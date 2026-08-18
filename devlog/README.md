@@ -295,3 +295,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-18 | [CP1 — system specification model and generation derivation](2026-08-18-cp1-generation-derivation/index.md) | Change | Verified | CP1, B70 |
 | 2026-08-18 | [CP2 — runtime-resolved component binding](2026-08-18-cp2-runtime-binding-query/index.md) | Change | Verified | CP2, B70 |
 | 2026-08-18 | [CP2 — capability-role query axis](2026-08-18-cp2-capability-role-axis/index.md) | Change | Verified | CP2, B70 |
+| 2026-08-18 | [B71 — boot-layout binary/Rust drift, root-caused](2026-08-18-b71-boot-layout-binary-drift/index.md) | Defect | Root-caused | B70, B71 |
