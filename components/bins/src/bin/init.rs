@@ -327,7 +327,7 @@ fn compose_declared_graph(startup_arg: u32) {
         }
         action::TRANSFER => {
             drive_probe_plane_with_token(
-                SEL4_TRANSFER_PROBE_SLOT,
+                resolve_executable(b"executable:sel4-transfer-probe"),
                 b"[init] transfer probe spawned\n",
                 b"transfer",
                 Some(2),
@@ -337,7 +337,7 @@ fn compose_declared_graph(startup_arg: u32) {
         }
         action::INPUT => {
             drive_probe_plane_with_token(
-                SEL4_INPUT_PROBE_SLOT,
+                resolve_executable(b"executable:sel4-input-probe"),
                 b"[init] input probe spawned\n",
                 b"input",
                 // Init's own end of `sel4-input-probe-run-token`. The idle
@@ -350,7 +350,7 @@ fn compose_declared_graph(startup_arg: u32) {
         }
         action::DIRECTORY => {
             drive_probe_plane_with_token(
-                SEL4_DIRECTORY_PROBE_SLOT,
+                resolve_executable(b"executable:sel4-directory-probe"),
                 b"[init] directory probe spawned\n",
                 b"directory",
                 // Init's own end of `sel4-directory-probe-run-token`; the idle
@@ -362,7 +362,7 @@ fn compose_declared_graph(startup_arg: u32) {
         }
         action::RECOVERY => {
             drive_probe_plane_with_token(
-                SEL4_RECOVERY_PROBE_SLOT,
+                resolve_executable(b"executable:sel4-recovery-probe"),
                 b"[init] recovery probe spawned\n",
                 b"recovery",
                 Some(2),
@@ -372,7 +372,7 @@ fn compose_declared_graph(startup_arg: u32) {
         }
         action::ROLLBACK => {
             drive_probe_plane_with_token(
-                SEL4_ROLLBACK_PROBE_SLOT,
+                resolve_executable(b"executable:sel4-rollback-probe"),
                 b"[init] rollback probe spawned\n",
                 b"rollback",
                 Some(2),
@@ -411,7 +411,10 @@ fn main(startup_arg: u32) {
 
     if FILESYSTEM_SERVICE_SLOT != SLOT_ABSENT && DIRECTORY_PROBE_SLOT != SLOT_ABSENT {
         spawn_or_fail(FILESYSTEM_SERVICE_SLOT, &filesystem_caps());
-        spawn_or_fail(DIRECTORY_PROBE_SLOT, &DIRECTORY_PROBE_CAPS);
+        spawn_or_fail(
+            resolve_executable(b"executable:directory-probe"),
+            &DIRECTORY_PROBE_CAPS,
+        );
     }
     let mut component_console = None;
     let mut component_spawn_service = None;
@@ -554,21 +557,21 @@ fn drive_boot_plane() -> ! {
     // The stream broker's loan receivers, in the order the resolved profile
     // numbers them at slots 9..14. `FABRIC_SUPERVISION` derives that order, and
     // the fixture's minted bindings must agree row for row.
-    let publisher = spawn_boot(FABRIC_PUBLISHER_SLOT);
-    let subscriber = spawn_boot(FABRIC_SUBSCRIBER_SLOT);
-    let publisher_b = spawn_boot(FABRIC_PUBLISHER_B_SLOT);
-    let subscriber_b = spawn_boot(FABRIC_SUBSCRIBER_B_SLOT);
-    let observer = spawn_boot(FABRIC_OBSERVER_SLOT);
-    let proxy = spawn_boot(FABRIC_PROXY_SLOT);
+    let publisher = spawn_boot(b"executable:fabric-publisher");
+    let subscriber = spawn_boot(b"executable:fabric-subscriber");
+    let publisher_b = spawn_boot(b"executable:fabric-publisher-b");
+    let subscriber_b = spawn_boot(b"executable:fabric-subscriber-b");
+    let observer = spawn_boot(b"executable:fabric-observer");
+    let proxy = spawn_boot(b"executable:fabric-proxy");
     // Holds a real control endpoint and is granted no edge; its denial is the
     // plane's authority evidence, so it needs no handle from anyone.
-    spawn_boot(FABRIC_PROBE_SLOT);
+    spawn_boot(b"executable:fabric-probe");
     slime_rt::debug_write(b"[init] fabric boot stream participants spawned\n");
 
     // Matched positionally against the child's declarations in ascending
     // destination-slot order: the factory at 1, then the six handles at 9..14.
     let fabric = spawn_boot_with(
-        FABRIC_SERVICE_SLOT,
+        b"executable:fabric-service",
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(publisher, RIGHT_SUPERVISE),
@@ -581,16 +584,16 @@ fn drive_boot_plane() -> ! {
     );
     slime_rt::debug_write(b"[init] fabric boot stream broker spawned\n");
 
-    let call_client = spawn_boot(FABRIC_CALL_CLIENT_SLOT);
-    let call_client_b = spawn_boot(FABRIC_CALL_CLIENT_B_SLOT);
-    let call_server = spawn_boot(FABRIC_CALL_SERVER_SLOT);
+    let call_client = spawn_boot(b"executable:fabric-call-client");
+    let call_client_b = spawn_boot(b"executable:fabric-call-client-b");
+    let call_server = spawn_boot(b"executable:fabric-call-server");
     // The clock asks for nothing and is named by no handle: the worker observes
     // its exit through the control endpoint's own peer state.
-    spawn_boot(FABRIC_CALL_TIME_SLOT);
+    spawn_boot(b"executable:fabric-call-time");
     // The call worker copies large payloads, so it holds buffer-creation
     // authority of its own, bounded by its declared quota.
     spawn_boot_with(
-        FABRIC_CALL_WORKER_SLOT,
+        b"executable:fabric-call-worker",
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(call_client, RIGHT_SUPERVISE),
@@ -600,13 +603,13 @@ fn drive_boot_plane() -> ! {
     );
     slime_rt::debug_write(b"[init] fabric boot call plane spawned\n");
 
-    let op_client = spawn_boot(FABRIC_OP_CLIENT_SLOT);
-    let op_client_b = spawn_boot(FABRIC_OP_CLIENT_B_SLOT);
-    let op_server = spawn_boot(FABRIC_OP_SERVER_SLOT);
-    spawn_boot(FABRIC_OP_TIME_SLOT);
-    let op_restart = spawn_boot(FABRIC_OP_CLIENT_B_RESTART_SLOT);
+    let op_client = spawn_boot(b"executable:fabric-op-client");
+    let op_client_b = spawn_boot(b"executable:fabric-op-client-b");
+    let op_server = spawn_boot(b"executable:fabric-op-server");
+    spawn_boot(b"executable:fabric-op-time");
+    let op_restart = spawn_boot(b"executable:fabric-op-client-b-restart");
     spawn_boot_with(
-        FABRIC_OP_WORKER_SLOT,
+        b"executable:fabric-op-worker",
         &[
             grant(op_client, RIGHT_SUPERVISE),
             grant(op_client_b, RIGHT_SUPERVISE),
@@ -656,20 +659,20 @@ fn drive_boot_plane() -> ! {
 /// concurrent plane in this file uses.
 fn drive_traffic_plane() -> ! {
     slime_rt::debug_write(b"[init] traffic control channels minted\n");
-    let publisher = spawn_boot(FABRIC_PUBLISHER_SLOT);
-    let subscriber = spawn_boot(FABRIC_SUBSCRIBER_SLOT);
+    let publisher = spawn_boot(b"executable:fabric-publisher");
+    let subscriber = spawn_boot(b"executable:fabric-subscriber");
     let publisher_b = spawn_boot_with(
-        FABRIC_PUBLISHER_B_SLOT,
+        b"executable:fabric-publisher-b",
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     );
-    let subscriber_b = spawn_boot(FABRIC_SUBSCRIBER_B_SLOT);
-    let observer = spawn_boot(FABRIC_OBSERVER_SLOT);
-    let proxy = spawn_boot(FABRIC_PROXY_SLOT);
-    let probe = spawn_boot(FABRIC_PROBE_SLOT);
+    let subscriber_b = spawn_boot(b"executable:fabric-subscriber-b");
+    let observer = spawn_boot(b"executable:fabric-observer");
+    let proxy = spawn_boot(b"executable:fabric-proxy");
+    let probe = spawn_boot(b"executable:fabric-probe");
     slime_rt::debug_write(b"[init] traffic stream participants spawned\n");
 
     let fabric = spawn_boot_with(
-        FABRIC_SERVICE_SLOT,
+        b"executable:fabric-service",
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(publisher, RIGHT_SUPERVISE),
@@ -683,17 +686,17 @@ fn drive_traffic_plane() -> ! {
     slime_rt::debug_write(b"[init] traffic stream broker spawned\n");
 
     let call_client = spawn_boot_with(
-        FABRIC_CALL_CLIENT_SLOT,
+        b"executable:fabric-call-client",
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     );
-    let call_client_b = spawn_boot(FABRIC_CALL_CLIENT_B_SLOT);
+    let call_client_b = spawn_boot(b"executable:fabric-call-client-b");
     let call_server = spawn_boot_with(
-        FABRIC_CALL_SERVER_SLOT,
+        b"executable:fabric-call-server",
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     );
-    let call_time = spawn_boot(FABRIC_CALL_TIME_SLOT);
+    let call_time = spawn_boot(b"executable:fabric-call-time");
     let call_worker = spawn_boot_with(
-        FABRIC_CALL_WORKER_SLOT,
+        b"executable:fabric-call-worker",
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(call_client, RIGHT_SUPERVISE),
@@ -703,13 +706,13 @@ fn drive_traffic_plane() -> ! {
     );
     slime_rt::debug_write(b"[init] traffic call plane spawned\n");
 
-    let op_client = spawn_boot(FABRIC_OP_CLIENT_SLOT);
-    let op_client_b = spawn_boot(FABRIC_OP_CLIENT_B_SLOT);
-    let op_server = spawn_boot(FABRIC_OP_SERVER_SLOT);
-    let op_time = spawn_boot(FABRIC_OP_TIME_SLOT);
-    let op_restart = spawn_boot(FABRIC_OP_CLIENT_B_RESTART_SLOT);
+    let op_client = spawn_boot(b"executable:fabric-op-client");
+    let op_client_b = spawn_boot(b"executable:fabric-op-client-b");
+    let op_server = spawn_boot(b"executable:fabric-op-server");
+    let op_time = spawn_boot(b"executable:fabric-op-time");
+    let op_restart = spawn_boot(b"executable:fabric-op-client-b-restart");
     let op_worker = spawn_boot_with(
-        FABRIC_OP_WORKER_SLOT,
+        b"executable:fabric-op-worker",
         &[
             grant(op_client, RIGHT_SUPERVISE),
             grant(op_client_b, RIGHT_SUPERVISE),
@@ -766,10 +769,20 @@ fn drive_traffic_plane() -> ! {
     slime_rt::exit(0)
 }
 
+/// One boot-layout executable slot, resolved through the root by name.
+///
+/// CP2/B70: the slot number is a fact about the active generation, so this image
+/// asks for it rather than compiling it in. A generation whose layout declares no
+/// such executable is a real answer — the caller asked to launch a component this
+/// composition does not have — so it exits rather than falling back to a guess.
+fn resolve_executable(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| slime_rt::exit(1))
+}
+
 /// Spawn one boot participant that its manifest grants nothing, returning the
 /// supervision handle init keeps.
-fn spawn_boot(executable_slot: u32) -> u32 {
-    spawn_boot_with(executable_slot, &[])
+fn spawn_boot(executable: &[u8]) -> u32 {
+    spawn_boot_with(executable, &[])
 }
 
 /// Spawn one boot participant with the exact grant vector its manifest declares.
@@ -779,7 +792,22 @@ fn spawn_boot(executable_slot: u32) -> u32 {
 /// bindings — or the root refuses the spawn with nothing constructed. Both
 /// numbers come from the same manifest, so a disagreement is a fixture defect
 /// rather than something to reconcile here.
-fn spawn_boot_with(executable_slot: u32, grants: &[SpawnGrant]) -> u32 {
+///
+/// `executable` is the component's name, not a slot: the root resolves it from
+/// the boot layout it placed these capabilities from (CP2/B70), so this image
+/// carries no plane's slot numbering. `executable:` names the layout's component
+/// identity domain, which is what keeps a channel of the same name from
+/// answering.
+fn spawn_boot_with(executable: &[u8], grants: &[SpawnGrant]) -> u32 {
+    let executable_slot = match slime_rt::resolve_binding(executable) {
+        Ok(slot) => slot,
+        Err(error) => {
+            slime_rt::debug_write(b"[init] fabric boot unresolved executable error=");
+            write_i64(error);
+            slime_rt::debug_write(b"\n");
+            fail_boot(b"resolve participant executable")
+        }
+    };
     match slime_rt::spawn(executable_slot, grants) {
         Ok(spawned) => spawned.supervision_slot,
         Err(error) => {
@@ -874,12 +902,17 @@ fn launch_fabric_operations() {
     // handle naming each of them, and a handle cannot exist before its task. A
     // native Endpoint reports no peer death, so those handles are the only way
     // the broker observes a participant exit rather than blocking on it.
-    let client = slime_rt::spawn(FABRIC_OP_CLIENT_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
-    let client_b =
-        slime_rt::spawn(FABRIC_OP_CLIENT_B_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
-    let server = slime_rt::spawn(FABRIC_OP_SERVER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
-    let replacement =
-        slime_rt::spawn(FABRIC_OP_CLIENT_B_RESTART_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let client = slime_rt::spawn(resolve_executable(b"executable:fabric-op-client"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
+    let client_b = slime_rt::spawn(resolve_executable(b"executable:fabric-op-client-b"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
+    let server = slime_rt::spawn(resolve_executable(b"executable:fabric-op-server"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
+    let replacement = slime_rt::spawn(
+        resolve_executable(b"executable:fabric-op-client-b-restart"),
+        &[],
+    )
+    .unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] operation participants spawned\n");
     slime_rt::debug_write(b"[init] operation replacement introduced\n");
     // What init still passes is exactly what the generation cannot place: the
@@ -887,7 +920,7 @@ fn launch_fabric_operations() {
     // participant, which only exist once those tasks do. Matching is positional
     // against ascending declared slot: factory at 1, then the handles.
     let service = slime_rt::spawn(
-        FABRIC_SERVICE_SLOT,
+        resolve_executable(b"executable:fabric-service"),
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(client.supervision_slot, RIGHT_SUPERVISE),
@@ -899,7 +932,8 @@ fn launch_fabric_operations() {
     .unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] operation fabric spawned\n");
     slime_rt::debug_write(b"[init] operation supervision delegated\n");
-    let time = slime_rt::spawn(FABRIC_OP_TIME_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let time = slime_rt::spawn(resolve_executable(b"executable:fabric-op-time"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] operation replacement released\n");
     wait_clean(&[
         client.supervision_slot,
@@ -923,14 +957,14 @@ fn launch_fabric_calls() {
     // the only way the broker observes a participant exit rather than blocking
     // on it forever.
     let client = slime_rt::spawn(
-        FABRIC_CALL_CLIENT_SLOT,
+        resolve_executable(b"executable:fabric-call-client"),
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
-    let client_b =
-        slime_rt::spawn(FABRIC_CALL_CLIENT_B_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let client_b = slime_rt::spawn(resolve_executable(b"executable:fabric-call-client-b"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     let server = slime_rt::spawn(
-        FABRIC_CALL_SERVER_SLOT,
+        resolve_executable(b"executable:fabric-call-server"),
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
@@ -940,7 +974,7 @@ fn launch_fabric_calls() {
     // participant, which only exist once those tasks do. Matching is positional
     // against ascending declared slot: factory at 1, then the handles.
     let service = slime_rt::spawn(
-        FABRIC_SERVICE_SLOT,
+        resolve_executable(b"executable:fabric-service"),
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(client.supervision_slot, RIGHT_SUPERVISE),
@@ -951,7 +985,8 @@ fn launch_fabric_calls() {
     .unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] call fabric spawned\n");
     slime_rt::debug_write(b"[init] call supervision delegated\n");
-    let time = slime_rt::spawn(FABRIC_CALL_TIME_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let time = slime_rt::spawn(resolve_executable(b"executable:fabric-call-time"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     wait_clean(&[
         client.supervision_slot,
         client_b.supervision_slot,
@@ -1051,21 +1086,23 @@ fn fail(reason: &[u8]) -> ! {
 /// That also fixes the spawn order — the receiver first, because a handle
 /// naming it cannot precede it.
 fn drive_sample_plane() {
-    let receiver = slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[])
+    let receiver = slime_rt::spawn(resolve_executable(b"executable:sample-receiver"), &[])
         .unwrap_or_else(|_| fail_sample(b"spawn receiver"));
     // Matched positionally against ascending declared slot, exactly as
     // `launch_fabric_calls` matches: the lender's factory at 1, then the
     // receiver's supervision handle at 2. The channel is a declared endpoint the
     // root installs on both sides, so it is not in this list.
     let lender = slime_rt::spawn(
-        SAMPLE_LENDER_SLOT,
+        resolve_executable(b"executable:sample-lender"),
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(receiver.supervision_slot, RIGHT_SUPERVISE),
         ],
     )
     .unwrap_or_else(|_| fail_sample(b"spawn lender"));
-    if slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[]) != Err(slime_rt::ERR_BAD_CAP) {
+    if slime_rt::spawn(resolve_executable(b"executable:sample-receiver"), &[])
+        != Err(slime_rt::ERR_BAD_CAP)
+    {
         fail_sample(b"a live instance was spawned twice");
     }
     slime_rt::debug_write(b"[init] spawn budget refused\n");
@@ -1078,7 +1115,7 @@ fn drive_sample_plane() {
             }
         }
     }
-    let reaped = slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[])
+    let reaped = slime_rt::spawn(resolve_executable(b"executable:sample-receiver"), &[])
         .unwrap_or_else(|_| fail_sample(b"budget did not recover after a child exited"));
     slime_rt::debug_write(b"[init] spawn budget recovered\n");
     if slime_rt::cap_drop(reaped.supervision_slot) != slime_rt::ERR_SUCCESS {
@@ -1232,16 +1269,16 @@ fn drive_visibility_plane() {
 ///   The probe gets none: it asks for nothing the broker must reclaim.
 fn drive_matrix_plane() {
     plane_marker(b"matrix", b" control channels minted\n");
-    let publisher = spawn_boot(FABRIC_PUBLISHER_SLOT);
-    let subscriber = spawn_boot(FABRIC_SUBSCRIBER_SLOT);
+    let publisher = spawn_boot(b"executable:fabric-publisher");
+    let subscriber = spawn_boot(b"executable:fabric-subscriber");
     let publisher_b = spawn_boot_with(
-        FABRIC_PUBLISHER_B_SLOT,
+        b"executable:fabric-publisher-b",
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     );
-    let subscriber_b = spawn_boot(FABRIC_SUBSCRIBER_B_SLOT);
-    let observer = spawn_boot(FABRIC_OBSERVER_SLOT);
-    let proxy = spawn_boot(FABRIC_PROXY_SLOT);
-    let probe = spawn_boot(FABRIC_PROBE_SLOT);
+    let subscriber_b = spawn_boot(b"executable:fabric-subscriber-b");
+    let observer = spawn_boot(b"executable:fabric-observer");
+    let proxy = spawn_boot(b"executable:fabric-proxy");
+    let probe = spawn_boot(b"executable:fabric-probe");
     plane_marker(b"matrix", b" participants spawned\n");
 
     // Positional against the child's ascending declared slot, exactly as every
@@ -1269,7 +1306,7 @@ fn drive_matrix_plane() {
         slime_rt::debug_write(b"[init] matrix plane fail: fabric-service grant count\n");
         slime_rt::exit(1);
     }
-    let service = spawn_boot_with(FABRIC_SERVICE_SLOT, &grants);
+    let service = spawn_boot_with(b"executable:fabric-service", &grants);
     plane_marker(b"matrix", b" fabric spawned\n");
 
     wait_clean(&[
@@ -1292,10 +1329,10 @@ fn drive_matrix_plane() {
 /// an object is for the chooser to mint one and transfer it, and the chooser
 /// mints only what the user's selection gesture named.
 fn drive_powerbox_plane() {
-    let chooser = slime_rt::spawn(POWERBOX_CHOOSER_SLOT, &[])
+    let chooser = slime_rt::spawn(resolve_executable(b"executable:powerbox-chooser"), &[])
         .unwrap_or_else(|_| fail_plane(b"powerbox", b"spawn chooser"));
     slime_rt::debug_write(b"[init] powerbox chooser spawned\n");
-    let probe = slime_rt::spawn(POWERBOX_PROBE_SLOT, &[])
+    let probe = slime_rt::spawn(resolve_executable(b"executable:powerbox-probe"), &[])
         .unwrap_or_else(|_| fail_plane(b"powerbox", b"spawn probe"));
     slime_rt::debug_write(b"[init] powerbox probe spawned\n");
     wait_clean(&[probe.supervision_slot, chooser.supervision_slot]);
@@ -1368,8 +1405,11 @@ fn drive_dango_plane() {
 /// authority each holds is placed by the generation, and init composes only the
 /// channel between them.
 fn drive_filesystem_plane() {
-    let service = slime_rt::spawn(SEL4_FILESYSTEM_SERVICE_SLOT, &[])
-        .unwrap_or_else(|_| fail_plane(b"filesystem", b"spawn service"));
+    let service = slime_rt::spawn(
+        resolve_executable(b"executable:sel4-filesystem-service"),
+        &[],
+    )
+    .unwrap_or_else(|_| fail_plane(b"filesystem", b"spawn service"));
     slime_rt::debug_write(b"[init] filesystem service spawned\n");
     // The service announces its store is open on a declared edge, and the
     // client is not spawned until it does. Opening the store is hundreds of
@@ -1380,7 +1420,10 @@ fn drive_filesystem_plane() {
     if slime_rt::recv_blocking(3, &mut ready, &mut caps) < 0 {
         fail_plane(b"filesystem", b"await service readiness");
     }
-    let client = slime_rt::spawn(DIRECTORY_PROBE_SLOT, &[])
+    // `directory-probe`, not `sel4-directory-probe`: this plane and the
+    // directory plane declare different executables, and only the fixtures say
+    // which. Verified against `sel4-filesystem.layout`.
+    let client = slime_rt::spawn(resolve_executable(b"executable:directory-probe"), &[])
         .unwrap_or_else(|_| fail_plane(b"filesystem", b"spawn client"));
     slime_rt::debug_write(b"[init] filesystem client spawned\n");
     // The client's exit is init's to observe, through the handle its spawn
@@ -1407,11 +1450,14 @@ fn drive_generation_plane() {
     // handle naming it, and a handle cannot exist before its task. A native
     // Endpoint reports no peer death, so that handle is the only way the
     // manager can learn its client is gone rather than merely quiet.
-    let client = slime_rt::spawn(SEL4_GENERATION_CLIENT_SLOT, &[])
-        .unwrap_or_else(|_| fail_plane(b"generation", b"spawn client"));
+    let client = slime_rt::spawn(
+        resolve_executable(b"executable:sel4-generation-client"),
+        &[],
+    )
+    .unwrap_or_else(|_| fail_plane(b"generation", b"spawn client"));
     slime_rt::debug_write(b"[init] generation client spawned\n");
     let manager = slime_rt::spawn(
-        SEL4_GENERATION_MANAGER_SLOT,
+        resolve_executable(b"executable:sel4-generation-manager"),
         &[grant(client.supervision_slot, RIGHT_SUPERVISE)],
     )
     .unwrap_or_else(|_| fail_plane(b"generation", b"spawn manager"));
@@ -1438,7 +1484,7 @@ fn drive_generation_plane() {
 /// composes it.
 fn drive_store_plane() {
     drive_probe_plane_with_token(
-        SEL4_STORE_PROBE_SLOT,
+        resolve_executable(b"executable:sel4-store-probe"),
         b"[init] store probe spawned\n",
         b"store",
         Some(2),
@@ -1449,7 +1495,7 @@ fn drive_store_plane() {
 /// capability and require a clean exit.
 fn drive_storage_plane() {
     drive_probe_plane_with_token(
-        SEL4_STORAGE_PROBE_SLOT,
+        resolve_executable(b"executable:sel4-storage-probe"),
         b"[init] storage probe spawned\n",
         b"storage",
         Some(2),
@@ -1502,13 +1548,13 @@ fn fail_plane(plane: &[u8], reason: &[u8]) -> ! {
 const RECLAMATION_LOOP_CHILDREN: u32 = 80;
 
 fn drive_reclamation_plane() {
-    if slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[]).is_ok() {
+    if slime_rt::spawn(resolve_executable(b"executable:supervision-child"), &[]).is_ok() {
         fail_reclamation(b"forced construction unwind unexpectedly succeeded");
     }
     slime_rt::debug_write(b"[init] reclamation construction unwind returned\n");
     let mut completed = 0u32;
     for _ in 0..RECLAMATION_LOOP_CHILDREN {
-        let child = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+        let child = slime_rt::spawn(resolve_executable(b"executable:supervision-child"), &[])
             .unwrap_or_else(|_| fail_reclamation(b"loop child spawn"));
         loop {
             match slime_rt::supervision_status(child.supervision_slot) {
@@ -1576,23 +1622,24 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
     // its receiver through a supervision capability — so the handle must
     // exist before the service that will use it does. Under v1 only
     // subscribers received loans, which is why only they had to precede it.
-    let publisher =
-        slime_rt::spawn(FABRIC_PUBLISHER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
-    let subscriber =
-        slime_rt::spawn(FABRIC_SUBSCRIBER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let publisher = slime_rt::spawn(resolve_executable(b"executable:fabric-publisher"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
+    let subscriber = slime_rt::spawn(resolve_executable(b"executable:fabric-subscriber"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     let publisher_b = slime_rt::spawn(
-        FABRIC_PUBLISHER_B_SLOT,
+        resolve_executable(b"executable:fabric-publisher-b"),
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
-    let subscriber_b =
-        slime_rt::spawn(FABRIC_SUBSCRIBER_B_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let subscriber_b = slime_rt::spawn(resolve_executable(b"executable:fabric-subscriber-b"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     // The declared interposition proxy precedes the fabric for the same reason
     // every ring participant does: the fabric is granted a supervision handle
     // naming it, and a handle cannot exist before its task. A native Endpoint
     // reports no peer death, so this handle is the only way the broker can
     // observe a hop through a dead proxy rather than blocking on it forever.
-    let intruder = slime_rt::spawn(FABRIC_INTRUDER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    let intruder = slime_rt::spawn(resolve_executable(b"executable:fabric-intruder"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     // What init still passes is exactly what the generation cannot place: the
     // shared-buffer factory it holds, and one supervision handle per ring
     // participant and declared proxy, which only exist once those tasks do.
@@ -1612,7 +1659,7 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
     let without_proxy = [grants[0], grants[1], grants[2], grants[4], grants[5]];
     let declared = declared_minted_grants(b"fabric-service");
     let service = slime_rt::spawn(
-        FABRIC_SERVICE_SLOT,
+        resolve_executable(b"executable:fabric-service"),
         if declared == grants.len() {
             &grants[..]
         } else if declared == without_proxy.len() {
