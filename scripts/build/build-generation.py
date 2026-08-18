@@ -1766,75 +1766,13 @@ def render_fabric_profile_rust(
         f"    (b{rust_string(component)}, {rust_string(route)}, {direction}, {ready}, {credit}),\n"
         for component, route, direction, ready, credit in notification_rows_data
     )
-    # Slot constants come from the *manifest's* notification bindings, not
-    # from the resolved participant set. A component compiles against its own
-    # ring slots in every image, while a profile decides only which instances
-    # a boot activates -- so scoping these to the resolved participants would
-    # stop the component from compiling under any profile that prunes it,
-    # which is a build failure standing in for a boot-time absence the
-    # generation already expresses.
-    notification_slots: dict[str, int] = {}
-    for binding in notification_bindings:
-        grant = notification_grants.get(binding["grant"])
-        if grant is None:
-            fail(f"notification binding names unknown grant {binding['grant']}")
-        holder = binding["holder"]
-        if not binding["grant"].startswith(f"{holder}-"):
-            # A grant whose name does not begin with this holder is one it
-            # shares: either the fabric's own half of a per-participant pair
-            # (published through `FABRIC_NOTIFICATIONS`), or a wake object
-            # several peers signal and one waits on. The shared case still needs
-            # a constant per holder, because each holds it at its own slot --
-            # that slot is also its badge bit, so they are deliberately
-            # different numbers for the same object.
-            shared = [b for b in notification_bindings if b["grant"] == binding["grant"]]
-            if len(shared) <= 2:
-                continue
-            name = (
-                f"{holder.removeprefix('fabric-')}_{binding['grant'].removeprefix('fabric-')}_slot"
-                .upper()
-                .replace("-", "_")
-            )
-            existing = notification_slots.setdefault(name, binding["slot"])
-            if existing != binding["slot"]:
-                fail(f"notification slot {name} declared twice with different slots")
-            continue
-        suffix = binding["grant"].removeprefix(f"{holder}-")
-        route, _, kind = suffix.rpartition("-")
-        if kind not in ("ready", "credit") or not route:
-            fail(f"notification grant {binding['grant']} does not name a route and kind")
-        name = f"{holder.removeprefix('fabric-')}_{route}_{kind}_slot".upper().replace("-", "_")
-        existing = notification_slots.setdefault(name, binding["slot"])
-        if existing != binding["slot"]:
-            fail(f"notification slot {name} declared twice with different slots")
-    # Every profile emits these wake slots, even where the manifest declares no
-    # such notification. The components that read them are compiled for every
-    # graph, so an absent constant is a *build* failure standing in for a
-    # boot-time absence the generation already expresses -- the same trap the
-    # fabric's control-slot constants hit. `SLOT_ABSENT` says "this graph has no
-    # wake object", which the holder checks rather than fails to link against.
-    #
-    # The stream entries join the call plane's for C8.12, whose graph moves
-    # `fabric-subscriber-b` and `fabric-publisher-b` onto the alternate-name
-    # telemetry route. Both components still compile their `telemetry` arm in
-    # every image, so the constants must exist even where that graph declares
-    # the edge under a different route name.
-    for name in (
-        "SERVICE_PARAMETERS_READY_SLOT",
-        "CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT",
-        "CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT",
-        "CALL_SERVER_SERVICE_PARAMETERS_READY_SLOT",
-        "CALL_TIME_SERVICE_PARAMETERS_READY_SLOT",
-        "PUBLISHER_B_TELEMETRY_READY_SLOT",
-        "PUBLISHER_B_TELEMETRY_CREDIT_SLOT",
-        "SUBSCRIBER_B_TELEMETRY_READY_SLOT",
-        "SUBSCRIBER_B_TELEMETRY_CREDIT_SLOT",
-    ):
-        notification_slots.setdefault(name, 0xFFFF_FFFF)
-    notification_constants = "".join(
-        f"pub const FABRIC_{name}: u32 = {slot};\n"
-        for name, slot in sorted(notification_slots.items())
-    )
+    # The per-slot notification constants this profile used to emit are gone
+    # (CP2/B70). Every component resolves its notification slots through the
+    # root by the grant name the generation declares, which is one name per
+    # route rather than one constant per holder -- see
+    # `slime-root/src/ipc.rs`'s `notification:` axis. `FABRIC_NOTIFICATION_BINDINGS`
+    # stays: it is the graph's own table of who binds what, which the fabric
+    # validates its wiring against rather than reading a slot out of.
     interposition_rows = "".join(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, &[{', '.join(f'b{rust_string(hop)} as &[u8]' for hop in row['interposition'])}]),\n"
         for row in participants if row["interposition"]
@@ -1899,7 +1837,6 @@ pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{participant_ro
 pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
 pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
 {notification_rows}];
-{notification_constants}
 pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depth_rows}];
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
