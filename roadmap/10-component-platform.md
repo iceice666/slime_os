@@ -51,7 +51,7 @@
 
 ## CP2 — Runtime-resolved component binding
 
-**Status:** Mechanism complete and gated, answering both grant bindings and boot-layout roles; the site-by-site migration is partial.
+**Status:** Mechanism complete and gated, answering grant bindings, namespaced boot-layout roles, and unambiguous capability roles; the site-by-site migration is partial.
 
 **Depends on:** Cleared or explicitly deferred backlog. Independent of CP0/CP1.
 
@@ -81,10 +81,41 @@ identity domains the contract already declares to keep a component and a channel
 sharing a name apart. An unprefixed name is a grant and can never reach the
 layout, so no layout entry can shadow a grant.
 
-**Remaining:** the `fabric_profile` sites are a distinct case — 46 of its 64
-constants are graph facts (route tables, QoS depths, trace depth) rather than
-slots, so a slot-resolution query is the wrong instrument and those components
-should read the authenticated `fabric-graph` resource instead.
+**Progress (2026-08-18, role axis):** a third query axis,
+`kind:<capabilityKind>` or `kind:<capabilityKind>+<right>,<right>`, resolves a
+caller's own binding by what the capability *is* rather than by its grant name.
+This exists because grant names are not stable across generations and so cannot
+be written into a component: `spawn-service`'s shared-buffer factory grant is
+`spawn-service-shared-buffer-factory` under `valid.zti` and its RPC endpoint is
+`spawn-service-rpc` there but `dango-e-spawn-service-rpc` under
+`sel4-dango.zti`. Kind and rights are properties of the capability instead, and
+`components/bins/build.rs` already asked exactly this question of the manifest
+(`binding_with_right_slot`, `related_binding_slot`) before this axis let the root
+answer it at runtime; those two now-unused derivations were removed rather than
+left to drift.
+
+`spawn-service` resolves its shared-buffer factory slot this way. Its RPC
+endpoint is deliberately *not* migrated: `sel4-dango.zti` grants it three
+`send`+`recv` endpoints (the RPC channel plus one context endpoint per command),
+so the role is ambiguous there and the query refuses it rather than guessing —
+observed directly: resolving it hung the dango plane at `dango> $(sysinfo)`
+until the query was left refusing and `RPC_SLOT` restored to the generated
+table. Ambiguity refusal, not a lowest-slot tiebreak, is the same discipline the
+boot-layout namespace fix above encodes: a plausible wrong answer is worse than
+no answer.
+
+**Remaining:** `spawn-service`'s RPC endpoint and its two command executables
+(`COMMAND_PROFILE`) stay generated, because "the endpoint that carries requests"
+and "the executable this command name spawns" are graph-shape facts a
+kind/rights query cannot distinguish, not properties of one capability;
+resolving them needs a binding to carry a stable logical role, which is a
+`contracts/generation/v1` format change. `init`'s remaining ~134 boot-layout
+constants (of 136; 2 migrated) are the same fabric-profile-shaped question as
+`fabric_profile`'s 46 non-slot constants — the `fabric_profile` sites are a
+distinct case: 46 of its 64 constants are graph facts (route tables, QoS depths,
+trace depth) rather than slots, so a slot-resolution query is the wrong
+instrument and those components should read the authenticated `fabric-graph`
+resource instead.
 
 ### Deliverables
 

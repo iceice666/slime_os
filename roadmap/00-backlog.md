@@ -120,8 +120,22 @@ question with an executable slot, because the layout and the grant list use
 overlapping names for different things, and `init` sent into an endpoint nobody was
 waiting on. The namespace prefix uses the two identity domains the contract already
 declares, so no format change was needed and no layout entry can shadow a grant.
-B70 stays open for the `fabric_profile` sites alone, where 46 of 64 constants are
-graph facts rather than slots and a slot query is the wrong instrument.
+A third axis, `kind:<capabilityKind>+<right>,<right>`, answers by what the
+capability is rather than by its grant name — the same question
+`components/bins/build.rs` asked of the manifest by string search, now asked of
+the root's activation record; `spawn-service` uses it for its shared-buffer
+factory. It refuses an ambiguous role rather than guessing: `spawn-service`'s
+RPC endpoint stays derived because `sel4-dango.zti` grants it three
+`send`+`recv` endpoints and the role cannot tell them apart, observed directly
+as a hang before the refusal was restored.
+
+B70's remaining surface is `init`'s ~134 of 136 boot-layout constants,
+`spawn-service`'s RPC endpoint and command-executable table, and
+`fabric_profile`'s 64 constants. All three share one shape: each needs a
+binding to carry a stable logical role a component can name across
+generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
+tables, QoS depths, trace depth) rather than slots at all, so a slot query is
+the wrong instrument for those regardless.
 **Evidence:** [`devlog/2026-08-18-cp2-runtime-binding-query/`](../devlog/2026-08-18-cp2-runtime-binding-query/index.md)
 
 ## Deferred follow-ups
