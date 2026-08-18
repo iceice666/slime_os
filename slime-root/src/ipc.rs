@@ -591,12 +591,22 @@ fn capability_kind_named(name: &str) -> Option<boot_contracts::generation::Capab
 /// computes the one it means and this compares it. Resource objects share a
 /// kind, so the decode is the discriminator: a shared-buffer budget or a fabric
 /// graph fails it and is skipped.
+///
+/// Ambiguous, like `resolve_role_slot`, refuses rather than returning the first
+/// match. No generated layout has ever declared one identity at two slots — the
+/// builder derives each label's identity from the manifest's own component and
+/// channel names, which are themselves unique — but a hand-authored
+/// `SLIME_BOOT_LAYOUT` override is not proven to keep that property, and a
+/// silent first-match would repeat the exact failure class the namespace fix
+/// above exists to prevent: a plausible slot that is not the one the caller
+/// meant.
 fn resolve_layout_slot(
     generation: &boot_contracts::generation::Generation<'_>,
     identity: &[u8; 32],
 ) -> Option<usize> {
     use boot_contracts::generation::KIND_RESOURCE;
 
+    let mut found: Option<usize> = None;
     for index in 0..generation.object_count() {
         let object = generation.object(index).ok()?;
         if object.kind != KIND_RESOURCE {
@@ -608,11 +618,14 @@ fn resolve_layout_slot(
         for entry in 0..layout.entry_count() {
             let entry = layout.entry(entry)?;
             if &entry.name_identity == identity {
-                return Some(entry.slot as usize);
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(entry.slot as usize);
             }
         }
     }
-    None
+    found
 }
 
 /// The bounds `resolve_binding_slot` applies before it looks anything up.
