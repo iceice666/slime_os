@@ -36,6 +36,13 @@ pythonManifestRight :: RightBit -> Text
 rustRightConst :: RightBit -> Text
   = bit => r.u64Const (r.join { "RIGHT_"; bit.name; }) (rightValue bit);
 
+-- The root resolves a capability role by manifest spelling too (CP2's
+-- `kind:<kind>+<right>` query), so the same pairing is emitted for Rust rather
+-- than hand-copied beside the Python table. A right a manifest cannot name is
+-- omitted: it is unaskable by name, so an entry for it could only mislead.
+rustManifestRight :: RightBit -> Text
+  = bit => w.join { "        \""; bit.manifest; "\" => RIGHT_"; bit.name; ",\n"; };
+
 Format :: type {
   formatVersion : Int;
   headerLen : Int;
@@ -247,6 +254,19 @@ rustBindings :: Format -> Text
     r.u32Const "SERVICE_CONSOLE" 9;
     r.join (map rustRightConst format.rightBits);
     r.u64Const "RIGHT_ALL" (rightsMask format.rightBits);
+    "\n/// The rights bit a generation manifest spells `name`, or `None`.\n";
+    "///\n";
+    "/// Generated from the same `rightBits` table as `RIGHT_*` and the builder's\n";
+    "/// Python mapping, so a right cannot be askable under one spelling here and\n";
+    "/// another there. A right a manifest cannot name is absent rather than\n";
+    "/// mapped to a default: it is unaskable, and inventing an answer would hand\n";
+    "/// out a bit the caller never named.\n";
+    "pub fn right_named(name: &str) -> Option<u64> {\n";
+    "    Some(match name {\n";
+    w.join (map rustManifestRight (filter manifestNamed format.rightBits));
+    "        _ => return None,\n";
+    "    })\n";
+    "}\n";
   };
 
 render :: Format -> { python : Text; rust : Text; }

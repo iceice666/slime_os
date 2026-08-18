@@ -39,12 +39,34 @@ struct LiveChild {
 
 fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[spawn-service] ready\n");
+    // The shared-buffer factory slot is resolved by capability *role* rather than
+    // read from the generated table (CP2/B70). Role, not grant name: grant names
+    // differ per generation -- this component's echo executable is
+    // `spawn-service-echo` under `valid.zti` and `spawn-service-echo-agent` under
+    // `sel4-dango.zti` -- so a name written here would couple this source to one
+    // manifest, which is the coupling being removed. Kind plus rights is the
+    // question `components/bins/build.rs` already asked of the manifest, now asked
+    // of the root at runtime.
+    //
+    // Only the factory is unambiguous in every generation declaring this
+    // component: exactly one `bufferCreate` capability. The command executables
+    // are not resolved this way either -- two or three share one kind and rights
+    // set -- so `COMMAND_PROFILE` still supplies them.
+    let factory_slot = slime_rt::resolve_binding(b"kind:sharedBufferFactory+bufferCreate")
+        .unwrap_or_else(|_| slime_rt::exit(1));
+    // The RPC endpoint is *not* resolved by role: `sel4-dango.zti` grants this
+    // component three `send`+`recv` endpoints -- the RPC channel plus one context
+    // endpoint per command -- so the role query is ambiguous and refuses. That
+    // refusal is correct: which of the three carries requests is a fact about the
+    // graph's shape rather than about the capability, so `RPC_SLOT` stays derived
+    // until a binding carries a logical role the component can name.
+    let rpc_slot = RPC_SLOT;
     // C7.2/C7.3: prove this component's generation-declared shared-buffer
     // quota is live before serving requests. A failure here is fatal: the
     // generation granted authority the kernel did not honour.
     if !slime_components::shared_buffer_probe::probe_and_report(
         b"[spawn-service]",
-        SHARED_BUFFER_FACTORY_SLOT,
+        factory_slot,
         SHARED_BUFFER_PROBE_BASE,
     ) {
         slime_rt::exit(1);
@@ -54,7 +76,7 @@ fn main(_startup_arg: u32) {
         reap(&mut live);
         let mut message = [0u8; MAX_MSG];
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
-        match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
+        match slime_rt::recv(rpc_slot, &mut message, &mut received_caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => slime_rt::exit(1),
             n => {
@@ -74,7 +96,7 @@ fn main(_startup_arg: u32) {
                 }
                 let (reply, supervision) =
                     handle(&message[..n as usize], &received_caps, &mut live);
-                send_reply(reply, supervision);
+                send_reply(rpc_slot, reply, supervision);
             }
         }
     }
@@ -256,7 +278,7 @@ fn reap(live: &mut [Option<LiveChild>; CLIENT_BUDGET]) {
     }
 }
 
-fn send_reply(reply: WireSpawnReply, supervision: Option<u32>) {
+fn send_reply(rpc_slot: u32, reply: WireSpawnReply, supervision: Option<u32>) {
     let encoded = reply.encode();
     loop {
         let result = match supervision {
@@ -264,7 +286,7 @@ fn send_reply(reply: WireSpawnReply, supervision: Option<u32>) {
                 let transfer =
                     slime_rt::supervision_derive(slot).unwrap_or_else(|_| slime_rt::exit(1));
                 let result = slime_rt::capability_delegate(
-                    RPC_SLOT,
+                    rpc_slot,
                     transfer,
                     CapabilityDisposition::Move,
                     OBJECT_KIND_SUPERVISION,
@@ -276,7 +298,7 @@ fn send_reply(reply: WireSpawnReply, supervision: Option<u32>) {
                 }
                 result
             }
-            None => slime_rt::send(RPC_SLOT, &encoded, &[]),
+            None => slime_rt::send(rpc_slot, &encoded, &[]),
         };
         match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),

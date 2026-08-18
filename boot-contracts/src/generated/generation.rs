@@ -93,3 +93,40 @@ pub const RIGHT_INPUT_READ: u64 = 8388608;
 pub const RIGHT_BUFFER_CREATE: u64 = 16777216;
 pub const RIGHT_BUFFER_LOAN: u64 = 33554432;
 pub const RIGHT_ALL: u64 = 66977791;
+
+/// The rights bit a generation manifest spells `name`, or `None`.
+///
+/// Generated from the same `rightBits` table as `RIGHT_*` and the builder's
+/// Python mapping, so a right cannot be askable under one spelling here and
+/// another there. A right a manifest cannot name is absent rather than
+/// mapped to a default: it is unaskable, and inventing an answer would hand
+/// out a bit the caller never named.
+pub fn right_named(name: &str) -> Option<u64> {
+    Some(match name {
+        "send" => RIGHT_SEND,
+        "recv" => RIGHT_RECV,
+        "exec" => RIGHT_EXEC,
+        "mapMmio" => RIGHT_MAP_MMIO,
+        "dmaPin" => RIGHT_DMA_PIN,
+        "dmaRelease" => RIGHT_DMA_RELEASE,
+        "irqAck" => RIGHT_IRQ_ACK,
+        "bufferWrite" => RIGHT_BUFFER_WRITE,
+        "bufferMap" => RIGHT_BUFFER_MAP,
+        "blockRead" => RIGHT_BLOCK_READ,
+        "blockWrite" => RIGHT_BLOCK_WRITE,
+        "storeRead" => RIGHT_STORE_READ,
+        "storeWrite" => RIGHT_STORE_WRITE,
+        "healthConfirm" => RIGHT_HEALTH_CONFIRM,
+        "bootUpdate" => RIGHT_BOOT_UPDATE,
+        "spawn" => RIGHT_SPAWN,
+        "supervise" => RIGHT_SUPERVISE,
+        "directoryRead" => RIGHT_DIRECTORY_READ,
+        "directoryWrite" => RIGHT_DIRECTORY_WRITE,
+        "directoryList" => RIGHT_DIRECTORY_LIST,
+        "directoryDerive" => RIGHT_DIRECTORY_DERIVE,
+        "inputRead" => RIGHT_INPUT_READ,
+        "bufferCreate" => RIGHT_BUFFER_CREATE,
+        "bufferLoan" => RIGHT_BUFFER_LOAN,
+        _ => return None,
+    })
+}

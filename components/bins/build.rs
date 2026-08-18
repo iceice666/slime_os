@@ -144,11 +144,16 @@ fn generate_command_profile(manifest_dir: &str) {
     // `mintedBindings` entry rather than a grant binding: the edge and slot are
     // fixed, only the object waits for its minter. Either spelling answers the
     // same question, so both are consulted.
+    //
+    // This stays a build-time derivation while the RPC endpoint cannot be named
+    // at runtime: `sel4-dango.zti` grants `spawn-service` three `send`+`recv`
+    // endpoints -- the RPC channel plus one context endpoint per command -- so
+    // CP2's `kind:endpoint+send,recv` role is ambiguous and is refused. Which of
+    // the three is "the RPC one" is a fact about the graph's shape, not about the
+    // capability, so it needs the peer relation this reads.
     let rpc_slot = related_binding_slot(&manifest, consumer, peer, &["send", "recv"])
         .or_else(|| minted_binding_slot(&manifest, consumer, &["send", "recv"]))
         .expect("command RPC binding");
-    let shared_buffer_factory_slot = binding_with_right_slot(&manifest, consumer, "bufferCreate")
-        .expect("command shared-buffer binding");
     let generated = entries
         .iter()
         .map(|(name, object, slot)| format!("    (b\"{name}\", b\"{object}\", {slot}),\n"))
@@ -157,7 +162,7 @@ fn generate_command_profile(manifest_dir: &str) {
     std::fs::write(
         out.join("command_profile.rs"),
         format!(
-            "pub const CLIENT_BUDGET: usize = {client_budget};\npub const RPC_SLOT: u32 = {rpc_slot};\npub const SHARED_BUFFER_FACTORY_SLOT: u32 = {shared_buffer_factory_slot};\npub const COMMAND_PROFILE: &[(&[u8], &[u8], u32)] = &[\n{generated}];\n"
+            "pub const CLIENT_BUDGET: usize = {client_budget};\npub const RPC_SLOT: u32 = {rpc_slot};\npub const COMMAND_PROFILE: &[(&[u8], &[u8], u32)] = &[\n{generated}];\n"
         ),
     )
     .expect("write command profile");
@@ -215,6 +220,35 @@ fn executable_slot(manifest: &str, holder: &str, wanted: &str) -> Option<usize> 
     )
 }
 
+fn related_binding_slot(
+    manifest: &str,
+    holder: &str,
+    peer: &str,
+    rights: &[&str],
+) -> Option<usize> {
+    manifest.split("\n    {\n").skip(1).find_map(|block| {
+        let name = field(block, "name")?;
+        let source = field(block, "source")?;
+        let target = field(block, "target")?;
+        let declared = field_list(block, "rights")?;
+        ((source == holder && target == peer || source == peer && target == holder)
+            && rights.iter().all(|right| declared.contains(right)))
+        .then(|| binding_slot(manifest, holder, name))
+        .flatten()
+    })
+}
+
+fn minted_binding_slot(manifest: &str, holder: &str, rights: &[&str]) -> Option<usize> {
+    let section = manifest.split("mintedBindings = [").nth(1)?;
+    let section = section.split("\n  ];").next()?;
+    section.split("\n    {\n").skip(1).find_map(|block| {
+        let declared = field_list(block, "rights")?;
+        (field(block, "holder")? == holder && rights.iter().all(|r| declared.contains(r)))
+            .then(|| field_int(block, "slot"))
+            .flatten()
+    })
+}
+
 fn binding_slot(manifest: &str, holder: &str, grant: &str) -> Option<usize> {
     let instance = instance_block(manifest, holder)?;
     instance.split("\n        {\n").skip(1).find_map(|block| {
@@ -238,48 +272,6 @@ fn executable_launcher<'a>(manifest: &'a str, targets: &[&str]) -> Option<&'a st
             .iter()
             .all(|target| executable_grant(manifest, name, target).is_some())
             .then_some(name)
-    })
-}
-
-fn related_binding_slot(
-    manifest: &str,
-    holder: &str,
-    peer: &str,
-    rights: &[&str],
-) -> Option<usize> {
-    manifest.split("\n    {\n").skip(1).find_map(|block| {
-        let name = field(block, "name")?;
-        let source = field(block, "source")?;
-        let target = field(block, "target")?;
-        let declared = field_list(block, "rights")?;
-        ((source == holder && target == peer || source == peer && target == holder)
-            && rights.iter().all(|right| declared.contains(right)))
-        .then(|| binding_slot(manifest, holder, name))
-        .flatten()
-    })
-}
-
-/// The slot a `mintedBindings` entry declares for `holder`, for a capability
-/// carrying every one of `rights`. The object is created by the owner at
-/// runtime; the destination slot is fixed here.
-fn minted_binding_slot(manifest: &str, holder: &str, rights: &[&str]) -> Option<usize> {
-    let section = manifest.split("mintedBindings = [").nth(1)?;
-    let section = section.split("\n  ];").next()?;
-    section.split("\n    {\n").skip(1).find_map(|block| {
-        let declared = field_list(block, "rights")?;
-        (field(block, "holder")? == holder && rights.iter().all(|r| declared.contains(r)))
-            .then(|| field_int(block, "slot"))
-            .flatten()
-    })
-}
-
-fn binding_with_right_slot(manifest: &str, holder: &str, right: &str) -> Option<usize> {
-    manifest.split("\n    {\n").skip(1).find_map(|block| {
-        let name = field(block, "name")?;
-        field_list(block, "rights")?
-            .contains(&right)
-            .then(|| binding_slot(manifest, holder, name))
-            .flatten()
     })
 }
 

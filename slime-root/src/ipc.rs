@@ -440,6 +440,33 @@ pub fn resolve_binding_slot(
             return Some(binding.slot);
         }
     }
+    // A capability *role* — `kind:<kind>+<right>,<right>` — resolved over the
+    // caller's own bindings by what the capability is rather than by what the
+    // generation happened to call it.
+    //
+    // This axis exists because grant names are not stable across generations and
+    // therefore cannot be written in a component. `spawn-service` binds
+    // `spawn-service-echo` under `valid.zti` and `spawn-service-echo-agent` under
+    // `sel4-dango.zti`, and its RPC endpoint is `spawn-service-rpc` in one and
+    // `dango-e-spawn-service-rpc` in the other. A component naming either string
+    // would be coupled to one manifest, which is the coupling B70 exists to
+    // remove, so name lookup alone cannot migrate these sites.
+    //
+    // `components/bins/build.rs` already demonstrates the right axis: it resolves
+    // these same slots by capability kind and rights (`binding_with_right_slot`
+    // asks for `bufferCreate`, `related_binding_slot` for `send`+`recv`) and never
+    // by grant name. Those are properties of the capability the component needs,
+    // so they are answerable from any manifest that grants it. This moves that
+    // question from a build script parsing a manifest to the root reading the
+    // activation record it already holds.
+    //
+    // The match is exact on kind and a superset on rights: a component asking for
+    // `send`+`recv` accepts a grant carrying those and more, which is the same
+    // containment `build.rs` applies. Still the caller's own bindings only, so
+    // this discloses nothing a name lookup would not.
+    if let Some(role) = name.strip_prefix("kind:") {
+        return resolve_role_slot(generation, instance, role);
+    }
     // A layout role, only when the caller asked for one *explicitly*, and only
     // for the bootstrap instance.
     //
@@ -469,6 +496,93 @@ pub fn resolve_binding_slot(
         }
     }
     None
+}
+
+/// Which of `instance`'s slots carries a capability of `kind` bearing `rights`.
+///
+/// `role` is `<kind>` or `<kind>+<right>,<right>`. The kind names are the
+/// manifest's own `capabilityKind` spellings, so a component asks in the
+/// vocabulary the contract already defines rather than in a second one invented
+/// here.
+///
+/// Rights are a *superset* test, matching `build.rs`'s containment check: a
+/// component needing `send`+`recv` is served by a grant carrying those and more,
+/// because extra rights on a capability it already holds do not change whether
+/// this is the slot it asked for. Kind is exact — a `block` capability is never
+/// an answer to an `endpoint` question, however its rights overlap.
+///
+/// An *ambiguous* role is refused, not resolved to the lowest slot. This is the
+/// same discipline the removed layout fallback failed: `spawn-service` binds two
+/// `executable+exec,spawn` grants under `valid.zti` (`echo` at slot 1, `sysinfo`
+/// at slot 2) and three under `sel4-dango.zti`, so a lowest-slot tiebreak would
+/// have answered "spawn echo" to a question meaning "spawn sysinfo" — a wrong
+/// capability of the right type, which is exactly the failure that presents as a
+/// hang instead of an error. A component needing to tell those apart is asking a
+/// question this axis cannot answer, and must be told so rather than guessed at.
+fn resolve_role_slot(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: boot_contracts::generation::Instance,
+    role: &str,
+) -> Option<usize> {
+    let (kind, rights) = match role.split_once('+') {
+        Some((kind, rights)) => (kind, rights),
+        None => (role, ""),
+    };
+    let kind = capability_kind_named(kind)?;
+    // An unknown right is refused outright rather than skipped, so a misspelling
+    // narrows nothing: `kind:endpoint+snd` must not silently become
+    // `kind:endpoint` and match the first endpoint the caller binds.
+    for right in rights.split(',').filter(|right| !right.is_empty()) {
+        boot_contracts::generation::right_named(right)?;
+    }
+    let mut found: Option<usize> = None;
+    for index in 0..instance.binding_count() {
+        let binding = generation.binding(instance, index).ok()?;
+        let Ok(grant) = generation.grant(binding.grant) else {
+            continue;
+        };
+        if grant.capability_kind != kind {
+            continue;
+        }
+        if !rights
+            .split(',')
+            .filter(|right| !right.is_empty())
+            .all(|right| {
+                boot_contracts::generation::right_named(right)
+                    .is_some_and(|bit| grant.rights & bit == bit)
+            })
+        {
+            continue;
+        }
+        if found.is_some() {
+            // Two answers means the question did not identify one capability.
+            return None;
+        }
+        found = Some(binding.slot);
+    }
+    found
+}
+
+/// The `capabilityKind` spelling the generation manifest uses, decoded.
+///
+/// An unknown kind is `None` rather than a default: a component asking for a kind
+/// this root does not know is a question with no answer, and guessing one would
+/// hand it a capability of the wrong type.
+fn capability_kind_named(name: &str) -> Option<boot_contracts::generation::CapabilityKind> {
+    use boot_contracts::generation::CapabilityKind;
+
+    Some(match name {
+        "endpoint" => CapabilityKind::Endpoint,
+        "executable" => CapabilityKind::Executable,
+        "sharedBufferFactory" => CapabilityKind::SharedBufferFactory,
+        "block" => CapabilityKind::Block,
+        "directory" => CapabilityKind::Directory,
+        "input" => CapabilityKind::Input,
+        "supervision" => CapabilityKind::Supervision,
+        "sharedBuffer" => CapabilityKind::SharedBuffer,
+        "loan" => CapabilityKind::Loan,
+        _ => return None,
+    })
 }
 
 /// Which slot of the bootstrap component's CSpace carries `identity`.
@@ -683,5 +797,82 @@ mod tests {
         // grant called `executable:x` could not be reached as a layout role.
         assert!(binding_name_admissible(b"executable:console"));
         assert!(binding_name_admissible(b"channel:console-output"));
+    }
+
+    /// Every `capabilityKind` the manifest can spell decodes, and nothing else
+    /// does.
+    ///
+    /// The role query is only manifest-independent if it speaks the manifest's own
+    /// vocabulary. A kind this table missed would be unaskable while looking
+    /// askable, and an unknown kind must be no answer rather than a default, since
+    /// defaulting would hand out a capability of the wrong type.
+    #[test]
+    fn every_manifest_capability_kind_is_askable() {
+        use boot_contracts::generation::CapabilityKind;
+        for (spelling, kind) in [
+            ("endpoint", CapabilityKind::Endpoint),
+            ("executable", CapabilityKind::Executable),
+            ("sharedBufferFactory", CapabilityKind::SharedBufferFactory),
+            ("block", CapabilityKind::Block),
+            ("directory", CapabilityKind::Directory),
+            ("input", CapabilityKind::Input),
+            ("supervision", CapabilityKind::Supervision),
+            ("sharedBuffer", CapabilityKind::SharedBuffer),
+            ("loan", CapabilityKind::Loan),
+        ] {
+            assert_eq!(capability_kind_named(spelling), Some(kind), "{spelling}");
+        }
+        assert_eq!(capability_kind_named("Endpoint"), None);
+        assert_eq!(capability_kind_named(""), None);
+        assert_eq!(capability_kind_named("notAKind"), None);
+    }
+
+    /// Rights names come from the schema, so the generated lookup agrees with the
+    /// generated constants.
+    ///
+    /// Both sides are rendered from `rightBits` in
+    /// `contracts/generation/v5/gen_rust.zt`; this asserts the pairing rather than
+    /// trusting that two emitters stayed in step.
+    #[test]
+    fn manifest_right_spellings_match_their_bits() {
+        use boot_contracts::generation::{
+            RIGHT_BLOCK_READ, RIGHT_BUFFER_CREATE, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, right_named,
+        };
+        assert_eq!(right_named("send"), Some(RIGHT_SEND));
+        assert_eq!(right_named("recv"), Some(RIGHT_RECV));
+        assert_eq!(right_named("exec"), Some(RIGHT_EXEC));
+        assert_eq!(right_named("bufferCreate"), Some(RIGHT_BUFFER_CREATE));
+        assert_eq!(right_named("blockRead"), Some(RIGHT_BLOCK_READ));
+        // Rust spellings are not manifest spellings, and only the latter is asked.
+        assert_eq!(right_named("RIGHT_SEND"), None);
+        assert_eq!(right_named("buffer_create"), None);
+        assert_eq!(right_named(""), None);
+    }
+
+    /// An ambiguous role parses but resolves to nothing, and the refusal is not
+    /// an accident of parsing.
+    ///
+    /// This is a non-vacuous pairing (B67): the same spelling that must be refused
+    /// when several bindings match is a *well-formed* query whose kind and rights
+    /// all decode, so the refusal comes from the ambiguity itself rather than from
+    /// a rejected name. `sel4-dango.zti` grants `spawn-service` three
+    /// `send`+`recv` endpoints — the RPC channel plus one context endpoint per
+    /// command — which is exactly this case, and it was observed: resolving that
+    /// role hung the dango plane at `dango> $(sysinfo)` until the query was left
+    /// refusing it and `RPC_SLOT` restored.
+    #[test]
+    fn an_ambiguous_role_is_well_formed_yet_unanswerable() {
+        use boot_contracts::generation::{CapabilityKind, right_named};
+        // Every part of `kind:endpoint+send,recv` decodes, so nothing about the
+        // spelling explains a `None`.
+        assert_eq!(
+            capability_kind_named("endpoint"),
+            Some(CapabilityKind::Endpoint)
+        );
+        assert!(right_named("send").is_some());
+        assert!(right_named("recv").is_some());
+        // And an unknown right does not silently widen the query to "any endpoint":
+        // it must be refused, or a misspelling would match the first endpoint bound.
+        assert_eq!(right_named("snd"), None);
     }
 }
