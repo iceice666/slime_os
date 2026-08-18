@@ -1,0 +1,358 @@
+-- Slime OS system specification contract, version 1 (CP1).
+--
+-- A `SystemSpec` is one composition: which components a generation admits, the
+-- authority edges between them, and the graph they exchange data over. It is
+-- the system-level half of the model `contracts/component-spec/v1` began —
+-- a component spec describes a component, a system spec composes instances of
+-- them into a generation.
+--
+-- The point is that `contracts/generation/v1`'s `executables`, `instances`,
+-- `objects`, `sharedBufferBudget`, and `health.requiredInstances` sections stop
+-- being hand-authored: `scripts/generate/generate-generation-from-spec.py`
+-- derives them from this record plus the referenced component specs. What
+-- remains declared here is what genuinely cannot be derived — a component
+-- spec describes a component in isolation and cannot know which *other*
+-- components a particular system grants it authority over.
+--
+-- This is not a wire format. Nothing serializes a `SystemSpec`; the generation
+-- manifest it produces is what the builder encodes, and
+-- `contracts/generation/v1` still owns that boundary.
+
+-- One authority edge. Identical in shape to `contracts/generation/v1`'s
+-- `CapabilityGrant`, because it *is* that record: the generator copies it
+-- through rather than translating, so there is no second grant vocabulary to
+-- keep in step.
+--
+-- Grants are the irreducible system-level fact. Which components exist is a
+-- list of component specs; which of them may talk to which is only ever a
+-- property of the composition, so it is declared, and every instance binding is
+-- then derived from it.
+SystemGrant :: type {
+  name : Text;
+  capabilityKind : Text;
+  source : Text;
+  target : Text;
+  rights : List Text;
+  transferable : Bool;
+};
+
+-- One statically created notification, as `contracts/generation/v1`'s
+-- `NotificationGrant`. Stream rings declare two — ready flows producer to
+-- consumer, credit flows back — but not every stream participant gets a ring
+-- (`fabric-observer` has none), so the set is declared rather than derived from
+-- the route table.
+SystemNotification :: type {
+  name : Text;
+  source : Text;
+  target : Text;
+};
+
+-- One holder's view of a notification, as `NotificationBinding`. `slot` is
+-- optional on the same terms the generation manifest gives it: omitted asks the
+-- builder to assign deterministically, present pins a byte-frozen layout.
+SystemNotificationBinding :: type {
+  grant : Text;
+  holder : Text;
+  slot? : Int;
+  role : Text;
+};
+
+-- One pinned capability slot.
+--
+-- Bindings are derived from `grants`, so their slot numbers would ordinarily be
+-- assigned by `build-generation.py::assign_declared_slots` — the lowest free
+-- number per holder, in grant-name order. That is exactly what
+-- `sel4-channel.zti` already encodes, and it needs no pins at all. `valid.zti`
+-- does: 44 of its 76 bindings sit at hand-picked numbers because
+-- `contracts/boot-layout/v1/fixtures/*.layout` freeze them byte for byte, and
+-- `components/bins/build.rs` reads several of them out of the manifest text.
+--
+-- Three of those 44 exist for a subtler reason worth stating, because a reviewer
+-- caught it and the gate did not: dropping the four bindings that name no grant
+-- freed the slots they occupied, and `assign_declared_slots` then handed those
+-- numbers to the next binding in grant-name order, silently moving
+-- `generation-manager`'s rollback/select/stage bindings from 2/3/4 to 1/2/3.
+-- Pinning them holds the pre-CP1 layout, and the gate now resolves the frozen
+-- baseline independently so no future removal can renumber a live slot unnoticed.
+--
+-- A pin is therefore a real, narrow exception rather than the normal case: it
+-- says "this number is load-bearing elsewhere", and the generator refuses a pin
+-- naming a (holder, grant) pair the grant table does not produce, so a stale
+-- pin cannot silently do nothing.
+SlotPin :: type {
+  holder : Text;
+  grant : Text;
+  slot : Int;
+};
+
+-- Which executables one component may spawn by command name.
+--
+-- Not derivable from the exec grants alone: `dango` spawns `echo-agent` through
+-- the command name `echo`, so the mapping from command to executable is a
+-- composition choice, not a property of either component.
+CommandBinding :: type {
+  component : Text;
+  commands : List Text;
+};
+
+-- Per-component generation-module image size.
+--
+-- Declared with one default and explicit exceptions rather than per component,
+-- because it is uniform for all but a handful. `Object.size` is presently
+-- carried by the manifest and read by nothing — no builder path, no Rust
+-- decoder — so this exists to reproduce the declared field faithfully, not
+-- because a number here changes an admitted image.
+ImageSize :: type {
+  component : Text;
+  bytes : Int;
+};
+
+-- One persisted state binding, as `contracts/generation/v1`'s `StateBinding`.
+-- Which state a component owns is arguably a component fact, but its schema
+-- version and retention policy are what *this* system admits, so the whole
+-- record is declared here rather than split across two contracts.
+SystemState :: type {
+  name : Text;
+  owner : Text;
+  schemaVersion : Int;
+  policy : Text;
+};
+
+-- QoS and route shape are `contracts/generation/v1`'s `FabricParticipant` and
+-- `FabricRoute`, reproduced field for field. CP1 deliberately does not define a
+-- second graph representation: the generator copies these records into the
+-- manifest's `fabricGraph`, so the fabric contract has exactly one shape and
+-- `contracts/component-spec/v1`'s QoS entries are checked against it.
+SystemParticipant :: type {
+  component : Text;
+  direction : Text;
+  visibility : Text;
+  interposition : List Text;
+  reliability : Text;
+  durability : Text;
+  liveliness : Text;
+  historyDepth : Int;
+  retainedDepth : Int;
+  deadlineNs : Int;
+  lifespanNs : Int;
+  leaseNs : Int;
+};
+
+SystemRoute :: type {
+  name : Text;
+  interface : Text;
+  participants : List SystemParticipant;
+};
+
+SystemFabricLimits :: type {
+  routes : Int;
+  ingressSources : Int;
+  publishers : Int;
+  subscribers : Int;
+  clients : Int;
+  servers : Int;
+  sampleBytes : Int;
+  queueDepth : Int;
+  historyDepth : Int;
+  eventDepth : Int;
+  retainedSamples : Int;
+  retries : Int;
+  inFlightCalls : Int;
+  inFlightOperations : Int;
+  bufferPages : Int;
+  mappings : Int;
+  loans : Int;
+  capabilitySlots : Int;
+  buffers : Int;
+};
+
+SystemProfileInterposition :: type {
+  route : Text;
+  participant : Text;
+  chain : List Text;
+};
+
+SystemFabricProfile :: type {
+  name : Text;
+  interpositions : List SystemProfileInterposition;
+  streamControls : List Text;
+};
+
+SystemFabricGraph :: type {
+  fabricComponent : Text;
+  limits : SystemFabricLimits;
+  traceDepth : Int;
+  traceOverflow : Text;
+  routes : List SystemRoute;
+  profiles : List SystemFabricProfile;
+};
+
+-- One named boot composition, as `contracts/generation/v1`'s `BootProfile`.
+SystemBootProfile :: type {
+  name : Text;
+  fabricProfile : Text;
+  instances : List Text;
+  requiredInstances : List Text;
+};
+
+-- One instance's placement facts that belong to the composition rather than to
+-- the component.
+--
+-- `owner` is here and not in the component spec because the same component can
+-- be owned by `root` in one system and by a spawner in another — `console` is
+-- owned by `root` in `valid.zti` and by `init` in `sel4-channel.zti`. The
+-- component spec's `owner` records what the reference generation does; a
+-- placement overrides it when a system composes the component differently.
+--
+-- `autostart` defaults to true, which every instance in every current fixture
+-- declares.
+--
+-- `spawnBudget` is here too, and its being a placement rather than a component
+-- fact is a finding of this milestone rather than a preference: `init` carries
+-- 1 in `sel4-channel.zti`, 2 in `sel4-crossing.zti`, 4 in `sel4-dango.zti`, 18
+-- in `valid.zti`, and 19 in `sel4-boot.zti`. A spawn budget is how many
+-- children *this* composition launches, so a component spec cannot own it. The
+-- component spec's `runtime.resource.spawnBudget` remains the reference
+-- generation's value and is the default when a system declares no placement.
+Placement :: type {
+  component : Text;
+  owner? : Text;
+  autostart? : Bool;
+  spawnBudget? : Int;
+  priority? : Int;
+  extraThreads? : Int;
+  workerPriority? : Int;
+};
+
+-- `deploymentConstraint` and `acceptanceCriteria` are the requirement
+-- document's §4.2 fields, kept as bounded declared text: a deployment
+-- constraint this repository can *enforce* is already expressed as a target
+-- profile or a resource bound, so these record the human-level statement the
+-- system is accepted against rather than inventing a second enforcement path
+-- that nothing reads.
+SystemSpec :: type {
+  formatVersion : Int;
+  name : Text;
+  generation : Int;
+  -- A `contracts/target-profile/v1` profile name, becoming the manifest's
+  -- `target`. It is deliberately *not* required to equal the referenced
+  -- component specs' `runtime.executionEnvironment`: the same components
+  -- compose into both `valid.zti` (x86_64-qemu-virtio) and `sel4-channel.zti`
+  -- (aarch64-sel4-qemu-virt), so a component spec's environment records the
+  -- reference generation it was authored against rather than an exclusive
+  -- claim. Per-image target qualification is stage-0's, through
+  -- `contracts/component/v2`'s header, and is already gated there.
+  targetRequirement : Text;
+  bootAction : Text;
+  bootstrapInstance : Text;
+  bootAttempts : Int;
+  components : List Text;
+  placements : List Placement;
+  grants : List SystemGrant;
+  slotPins : List SlotPin;
+  commandBindings : List CommandBinding;
+  defaultImageBytes : Int;
+  imageSizes : List ImageSize;
+  -- Whether the generation carries a `shared-buffer-budget` resource object.
+  --
+  -- Declared rather than derived from "does any component have a budget",
+  -- because the two are genuinely independent in the builder: the object's
+  -- presence is what makes it *encode* a budget payload
+  -- (`build-generation.py` line 3866), and the current fixtures disagree about
+  -- the correlation — `sel4-channel` and `sel4-crossing` carry the object with
+  -- an empty budget, while `sel4-directory` and `sel4-filesystem` carry neither.
+  -- Deriving it would silently change which payloads four existing generations
+  -- encode. The `fabric-graph` object needs no such field: the builder already
+  -- refuses a graph without the object and an object without the graph, so its
+  -- presence *is* derived.
+  sharedBufferBudgetObject : Bool;
+  interfaceSchemas : List Text;
+  state : List SystemState;
+  notifications : List SystemNotification;
+  notificationBindings : List SystemNotificationBinding;
+  bootProfiles : List SystemBootProfile;
+  fabricGraph? : SystemFabricGraph;
+  deploymentConstraint : Text;
+  acceptanceCriteria : Text;
+};
+
+FromData @SystemGrant :: derive
+FromData @SystemNotification :: derive
+FromData @SystemNotificationBinding :: derive
+FromData @SlotPin :: derive
+FromData @CommandBinding :: derive
+FromData @ImageSize :: derive
+FromData @SystemState :: derive
+FromData @SystemParticipant :: derive
+FromData @SystemRoute :: derive
+FromData @SystemFabricLimits :: derive
+FromData @SystemProfileInterposition :: derive
+FromData @SystemFabricProfile :: derive
+FromData @SystemFabricGraph :: derive
+FromData @SystemBootProfile :: derive
+FromData @Placement :: derive
+FromData @SystemSpec :: derive
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-system-spec-v1:";
+
+-- Bounds. `maxComponents` is `contracts/generation/v1`'s admitted-instance
+-- ceiling; the rest mirror the manifest limits the builder already enforces, so
+-- a system spec cannot describe a generation the builder would refuse.
+maxComponents :: Int = 48;
+maxSourceBytes :: Int = 262144;
+maxNameBytes :: Int = 64;
+maxTextBytes :: Int = 256;
+maxGrants :: Int = 128;
+maxSlotPins :: Int = 128;
+maxNotifications :: Int = 64;
+maxNotificationBindings :: Int = 128;
+maxBootProfiles :: Int = 8;
+maxRoutes :: Int = 16;
+maxParticipantsPerRoute :: Int = 16;
+maxProfiles :: Int = 8;
+maxStateBindings :: Int = 16;
+maxInterfaceSchemas :: Int = 64;
+maxCommandBindings :: Int = 16;
+maxImageSizes :: Int = 48;
+
+decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
+  = data => decode data;
+
+{
+  SystemGrant =;
+  SystemNotification =;
+  SystemNotificationBinding =;
+  SlotPin =;
+  CommandBinding =;
+  ImageSize =;
+  SystemState =;
+  SystemParticipant =;
+  SystemRoute =;
+  SystemFabricLimits =;
+  SystemProfileInterposition =;
+  SystemFabricProfile =;
+  SystemFabricGraph =;
+  SystemBootProfile =;
+  Placement =;
+  SystemSpec =;
+  decodeSystemSpec =;
+  formatVersion =;
+  identityDomain =;
+  maxComponents =;
+  maxSourceBytes =;
+  maxNameBytes =;
+  maxTextBytes =;
+  maxGrants =;
+  maxSlotPins =;
+  maxNotifications =;
+  maxNotificationBindings =;
+  maxBootProfiles =;
+  maxRoutes =;
+  maxParticipantsPerRoute =;
+  maxProfiles =;
+  maxStateBindings =;
+  maxInterfaceSchemas =;
+  maxCommandBindings =;
+  maxImageSizes =;
+}

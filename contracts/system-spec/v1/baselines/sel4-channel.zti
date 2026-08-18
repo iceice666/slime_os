@@ -4,17 +4,17 @@
   executables = [
     {
       commandProfile = [];
-      name = "console";
-      object = "sha256:console";
-      role = "service";
-      spawnBudget = 0;
-    };
-    {
-      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
       spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
     };
   ];
   formatVersion = 1;
@@ -55,6 +55,25 @@
       bindings = [
         {
           grant = "dango-output";
+          slot = 0;
+        };
+        {
+          grant = "init-console";
+          slot = 1;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "dango-output";
+          slot = 0;
         };
       ];
       dependencies = [
@@ -65,30 +84,14 @@
       name = "console";
       owner = "init";
     };
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "dango-output";
-        };
-        {
-          grant = "init-console";
-        };
-      ];
-      dependencies = [];
-      executable = "init";
-      health = "required";
-      name = "init";
-      owner = "root";
-    };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
     };
     {
       id = "sha256:console";
@@ -96,12 +99,12 @@
       size = 65536;
     };
     {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
     };
     {
-      id = "shared-buffer-budget";
+      id = "boot-layout";
       kind = "resource";
       size = 4096;
     };

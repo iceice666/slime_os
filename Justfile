@@ -608,6 +608,13 @@ interface_schema_check: contracts_check
 component_spec_check: contracts_check
     python3 scripts/check/check-component-spec.py
 
+# CP1's generation derivation: `valid.zti` and `sel4-channel.zti` are generated
+# from `contracts/system-spec/v1` sources plus the component-spec corpus, must
+# regenerate byte-identically, and 17 named malformations are refused.
+system_spec_check: component_spec_check
+    python3 scripts/check/check-system-spec.py
+    python3 scripts/generate/generate-generation-from-spec.py --check
+
 fabric_manifest_check: contracts_check sel4_stream_check
     python3 scripts/check/check-fabric-manifest.py
 

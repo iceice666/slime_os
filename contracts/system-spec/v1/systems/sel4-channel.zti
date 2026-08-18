@@ -1,0 +1,58 @@
+{
+  formatVersion = 1;
+  name = "sel4-channel";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "channel";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "console";
+    "init";
+  ];
+  placements = [
+    {
+      component = "console";
+      owner = "init";
+    };
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+  ];
+  grants = [
+    {
+      name = "dango-output";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "console";
+      rights = [
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      source = "init";
+      target = "console";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  deploymentConstraint = "aarch64 seL4 QEMU virt, no block device.";
+  acceptanceCriteria = "just sel4_channel_check observes the console channel plane complete.";
+}

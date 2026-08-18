@@ -57,6 +57,10 @@ COMPONENT_SPEC_CONTRACT = ROOT / "contracts" / "component-spec" / "v1"
 COMPONENT_SPEC_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-component-spec-bindings.py"
 )
+SYSTEM_SPEC_CONTRACT = ROOT / "contracts" / "system-spec" / "v1"
+SYSTEM_SPEC_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-system-spec-bindings.py"
+)
 FABRIC_GRAPH_CONTRACT = ROOT / "contracts" / "fabric-graph" / "v1"
 CAPABILITY_TRANSFER_CONTRACT = ROOT / "contracts" / "capability-transfer" / "v1"
 CAPABILITY_TRANSFER_BINDING_GENERATOR = (
@@ -256,6 +260,14 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(SYSTEM_SPEC_CONTRACT / "schema.zt"))
+run("check", str(SYSTEM_SPEC_CONTRACT / "check.zt"))
+run("check", str(SYSTEM_SPEC_CONTRACT / "gen_python.zt"))
+subprocess.run(
+    [sys.executable, str(SYSTEM_SPEC_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))
@@ -311,5 +323,5 @@ print(
     "powerbox, generation-management, transfer, sample-descriptor, interface-schema, "
     "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
     "fabric-call, fabric-operation, fabric-visibility, fabric-trace, "
-    "component-spec, and rpi5-ros2-demo contracts passed"
+    "component-spec, system-spec, and rpi5-ros2-demo contracts passed"
 )

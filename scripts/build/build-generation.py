@@ -710,6 +710,18 @@ def declared_spawn_grant_counts(manifest: dict) -> list[tuple[dict, int]]:
             )
         )
         counts.append((instance, minted + supplied))
+    # By holder name, so this table is a function of the manifest's *content*
+    # rather than of the order its instances happen to be written in.
+    #
+    # CP1 found this: deriving `sel4-channel.zti` in canonical order produced a
+    # semantically identical manifest whose `generation.bin` nevertheless
+    # differed, because this list is rendered straight into
+    # `FABRIC_MINTED_GRANTS` and compiled into `init`, so reordering two
+    # instances changed a component ELF and therefore the generation identity.
+    # Every reader looks entries up by holder name (`init.rs`'s
+    # `declared_minted_grants`), so the order was never meaningful — only
+    # accidentally load-bearing.
+    counts.sort(key=lambda entry: entry[0]["name"])
     return counts
 
 def resolve_target_profile(target: object) -> TargetProfile:
