@@ -2285,12 +2285,31 @@ fn send_qos_event(
 /// The supervision handle init granted the fabric for one subscriber. Init
 /// spawns each client and hands the fabric its supervision capability, so the
 /// fabric can name a loan receiver by capability rather than by task id.
+///
+/// Resolved from the root at runtime rather than read out of a generated table:
+/// a supervision binding is named for the task it supervises
+/// (`<supervised-instance>-supervision`, asserted by
+/// `build-generation.py`'s `validate_supervision_binding_names`), so the
+/// component this function is already given *is* the name to ask for. That name
+/// means the same thing under every generation declaring it, which the three
+/// spellings this convention replaced did not.
 fn supervision_slot_for(component: &[u8]) -> u32 {
-    FABRIC_SUPERVISION
-        .iter()
-        .find(|(name, _)| *name == component)
-        .map(|(_, slot)| *slot)
-        .unwrap_or_else(|| fail(b"subscriber has no supervision handle"))
+    // `minted:` + the longest component name + `-supervision`. A supervision
+    // object cannot exist before the task it names, so the generation declares
+    // where it will land rather than granting it, and `minted:` is the axis that
+    // reads that table.
+    const PREFIX: &[u8] = b"minted:";
+    const SUFFIX: &[u8] = b"-supervision";
+    let mut name = [0u8; 64];
+    let end = PREFIX.len() + component.len() + SUFFIX.len();
+    if end > name.len() {
+        fail(b"supervision name exceeds bound");
+    }
+    name[..PREFIX.len()].copy_from_slice(PREFIX);
+    name[PREFIX.len()..PREFIX.len() + component.len()].copy_from_slice(component);
+    name[PREFIX.len() + component.len()..end].copy_from_slice(SUFFIX);
+    slime_rt::resolve_binding(&name[..end])
+        .unwrap_or_else(|_| fail(b"subscriber has no supervision handle"))
 }
 
 /// Answer a request the graph does not authorize. A denial is the same record

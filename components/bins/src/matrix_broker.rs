@@ -448,20 +448,19 @@ fn serve(
 /// that is merely slow look identical on the endpoint alone. An error reading
 /// the handle means the handle itself is gone, which is that same answer.
 fn settled(component: &[u8]) -> bool {
-    let Some((_, supervision)) = super::FABRIC_SUPERVISION
-        .iter()
-        .find(|(name, _)| *name == component)
-    else {
-        // No handle is no termination signal at all, on this transport: a
-        // native Endpoint never reports `ERR_PEER_DEAD`, so a component absent
-        // from this table would poll `Idle` forever and the dispatch loop
-        // would never see it settle. Every control-plane participant is
-        // granted a handle for exactly this reason (`denied_components` in
-        // `build-generation.py`'s `resolve_fabric_profile`); a graph that
-        // omitted one is a composition defect, refused here rather than hung on.
-        fail(b"matrix client holds no supervision handle");
-    };
-    !matches!(slime_rt::supervision_status(*supervision), Ok(None))
+    // Resolved from the root by the supervised task's own name, rather than
+    // looked up in a generated table. `supervision_slot_for` refuses a component
+    // the generation granted no handle for, which is the same answer this
+    // function's own `else` arm gave and for the same reason: no handle is no
+    // termination signal at all on this transport, since a native Endpoint never
+    // reports `ERR_PEER_DEAD`, so such a component would poll `Idle` forever and
+    // the dispatch loop would never see it settle. Every control-plane
+    // participant is granted a handle for exactly this reason
+    // (`denied_components` in `build-generation.py`'s `resolve_fabric_profile`);
+    // a graph that omitted one is a composition defect, refused rather than hung
+    // on.
+    let supervision = super::supervision_slot_for(component);
+    !matches!(slime_rt::supervision_status(supervision), Ok(None))
 }
 
 /// Match one provisioning request against the graph, or refuse it.
