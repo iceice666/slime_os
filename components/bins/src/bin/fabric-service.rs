@@ -2300,6 +2300,11 @@ fn supervision_slot_for(component: &[u8]) -> u32 {
     // reads that table.
     const PREFIX: &[u8] = b"minted:";
     const SUFFIX: &[u8] = b"-supervision";
+    // 64 is `SUPERVISION_RESOLVE_NAME_BYTES` in `build-generation.py`, which
+    // refuses any supervision binding whose resolve string would not fit here.
+    // A `no_std` component has no allocator, so this buffer is fixed; bounding it
+    // at build time is what keeps the `fail()` below unreachable on a generation
+    // the builder accepted, rather than a boot-time surprise.
     let mut name = [0u8; 64];
     let end = PREFIX.len() + component.len() + SUFFIX.len();
     if end > name.len() {

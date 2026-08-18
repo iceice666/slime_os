@@ -60,6 +60,25 @@ no holder supervises itself.
 | A future fixture reintroduces a fourth convention | `just contracts_check` (builder invariant) | `minted binding <name>: a supervision binding is named <supervised-instance>-supervision` |
 | A name points at a task its minter cannot supervise | `just contracts_check` | `supervises an instance owned by X, but is minted by Y` |
 | A rename silently moved authority | `just sel4_fabric_aggregate_check` and the four plane gates | Plane timeout or trace-record mismatch |
+| A future name overflows the component's fixed resolve buffer | `just contracts_check` (`SUPERVISION_RESOLVE_NAME_BYTES`) | `its resolve string is N bytes, over the 64-byte buffer a component formats it in` |
+
+The last guard exists because migrating `supervision_slot_for` introduced a
+failure path that did not exist before: a `no_std` component has no allocator, so
+it formats `minted:<component>-supervision` into a fixed 64-byte array, and a
+longer name would `fail()` on a real boot — the silent-hang class this track has
+already been bitten by. No instance-name length bound existed anywhere, so the
+builder now refuses at build time what the component cannot format at run time.
+Today's longest resolve string is 45 bytes (`fabric-op-client-b-restart`), and
+the bound was proven non-vacuous by validating a 79-byte case (refused) against
+that 45-byte one (accepted).
+
+Worth knowing for the next handle added: six instance-name pairs are
+prefix-extensions of each other (`fabric-op-client-b` and
+`fabric-op-client-b-restart` among them), and both members of every pair declare
+their own supervision handle. The invariant strips the `-supervision` suffix and
+looks up the whole remainder rather than searching for a known instance name
+inside the string; a substring search would resolve
+`fabric-op-client-b-restart-supervision` to the wrong task.
 
 The invariant was proven non-vacuous by re-injecting each retired convention into
 `sel4-call.zti` and observing the refusal, including the two real historical
@@ -86,6 +105,13 @@ refused (names a non-instance): minted binding fabric-call-ghost-supervision:
 | `just fmt_check_all`, `just lint_all` | Pass | Direct |
 | `just sel4_matrix_check`, `just sel4_stream_check`, `just sel4_visibility_check`, `just sel4_qos_check` | Pass — the four planes exercising the two migrated call sites | Direct |
 | `just sel4_fabric_aggregate_check`, re-run after the component migration | Pass — 280 byte-identical records again | Direct |
+
+The snapshot enumerates `SEL4_MANIFESTS`, which is 28 manifests. `sel4-fault` and
+`sel4-saturation` are not in it: B62 made them per-variant overrides of
+`sel4-traffic`'s fixture rather than fixtures of their own, built through their
+own gate invocations. They are covered instead by
+`just sel4_fabric_aggregate_check`, whose fault schedule emitted 140
+byte-identical trace records over the same graph.
 
 Both byte comparisons were taken across the fixture rename **only**, before the
 two component call sites were migrated. Component code is compiled into the

@@ -398,6 +398,14 @@ CAPABILITY_KIND = {
 
 
 SUPERVISION_NAME_SUFFIX = "-supervision"
+# The `minted:` resolve string a component builds for a supervision handle, and
+# the stack buffer it builds it in. `fabric-service.rs`'s `supervision_slot_for`
+# formats `minted:<component>-supervision` into a fixed 64-byte array, because a
+# `no_std` component has no allocator; a name that overflowed it would be a
+# runtime `fail()` on a real boot. Bounding it here makes that a build failure
+# instead, which is the only place the two can be kept in agreement.
+SUPERVISION_RESOLVE_PREFIX = "minted:"
+SUPERVISION_RESOLVE_NAME_BYTES = 64
 
 
 def validate_supervision_binding_names(manifest: dict, instances: list) -> None:
@@ -420,6 +428,12 @@ def validate_supervision_binding_names(manifest: dict, instances: list) -> None:
     failure rather than a name a component silently cannot resolve. Scoped to
     `supervision`, the one kind whose object is a task identity; other minted
     kinds name channels and have no supervised instance to be named for.
+
+    Instance names may be prefixes of one another — `fabric-op-client-b` and
+    `fabric-op-client-b-restart` both exist, each with its own handle — so the
+    check strips the suffix and looks up the whole remainder, rather than
+    searching for a known instance name inside the string. A substring search
+    would resolve `fabric-op-client-b-restart-supervision` to the wrong task.
 
     The owner clause is what makes the name *answerable*. `resolve_minted_slot`
     scopes to the calling holder, so the name only has to be unique per holder —
@@ -451,6 +465,13 @@ def validate_supervision_binding_names(manifest: dict, instances: list) -> None:
             fail(
                 f"minted binding {name}: supervises an instance owned by "
                 f"{owners[supervised]!r}, but is minted by {minted['owner']!r}"
+            )
+        resolve_bytes = len((SUPERVISION_RESOLVE_PREFIX + name).encode("utf-8"))
+        if resolve_bytes > SUPERVISION_RESOLVE_NAME_BYTES:
+            fail(
+                f"minted binding {name}: its resolve string is {resolve_bytes} "
+                f"bytes, over the {SUPERVISION_RESOLVE_NAME_BYTES}-byte buffer a "
+                "component formats it in"
             )
 
 
