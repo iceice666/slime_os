@@ -108,6 +108,18 @@ order-dependency — `declared_spawn_grant_counts` fed `init`'s compiled
 component ELF — now fixed by sorting.
 **Evidence:** [`devlog/2026-08-18-cp1-generation-derivation/`](../devlog/2026-08-18-cp1-generation-derivation/index.md)
 
+**Progress (2026-08-18, CP2):** the third clause is partially closed. A root-served
+`CAPABILITY RESOLVE BINDING` operation now answers which of a component's own slots
+holds a named binding, scoped to the calling instance's own binding list and
+refusing a name it did not bind; `console` and `init` use it on real boots. What is
+*not* closed is the clause's own wording: 17 of 19 `include!` sites remain, because
+`init`'s 61 slots come from `contracts/boot-layout/v1`'s resource object rather than
+from manifest grants, and that table describes one CSpace without recording which
+instance each entry belongs to. A fallback to it was written and proved unsound on a
+real boot — it answered names the caller had never bound. B70 therefore stays open,
+and the unblocking step is a boot-layout format revision.
+**Evidence:** [`devlog/2026-08-18-cp2-runtime-binding-query/`](../devlog/2026-08-18-cp2-runtime-binding-query/index.md)
+
 ## Deferred follow-ups
 
 Real, unclosed follow-up work surfaced by resolved entries, not new backlog

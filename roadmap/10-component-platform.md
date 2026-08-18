@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
 
-**Status:** CP0 and CP1 complete; CP2–CP5 not started.
+**Status:** CP0 and CP1 complete; CP2's mechanism landed with its migration partial; CP3–CP5 not started.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -51,9 +51,32 @@
 
 ## CP2 — Runtime-resolved component binding
 
-**Status:** Not started.
+**Status:** Mechanism complete and gated; the 19-site migration is partial (2 of 19) and blocked on a contract change named below.
 
 **Depends on:** Cleared or explicitly deferred backlog. Independent of CP0/CP1.
+
+**Delivered (2026-08-18):** `contracts/syscall-abi/v1` declares
+`CAPABILITY RESOLVE BINDING` (label 37); the root answers it from the calling
+instance's *own* `InstanceBinding` list, scoped by the badge it authenticated,
+with the name bounded and UTF-8-validated before any table walk; `slime-rt`
+exposes `resolve_binding`; `docs/syscall-abi.md` and `docs/capability-matrix.md`
+document it per invariant 4; `just runtime_binding_resolution_check` guards it.
+`console` and `init` resolve real bindings at runtime, and 14 QEMU plane gates
+pass unchanged.
+
+**Blocked (the honest reason the other 17 sites remain):** the query answers
+*manifest grant* bindings, which is what an instance's binding list contains.
+`init`'s 61 slots are not that — they come from `contracts/boot-layout/v1`'s
+resource object, which is one table describing the bootstrap component's CSpace
+(`path=init`), keyed by role and identity hash rather than by instance. A
+fallback to that table was written and proved unsound on a real boot: the layout
+declares every plane's edges, so it answered names the caller had never bound,
+and `init` sent into an endpoint nobody was waiting on. Serving those slots
+safely needs the layout to record which instance each entry belongs to, which is
+a `contracts/boot-layout/v1` format change rather than a root change. The
+`fabric_profile` sites are a second, distinct case: 46 of its 64 constants are
+graph facts (route tables, QoS depths, trace depth), not slots, so a
+slot-resolution query is the wrong instrument for them.
 
 ### Deliverables
 
