@@ -372,14 +372,19 @@ impl Broker {
             // signals nothing. Parking then waits for a wake no one can send,
             // while the supervision handle that reports the death is only read
             // by a later sweep. Yielding keeps the sweeps coming.
-            if owed
-                || self.server_call.is_some()
-                || FABRIC_SERVICE_PARAMETERS_READY_SLOT == u32::MAX
-            {
+            // Resolved through the root rather than compiled in (CP2/B70): the
+            // broker waits on the same grant name its four peers signal, and the
+            // per-holder answer is what gives each side its own slot. A graph
+            // declaring no wake object resolves to nothing, which is the same
+            // "yield instead of parking" case the sentinel used to mark.
+            let wake = slime_rt::resolve_binding(b"notification:fabric-service-parameters-ready");
+            if owed || self.server_call.is_some() || wake.is_err() {
                 slime_rt::yield_now();
                 continue;
             }
-            let _ = slime_rt::notification_wait(FABRIC_SERVICE_PARAMETERS_READY_SLOT);
+            if let Ok(slot) = wake {
+                let _ = slime_rt::notification_wait(slot);
+            }
         }
     }
 

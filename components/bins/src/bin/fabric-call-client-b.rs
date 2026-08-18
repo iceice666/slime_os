@@ -15,6 +15,6 @@ fn main(_startup_arg: u32) {
         slime_components::fabric_boot::park_only(b"fabric-call-client-b");
     }
     // This binary's badge bit on the broker's wake notification.
-    scenario::set_wake_slot(scenario::FABRIC_CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT);
+    scenario::resolve_wake_slot();
     scenario::run_client_b();
 }

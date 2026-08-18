@@ -632,6 +632,25 @@ pub fn set_wake_slot(slot: u32) {
     unsafe { *core::ptr::addr_of_mut!(WAKE_SLOT) = slot };
 }
 
+/// Resolve this component's badge bit on the broker's wake notification through
+/// the root, and install it (CP2/B70).
+///
+/// Every participant on this route binds the *same* grant name,
+/// `fabric-service-parameters-ready`, at a different slot -- the four peers
+/// signal on 0..3 and the broker waits on 0. That is exactly what a per-holder
+/// answer resolves: the root scopes the lookup to the calling instance, so one
+/// name gives each component its own badge without any of them naming a number.
+///
+/// A graph declaring no wake object at all is not an error. `wake_slot` already
+/// treats `u32::MAX` as absent, because a component compiled for every profile
+/// must tolerate a graph that has none, so a refusal maps to that same sentinel
+/// rather than exiting.
+pub fn resolve_wake_slot() {
+    let slot = slime_rt::resolve_binding(b"notification:fabric-service-parameters-ready")
+        .unwrap_or(u32::MAX);
+    set_wake_slot(slot);
+}
+
 /// The wake slot, or `None` where this graph declares no wake object. A
 /// component compiled for every profile must tolerate its absence, since the
 /// constant is emitted regardless (`u32::MAX` means "not in this graph").
