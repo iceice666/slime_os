@@ -386,7 +386,7 @@ fn consume(_ring_slot: u32) {
                 fail(b"empty sample");
             }
             inline += 1;
-            let _ = slime_rt::notification_signal(FABRIC_SUBSCRIBER_TELEMETRY_CREDIT_SLOT);
+            let _ = slime_rt::notification_signal(credit_slot());
             if last && shared != 0 {
                 slime_rt::debug_write(b"[fabric-subscriber] inline and shared received\n");
                 return;
@@ -449,9 +449,25 @@ fn consume(_ring_slot: u32) {
                 }
             }
         } else {
-            let _ = slime_rt::notification_wait(FABRIC_SUBSCRIBER_TELEMETRY_READY_SLOT);
+            let _ = slime_rt::notification_wait(ready_slot());
         }
     }
+}
+
+/// This component's two notification slots, resolved through the root by the
+/// grant names the generation declares (CP2/B70).
+///
+/// `notification:` reaches `notificationBindings`, which the root answers for the
+/// caller's own holder index -- one grant binds a slot in both peers, so that
+/// scoping is the answer rather than a restriction.
+fn ready_slot() -> u32 {
+    slime_rt::resolve_binding(b"notification:fabric-subscriber-telemetry-ready")
+        .unwrap_or_else(|_| fail(b"resolve telemetry-ready notification"))
+}
+
+fn credit_slot() -> u32 {
+    slime_rt::resolve_binding(b"notification:fabric-subscriber-telemetry-credit")
+        .unwrap_or_else(|_| fail(b"resolve telemetry-credit notification"))
 }
 
 fn route_name_bytes() -> [u8; 32] {

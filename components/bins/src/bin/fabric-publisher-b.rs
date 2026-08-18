@@ -235,8 +235,8 @@ fn main(_startup_arg: u32) {
         &mut diagnostics_ring,
         &inline_sample(diagnostics_stream::TYPE_TAG, 1, FLAG_LAST).payload,
         true,
-        FABRIC_PUBLISHER_B_DIAGNOSTICS_READY_SLOT,
-        FABRIC_PUBLISHER_B_DIAGNOSTICS_CREDIT_SLOT,
+        diagnostics_notification(b"ready"),
+        diagnostics_notification(b"credit"),
     );
     slime_rt::debug_write(b"[fabric-publisher-b] diagnostics sample published\n");
 
@@ -577,6 +577,21 @@ fn await_time_credit(now_ns: u64) {
         }
         return;
     }
+}
+
+/// This component's diagnostics notification slots, resolved through the root by
+/// the grant names the generation declares (CP2/B70).
+fn diagnostics_notification(suffix: &[u8]) -> u32 {
+    let stem = b"notification:fabric-publisher-b-diagnostics-";
+    let mut name = [0u8; 64];
+    let len = stem.len() + suffix.len();
+    if len > name.len() {
+        fail(b"notification name exceeds the query bound");
+    }
+    name[..stem.len()].copy_from_slice(stem);
+    name[stem.len()..len].copy_from_slice(suffix);
+    slime_rt::resolve_binding(&name[..len])
+        .unwrap_or_else(|_| fail(b"no diagnostics notification in this generation"))
 }
 
 fn ring_publish(

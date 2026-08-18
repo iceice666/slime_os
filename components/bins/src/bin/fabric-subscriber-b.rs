@@ -393,10 +393,51 @@ fn ack(ack_slot: u32, sequence: u64, type_identity: u64) {
     }
 }
 
+/// This component's four notification slots, resolved through the root by the
+/// grant names the generation declares (CP2/B70).
+///
+/// Telemetry takes two names because the compositions disagree: the matrix plane
+/// declares `telemetry-alt` where the stream, QoS, visibility, boot, and traffic
+/// planes declare `telemetry`. No generation declares both for one holder --
+/// verified against every manifest that declares notifications -- so this is a
+/// disjoint lookup rather than a precedence rule, the same shape
+/// `init.rs::console_send_slot` uses for its edge.
+fn telemetry_slot(suffix: &[u8]) -> u32 {
+    for stem in [
+        b"notification:fabric-subscriber-b-telemetry-".as_slice(),
+        b"notification:fabric-subscriber-b-telemetry-alt-".as_slice(),
+    ] {
+        let mut name = [0u8; 64];
+        let len = stem.len() + suffix.len();
+        if len > name.len() {
+            fail(b"notification name exceeds the query bound");
+        }
+        name[..stem.len()].copy_from_slice(stem);
+        name[stem.len()..len].copy_from_slice(suffix);
+        if let Ok(slot) = slime_rt::resolve_binding(&name[..len]) {
+            return slot;
+        }
+    }
+    fail(b"no telemetry notification in this generation")
+}
+
+fn diagnostics_slot(suffix: &[u8]) -> u32 {
+    let stem = b"notification:fabric-subscriber-b-diagnostics-";
+    let mut name = [0u8; 64];
+    let len = stem.len() + suffix.len();
+    if len > name.len() {
+        fail(b"notification name exceeds the query bound");
+    }
+    name[..stem.len()].copy_from_slice(stem);
+    name[stem.len()..len].copy_from_slice(suffix);
+    slime_rt::resolve_binding(&name[..len])
+        .unwrap_or_else(|_| fail(b"no diagnostics notification in this generation"))
+}
+
 fn consume_diagnostics_stream(ring: &mut Ring<'_>) {
     let mut sample_seen = false;
     loop {
-        let _ = slime_rt::notification_poll(FABRIC_SUBSCRIBER_B_DIAGNOSTICS_READY_SLOT);
+        let _ = slime_rt::notification_poll(diagnostics_slot(b"ready"));
         let mut payload = [0u8; MAX_INLINE_BYTES];
         loop {
             match ring.consume(&mut payload) {
@@ -405,8 +446,7 @@ fn consume_diagnostics_stream(ring: &mut Ring<'_>) {
                         fail(b"empty diagnostics sample");
                     }
                     sample_seen = true;
-                    let _ =
-                        slime_rt::notification_signal(FABRIC_SUBSCRIBER_B_DIAGNOSTICS_CREDIT_SLOT);
+                    let _ = slime_rt::notification_signal(diagnostics_slot(b"credit"));
                 }
                 Err(RingError::Empty) => break,
                 Err(_) => fail(b"diagnostics ring consume"),
@@ -702,7 +742,7 @@ fn consume_telemetry(ring: &mut Ring<'_>, early: EarlyLoss) -> u32 {
     let mut reports = early.reports;
     let mut total_lost = early.total;
     loop {
-        let _ = slime_rt::notification_poll(FABRIC_SUBSCRIBER_B_TELEMETRY_READY_SLOT);
+        let _ = slime_rt::notification_poll(telemetry_slot(b"ready"));
         let mut payload = [0u8; MAX_INLINE_BYTES];
         loop {
             match ring.consume(&mut payload) {
@@ -711,8 +751,7 @@ fn consume_telemetry(ring: &mut Ring<'_>, early: EarlyLoss) -> u32 {
                         fail(b"empty telemetry sample");
                     }
                     consumed += 1;
-                    let _ =
-                        slime_rt::notification_signal(FABRIC_SUBSCRIBER_B_TELEMETRY_CREDIT_SLOT);
+                    let _ = slime_rt::notification_signal(telemetry_slot(b"credit"));
                 }
                 Err(RingError::Empty) => break,
                 Err(_) => fail(b"telemetry ring consume"),
@@ -775,7 +814,7 @@ fn consume_diagnostics(ring: &mut Ring<'_>) {
     let mut liveliness = false;
     let mut exhausted = false;
     loop {
-        let _ = slime_rt::notification_poll(FABRIC_SUBSCRIBER_B_DIAGNOSTICS_READY_SLOT);
+        let _ = slime_rt::notification_poll(diagnostics_slot(b"ready"));
         let mut payload = [0u8; MAX_INLINE_BYTES];
         loop {
             match ring.consume(&mut payload) {
