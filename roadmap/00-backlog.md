@@ -197,15 +197,29 @@ constant table against drift, and a table that is not generated cannot drift.
 B71's second defect — an ungranted role taking a live slot's number — is now
 structurally impossible rather than checked.
 
-B70's remaining surface is 18 `include!` sites over three tables: `fabric_profile`
-(16 sites), `command_profile` (1), and `dango_profile` (1). `spawn-service`'s RPC
-endpoint stays derived because `sel4-dango.zti` grants it three `send`+`recv`
-endpoints, so `kind:endpoint+send,recv` is ambiguous and refuses; its
-command-executable table maps a command *name* to an executable, which is a
-graph-shape fact rather than a capability. 46 of `fabric_profile`'s 64 constants
-are likewise graph facts (routes, QoS depths, trace depth) belonging to an
-authenticated `fabric-graph` read that does not exist yet — there is no
-resource-read syscall. All three share one shape: each needs a
+**Progress (2026-08-18, notification axis):** a fourth axis,
+`notification:<grant>` with an optional `+signal`/`+wait` suffix, resolves
+`notificationBindings` records; `fabric-publisher` uses it for both its slots.
+
+This corrects the note above, which counted `fabric_profile`'s 64 constants as
+"46 graph facts" blocked on a `fabric-graph` read with no syscall. That is true of
+the graph facts and swept **17 notification slots** in with them. Those are
+ordinary per-holder bindings the generation already declares by name, needing no
+contract change and no resource read. Notifications are declared separately from
+capability grants and one grant binds a slot in *both* peers, so scoping to the
+caller's holder index is the meaning rather than a restriction — verified across
+all 7 manifests declaring notifications: 153 bindings, each unique on
+`(holder, grant)` alone, so the suffix is available but not needed today.
+
+B70's remaining surface is 18 `include!` sites over three tables. Of
+`fabric_profile`'s 64 constants, 15 notification slots remain migratable by the
+axis above, 3 are capability-slot ceilings, and 46 are genuine graph facts
+(routes, QoS depths, trace depth) that belong to an authenticated `fabric-graph`
+read — still no resource-read syscall exists. `spawn-service`'s RPC endpoint stays
+derived because `sel4-dango.zti` grants it three `send`+`recv` endpoints, so
+`kind:endpoint+send,recv` is ambiguous and refuses; its command-executable table
+maps a command *name* to an executable, a graph-shape fact rather than a
+capability. All three share one shape: each needs a
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
