@@ -570,7 +570,7 @@
       transferable = false;
     };
     {
-      name = "fabric-service-op-client-supervision";
+      name = "fabric-op-client-supervision";
       capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
@@ -581,7 +581,7 @@
       transferable = false;
     };
     {
-      name = "fabric-service-op-client-b-supervision";
+      name = "fabric-op-client-b-supervision";
       capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
@@ -592,7 +592,7 @@
       transferable = false;
     };
     {
-      name = "fabric-service-op-server-supervision";
+      name = "fabric-op-server-supervision";
       capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
@@ -603,7 +603,7 @@
       transferable = false;
     };
     {
-      name = "fabric-service-op-client-b-restart-supervision";
+      name = "fabric-op-client-b-restart-supervision";
       capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";

@@ -243,7 +243,7 @@
   ];
   mintedBindings = [
     {
-      name = "generation-manager-client-supervision";
+      name = "sel4-generation-client-supervision";
       capabilityKind = "supervision";
       owner = "init";
       holder = "sel4-generation-manager";

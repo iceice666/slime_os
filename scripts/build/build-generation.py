@@ -397,6 +397,63 @@ CAPABILITY_KIND = {
 }
 
 
+SUPERVISION_NAME_SUFFIX = "-supervision"
+
+
+def validate_supervision_binding_names(manifest: dict, instances: list) -> None:
+    """A supervision binding is named for the task it supervises.
+
+    The `minted:` resolve axis lets a component ask the root which of its slots
+    holds a named binding, which is only usable if the name means the same thing
+    in every generation that declares it. Three conventions were in the fixtures
+    at once — `fabric-publisher-supervision`,
+    `fabric-service-supervision-publisher`, and
+    `fabric-service-call-client-supervision` — so a component could not ask by
+    name without a manifest-specific alias table, which is exactly the
+    compile-time coupling B70 exists to remove. Naming the handle for the
+    *supervised* task is the one choice that is a property of the graph rather
+    than of which manifest happens to declare it: `fabric-service` and
+    `fabric-call-worker` both supervise `fabric-call-client`, and under this rule
+    both name that handle `fabric-call-client-supervision`.
+
+    Asserted here rather than merely applied, so a fourth convention is a build
+    failure rather than a name a component silently cannot resolve. Scoped to
+    `supervision`, the one kind whose object is a task identity; other minted
+    kinds name channels and have no supervised instance to be named for.
+
+    The owner clause is what makes the name *answerable*. `resolve_minted_slot`
+    scopes to the calling holder, so the name only has to be unique per holder —
+    but a handle can only exist if its minter owns the task it names, which the
+    holder-ownership check below already requires of the holder. Requiring the
+    supervised instance to be owned by the same minter keeps the two halves
+    consistent: a name pointing at a task its minter cannot supervise would pass
+    the string check and fail at spawn.
+    """
+    owners = {instance["name"]: instance["owner"] for instance in instances}
+    for minted in manifest.get("mintedBindings", []):
+        if minted["capabilityKind"] != "supervision":
+            continue
+        name = minted["name"]
+        if not name.endswith(SUPERVISION_NAME_SUFFIX):
+            fail(
+                f"minted binding {name}: a supervision binding is named "
+                f"<supervised-instance>{SUPERVISION_NAME_SUFFIX}"
+            )
+        supervised = name[: -len(SUPERVISION_NAME_SUFFIX)]
+        if supervised not in owners:
+            fail(
+                f"minted binding {name}: names no declared instance "
+                f"({supervised!r} is not an instance in this generation)"
+            )
+        if supervised == minted["holder"]:
+            fail(f"minted binding {name}: holder would supervise itself")
+        if owners[supervised] != minted["owner"]:
+            fail(
+                f"minted binding {name}: supervises an instance owned by "
+                f"{owners[supervised]!r}, but is minted by {minted['owner']!r}"
+            )
+
+
 def validate_capability_rights(name: str, kind: str, rights: int) -> None:
     masks = {
         "endpoint": RIGHT["send"] | RIGHT["recv"] | RIGHT_TRANSFER,
@@ -3146,6 +3203,7 @@ def build_sel4_plan(
     # and validated here so an unsatisfiable declaration fails before output.
     minted_records = bytearray()
     seen_holder_slots: set[tuple[int, int]] = set()
+    validate_supervision_binding_names(manifest, instances)
     for minted in sorted(manifest.get("mintedBindings", []), key=lambda entry: entry["name"]):
         owner = instance_index.get(minted["owner"])
         holder = instance_index.get(minted["holder"])

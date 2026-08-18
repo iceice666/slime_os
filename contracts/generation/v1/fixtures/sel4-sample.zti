@@ -186,7 +186,7 @@
   ];
   mintedBindings = [
     {
-      name = "sample-lender-receiver-supervision";
+      name = "sample-receiver-supervision";
       capabilityKind = "supervision";
       owner = "init";
       holder = "sample-lender";
