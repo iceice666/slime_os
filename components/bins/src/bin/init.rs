@@ -573,7 +573,7 @@ fn drive_boot_plane() -> ! {
     let fabric = spawn_boot_with(
         b"executable:fabric-service",
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(publisher, RIGHT_SUPERVISE),
             grant(subscriber, RIGHT_SUPERVISE),
             grant(publisher_b, RIGHT_SUPERVISE),
@@ -595,7 +595,7 @@ fn drive_boot_plane() -> ! {
     spawn_boot_with(
         b"executable:fabric-call-worker",
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(call_client, RIGHT_SUPERVISE),
             grant(call_client_b, RIGHT_SUPERVISE),
             grant(call_server, RIGHT_SUPERVISE),
@@ -663,7 +663,7 @@ fn drive_traffic_plane() -> ! {
     let subscriber = spawn_boot(b"executable:fabric-subscriber");
     let publisher_b = spawn_boot_with(
         b"executable:fabric-publisher-b",
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE)],
     );
     let subscriber_b = spawn_boot(b"executable:fabric-subscriber-b");
     let observer = spawn_boot(b"executable:fabric-observer");
@@ -674,7 +674,7 @@ fn drive_traffic_plane() -> ! {
     let fabric = spawn_boot_with(
         b"executable:fabric-service",
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(publisher, RIGHT_SUPERVISE),
             grant(subscriber, RIGHT_SUPERVISE),
             grant(publisher_b, RIGHT_SUPERVISE),
@@ -687,18 +687,18 @@ fn drive_traffic_plane() -> ! {
 
     let call_client = spawn_boot_with(
         b"executable:fabric-call-client",
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE)],
     );
     let call_client_b = spawn_boot(b"executable:fabric-call-client-b");
     let call_server = spawn_boot_with(
         b"executable:fabric-call-server",
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE)],
     );
     let call_time = spawn_boot(b"executable:fabric-call-time");
     let call_worker = spawn_boot_with(
         b"executable:fabric-call-worker",
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(call_client, RIGHT_SUPERVISE),
             grant(call_client_b, RIGHT_SUPERVISE),
             grant(call_server, RIGHT_SUPERVISE),
@@ -784,10 +784,9 @@ fn resolve_executable(name: &[u8]) -> u32 {
 ///
 /// `kind:sharedBufferFactory+bufferCreate` asks by what the capability *is*, and
 /// the root refuses an ambiguous answer, so this is only usable where the
-/// generation grants init exactly one factory. That is every plane but the
-/// full-graph `boot` and `traffic` compositions, which hold two — those keep the
-/// generated constant, because which of the two to delegate is a graph-shape
-/// question this axis cannot answer.
+/// generation grants init exactly one factory — every plane but the full-graph
+/// `boot` and `traffic` compositions, which hold two and use
+/// [`resolve_own_buffer_factory`].
 ///
 /// Deliberately not "the factory granted to me": that spelling looked like the
 /// general rule and is not. Under the product graph init holds one factory whose
@@ -796,6 +795,25 @@ fn resolve_executable(name: &[u8]) -> u32 {
 fn resolve_buffer_factory() -> u32 {
     slime_rt::resolve_binding(b"kind:sharedBufferFactory+bufferCreate")
         .unwrap_or_else(|_| slime_rt::exit(1))
+}
+
+/// Init's *own* shared-buffer factory, for the two compositions that grant it
+/// two.
+///
+/// The full-graph `boot` and `traffic` generations bind both
+/// `init-shared-buffer-factory` and `fabric-service-shared-buffer-factory` to
+/// init, so `resolve_buffer_factory`'s role query is ambiguous there and refuses.
+/// A grant name is unambiguous, and these two names are stable across every
+/// generation reaching this code: `traffic`, `fault`, and `saturation` share one
+/// manifest, differing only in generation number.
+///
+/// Which of the two is delegated does not change what the receiver may do — a
+/// shared-buffer quota binds to the receiving task, not to the factory capability
+/// handed over, verified by delegating the other one and observing the boot plane
+/// stay green. So this names init's own for the same reason the source reads
+/// better for it, not because the authority differs.
+fn resolve_own_buffer_factory() -> u32 {
+    slime_rt::resolve_binding(b"init-shared-buffer-factory").unwrap_or_else(|_| slime_rt::exit(1))
 }
 
 /// Spawn one boot participant that its manifest grants nothing, returning the
