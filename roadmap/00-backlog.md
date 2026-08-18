@@ -244,16 +244,52 @@ incompatible conventions in the 8 manifests that declare it —
 `fabric-service-call-client-supervision`. A component cannot ask by name without
 a manifest-specific alias table, the exact coupling this operation removes.
 
-Closing it needs one naming convention across those 8 fixtures first — a real,
-scoped, separate change. Unlike every migration in this track so far it changes
-`generation.bin`'s bytes (a binding name is part of the string table the
-generation's own identity hashes over), so it needs its own verification pass:
-confirm nothing pins the old bytes, rename, re-verify every plane that carries a
-`fabric-service` supervision table.
+**Progress (2026-08-19, supervision naming):** the naming task the note above
+proposed is done. All 55 minted supervision bindings across 10 seL4 manifests now
+follow one rule — a handle is named for the task it *supervises*,
+`<supervised-instance>-supervision` — with 35 renamed and 20 already conforming.
+The supervised task is the right key because it is a graph fact: `fabric-service`
+and `fabric-call-worker` both supervise `fabric-call-client` on different planes
+and now name that handle identically, which is what lets one component source
+resolve it under either composition. The convention is asserted in
+`build-generation.py` rather than merely applied, proven non-vacuous by
+re-injecting both retired spellings and observing the refusal.
+
+It did change `generation.bin`'s bytes, as predicted, for exactly the 6 manifests
+edited; the other 22 are byte-identical. Two things made that safe, both
+established before the rename rather than assumed. Nothing pins the old bytes:
+CP1's baselines declare no supervision minted binding at all, and no boot-layout
+fixture or check script names one. And the reorder the rename causes — records are
+encoded sorted by name — is harmless because `nth_declared_capability` selects by
+*ascending slot* (`declarations_below` compares slots), not by table position. The
+minted-record multiset excluding the name field is identical before and after for
+all 28 manifests, so no `(owner, holder, slot, rights, kind)` tuple moved.
+
+**This corrects the note above in one respect:** unblocking the name did *not*
+unblock the 13 `FABRIC_SUPERVISION` uses, because they are not 13 instances of one
+question. Counted by shape, **2** were name→slot lookups the `minted:` axis can
+answer, and both are now **migrated**: `supervision_slot_for` resolves
+`minted:<component>-supervision` from the root, and `matrix_broker`'s `settled`
+calls it rather than keeping a second table scan. Those two funnel every real
+supervision read on the stream and matrix planes, so the convention is proven
+usable rather than merely consistent.
+
+**5** uses remain, and they are a different question. **3** are `.len()`
+arithmetic deriving `TIME_SLOT` and `FIRST_ROUTE_SLOT` (`fabric-service.rs:119`,
+`matrix_broker.rs:832`, `visibility_broker.rs:61`), needing a *count* of the
+holder set. **2** are `.iter()` teardown walks (`fabric-service.rs:381,525`),
+needing its *membership*. Neither a count nor a membership list is expressible as
+one-name-one-slot, so both want a query returning a component's binding *set*;
+the `.iter()` walks additionally ask which components exist, a graph fact
+belonging to the `fabric-graph` resource read. The remaining 4 mentions are
+comments that fall out with the code they describe. The naming blocker was real
+and is gone; what is left is a query-shape question, not a naming one.
+**Evidence:** [`devlog/2026-08-19-supervision-binding-naming/`](../devlog/2026-08-19-supervision-binding-naming/index.md)
 
 B70's remaining surface is 18 `include!` sites over three tables.
-`fabric_profile`'s 47 constants: 13 `FABRIC_SUPERVISION` uses blocked on the
-fixture-naming task above, 3 capability-slot ceilings, and 44 graph facts
+`fabric_profile`'s 47 constants: 5 remaining `FABRIC_SUPERVISION` uses — no
+longer blocked on naming, which is closed, but on a query returning a binding
+*set* rather than one slot — 3 capability-slot ceilings, and 44 graph facts
 (routes, QoS depths, trace depth, participant and worker tables) belonging to an
 authenticated `fabric-graph` read — still no resource-read syscall exists, the
 one item with no available mechanism at all. `spawn-service`'s RPC endpoint stays
