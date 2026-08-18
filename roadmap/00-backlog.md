@@ -138,13 +138,29 @@ way, one of them costing a plane timeout before the fixtures were consulted. Nin
 names no seL4 fixture declares stay as constants: those paths belong to the
 retired x86 graph and are unreachable here.
 
-B70's remaining surface is `init`'s 27 remaining boot-layout constant uses,
-`spawn-service`'s RPC endpoint and command-executable table, and
-`fabric_profile`'s 64 constants. `SHARED_BUFFER_FACTORY_SLOT` is 20 of those 27
-and needs one new axis — "the capability granted *to me*", since grant target
-uniquely identifies init's own factory even in the two planes that hold two —
-while the rest sit in `const` grant tables that cannot call a syscall without
-becoming functions. All three share one shape: each needs a
+**Progress (2026-08-18, factory migration):** 13 of `init.rs`'s 20 shared-buffer
+factory delegations resolve through the existing
+`kind:sharedBufferFactory+bufferCreate` axis, leaving 43 boot-layout constant
+uses across 27 distinct constants. The 7 remaining factory sites are in
+`drive_boot_plane`/`drive_traffic_plane`, whose generations grant init two
+factories, so the role query is ambiguous and refuses — verified non-vacuously by
+pointing the boot plane at it and observing `component exit task=0 status=1`.
+
+This corrects the note above: the axis is *not* "the capability granted to me".
+Under the product graph init holds one factory whose grant target is
+`spawn-service` rather than itself, so a target test resolves nothing exactly
+where it is needed, and no new axis was required. Established by experiment while
+checking whether the remaining 7 are a real limit: the two factories are
+**interchangeable** — delegating the second instead of init's own leaves the boot
+plane fully green, because a shared-buffer quota binds to the receiving task, not
+to which factory capability was handed over. Those sites are therefore a naming
+gap, closable by giving the two grants distinguishable names in the fixtures,
+rather than an authority distinction needing new mechanism.
+
+B70's remaining surface is those 43 constant uses, `spawn-service`'s RPC endpoint
+and command-executable table, and `fabric_profile`'s 64 constants. Most of the 43
+sit in `const` grant tables that cannot call a syscall without becoming
+functions; nine name executables no seL4 fixture declares, on retired x86 paths. All three share one shape: each needs a
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
