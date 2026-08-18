@@ -602,6 +602,12 @@ shared_buffer_loan_check: sel4_loan_check
 interface_schema_check: contracts_check
     python3 scripts/check/check-interface-schema.py
 
+# CP0's component-specification model: every component the reference generation
+# declares has a schema-valid `contracts/component-spec/v1` record with a stable
+# computed identity, and 37 named malformations are refused.
+component_spec_check: contracts_check
+    python3 scripts/check/check-component-spec.py
+
 fabric_manifest_check: contracts_check sel4_stream_check
     python3 scripts/check/check-fabric-manifest.py
 

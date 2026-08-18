@@ -1,0 +1,79 @@
+{
+  formatVersion = 1;
+  name = "fabric-call-worker";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "A dedicated task running the bounded call broker for the parameters route alone.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-call-worker";
+  };
+  provides = [];
+  requires = [
+    "sharedBufferFactory";
+  ];
+  interfaces = [
+    {
+      name = "parameters";
+      tag = "input";
+      interface = "ParameterCall";
+    };
+    {
+      name = "parameters";
+      tag = "output";
+      interface = "ParameterCall";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "call";
+    qos = [];
+  };
+  configuration = [
+    {
+      name = "stackBytes";
+      default = 49152;
+      minimum = 4096;
+      maximum = 1048576;
+    };
+  ];
+  lifecycle = [
+    "Initialize";
+    "Configure";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 49152;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 4;
+      bufferCount = 2;
+      mappingCount = 4;
+      loanCount = 2;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_boot_check gate boots a generation declaring fabric-call-worker";
+    expectedResult = "fabric-call-worker reaches its declared behavior under that gate";
+    passFailCriteria = "[init] fabric boot call plane spawned";
+    requiredTestEnvironment = "sel4_boot_check";
+  };
+}

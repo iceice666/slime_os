@@ -1,0 +1,70 @@
+{
+  formatVersion = 1;
+  name = "spawn-service";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Serves spawn and shutdown requests, launching children within its budget and reaping their termination.";
+  implementation = {
+    provider = "workspace";
+    binary = "spawn-service";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+    "executable";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [
+    {
+      name = "spawnBudget";
+      default = 8;
+      minimum = 0;
+      maximum = 32;
+    };
+  ];
+  lifecycle = [
+    "Initialize";
+    "Configure";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 8;
+      extraThreads = 0;
+      bufferBytePages = 4;
+      bufferCount = 1;
+      mappingCount = 2;
+      loanCount = 1;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_component_graph_check gate boots a generation declaring spawn-service";
+    expectedResult = "spawn-service reaches its declared behavior under that gate";
+    passFailCriteria = "[spawn-service] ready";
+    requiredTestEnvironment = "sel4_component_graph_check";
+  };
+}

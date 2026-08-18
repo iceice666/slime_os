@@ -1,0 +1,77 @@
+{
+  formatVersion = 1;
+  name = "fabric-subscriber";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Requests a receive-only telemetry role, asserts forbidden operations are denied, and consumes inline and shared samples.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-subscriber";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "telemetry";
+      tag = "input";
+      interface = "TelemetryStream";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "stream";
+    qos = [
+      {
+        reference = "telemetry";
+        reliability = "bestEffort";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 8;
+        retainedDepth = 0;
+        deadlineNs = 0;
+        lifespanNs = 0;
+        leaseNs = 0;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 4;
+      bufferCount = 0;
+      mappingCount = 4;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the sel4_stream_check gate boots a generation declaring fabric-subscriber";
+    expectedResult = "fabric-subscriber reaches its declared behavior under that gate";
+    passFailCriteria = "[fabric-subscriber] done";
+    requiredTestEnvironment = "sel4_stream_check";
+  };
+}

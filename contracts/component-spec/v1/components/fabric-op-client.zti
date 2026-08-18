@@ -1,0 +1,94 @@
+{
+  formatVersion = 1;
+  name = "fabric-op-client";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Runs the operation plane's first-client role, correlating results and claiming a retained result once.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-op-client";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "nav-backup";
+      tag = "command";
+      interface = "NavigationOperation";
+    };
+    {
+      name = "navigation";
+      tag = "command";
+      interface = "NavigationOperation";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "operation";
+    qos = [
+      {
+        reference = "nav-backup";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 1000000;
+        lifespanNs = 2000000;
+        leaseNs = 0;
+      };
+      {
+        reference = "navigation";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 1000000;
+        lifespanNs = 2000000;
+        leaseNs = 0;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Degraded";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the sel4_operation_check gate boots a generation declaring fabric-op-client";
+    expectedResult = "fabric-op-client reaches its declared behavior under that gate";
+    passFailCriteria = "[fabric-op-client] success correlated";
+    requiredTestEnvironment = "sel4_operation_check";
+  };
+}

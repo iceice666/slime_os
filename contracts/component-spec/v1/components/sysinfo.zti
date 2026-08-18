@@ -1,0 +1,55 @@
+{
+  formatVersion = 1;
+  name = "sysinfo";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Prints its launch context's argument and environment counts, proving it was spawned through the command profile.";
+  implementation = {
+    provider = "workspace";
+    binary = "sysinfo";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_spawn_check gate boots a generation declaring sysinfo";
+    expectedResult = "sysinfo reaches its declared behavior under that gate";
+    passFailCriteria = "[init] sysinfo spawned";
+    requiredTestEnvironment = "sel4_spawn_check";
+  };
+}

@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "sample-receiver";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Validates a received sample descriptor and loan, maps the loaned bytes read-only, and returns the loan once.";
+  implementation = {
+    provider = "workspace";
+    binary = "sample-receiver";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 2;
+      bufferCount = 1;
+      mappingCount = 2;
+      loanCount = 1;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_sample_check gate boots a generation declaring sample-receiver";
+    expectedResult = "sample-receiver reaches its declared behavior under that gate";
+    passFailCriteria = "[sample-receiver] done";
+    requiredTestEnvironment = "sel4_sample_check";
+  };
+}

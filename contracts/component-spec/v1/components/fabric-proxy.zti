@@ -1,0 +1,70 @@
+{
+  formatVersion = 1;
+  name = "fabric-proxy";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "The one declared interposition relay hop for the telemetry subscriber's chain, holding no graph visibility.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-proxy";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "telemetry";
+      tag = "input";
+      interface = "TelemetryStream";
+    };
+    {
+      name = "telemetry";
+      tag = "output";
+      interface = "TelemetryStream";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "stream";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_fault_check gate boots a generation declaring fabric-proxy";
+    expectedResult = "fabric-proxy reaches its declared behavior under that gate";
+    passFailCriteria = "[fabric-proxy] injected early proxy death";
+    requiredTestEnvironment = "sel4_fault_check";
+  };
+}

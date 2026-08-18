@@ -1,0 +1,74 @@
+{
+  formatVersion = 1;
+  name = "dango";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "An interactive line-editing shell that reads key events and spawns declared commands through the spawn service.";
+  implementation = {
+    provider = "workspace";
+    binary = "dango";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "directory";
+    "endpoint";
+    "input";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [
+    "console";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [
+    {
+      name = "spawnBudget";
+      default = 8;
+      minimum = 0;
+      maximum = 32;
+    };
+  ];
+  lifecycle = [
+    "Initialize";
+    "Configure";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 8;
+      extraThreads = 0;
+      bufferBytePages = 8;
+      bufferCount = 2;
+      mappingCount = 4;
+      loanCount = 2;
+    };
+    devices = [
+      "input";
+    ];
+  };
+  health = "required";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_dango_check gate boots a generation declaring dango";
+    expectedResult = "dango reaches its declared behavior under that gate";
+    passFailCriteria = "[init] dango plane complete";
+    requiredTestEnvironment = "sel4_dango_check";
+  };
+}

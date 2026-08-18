@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "storage-writer";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Writes a marker pattern to a sector, flushes it, and reads it back to confirm the write persisted.";
+  implementation = {
+    provider = "workspace";
+    binary = "storage-writer";
+  };
+  provides = [];
+  requires = [
+    "block";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [
+      "block";
+    ];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the generation_check gate boots a generation declaring storage-writer";
+    expectedResult = "storage-writer reaches its declared behavior under that gate";
+    passFailCriteria = "generation determinism check";
+    requiredTestEnvironment = "generation_check";
+  };
+}

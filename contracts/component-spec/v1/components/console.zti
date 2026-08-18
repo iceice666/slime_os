@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "console";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Receives IPC lines on its endpoint, echoes each to debug output, and exits on an explicit close message.";
+  implementation = {
+    provider = "workspace";
+    binary = "console";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_channel_check gate boots a generation declaring console";
+    expectedResult = "console reaches its declared behavior under that gate";
+    passFailCriteria = "[console] channel plane complete";
+    requiredTestEnvironment = "sel4_channel_check";
+  };
+}

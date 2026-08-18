@@ -53,6 +53,10 @@ INTERFACE_SCHEMA_CONTRACT = ROOT / "contracts" / "interface-schema" / "v1"
 INTERFACE_SCHEMA_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-interface-schema-bindings.py"
 )
+COMPONENT_SPEC_CONTRACT = ROOT / "contracts" / "component-spec" / "v1"
+COMPONENT_SPEC_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-component-spec-bindings.py"
+)
 FABRIC_GRAPH_CONTRACT = ROOT / "contracts" / "fabric-graph" / "v1"
 CAPABILITY_TRANSFER_CONTRACT = ROOT / "contracts" / "capability-transfer" / "v1"
 CAPABILITY_TRANSFER_BINDING_GENERATOR = (
@@ -244,6 +248,14 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(COMPONENT_SPEC_CONTRACT / "schema.zt"))
+run("check", str(COMPONENT_SPEC_CONTRACT / "check.zt"))
+run("check", str(COMPONENT_SPEC_CONTRACT / "gen_python.zt"))
+subprocess.run(
+    [sys.executable, str(COMPONENT_SPEC_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))
@@ -298,6 +310,6 @@ print(
     "BootState trace, recovery, block, component v1/v2, store, spawn, filesystem, "
     "powerbox, generation-management, transfer, sample-descriptor, interface-schema, "
     "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
-    "fabric-call, fabric-operation, fabric-visibility, fabric-trace, and "
-    "rpi5-ros2-demo contracts passed"
+    "fabric-call, fabric-operation, fabric-visibility, fabric-trace, "
+    "component-spec, and rpi5-ros2-demo contracts passed"
 )

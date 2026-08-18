@@ -1,0 +1,94 @@
+{
+  formatVersion = 1;
+  name = "fabric-publisher-b";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Publishes shared-buffer-backed samples on telemetry and separately on diagnostics under its own declared policy.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-publisher-b";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "diagnostics";
+      tag = "output";
+      interface = "DiagnosticsStream";
+    };
+    {
+      name = "telemetry";
+      tag = "output";
+      interface = "TelemetryStream";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "stream";
+    qos = [
+      {
+        reference = "diagnostics";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "manual";
+        historyDepth = 2;
+        retainedDepth = 0;
+        deadlineNs = 100;
+        lifespanNs = 0;
+        leaseNs = 200;
+      };
+      {
+        reference = "telemetry";
+        reliability = "reliable";
+        durability = "retained";
+        liveliness = "manual";
+        historyDepth = 4;
+        retainedDepth = 2;
+        deadlineNs = 100;
+        lifespanNs = 300;
+        leaseNs = 200;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Degraded";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 4;
+      bufferCount = 1;
+      mappingCount = 2;
+      loanCount = 1;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the sel4_stream_check gate boots a generation declaring fabric-publisher-b";
+    expectedResult = "fabric-publisher-b reaches its declared behavior under that gate";
+    passFailCriteria = "[fabric-publisher-b] done";
+    requiredTestEnvironment = "sel4_stream_check";
+  };
+}

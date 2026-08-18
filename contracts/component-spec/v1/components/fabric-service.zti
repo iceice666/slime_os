@@ -1,0 +1,126 @@
+{
+  formatVersion = 1;
+  name = "fabric-service";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Owns every declared route endpoint, provisions attenuated per-participant authority, and brokers samples between them.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-service";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+    "sharedBufferFactory";
+  ];
+  interfaces = [
+    {
+      name = "diagnostics";
+      tag = "input";
+      interface = "DiagnosticsStream";
+    };
+    {
+      name = "diagnostics";
+      tag = "output";
+      interface = "DiagnosticsStream";
+    };
+    {
+      name = "nav-backup";
+      tag = "input";
+      interface = "NavigationOperation";
+    };
+    {
+      name = "nav-backup";
+      tag = "output";
+      interface = "NavigationOperation";
+    };
+    {
+      name = "navigation";
+      tag = "input";
+      interface = "NavigationOperation";
+    };
+    {
+      name = "navigation";
+      tag = "output";
+      interface = "NavigationOperation";
+    };
+    {
+      name = "parameters";
+      tag = "input";
+      interface = "ParameterCall";
+    };
+    {
+      name = "parameters";
+      tag = "output";
+      interface = "ParameterCall";
+    };
+    {
+      name = "telemetry";
+      tag = "input";
+      interface = "TelemetryStream";
+    };
+    {
+      name = "telemetry";
+      tag = "output";
+      interface = "TelemetryStream";
+    };
+  ];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "mixed";
+    qos = [];
+  };
+  configuration = [
+    {
+      name = "spawnBudget";
+      default = 2;
+      minimum = 0;
+      maximum = 32;
+    };
+    {
+      name = "stackBytes";
+      default = 49152;
+      minimum = 4096;
+      maximum = 1048576;
+    };
+  ];
+  lifecycle = [
+    "Initialize";
+    "Configure";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 49152;
+      spawnBudget = 2;
+      extraThreads = 0;
+      bufferBytePages = 28;
+      bufferCount = 14;
+      mappingCount = 14;
+      loanCount = 14;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_stream_check gate boots a generation declaring fabric-service";
+    expectedResult = "fabric-service reaches its declared behavior under that gate";
+    passFailCriteria = "[init] fabric service spawned";
+    requiredTestEnvironment = "sel4_stream_check";
+  };
+}

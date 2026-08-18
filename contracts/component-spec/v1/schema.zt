@@ -1,0 +1,361 @@
+-- Slime OS component specification contract, version 1 (CP0).
+--
+-- A `ComponentSpec` is the component-level source of truth `spec/requirement-document-v0.6.md`
+-- section 2.1 describes, expressed as inert Zutai data and independent of any
+-- one generation manifest. Today `contracts/generation/v1`'s
+-- `Executable`/`Instance` pair is the only place a component is described at
+-- all, so "what a component is" and "how one generation composes it" are the
+-- same text (B70). This contract separates them: a spec describes the
+-- component, a manifest composes an instance of it.
+--
+-- CP0 only declares and validates the model. Deriving manifests from it is
+-- CP1's job, and resolving a component's slots at runtime rather than at
+-- compile time is CP2's. Nothing here is a wire format: no record is
+-- serialized into a generation, so the boot-time encoding stays owned by
+-- `contracts/generation/v1`.
+--
+-- The authoritative identity of a spec is SHA-256 over `identityDomain`
+-- followed by the normalized, sorted-key, whitespace-free, ASCII-escaped UTF-8
+-- JSON bytes of the decoded record plus one trailing newline -- the exact
+-- convention `contracts/interface-schema/v1/schema.zt` already established.
+-- Reusing it means an interface identity and a component identity are computed
+-- the same way rather than by two hand-written normalizers that can drift.
+
+-- One interface this component uses, resolving to an
+-- `contracts/interface-schema/v1/interfaces/*.zti` declaration by that
+-- declaration's `name`.
+--
+-- `name` is the route this component reaches the interface on, so a spec's
+-- interface entry is addressable by the same identifier a fabric route uses.
+-- `tag` is the closed data-direction vocabulary from the requirement
+-- document's Interface section, and it is derived from the declared graph
+-- rather than chosen per component:
+--
+--   stream publish            -> output   (samples leave this component)
+--   stream subscribe          -> input    (samples enter it)
+--   call/operation client     -> command  (it issues a request expecting a reply)
+--   call/operation server     -> event    (it is invoked and answers)
+--   interposition hop / broker -> input and output, one entry each
+--
+-- An entry is identified by `name` and `tag` together, because a relay hop
+-- genuinely carries one route in both directions and a single tag would have
+-- to lie about one of them.
+InterfaceReference :: type {
+  name : Text;
+  tag : Text;
+  interface : Text;
+};
+
+-- Requested/offered QoS for one interface entry.
+--
+-- These are `contracts/generation/v1/schema.zt`'s `FabricParticipant` QoS
+-- fields, spelled identically and carrying the same closed value sets, rather
+-- than a second QoS vocabulary. A component's declared policy and the graph's
+-- declared policy must be comparable field by field; two vocabularies could
+-- only be compared by translation, and a translation table is where they would
+-- diverge.
+--
+-- `reference` names an `InterfaceReference.name`. A policy exists only where
+-- the graph declares one, so a relay hop and a broker carry none: they neither
+-- request nor offer policy, they carry whatever the participants agreed.
+QosPolicy :: type {
+  reference : Text;
+  reliability : Text;
+  durability : Text;
+  liveliness : Text;
+  historyDepth : Int;
+  retainedDepth : Int;
+  deadlineNs : Int;
+  lifespanNs : Int;
+  leaseNs : Int;
+};
+
+-- `semantic` is the closed summary of which interface kinds this component
+-- speaks: `none`, one of `stream`/`call`/`operation`, or `mixed` when it speaks
+-- more than one. It is derived from the referenced interfaces' own `kind`
+-- fields, so it cannot claim a semantic no interface of that kind backs.
+Communication :: type {
+  semantic : Text;
+  qos : List QosPolicy;
+};
+
+-- One configuration parameter with its default and inclusive valid range.
+--
+-- Parameters are integers because every knob a component currently declares is
+-- one: `spawnBudget`, `stackBytes`, and `extraThreads` are the manifest's whole
+-- per-component configuration surface. A textual or enumerated parameter needs
+-- a format 2, not an untyped `Text` field here that admits anything.
+Parameter :: type {
+  name : Text;
+  default : Int;
+  minimum : Int;
+  maximum : Int;
+};
+
+-- What this component needs from the platform to run at all.
+--
+-- `executionEnvironment` is a `contracts/target-profile/v1` profile name, so a
+-- spec is target-qualified by the same table stage-0 admits images against.
+-- `resource` fields mirror the manifest's declared per-component ceilings, and
+-- `devices` names capability kinds that are device authority rather than
+-- component-to-component authority.
+ResourceRequirement :: type {
+  stackBytes : Int;
+  spawnBudget : Int;
+  extraThreads : Int;
+  bufferBytePages : Int;
+  bufferCount : Int;
+  mappingCount : Int;
+  loanCount : Int;
+};
+
+RuntimeRequirement :: type {
+  executionEnvironment : Text;
+  resource : ResourceRequirement;
+  devices : List Text;
+};
+
+-- The six compatibility axes the requirement document names.
+--
+-- `platform` is a target-profile name and `interface` is a contract directory
+-- that must exist, so both fail closed against real repository state. The
+-- other four are constraint *modes* drawn from a closed set rather than prose:
+-- `exact` (must match), `atMost` (must not exceed), `compatible` (must be
+-- admissible under the fabric's own compatibility rule), `none` (unconstrained).
+-- A free-text constraint would be unenforceable, which is the same failure as
+-- not declaring one.
+Compatibility :: type {
+  platform : Text;
+  interface : Text;
+  dependency : Text;
+  resource : Text;
+  runtime : Text;
+  qos : Text;
+};
+
+-- How this component is observed to work.
+--
+-- `requiredTestEnvironment` names a real Justfile target, on the same terms
+-- `devlog/`'s `Gates` front matter does: a spec whose evidence gate does not
+-- exist claims verification it cannot have. `passFailCriteria` is the exact
+-- assertion or serial marker that gate observes, so the criterion is checkable
+-- text rather than a promise.
+TestSpecification :: type {
+  testCondition : Text;
+  expectedResult : Text;
+  passFailCriteria : Text;
+  requiredTestEnvironment : Text;
+};
+
+-- Where this component's implementation comes from.
+--
+-- `spec/requirement-document-v0.6.md` section 2.2 names Implementation as its
+-- own concept, and CP4 admits externally supplied artifacts, so a spec must be
+-- able to say which it is without that being inferred from whether a build
+-- happens to find a file.
+--
+-- `provider` is closed: `workspace` (a `[[bin]]` in this repository's
+-- `components/bins` crate), `external` (an artifact admitted by CP4's
+-- host-side path), or `undeclared` (this repository declares the component but
+-- ships no implementation for it). `undeclared` exists because two components
+-- in `contracts/generation/v1/fixtures/valid.zti` are exactly that today:
+-- `generation-list` and `storage-store-probe` were deleted as unreachable
+-- clients of retired syscalls (see `devlog/2026-08-10-b44-policy-labels-deleted/`
+-- and `devlog/2026-08-10-b43-block-service-endpoint/`) while their manifest,
+-- boot-layout, and fabric-profile entries stayed. A model that could not
+-- express that would have to invent a source file for them, which is the one
+-- outcome worse than recording the gap.
+--
+-- `binary` is the `[[bin]]` target name, which is not always the component
+-- name: the manifest's `generation-manager` and `filesystem-service` are built
+-- by `sel4-generation-manager` and `sel4-filesystem-service`. Recording it
+-- makes that mapping a declared fact instead of a convention a reader has to
+-- rediscover. It is empty exactly when `provider` is `undeclared`.
+Implementation :: type {
+  provider : Text;
+  binary : Text;
+};
+
+-- `componentType` rather than `type`: `type` is Zutai's type-declaration
+-- keyword. The value set is the manifest's `Executable.role` vocabulary --
+-- `init`, `service`, `application` -- because a spec and the manifest that
+-- composes it must agree on what kind of thing the component is, and a second
+-- spelling of that vocabulary would be one more thing to keep in sync.
+--
+-- `version` is the spec record's own revision, not a claim that the
+-- implementation is independently versioned. Nothing in this repository
+-- versions a component binary yet; CP4's external artifacts are where that
+-- becomes load-bearing.
+--
+-- `health` is the named health policy this component is admitted under,
+-- matching the manifest's closed `required`/`optional` instance vocabulary.
+ComponentSpec :: type {
+  formatVersion : Int;
+  name : Text;
+  componentType : Text;
+  version : Text;
+  owner : Text;
+  purpose : Text;
+  implementation : Implementation;
+  provides : List Text;
+  requires : List Text;
+  interfaces : List InterfaceReference;
+  dependencies : List Text;
+  communication : Communication;
+  configuration : List Parameter;
+  lifecycle : List Text;
+  runtime : RuntimeRequirement;
+  health : Text;
+  compatibility : Compatibility;
+  test : TestSpecification;
+};
+
+FromData @Implementation :: derive
+FromData @InterfaceReference :: derive
+FromData @QosPolicy :: derive
+FromData @Communication :: derive
+FromData @Parameter :: derive
+FromData @ResourceRequirement :: derive
+FromData @RuntimeRequirement :: derive
+FromData @Compatibility :: derive
+FromData @TestSpecification :: derive
+FromData @ComponentSpec :: derive
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-component-spec-v1:";
+
+-- Bounds. Every list and text field is bounded before anything reads it, on
+-- the same terms as every other contract here: a spec corpus is host-side
+-- input, and host-side input that is not bounded is unbounded input.
+--
+-- `maxSpecs` is `contracts/generation/v1`'s admitted instance ceiling
+-- (`MAX_ADMITTED_INSTANCES = 48`): a corpus larger than the number of
+-- instances a generation can admit cannot be fully composed anyway.
+maxSpecs :: Int = 48;
+maxSourceBytes :: Int = 65536;
+maxNormalizedBytes :: Int = 65536;
+maxNameBytes :: Int = 64;
+maxPurposeBytes :: Int = 160;
+maxTextBytes :: Int = 256;
+maxCapabilityKinds :: Int = 9;
+maxInterfaces :: Int = 16;
+maxQosPolicies :: Int = 16;
+maxDependencies :: Int = 8;
+maxParameters :: Int = 8;
+maxLifecycleStates :: Int = 8;
+maxDeviceRequirements :: Int = 4;
+
+-- Closed vocabularies. Each is declared once here and consumed by
+-- `scripts/check/check-component-spec.py`, so the gate cannot admit a value
+-- this contract does not name.
+componentTypeInit :: Text = "init";
+componentTypeService :: Text = "service";
+componentTypeApplication :: Text = "application";
+
+interfaceTagInput :: Text = "input";
+interfaceTagOutput :: Text = "output";
+interfaceTagCommand :: Text = "command";
+interfaceTagEvent :: Text = "event";
+
+providerWorkspace :: Text = "workspace";
+providerExternal :: Text = "external";
+providerUndeclared :: Text = "undeclared";
+
+semanticNone :: Text = "none";
+semanticStream :: Text = "stream";
+semanticCall :: Text = "call";
+semanticOperation :: Text = "operation";
+semanticMixed :: Text = "mixed";
+
+-- The lifecycle states, in canonical order. A spec declares a subset in this
+-- order; the requirement document's own note that "lifecycle applicability may
+-- depend on component type" is why a subset is admissible at all.
+lifecycleInitialize :: Text = "Initialize";
+lifecycleConfigure :: Text = "Configure";
+lifecycleStart :: Text = "Start";
+lifecycleReady :: Text = "Ready";
+lifecycleRunning :: Text = "Running";
+lifecycleDegraded :: Text = "Degraded";
+lifecycleStop :: Text = "Stop";
+lifecycleError :: Text = "Error";
+
+-- Every component initializes, starts, runs, and can fail, so these four are
+-- required of every spec. `Configure`, `Ready`, `Degraded`, and `Stop` are
+-- conditional on what the component actually does, and the gate ties each to a
+-- declared fact rather than leaving it to taste.
+lifecycleRequired :: List Text = {
+  "Initialize";
+  "Start";
+  "Running";
+  "Error";
+};
+
+constraintExact :: Text = "exact";
+constraintAtMost :: Text = "atMost";
+constraintCompatible :: Text = "compatible";
+constraintNone :: Text = "none";
+
+healthRequired :: Text = "required";
+healthOptional :: Text = "optional";
+
+decodeComponentSpec :: Data -> Validation DecodeIssue ComponentSpec
+  = data => decode data;
+
+{
+  Implementation =;
+  InterfaceReference =;
+  QosPolicy =;
+  Communication =;
+  Parameter =;
+  ResourceRequirement =;
+  RuntimeRequirement =;
+  Compatibility =;
+  TestSpecification =;
+  ComponentSpec =;
+  decodeComponentSpec =;
+  formatVersion =;
+  identityDomain =;
+  maxSpecs =;
+  maxSourceBytes =;
+  maxNormalizedBytes =;
+  maxNameBytes =;
+  maxPurposeBytes =;
+  maxTextBytes =;
+  maxCapabilityKinds =;
+  maxInterfaces =;
+  maxQosPolicies =;
+  maxDependencies =;
+  maxParameters =;
+  maxLifecycleStates =;
+  maxDeviceRequirements =;
+  componentTypeInit =;
+  componentTypeService =;
+  componentTypeApplication =;
+  interfaceTagInput =;
+  interfaceTagOutput =;
+  interfaceTagCommand =;
+  interfaceTagEvent =;
+  providerWorkspace =;
+  providerExternal =;
+  providerUndeclared =;
+  semanticNone =;
+  semanticStream =;
+  semanticCall =;
+  semanticOperation =;
+  semanticMixed =;
+  lifecycleInitialize =;
+  lifecycleConfigure =;
+  lifecycleStart =;
+  lifecycleReady =;
+  lifecycleRunning =;
+  lifecycleDegraded =;
+  lifecycleStop =;
+  lifecycleError =;
+  lifecycleRequired =;
+  constraintExact =;
+  constraintAtMost =;
+  constraintCompatible =;
+  constraintNone =;
+  healthRequired =;
+  healthOptional =;
+}

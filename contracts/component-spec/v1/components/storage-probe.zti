@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "storage-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Reads sector zero through its block capability, verifies the digest, and asserts refused requests stay refused.";
+  implementation = {
+    provider = "workspace";
+    binary = "storage-probe";
+  };
+  provides = [];
+  requires = [
+    "block";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [
+      "block";
+    ];
+  };
+  health = "required";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_storage_check gate boots a generation declaring storage-probe";
+    expectedResult = "storage-probe reaches its declared behavior under that gate";
+    passFailCriteria = "[sel4-storage-probe] storage plane complete";
+    requiredTestEnvironment = "sel4_storage_check";
+  };
+}

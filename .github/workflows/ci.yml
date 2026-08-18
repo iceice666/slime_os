@@ -103,6 +103,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just contracts_check
+      - run: just component_spec_check
       - run: just x86_portability_check
       - run: just framework_safety_check
       - run: just devlog_check

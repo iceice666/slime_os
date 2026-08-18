@@ -1,0 +1,64 @@
+{
+  formatVersion = 1;
+  name = "powerbox-chooser";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Serves powerbox requests, selecting one file capability and granting it at attenuated rights.";
+  implementation = {
+    provider = "workspace";
+    binary = "powerbox-chooser";
+  };
+  provides = [];
+  requires = [
+    "directory";
+    "endpoint";
+    "input";
+  ];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [
+      "input";
+    ];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_powerbox_check gate boots a generation declaring powerbox-chooser";
+    expectedResult = "powerbox-chooser reaches its declared behavior under that gate";
+    passFailCriteria = "[powerbox] chooser ready";
+    requiredTestEnvironment = "sel4_powerbox_check";
+  };
+}

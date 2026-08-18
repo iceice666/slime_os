@@ -1,0 +1,78 @@
+{
+  formatVersion = 1;
+  name = "fabric-call-client-b";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Runs the call plane's second-client role, exercising duplicate rejection, cancellation, and backpressure recovery.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-call-client-b";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "parameters";
+      tag = "command";
+      interface = "ParameterCall";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "call";
+    qos = [
+      {
+        reference = "parameters";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 1000000;
+        lifespanNs = 2000000;
+        leaseNs = 0;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Degraded";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the sel4_call_check gate boots a generation declaring fabric-call-client-b";
+    expectedResult = "fabric-call-client-b reaches its declared behavior under that gate";
+    passFailCriteria = "[fabric-call-client-b] duplicate rejected";
+    requiredTestEnvironment = "sel4_call_check";
+  };
+}

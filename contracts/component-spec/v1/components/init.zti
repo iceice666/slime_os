@@ -1,0 +1,76 @@
+{
+  formatVersion = 1;
+  name = "init";
+  componentType = "init";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Boots the declared component graph, spawning each instance and delegating its capability grants.";
+  implementation = {
+    provider = "workspace";
+    binary = "init";
+  };
+  provides = [
+    "block";
+    "directory";
+    "input";
+    "sharedBufferFactory";
+    "supervision";
+  ];
+  requires = [
+    "executable";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [
+    {
+      name = "spawnBudget";
+      default = 18;
+      minimum = 0;
+      maximum = 32;
+    };
+  ];
+  lifecycle = [
+    "Initialize";
+    "Configure";
+    "Start";
+    "Ready";
+    "Running";
+    "Stop";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 18;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [
+      "block";
+      "input";
+    ];
+  };
+  health = "required";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_component_graph_check gate boots a generation declaring init";
+    expectedResult = "init reaches its declared behavior under that gate";
+    passFailCriteria = "[init] launching component graph";
+    requiredTestEnvironment = "sel4_component_graph_check";
+  };
+}

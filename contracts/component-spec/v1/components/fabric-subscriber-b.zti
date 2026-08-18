@@ -1,0 +1,94 @@
+{
+  formatVersion = 1;
+  name = "fabric-subscriber-b";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Stalls its telemetry acks to exercise bounded ring eviction and loss reporting while consuming diagnostics.";
+  implementation = {
+    provider = "workspace";
+    binary = "fabric-subscriber-b";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "diagnostics";
+      tag = "input";
+      interface = "DiagnosticsStream";
+    };
+    {
+      name = "telemetry";
+      tag = "input";
+      interface = "TelemetryStream";
+    };
+  ];
+  dependencies = [
+    "fabric-service";
+  ];
+  communication = {
+    semantic = "stream";
+    qos = [
+      {
+        reference = "diagnostics";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "manual";
+        historyDepth = 2;
+        retainedDepth = 0;
+        deadlineNs = 100;
+        lifespanNs = 0;
+        leaseNs = 200;
+      };
+      {
+        reference = "telemetry";
+        reliability = "bestEffort";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 0;
+        lifespanNs = 0;
+        leaseNs = 0;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Degraded";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 4;
+      bufferCount = 0;
+      mappingCount = 4;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the sel4_stream_check gate boots a generation declaring fabric-subscriber-b";
+    expectedResult = "fabric-subscriber-b reaches its declared behavior under that gate";
+    passFailCriteria = "[fabric-subscriber-b] bounded loss reported";
+    requiredTestEnvironment = "sel4_stream_check";
+  };
+}

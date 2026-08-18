@@ -1,0 +1,55 @@
+{
+  formatVersion = 1;
+  name = "echo-agent";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Verifies its granted directory scope and stdin payload, then reports its launch context.";
+  implementation = {
+    provider = "workspace";
+    binary = "echo-agent";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_dango_check gate boots a generation declaring echo-agent";
+    expectedResult = "echo-agent reaches its declared behavior under that gate";
+    passFailCriteria = "echo-agent{tool=echo";
+    requiredTestEnvironment = "sel4_dango_check";
+  };
+}

@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "generation-manager";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Serves the generation plane's list, inspect, stage, select, and rollback operations over its block capability.";
+  implementation = {
+    provider = "workspace";
+    binary = "sel4-generation-manager";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "x86_64-qemu-virtio";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "x86_64-qemu-virtio";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_generation_check gate boots a generation declaring generation-manager";
+    expectedResult = "generation-manager reaches its declared behavior under that gate";
+    passFailCriteria = "[init] generation plane complete";
+    requiredTestEnvironment = "sel4_generation_check";
+  };
+}
