@@ -291,3 +291,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-17 | [ROS 2 transport pivot: bounded Zenoh replaces self-built DDSI-RTPS](2026-08-17-ros2-transport-zenoh-pivot/index.md) | Decision | Verified | R0, R1, R2, RP0, RP1, RP5, RP6, B69 |
 | 2026-08-17 | [Roadmap/devlog record boundary: collapse finished-work narrative out of `roadmap/`](2026-08-17-roadmap-record-boundary/index.md) | Decision | Verified | none |
 | 2026-08-17 | [Component platform track: component/system specs as data, and out-of-tree components as the forcing proof](2026-08-17-component-platform-track/index.md) | Decision | Proposed | CP0, CP1, CP2, CP3, CP4, CP5, B70, RP4, B65 |
+| 2026-08-18 | [CP0 — component specification model](2026-08-18-cp0-component-spec-model/index.md) | Change | Verified | CP0, B70 |

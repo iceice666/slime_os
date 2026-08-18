@@ -83,6 +83,18 @@ independently; no component source file `include!`s a `build.rs`-private,
 manifest-derived constant table; `just contracts_check`, `just
 generation_check`, and the full seL4 gate suite pass unchanged.
 
+**Progress (2026-08-18):** CP0 landed the first clause. `contracts/component-spec/v1`
+exists, is type-checked by `just contracts_check`, and is validated semantically by
+`just component_spec_check` over a 42-record corpus covering every component
+`valid.zti` declares. That closes the "no component-level specification exists"
+half of the problem statement; the compile-time coupling itself is untouched, since
+no `include!` site moved and no manifest is derived yet. `contracts/system-spec/v1`
+(CP1) and runtime binding resolution (CP2) remain. Authoring the corpus also
+established that two declared components — `generation-list` and
+`storage-store-probe` — have no implementation at all, now recorded as
+`provider = "undeclared"` and pinned by the gate.
+**Evidence:** [`devlog/2026-08-18-cp0-component-spec-model/`](../devlog/2026-08-18-cp0-component-spec-model/index.md)
+
 ## Deferred follow-ups
 
 Real, unclosed follow-up work surfaced by resolved entries, not new backlog

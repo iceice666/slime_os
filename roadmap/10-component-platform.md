@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
 
-**Status:** Not started.
+**Status:** CP0 complete; CP1–CP5 not started.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -27,34 +27,15 @@
 
 ## CP0 — Component specification model
 
-**Status:** Not started.
+**Status:** Complete.
 
-**Depends on:** Cleared or explicitly deferred backlog.
+**Delivered:** `contracts/component-spec/v1` declares a bounded, closed-vocabulary `ComponentSpec` covering the twelve sections `spec/requirement-document-v0.6.md` §2.1 names, with 42 records — one per component `contracts/generation/v1/fixtures/valid.zti` declares — each cross-checked field by field against that manifest and its fabric graph, and each identified by `contracts/interface-schema/v1`'s own normalization convention rather than a second one.
 
-Defines the component-level data `spec/requirement-document-v0.6.md` §2.1 describes (Identity, Purpose, Capability, Interface, Dependency, Communication, Configuration, Lifecycle, Runtime Requirement, Status/Health, Compatibility, Test Specification) as a real Zutai contract, independent of any one generation manifest.
+**Exit condition (observed):** `just component_spec_check` validates all 42 records against the 4 declared interfaces and the reference generation, refusing 37 named malformations with stable identities, and reports the two components the repository declares but ships no implementation for (`generation-list`, `storage-store-probe`); `just contracts_check` type-checks the new contract and its generated bindings.
 
-### Deliverables
+**Gates:** `just component_spec_check`, `just contracts_check`.
 
-- add `contracts/component-spec/v1/schema.zt` defining a `ComponentSpec` record with: Identity (`name`, `type`, `version`, `owner`); `purpose` (Text); Capability (`provides : List Text`, `requires : List Text`); Interface references (named entries resolving to `contracts/interface-schema/v1/interfaces/*.zti` identities, tagged input/output/command/event); `dependencies : List Text` naming other `ComponentSpec` identities; Communication (`semantic`, and a QoS reference reusing `contracts/generation/v1/schema.zt`'s existing `FabricParticipant` QoS fields rather than inventing a second QoS vocabulary); Configuration (`parameters` with name/default/valid-range); Lifecycle (`states : List Text` drawn from the closed set `{Initialize, Configure, Start, Ready, Running, Degraded, Stop, Error}`); Runtime Requirement (`executionEnvironment`, `resourceRequirement`, `deviceRequirement`); Status/Health (a named health-check reference); Compatibility (`platform`, `interface`, `dependency`, `resource`, `runtime`, `qos` constraint fields); Test Specification (`testCondition`, `expectedResult`, `passFailCriteria`, `requiredTestEnvironment`);
-- compute each record's identity the same way `contracts/interface-schema/v1/schema.zt` does: SHA-256 over a domain-separation prefix plus normalized, sorted-key, whitespace-free UTF-8 JSON bytes — reuse that exact normalization convention rather than defining a second one;
-- add a `just component_spec_check` gate (new `scripts/check/check-component-spec.py`, following the shape of `scripts/check/check-contracts.py`) that structurally and semantically validates every `contracts/component-spec/v1` record: required identity fields present, `provides`/`requires` well-formed, every interface reference resolving to a real `contracts/interface-schema/v1/interfaces/*.zti` entry, every lifecycle state drawn from the closed set;
-- author one `component-spec` record for every `Executable`/`Instance` pair currently declared in `contracts/generation/v1/fixtures/valid.zti`, as the first real corpus proving the schema can describe every existing component before anything is asked to derive from it.
-
-### Required checks
-
-- a `component-spec` record with an unresolvable interface reference, a lifecycle state outside the closed set, or a missing identity field is rejected with a location, mirroring the Zutai `zutai-cli check` error shape;
-- two independently produced normalized encodings of the same `component-spec` content compute the same identity hash;
-- every component named in `valid.zti`'s `executables`/`instances` has a corresponding, schema-valid `component-spec` record, verified by `just component_spec_check`.
-
-### Planned verification target
-
-```sh
-just component_spec_check
-```
-
-### Exit condition
-
-`contracts/component-spec/v1` exists, is validated by a real gate, and every component in the reference `valid.zti` generation has a corresponding `component-spec` record with a stable computed identity.
+**Evidence:** [`devlog/2026-08-18-cp0-component-spec-model/`](../devlog/2026-08-18-cp0-component-spec-model/index.md)
 
 ## CP1 — System specification model and generation derivation
 
