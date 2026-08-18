@@ -211,12 +211,33 @@ caller's holder index is the meaning rather than a restriction — verified acro
 all 7 manifests declaring notifications: 153 bindings, each unique on
 `(holder, grant)` alone, so the suffix is available but not needed today.
 
+**Progress (2026-08-18, notification slots closed):** all 17 notification
+constants are migrated and **deleted** from `fabric_profile`, which drops from 64
+constants to 47. Six components resolve them by grant name:
+`fabric-publisher`, `fabric-subscriber`, `fabric-subscriber-b`,
+`fabric-publisher-b`, the four call participants through
+`fabric_call_scenario::resolve_wake_slot`, and `call_broker`.
+
+Two findings worth keeping. `fabric-subscriber-b` needs a two-name disjoint
+lookup because the matrix plane declares `telemetry-alt` where five other planes
+declare `telemetry`, at the same slots, and no holder ever binds both — verified
+against every manifest declaring notifications. And the call plane's five holders
+all bind *one* grant name at five different slots, which is the clearest case for
+per-holder scoping being the mechanism rather than a restriction: the generated
+table needed five differently-named constants to state what one name now states.
+
+The deleted always-emit list is the argument for the axis. It existed to paper
+over absence at *build* time — `SLOT_ABSENT` standing in for "this graph has no
+wake object" — because a missing constant is a link error where a missing
+notification is a runtime fact the generation already states. A failed resolve
+*is* absence, and the two components that must tolerate it now say so.
+
 B70's remaining surface is 18 `include!` sites over three tables. Of
-`fabric_profile`'s 64 constants, 15 notification slots remain migratable by the
-axis above, 3 are capability-slot ceilings, and 46 are genuine graph facts
-(routes, QoS depths, trace depth) that belong to an authenticated `fabric-graph`
-read — still no resource-read syscall exists. `spawn-service`'s RPC endpoint stays
-derived because `sel4-dango.zti` grants it three `send`+`recv` endpoints, so
+`fabric_profile`'s 47 remaining constants, 3 are capability-slot ceilings and 44
+are graph facts (routes, QoS depths, trace depth, participant and worker tables)
+belonging to an authenticated `fabric-graph` read — still no resource-read syscall
+exists, which is the one genuinely blocked item. `spawn-service`'s RPC endpoint
+stays derived because `sel4-dango.zti` grants it three `send`+`recv` endpoints, so
 `kind:endpoint+send,recv` is ambiguous and refuses; its command-executable table
 maps a command *name* to an executable, a graph-shape fact rather than a
 capability. All three share one shape: each needs a
