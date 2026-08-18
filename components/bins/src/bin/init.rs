@@ -954,7 +954,16 @@ fn launch_fabric_calls() {
 fn drive_channel_plane() {
     const LINE: &[u8] = b"[console] channel plane carried this line\n";
     const CLOSE: &[u8] = b"SLIME.CONSOLE.CLOSE";
-    let console = slime_rt::spawn(CONSOLE_SLOT, &[]).unwrap_or_else(|_| fail(b"spawn console"));
+    // `console` is an *executable* slot the boot layout declares and no grant
+    // binds, so resolving it exercises the layout half of the query — the half
+    // `CONSOLE_SLOT` was the compiled stand-in for. The `executable:` prefix names
+    // which of the layout's two identity domains is meant; without it the root
+    // treats the name as a grant and refuses, which is what keeps a layout entry
+    // from ever shadowing a grant.
+    let console_executable = slime_rt::resolve_binding(b"executable:console")
+        .unwrap_or_else(|_| fail(b"no console executable in this generation's layout"));
+    let console =
+        slime_rt::spawn(console_executable, &[]).unwrap_or_else(|_| fail(b"spawn console"));
     for _ in 0..PEER_PARK_YIELDS {
         slime_rt::yield_now();
     }
@@ -1280,6 +1289,17 @@ fn drive_powerbox_plane() {
     wait_clean(&[probe.supervision_slot, chooser.supervision_slot]);
 }
 
+/// One boot-layout executable slot, resolved by name through the root.
+///
+/// CP2's replacement for the `build.rs`-generated `*_SLOT` constants. `reason` is
+/// the component name reported when the active generation's layout declares no
+/// such executable, which is a real answer rather than a failure to paper over:
+/// a plane that cannot find the component it is about to launch must say so
+/// instead of spawning whatever sits at a guessed slot.
+fn layout_executable(query: &[u8], reason: &'static [u8]) -> u32 {
+    slime_rt::resolve_binding(query).unwrap_or_else(|_| fail_plane(b"dango", reason))
+}
+
 /// Drive the P5.4.3 dango plane (M6.4): a scripted console session that
 /// launches commands through the spawn service.
 ///
@@ -1292,8 +1312,14 @@ fn drive_dango_plane() {
     // init holds the source and must hand it over at spawn. Every endpoint on
     // this plane is a generation-declared object the root installs into both
     // ends itself, so no endpoint half crosses here.
+    // The three executables this plane launches are layout roles, resolved by
+    // name through the root rather than compiled in (CP2). `executable:` names
+    // which of the layout's two identity domains is meant.
+    let console_slot = layout_executable(b"executable:console", b"console");
+    let service_slot = layout_executable(b"executable:spawn-service", b"spawn-service");
+    let dango_slot = layout_executable(b"executable:dango", b"dango");
     let console = slime_rt::spawn(
-        CONSOLE_SLOT,
+        console_slot,
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| fail_plane(b"dango", b"spawn console"));
@@ -1303,7 +1329,7 @@ fn drive_dango_plane() {
     // that must pass them; ascending declared slot is the order the root pairs
     // requests with declarations in.
     let service = slime_rt::spawn(
-        SPAWN_SERVICE_SLOT,
+        service_slot,
         &[
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(6, RIGHT_EXEC | RIGHT_SPAWN),
@@ -1313,7 +1339,7 @@ fn drive_dango_plane() {
     .unwrap_or_else(|_| fail_plane(b"dango", b"spawn service"));
     slime_rt::debug_write(b"[init] spawn service spawned\n");
     let dango =
-        slime_rt::spawn(DANGO_SLOT, &[]).unwrap_or_else(|_| fail_plane(b"dango", b"spawn dango"));
+        slime_rt::spawn(dango_slot, &[]).unwrap_or_else(|_| fail_plane(b"dango", b"spawn dango"));
     slime_rt::debug_write(b"[init] dango spawned\n");
     wait_terminated(&[
         dango.supervision_slot,

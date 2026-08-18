@@ -616,7 +616,10 @@ system_spec_check: component_spec_check
     python3 scripts/generate/generate-generation-from-spec.py --check
 
 # CP2's runtime binding resolution: a component asks the root which of its own
-# slots holds a named binding instead of compiling the number in.
+# slots holds a named binding instead of compiling the number in. An unprefixed
+# name is a manifest grant; `executable:`/`channel:` reach the boot layout's two
+# identity domains for the bootstrap instance, which is what keeps a layout entry
+# from shadowing a grant.
 #
 # The planes are the gate. `sel4_channel_check` asserts the denial arm from both
 # the root's line and the component's, and `sel4_loan_check` plus
@@ -828,7 +831,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=123
+    expected=124
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

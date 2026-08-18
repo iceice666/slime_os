@@ -415,6 +415,8 @@ pub const MAX_BINDING_NAME: usize = MAX_MESSAGE_BYTES;
 /// slot — the property that makes this answerable for every component. A
 /// component learns its own layout, which it already knew at compile time, and
 /// nothing else.
+use boot_contracts::boot_layout;
+
 pub fn resolve_binding_slot(
     generation: &boot_contracts::generation::Generation<'_>,
     instance: usize,
@@ -424,7 +426,8 @@ pub fn resolve_binding_slot(
         return None;
     }
     let name = core::str::from_utf8(name).ok()?;
-    let instance = generation.instance(instance).ok()?;
+    let instance_index = instance;
+    let instance = generation.instance(instance_index).ok()?;
     // Each binding names a grant by index, so the grant is decoded per binding
     // rather than the grant table being scanned for the name first: an instance
     // binds a handful of grants, while the generation declares up to 128.
@@ -437,23 +440,64 @@ pub fn resolve_binding_slot(
             return Some(binding.slot);
         }
     }
-    // Deliberately nothing else. The boot layout is *not* consulted, and a
-    // fallback to it was written, tested on real boots, and removed.
+    // A layout role, only when the caller asked for one *explicitly*, and only
+    // for the bootstrap instance.
     //
-    // `contracts/boot-layout/v1`'s resource object is one table describing the
-    // bootstrap component's CSpace, and it declares every edge any plane uses —
-    // `console-output` and `dango-output` both. Answering from it therefore
-    // returned slots for names the caller had never bound, which is precisely the
-    // leak this operation must not have. It surfaced as a hang rather than a
-    // wrong number: under the product graph `init` asked for the edge it binds,
-    // received the layout's *other* edge, and sent into an endpoint no one was
-    // waiting on.
+    // The namespace prefix is what makes this sound, and it exists because the
+    // unprefixed version was written twice and failed on real boots twice. The
+    // boot layout declares the bootstrap component's executables and channel
+    // halves; a grant list declares its capability edges; and the two use
+    // overlapping names for different things — `console` is a layout executable
+    // at slot 1 while `init-console` is a grant at the same slot, and
+    // `console-output` is a grant under one generation and absent from the
+    // layout under another. A single flat lookup therefore answered a channel
+    // question with an executable slot, and `init` sent into an endpoint nobody
+    // was waiting on: a hang rather than a visible error.
     //
-    // So the answer is the instance's own binding list or nothing. A component
-    // whose slots come from the layout rather than from grants still reads them
-    // from the generated table for now; making those runtime-resolvable needs the
-    // layout to record which instance each entry belongs to, which is a
-    // contract change rather than a root change.
+    // So the caller states which table it means. `executable:` and `channel:`
+    // address the layout's two identity domains, which is exactly the
+    // distinction the contract already draws to keep a component and a channel
+    // sharing a name apart. An unprefixed name is a grant and can never reach
+    // the layout, so no existing caller's meaning changes and no layout entry
+    // can shadow a grant.
+    if instance_index == generation.bootstrap() {
+        if let Some(role) = name.strip_prefix("executable:") {
+            return resolve_layout_slot(generation, &boot_layout::component_identity(role));
+        }
+        if let Some(role) = name.strip_prefix("channel:") {
+            return resolve_layout_slot(generation, &boot_layout::channel_identity(role));
+        }
+    }
+    None
+}
+
+/// Which slot of the bootstrap component's CSpace carries `identity`.
+///
+/// The layout keys entries by identity hash under two domains, so the caller
+/// computes the one it means and this compares it. Resource objects share a
+/// kind, so the decode is the discriminator: a shared-buffer budget or a fabric
+/// graph fails it and is skipped.
+fn resolve_layout_slot(
+    generation: &boot_contracts::generation::Generation<'_>,
+    identity: &[u8; 32],
+) -> Option<usize> {
+    use boot_contracts::generation::KIND_RESOURCE;
+
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind != KIND_RESOURCE {
+            continue;
+        }
+        let Ok(layout) = boot_layout::BootLayout::decode(object.bytes) else {
+            continue;
+        };
+        for entry in 0..layout.entry_count() {
+            let entry = layout.entry(entry)?;
+            if &entry.name_identity == identity {
+                return Some(entry.slot as usize);
+            }
+        }
+    }
     None
 }
 
@@ -615,5 +659,29 @@ mod tests {
     fn binding_name_bound_fits_one_request() {
         assert_eq!(MAX_BINDING_NAME, MAX_MESSAGE_BYTES);
         assert!(MAX_BINDING_NAME <= boot_contracts::generation::MAX_STRING_BYTES);
+    }
+
+    /// The two layout namespaces are distinct domains, and neither collides with
+    /// the other for the same text.
+    ///
+    /// This is what lets one query serve grants and layout roles without a layout
+    /// entry shadowing a grant. The unprefixed-name version of this operation was
+    /// written twice and failed on real boots twice: `console` is a layout
+    /// executable at slot 1 while `init-console` is a grant at the same slot, and
+    /// a flat lookup answered a channel question with an executable slot. The
+    /// prefix makes the caller state which table it means, so the domains below
+    /// must genuinely differ.
+    #[test]
+    fn layout_namespaces_are_distinct_domains() {
+        use boot_contracts::boot_layout::{channel_identity, component_identity};
+        assert_ne!(component_identity("console"), channel_identity("console"));
+        assert_ne!(
+            component_identity("console-output"),
+            channel_identity("console-output")
+        );
+        // And a prefixed request never matches the grant name it contains, so a
+        // grant called `executable:x` could not be reached as a layout role.
+        assert!(binding_name_admissible(b"executable:console"));
+        assert!(binding_name_admissible(b"channel:console-output"));
     }
 }
