@@ -9,8 +9,8 @@
 //! `super` — there is no path naming that layout independently of its binary.
 
 use super::{
-    CONSOLE_SLOT, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_SPAWN,
-    RIGHT_TRANSFER, SYSINFO_SLOT, grant, wait_clean,
+    RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_SPAWN, RIGHT_TRANSFER, grant,
+    resolve_executable, wait_clean,
 };
 
 fn fail_spawn(reason: &[u8]) -> ! {
@@ -55,8 +55,12 @@ pub fn drive_spawn_plane() {
     // holds. Init holds this view with `directoryRead | transfer` alone, so
     // asking to pass on write authority is asking the root to manufacture
     // authority no generation declared.
+    // Resolved once and reused: three of the four spawns below are *expected
+    // refusals*, so each must name the same real executable the accepted one
+    // does -- a wrong slot would make them pass for the wrong reason (CP2/B70).
+    let console_executable = resolve_executable(b"executable:console");
     if slime_rt::spawn(
-        CONSOLE_SLOT,
+        console_executable,
         &[grant(5, RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_WRITE)],
     )
     .is_ok()
@@ -67,8 +71,8 @@ pub fn drive_spawn_plane() {
     // The executable slot is authority to create this child; passing it on
     // would let the child re-spawn its own image outside its parent's budget.
     if slime_rt::spawn(
-        CONSOLE_SLOT,
-        &[grant(CONSOLE_SLOT, RIGHT_EXEC | RIGHT_SPAWN)],
+        console_executable,
+        &[grant(console_executable, RIGHT_EXEC | RIGHT_SPAWN)],
     )
     .is_ok()
     {
@@ -76,7 +80,7 @@ pub fn drive_spawn_plane() {
     }
     slime_rt::debug_write(b"[init] self-executable grant refused\n");
     let console = slime_rt::spawn(
-        CONSOLE_SLOT,
+        console_executable,
         &[grant(5, RIGHT_DIRECTORY_READ | RIGHT_TRANSFER)],
     )
     .unwrap_or_else(|_| fail_spawn(b"console"));
@@ -105,7 +109,8 @@ pub fn drive_spawn_plane() {
         grant(10, RIGHT_DIRECTORY_READ | RIGHT_TRANSFER),
         grant(11, RIGHT_DIRECTORY_READ | RIGHT_TRANSFER),
     ];
-    let sysinfo = slime_rt::spawn(SYSINFO_SLOT, &wide).unwrap_or_else(|_| fail_spawn(b"sysinfo"));
+    let sysinfo = slime_rt::spawn(resolve_executable(b"executable:sysinfo"), &wide)
+        .unwrap_or_else(|_| fail_spawn(b"sysinfo"));
     slime_rt::debug_write(b"[init] sysinfo spawned\n");
     for slot in 6..=11 {
         if slime_rt::directory_inspect(slot, RIGHT_DIRECTORY_READ as u32, &mut root, &mut scope)

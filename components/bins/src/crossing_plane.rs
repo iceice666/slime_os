@@ -8,7 +8,7 @@
 //! boot layout into `init.rs`'s scope, so anything from it is reached through
 //! `super` — there is no path naming that layout independently of its binary.
 
-use super::{CROSSING_PEER_SLOT, RIGHT_SEND};
+use super::{RIGHT_SEND, resolve_executable};
 use slime_rt::CapabilityDisposition;
 
 /// More rendezvous exchanges than the retired logical lifetime bound of 48.
@@ -20,7 +20,7 @@ const CHANNEL_LOOP_PAIRS: u32 = 49;
 pub fn drive_crossing_plane() {
     const CARRIER_SLOT: u32 = 2;
     const GATE_SLOT: u32 = 3;
-    let peer = slime_rt::spawn(CROSSING_PEER_SLOT, &[])
+    let peer = slime_rt::spawn(resolve_executable(b"executable:crossing-peer"), &[])
         .unwrap_or_else(|_| fail_crossing(b"crossing peer"));
     let descriptor = slime_proto::capability_transfer::WireCapabilityTransfer {
         magic: slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC,

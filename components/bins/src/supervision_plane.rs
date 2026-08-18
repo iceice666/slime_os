@@ -8,7 +8,7 @@
 //! boot layout into `init.rs`'s scope, so anything from it is reached through
 //! `super` — there is no path naming that layout independently of its binary.
 
-use super::{SUPERVISION_CHILD_SLOT, wait_clean};
+use super::{resolve_executable, wait_clean};
 
 /// How many children the supervision plane creates over the boot.
 ///
@@ -36,7 +36,7 @@ const SUPERVISION_LOOP_CHILDREN: u32 = 49;
 /// `ChannelTable` never reclaims (B22), so a child needing one would exhaust
 /// channels before the loop reached the record bound.
 pub fn drive_supervision_plane() {
-    let retained = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+    let retained = slime_rt::spawn(resolve_executable(b"executable:supervision-child"), &[])
         .unwrap_or_else(|_| fail_supervision(b"retained child"));
     // B25: a second handle naming a task this component already supervises.
     // Neither a spawn grant nor an export could place one twice — a grant must
@@ -54,7 +54,7 @@ pub fn drive_supervision_plane() {
     // interesting one: it outlives the handle it came from.
     wait_clean(&[retained.supervision_slot]);
     for _ in 0..SUPERVISION_LOOP_CHILDREN {
-        let child = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+        let child = slime_rt::spawn(resolve_executable(b"executable:supervision-child"), &[])
             .unwrap_or_else(|_| fail_supervision(b"loop child"));
         wait_clean(&[child.supervision_slot]);
     }

@@ -16,10 +16,7 @@ use slime_rt::CapabilityDisposition;
 // `init.rs`'s own scope, so they are reached through `super` rather than
 // imported: the layout is per-generation and there is no path that names it
 // independently of the binary it was generated for.
-use super::{
-    DANGO_OUTPUT_SLOT, RIGHT_TRANSFER, SAMPLE_RECEIVER_SIDE_SLOT, SAMPLE_RECEIVER_SLOT,
-    SHARED_BUFFER_FACTORY_SLOT, console_send_slot,
-};
+use super::{RIGHT_TRANSFER, console_send_slot, resolve_buffer_factory, resolve_executable};
 
 /// Drive the P5.3.2 loan plane, as the lender.
 ///
@@ -54,7 +51,7 @@ pub fn drive_loan_plane() {
     }
     // A slot holding real authority of another kind, so the check is on kind
     // rather than on possession.
-    if slime_rt::shared_buffer_create(RECEIVER_SLOT, 1, true).is_ok() {
+    if slime_rt::shared_buffer_create(receiver_slot(), 1, true).is_ok() {
         fail_loan(b"a channel slot named a buffer factory");
     }
     slime_rt::debug_write(b"[init] ungranted buffer factory refused\n");
@@ -67,7 +64,7 @@ pub fn drive_loan_plane() {
     // every probe below asks for exactly one more than one of those.
     probe_quota_ceilings(BASE);
 
-    let buffer = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, PAGES, true) {
+    let buffer = match slime_rt::shared_buffer_create(resolve_buffer_factory(), PAGES, true) {
         Ok(buffer) => buffer,
         Err(_) => fail_loan(b"create"),
     };
@@ -95,14 +92,14 @@ pub fn drive_loan_plane() {
     // half of. That edge is generation-declared, so the preflight expects
     // exactly it -- which is what the docstring above says this cutover lacked
     // "until P5.3.3", and now has.
-    if slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[]).is_err() {
+    if slime_rt::spawn(resolve_executable(b"executable:sample-receiver"), &[]).is_err() {
         fail_loan(b"spawn the receiver");
     }
     slime_rt::debug_write(b"[init] loan receiver spawned\n");
 
     // A loan requires an irreversibly sealed source, so an unsealed one must be
     // refused. Checked before sealing, because afterwards it is unobservable.
-    if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN, false).is_ok() {
+    if slime_rt::shared_buffer_loan(buffer.slot, receiver_slot(), 0, PAYLOAD_LEN, false).is_ok() {
         fail_loan(b"unsealed region was loanable");
     }
     slime_rt::debug_write(b"[init] unsealed loan denied\n");
@@ -141,16 +138,16 @@ pub fn drive_loan_plane() {
     }
     slime_rt::debug_write(b"[init] undelegated loan denied\n");
 
-    let loan = match slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN, false)
-    {
-        Ok(loan) => loan,
-        Err(_) => fail_loan(b"loan"),
-    };
+    let loan =
+        match slime_rt::shared_buffer_loan(buffer.slot, receiver_slot(), 0, PAYLOAD_LEN, false) {
+            Ok(loan) => loan,
+            Err(_) => fail_loan(b"loan"),
+        };
     slime_rt::debug_write(b"[init] loan created\n");
 
     // The loan ceiling is one. A second loan of the same sealed region is
     // therefore refused by the quota rather than by anything about the range.
-    if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAGE, false).is_ok() {
+    if slime_rt::shared_buffer_loan(buffer.slot, receiver_slot(), 0, PAGE, false).is_ok() {
         fail_loan(b"loan quota did not bite");
     }
     slime_rt::debug_write(b"[init] loan quota refused\n");
@@ -161,7 +158,7 @@ pub fn drive_loan_plane() {
     // gets a read-only window onto an exact subrange, not the region.
     let descriptor = sample_descriptor(loan.id, PAYLOAD_LEN);
     if slime_rt::capability_delegate(
-        RECEIVER_SLOT,
+        receiver_slot(),
         loan.slot,
         CapabilityDisposition::Move,
         slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN,
@@ -188,7 +185,7 @@ pub fn drive_loan_plane() {
     let mut done = [0u8; slime_rt::MAX_MSG];
     let mut no_caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(RECEIVER_SLOT, &mut done, &mut no_caps) {
+        match slime_rt::recv(receiver_slot(), &mut done, &mut no_caps) {
             slime_rt::ERR_WOULDBLOCK => {
                 slime_rt::yield_now();
             }
@@ -229,10 +226,10 @@ pub fn drive_loan_plane() {
     // when the graph drains; otherwise the terminal capability summary remains
     // nonzero. Retain the source so init's normal task cleanup independently
     // reclaims the buffer itself.
-    let abandoned = slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true)
+    let abandoned = slime_rt::shared_buffer_create(resolve_buffer_factory(), 1, true)
         .unwrap_or_else(|_| fail_loan(b"create abandoned export source"));
     if slime_rt::capability_delegate(
-        DANGO_OUTPUT_SLOT,
+        console_send_slot(),
         abandoned.slot,
         CapabilityDisposition::Retain,
         slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER,
@@ -257,22 +254,22 @@ pub fn drive_loan_plane() {
 fn probe_quota_ceilings(base: u64) {
     const PAGE: u64 = 4096;
     // Pages: the ceiling is 4, so a single 5-page region can never fit.
-    if slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 5, true).is_ok() {
+    if slime_rt::shared_buffer_create(resolve_buffer_factory(), 5, true).is_ok() {
         fail_loan(b"page quota did not bite");
     }
     slime_rt::debug_write(b"[init] page quota refused\n");
 
     // Buffers: the ceiling is 2. Three single-page regions exceed it while
     // staying inside the 4-page budget, so it is the buffer count that refuses.
-    let first = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true) {
+    let first = match slime_rt::shared_buffer_create(resolve_buffer_factory(), 1, true) {
         Ok(buffer) => buffer,
         Err(_) => fail_loan(b"first probe region"),
     };
-    let second = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true) {
+    let second = match slime_rt::shared_buffer_create(resolve_buffer_factory(), 1, true) {
         Ok(buffer) => buffer,
         Err(_) => fail_loan(b"second probe region"),
     };
-    if slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true).is_ok() {
+    if slime_rt::shared_buffer_create(resolve_buffer_factory(), 1, true).is_ok() {
         fail_loan(b"buffer quota did not bite");
     }
     slime_rt::debug_write(b"[init] buffer quota refused\n");
@@ -343,4 +340,9 @@ pub const PEER_PARK_YIELDS: usize = 64;
 /// at the other end of this channel — see
 /// `slime-root/src/main.rs::serve_buffer_loan` for why that stands in for the
 /// supervision handle the retired kernel uses, and what replaces it in P5.3.3.
-const RECEIVER_SLOT: u32 = SAMPLE_RECEIVER_SIDE_SLOT;
+///
+/// Resolved by grant name rather than compiled in (CP2/B70): `sample-receiver-side`
+/// is an ordinary endpoint binding in init's own list.
+fn receiver_slot() -> u32 {
+    slime_rt::resolve_binding(b"sample-receiver-side").unwrap_or_else(|_| slime_rt::exit(1))
+}

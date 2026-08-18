@@ -67,16 +67,12 @@ fn spawn_service_caps() -> [SpawnGrant; 3] {
     ]
 }
 
-// Init's slot numbers come from the generation's boot layout, emitted by
-// `scripts/build/boot_layout.py` into `OUT_DIR` at component build time. The
-// kernel places each capability at the slot the same layout names, so the
-// component that uses a slot and the kernel that fills it read one source
-// rather than two hand-maintained lists that agreed by inspection (B10).
-//
-// A label this generation does not declare is `SLOT_ABSENT`. Every generation
-// emits the same constant names, and runtime branches test those values rather
-// than hidden build flags.
-include!(concat!(env!("OUT_DIR"), "/boot_layout.rs"));
+// The generated boot-layout slot table was `include!`d here (B10) and is gone
+// (CP2/B70). Init asked the root for every slot it needs instead: by grant name,
+// by `executable:` layout role, or by `kind:` capability role. Nothing in this
+// binary now knows any generation's numbering, which is what lets it be built
+// outside this crate -- and what B71 had to make true of the resource those
+// queries read before any of it was safe.
 
 const fn grant(slot: u32, rights: Rights) -> SpawnGrant {
     SpawnGrant { slot, rights }
