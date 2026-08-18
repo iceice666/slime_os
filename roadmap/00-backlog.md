@@ -232,12 +232,32 @@ wake object" — because a missing constant is a link error where a missing
 notification is a runtime fact the generation already states. A failed resolve
 *is* absence, and the two components that must tolerate it now say so.
 
-B70's remaining surface is 18 `include!` sites over three tables. Of
-`fabric_profile`'s 47 remaining constants, 3 are capability-slot ceilings and 44
-are graph facts (routes, QoS depths, trace depth, participant and worker tables)
-belonging to an authenticated `fabric-graph` read — still no resource-read syscall
-exists, which is the one genuinely blocked item. `spawn-service`'s RPC endpoint
-stays derived because `sel4-dango.zti` grants it three `send`+`recv` endpoints, so
+**Progress (2026-08-18, minted axis):** a fifth axis, `minted:<name>`, resolves
+`mintedBindings` — the table a manifest uses for a slot whose *object* its
+holder's owner creates at runtime, such as a supervision handle that cannot
+exist before the task it names. Added and host-tested, but **not yet migrated
+onto**: `FABRIC_SUPERVISION` (13 remaining uses, the constant this would
+replace) is computed positionally from the resolved graph, independent of the
+minted binding's own `name` field, and that name varies across three
+incompatible conventions in the 8 manifests that declare it —
+`fabric-publisher-supervision`, `fabric-service-supervision-publisher`,
+`fabric-service-call-client-supervision`. A component cannot ask by name without
+a manifest-specific alias table, the exact coupling this operation removes.
+
+Closing it needs one naming convention across those 8 fixtures first — a real,
+scoped, separate change. Unlike every migration in this track so far it changes
+`generation.bin`'s bytes (a binding name is part of the string table the
+generation's own identity hashes over), so it needs its own verification pass:
+confirm nothing pins the old bytes, rename, re-verify every plane that carries a
+`fabric-service` supervision table.
+
+B70's remaining surface is 18 `include!` sites over three tables.
+`fabric_profile`'s 47 constants: 13 `FABRIC_SUPERVISION` uses blocked on the
+fixture-naming task above, 3 capability-slot ceilings, and 44 graph facts
+(routes, QoS depths, trace depth, participant and worker tables) belonging to an
+authenticated `fabric-graph` read — still no resource-read syscall exists, the
+one item with no available mechanism at all. `spawn-service`'s RPC endpoint stays
+derived because `sel4-dango.zti` grants it three `send`+`recv` endpoints, so
 `kind:endpoint+send,recv` is ambiguous and refuses; its command-executable table
 maps a command *name* to an executable, a graph-shape fact rather than a
 capability. All three share one shape: each needs a
