@@ -707,17 +707,17 @@ fn advance_relay(
             if !proxy_replied {
                 return false;
             }
-            let Some(sample) = poll_message(TELEMETRY_INGRESS_SLOT) else {
+            let Some(sample) = poll_message(telemetry_ingress_slot()) else {
                 return false;
             };
-            if slime_rt::send(PROXY_UPSTREAM_SLOT, &sample, &[]) != ERR_SUCCESS {
+            if slime_rt::send(proxy_upstream_slot(), &sample, &[]) != ERR_SUCCESS {
                 fail(b"declared chain upstream send");
             }
             *relay = Relay::Forwarded;
             true
         }
         Relay::Forwarded => {
-            if poll_message(PROXY_UPSTREAM_ACK_SLOT).is_none() {
+            if poll_message(proxy_upstream_ack_slot()).is_none() {
                 return false;
             }
             // The hop is graph-shaped evidence: the edge it traversed, and an
@@ -820,18 +820,36 @@ fn send_message(slot: u32, message: &[u8; MAX_MSG]) {
     }
 }
 
-/// The broker's own declared route endpoints, directly after the control
-/// endpoints and the supervision handles.
+/// The broker's own declared route endpoints, each resolved from the root by the
+/// name the generation gives that edge, for the reason `visibility_broker` gives.
 ///
-/// Derived rather than hardcoded, for the reason `visibility_broker` gives:
-/// `FABRIC_CLIENTS` and `FABRIC_SUPERVISION` are generated from the resolved
-/// profile, so adding a participant renumbers these with the manifest instead
-/// of silently landing a route edge on a supervision handle.
-const FIRST_ROUTE_SLOT: u32 = super::FIRST_CONTROL_SLOT
-    + super::FABRIC_CLIENTS.len() as u32
-    + super::FABRIC_SUPERVISION.len() as u32;
-const TELEMETRY_INGRESS_SLOT: u32 = FIRST_ROUTE_SLOT;
-const PROXY_UPSTREAM_SLOT: u32 = FIRST_ROUTE_SLOT + 1;
-const PROXY_UPSTREAM_ACK_SLOT: u32 = FIRST_ROUTE_SLOT + 2;
+/// These were computed from `FABRIC_CLIENTS.len()` and `FABRIC_SUPERVISION.len()`,
+/// which made the broker reconstruct the builder's numbering rule — route edges
+/// sit above the controls, with the supervision handles in between — out of two
+/// generated tables. Each is a declared grant with a name, so the name is the
+/// whole answer. Checked equal to the derived numbers before the change:
+/// `matrix-telemetry-ingress` is 16 under `sel4-matrix.zti`, which is what
+/// `FIRST_ROUTE_SLOT` computed.
+///
+/// `matrix_broker` is only reached under `bootAction = "matrix"`, so these names
+/// resolve against `sel4-matrix.zti` alone — and against its
+/// `sel4-matrix-unsatisfiable` variant, which B62 reduced to a single
+/// participant-QoS override of that same fixture, leaving every grant name
+/// identical.
+fn telemetry_ingress_slot() -> u32 {
+    route_slot(b"matrix-telemetry-ingress")
+}
+fn proxy_upstream_slot() -> u32 {
+    route_slot(b"matrix-proxy-upstream")
+}
+fn proxy_upstream_ack_slot() -> u32 {
+    route_slot(b"matrix-proxy-upstream-ack")
+}
+
+/// One declared route edge, by grant name. Absence is a composition defect on
+/// this plane, not something to tolerate.
+fn route_slot(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"matrix route slot"))
+}
 
 const _: () = assert!(RECORD_LEN == MAX_MSG);

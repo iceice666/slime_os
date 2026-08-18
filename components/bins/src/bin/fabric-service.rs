@@ -110,14 +110,25 @@ include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 /// gets one page-backed v2 ring; the participant receives a narrowed copy over
 /// its already-installed direct control endpoint.
 const BUFFER_FACTORY_SLOT: u32 = 1;
-/// The simulated clock's control endpoint, which sits immediately above the
-/// supervision handles rather than at a number written here. Those handles are
-/// themselves derived (`FIRST_CONTROL_SLOT + clients`), so a hardcoded 9 was a
-/// constant racing a computed range: adding a ring participant moved
-/// supervision onto it (B50/R2).
-const TIME_SLOT: u32 =
-    FABRIC_FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
-/// The component that owns the other end of `TIME_SLOT`. Named rather than
+/// The simulated clock's control endpoint, resolved from the root by the name
+/// the generation gives that edge.
+///
+/// This was `FABRIC_FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() +
+/// FABRIC_SUPERVISION.len()`, which replaced an earlier hardcoded 9 that a new
+/// ring participant silently moved supervision onto (B50/R2). The derivation
+/// fixed the racing constant but kept the broker reconstructing the builder's
+/// layout rule from two generated tables; the edge has a declared name, so the
+/// name answers it outright and neither table is consulted.
+///
+/// Both readers sit behind `qos_check()`, which is `"qos" || "traffic"` — the
+/// only two graphs declaring a clock, and both name this grant identically.
+/// Verified equal to the derived number before the change:
+/// `fabric-publisher-b-clock` is 11 under `sel4-qos.zti`.
+fn time_slot() -> u32 {
+    slime_rt::resolve_binding(b"fabric-publisher-b-clock")
+        .unwrap_or_else(|_| fail(b"clock control slot"))
+}
+/// The component that owns the other end of `time_slot()`. Named rather than
 /// numbered because its supervision handle is what reports the clock's exit:
 /// no `ERR_PEER_DEAD` reaches a native Endpoint.
 const TIME_COMPONENT: &[u8] = b"fabric-publisher-b";
@@ -2039,7 +2050,7 @@ fn receive_time(pending_time: &mut Option<u64>, time_dead: &mut bool) {
     }
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    let length = match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
+    let length = match slime_rt::recv(time_slot(), &mut bytes, &mut caps) {
         ERR_WOULDBLOCK => {
             // A native Endpoint has no `ERR_PEER_DEAD`: an exited clock is
             // indistinguishable from a silent one, so a receive alone can never
@@ -2213,7 +2224,7 @@ fn apply_time(
         now_ns: *now_ns,
         reserved: [0; 40],
     };
-    match slime_rt::send(TIME_SLOT, &credit.encode(), &[]) {
+    match slime_rt::send(time_slot(), &credit.encode(), &[]) {
         ERR_SUCCESS => {}
         ERR_WOULDBLOCK | ERR_PEER_DEAD => fail(b"time credit blocked"),
         _ => fail(b"time credit"),

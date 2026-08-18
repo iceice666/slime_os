@@ -30,9 +30,8 @@ use slime_proto::{
 use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::{
-    FABRIC_CLIENTS, FABRIC_INTERPOSITIONS, FABRIC_PARTICIPANTS, FABRIC_QOS, FABRIC_SUPERVISION,
-    FABRIC_VISIBILITY, FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail, release_received,
-    supervision_slot_for,
+    FABRIC_INTERPOSITIONS, FABRIC_PARTICIPANTS, FABRIC_QOS, FABRIC_VISIBILITY, FIRST_CONTROL_SLOT,
+    ROUTE_NAMES, control_clients, fail, release_received, supervision_slot_for,
 };
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -49,23 +48,51 @@ const DIAGNOSTICS_PUBLISHER: &[u8] = b"fabric-publisher-b";
 const VISIBILITY_PRIVATE: u8 = 1;
 const VISIBILITY_GRAPH: u8 = 2;
 const SAMPLE_SEQUENCE: u64 = 1;
-/// The broker's own declared route endpoints, which sit directly after the
-/// control endpoints and the supervision handles.
+/// The broker's own declared route endpoints, each resolved from the root by the
+/// name the generation gives that edge.
 ///
-/// Derived rather than hardcoded: `FABRIC_CLIENTS` and `FABRIC_SUPERVISION`
-/// are generated from the resolved profile, so adding a participant renumbers
-/// these with the manifest instead of silently landing a route edge on a
-/// supervision handle. Same rule `supervision_slot_for` and
-/// `FABRIC_FIRST_CONTROL_SLOT + index` already follow.
-const FIRST_ROUTE_SLOT: u32 =
-    FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
-const TELEMETRY_INGRESS_SLOT: u32 = FIRST_ROUTE_SLOT;
-const PROXY_UPSTREAM_SLOT: u32 = FIRST_ROUTE_SLOT + 1;
-const PROXY_UPSTREAM_ACK_SLOT: u32 = FIRST_ROUTE_SLOT + 2;
-const PROXY_EVENT_SLOT: u32 = FIRST_ROUTE_SLOT + 3;
-const DIAGNOSTICS_INGRESS_SLOT: u32 = FIRST_ROUTE_SLOT + 4;
-const DIAGNOSTICS_EGRESS_SLOT: u32 = FIRST_ROUTE_SLOT + 5;
-const DIAGNOSTICS_ACK_SLOT: u32 = FIRST_ROUTE_SLOT + 6;
+/// These were computed as `FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() +
+/// FABRIC_SUPERVISION.len() + n`, which is a component reconstructing the
+/// builder's own numbering rule from generated tables — it has to know that
+/// route endpoints sit after the controls, that the supervision handles sit
+/// between them, and in what order the profile emitted each. Every one of these
+/// slots is an ordinary declared grant with a name, so asking for the name
+/// replaces all of that with the one fact the broker actually needs. Verified
+/// equal to the derived numbers on this plane before the change, rather than
+/// assumed: `visibility-telemetry-ingress` is 12 under `sel4-visibility.zti`,
+/// which is what `FIRST_ROUTE_SLOT` computed.
+///
+/// `visibility_broker` is only reached under `bootAction = "visibility"`
+/// (`fabric-service.rs`'s dispatch), so these names are resolved against exactly
+/// one manifest and cannot be absent where this code runs.
+fn telemetry_ingress_slot() -> u32 {
+    route_slot(b"visibility-telemetry-ingress")
+}
+fn proxy_upstream_slot() -> u32 {
+    route_slot(b"visibility-proxy-upstream")
+}
+fn proxy_upstream_ack_slot() -> u32 {
+    route_slot(b"visibility-proxy-upstream-ack")
+}
+fn proxy_event_slot() -> u32 {
+    route_slot(b"visibility-proxy-event")
+}
+fn diagnostics_ingress_slot() -> u32 {
+    route_slot(b"visibility-diagnostics-ingress")
+}
+fn diagnostics_egress_slot() -> u32 {
+    route_slot(b"visibility-diagnostics-egress")
+}
+fn diagnostics_ack_slot() -> u32 {
+    route_slot(b"visibility-diagnostics-ack")
+}
+
+/// One declared route edge, by grant name. Absence is a composition defect on
+/// this plane rather than something to tolerate: every name above is declared by
+/// the only manifest that reaches this broker.
+fn route_slot(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"visibility route slot"))
+}
 
 #[derive(Default)]
 struct Roles {
@@ -202,9 +229,9 @@ fn provision(component: &'static [u8], control: u32, routes: &[[u8; 32]; 2], rol
 }
 
 fn relay_declared_chain(routes: &[[u8; 32]; 2], roles: &mut Roles) {
-    let ingress = TELEMETRY_INGRESS_SLOT;
-    let upstream = PROXY_UPSTREAM_SLOT;
-    let upstream_ack = PROXY_UPSTREAM_ACK_SLOT;
+    let ingress = telemetry_ingress_slot();
+    let upstream = proxy_upstream_slot();
+    let upstream_ack = proxy_upstream_ack_slot();
     let proxy_control = take(&mut roles.proxy_control);
 
     let sample_bytes = recv_message(ingress);
@@ -326,7 +353,7 @@ fn finish_proxy_loss(
     // two tasks and inverts the causal order the gate reads.
     write_record(b"[fabric-trace] ", &lost.encode());
     slime_rt::debug_write(b"[fabric] proxy death isolated to telemetry\n");
-    if !send_proxy_message(PROXY_EVENT_SLOT, &lost.encode()) {
+    if !send_proxy_message(proxy_event_slot(), &lost.encode()) {
         fail(b"proxy loss event send");
     }
     serve_event_view(take(&mut roles.subscriber_control), DOWNSTREAM);
@@ -366,9 +393,9 @@ fn serve_event_view(control: u32, component: &[u8]) {
 }
 
 fn relay_unrelated_route(_roles: &mut Roles) {
-    let ingress = DIAGNOSTICS_INGRESS_SLOT;
-    let egress = DIAGNOSTICS_EGRESS_SLOT;
-    let ack_slot = DIAGNOSTICS_ACK_SLOT;
+    let ingress = diagnostics_ingress_slot();
+    let egress = diagnostics_egress_slot();
+    let ack_slot = diagnostics_ack_slot();
     let sample_bytes = recv_message(ingress);
     let sample = WireStreamSample::decode(&sample_bytes)
         .filter(|sample| valid_stream_sample(sample, diagnostics_stream::TYPE_TAG, 32))

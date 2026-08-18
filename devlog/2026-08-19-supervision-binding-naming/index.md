@@ -173,3 +173,41 @@ byte-identical traces.
   spelling disagreed with the slot they resolved.
 - Related roadmap item: [B70](../../roadmap/00-backlog.md), [CP2](../../roadmap/10-component-platform.md)
 - Predecessor: [`devlog/2026-08-18-cp2-runtime-binding-query/`](../2026-08-18-cp2-runtime-binding-query/index.md)
+
+## Corrections
+
+**2026-08-19 — the 3 `.len()` sites were misclassified.** The follow-up above
+records them as needing a *count* of the holder set, and therefore as blocked on
+a query returning a component's binding set. That was wrong, and the error was
+one of inference rather than observation: the constants are written as
+`FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() + FABRIC_SUPERVISION.len()`, so they
+were read as asking for two table sizes. What they actually compute is the slot
+of a specific declared endpoint, and every such slot is an ordinary grant with a
+name.
+
+Checked against the manifests rather than reasoned about further:
+`matrix-telemetry-ingress` is slot 16 under `sel4-matrix.zti`, which is exactly
+what `FIRST_ROUTE_SLOT` derived; `visibility-telemetry-ingress` is 12, matching
+its derivation; `fabric-publisher-b-clock` is 11 under `sel4-qos.zti`, matching
+`TIME_SLOT`. All eleven derived constants across the three sites were verified
+equal to their named grant's slot before any code moved.
+
+So all three migrated by grant name, with no new ABI and no set-returning query:
+`fabric-service`'s `TIME_SLOT`, `matrix_broker`'s three route slots, and
+`visibility_broker`'s seven. Each broker is reached under exactly one
+`bootAction`, so the names resolve against one manifest and cannot be absent
+where the code runs — `matrix_broker` additionally covers
+`sel4-matrix-unsatisfiable`, which B62 reduced to a single participant-QoS
+override of the same fixture, leaving grant names identical.
+
+**What remains is 2, not 5.** Both are the `.iter()` teardown walks
+(`fabric-service.rs:392,536`), which enumerate the holder set to wait on every
+participant's exit. Those do need *membership*, and the traffic walk additionally
+filters it by which components this graph parks rather than exits — a graph fact
+belonging to the `fabric-graph` resource read. The count-vs-membership
+distinction in the follow-up above holds for these two; it simply never applied
+to the other three.
+
+Verified: `just sel4_visibility_check`, `just sel4_matrix_check`, `just
+sel4_qos_check`, `just sel4_stream_check`, `just sel4_fabric_aggregate_check`,
+`just fmt_check_all`, `just lint_all` all pass.
