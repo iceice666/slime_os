@@ -135,101 +135,11 @@ B70's remaining surface is `init`'s ~134 of 136 boot-layout constants,
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
-the wrong instrument for those regardless. Migrating any further boot-layout
-constant is additionally blocked until B71 is resolved: the binary resource
-those constants would be verified against disagrees with the generated Rust
-table it is supposed to match.
+the wrong instrument for those regardless. The boot-layout half is no longer
+blocked: B71 made the resource derive from the same bindings the root places
+from, and `init.rs`'s `main()` now resolves its three executables through the
+query.
 **Evidence:** [`devlog/2026-08-18-cp2-runtime-binding-query/`](../devlog/2026-08-18-cp2-runtime-binding-query/index.md)
-
-### B71 — the boot-layout resource's binary encoding was never cross-checked against the manifest's real bindings, and unnamed roles are never narrowed
-
-**Problem:** `contracts/boot-layout/v1`'s resource object has been embedded in
-every seL4 generation since B10, decoded and structurally validated by
-`boot-contracts/src/boot_layout.rs::BootLayout::decode`, but until CP2's
-`kind:`/`executable:`/`channel:` runtime query (this session) nothing ever
-read an entry's *content* — only its shape. That query is the first real
-consumer, and it immediately surfaced two independent, confirmed defects in
-`scripts/build/boot_layout.py`, both predating this session:
-
-1. **The binary resource disagrees with the manifest's real bindings.**
-   `scripts/build/build-generation.py`'s `render_boot_layout_rust` call (the
-   Rust constant table `init.rs` compiles against) receives
-   `binding_slots`/`role_bindings` from `bootstrap_binding_projection(manifest)`
-   and overrides the static `boot_layout.py` table with them. The
-   `build_boot_layout` call two lines above it (the *binary* resource embedded
-   in `generation.bin`, which the root decodes at runtime) receives neither —
-   it encodes the static table's guess verbatim. Confirmed by direct byte
-   inspection of `build/sel4-generation/generation.bin` for the component-graph
-   fixture (`SLIME_SEL4_MANIFEST=sel4`): the embedded entry for `spawn-service`
-   carries slot `4`, while the Rust constant `SPAWN_SERVICE_SLOT` (and root's
-   own `SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service`
-   marker, derived independently from the manifest's real `InstanceBinding`)
-   is `5`.
-2. **Unnamed layout roles are never narrowed with the named ones.**
-   `boot_layout.layout_for`'s component-narrowing only filters and renumbers
-   entries with a `label` (executables and channel halves); an unnamed role
-   entry (`shared-buffer-factory`, `storage-capability`,
-   `generation-control`, `object-store`, `directory`, `input`,
-   `endpoint-factory`) always keeps its *full-layout* static slot, because
-   `_entry_component` returns `None` for it and the filter
-   `owner is None or owner in components` always keeps a `None` owner. When a
-   narrowed manifest's real named entries get corrected (defect 1) or simply
-   compact into a low slot range, they can land exactly on an unnamed role's
-   untouched static position. Confirmed *independent of defect 1 and
-   independent of any change made this session*: `git stash` to a clean `HEAD`
-   checkout, then generate the component-graph fixture's Rust table
-   (`SLIME_SEL4_MANIFEST=sel4 SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt
-   python3 scripts/build/build-generation.py <out>`) — the *currently
-   committed, gate-passing* `boot-layout-1.rs` declares
-   `ECHO_AGENT_SLOT: u32 = 7` and `STORAGE_CAPABILITY_SLOT: u32 = 7` as the
-   same value, and `GENERATION_CONTROL_SLOT: u32 = 8` and
-   `SHARED_BUFFER_FACTORY_SLOT: u32 = 8` as the same value. This generation
-   grants neither a storage capability nor a generation-control capability at
-   all, so nothing has ever *used* those two phantom constants — every
-   consumer of them is guarded by `if X_SLOT != SLOT_ABSENT`, and they are not
-   `SLOT_ABSENT`, only silently wrong and silently unused.
-
-Both defects were latent and undetected because the binary resource's content
-was write-only. A build-time uniqueness check over the binary encoding
-(`if slot in seen: fail(...)`, already present in `build_boot_layout`) is the
-first thing that would ever catch either — and does, the moment defect 1's fix
-is applied naively: correcting `spawn-service`'s slot via `binding_slots`
-moves `echo-agent`'s corrected slot onto `storage-capability`'s untouched
-static one, turning a silent data bug into a loud build failure. That
-dependency is why this is filed as one item with two problem statements
-rather than two: fixing 1 without fixing 2 first regresses builds that
-currently succeed by accident.
-
-**Evidence:** Session investigation, 2026-08-18, continuing CP2. Direct byte
-search of `build/sel4-generation/generation.bin` locating `spawn-service`'s
-component identity and reading its packed slot field; `git stash` to `HEAD`
-and regenerating `boot-layout-1.rs` for the component-graph fixture, showing
-the 7/7 and 8/8 collisions independent of any working-tree change; QEMU
-reproduction — migrating `init.rs`'s `main()` to resolve `console`/`dango`/
-`spawn-service` via the (correct, unambiguous) `executable:` query against the
-*unfixed* binary resource made `sel4_component_graph_check` fail closed
-(`SLIME_GRAPH spawn preflight executable task-instance=2 slot=4 held=None
-required=0x10008 error=InvalidOperation`) rather than silently spawn the wrong
-executable, because init's real CSpace holds nothing at the stale slot.
-
-**Proposed fix:** thread `bootstrap_binding_projection(manifest)`'s
-`binding_slots`/`role_bindings` into `build_boot_layout` exactly as
-`render_boot_layout_rust` already receives them (defect 1), and extend
-`boot_layout.layout_for`'s narrowing to also drop or renumber an unnamed role
-entry when the manifest's real bindings do not need it, rather than always
-keeping it at its full-layout static slot (defect 2). Fix 2 first, or fix 1's
-correction will collide with fix 2's still-static unnamed roles on any
-narrowed manifest, exactly as observed above.
-
-**Exit condition:** `build_boot_layout`'s output agrees with
-`render_boot_layout_rust`'s for every label and role, for every `sel4-*.zti`
-fixture, verified by decoding the binary resource and comparing every entry
-against the corresponding Rust constant; no generated `boot-layout-N.rs`
-declares two differently-named constants with the same slot value, verified
-by a build-time or gate-time uniqueness check over the full table (not just
-the labels one narrowing pass happens to touch); `just contracts_check`,
-`just generation_check`, and the full seL4 gate suite pass with the fix
-applied to every fixture, not only the one this session's reproduction used.
 
 ## Deferred follow-ups
 
@@ -245,6 +155,31 @@ successor closes it.
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
 ## Resolved
+### B71 — the boot-layout resource's binary encoding was never cross-checked against the manifest's real bindings, and unnamed roles are never narrowed
+
+**Status:** Resolved 2026-08-18. **Class:** Defect (write-only generated data
+that had silently drifted, found by its first real consumer).
+**Was:** the boot-layout resource embedded in `generation.bin` encoded a second,
+static statement of where the root places the bootstrap component's
+capabilities, and it had drifted from the `InstanceBinding` records the root
+actually places from — `spawn-service` at slot 4 against the real 5. Separately,
+a role the generation does not grant kept whatever slot the full static table
+gave it, so the component-graph plane's generated constants declared
+`STORAGE_CAPABILITY_SLOT` as `ECHO_AGENT_SLOT`'s real 7 and
+`GENERATION_CONTROL_SLOT` as the real shared-buffer factory's 8.
+**Exit condition (observed):** the resource and the Rust constant table are both
+derived from the manifest's own bindings by `boot_layout.layout_from_manifest`,
+so neither can drift and an ungranted role renders `SLOT_ABSENT`; all 25 seL4
+planes agree across resource, constants, and the frozen `.layout` the root
+resolved (106 rows, verified by a new `check-boot-layout-resource.py` arm that
+also refuses two differently-named constants at one slot), each half proven
+non-vacuous by re-injecting its original defect; `just sel4_boot_layout_check`
+matches all 25 frozen fixtures unchanged, and `just generation_check`,
+`contracts_check`, `runtime_binding_resolution_check`, `test`, `fmt_check_all`,
+`lint_all`, `ruff`, and `typos` pass. `init.rs`'s `main()` migration that B71
+blocked now resolves `console`/`dango`/`spawn-service` through the CP2 query.
+**Evidence:** [`devlog/2026-08-18-b71-boot-layout-binary-drift/`](../devlog/2026-08-18-b71-boot-layout-binary-drift/index.md)
+
 ### B69 — RP1's artifact gate never ran, and hid three admission defects
 
 **Status:** Resolved 2026-08-17. **Class:** Defect (a claimed-green gate could

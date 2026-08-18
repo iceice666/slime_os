@@ -4,10 +4,10 @@
 |---|---|
 | Date | 2026-08-18 |
 | Kind | Defect |
-| Status | Root-caused |
+| Status | Verified |
 | Scope | `scripts/build/boot_layout.py`, `scripts/build/build-generation.py` |
 | Roadmap | B70, B71 |
-| Gates | `just contracts_check`, `just generation_check`, `just sel4_component_graph_check` |
+| Gates | `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_component_graph_check` |
 | Trigger | Attempting to extend `devlog/2026-08-18-cp2-capability-role-axis/`'s migration to `init.rs`'s `main()` |
 | Baseline | `just sel4_component_graph_check` passes at `HEAD` (`934ca08`), booting `init.rs` unmigrated against the compiled `boot-layout-1.rs` constant table |
 
@@ -98,3 +98,50 @@ No fix is applied in this session. The `build_boot_layout` correction (defect 1'
 
 - Related roadmap item: `roadmap/00-backlog.md` B71; `roadmap/10-component-platform.md` CP2
 - Prior entries this continues: `devlog/2026-08-18-cp2-runtime-binding-query/index.md`, `devlog/2026-08-18-cp2-capability-role-axis/index.md`
+
+## Corrections
+
+**2026-08-18 — resolved the same day; this entry's `Status: Root-caused` and its
+"No fix is applied in this session" are superseded.** The body's judgement that
+defect 1 could not be fixed without first designing defect 2's fix was correct in
+its reasoning and wrong in its conclusion, because both defects share one cause
+the body stopped one step short of naming: the static table is a *second*
+statement of a placement the manifest already decides. Deleting the second
+statement fixes both at once, and needs no renumbering design.
+
+`boot_layout.layout_from_manifest` derives the layout from the bootstrap
+instance's own `InstanceBinding` records — the only thing that decides where the
+root places a capability. `build_boot_layout` encodes that table and
+`render_rust` renders constants from it, so the two readings cannot drift
+(defect 1), and a role the generation does not grant simply has no row, so it
+renders `SLOT_ABSENT` instead of a live slot belonging to something else
+(defect 2).
+
+The kind→role mapping was derived empirically before being pinned, rather than
+guessed: over all 25 seL4 plane fixtures, every one of the 106 rows the root
+actually resolved is a bootstrap binding of `executable`,
+`sharedBufferFactory`, or `directory`, agreeing on slot, role, *and* rights,
+with no row unaccounted for and no kind ever landing in some planes and skipping
+in others. `endpoint` never occupies a row — the root installs a declared
+Endpoint into both declaring instances directly — which all 20 endpoint bindings
+confirm. Endpoint bindings still hold real CSpace slots, so they reach the
+constant table through the binding projection; that distinction cost one QEMU
+cycle to find, when `SPAWN_SERVICE_RPC_SLOT` went `SLOT_ABSENT` and init could
+not send its shutdown.
+
+Verified: all 25 planes agree across resource, constants, and the frozen
+`.layout` the root resolved (106 rows), by a new `check-boot-layout-resource.py`
+arm that also refuses two differently-named constants sharing one slot. Both
+halves proven non-vacuous by re-injecting the original defects: encoding the
+static table instead of the derivation reports `the root resolved 5 slots, the
+derived resource declares 64`; letting an ungranted role fall back to its static
+slot reports `DIRECTORY_SLOT is 14, which is neither a resource row nor a
+declared binding slot`. `just sel4_boot_layout_check` matches all 25 frozen
+fixtures **unchanged** — the derivation reproduces what the root already did, so
+no fixture was re-blessed, which is the strongest available evidence that the
+static table was the wrong copy rather than the layout being redefined.
+
+The `main()` migration this entry's third open risk deferred is done:
+`console`, `dango`, and `spawn-service` resolve through the CP2 query, and
+`sel4_component_graph_check`, `sel4_dango_check`, and
+`sel4_generation_plane_check` pass.
