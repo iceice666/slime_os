@@ -418,20 +418,32 @@ fn main(startup_arg: u32) {
     let mut component_dango = None;
     let generation_command_plane = GENERATION_LIST_SLOT != SLOT_ABSENT;
     if !generation_command_plane {
+        // Resolved through the root rather than from the compiled table
+        // (CP2/B70). This became correct only once B71 was fixed: the
+        // boot-layout resource the query reads is now derived from the same
+        // `InstanceBinding` records the root places from, so it answers 5 for
+        // `spawn-service` where the old static table said 4 and this migration
+        // spawned into an empty slot.
+        let console_executable =
+            slime_rt::resolve_binding(b"executable:console").unwrap_or_else(|_| slime_rt::exit(1));
         component_console = Some(
-            slime_rt::spawn(CONSOLE_SLOT, &CONSOLE_CAPS)
+            slime_rt::spawn(console_executable, &CONSOLE_CAPS)
                 .unwrap_or_else(|_| slime_rt::exit(1))
                 .supervision_slot,
         );
         if DANGO_SLOT != SLOT_ABSENT {
+            let dango_executable = slime_rt::resolve_binding(b"executable:dango")
+                .unwrap_or_else(|_| slime_rt::exit(1));
             component_dango = Some(
-                slime_rt::spawn(DANGO_SLOT, &dango_caps())
+                slime_rt::spawn(dango_executable, &dango_caps())
                     .unwrap_or_else(|_| slime_rt::exit(1))
                     .supervision_slot,
             );
         }
+        let spawn_service_executable = slime_rt::resolve_binding(b"executable:spawn-service")
+            .unwrap_or_else(|_| slime_rt::exit(1));
         component_spawn_service = Some(
-            slime_rt::spawn(SPAWN_SERVICE_SLOT, &spawn_service_caps())
+            slime_rt::spawn(spawn_service_executable, &spawn_service_caps())
                 .unwrap_or_else(|_| slime_rt::exit(1))
                 .supervision_slot,
         );
