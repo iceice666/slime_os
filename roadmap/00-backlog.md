@@ -165,15 +165,29 @@ distinct, stable names, and `traffic`/`fault`/`saturation` share one manifest, s
 reading the fixtures replaced the "give them distinguishable names" step the note
 above proposed.
 
-B70's remaining surface in `init.rs` is 33 boot-layout constant uses across 26
-constants, which classify as: 22 in live code, 8 as `!= SLOT_ABSENT` presence
-guards asking "does this composition declare X at all", and 3 inside `const`
-grant tables that cannot call a syscall without becoming functions. The presence
-guards are a distinct problem from slot resolution — a query answers *where*, not
-*whether* — and nine of the live-code names belong to retired x86 paths no seL4
-fixture declares. Beyond `init.rs`: `spawn-service`'s RPC endpoint and
-command-executable table, and `fabric_profile`'s 64 constants, 46 of which are
-graph facts rather than slots. All three share one shape: each needs a
+**Progress (2026-08-18, init.rs complete):** no boot-layout constant remains in
+`init.rs`'s live code. The last two migrated by grant name (`spawn-service-rpc`)
+and layout role (`executable:reclamation-fault`).
+
+The 8 presence guards did not need the "whether" query the note above proposed:
+they were **dead code**. Every executable they tested — `storage-writer`,
+`storage-fault-probe`, `storage-store-probe`, `storage-probe`,
+`filesystem-service`, and the five `generation-*` commands — is declared by *none*
+of the 28 seL4 manifests, so each constant resolved `SLOT_ABSENT` and every branch
+was unreachable. Established before deleting: exactly one manifest (`sel4.zti`)
+carries `bootAction = "product"` and so reaches `main()`'s body, and it declares
+only `console`, `spawn-service`, `sysinfo`, `echo-agent`, and `init`. The seL4
+planes that do exercise storage, filesystem, and generation commands reach them
+through their own `bootAction`, naming `sel4-*` executables the fixtures declare.
+Deleting the branches exposed four further dead functions and nine orphaned
+imports; `init.rs` lost 222 lines net.
+
+B70's remaining surface is 39 slot uses in the four plane modules `init.rs`
+`include!`s the layout for (`loan_plane.rs` 20, `crossing_plane.rs` 9,
+`spawn_plane.rs` 7, `supervision_plane.rs` 3 — B65 moved these out of `init.rs`),
+`spawn-service`'s RPC endpoint and command-executable table, and
+`fabric_profile`'s 64 constants, 46 of which are graph facts rather than slots and
+belong to an authenticated `fabric-graph` read that does not exist yet. All three share one shape: each needs a
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
