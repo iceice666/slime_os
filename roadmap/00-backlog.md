@@ -182,12 +182,30 @@ through their own `bootAction`, naming `sel4-*` executables the fixtures declare
 Deleting the branches exposed four further dead functions and nine orphaned
 imports; `init.rs` lost 222 lines net.
 
-B70's remaining surface is 39 slot uses in the four plane modules `init.rs`
-`include!`s the layout for (`loan_plane.rs` 20, `crossing_plane.rs` 9,
-`spawn_plane.rs` 7, `supervision_plane.rs` 3 — B65 moved these out of `init.rs`),
-`spawn-service`'s RPC endpoint and command-executable table, and
-`fabric_profile`'s 64 constants, 46 of which are graph facts rather than slots and
-belong to an authenticated `fabric-graph` read that does not exist yet. All three share one shape: each needs a
+**Progress (2026-08-18, boot-layout table deleted):** the four plane modules
+resolve their slots through the root too, so `init.rs`'s
+`include!(".../boot_layout.rs")` has no consumers and is **gone** — one of the
+four `build.rs`-private tables named in the problem statement is deleted
+outright, along with its whole generation chain: `build.rs`'s
+`generate_boot_layout`, the 342-constant checked-in `default_boot_layout.rs`,
+`boot_layout.py`'s `render_rust`, and `build-generation.py`'s per-generation
+emission and `SLIME_BOOT_LAYOUT` plumbing (573 lines net). No generated slot
+table is compiled into `init` at all, which is the clause's own test.
+
+`check-boot-layout-resource.py` lost two arms with it: both guarded the generated
+constant table against drift, and a table that is not generated cannot drift.
+B71's second defect — an ungranted role taking a live slot's number — is now
+structurally impossible rather than checked.
+
+B70's remaining surface is 18 `include!` sites over three tables: `fabric_profile`
+(16 sites), `command_profile` (1), and `dango_profile` (1). `spawn-service`'s RPC
+endpoint stays derived because `sel4-dango.zti` grants it three `send`+`recv`
+endpoints, so `kind:endpoint+send,recv` is ambiguous and refuses; its
+command-executable table maps a command *name* to an executable, which is a
+graph-shape fact rather than a capability. 46 of `fabric_profile`'s 64 constants
+are likewise graph facts (routes, QoS depths, trace depth) belonging to an
+authenticated `fabric-graph` read that does not exist yet — there is no
+resource-read syscall. All three share one shape: each needs a
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
