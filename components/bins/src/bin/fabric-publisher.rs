@@ -416,19 +416,36 @@ fn inline_payload(sequence: u64) -> [u8; slime_proto::fabric_ring::MAX_INLINE_BY
     payload
 }
 
+/// This component's two notification slots, resolved through the root by the
+/// grant names the generation declares (CP2/B70).
+///
+/// `notification:` is its own namespace because `notificationBindings` is a
+/// separate declaration from capability grants, and one grant binds a slot in
+/// both peers -- the root answers per-holder, which is what makes a bare grant
+/// name unambiguous here. Resolved once per `publish` rather than cached in a
+/// static, because this component has no initialization phase that runs before
+/// the first publish.
+fn ready_slot() -> u32 {
+    slime_rt::resolve_binding(b"notification:fabric-publisher-telemetry-ready")
+        .unwrap_or_else(|_| fail(b"resolve telemetry-ready notification"))
+}
+
+fn credit_slot() -> u32 {
+    slime_rt::resolve_binding(b"notification:fabric-publisher-telemetry-credit")
+        .unwrap_or_else(|_| fail(b"resolve telemetry-credit notification"))
+}
+
 fn publish(ring: &mut Ring<'_>, payload: &[u8], last: bool) {
     loop {
         match ring.publish(payload, last) {
             Ok(_) => {
-                if slime_rt::notification_signal(FABRIC_PUBLISHER_TELEMETRY_READY_SLOT)
-                    != ERR_SUCCESS
-                {
+                if slime_rt::notification_signal(ready_slot()) != ERR_SUCCESS {
                     fail(b"publish notify");
                 }
                 return;
             }
             Err(RingError::Full) => {
-                let _ = slime_rt::notification_wait(FABRIC_PUBLISHER_TELEMETRY_CREDIT_SLOT);
+                let _ = slime_rt::notification_wait(credit_slot());
             }
             Err(_) => fail(b"publish ring"),
         }

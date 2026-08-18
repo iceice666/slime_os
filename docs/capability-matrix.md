@@ -99,7 +99,9 @@ already knew at compile time and could not otherwise learn at runtime. Requiring
 a right to ask would mean minting a capability whose only power is to read one's
 own layout (CP2). The `executable:`/`channel:` prefixes reach
 `contracts/boot-layout/v1`'s two identity domains for the bootstrap instance and
-disclose no more: that table describes exactly that component's CSpace.
+disclose no more: that table describes exactly that component's CSpace. The
+`notification:` prefix reaches `notificationBindings` for the caller's own holder
+index, which is the same disclosure bound in a separate table.
 
 Bits 4–7 and 12–15 are unassigned. The retired custom kernel spent them on
 `PciFunction`, `DmaMemory`, `Irq`, `ObjectStore`, and `GenerationControl` object

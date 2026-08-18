@@ -495,7 +495,79 @@ pub fn resolve_binding_slot(
             return resolve_layout_slot(generation, &boot_layout::channel_identity(role));
         }
     }
+    // A *notification* binding — `notification:<grant>` or
+    // `notification:<grant>+signal`/`+wait`.
+    //
+    // Notifications are a separate declaration from capability grants:
+    // `notificationBindings` names a `(grant, holder, slot, role)` tuple, and one
+    // grant binds a slot in *both* peers — the signaller and the waiter — so the
+    // same name legitimately answers two different slots depending on which side
+    // asks. Scoping to the caller's own holder index is therefore not a
+    // restriction here but the whole answer: `fabric-publisher-telemetry-ready`
+    // is slot 0 for `fabric-publisher` and slot 0 for `fabric-service` in the
+    // stream plane, and slot 4 for the service in others.
+    //
+    // The role suffix exists because a component can hold both ends of one
+    // grant's name space. Without it, a holder appearing twice for one grant
+    // would be ambiguous and refused, which is correct but useless; with it the
+    // caller says which end it means, in the manifest's own `signal`/`wait`
+    // vocabulary.
+    if let Some(role) = name.strip_prefix("notification:") {
+        return resolve_notification_slot(generation, instance_index, role);
+    }
     None
+}
+
+/// Which of `holder`'s notification slots the grant named `role` binds.
+///
+/// `role` is `<grant>` or `<grant>+signal`/`+wait`. Matching is on the
+/// generation's own `notificationGrants` names and `notificationBindings`
+/// records, so a component asks in the vocabulary the manifest already uses.
+///
+/// Scoped to `holder`, the caller's authenticated instance index, for the same
+/// reason the capability lookups are: a component learns its own layout and
+/// nothing else. Here that scoping also carries the meaning, because one
+/// notification grant binds a slot in both peers.
+///
+/// Ambiguity refuses, as everywhere else in this operation. A holder binding one
+/// grant under both roles is answerable only with the suffix, and asking without
+/// it is a question that does not identify one slot.
+fn resolve_notification_slot(
+    generation: &boot_contracts::generation::Generation<'_>,
+    holder: usize,
+    role: &str,
+) -> Option<usize> {
+    use boot_contracts::generation::NotificationRole;
+
+    let (name, wanted) = match role.split_once('+') {
+        Some((name, "signal")) => (name, Some(NotificationRole::Signal)),
+        Some((name, "wait")) => (name, Some(NotificationRole::Wait)),
+        // An unrecognized suffix is refused rather than ignored: silently
+        // dropping it would answer a different question than the caller asked.
+        Some(_) => return None,
+        None => (role, None),
+    };
+    let mut found: Option<usize> = None;
+    for index in 0..generation.notification_binding_count() {
+        let binding = generation.notification_binding(index).ok()?;
+        if binding.holder != holder {
+            continue;
+        }
+        if wanted.is_some_and(|role| binding.role != role) {
+            continue;
+        }
+        if !generation
+            .notification_grant(binding.grant)
+            .is_ok_and(|grant| grant.name == name)
+        {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(binding.slot);
+    }
+    found
 }
 
 /// Which of `instance`'s slots carries a capability of `kind` bearing `rights`.
@@ -887,5 +959,33 @@ mod tests {
         // And an unknown right does not silently widen the query to "any endpoint":
         // it must be refused, or a misspelling would match the first endpoint bound.
         assert_eq!(right_named("snd"), None);
+    }
+
+    /// The notification axis is its own namespace, and its role suffix is
+    /// closed.
+    ///
+    /// `notificationBindings` is a separate declaration from capability grants,
+    /// and one grant binds a slot in *both* peers, so a bare name is answered
+    /// per-holder rather than globally. The suffix vocabulary is the manifest's
+    /// own `signal`/`wait`; anything else must be refused rather than dropped,
+    /// because silently ignoring it answers a different question than the caller
+    /// asked — the failure mode this whole operation has been bitten by twice.
+    #[test]
+    fn notification_names_are_their_own_namespace() {
+        // The prefix is admissible as a name, so refusal can only come from the
+        // lookup rather than from the bounds check.
+        assert!(binding_name_admissible(
+            b"notification:fabric-publisher-telemetry-ready"
+        ));
+        assert!(binding_name_admissible(
+            b"notification:fabric-publisher-telemetry-ready+wait"
+        ));
+        // A notification grant name is not a capability grant name: the two
+        // tables are declared separately, so an unprefixed lookup must not reach
+        // this one.
+        assert!(!"fabric-publisher-telemetry-ready".starts_with("notification:"));
+        // `kind:` and `notification:` cannot both claim one name.
+        assert!(!"notification:x".starts_with("kind:"));
+        assert!(!"kind:endpoint".starts_with("notification:"));
     }
 }
