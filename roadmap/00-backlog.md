@@ -129,9 +129,22 @@ RPC endpoint stays derived because `sel4-dango.zti` grants it three
 `send`+`recv` endpoints and the role cannot tell them apart, observed directly
 as a hang before the refusal was restored.
 
-B70's remaining surface is `init`'s ~134 of 136 boot-layout constants,
+**Progress (2026-08-18, executable migration):** with B71 closed, 39 executable
+names in `init.rs` resolve through the root's boot-layout query across all 26
+seL4 planes, dropping its boot-layout constant uses from 63 to 27. Every name was
+verified against the frozen `.layout` fixture recording what the root actually
+resolved rather than inferred from the constant's spelling — three were wrong that
+way, one of them costing a plane timeout before the fixtures were consulted. Nine
+names no seL4 fixture declares stay as constants: those paths belong to the
+retired x86 graph and are unreachable here.
+
+B70's remaining surface is `init`'s 27 remaining boot-layout constant uses,
 `spawn-service`'s RPC endpoint and command-executable table, and
-`fabric_profile`'s 64 constants. All three share one shape: each needs a
+`fabric_profile`'s 64 constants. `SHARED_BUFFER_FACTORY_SLOT` is 20 of those 27
+and needs one new axis — "the capability granted *to me*", since grant target
+uniquely identifies init's own factory even in the two planes that hold two —
+while the rest sit in `const` grant tables that cannot call a syscall without
+becoming functions. All three share one shape: each needs a
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
