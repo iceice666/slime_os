@@ -22,7 +22,6 @@ exists to abstract.
 
 from __future__ import annotations
 import os
-import re
 import sys as _sys
 from pathlib import Path as _Path
 
@@ -43,7 +42,6 @@ from boot_layout import (
     channel_identity,
     component_identity,
     layout_for,
-    render_rust as render_boot_layout_rust,
 )
 from harness import ROOT, load_script
 
@@ -291,62 +289,8 @@ def check_sel4_fixtures() -> int:
             os.environ["SLIME_SEL4_MANIFEST"] = previous_manifest
     return checked
 
-def check_component_fallback() -> None:
-    """The checked-in slot table must match what the emitter renders.
-
-    `components/bins/build.rs` falls back to it when `SLIME_BOOT_LAYOUT` is
-    unset, which is every plain `cargo build`. If it drifts, userspace compiles
-    against slots the kernel no longer places, and only a QEMU boot would say
-    so.
-    """
-    path = ROOT / "components" / "bins" / "src" / "default_boot_layout.rs"
-    expected = render_boot_layout_rust(1, profile_executables("default"))
-    if path.read_text() != expected:
-        fail(
-            f"{path.relative_to(ROOT)} is stale; regenerate it from the product "
-            "profile's layout_for(1)"
-        )
-
-
-def check_bootstrap_binding_projection() -> None:
-    """Compile-time semantic slots must equal the explicit bootstrap bindings."""
-    prior_target = os.environ.get("SLIME_TARGET_PROFILE")
-    prior_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
-    os.environ["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
-    os.environ["SLIME_SEL4_MANIFEST"] = "sel4"
-    try:
-        manifest = builder.load_manifest()
-    finally:
-        if prior_target is None:
-            os.environ.pop("SLIME_TARGET_PROFILE", None)
-        else:
-            os.environ["SLIME_TARGET_PROFILE"] = prior_target
-        if prior_manifest is None:
-            os.environ.pop("SLIME_SEL4_MANIFEST", None)
-        else:
-            os.environ["SLIME_SEL4_MANIFEST"] = prior_manifest
-    bindings, roles = builder.bootstrap_binding_projection(manifest)
-    rendered = render_boot_layout_rust(
-        manifest["generation"],
-        {item["name"] for item in manifest["executables"]},
-        bindings,
-        roles,
-    )
-    expected = {
-        "CONSOLE_SLOT": bindings["console"],
-        "CONSOLE_OUTPUT_SLOT": bindings["console-output"],
-        "SPAWN_SERVICE_SLOT": bindings["spawn-service"],
-        "SPAWN_SERVICE_RPC_SLOT": bindings["spawn-service-rpc"],
-        "SHARED_BUFFER_FACTORY_SLOT": roles["shared-buffer-factory"],
-    }
-    for constant, slot in expected.items():
-        declaration = f"pub const {constant}: u32 = {slot};"
-        if declaration not in rendered:
-            fail(f"bootstrap binding projection did not emit {declaration}")
-
-
 def check_derived_layout_agrees(stem: str) -> int:
-    """B71: the resource, the constants, and the frozen layout are one table.
+    """B71: the derived resource and the layout the root resolved are one table.
 
     Three readings of where the root places the bootstrap component's
     capabilities: the binary resource the root decodes, the Rust constants a
@@ -355,13 +299,11 @@ def check_derived_layout_agrees(stem: str) -> int:
     slot 4 in the resource against 5 everywhere else — with nothing comparing
     them, because until CP2's runtime query nothing read the resource's content.
 
-    Also refuses two differently-named constants sharing one slot. That was the
-    second half of B71: a role the generation does not grant kept whatever slot
-    the full static table gave it, so the component-graph plane's table declared
-    `STORAGE_CAPABILITY_SLOT` as `ECHO_AGENT_SLOT`'s real 7 and
-    `GENERATION_CONTROL_SLOT` as the real shared-buffer factory's 8. Both were
-    silently unused; either would have handed out a live capability of the wrong
-    kind. `_0`-suffixed aliases are the one legitimate repeat.
+    B71's second half -- a role the generation does not grant keeping whatever
+    slot the full static table gave it, which made `STORAGE_CAPABILITY_SLOT` equal
+    `ECHO_AGENT_SLOT`'s real 7 -- is now structurally impossible rather than
+    checked: no constant table is generated, because `init.rs` resolves every
+    slot through the root instead of compiling one in.
     """
     prior_target = os.environ.get("SLIME_TARGET_PROFILE")
     prior_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
@@ -413,46 +355,13 @@ def check_derived_layout_agrees(stem: str) -> int:
         ):
             fail(f"{stem} slot {slot}: identity disagrees with the label {observed_label!r}")
 
-    # The constants a component compiles against, over the same derivation.
-    bindings, _roles = builder.bootstrap_binding_projection(manifest)
-    rendered = render_boot_layout_rust(
-        number,
-        {item["name"] for item in manifest["executables"]},
-        bindings,
-        entries=entries,
-    )
-    slots_by_name: dict[str, int] = {}
-    for line in rendered.splitlines():
-        # `u32` only, and only `*_SLOT`: `BOOT_LAYOUT_GENERATION` is a `u64`
-        # generation number that shares this table but names no slot.
-        match = re.fullmatch(r"pub const (\w+_SLOT(?:_\d+)?): u32 = (\d+);", line)
-        if match:
-            slots_by_name[match[1]] = int(match[2])
-    for name, slot in slots_by_name.items():
-        # A layout row's constant must name the slot the resource declares.
-        if slot in resource:
-            continue
-        # Otherwise it must be a real binding of a kind that occupies no row —
-        # an endpoint — rather than a stale number.
-        if slot not in bindings.values():
-            fail(
-                f"{stem}: {name} is {slot}, which is neither a resource row nor a "
-                "declared binding slot"
-            )
-    collisions: dict[int, list[str]] = {}
-    for name, slot in sorted(slots_by_name.items()):
-        collisions.setdefault(slot, []).append(name)
-    for slot, names in sorted(collisions.items()):
-        distinct = {name.removesuffix("_0") for name in names}
-        if len(distinct) > 1:
-            fail(f"{stem}: slot {slot} is declared by {', '.join(names)}")
+    # No compile-time constant table is rendered any more: `init.rs` resolves
+    # every slot through the root (CP2/B70), so the resource and the frozen
+    # layout the root resolved are the only two representations left, and the
+    # loop above is what keeps them in agreement.
     return len(resource)
 
 def main() -> None:
-    check_component_fallback()
-    print("boot layout resource: component fallback table is current")
-    check_bootstrap_binding_projection()
-    print("boot layout resource: bootstrap binding projection is current")
     pairs = sorted(set(FIXTURE_PROFILES.values()))
     for number, profile in pairs:
         check_generation(number, profile)
@@ -486,8 +395,8 @@ def main() -> None:
         derived_rows += check_derived_layout_agrees(manifest_name)
         derived_planes += 1
     print(
-        f"boot layout resource: {derived_planes} seL4 planes agree across resource, "
-        f"constants, and resolved layout ({derived_rows} rows), with no slot declared twice"
+        f"boot layout resource: {derived_planes} seL4 planes agree between the derived "
+        f"resource and the layout the root resolved ({derived_rows} rows)"
     )
     print("boot layout resource check: ok")
 

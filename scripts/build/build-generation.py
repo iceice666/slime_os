@@ -174,11 +174,7 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
-from boot_layout import (
-    build_boot_layout,
-    layout_from_manifest,
-    render_rust as render_boot_layout_rust,
-)
+from boot_layout import build_boot_layout, layout_from_manifest
 from fabric_trace_contract import (
     FABRIC_TRACE_MAX_DEPTH,
     FABRIC_TRACE_OVERFLOW_SATURATE,
@@ -2376,9 +2372,6 @@ def build_rust_components(
     recovery: bool = False,
     candidate_identity: bytes | None = None,
     components: set[str] | None = None,
-    binding_slots: dict[str, int] | None = None,
-    role_bindings: dict[str, int] | None = None,
-    layout_entries: tuple | None = None,
 ) -> Path:
     environment = {
         key: value
@@ -2397,18 +2390,6 @@ def build_rust_components(
     # Components are compiled before the generation is assembled, so hand
     # build.rs the manifest-derived Rust tables they need. Per-generation data
     # selects behavior; inherited product flags must not change the image.
-    layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
-    layout_path.write_text(
-        render_boot_layout_rust(
-            generation_number,
-            components,
-            binding_slots,
-            role_bindings,
-            entries=layout_entries,
-        ),
-        encoding="utf-8",
-    )
-    environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
     # Product graph selectors are deliberately absent: generated manifest data
     # selects component behavior. Validation-only injection controls remain.
@@ -3872,18 +3853,12 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     # One derivation, both readers. `build_generation` encodes this same table
     # into the boot-layout resource, so the constants a component compiles
     # against and the resource the root serves at runtime cannot disagree (B71).
-    layout_entries = layout_from_manifest(manifest, RIGHT, RIGHT_TRANSFER)
-    # Endpoint bindings hold real CSpace slots but never a layout row, so they
-    # come from the binding projection rather than from `layout_entries`.
-    binding_slots, _role_bindings = bootstrap_binding_projection(manifest)
     built = build_rust_components(
         manifest["generation"],
         profile_path,
         target_profile,
         candidate_identity=None,
         components=executable_names,
-        binding_slots=binding_slots,
-        layout_entries=layout_entries,
     )
     payloads: dict[str, bytes] = {}
     object_ids = {object_["id"] for object_ in manifest["objects"]}
