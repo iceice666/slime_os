@@ -515,7 +515,52 @@ pub fn resolve_binding_slot(
     if let Some(role) = name.strip_prefix("notification:") {
         return resolve_notification_slot(generation, instance_index, role);
     }
+    // A *minted* binding — `minted:<name>`.
+    //
+    // A third declaration table, for a capability whose *slot* the generation
+    // fixes but whose object is created at runtime by the holder's owner: a
+    // supervision handle cannot exist before the task it names, so the manifest
+    // declares where it will land rather than granting it. `fabric-service` holds
+    // one per child it supervises.
+    //
+    // Its own namespace rather than folded into the grant lookup, on the same
+    // rule the layout and notification prefixes follow: these are different
+    // tables, and the names in them are not drawn from one pool. Reusing the
+    // unprefixed spelling would let a minted binding answer a grant question,
+    // which is exactly the shadowing the `executable:` fix exists to prevent.
+    if let Some(minted) = name.strip_prefix("minted:") {
+        return resolve_minted_slot(generation, instance_index, minted);
+    }
     None
+}
+
+/// Which of `holder`'s slots the minted binding named `name` declares.
+///
+/// Scoped to the caller's authenticated holder index, as every axis here is.
+/// `mintedBindings` already keys on `holder`, so this is the same per-holder
+/// question the notification lookup answers, over the table that declares a slot
+/// for an object created after boot.
+///
+/// Ambiguity refuses. A holder declaring one minted name twice is a fixture
+/// defect, and answering the first would hand out whichever the builder happened
+/// to emit first.
+fn resolve_minted_slot(
+    generation: &boot_contracts::generation::Generation<'_>,
+    holder: usize,
+    name: &str,
+) -> Option<usize> {
+    let mut found: Option<usize> = None;
+    for index in 0..generation.minted_binding_count() {
+        let binding = generation.minted_binding(index).ok()?;
+        if binding.holder != holder || binding.name != name {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(binding.slot);
+    }
+    found
 }
 
 /// Which of `holder`'s notification slots the grant named `role` binds.
@@ -987,5 +1032,25 @@ mod tests {
         // `kind:` and `notification:` cannot both claim one name.
         assert!(!"notification:x".starts_with("kind:"));
         assert!(!"kind:endpoint".starts_with("notification:"));
+    }
+
+    /// The minted-binding axis is its own namespace too, disjoint from grants
+    /// and notifications.
+    ///
+    /// `mintedBindings` is a third declaration table -- a slot the generation
+    /// fixes for an object its holder's *owner* creates at runtime, because a
+    /// supervision handle cannot exist before the task it names. Its names are
+    /// not drawn from the grant or notification pools, so `minted:` must not
+    /// silently answer from either of those tables, the same shadowing every
+    /// other prefix here exists to prevent.
+    #[test]
+    fn minted_binding_names_are_their_own_namespace() {
+        assert!(binding_name_admissible(
+            b"minted:fabric-publisher-supervision"
+        ));
+        assert!(!"fabric-publisher-supervision".starts_with("minted:"));
+        assert!(!"minted:x".starts_with("kind:"));
+        assert!(!"minted:x".starts_with("notification:"));
+        assert!(!"kind:endpoint".starts_with("minted:"));
     }
 }
