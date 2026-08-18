@@ -22,6 +22,7 @@ exists to abstract.
 
 from __future__ import annotations
 import os
+import re
 import sys as _sys
 from pathlib import Path as _Path
 
@@ -344,6 +345,109 @@ def check_bootstrap_binding_projection() -> None:
             fail(f"bootstrap binding projection did not emit {declaration}")
 
 
+def check_derived_layout_agrees(stem: str) -> int:
+    """B71: the resource, the constants, and the frozen layout are one table.
+
+    Three readings of where the root places the bootstrap component's
+    capabilities: the binary resource the root decodes, the Rust constants a
+    component compiles against, and the `.layout` fixture recording what the
+    root actually resolved. B71 was two of them disagreeing — `spawn-service` at
+    slot 4 in the resource against 5 everywhere else — with nothing comparing
+    them, because until CP2's runtime query nothing read the resource's content.
+
+    Also refuses two differently-named constants sharing one slot. That was the
+    second half of B71: a role the generation does not grant kept whatever slot
+    the full static table gave it, so the component-graph plane's table declared
+    `STORAGE_CAPABILITY_SLOT` as `ECHO_AGENT_SLOT`'s real 7 and
+    `GENERATION_CONTROL_SLOT` as the real shared-buffer factory's 8. Both were
+    silently unused; either would have handed out a live capability of the wrong
+    kind. `_0`-suffixed aliases are the one legitimate repeat.
+    """
+    prior_target = os.environ.get("SLIME_TARGET_PROFILE")
+    prior_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
+    os.environ["SLIME_TARGET_PROFILE"] = builder.SEL4_TARGET_PROFILE
+    os.environ["SLIME_SEL4_MANIFEST"] = stem
+    try:
+        manifest = builder.load_manifest()
+    finally:
+        if prior_target is None:
+            os.environ.pop("SLIME_TARGET_PROFILE", None)
+        else:
+            os.environ["SLIME_TARGET_PROFILE"] = prior_target
+        if prior_manifest is None:
+            os.environ.pop("SLIME_SEL4_MANIFEST", None)
+        else:
+            os.environ["SLIME_SEL4_MANIFEST"] = prior_manifest
+
+    entries = builder.layout_from_manifest(manifest, builder.RIGHT, builder.RIGHT_TRANSFER)
+    number = manifest["generation"]
+
+    # The resource the root decodes.
+    encoded_number, encoded = decode(build_boot_layout(number, fail, entries=entries))
+    if encoded_number != number:
+        fail(f"{stem}: resource carries generation {encoded_number}, manifest says {number}")
+    resource = {slot: (role, rights) for slot, role, _identity, rights in encoded}
+
+    # What the root actually resolved, frozen by `just sel4_boot_layout_check`.
+    observed = fixture_rows(stem)
+    if len(observed) != len(resource):
+        fail(
+            f"{stem}: the root resolved {len(observed)} slots, the derived resource "
+            f"declares {len(resource)}"
+        )
+    for slot, kind, label, rights in observed:
+        if slot not in resource:
+            fail(f"{stem}: the root filled slot {slot}, the resource declares nothing there")
+        role_wire, resource_rights = resource[slot]
+        role = next(name for name, wire in ROLE.items() if wire == role_wire)
+        if rights != resource_rights:
+            fail(
+                f"{stem} slot {slot}: the root resolved rights {rights:#x}, the resource "
+                f"declares {resource_rights:#x}"
+            )
+        if kind != kind_for(role):
+            fail(f"{stem} slot {slot}: the root resolved kind {kind!r}, the resource role {role!r}")
+        observed_label = None if label == "-" else label
+        if expected_identity(role, observed_label) != next(
+            identity for entry_slot, _role, identity, _rights in encoded if entry_slot == slot
+        ):
+            fail(f"{stem} slot {slot}: identity disagrees with the label {observed_label!r}")
+
+    # The constants a component compiles against, over the same derivation.
+    bindings, _roles = builder.bootstrap_binding_projection(manifest)
+    rendered = render_boot_layout_rust(
+        number,
+        {item["name"] for item in manifest["executables"]},
+        bindings,
+        entries=entries,
+    )
+    slots_by_name: dict[str, int] = {}
+    for line in rendered.splitlines():
+        # `u32` only, and only `*_SLOT`: `BOOT_LAYOUT_GENERATION` is a `u64`
+        # generation number that shares this table but names no slot.
+        match = re.fullmatch(r"pub const (\w+_SLOT(?:_\d+)?): u32 = (\d+);", line)
+        if match:
+            slots_by_name[match[1]] = int(match[2])
+    for name, slot in slots_by_name.items():
+        # A layout row's constant must name the slot the resource declares.
+        if slot in resource:
+            continue
+        # Otherwise it must be a real binding of a kind that occupies no row —
+        # an endpoint — rather than a stale number.
+        if slot not in bindings.values():
+            fail(
+                f"{stem}: {name} is {slot}, which is neither a resource row nor a "
+                "declared binding slot"
+            )
+    collisions: dict[int, list[str]] = {}
+    for name, slot in sorted(slots_by_name.items()):
+        collisions.setdefault(slot, []).append(name)
+    for slot, names in sorted(collisions.items()):
+        distinct = {name.removesuffix("_0") for name in names}
+        if len(distinct) > 1:
+            fail(f"{stem}: slot {slot} is declared by {', '.join(names)}")
+    return len(resource)
+
 def main() -> None:
     check_component_fallback()
     print("boot layout resource: component fallback table is current")
@@ -371,6 +475,20 @@ def main() -> None:
     print(f"boot layout resource: {len(FIXTURE_PROFILES)} fixtures agree with the resource")
     sel4_checked = check_sel4_fixtures()
     print(f"boot layout resource: {sel4_checked} seL4 fixtures agree with layout_for()")
+    # B71. Every seL4 plane, not just the 17 `SEL4_RESOLVER_STEMS`: the two the
+    # older arm skipped -- `sel4` and `sel4-spawn` -- are exactly the two whose
+    # static table disagreed with what the root placed.
+    derived_rows = 0
+    derived_planes = 0
+    for manifest_name in sorted(builder.SEL4_MANIFESTS):
+        if not (FIXTURES / f"{manifest_name}.layout").is_file():
+            continue
+        derived_rows += check_derived_layout_agrees(manifest_name)
+        derived_planes += 1
+    print(
+        f"boot layout resource: {derived_planes} seL4 planes agree across resource, "
+        f"constants, and resolved layout ({derived_rows} rows), with no slot declared twice"
+    )
     print("boot layout resource check: ok")
 
 

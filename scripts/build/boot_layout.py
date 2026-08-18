@@ -638,6 +638,68 @@ def _channel_components() -> dict[str, str]:
 CHANNEL_COMPONENTS = _channel_components()
 
 
+# The manifest `capabilityKind` each layout role is the placement of, for the
+# bootstrap component's own bindings. Derived empirically and then pinned: over
+# all 25 seL4 plane fixtures, every one of the 106 rows the root actually
+# resolved is a bootstrap binding of one of these three kinds, agreeing on slot,
+# role, *and* rights, with no row unaccounted for and no kind ever landing
+# sometimes and skipping other times.
+#
+# `endpoint` is deliberately absent: the root installs a declared native
+# Endpoint into both declaring instances at the slot each binding names, without
+# routing it through the bootstrap component's layout, so an endpoint binding
+# occupies no layout row. All 20 endpoint bindings across those fixtures confirm
+# it.
+LAYOUT_KIND_ROLES = {
+    "executable": "executable",
+    "sharedBufferFactory": "shared-buffer-factory",
+    "directory": "directory",
+}
+
+
+def layout_from_manifest(manifest: dict, right_bits: dict, transfer_bit: int) -> tuple:
+    """The layout the root will resolve, derived from the manifest itself.
+
+    B71: the static tables above are a *second* statement of where the root
+    places the bootstrap component's capabilities, and the two drifted. The root
+    places them from `InstanceBinding` — that is the only thing that decides a
+    slot — so deriving the resource from the same record removes the second
+    statement rather than trying to keep two in agreement.
+
+    That also removes what made the drift damaging. A static table narrowed by
+    component set renumbered only its *named* rows, leaving unnamed role rows at
+    whichever slot the full table gave them, so a narrowed manifest's real slots
+    could land on a role row's stale position: the committed generated table for
+    the component-graph plane declared `ECHO_AGENT_SLOT` and
+    `STORAGE_CAPABILITY_SLOT` as the same 7, and `GENERATION_CONTROL_SLOT` and
+    `SHARED_BUFFER_FACTORY_SLOT` as the same 8. Derived rows have no static
+    position to collide with, and a role this generation does not grant simply
+    has no row.
+
+    `right_bits`/`transfer_bit` are the builder's rights vocabulary, passed in
+    rather than imported so this module keeps depending on nothing above it.
+    """
+    grants = {grant["name"]: grant for grant in manifest["grants"]}
+    bootstrap = manifest["bootstrapInstance"]
+    instance = next(
+        item for item in manifest["instances"] if item["name"] == bootstrap
+    )
+    entries = []
+    for binding in instance["bindings"]:
+        grant = grants[binding["grant"]]
+        role = LAYOUT_KIND_ROLES.get(grant["capabilityKind"])
+        if role is None:
+            continue
+        rights = 0
+        for right in grant["rights"]:
+            rights |= right_bits[right]
+        if grant["transferable"]:
+            rights |= transfer_bit
+        label = grant["target"] if role in NAMED_ROLES else None
+        entries.append((binding["slot"], role, label, rights))
+    return tuple(sorted(entries, key=lambda entry: entry[0]))
+
+
 def layout_for(number: int, components: set[str] | None = None) -> tuple:
     """The slot table this generation number resolves, as (slot, role, label, rights).
 
@@ -698,7 +760,12 @@ def _entry_component(entry: tuple) -> str | None:
     return CHANNEL_COMPONENTS.get(label)
 
 
-def build_boot_layout(number: int, fail, components: set[str] | None = None) -> bytes:
+def build_boot_layout(
+    number: int,
+    fail,
+    components: set[str] | None = None,
+    entries: tuple | None = None,
+) -> bytes:
     """Encode the B10 boot capability layout resource object for one generation.
 
     Entries are sorted by slot and unique: the decoder rejects any other order,
@@ -708,8 +775,14 @@ def build_boot_layout(number: int, fail, components: set[str] | None = None) -> 
     `components` is the set the selected boot profile declares (B11); the layout
     is narrowed to it so the resource and the generation cannot disagree about
     which components exist.
+
+    `entries` supplies the table directly, bypassing the static one. seL4
+    generations pass `layout_from_manifest`'s derivation: the root places these
+    capabilities from `InstanceBinding`, so deriving them from the same record
+    is the only way the resource cannot drift from what boots (B71).
     """
-    entries = layout_for(number, components)
+    if entries is None:
+        entries = layout_for(number, components)
     if len(entries) > MAX_BOOT_LAYOUT_ENTRIES:
         fail(f"boot layout for generation {number} exceeds the capability table")
     encoded = b""
@@ -777,6 +850,7 @@ def render_rust(
     components: set[str] | None = None,
     binding_slots: dict[str, int] | None = None,
     role_bindings: dict[str, int] | None = None,
+    entries: tuple | None = None,
 ) -> str:
     """The slot table for one generation, including explicit init bindings.
 
@@ -790,12 +864,32 @@ def render_rust(
     of constant *names* is unaffected -- `all_labels()` unions every profile, so
     a body gated by a check flag still compiles -- and a component the profile
     drops simply has `SLOT_ABSENT` where it had a slot.
+
+    `entries` supplies the resolved table directly, which is what seL4
+    generations pass (`layout_from_manifest`). It must be the same table
+    `build_boot_layout` encodes, because these constants and that resource are
+    two readings of one placement and B71 was the two disagreeing.
+
+    Deriving also fixes what the static fallback got wrong for a *role* the
+    generation does not grant. That role used to keep whatever slot the
+    full-layout table gave it, which for the component-graph plane made
+    `STORAGE_CAPABILITY_SLOT` 7 -- the slot `ECHO_AGENT_SLOT` really occupies --
+    and `GENERATION_CONTROL_SLOT` 8, the real shared-buffer factory. Both were
+    silently unused, and both would have handed out a live capability of the
+    wrong kind to anything that did use them. A derived table has no row for an
+    ungranted role, so it renders `SLOT_ABSENT`: the value that fails closed.
     """
+    resolved = entries if entries is not None else layout_for(number, components)
     declared = {
-        label: slot
-        for slot, _, label, _ in layout_for(number, components)
-        if label is not None
+        label: slot for slot, _, label, _ in resolved if label is not None
     }
+    # `binding_slots` covers what a layout *row* cannot: an endpoint binding
+    # occupies a real slot in the bootstrap component's CSpace, but the root
+    # installs a declared Endpoint into both declaring instances directly, so it
+    # is never a layout entry. `init.rs` still addresses those slots by name
+    # (`SPAWN_SERVICE_RPC_SLOT`, `CONSOLE_OUTPUT_SLOT`), so they must appear
+    # here. Both this and `entries` are derived from the same manifest bindings,
+    # so where they overlap they agree by construction.
     if binding_slots is not None:
         declared.update(binding_slots)
     lines = [
@@ -823,10 +917,10 @@ def render_rust(
     # order with an index suffix, matching the order the kernel places them in.
     lines.append("")
     by_role: dict[str, list[int]] = {}
-    for slot, role, label, _ in layout_for(number, components):
+    for slot, role, label, _ in resolved:
         if label is None:
             by_role.setdefault(role, []).append(slot)
-    if role_bindings is not None:
+    if role_bindings is not None and entries is None:
         for role, slot in role_bindings.items():
             by_role[role] = [slot]
     # A role can repeat: generation 4 declares an object store in both the

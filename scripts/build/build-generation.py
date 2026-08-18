@@ -174,7 +174,11 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
-from boot_layout import build_boot_layout, render_rust as render_boot_layout_rust
+from boot_layout import (
+    build_boot_layout,
+    layout_from_manifest,
+    render_rust as render_boot_layout_rust,
+)
 from fabric_trace_contract import (
     FABRIC_TRACE_MAX_DEPTH,
     FABRIC_TRACE_OVERFLOW_SATURATE,
@@ -2374,6 +2378,7 @@ def build_rust_components(
     components: set[str] | None = None,
     binding_slots: dict[str, int] | None = None,
     role_bindings: dict[str, int] | None = None,
+    layout_entries: tuple | None = None,
 ) -> Path:
     environment = {
         key: value
@@ -2394,7 +2399,13 @@ def build_rust_components(
     # selects behavior; inherited product flags must not change the image.
     layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
     layout_path.write_text(
-        render_boot_layout_rust(generation_number, components, binding_slots, role_bindings),
+        render_boot_layout_rust(
+            generation_number,
+            components,
+            binding_slots,
+            role_bindings,
+            entries=layout_entries,
+        ),
         encoding="utf-8",
     )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
@@ -3295,10 +3306,19 @@ def layout_executables(manifest: dict) -> set[str]:
 
 
 def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int, profile: TargetProfile) -> bytes:
-    declared_layout_executables = layout_executables(manifest)
     if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
         payloads = dict(payloads)
-        payloads["boot-layout"] = build_boot_layout(number, fail, declared_layout_executables)
+        # Derived from the manifest's own `InstanceBinding` records rather than
+        # from a second, static statement of the same thing (B71). The root
+        # places the bootstrap component's capabilities from those bindings, so
+        # this is the only derivation that cannot drift from what boots — the
+        # static table had `spawn-service` at 4 where the root placed 5, and
+        # nothing noticed until CP2's query read the resource's content.
+        payloads["boot-layout"] = build_boot_layout(
+            number,
+            fail,
+            entries=layout_from_manifest(manifest, RIGHT, RIGHT_TRANSFER),
+        )
     objects = unique_sorted(manifest["objects"], "id", "object ids")
     executables = unique_sorted(manifest["executables"], "name", "executable names")
 
@@ -3849,7 +3869,13 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             encoding="utf-8",
         )
     executable_names = {executable["name"] for executable in manifest["executables"]}
-    binding_slots, role_bindings = bootstrap_binding_projection(manifest)
+    # One derivation, both readers. `build_generation` encodes this same table
+    # into the boot-layout resource, so the constants a component compiles
+    # against and the resource the root serves at runtime cannot disagree (B71).
+    layout_entries = layout_from_manifest(manifest, RIGHT, RIGHT_TRANSFER)
+    # Endpoint bindings hold real CSpace slots but never a layout row, so they
+    # come from the binding projection rather than from `layout_entries`.
+    binding_slots, _role_bindings = bootstrap_binding_projection(manifest)
     built = build_rust_components(
         manifest["generation"],
         profile_path,
@@ -3857,7 +3883,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         candidate_identity=None,
         components=executable_names,
         binding_slots=binding_slots,
-        role_bindings=role_bindings,
+        layout_entries=layout_entries,
     )
     payloads: dict[str, bytes] = {}
     object_ids = {object_["id"] for object_ in manifest["objects"]}
