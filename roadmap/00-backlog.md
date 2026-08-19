@@ -437,8 +437,12 @@ groups:
   that delivery or answering it through the root — a distinct, smaller question
   than the graph read, and one with its own authority consequence, since the boot
   action is currently a fact only `init` is told.
-- **55 uses / 10 symbols are genuine graph data** — `FABRIC_PARTICIPANTS` (17),
-  `FABRIC_VISIBILITY` (9), `FABRIC_HISTORY_DEPTHS` (7), `FABRIC_QOS` (6),
+- **53 uses / 10 symbols are genuine graph data** (2026-08-19: was 55; the
+  `DECLARED_RING_CAPACITY` const block was deleted as a duplicate of
+  `resolve_fabric_profile`'s own ring-capacity check, which took the only three
+  const-context uses with it, so every survivor is a runtime read and a graph
+  read is no longer structurally blocked) — `FABRIC_PARTICIPANTS` (15),
+  `FABRIC_VISIBILITY` (9), `FABRIC_HISTORY_DEPTHS` (6), `FABRIC_QOS` (6),
   `FABRIC_CLIENTS`/`FABRIC_INTERPOSITIONS` (4 each), and the client and schema
   tables. These are what a `fabric-graph` read would answer.
 - **3 uses are slot-ish** — `FABRIC_NOTIFICATION_BINDINGS` (2) and

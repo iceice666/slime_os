@@ -161,3 +161,35 @@ That makes this genuinely CP3/CP4 work rather than a filing change: an
 out-of-tree component needs its *own* declared capacity, admitted against the
 graph it is composed into, which is a contract question about component
 specification and not a table that can be moved.
+
+**2026-08-19 — the one const-context blocker is removed, and it was a
+duplicate.** Scoping the graph read further showed that of the 55 graph-data
+uses, **3 were in `const` context** — all in one block, `DECLARED_RING_CAPACITY`,
+which walked `FABRIC_PARTICIPANTS` and `FABRIC_HISTORY_DEPTHS` at compile time to
+sum every subscriber's KEEP_LAST depth and assert `MAX_FRAMES >=` that sum. Those
+three would have blocked a runtime read outright: no syscall can answer a
+question asked before the component runs.
+
+They did not need the read, because the check already exists upstream.
+`build-generation.py`'s `resolve_fabric_profile` sums `historyDepth` over every
+`DIRECTION_SUBSCRIBE` participant and refuses a graph exceeding
+`FABRIC_FRAME_CAPACITY` — the same sum, over the same participants, against the
+same constant (32). It runs for every manifest declaring a `fabricGraph`, so the
+component's copy pinned the same fact one generation later while dragging two
+graph tables into const context that nothing else in the file needs there.
+
+Proven non-vacuous before deleting the duplicate: raising `sel4-stream.zti`'s
+seven declared history depths to 16 so their sum passes 32 fails the build with
+`fabric graph: subscriber history exceeds the frame table`.
+
+With that block gone, **zero of the remaining graph-data uses are const-context**
+— `FABRIC_PARTICIPANTS` drops 17 → 15 and `FABRIC_HISTORY_DEPTHS` 7 → 6, and
+every survivor is an ordinary runtime read. That is the precondition a
+`fabric-graph` read needs, established independently of the read itself.
+
+**One thing this removes that CP3/CP4 must give back.** The deleted block was the
+last place a component stated a capacity requirement *about itself* — "my frame
+table must hold the rings this graph declares". An out-of-tree component cannot
+rely on this repository's builder to check that, so the declared-capacity
+contract owes it a way to say the same thing. This is a requirement to
+reintroduce, not dead weight, and the comment left in its place says so.

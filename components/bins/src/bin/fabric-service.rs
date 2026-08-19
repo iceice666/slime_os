@@ -2463,27 +2463,26 @@ const _: () = assert!(FABRIC_REQUIRED_CAPABILITY_SLOTS <= FABRIC_MAX_CAPABILITY_
 // This assertion pins the property the table does guarantee — every ring the
 // *declared* graph asks for fits at once — so a manifest that outgrows it fails
 // the build rather than a boot.
-const _: () = assert!(
-    MAX_FRAMES >= DECLARED_RING_CAPACITY,
-    "frame table smaller than the rings this generation declares"
-);
-
-/// Summed KEEP_LAST depth of every subscriber the generation declares. Derived
-/// from the same build-time tables the fabric sizes each ring from, so the two
-/// cannot disagree.
-const DECLARED_RING_CAPACITY: usize = {
-    let mut total = 0;
-    let mut index = 0;
-    while index < FABRIC_PARTICIPANTS.len() {
-        // The two tables are positionally paired by `build.rs`, which asserts
-        // their lengths match. Direction 2 is `DIRECTION_SUBSCRIBE`.
-        if FABRIC_PARTICIPANTS[index].3 == 2 {
-            total += FABRIC_HISTORY_DEPTHS[index].2 as usize;
-        }
-        index += 1;
-    }
-    total
-};
+// The frame table must hold every ring the declared graph asks for at once.
+//
+// That property is checked, but by `build-generation.py`'s
+// `resolve_fabric_profile`, which sums `historyDepth` over every
+// `DIRECTION_SUBSCRIBE` participant and refuses a graph exceeding
+// `FABRIC_FRAME_CAPACITY` -- the same sum against the same constant this file
+// used to recompute in a `const` block from `FABRIC_PARTICIPANTS` and
+// `FABRIC_HISTORY_DEPTHS`. The builder's copy runs for every manifest declaring
+// a graph, so the duplicate here only pinned the same fact one generation later,
+// at the cost of two graph tables reaching into const context where nothing else
+// in this file needs them.
+//
+// Verified non-vacuous before the duplicate was removed: raising this plane's
+// declared history depths so their sum passes 32 fails the build with
+// `fabric graph: subscriber history exceeds the frame table`.
+//
+// Worth knowing for CP3/CP4: this was the last place a component stated a
+// capacity requirement *about itself*. An out-of-tree component cannot rely on
+// this builder, so the declared-capacity contract owes it a way to say the same
+// thing -- this is a requirement to reintroduce, not dead weight.
 
 #[cfg(test)]
 mod tests {
