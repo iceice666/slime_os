@@ -296,6 +296,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-18 | [CP2 — runtime-resolved component binding](2026-08-18-cp2-runtime-binding-query/index.md) | Change | Verified | CP2, B70 |
 | 2026-08-18 | [CP2 — capability-role query axis](2026-08-18-cp2-capability-role-axis/index.md) | Change | Verified | CP2, B70 |
 | 2026-08-18 | [B71 — boot-layout binary/Rust drift](2026-08-18-b71-boot-layout-binary-drift/index.md) | Defect | Verified | B70, B71 |
+| 2026-08-19 | [Retiring FABRIC_PARTICIPANTS, and the gate that outlived what it guarded](2026-08-19-fabric-participants-retirement/index.md) | Change | Verified | B70, CP2, B74 |
 | 2026-08-19 | [Visibility plane reads its participant facts from the graph](2026-08-19-fabric-graph-visibility-join/index.md) | Change | Verified | B70, B72 |
 | 2026-08-19 | [Supervision binding naming convention](2026-08-19-supervision-binding-naming/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [Scoping the fabric-graph read against measured consumer needs](2026-08-19-fabric-graph-read-scope/index.md) | Audit | Verified | B70, CP2 |

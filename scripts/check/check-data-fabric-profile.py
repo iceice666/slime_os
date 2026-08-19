@@ -111,14 +111,40 @@ with tempfile.TemporaryDirectory(prefix="slime-data-fabric-profile-") as tempora
     # The participant *table* retired with B70/CP2 -- a component reads the graph
     # for what it used to compile in. What this still has to catch is the failure
     # the table check caught: rendered Rust silently disagreeing with the canonical
-    # profile. The QoS and visibility rows are rendered from the same participant
-    # list, so every declared participant must still surface as a (component, route)
-    # pair in what is rendered, and a dropped or misspelled participant fails here
-    # exactly as it did before.
-    for row in first.artifact["participants"]:
-        expected = f'(b"{row["component"]}", "{row["route"]}", '
-        if expected not in rust:
-            fail("rendered Rust rows diverge from the canonical profile participants")
+    # profile. `FABRIC_QOS` and `FABRIC_VISIBILITY` are rendered one row per
+    # participant from the same list, so each must carry every declared participant
+    # and carry exactly as many rows as there are participants.
+    #
+    # Both halves are load-bearing, and each was observed failing without the other.
+    # Searching the whole file for a `(b"component", "route", ` prefix proves
+    # nothing, because `FABRIC_NOTIFICATION_BINDINGS` renders that same prefix and
+    # keeps the substring alive after `FABRIC_QOS` and `FABRIC_VISIBILITY` have lost
+    # the row -- so the search is scoped to one table body at a time. Membership
+    # alone is likewise not enough: a duplicated participant covers for a dropped
+    # one, which the row count catches and the substring search does not.
+    def table_body(name):
+        opening = f"pub const {name}"
+        start = rust.find(opening)
+        if start < 0:
+            fail(f"rendered Rust omitted the {name} table")
+        start = rust.find("&[", rust.find("= ", start))
+        end = rust.find("];", start)
+        if start < 0 or end < 0:
+            fail(f"rendered Rust {name} table is not delimited as expected")
+        return rust[start + 2 : end]
+
+    for name in ("FABRIC_QOS", "FABRIC_VISIBILITY"):
+        body = table_body(name)
+        rows = [line for line in body.splitlines() if line.strip()]
+        if len(rows) != len(first.artifact["participants"]):
+            fail(
+                f"rendered Rust {name} has {len(rows)} rows for "
+                f"{len(first.artifact['participants'])} declared participants"
+            )
+        for row in first.artifact["participants"]:
+            expected = f'(b"{row["component"]}", "{row["route"]}", '
+            if expected not in body:
+                fail(f"rendered Rust {name} diverges from the canonical profile participants")
     for entry in first.artifact["limits"]:
         if f" = {entry['value']};" not in rust:
             fail(f"Rust profile omitted the {entry['name']} limit value")

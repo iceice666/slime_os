@@ -557,6 +557,41 @@ contents of what it admits go unasserted.
 from `graph` to `private` in `contracts/generation/v1/fixtures/sel4-matrix.zti`,
 changing no route name, fails `just sel4_matrix_check`.
 
+### B74 — the aggregate gate's traffic schedule failed twice in one session on a gate B68 closed as deterministic
+
+`just sel4_fabric_aggregate_check` boots each of two schedules twice over one
+composition and requires byte-identical semantic traces. B68 closed a real
+nondeterminism in how that comparison zipped records, with 10 consecutive
+passing runs as its exit condition.
+
+Observed 2026-08-19, on `slime-sel4-traffic.elf` boot 2 only, two consecutive
+failures with *different* signatures:
+
+- a trace divergence, whose reported record was a `stream kind=resource
+  order=data now=600 ... sequence=4 status=0 event=7 high_water=4` row;
+- `boot 2 exceeded 240s without init's clean exit`.
+
+Neither reproduced afterwards: the same target then passed on the committed
+baseline and passed again with the working-tree changes restored, and the fault
+schedule passed on every run. The changes in the tree at the time removed a
+write-only local from `render_fabric_profile_rust` and produced generation
+`65f60c11…`, byte-identical to the committed baseline's, so nothing in the
+booted image differed from the passing runs.
+
+Two different failure signatures on the same boot points away from the
+positional-zip defect B68 fixed and toward the traffic schedule's 19 concurrent
+participants being timing-sensitive under host load — the timeout arm especially.
+That makes this a gate-reliability question rather than a determinism one, but a
+determinism gate that fails intermittently cannot distinguish the two, which is
+the reason to track it.
+
+**Exit condition:** either `just sel4_fabric_aggregate_check` passes 10
+consecutive runs under host load comparable to the observed failures, or the
+traffic schedule's boot-2 timing sensitivity is identified and the gate
+distinguishes a real trace divergence from a host-load timeout in what it
+reports.
+
+
 ## Deferred follow-ups
 
 Real, unclosed follow-up work surfaced by resolved entries, not new backlog

@@ -1806,7 +1806,6 @@ def render_fabric_profile_rust(
         for binding in notification_bindings
     }
     notification_rows_data = []
-    participant_rows_data = []
     for participant in participants:
         component = participant["component"]
         route = participant["route"]
@@ -1831,7 +1830,6 @@ def render_fabric_profile_rust(
         if None in (ready, credit, participant_ready, participant_credit):
             fail(f"fabric notification bindings missing for {component}/{route}")
         notification_rows_data.append((component, route, participant["direction"], ready["slot"], credit["slot"]))
-        participant_rows_data.append((component, route, participant_ready["slot"], participant_credit["slot"]))
     notification_rows = "".join(
         f"    (b{rust_string(component)}, {rust_string(route)}, {direction}, {ready}, {credit}),\n"
         for component, route, direction, ready, credit in notification_rows_data
