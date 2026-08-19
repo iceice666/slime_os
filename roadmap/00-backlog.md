@@ -324,21 +324,45 @@ manifests the multiset of `(slot, source, target, rights, transferable, flags,
 kind)` over every binding, name excluded, is unchanged, and only the two edited
 manifests moved `generation.bin` at all.
 
-**2** uses remain, both the `.iter()` teardown walks
-(`fabric-service.rs:392,536`). These do need the holder set's *membership*, and
-the traffic walk additionally filters it by which components this graph parks
-rather than exits — a graph fact belonging to the `fabric-graph` resource read.
-The count-vs-membership distinction holds for these two; it never applied to the
-other three.
+**Progress (2026-08-19, `FABRIC_SUPERVISION` deleted):** the last two uses close,
+and again the blocker was narrower than recorded. They were noted as needing a
+query returning a component's binding *set*, which one-name-one-slot cannot
+express — but the set was one the broker already held. `Publisher` and
+`Subscriber` each carry a `supervision_slot` installed at provisioning, so the
+teardown walks iterate the provisioned arrays and resolve nothing. Checked on
+every plane reaching a teardown first: on `stream` and `qos` the holder set and
+the ring-participant set are equal, and on `traffic` the table's extra rows are
+exactly the components that never provision.
+
+That is why this is not a restatement of the old walk. The traffic walk named
+`fabric-proxy` and `fabric-observer` as literals to avoid blocking on tasks C8.10
+requires to stay parked; iterating what was provisioned makes the absence
+structural, so a composition parking a different component needs no edit.
+
+With no live uses left, `FABRIC_SUPERVISION` is **deleted**, along with
+`FABRIC_SUBSCRIBERS` — derived from the same rows, also unused — including their
+generator expressions and their entries in the checked-in
+`default_fabric_profile.rs`. `fabric_profile` drops from 51 constants to 49.
 **Evidence:** [`devlog/2026-08-19-supervision-binding-naming/`](../devlog/2026-08-19-supervision-binding-naming/index.md)
 
 B70's remaining surface is 18 `include!` sites over three tables.
-`fabric_profile`'s 47 constants: 2 remaining `FABRIC_SUPERVISION` uses — no
-longer blocked on naming, which is closed, but on a query returning a binding
-*set* rather than one slot — 3 capability-slot ceilings, and 44 graph facts
-(routes, QoS depths, trace depth, participant and worker tables) belonging to an
-authenticated `fabric-graph` read — still no resource-read syscall exists, the
-one item with no available mechanism at all. `spawn-service`'s RPC endpoint stays
+`fabric_profile`'s 49 constants (2026-08-19: `FABRIC_SUPERVISION` and
+`FABRIC_SUBSCRIBERS` deleted): one remaining slot table,
+`FABRIC_NOTIFICATION_BINDINGS`, plus 3 capability-slot ceilings and the rest
+graph facts (routes, QoS depths, trace depth, participant and worker tables)
+belonging to an authenticated `fabric-graph` read — still no resource-read
+syscall exists, the one item with no available mechanism at all.
+
+`FABRIC_NOTIFICATION_BINDINGS` is worth distinguishing from the notification work
+already closed above. That migration moved each component's own wake slots onto
+the `notification:` axis; this table is the *fabric's* view of its peers' slots —
+`notification_slots(component, route, direction)` answers which ready/credit
+slots some other participant holds, which is a per-holder question about a
+different holder and so outside what a self-scoped query can answer by
+construction. `matrix_broker`'s `declared_capabilities` reads it as a count.
+Closing it needs the graph read, not another slot axis.
+
+`spawn-service`'s RPC endpoint stays
 derived because `sel4-dango.zti` grants it three `send`+`recv` endpoints, so
 `kind:endpoint+send,recv` is ambiguous and refuses; its command-executable table
 maps a command *name* to an executable, a graph-shape fact rather than a

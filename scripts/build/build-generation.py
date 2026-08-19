@@ -1867,12 +1867,6 @@ def render_fabric_profile_rust(
         f"    ({rust_string(row['name'])}, &[{', '.join(rust_string(route) for route in row['routes'])}], {row['waitSources']}),\n"
         for row in artifact["workers"]
     )
-    supervision_rows = "".join(
-        f"    (b{rust_string(row['component'])}, {row['slot']}),\n" for row in artifact["supervision"]
-    )
-    subscriber_rows = "".join(
-        f"    b{rust_string(row['component'])},\n" for row in artifact["supervision"]
-    )
     minted_grant_rows = "".join(
         f"    (b{rust_string(row['holder'])}, {row['count']}),\n"
         for row in artifact["mintedGrants"]
@@ -1971,7 +1965,6 @@ const fn konst_str_eq(left: &str, right: &str) -> bool {{
 pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
 pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
 pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
-pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[\n{supervision_rows}];
 /// How many capabilities each child's owner must hand it at spawn: its minted
 /// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
 /// total `preflight_spawn_grants` checks a request against, so it is the one
@@ -1979,7 +1972,6 @@ pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[\n{supervision_rows}];
 /// with nothing.
 #[allow(dead_code)]
 pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n{minted_grant_rows}];
-pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];
 #[allow(dead_code)]
 pub const FABRIC_MAX_ROUTES: usize = {limits['routes']};
 #[allow(dead_code)]

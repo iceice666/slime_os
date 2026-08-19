@@ -303,3 +303,51 @@ sel4_visibility_check` observe. That is weaker than the supervision guard —
 it catches a name a broker *reads*, not every name a fixture declares. A grant no
 component resolves could drift back silently, which is exactly how the four
 downstream grants were missed on the first pass.
+
+**2026-08-19 — the last two uses close, and `FABRIC_SUPERVISION` is deleted.**
+The correction above recorded these as needing a query returning a component's
+binding *set*, since one-name-one-slot cannot express a membership list. The set
+turned out to be one the broker already had.
+
+`Publisher` and `Subscriber` each carry a `supervision_slot`, installed when
+provisioning hands that participant its ring. So the teardown walks iterate the
+provisioned arrays instead of the generated table, and resolve nothing. Checked
+before the change on every plane that reaches a teardown: on `stream` and `qos`
+the holder set and the ring-participant set are *equal*, and on `traffic` the
+table's extra rows — `fabric-proxy`, `fabric-observer` — are exactly the
+components that never provision.
+
+That last fact is what makes this more than a restatement. The traffic walk named
+those two as string literals to avoid blocking forever on tasks C8.10 requires to
+stay parked; iterating what was actually provisioned makes their absence
+structural, so a composition parking a *different* component needs no edit. The
+skip list is gone rather than moved.
+
+With both walks migrated, `FABRIC_SUPERVISION` had no live uses and is
+**deleted**, along with `FABRIC_SUBSCRIBERS`, which was derived from the same
+rows and had none either — both tables, their two generator expressions in
+`build-generation.py`, and their entries in the checked-in
+`default_fabric_profile.rs`. `fabric_profile` drops from 51 constants to 49.
+
+**What this does not do**, since the count is the honest measure: the `include!`
+site count is unchanged at 18. Sixteen components still include `fabric_profile`
+for `ROUTE_NAMES` (31 uses), `FABRIC_PARTICIPANTS` (17), `FABRIC_VISIBILITY` (9),
+`FABRIC_QOS` (6), `FABRIC_CLIENTS` (4) and `FABRIC_INTERPOSITIONS` (4). Every one
+of those is graph data rather than a slot, so no slot query — set-returning or
+otherwise — retires them; they need the authenticated `fabric-graph` read that
+still has no syscall.
+
+And one slot table does remain, which is worth naming precisely because the
+earlier notification work reads as if it were gone.
+`FABRIC_NOTIFICATION_BINDINGS` still has two live uses. The notification
+migration moved each component's *own* wake slots onto the `notification:` axis;
+this table is the fabric's view of its *peers'* slots —
+`notification_slots(component, route, direction)` answers which ready/credit
+slots another participant holds. That is a per-holder question about a different
+holder, so a self-scoped query cannot answer it by construction, and it too waits
+on the graph read.
+
+Verified: `just sel4_stream_check`, `just sel4_qos_check`, `just
+sel4_fabric_aggregate_check` (280 byte-identical records across four boots,
+covering the traffic walk), `just sel4_matrix_check`, `just
+sel4_visibility_check`, `just fmt_check_all`, `just lint_all`, `just ruff`.

@@ -129,10 +129,6 @@ pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[
     b"fabric-op-server",
     b"fabric-op-time",
 ];
-pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[
-    (b"fabric-publisher", 4),
-    (b"fabric-subscriber", 5),
-];
 /// How many capabilities each child's owner must hand it at spawn: its minted
 /// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
 /// total `preflight_spawn_grants` checks a request against, so it is the one
@@ -165,10 +161,6 @@ pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
     (b"powerbox-chooser", 2),
     (b"spawn-service", 3),
     (b"sysinfo", 0),
-];
-pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[
-    b"fabric-publisher",
-    b"fabric-subscriber",
 ];
 #[allow(dead_code)]
 pub const FABRIC_MAX_ROUTES: usize = 8;

@@ -402,13 +402,49 @@ fn main(_startup_arg: u32) {
     // after `holder reclaimed`. The supervision handles the generation granted
     // for loan addressing answer "is that task gone", so they order the
     // teardown too.
-    for (component, _) in FABRIC_SUPERVISION.iter() {
-        let supervision = supervision_slot_for(component);
+    await_participants(&publishers, &subscribers);
+    slime_rt::debug_write(b"[fabric] stream plane complete\n");
+}
+
+/// Block until every participant this service provisioned a ring for has ended.
+///
+/// The set comes from the provisioned arrays rather than from
+/// `FABRIC_SUPERVISION`, and the two agree by construction: a row exists in that
+/// table exactly for the components holding a ring or an interposition chain
+/// (`resolve_fabric_profile`'s `holders`), and an entry exists here exactly for
+/// the components that asked for and received a ring role. Verified against
+/// every plane reaching a teardown: on `stream` and `qos` the two sets are
+/// equal, and on `traffic` the table's extra rows are precisely the components
+/// that never provision.
+///
+/// That last point is why this replaces a hardcoded skip list rather than merely
+/// restating one. The traffic walk named `fabric-proxy` and `fabric-observer` as
+/// literals to avoid waiting forever on two tasks the milestone requires to stay
+/// parked; iterating what was actually provisioned makes their absence
+/// structural, so a composition that parks a *different* component needs no edit
+/// here.
+///
+/// Each entry carries the supervision handle its provisioning installed, so this
+/// resolves nothing: a native Endpoint reports no peer death, and the handle is
+/// the only observation that distinguishes an exited participant from a quiet
+/// one.
+fn await_participants(
+    publishers: &[Option<Publisher>; MAX_PARTICIPANTS],
+    subscribers: &[Option<Subscriber>; MAX_PARTICIPANTS],
+) {
+    let slots = publishers
+        .iter()
+        .filter_map(|entry| entry.as_ref().map(|publisher| publisher.supervision_slot))
+        .chain(
+            subscribers
+                .iter()
+                .filter_map(|entry| entry.as_ref().map(|subscriber| subscriber.supervision_slot)),
+        );
+    for supervision in slots {
         while let Ok(None) = slime_rt::supervision_status(supervision) {
             slime_rt::yield_now();
         }
     }
-    slime_rt::debug_write(b"[fabric] stream plane complete\n");
 }
 
 /// C8.10 full-graph boot: run the stream plane, which is this task's whole
@@ -545,16 +581,10 @@ fn traffic_graph() {
     // Neither the proxy nor the observer ever contacts this broker under
     // `"traffic"` (both parked above without requesting a role), so neither
     // dies either; waiting on either here would hang forever on a task the
-    // milestone requires to stay parked.
-    for (component, _) in FABRIC_SUPERVISION.iter() {
-        if *component == b"fabric-proxy" || *component == b"fabric-observer" {
-            continue;
-        }
-        let supervision = supervision_slot_for(component);
-        while let Ok(None) = slime_rt::supervision_status(supervision) {
-            slime_rt::yield_now();
-        }
-    }
+    // milestone requires to stay parked. They are absent from the provisioned
+    // arrays for exactly that reason, so `await_participants` skips them
+    // structurally — this used to name both as literals.
+    await_participants(&publishers, &subscribers);
     slime_rt::debug_write(b"[fabric] traffic stream plane complete\n");
 }
 
