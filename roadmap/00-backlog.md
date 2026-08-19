@@ -459,6 +459,60 @@ names: `ParticipantEntry` carries `component_identity`/`route_index`, while
 already call `route_identity()` from that same module, so the fold is available to
 them; a consumer would ask by identity and stop holding the name at all.
 
+**Progress (2026-08-19, census re-measured, comment-blind):** The census note
+below has a third flaw beyond the denominators the note after it corrects, and
+this one changes which file is cheapest to migrate. It counted symbol names
+wherever they appeared in the file text, including inside `///` doc comments and
+string literals, and it counted them against a claimed union of 46 symbols
+rendered across every per-plane profile. Both inputs were wrong.
+
+The symbol universe is **29, not 46**. `render_fabric_profile_rust` in
+`scripts/build/build-generation.py` emits exactly 29 `pub const`/`pub type`
+items, the checked-in fallback `components/bins/src/default_fabric_profile.rs`
+declares the identical 29, and `generate_fabric_profile` in
+`components/bins/build.rs` copies one file through to `OUT_DIR` without
+synthesising anything. There is no plane-conditional symbol, so there is no
+union to take.
+
+Re-measured over the 13 surviving `fabric_profile` sites with comments and
+string literals stripped, against those 29 symbols:
+
+| File | Live symbols | Bucket |
+| --- | --- | --- |
+| `console.rs`, `dango.rs`, `fabric-intruder.rs`, `fabric_boot.rs`, `fabric_matrix.rs` | 1 — `GENERATION_BOOT_ACTION` | boot-action |
+| `init.rs` | 1 — `FABRIC_MINTED_GRANTS` | table |
+| `fabric-publisher{,-b}.rs`, `fabric-subscriber{,-b}.rs` | 2 — `FABRIC_TRACE_DEPTH`, `GENERATION_BOOT_ACTION` | table |
+| `call_broker.rs` | 5 | table |
+| `operation_broker.rs` | 7 | table |
+| `fabric-service.rs` | 18 | table |
+
+The 5/8 partition and the argument it supports are unchanged. The per-file
+counts are not: `fabric-service.rs` is 18 not 22, the four participants are 2
+not 3–4, and `init.rs` is **1 not 4** — its other three apparent references are
+prose in comments at lines 29, 1218, and 1580. Likewise the three participant
+files that appeared to read `FABRIC_HISTORY_DEPTHS` mention it only in a doc
+line about a cross-check that no longer exists.
+
+Two facts follow that the inflated counts hid. `init.rs` is the cheapest real
+table migration available anywhere in bucket B, at a single use of
+`FABRIC_MINTED_GRANTS` at line 44. And `FABRIC_TRACE_DEPTH` alone blocks four
+files: each participant's only other symbol is the boot-action string, and the
+depth is not read at the call site — `occupancy_trace::report` takes it as a
+parameter — but by the two `const _: () = assert!(super::FABRIC_TRACE_DEPTH ...)`
+guards in `components/bins/src/fabric_occupancy_trace.rs`, which resolve against
+the including binary's profile. Migrating that one symbol is the highest
+site-closure-per-symbol move left.
+
+Separately, the standing `FABRIC_PARTICIPANTS` migration is **complete**: the
+symbol has zero live uses in `components/bins/src`, is not emitted by
+`build.rs`, and is absent from the rendered profile. Seven mentions survive
+outside `devlog/`, and all seven are comments describing what the symbol used to
+do -- `visibility_broker.rs:176,179,675`, `fabric-service.rs:330,2589`,
+`fabric-publisher.rs:119`, and a `--` comment at
+`contracts/syscall-abi/v1/schema.zt:77`. None is code; they are stale prose to
+clean up, not migration work. See
+`devlog/2026-08-19-fabric-participants-retirement/`.
+
 **Progress (2026-08-19, site-count correction):** The two notes below report
 site totals against the wrong population, and both figures they quote are wrong.
 B70's problem statement counts `include!` sites across **all three** generated
