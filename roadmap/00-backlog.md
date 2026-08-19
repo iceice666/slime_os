@@ -274,20 +274,35 @@ calls it rather than keeping a second table scan. Those two funnel every real
 supervision read on the stream and matrix planes, so the convention is proven
 usable rather than merely consistent.
 
-**5** uses remain, and they are a different question. **3** are `.len()`
-arithmetic deriving `TIME_SLOT` and `FIRST_ROUTE_SLOT` (`fabric-service.rs:119`,
-`matrix_broker.rs:832`, `visibility_broker.rs:61`), needing a *count* of the
-holder set. **2** are `.iter()` teardown walks (`fabric-service.rs:381,525`),
-needing its *membership*. Neither a count nor a membership list is expressible as
-one-name-one-slot, so both want a query returning a component's binding *set*;
-the `.iter()` walks additionally ask which components exist, a graph fact
-belonging to the `fabric-graph` resource read. The remaining 4 mentions are
-comments that fall out with the code they describe. The naming blocker was real
-and is gone; what is left is a query-shape question, not a naming one.
+**Progress (2026-08-19, route and clock slots):** three further sites migrated,
+and this **corrects an earlier reading of them**. They were recorded here as
+needing a *count* of the holder set, hence blocked on a set-returning query. That
+was inferred from how they are written — `FIRST_CONTROL_SLOT +
+FABRIC_CLIENTS.len() + FABRIC_SUPERVISION.len() + n` reads like a request for two
+table sizes — rather than observed from what they compute, which is the slot of
+one specific declared endpoint. Every such slot is an ordinary grant with a name,
+so none needed new mechanism.
+
+Verified against the manifests before any code moved: all eleven derived
+constants equal their named grant's slot (`matrix-telemetry-ingress` is 16 under
+`sel4-matrix.zti`, `visibility-telemetry-ingress` is 12,
+`fabric-publisher-b-clock` is 11 under `sel4-qos.zti`). `fabric-service`'s
+`TIME_SLOT`, `matrix_broker`'s three route slots and `visibility_broker`'s seven
+now resolve by name. Each broker is reached under exactly one `bootAction`, so
+the names resolve against one manifest; `matrix_broker` also covers
+`sel4-matrix-unsatisfiable`, which B62 reduced to a one-field QoS override of the
+same fixture.
+
+**2** uses remain, both the `.iter()` teardown walks
+(`fabric-service.rs:392,536`). These do need the holder set's *membership*, and
+the traffic walk additionally filters it by which components this graph parks
+rather than exits — a graph fact belonging to the `fabric-graph` resource read.
+The count-vs-membership distinction holds for these two; it never applied to the
+other three.
 **Evidence:** [`devlog/2026-08-19-supervision-binding-naming/`](../devlog/2026-08-19-supervision-binding-naming/index.md)
 
 B70's remaining surface is 18 `include!` sites over three tables.
-`fabric_profile`'s 47 constants: 5 remaining `FABRIC_SUPERVISION` uses — no
+`fabric_profile`'s 47 constants: 2 remaining `FABRIC_SUPERVISION` uses — no
 longer blocked on naming, which is closed, but on a query returning a binding
 *set* rather than one slot — 3 capability-slot ceilings, and 44 graph facts
 (routes, QoS depths, trace depth, participant and worker tables) belonging to an
