@@ -791,6 +791,55 @@ pub fn is_declared_fabric_holder(
         == graph.fabric_component_identity()
 }
 
+/// Whether `instance` may read the row naming `component`.
+///
+/// Two ways in, and both are authority the generation already gave the caller.
+///
+/// **Itself.** A component reads what the generation declares about it, which is
+/// the rule `resolve_binding_slot` applies to bindings and is exactly what the
+/// generated table used to tell it.
+///
+/// **A component it holds a declared capability edge with.** A route worker
+/// brokers for participants it did not spawn and is not the graph's holder of —
+/// `fabric-op-worker` on `sel4-boot` is bound to `fabric-op-client`'s control
+/// endpoint and must know that client's declared feedback depth. It already
+/// holds an endpoint to that component, placed by the root from the manifest, so
+/// the graph row tells it nothing about a peer it could not already reach. What
+/// it cannot do is enumerate: a component with no edge to a participant still
+/// reads nothing of it, so C8.8's route filtering stays the fabric's to enforce.
+///
+/// The edge is read from the *caller's own* binding list, so it is the same
+/// per-instance scoping every axis here uses, not a search of the global grant
+/// table.
+fn may_read_row(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    component: &[u8; 32],
+) -> bool {
+    use boot_contracts::fabric_graph::component_identity;
+    use boot_contracts::generation::GrantEndpoint;
+
+    let Ok(caller) = generation.instance(instance) else {
+        return false;
+    };
+    if component_identity(caller.name) == *component {
+        return true;
+    }
+    let names_component = |endpoint: GrantEndpoint| match endpoint {
+        GrantEndpoint::Instance(index) => generation
+            .instance(index)
+            .is_ok_and(|peer| component_identity(peer.name) == *component),
+        GrantEndpoint::Executable(_) => false,
+    };
+    (0..caller.binding_count()).any(|index| {
+        generation
+            .binding(caller, index)
+            .ok()
+            .and_then(|binding| generation.grant(binding.grant).ok())
+            .is_some_and(|grant| names_component(grant.source) || names_component(grant.target))
+    })
+}
+
 /// The graph's index for the route whose identity is `identity`.
 ///
 /// A participant knows its route by *identity* — it folds the route name, its
@@ -847,15 +896,11 @@ pub fn read_graph_participants(
         return None;
     };
     let holder = is_declared_fabric_holder(generation, instance);
-    let own = generation
-        .instance(instance)
-        .ok()
-        .map(|instance| boot_contracts::fabric_graph::component_identity(instance.name));
     let mut written = 0;
     let mut seen = 0;
     for index in 0..graph.participant_count() {
         let participant = graph.participant(index)?;
-        if !holder && own != Some(participant.component_identity) {
+        if !holder && !may_read_row(generation, instance, &participant.component_identity) {
             continue;
         }
         // `cursor` counts the rows this caller may see, not rows of the table.

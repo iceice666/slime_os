@@ -136,3 +136,36 @@ Deleting the cross-checks also made `COMPONENT` dead in three of the four
 participants — it existed only to key the compiled lookup. Clippy caught it,
 which is the guard working: the constant named a component's own identity for a
 table that no longer exists.
+
+**2026-08-19 — the blocked site closes, and needs no contract change.** The
+correction above records `operation_broker` as needing "a graph-model change:
+either the worker declared as a holder of the routes it brokers, or a read
+scoped to components on routes I broker". Both were more than the problem
+required.
+
+The worker already holds a declared capability edge to every component whose row
+it needs. `fabric-op-worker` on `sel4-boot` binds `fabric-op-client-control`,
+`fabric-op-client-b-control`, `fabric-op-server-control` and the rest — the root
+placed those endpoints from the manifest before the worker ran. Verified against
+both manifests before writing any code: the peers reachable from the host's own
+bindings cover the components `declared_history_depth` asks about, on
+`sel4-operation` (host `fabric-service`) and `sel4-boot` (host
+`fabric-op-worker`) alike.
+
+So `GRAPH_READ` gained a second scope rather than a new model: a caller reads
+the rows of components it *shares a declared grant edge with*. That grants
+nothing new — the caller already holds an endpoint to that component — and it
+still refuses enumeration, so a component with no edge to a participant reads
+nothing of it and C8.8's filtering stays the fabric's. The edge is read from the
+caller's own binding list, the same per-instance scoping every other axis uses.
+
+The worker-as-holder alternative was rejected on inspection: `fabricComponent`
+is a single field naming one component, so making the worker a holder would
+either need a second field or would move the holder away from `fabric-service`,
+which brokers the stream plane in the same generation.
+
+**`FABRIC_HISTORY_DEPTHS` is now deleted** — the table, its `depth_rows`
+generator in `build-generation.py`, and its entry in the checked-in
+`default_fabric_profile.rs`. `fabric_profile` drops 49 → 48 constants. Both
+compilation paths were booted: `just sel4_operation_check` for the holder path
+and `just sel4_boot_check` for the worker-as-peer path.

@@ -1379,31 +1379,32 @@ impl Broker {
 /// The graph declares feedback history per authenticated participant/route.
 /// Operation clients are in the same order as the control table and broker
 /// slots, so lookup stays keyed to the authority index rather than a message.
-/// The KEEP_LAST feedback depth declared for one operation client.
+/// The KEEP_LAST feedback depth the generation declares for one operation
+/// client, read from the graph rather than a generated table (B70/CP2).
 ///
-/// **Still read from the generated table, and this is the one site that cannot
-/// migrate to `GRAPH_READ` today.** It asks about a *client*, not about the
-/// component running it, so it needs the holder-scoped read -- but this module
-/// is compiled into two binaries: `fabric-service`, which is the graph's
-/// declared holder, and `fabric-op-worker`, which is not. On `sel4-boot` the
-/// worker runs this path as a non-holder and would read only its own rows, so a
-/// migration would resolve nothing exactly where C8.10 needs it.
-///
-/// The module cannot branch on which binary hosts it either: nothing in scope
-/// distinguishes them. Closing this needs either the worker declared as a holder
-/// of the routes it brokers, or a read scoped to "components on routes I
-/// broker" -- both graph-model questions rather than call-site changes.
+/// This asks about a *client*, not about the component running it, and the two
+/// binaries this module compiles into answer that differently:
+/// `fabric-service` is the graph's declared holder and reads every row, while
+/// `fabric-op-worker` is not. The worker reaches its clients through the second
+/// scope instead -- it holds each one's declared control endpoint, so the row is
+/// about a peer the generation already bound it to. Neither binary needs to know
+/// which one it is, which is why this reads the same on both.
 fn declared_history_depth(client: usize) -> u32 {
     let component = match client {
-        0 => b"fabric-op-client".as_slice(),
-        1 => b"fabric-op-client-b".as_slice(),
+        0 => "fabric-op-client",
+        1 => "fabric-op-client-b",
         _ => fail(b"operation history client"),
     };
-    FABRIC_HISTORY_DEPTHS
-        .iter()
-        .find(|(name, route, _)| *name == component && *route == ROUTE_NAME)
-        .map(|(_, _, depth)| *depth)
-        .unwrap_or_else(|| fail(b"operation history depth"))
+    let route = boot_contracts::fabric_graph::route_identity(
+        ROUTE_NAME,
+        &navigation_operation::INTERFACE_IDENTITY,
+        boot_contracts::fabric_graph::CONTRACT_KIND_OPERATION,
+    );
+    let index = slime_rt::graph_route_index(&route)
+        .unwrap_or_else(|_| fail(b"operation route is not declared by this graph"));
+    let identity = boot_contracts::fabric_graph::component_identity(component);
+    slime_components::fabric_self_view::history_depth_of(&identity, index as u32)
+        .unwrap_or_else(|| fail(b"operation history depth")) as u32
 }
 
 fn declared_edges(component: &[u8], route: &str, direction: u32) -> usize {

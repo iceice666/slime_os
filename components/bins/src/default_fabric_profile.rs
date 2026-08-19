@@ -32,15 +32,6 @@ pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
     (b"fabric-subscriber", "telemetry", 2, 2, 3),
 ];
 
-pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[
-    (b"fabric-publisher", "telemetry", 4),
-    (b"fabric-subscriber", "telemetry", 8),
-    (b"fabric-call-client", "parameters", 4),
-    (b"fabric-call-server", "parameters", 4),
-    (b"fabric-op-client", "nav-backup", 4),
-    (b"fabric-op-client", "navigation", 4),
-    (b"fabric-op-server", "navigation", 4),
-];
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[
     (b"fabric-publisher", "telemetry", 0, 300, 0, 4, 2, 1, 2, 1),

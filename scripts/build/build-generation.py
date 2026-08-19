@@ -1795,10 +1795,6 @@ def render_fabric_profile_rust(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {rust_string(row['interface'])}, {row['direction']}),\n"
         for row in participants
     )
-    depth_rows = "".join(
-        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['historyDepth']}),\n"
-        for row in participants
-    )
     qos_rows = "".join(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['deadlineNs']}, {row['lifespanNs']}, {row['leaseNs']}, {row['historyDepth']}, {row['retainedDepth']}, {row['reliability']}, {row['durability']}, {row['liveliness']}),\n"
         for row in participants
@@ -1909,7 +1905,6 @@ pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{participant_ro
 pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
 pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
 {notification_rows}];
-pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depth_rows}];
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
 pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[\n{visibility_rows}];
