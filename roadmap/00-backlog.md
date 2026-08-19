@@ -465,9 +465,12 @@ executables share one kind and rights set. Only `CLIENT_BUDGET` was open.
 fails the rule's *first* test rather than the trace depth's second. It sizes
 `[Option<LiveChild>; CLIENT_BUDGET]`, a fixed array in type position on a 16 KiB
 `COMPONENT_DEFAULT_STACK_BYTES` stack — the `MAX_PARTICIPANTS` failure exactly —
-and `boot-contracts` publishes only `MAX_SPAWN_TEMPLATES = 48`, six times the
-declared 8, so a ceiling build would grow the array sixfold. It is additionally
-wire-visible: `valid_request` at `:222` rejects any request whose
+and the ceiling that actually bounds this field is `MAX_SPAWN_BUDGET = 32`
+(`boot-contracts/src/generation.rs:136`, enforced at `:1628` and in
+`build-generation.py:3426`), four times the declared 8, so a ceiling build would
+quadruple the array. `MAX_SPAWN_TEMPLATES = 48` is *not* that ceiling — it
+bounds a record count, not a budget value (`check-generation.py:287`). It is
+additionally wire-visible: `valid_request` at `:222` rejects any request whose
 `client_budget` differs, so the constant is a protocol term shared with clients,
 not a private bound. Unlike `traceDepth` no gate asserts it (`scripts/check/`
 contains zero references), so the *gate* is not what blocks it here.
