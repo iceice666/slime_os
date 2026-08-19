@@ -31,6 +31,7 @@ const MAX_OWN_ROWS: usize = 8;
 /// Byte offsets into a participant record. Named from the contract's own
 /// decoder (`FabricGraph::participant`) rather than re-derived, and used only to
 /// read two fields out of a record this component received whole.
+const COMPONENT_IDENTITY: core::ops::Range<usize> = 32..64;
 const ROUTE_INDEX: core::ops::Range<usize> = 64..68;
 const HISTORY_DEPTH: core::ops::Range<usize> = 104..108;
 
@@ -62,4 +63,37 @@ pub fn ring_slots(route_identity: &[u8; 32]) -> Option<usize> {
     let index = slime_rt::graph_route_index(route_identity).ok()?;
     let depth = history_depth(index as u32)?;
     Some(depth.max(slime_proto::fabric_ring::MIN_RING_SLOTS))
+}
+
+/// The KEEP_LAST depth declared for `component` on `route_index`.
+///
+/// For the graph's declared holder, which reads every row: the four
+/// participants above ask about themselves and can use `history_depth`, but the
+/// fabric provisions a ring *for* each participant and so must ask about
+/// someone else. A non-holder calling this sees only its own rows, so it can
+/// answer only about itself -- which is the scoping, not a limitation of this
+/// function.
+pub fn history_depth_of(component_identity: &[u8; 32], route_index: u32) -> Option<usize> {
+    let mut rows = [0u8; MAX_OWN_ROWS * PARTICIPANT_ENTRY_BYTES];
+    let mut cursor = 0usize;
+    loop {
+        let count = slime_rt::graph_read(cursor, &mut rows).ok()?;
+        if count == 0 {
+            return None;
+        }
+        for row in 0..count {
+            let bytes = &rows[row * PARTICIPANT_ENTRY_BYTES..(row + 1) * PARTICIPANT_ENTRY_BYTES];
+            if &bytes[COMPONENT_IDENTITY] != component_identity.as_slice() {
+                continue;
+            }
+            let declared = u32::from_le_bytes(bytes[ROUTE_INDEX].try_into().ok()?);
+            if declared == route_index {
+                return Some(u32::from_le_bytes(bytes[HISTORY_DEPTH].try_into().ok()?) as usize);
+            }
+        }
+        cursor += count;
+        if count < MAX_OWN_ROWS {
+            return None;
+        }
+    }
 }

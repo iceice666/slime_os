@@ -1379,6 +1379,20 @@ impl Broker {
 /// The graph declares feedback history per authenticated participant/route.
 /// Operation clients are in the same order as the control table and broker
 /// slots, so lookup stays keyed to the authority index rather than a message.
+/// The KEEP_LAST feedback depth declared for one operation client.
+///
+/// **Still read from the generated table, and this is the one site that cannot
+/// migrate to `GRAPH_READ` today.** It asks about a *client*, not about the
+/// component running it, so it needs the holder-scoped read -- but this module
+/// is compiled into two binaries: `fabric-service`, which is the graph's
+/// declared holder, and `fabric-op-worker`, which is not. On `sel4-boot` the
+/// worker runs this path as a non-holder and would read only its own rows, so a
+/// migration would resolve nothing exactly where C8.10 needs it.
+///
+/// The module cannot branch on which binary hosts it either: nothing in scope
+/// distinguishes them. Closing this needs either the worker declared as a holder
+/// of the routes it brokers, or a read scoped to "components on routes I
+/// broker" -- both graph-model questions rather than call-site changes.
 fn declared_history_depth(client: usize) -> u32 {
     let component = match client {
         0 => b"fabric-op-client".as_slice(),

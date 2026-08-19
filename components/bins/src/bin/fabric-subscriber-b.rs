@@ -94,9 +94,6 @@ struct RouteRing {
     slot: Option<u32>,
 }
 
-/// This component's name, as the generation's participant table spells it.
-const COMPONENT: &[u8] = b"fabric-subscriber-b";
-
 /// This participant's declared ring depth for `route`, as the generation
 /// resolved it.
 ///
@@ -122,26 +119,17 @@ fn ring_slots(route: &str) -> usize {
             CONTRACT_KIND_STREAM,
         )
     };
-    ring_slots_checked(route, &identity)
+    ring_slots_checked(&identity)
 }
 
-/// The root's answer, cross-checked against the table this migration replaces
-/// while both exist. Agreement between the generation's own resource and the
-/// compiled copy is the evidence the read is right; the check goes away with
-/// the table (B70/CP2).
-fn ring_slots_checked(route: &str, identity: &[u8; 32]) -> usize {
-    let resolved = slime_components::fabric_self_view::ring_slots(identity)
-        .unwrap_or_else(|| fail(b"route declares no history depth"));
-    let compiled = FABRIC_HISTORY_DEPTHS
-        .iter()
-        .find(|(name, entry, _)| *name == COMPONENT && *entry == route)
-        .map(|(_, _, depth)| *depth as usize)
+/// This component's declared KEEP_LAST depth, read from the graph.
+///
+/// Carried a cross-check against `FABRIC_HISTORY_DEPTHS` while both statements
+/// of the depth existed; the table is gone, so agreement is no longer something
+/// to assert -- there is one source (B70/CP2).
+fn ring_slots_checked(identity: &[u8; 32]) -> usize {
+    slime_components::fabric_self_view::ring_slots(identity)
         .unwrap_or_else(|| fail(b"route declares no history depth"))
-        .max(slime_proto::fabric_ring::MIN_RING_SLOTS);
-    if resolved != compiled {
-        fail(b"graph read ring depth disagrees with the compiled table");
-    }
-    resolved
 }
 
 fn fail(reason: &[u8]) -> ! {

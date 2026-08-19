@@ -826,7 +826,7 @@ fn provision_edge(
     let qos = declared_qos(component, ROUTE_NAMES[route_index]);
     let ring_slots = match direction {
         DIRECTION_PUBLISH => qos.history_depth as usize,
-        DIRECTION_SUBSCRIBE => declared_history_depth(component, ROUTE_NAMES[route_index]),
+        DIRECTION_SUBSCRIBE => declared_history_depth(component, route),
         _ => fail(b"stream route declares a non-stream direction"),
     };
     let (ready_slot, credit_slot) =
@@ -2044,14 +2044,20 @@ fn declared_edges(component: &[u8]) -> usize {
 }
 
 /// The KEEP_LAST depth the generation declared for one participant on one
-/// route. The graph validated it against the per-graph history ceiling before
-/// launch, so a missing entry is a build-time inconsistency rather than a
-/// runtime condition.
-fn declared_history_depth(component: &[u8], route: &str) -> usize {
-    FABRIC_HISTORY_DEPTHS
-        .iter()
-        .find(|(name, entry_route, _)| *name == component && *entry_route == route)
-        .map(|(_, _, depth)| *depth as usize)
+/// route, read from the graph rather than from a generated table (B70/CP2).
+///
+/// This asks about *another* component -- the fabric provisions each
+/// participant's ring -- which only the graph's declared holder may do, and this
+/// component is that holder wherever this runs. The graph validated the depth
+/// against the per-graph history ceiling before launch, so a missing row is a
+/// composition inconsistency rather than a runtime condition.
+fn declared_history_depth(component: &[u8], route_identity: &[u8; 32]) -> usize {
+    let index = slime_rt::graph_route_index(route_identity)
+        .unwrap_or_else(|_| fail(b"route is not declared by this graph"));
+    let identity = boot_contracts::fabric_graph::component_identity(
+        core::str::from_utf8(component).unwrap_or_else(|_| fail(b"component name is not utf-8")),
+    );
+    slime_components::fabric_self_view::history_depth_of(&identity, index as u32)
         .unwrap_or_else(|| fail(b"participant declares no history depth"))
 }
 

@@ -99,3 +99,40 @@ the split -- `rows=6` for the holder, `rows=1` for the publisher.
 - Predecessor: [`devlog/2026-08-19-fabric-graph-read/`](../2026-08-19-fabric-graph-read/index.md)
 - Decision record: [`devlog/2026-08-19-fabric-graph-read-options/`](../2026-08-19-fabric-graph-read-options/index.md)
 - Related roadmap item: [B70](../../roadmap/00-backlog.md), [CP2](../../roadmap/10-component-platform.md)
+
+## Corrections
+
+**2026-08-19, same day — the cross-checks are deleted, and one site cannot
+migrate.** The follow-up above records the generated-table count as unchanged
+because each migrated participant held both paths. Those cross-checks are now
+gone: the four participants read only the root's answer, and
+`FABRIC_HISTORY_DEPTHS` drops from **6 live uses to 1**.
+
+`fabric-service`'s `declared_history_depth` migrated too, and it needed the
+*holder*-scoped read rather than the self view — the fabric provisions a ring
+*for* each participant, so it asks about another component. The row's
+`qos.historyDepth` is the same number the table carried: `depth_rows` in
+`build-generation.py` is generated from the same `participants` list the resource
+encodes, so this is one source replacing a copy of itself.
+
+**`operation_broker` cannot migrate, and the reason is structural.** It reads a
+*client's* depth, so it needs holder scope, but the module is compiled into two
+binaries: `fabric-service`, which is the graph's declared holder, and
+`fabric-op-worker`, which is not. On `sel4-boot` the worker runs that path as a
+non-holder and would read only its own rows, resolving nothing exactly where
+C8.10 needs it. Nothing in scope lets the module branch on which binary hosts it
+either. This was checked against both manifests before attempting it —
+`fabricComponent` is `fabric-service` on `sel4-operation` and `sel4-boot` alike
+— rather than discovered by a failing boot. The site now carries that
+explanation.
+
+Closing it needs a graph-model change: either the worker declared as a holder of
+the routes it brokers, or a read scoped to "components on routes I broker".
+That is the same shape as the `call_broker`/`operation_broker` question the
+follow-up above already flags as unexamined, and it is now examined: the answer
+is that a non-holder read is *not* sufficient for them.
+
+Deleting the cross-checks also made `COMPONENT` dead in three of the four
+participants — it existed only to key the compiled lookup. Clippy caught it,
+which is the guard working: the constant named a component's own identity for a
+table that no longer exists.
