@@ -293,16 +293,36 @@ the names resolve against one manifest; `matrix_broker` also covers
 `sel4-matrix-unsatisfiable`, which B62 reduced to a one-field QoS override of the
 same fixture.
 
-These three close **partially**, and the record should say so. The names are
-manifest-prefixed — `matrix-telemetry-ingress` and `visibility-telemetry-ingress`
-are one graph fact under two spellings — so each broker still knows one
-manifest's vocabulary, which is the coupling `ipc.rs`'s `kind:` rationale warns
-about. What changed is the *kind* of coupling: reconstructing the builder's
-slot-numbering rule from two generated tables became naming an edge, which fails
-loudly rather than silently and, unlike `FABRIC_SUPERVISION`, needs no generated
-table at all — the clause B70's exit condition tests. Making them portable enough
-for an out-of-tree broker needs the route grants renamed to their graph fact
-(`telemetry-ingress`), the same shape as the supervision rename above.
+**Progress (2026-08-19, route grant names):** the partial these three left is
+closed. They first migrated to *manifest-prefixed* names —
+`matrix-telemetry-ingress` and `visibility-telemetry-ingress` naming one role
+under two vocabularies — which left each broker readable only against the fixture
+it was written for, the coupling `ipc.rs`'s `kind:` rationale warns about. 21
+route grants are now renamed to the role they serve: both spellings above are
+`telemetry-ingress`, `matrix-diag-egress` and `visibility-diagnostics-egress` are
+both `diagnostics-egress`, and so on across `sel4-matrix.zti` (12) and
+`sel4-visibility.zti` (9). Neither fixture now declares any
+manifest-prefixed grant at all.
+
+The mapping came from each route's declared participants and direction, not from
+the old spelling: the route a grant serves is **not** recoverable from the grant
+record, since `matrix-alt-ingress` and `matrix-diag-ingress` are both
+`fabric-publisher-b -> fabric-service` with identical rights and `fabricGraph`
+routes carry no reference back to a grant.
+
+A name denotes a *role*, not an endpoint pair, and that is what makes it useful:
+`telemetry-proxy-upstream` reaches `fabric-proxy` on the matrix plane and
+`fabric-intruder` on the visibility plane, because the two interpose different
+components deliberately. A broker needs the hop it relays through, not which
+component the composition placed there — precisely what an out-of-tree component
+could not know.
+
+Wider blast radius than the minted rename, so verified differently: grants are
+encoded sorted by name and a binding stores the grant's *index*, so a rename
+permutes both. The invariant checked was the resolved authority — for all 28
+manifests the multiset of `(slot, source, target, rights, transferable, flags,
+kind)` over every binding, name excluded, is unchanged, and only the two edited
+manifests moved `generation.bin` at all.
 
 **2** uses remain, both the `.iter()` teardown walks
 (`fabric-service.rs:392,536`). These do need the holder set's *membership*, and

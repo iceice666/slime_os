@@ -829,8 +829,17 @@ fn send_message(slot: u32, message: &[u8; MAX_MSG]) {
 /// sit above the controls, with the supervision handles in between — out of two
 /// generated tables. Each is a declared grant with a name, so the name is the
 /// whole answer. Checked equal to the derived numbers before the change:
-/// `matrix-telemetry-ingress` is 16 under `sel4-matrix.zti`, which is what
+/// `telemetry-ingress` is 16 under `sel4-matrix.zti`, which is what
 /// `FIRST_ROUTE_SLOT` computed.
+///
+/// The names are the *route's*, not the manifest's — they were
+/// `matrix-telemetry-ingress` and so on, naming the same role
+/// `sel4-visibility.zti` spelled `visibility-telemetry-ingress`. A name now
+/// denotes a role in the graph — the telemetry route's ingress, its interposed
+/// upstream hop — spelled identically by both fixtures. The role, not the
+/// endpoint pair: this plane's `telemetry-proxy-upstream` reaches
+/// `fabric-proxy` where the visibility plane's reaches `fabric-intruder`, since
+/// the two interpose different components on purpose.
 ///
 /// `matrix_broker` is only reached under `bootAction = "matrix"`, so these names
 /// resolve against `sel4-matrix.zti` alone — and against its
@@ -851,9 +860,9 @@ const PROXY_UPSTREAM_ACK: usize = 2;
 /// dispatch loop runs.
 fn resolve_route_slots() {
     let slots = [
-        route_slot(b"matrix-telemetry-ingress"),
-        route_slot(b"matrix-proxy-upstream"),
-        route_slot(b"matrix-proxy-upstream-ack"),
+        route_slot(b"telemetry-ingress"),
+        route_slot(b"telemetry-proxy-upstream"),
+        route_slot(b"telemetry-proxy-upstream-ack"),
     ];
     // SAFETY: single-threaded, and called once before any read below.
     unsafe { *core::ptr::addr_of_mut!(ROUTE_SLOTS) = slots };

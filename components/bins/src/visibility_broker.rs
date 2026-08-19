@@ -59,32 +59,44 @@ const SAMPLE_SEQUENCE: u64 = 1;
 /// slots is an ordinary declared grant with a name, so asking for the name
 /// replaces all of that with the one fact the broker actually needs. Verified
 /// equal to the derived numbers on this plane before the change, rather than
-/// assumed: `visibility-telemetry-ingress` is 12 under `sel4-visibility.zti`,
-/// which is what `FIRST_ROUTE_SLOT` computed.
+/// assumed: `telemetry-ingress` is 12 under `sel4-visibility.zti`, which is what
+/// `FIRST_ROUTE_SLOT` computed.
 ///
-/// `visibility_broker` is only reached under `bootAction = "visibility"`
-/// (`fabric-service.rs`'s dispatch), so these names are resolved against exactly
-/// one manifest and cannot be absent where this code runs.
+/// The names are the *route's*, not the manifest's. They were
+/// `visibility-telemetry-ingress` and so on, which named the same role
+/// `sel4-matrix.zti` spelled `matrix-telemetry-ingress` — one fact under two
+/// vocabularies, so a broker could only be read against the fixture it was
+/// written for. What a name now denotes is a role in the graph: the telemetry
+/// route's ingress, its interposed upstream hop, the diagnostics egress. Both
+/// fixtures spell each role identically.
+///
+/// The role, not the endpoint pair. `telemetry-proxy-upstream` is
+/// `fabric-service -> fabric-intruder` here and `fabric-service -> fabric-proxy`
+/// under `sel4-matrix.zti`, because the two planes deliberately interpose
+/// different components; `diagnostics-egress` likewise reaches a different
+/// subscriber. That is the point rather than a gap — the broker needs the hop it
+/// relays through, not which component the composition put there, which is
+/// exactly what a component built outside this repo could not have known.
 fn telemetry_ingress_slot() -> u32 {
-    route_slot(b"visibility-telemetry-ingress")
+    route_slot(b"telemetry-ingress")
 }
 fn proxy_upstream_slot() -> u32 {
-    route_slot(b"visibility-proxy-upstream")
+    route_slot(b"telemetry-proxy-upstream")
 }
 fn proxy_upstream_ack_slot() -> u32 {
-    route_slot(b"visibility-proxy-upstream-ack")
+    route_slot(b"telemetry-proxy-upstream-ack")
 }
 fn proxy_event_slot() -> u32 {
-    route_slot(b"visibility-proxy-event")
+    route_slot(b"telemetry-proxy-event")
 }
 fn diagnostics_ingress_slot() -> u32 {
-    route_slot(b"visibility-diagnostics-ingress")
+    route_slot(b"diagnostics-ingress")
 }
 fn diagnostics_egress_slot() -> u32 {
-    route_slot(b"visibility-diagnostics-egress")
+    route_slot(b"diagnostics-egress")
 }
 fn diagnostics_ack_slot() -> u32 {
-    route_slot(b"visibility-diagnostics-ack")
+    route_slot(b"diagnostics-ack")
 }
 
 /// One declared route edge, by grant name. Absence is a composition defect on

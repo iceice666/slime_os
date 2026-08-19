@@ -270,7 +270,7 @@
       transferable = false;
     };
     {
-      name = "visibility-telemetry-ingress";
+      name = "telemetry-ingress";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -281,7 +281,7 @@
       transferable = false;
     };
     {
-      name = "visibility-proxy-upstream";
+      name = "telemetry-proxy-upstream";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -292,7 +292,7 @@
       transferable = false;
     };
     {
-      name = "visibility-proxy-upstream-ack";
+      name = "telemetry-proxy-upstream-ack";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -303,7 +303,7 @@
       transferable = false;
     };
     {
-      name = "visibility-proxy-downstream";
+      name = "telemetry-proxy-downstream";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -314,7 +314,7 @@
       transferable = false;
     };
     {
-      name = "visibility-proxy-downstream-ack";
+      name = "telemetry-proxy-downstream-ack";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -325,7 +325,7 @@
       transferable = false;
     };
     {
-      name = "visibility-proxy-event";
+      name = "telemetry-proxy-event";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -336,7 +336,7 @@
       transferable = false;
     };
     {
-      name = "visibility-diagnostics-ingress";
+      name = "diagnostics-ingress";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -347,7 +347,7 @@
       transferable = false;
     };
     {
-      name = "visibility-diagnostics-egress";
+      name = "diagnostics-egress";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -358,7 +358,7 @@
       transferable = false;
     };
     {
-      name = "visibility-diagnostics-ack";
+      name = "diagnostics-ack";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -508,31 +508,31 @@
           slot = 6;
         };
         {
-          grant = "visibility-telemetry-ingress";
+          grant = "telemetry-ingress";
           slot = 12;
         };
         {
-          grant = "visibility-proxy-upstream";
+          grant = "telemetry-proxy-upstream";
           slot = 13;
         };
         {
-          grant = "visibility-proxy-upstream-ack";
+          grant = "telemetry-proxy-upstream-ack";
           slot = 14;
         };
         {
-          grant = "visibility-proxy-event";
+          grant = "telemetry-proxy-event";
           slot = 15;
         };
         {
-          grant = "visibility-diagnostics-ingress";
+          grant = "diagnostics-ingress";
           slot = 16;
         };
         {
-          grant = "visibility-diagnostics-egress";
+          grant = "diagnostics-egress";
           slot = 17;
         };
         {
-          grant = "visibility-diagnostics-ack";
+          grant = "diagnostics-ack";
           slot = 18;
         };
       ];
@@ -552,7 +552,7 @@
           slot = 0;
         };
         {
-          grant = "visibility-telemetry-ingress";
+          grant = "telemetry-ingress";
           slot = 1;
         };
       ];
@@ -572,7 +572,7 @@
           slot = 0;
         };
         {
-          grant = "visibility-diagnostics-ingress";
+          grant = "diagnostics-ingress";
           slot = 2;
         };
       ];
@@ -592,15 +592,15 @@
           slot = 0;
         };
         {
-          grant = "visibility-proxy-downstream";
+          grant = "telemetry-proxy-downstream";
           slot = 1;
         };
         {
-          grant = "visibility-proxy-downstream-ack";
+          grant = "telemetry-proxy-downstream-ack";
           slot = 2;
         };
         {
-          grant = "visibility-proxy-event";
+          grant = "telemetry-proxy-event";
           slot = 3;
         };
       ];
@@ -620,11 +620,11 @@
           slot = 0;
         };
         {
-          grant = "visibility-diagnostics-egress";
+          grant = "diagnostics-egress";
           slot = 1;
         };
         {
-          grant = "visibility-diagnostics-ack";
+          grant = "diagnostics-ack";
           slot = 2;
         };
       ];
@@ -644,19 +644,19 @@
           slot = 0;
         };
         {
-          grant = "visibility-proxy-upstream";
+          grant = "telemetry-proxy-upstream";
           slot = 1;
         };
         {
-          grant = "visibility-proxy-upstream-ack";
+          grant = "telemetry-proxy-upstream-ack";
           slot = 2;
         };
         {
-          grant = "visibility-proxy-downstream";
+          grant = "telemetry-proxy-downstream";
           slot = 3;
         };
         {
-          grant = "visibility-proxy-downstream-ack";
+          grant = "telemetry-proxy-downstream-ack";
           slot = 4;
         };
       ];

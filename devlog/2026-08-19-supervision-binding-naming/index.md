@@ -231,3 +231,45 @@ to the other three.
 Verified: `just sel4_visibility_check`, `just sel4_matrix_check`, `just
 sel4_qos_check`, `just sel4_stream_check`, `just sel4_fabric_aggregate_check`,
 `just fmt_check_all`, `just lint_all` all pass.
+
+**2026-08-19 — the route grants are renamed too, closing the partial.** The
+correction above recorded the three `.len()` migrations as *partially* closed:
+they resolved by name rather than by reconstructing the builder's slot-numbering
+rule, but the names were manifest-prefixed, so each broker still knew one
+fixture's vocabulary. That deferral is now done, on the same rule the supervision
+rename used — name the thing for the graph fact, not for the composition.
+
+21 route grants renamed across `sel4-matrix.zti` (12) and `sel4-visibility.zti`
+(9): `matrix-telemetry-ingress` and `visibility-telemetry-ingress` both become
+`telemetry-ingress`, `matrix-diag-egress` and `visibility-diagnostics-egress`
+both become `diagnostics-egress`, and so on. Neither fixture declares any
+manifest-prefixed grant afterwards — the four `*-proxy-downstream*` grants were
+caught by that sweep rather than by the broker sites, since no component names
+them; leaving them would have left one fixture speaking two vocabularies. The route each grant serves is not
+recoverable from the grant record — `matrix-alt-ingress` and `matrix-diag-ingress`
+are both `fabric-publisher-b -> fabric-service` with identical rights, and the
+`fabricGraph` routes carry no reference back to a grant — so the mapping was
+taken from each route's declared participants and direction rather than from the
+old name's spelling.
+
+**What a name now denotes is a role, not an endpoint pair**, and the difference
+is worth stating because it is what makes the change useful.
+`telemetry-proxy-upstream` is `fabric-service -> fabric-proxy` under
+`sel4-matrix.zti` and `fabric-service -> fabric-intruder` under
+`sel4-visibility.zti`; `diagnostics-egress` reaches `fabric-observer` in one and
+`fabric-subscriber-b` in the other. The two planes interpose different components
+on purpose. A broker needs the hop it relays through, not which component the
+composition put at the far end — and *that* is the fact an out-of-tree component
+could not have known, so naming the role is what makes one source readable
+against either fixture.
+
+Verified the same way as the minted rename, with one addition. Grants are encoded
+sorted by name (`build-generation.py:3354`) and a binding stores the grant's
+*index* into that table, so renaming permutes both — a wider blast radius than the
+minted table, where holder+name lookup was index-independent. So the invariant
+checked was not the ordering but the resolved authority: for all 28 manifests, the
+multiset of `(slot, source, target, rights, transferable, flags, kind)` over every
+binding, with the grant's name excluded, is byte-identical before and after. Only
+`sel4-matrix` and `sel4-visibility` changed `generation.bin`; the other 26 are
+unchanged. `just sel4_matrix_check`, `just sel4_visibility_check`, `just
+contracts_check`, `just fmt_check_all` and `just lint_all` pass.
