@@ -11,7 +11,6 @@ use slime_rt::{
     CapabilityDisposition, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
 };
 
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 const FACTORY_SLOT: u32 = 1;
 
 /// The fabric, as this participant's loan receiver.

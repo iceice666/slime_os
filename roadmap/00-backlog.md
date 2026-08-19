@@ -459,6 +459,37 @@ names: `ParticipantEntry` carries `component_identity`/`route_index`, while
 already call `route_identity()` from that same module, so the fold is available to
 them; a consumer would ask by identity and stop holding the name at all.
 
+**Progress (2026-08-19, site-closure census):** Counting *uses* of a generated
+symbol is not the same as counting `include!` sites it would close: a site only
+disappears when the file stops referencing **every** profile symbol. A per-file
+census over the 14 remaining sites, against the union of 46 symbols rendered
+across every per-plane profile, partitions them as:
+
+- **1 dead** — `fabric_call_scenario.rs` referenced no profile symbol at all;
+  every non-local name in it resolves to a `use` import. Deleted here, so the
+  third clause goes from 17 sites to 13.
+- **5 boot-action only** — `console.rs`, `dango.rs`, `fabric-intruder.rs`,
+  `fabric_boot.rs`, `fabric_matrix.rs`. A runtime boot-action query would close
+  exactly these five.
+- **8 table readers** — `fabric-service.rs` (22 symbols), `operation_broker.rs`
+  (7), `call_broker.rs` (5), `init.rs` (4), `fabric-publisher.rs` (4), the two
+  subscribers and `fabric-publisher-b.rs` (3 each). A boot-action query closes
+  none of these; they need the table work B70's Proposed fix actually names.
+
+This is the measurement that sizes the `GENERATION_BOOT_ACTION` syscall
+question, and it argues against doing it first: assigning a label in a frozen
+numeric table is the least reversible change available, and it would close 5 of
+13 sites while leaving the 8 hardest untouched. `slime-root/src/ipc.rs:1030-1040`
+confirms the mechanism is real — `40` sits in the routes-nowhere list with a
+comment recording that 37 and 38 each had to fail there first — so the path is
+known and stays available once the table work has shrunk the remainder.
+
+One supporting claim was checked and is weaker than recorded: `console` is a
+product-graph service, but its two branches test `== "channel"` and `== "loan"`
+while `sel4.zti` declares `bootAction = "product"`, so both are false on the
+product boot. They are test-plane scaffolding inside a shipping component, not
+product behavior branching on the manifest.
+
 **Progress (2026-08-19, two dead `include!` sites deleted):** `sample-lender.rs`
 and `sample-receiver.rs` — both named in the problem statement's list of 17 files
 — `include!`d the fabric profile at module scope and referenced **zero** of its
