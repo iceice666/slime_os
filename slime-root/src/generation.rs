@@ -6,7 +6,7 @@
 //! never inferred to be instances.
 
 use boot_contracts::component_image::{self, ComponentTargetError};
-use boot_contracts::fabric_graph::{self, FabricGraph};
+use boot_contracts::fabric_graph::{self, FabricGraph, MAX_INTERPOSITION_HOPS};
 use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
@@ -375,6 +375,64 @@ fn participants_are_declared(
     Ok(())
 }
 
+/// The component names the graph's interposition hops resolve to, in chain order.
+///
+/// B70. The two fabric brokers each carried an `assert_declared_chain` that
+/// compared a build-time table against a hard-coded proxy name, which is
+/// exactly the compile-time coupling B70 removes — and which could only ever
+/// check the table against itself, never against the graph the root admitted.
+///
+/// Resolved here because this is the only place both facts are in hand. A hop
+/// is identified in the wire graph by `component_identity`, a hash, and the
+/// preimage exists only as an instance name in the generation; the same
+/// reverse map [`participants_are_declared`] already does for its membership
+/// check is what turns one into the other. A hop that resolves to no declared
+/// instance cannot reach here — admission refuses that graph — so an
+/// unresolved entry means the graph decoded differently than it validated, and
+/// is reported as `None` rather than skipped.
+pub fn interposition_hop_names<'a>(
+    generation: &Generation<'a>,
+) -> [Option<&'a str>; MAX_INTERPOSITION_HOPS] {
+    let mut names = [None; MAX_ADMITTED_INSTANCES];
+    let declared = generation.instance_count().min(MAX_ADMITTED_INSTANCES);
+    for (slot, name) in names.iter_mut().enumerate().take(declared) {
+        *name = generation.instance(slot).ok().map(|instance| instance.name);
+    }
+    let Some(Ok(graph)) = fabric_graph_object(generation) else {
+        return [None; MAX_INTERPOSITION_HOPS];
+    };
+    resolve_interposition_hops(&names[..declared], &graph)
+}
+
+/// The name half of [`interposition_hop_names`], over the component names
+/// rather than the generation that carries them.
+///
+/// Split for the same reason [`participants_are_declared`] is: building a
+/// whole `Generation` by hand would make the fixture the thing under test.
+/// This is the half that can be wrong — a hop resolving to the wrong name, or
+/// to none — and the plane gates now assert on its output.
+fn resolve_interposition_hops<'a>(
+    names: &[Option<&'a str>],
+    graph: &FabricGraph<'_>,
+) -> [Option<&'a str>; MAX_INTERPOSITION_HOPS] {
+    let mut hops = [None; MAX_INTERPOSITION_HOPS];
+    for (index, slot) in hops
+        .iter_mut()
+        .enumerate()
+        .take(graph.interposition_count())
+    {
+        let Some(hop) = graph.interposition(index) else {
+            continue;
+        };
+        *slot = names
+            .iter()
+            .flatten()
+            .find(|name| fabric_graph::component_identity(name) == hop.component_identity)
+            .copied();
+    }
+    hops
+}
+
 /// The shape a declared fabric graph fixes. See [`Admission::fabric_schemas`].
 #[derive(Clone, Copy)]
 struct FabricShape {
@@ -710,7 +768,7 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
 mod tests {
     use super::{
         Authority, FabricGraph, GenerationError, PayloadFormat, RIGHT_RECV, RIGHT_SEND,
-        fabric_graph_is_satisfiable, participants_are_declared,
+        fabric_graph_is_satisfiable, participants_are_declared, resolve_interposition_hops,
     };
     use boot_contracts::component_image::wire;
     use boot_contracts::generation::{RIGHT_TRANSFER, ResourceQuota};
@@ -1027,6 +1085,76 @@ mod tests {
     /// retries, in_flight_calls, in_flight_operations, buffer_pages, buffers,
     /// mappings, loans, capability_slots.
     const SATISFIABLE: [u32; 19] = [1, 4, 1, 1, 0, 0, 64, 8, 4, 4, 2, 2, 0, 0, 8, 2, 4, 4, 16];
+
+    /// [`qos_graph`] with one interposition hop naming `hop`, appended.
+    ///
+    /// The hop is left off every participant's chain (`interposition_head`
+    /// stays `INTERPOSITION_NONE`), which `validate_interposition` allows: its
+    /// per-hop arm requires only a non-zero identity and an in-range
+    /// `next_hop`, and the chain walk never reaches an unreferenced entry. That
+    /// keeps the fixture to the one fact under test — the identity-to-name
+    /// resolution — instead of also re-encoding a participant's chain head.
+    fn hop_graph(hop: &str) -> alloc::vec::Vec<u8> {
+        use boot_contracts::fabric_graph::{
+            INTERPOSITION_ENTRY_BYTES, INTERPOSITION_NONE, RELIABILITY_RELIABLE,
+        };
+        let mut bytes = qos_graph(RELIABILITY_RELIABLE as u8, RELIABILITY_RELIABLE as u8);
+        let at = bytes.len();
+        bytes.resize(at + INTERPOSITION_ENTRY_BYTES, 0);
+        bytes[at..at + 32].copy_from_slice(&boot_contracts::fabric_graph::component_identity(hop));
+        bytes[at + 32..at + 36].copy_from_slice(&INTERPOSITION_NONE.to_le_bytes());
+        bytes[40..44].copy_from_slice(&1u32.to_le_bytes()); // interposition hops
+        let total = bytes.len() as u32;
+        bytes[24..28].copy_from_slice(&total.to_le_bytes());
+        bytes
+    }
+
+    /// B70: the root resolves a declared hop's identity back to the generation
+    /// instance name, so a gate can assert *which* component mediates a route.
+    ///
+    /// The property that failed before this existed: both fabric brokers
+    /// checked their build-time interposition table against a proxy name
+    /// compiled into the same crate, so the two operands regenerated together
+    /// and the check could only ever confirm the table agreed with itself.
+    /// Substituting another component on the chain admitted cleanly and left
+    /// the gate green.
+    #[test]
+    fn an_interposition_hop_resolves_to_the_declared_component_name() {
+        let bytes = hop_graph(QOS_SUBSCRIBER);
+        let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
+        let declared = [
+            Some(QOS_FABRIC),
+            Some(QOS_PUBLISHER),
+            Some(QOS_SUBSCRIBER),
+            Some("init"),
+        ];
+
+        // The hop names a declared component: resolved, and to that exact name.
+        let hops = resolve_interposition_hops(&declared, &graph);
+        assert_eq!(hops[0], Some(QOS_SUBSCRIBER));
+
+        // Only the declared count is filled. A gate reads these in order, so a
+        // stale entry past the count would name a hop the graph does not have.
+        assert!(hops[1..].iter().all(Option::is_none));
+
+        // The discriminating half. A hop naming a *different* component must
+        // not resolve to the one the gate expects — this is the substitution
+        // that used to pass, and the whole reason the resolution moved to the
+        // root.
+        let other = hop_graph(QOS_PUBLISHER);
+        let other = FabricGraph::decode(&other).expect("well-formed graph");
+        assert_eq!(
+            resolve_interposition_hops(&declared, &other)[0],
+            Some(QOS_PUBLISHER)
+        );
+
+        // A hop no declared name hashes to resolves to `None` rather than to a
+        // neighbouring entry. Admission refuses such a graph, so reaching this
+        // means the graph decoded differently than it validated; reporting a
+        // wrong name there would be worse than reporting none.
+        let undeclared = [Some(QOS_FABRIC), Some(QOS_PUBLISHER), Some("init")];
+        assert_eq!(resolve_interposition_hops(&undeclared, &graph)[0], None);
+    }
 
     /// C8.3 (P5.4.10): a graph may only name participants the generation
     /// declares as components.

@@ -82,6 +82,13 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # surviving admission.
             r"SLIME_ROOT fabric graph=admitted schemas=2 routes=3 participants=7 "
             r"interpositions=1",
+            # B70. `interpositions=1` counts the chain; this names it. The
+            # broker used to assert the proxy's identity against a table
+            # compiled into itself, which could not fail if the generation
+            # changed under it. The root resolves the hop identity back to a
+            # declared instance name, so substituting any other component on
+            # the chain fails here.
+            r"SLIME_ROOT fabric interposition hop=fabric-proxy",
             r"\[init\] matrix control channels minted",
             r"\[init\] matrix participants spawned",
             r"\[init\] matrix fabric spawned",

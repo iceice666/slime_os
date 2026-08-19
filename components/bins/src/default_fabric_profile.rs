@@ -51,10 +51,6 @@ pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[
     (b"fabric-op-client", "navigation", 1),
     (b"fabric-op-server", "navigation", 1),
 ];
-pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'static [u8]]);
-pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[
-    (b"fabric-subscriber", "telemetry", &[b"fabric-service" as &[u8]]),
-];
 pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
 pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[
     ("stream", &["telemetry"], 3),

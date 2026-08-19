@@ -47,7 +47,7 @@ use slime_proto::{valid_fabric_request, valid_visibility_request};
 use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::trace_log::{self, Trace};
-use super::{FABRIC_INTERPOSITIONS, FABRIC_TRACE_DEPTH, control_clients, fail, release_received};
+use super::{FABRIC_TRACE_DEPTH, control_clients, fail, release_received};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
@@ -73,7 +73,6 @@ const STATUS_BAD_REQUEST: i32 = -2;
 
 pub(super) fn run() {
     resolve_route_slots();
-    assert_declared_chain();
     let routes = route_identities();
     let graph = GraphView::read(&routes);
     assert_declared_composition(&graph);
@@ -383,17 +382,6 @@ fn component_identity_of(component: &[u8]) -> [u8; 32] {
         fail(b"component name is not utf-8");
     };
     boot_contracts::fabric_graph::component_identity(name)
-}
-
-fn assert_declared_chain() {
-    let declared = FABRIC_INTERPOSITIONS
-        .iter()
-        .any(|(component, route, chain)| {
-            *component == DOWNSTREAM && *route == ROUTE_NAMES[TELEMETRY] && *chain == [PROXY]
-        });
-    if !declared {
-        fail(b"declared interposition chain missing");
-    }
 }
 
 /// The identities the plane's negative arms depend on are present, and each is

@@ -100,8 +100,14 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_trace_plane", "check/check-sel4-trace-plane.py", 6),
     ("sel4_call_plane", "check/check-sel4-call-plane.py", 47),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
-    ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
-    ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 24),
+    # B70: +1 each. Both gates gained "SLIME_ROOT fabric interposition
+    # hop=<name>", the root's own resolution of the declared chain's hop
+    # identity back to a generation instance name. It replaces an
+    # `assert_declared_chain` inside each broker that compared a
+    # build-time table against a constant compiled beside it -- a check
+    # that stayed green when the fixture named a different proxy.
+    ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 26),
+    ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 25),
     # C8.13: three chains -- admission, init's single-threaded spawn order, and
     # the close -- deliberately short. Everything a genuinely concurrent
     # schedule cannot guarantee an order for (per-plane traffic markers,

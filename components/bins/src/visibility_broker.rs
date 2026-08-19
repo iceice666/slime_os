@@ -30,8 +30,7 @@ use slime_proto::{
 use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::{
-    FABRIC_INTERPOSITIONS, FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail,
-    release_received, supervision_slot_for,
+    FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail, release_received, supervision_slot_for,
 };
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -111,7 +110,6 @@ struct Roles {
 }
 
 pub(super) fn run() {
-    assert_declared_chain();
     let routes = route_identities();
     let graph = GraphView::read(&routes);
     let mut clients = control_clients();
@@ -171,17 +169,6 @@ pub(super) fn run() {
     relay_declared_chain(&graph, &routes, &mut roles);
     relay_unrelated_route(&mut roles);
     slime_rt::debug_write(b"[fabric] visibility plane complete\n");
-}
-
-fn assert_declared_chain() {
-    let declared = FABRIC_INTERPOSITIONS
-        .iter()
-        .any(|(component, route, chain)| {
-            *component == DOWNSTREAM && *route == ROUTE_NAMES[TELEMETRY] && *chain == [PROXY]
-        });
-    if !declared {
-        fail(b"declared interposition chain missing");
-    }
 }
 
 /// This plane's declared participant table, read from the root once.

@@ -60,6 +60,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # edge where the generation declared a proxy hop.
             r"SLIME_ROOT fabric graph=admitted schemas=2 routes=2 participants=6 "
             r"interpositions=1",
+            # B70. The count above says a chain exists; this says which
+            # component the generation put on it, resolved by the root from
+            # the admitted graph rather than from a table compiled into the
+            # broker under test.
+            r"SLIME_ROOT fabric interposition hop=fabric-intruder",
             r"SLIME_GRAPH activated instances=\d+",
             r"\[init\] visibility control channels minted",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service ",

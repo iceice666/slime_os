@@ -1847,10 +1847,15 @@ def render_fabric_profile_rust(
     # `slime-root/src/ipc.rs`'s `notification:` axis. `FABRIC_NOTIFICATION_BINDINGS`
     # stays: it is the graph's own table of who binds what, which the fabric
     # validates its wiring against rather than reading a slot out of.
-    interposition_rows = "".join(
-        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, &[{', '.join(f'b{rust_string(hop)} as &[u8]' for hop in row['interposition'])}]),\n"
-        for row in participants if row["interposition"]
-    )
+    # `FABRIC_INTERPOSITIONS` is gone (B70). Its only consumer was an
+    # `assert_declared_chain` in each fabric broker that compared this table
+    # against a proxy name compiled into the same crate -- both operands
+    # regenerated from this manifest together, so the check could only confirm
+    # the table agreed with itself, and substituting another component on the
+    # chain left both plane gates green. The root now resolves each declared
+    # hop's identity back to a generation instance name and states it as
+    # `SLIME_ROOT fabric interposition hop=<name>`, which the plane gates
+    # assert on. See `slime-root/src/generation.rs`'s `interposition_hop_names`.
     planes = {plane["name"]: plane["controls"] for plane in artifact["planes"]}
     controls = lambda name: "".join(
         f"    b{rust_string(row['component'])},\n" for row in planes[name]
@@ -1908,8 +1913,6 @@ pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
 pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[\n{visibility_rows}];
-pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'static [u8]]);
-pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[\n{interposition_rows}];
 pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
 pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[\n{worker_rows}];
 /// The wake sources the generation declares one worker parks on at once, or

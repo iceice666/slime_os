@@ -459,6 +459,43 @@ names: `ParticipantEntry` carries `component_identity`/`route_index`, while
 already call `route_identity()` from that same module, so the fold is available to
 them; a consumer would ask by identity and stop holding the name at all.
 
+**Progress (2026-08-19, `FABRIC_INTERPOSITIONS` deleted):** the interposition
+group closes, and the table it read was **never checking anything**. Both fabric
+brokers carried an `assert_declared_chain` comparing this generated table against
+a `PROXY` constant compiled into the same crate. Both operands regenerate from
+the same manifest together, so the assertion could only confirm the table agreed
+with itself: substituting `fabric-probe` for `fabric-proxy` on the matrix chain
+admitted cleanly and left the gate **green**. The checked-in
+`default_fabric_profile.rs` named `fabric-service` as the hop where every real
+fixture names `fabric-proxy` or `fabric-intruder`, which nothing noticed.
+
+This needed no new mechanism, and the first plan — a graph-interposition syscall
+— was wrong. Root already inverts identity to name: `participants_are_declared`
+hashes every declared instance name to check hop membership, so the preimage is
+in hand at admission. `interposition_hop_names` resolves each declared hop and
+`main.rs` states it as `SLIME_ROOT fabric interposition hop=<name>`; the two
+plane gates assert on that line instead of on a constant inside the component
+they are checking. No `contracts/syscall-abi/v1` change, no new authority scope.
+
+Proven by the perturbation that used to pass. Substituting a *declared* component
+on each chain — so admission still succeeds and the failure cannot be an
+admission refusal wearing a gate's clothes — now fails both gates on exactly the
+new marker: `missing marker: SLIME_ROOT fabric interposition hop=fabric-proxy`
+and `...hop=fabric-intruder`, each after the plane booted to completion. The
+resolution itself is host-tested
+(`an_interposition_hop_resolves_to_the_declared_component_name`, B23 pin 129 to
+130), including the unresolvable arm no gate can reach, and mutating the resolver
+to ignore hop identity fails that test.
+
+With no consumers left the table is **deleted** — the checked-in rows, the
+`FabricInterpositionRow` type, and `build-generation.py`'s generator expression
+and emission. `grep` finds no `FABRIC_INTERPOSITIONS` or `FabricInterpositionRow`
+reference anywhere in `components/` or `scripts/` but the comment recording why.
+The running symbol tallies in the notes above are deliberately not restated here:
+they were measured by a per-symbol methodology this session did not reproduce, and
+a recount belongs with the next migration rather than as an unverified decrement.
+**Evidence:** [`devlog/2026-08-19-interposition-hop-identity/`](../devlog/2026-08-19-interposition-hop-identity/index.md)
+
 One more thing has no mechanism: `ROUTE_NAMES` is **not** generated — it is a
 hand-written `const` in `fabric-service.rs` and `matrix_broker.rs` naming the
 routes each plane carries. It was previously counted among the graph facts; it is

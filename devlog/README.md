@@ -303,3 +303,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-19 | [CAPABILITY GRAPH READ: serving the fabric graph to its declared holder](2026-08-19-fabric-graph-read/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [Self-scoped graph rows, and the first consumers off the generated table](2026-08-19-fabric-graph-self-view/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [Matrix plane reads its visibility policy from the graph](2026-08-19-fabric-graph-matrix-visibility/index.md) | Change | Verified | B70, CP2, B73 |
+| 2026-08-19 | [Interposition hop identity moves from broker constants to root admission](2026-08-19-interposition-hop-identity/index.md) | Defect | Verified | B70 |

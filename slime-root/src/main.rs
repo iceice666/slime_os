@@ -678,6 +678,19 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         admission.fabric_participants,
         admission.fabric_interpositions,
     );
+    // B70. The hop *count* above says a chain exists; it cannot say which
+    // component the generation put on it. Both fabric brokers used to answer
+    // that from a build-time table compiled into the component — a table that
+    // could only agree with itself. The name is a generation fact, so the root
+    // that admitted the generation is what states it, and the plane gates
+    // assert against this line rather than against a constant in the component
+    // they are checking.
+    for name in generation::interposition_hop_names(&generation)
+        .iter()
+        .flatten()
+    {
+        sel4::debug_println!("SLIME_ROOT fabric interposition hop={name}");
+    }
     sel4::debug_println!(
         "SLIME_ROOT authority manifest={:02x?}",
         generation.authority_manifest_identity()

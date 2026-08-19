@@ -831,7 +831,13 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=129
+    # B70: 129 -> 130. `generation` gained
+    # `an_interposition_hop_resolves_to_the_declared_component_name`, covering
+    # the root's resolution of a declared interposition hop's identity back to
+    # a generation instance name. It replaces an `assert_declared_chain` that
+    # lived in each fabric broker and compared a build-time table against a
+    # constant compiled beside it.
+    expected=130
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
