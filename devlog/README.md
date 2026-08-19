@@ -302,3 +302,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-19 | [Fabric-graph read: authority shape and what each option reaches](2026-08-19-fabric-graph-read-options/index.md) | Decision | Verified | B70, CP2 |
 | 2026-08-19 | [CAPABILITY GRAPH READ: serving the fabric graph to its declared holder](2026-08-19-fabric-graph-read/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [Self-scoped graph rows, and the first consumers off the generated table](2026-08-19-fabric-graph-self-view/index.md) | Change | Verified | B70, CP2 |
+| 2026-08-19 | [Matrix plane reads its visibility policy from the graph](2026-08-19-fabric-graph-matrix-visibility/index.md) | Change | Verified | B70, CP2, B73 |
