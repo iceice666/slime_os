@@ -24,6 +24,38 @@ full and says why.
 
 ## Open
 
+### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
+
+Split out of B74, which closed on making the failure *reportable*; this is the
+failure itself. Under CPU oversubscription (24 spinners on 18 cores) the graph
+stops making progress with 7-8 tasks still live: no task exits with a non-zero
+status, 12-13 of 19 participants have exited rather than the full set, and the
+root runs its 32768-iteration dispatcher bound out and stops serving. Measured
+at 6/10 boot-pairs under that load, 0/10 idle and 0/10 at 4 spinners; a fixed
+`-icount shift=3`, which pins the guest clock to instructions retired rather
+than host wall time, took it to 0/10 with load held throughout.
+
+A second signature — a trace divergence in the byte-identical comparison — appears
+under the same conditions and is likely the same underlying race. Two candidate
+mechanisms are recorded but unconfirmed: sink-shared `sequence`/`now_ns`
+stamping in `TraceLog::blank()` (`components/bins/src/fabric_trace_log.rs:233`),
+where `sequence` is a per-instant ordinal that encodes cross-kind arrival order,
+and a `retry_count` drain-vs-tick race in `fabric-service.rs:2296`.
+`send_qos_event`'s check-then-act blocking send is an unverified hypothesis for
+the stall.
+
+Note that the root cannot distinguish this from success on its own: B55's
+full-graph boot declares every required task parked forever as its success
+state, so exhausting the bound with live tasks is legitimate there. Any fix must
+preserve that, which is why B74 moved the verdict to the gate rather than
+inventing a root-side discriminator.
+
+**Exit condition:** the stall is root-caused to a specific race with a
+mutation-backed regression guard, and `just sel4_fabric_aggregate_check` passes
+10 consecutive runs at 24 spinners on 18 cores without an `-icount` pin.
+
+**Evidence:** [`devlog/2026-08-20-b74-aggregate-flake/`](../devlog/2026-08-20-b74-aggregate-flake/index.md)
+
 ### B70 — component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser, blocking out-of-tree components
 
 **Problem:** Slime OS has no component-level specification independent of the
@@ -756,40 +788,6 @@ the same reassurance.
 **Evidence:** [`devlog/2026-08-19-owned-minted-shape-selection/`](../devlog/2026-08-19-owned-minted-shape-selection/index.md)
 
 
-### B74 — the aggregate gate's traffic schedule failed twice in one session on a gate B68 closed as deterministic
-
-`just sel4_fabric_aggregate_check` boots each of two schedules twice over one
-composition and requires byte-identical semantic traces. B68 closed a real
-nondeterminism in how that comparison zipped records, with 10 consecutive
-passing runs as its exit condition.
-
-Observed 2026-08-19, on `slime-sel4-traffic.elf` boot 2 only, two consecutive
-failures with *different* signatures:
-
-- a trace divergence, whose reported record was a `stream kind=resource
-  order=data now=600 ... sequence=4 status=0 event=7 high_water=4` row;
-- `boot 2 exceeded 240s without init's clean exit`.
-
-Neither reproduced afterwards: the same target then passed on the committed
-baseline and passed again with the working-tree changes restored, and the fault
-schedule passed on every run. The changes in the tree at the time removed a
-write-only local from `render_fabric_profile_rust` and produced generation
-`65f60c11…`, byte-identical to the committed baseline's, so nothing in the
-booted image differed from the passing runs.
-
-Two different failure signatures on the same boot points away from the
-positional-zip defect B68 fixed and toward the traffic schedule's 19 concurrent
-participants being timing-sensitive under host load — the timeout arm especially.
-That makes this a gate-reliability question rather than a determinism one, but a
-determinism gate that fails intermittently cannot distinguish the two, which is
-the reason to track it.
-
-**Exit condition:** either `just sel4_fabric_aggregate_check` passes 10
-consecutive runs under host load comparable to the observed failures, or the
-traffic schedule's boot-2 timing sensitivity is identified and the gate
-distinguishes a real trace divergence from a host-load timeout in what it
-reports.
-
 
 ## Deferred follow-ups
 
@@ -805,6 +803,27 @@ successor closes it.
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
 ## Resolved
+### B74 — the aggregate gate's traffic schedule failed twice in one session on a gate B68 closed as deterministic
+
+**Status:** Resolved 2026-08-20. **Class:** Defect (a root that stopped serving
+without saying so, behind a deliberate guard suppression, plus a load-coupled
+gate that could not name either failure).
+**Was:** once the graph certified healthy, the root ran its dispatcher bound out
+with tasks still live and exited printing only its ordinary service summary, so a
+wedged guest was indistinguishable from a running one; because QEMU's `-serial
+mon:stdio` does not exit on guest quiescence, the gate blocked until its watchdog
+fired and reported a bare timeout naming nothing.
+**Exit condition (observed):** clause 1 was unattainable — the gate failed 6/10
+boot-pairs at 24 spinners on 18 cores while passing 0/10 idle and at 4 spinners,
+so it cannot pass 10 consecutive runs under load comparable to the failures — so
+closure went through clause 2: the sensitivity was identified (a fixed `-icount
+shift=3` suppressed both signatures 6/10 — 0/10 under held load) and the root now
+emits `SLIME_GRAPH exhausted live=N iterations=N certified=1`, on which the gate
+failed a real `slime-sel4-fault.elf` boot at 16.8s against its 240s watchdog,
+naming 32768 iterations and 7 live tasks, while six healthy boots of the same
+image passed in 14.1-15.1s.
+**Evidence:** [`devlog/2026-08-20-b74-aggregate-flake/`](../devlog/2026-08-20-b74-aggregate-flake/index.md)
+
 ### B73 — the matrix plane never checks the view a graph-visibility holder pages, only the observer's
 
 **Status:** Resolved 2026-08-20. **Class:** Defect (a plane that asserted one

@@ -3315,8 +3315,17 @@ fn serve_instance_graph(
     // is the property holding, not a wedge: the wedge this bound exists to
     // catch is a graph that exhausts every iteration *without* ever
     // certifying, which `healthy_emitted` still distinguishes precisely.
-    if iterations == MAX_GRAPH_ITERATIONS && live != 0 && !healthy_emitted {
-        fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
+    if iterations == MAX_GRAPH_ITERATIONS && live != 0 {
+        if !healthy_emitted {
+            fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
+        }
+        // Certified, then ran the bound out. This is not decidable here: B55's
+        // parked-forever success and a graph that stopped draining both park
+        // required tasks and complete none of them. Report it and let the
+        // observer, which knows whether the workload had finished, decide.
+        sel4::debug_println!(
+            "SLIME_GRAPH exhausted live={live} iterations={iterations} certified=1"
+        );
     }
     sel4::debug_println!(
         "SLIME_GRAPH served live={live} unsupported={unsupported} buffers={buffers_served} windows={} tasks={}",

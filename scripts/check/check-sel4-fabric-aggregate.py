@@ -113,6 +113,11 @@ FAILURE_MARKERS: tuple[str, ...] = (
 )
 
 INIT_COMPLETE = r"\[init\] traffic plane reclaimed"
+# B74: the root ran its dispatcher bound out with tasks still live, after having
+# certified the graph healthy. Reaching this before init's completion marker means
+# the guest has stopped serving and that marker is never coming, so the read below
+# stops here instead of waiting out the watchdog and reporting a bare timeout.
+GRAPH_EXHAUSTED = r"SLIME_GRAPH exhausted live=(\d+) iterations=(\d+) certified=1"
 TERMINAL_MARKER = r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)"
 SPAWN_PATTERN = re.compile(r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) ")
 
@@ -173,10 +178,12 @@ def boot(profile: dict[str, object], image: str, attempt: int) -> str:
     failures = re.compile("|".join(FAILURE_MARKERS))
     init_complete = re.compile(INIT_COMPLETE)
     component_exit = re.compile(TERMINAL_MARKER)
+    graph_exhausted = re.compile(GRAPH_EXHAUSTED)
     lines: list[str] = []
     saw_init_complete = False
     init_task: str | None = None
     saw_init_exit = False
+    exhausted: re.Match[str] | None = None
     try:
         process = subprocess.Popen(
             command,
@@ -196,6 +203,9 @@ def boot(profile: dict[str, object], image: str, attempt: int) -> str:
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
+                break
+            exhausted = graph_exhausted.search(line) or exhausted
+            if exhausted is not None:
                 break
             spawn = SPAWN_PATTERN.search(line)
             if spawn is not None and init_task is None:
@@ -217,6 +227,13 @@ def boot(profile: dict[str, object], image: str, attempt: int) -> str:
             process.kill()
             process.wait()
     transcript = "\n".join(lines)
+    if exhausted is not None and not saw_init_exit:
+        fail(
+            f"{image} boot {attempt} wedged: the root exhausted its dispatcher bound after "
+            f"{exhausted.group(2)} iterations with {exhausted.group(1)} tasks still live, "
+            "having already certified the graph healthy, and stopped serving without "
+            "reclaiming the plane. The workload did not drain; this is not a slow boot."
+        )
     if timed_out and not saw_init_exit:
         fail(f"{image} boot {attempt} exceeded {BOOT_TIMEOUT_SECONDS}s without init's clean exit")
     if not saw_init_exit:
