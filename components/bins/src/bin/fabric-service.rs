@@ -736,7 +736,9 @@ fn provision(
     // of six edges unprovisioned — so hoisting is not an optimization here, it
     // is what keeps the two uses disjoint.
     let mut graph_rows = slime_components::fabric_self_view::EMPTY_ROWS;
-    let row_count = slime_components::fabric_self_view::rows(&mut graph_rows);
+    let Ok(row_count) = slime_components::fabric_self_view::rows(&mut graph_rows) else {
+        fail(b"fabric graph read did not complete");
+    };
     while clients.iter().any(|client| !client.answered) {
         // Sweep every unanswered control endpoint through its non-blocking ABI
         // first. Only when all of them would block is parking correct: probing

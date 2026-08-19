@@ -80,8 +80,9 @@ const STATUS_BAD_REQUEST: i32 = -2;
 pub(super) fn run() {
     resolve_route_slots();
     assert_declared_chain();
-    assert_declared_composition();
     let routes = route_identities();
+    let graph = GraphView::read(&routes);
+    assert_declared_composition(&graph);
     let mut trace = Trace::new(FABRIC_TRACE_DEPTH);
 
     // Schema admission first, before any edge exists to name. The records are
@@ -150,10 +151,10 @@ pub(super) fn run() {
     // relay to run — the exact mutual wait this flag exists to avoid.
     let mut proxy_replied = false;
     // Roles actually granted this run — the resource high-water this plane
-    // reports at close. Tracked live rather than read off the participant
-    // table: `FABRIC_PARTICIPANTS` also carries the diagnostics edges this
-    // plane declares for visibility filtering but never provisions, so a
-    // static count would report roles nothing here ever handed out.
+    // reports at close. Tracked live rather than counted off the graph rows:
+    // the graph also declares the diagnostics edges this plane carries for
+    // visibility filtering but never provisions, so counting declarations would
+    // report roles nothing here ever handed out.
     let mut granted = 0u32;
     loop {
         let mut progressed = false;
@@ -162,6 +163,7 @@ pub(super) fn run() {
                 client.control_slot,
                 client.component,
                 &routes,
+                &graph,
                 &mut trace,
                 &mut granted,
             ) {
@@ -189,6 +191,7 @@ pub(super) fn run() {
                             client.control_slot,
                             client.component,
                             &routes,
+                            &graph,
                             &mut trace,
                             &mut granted,
                         ) {
@@ -224,10 +227,10 @@ pub(super) fn run() {
     // by that definition truncated.
     //
     // The counter is exactly the exact-tuple matches this run granted, tracked
-    // live as `provision` hands them out: `FABRIC_PARTICIPANTS` also carries
-    // the diagnostics edges declared for visibility filtering that this plane
-    // never provisions, so counting the table instead would report roles
-    // nothing here ever handed out.
+    // live as `provision` hands them out: the graph also declares the
+    // diagnostics edges carried for visibility filtering that this plane never
+    // provisions, so counting declarations instead would report roles nothing
+    // here ever handed out.
     let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_ROLES, granted);
     let _ = trace.terminal();
     trace.flush(b"matrix");
@@ -268,6 +271,89 @@ fn route_identities() -> [[u8; 32]; ROUTE_COUNT] {
     ]
 }
 
+/// The graph rows this broker reads, resolved once at startup (B70/CP2).
+///
+/// Read once and threaded through `serve` rather than re-read per request: this
+/// broker answers from a dispatch loop, and a `graph_read` per sweep is a
+/// syscall per sweep. It also stages its reply through this component's single
+/// transfer window, which `descriptor` uses to hand out role capabilities — the
+/// same contention `fabric-service` documents.
+///
+/// The three route names resolve to indices through `graph_route_index`, which
+/// folds the interface into the identity: `telemetry` under a different
+/// contract resolves to no index at all rather than matching by string. An
+/// absent index is fatal here, not an empty result, because the negative
+/// assertions below would otherwise be satisfied by an unresolved route rather
+/// than by the graph.
+struct GraphView {
+    rows: [slime_components::fabric_self_view::Row;
+        slime_components::fabric_self_view::MAX_GRAPH_ROWS],
+    row_count: usize,
+    route_indices: [u32; ROUTE_COUNT],
+}
+
+impl GraphView {
+    fn read(routes: &[[u8; 32]; ROUTE_COUNT]) -> Self {
+        let mut rows = slime_components::fabric_self_view::EMPTY_ROWS;
+        let Ok(row_count) = slime_components::fabric_self_view::rows(&mut rows) else {
+            fail(b"matrix graph read did not complete");
+        };
+        let mut route_indices = [0u32; ROUTE_COUNT];
+        for route in 0..ROUTE_COUNT {
+            let Ok(index) = slime_rt::graph_route_index(&routes[route]) else {
+                fail(b"a declared route name is absent from the graph");
+            };
+            route_indices[route] = index as u32;
+        }
+        Self {
+            rows,
+            row_count,
+            route_indices,
+        }
+    }
+
+    fn declared(&self) -> &[slime_components::fabric_self_view::Row] {
+        &self.rows[..self.row_count]
+    }
+
+    /// Whether the graph declares any edge for `component` on a route this
+    /// broker carries. Zero is a denial: authority is never ambient, so absence
+    /// from the participant table is not a default role.
+    fn declared_edges(&self, component: &[u8]) -> usize {
+        let identity = component_identity_of(component);
+        self.declared()
+            .iter()
+            .filter(|row| {
+                row.component_identity == identity && self.route_indices.contains(&row.route_index)
+            })
+            .count()
+    }
+
+    fn declares_edge_on(&self, component: &[u8], route: usize) -> bool {
+        let identity = component_identity_of(component);
+        self.declared().iter().any(|row| {
+            row.component_identity == identity && row.route_index == self.route_indices[route]
+        })
+    }
+
+    /// Every direction the graph declares for `component` on `route`.
+    fn directions(&self, component: &[u8], route: usize) -> impl Iterator<Item = u32> + '_ {
+        let identity = component_identity_of(component);
+        let wanted = self.route_indices[route];
+        self.declared()
+            .iter()
+            .filter(move |row| row.component_identity == identity && row.route_index == wanted)
+            .map(|row| row.direction)
+    }
+}
+
+fn component_identity_of(component: &[u8]) -> [u8; 32] {
+    let Ok(name) = core::str::from_utf8(component) else {
+        fail(b"component name is not utf-8");
+    };
+    boot_contracts::fabric_graph::component_identity(name)
+}
+
 fn assert_declared_chain() {
     let declared = FABRIC_INTERPOSITIONS
         .iter()
@@ -287,11 +373,20 @@ fn assert_declared_chain() {
 /// vacuously, and an observer whose view happened to span every route would
 /// make "a filtered view shows only your grant" a claim about an unfiltered
 /// one. Both are failure modes a transcript cannot distinguish from success.
-fn assert_declared_composition() {
+fn assert_declared_composition(graph: &GraphView) {
+    // A positive fact about the graph before any negative one. The probe and
+    // observer arms below are both claims that something is *absent*, and an
+    // absent row and an unread graph are the same observation from here. The
+    // downstream subscriber holds a telemetry edge this plane cannot run
+    // without, so requiring it first is what makes "the probe holds none" a
+    // statement about the graph rather than about a read that returned nothing.
+    if graph.declared_edges(DOWNSTREAM) == 0 {
+        fail(b"the graph declares no edge for the downstream subscriber");
+    }
     // The probe must hold no participant edge at all: its denial is the plane's
     // authority evidence, and an edge would make the refusal a bug rather than
     // the property.
-    if declared_edges(PROBE) != 0 {
+    if graph.declared_edges(PROBE) != 0 {
         fail(b"the ungranted probe holds a declared edge");
     }
     // And it must hold exactly one capability: its control endpoint. Call,
@@ -303,7 +398,7 @@ fn assert_declared_composition() {
     // invocation on a slot holding no capability faults the task in this model
     // (the same constraint `fabric-proxy` documents for its own wrong-right
     // case), so a crash is the only thing probing could observe.
-    if declared_capabilities(PROBE) != 1 {
+    if declared_capabilities(graph, PROBE) != 1 {
         fail(b"the ungranted probe holds more than its control endpoint");
     }
     slime_rt::debug_write(b"[fabric] matrix probe holds only its control endpoint\n");
@@ -320,17 +415,13 @@ fn assert_declared_composition() {
     if nth_visible_route(OBSERVER, 1).is_some() {
         fail(b"the observer's filtered view spans more than its grant");
     }
-    // Every route this broker indexes is one the generation declares. A fixture
-    // that renamed one would otherwise leave this table matching nothing, which
-    // reads as "no participant asked" rather than as the mismatch it is.
-    for name in ROUTE_NAMES {
-        if !super::FABRIC_PARTICIPANTS
-            .iter()
-            .any(|(_, route, _, _)| *route == name)
-        {
-            fail(b"a declared route name is absent from the graph");
-        }
-    }
+    // Every route this broker indexes is one the generation declares —
+    // established by `GraphView::read` resolving all three identities through
+    // `graph_route_index` before this runs. That is strictly stronger than the
+    // name comparison it replaces: the identity folds the interface in, so a
+    // fixture that kept the name `telemetry` but moved it to another contract
+    // now fails here rather than matching by string, which is the distinction
+    // this whole plane exists to draw.
 }
 
 /// How many capabilities the generation declares for `component`, across every
@@ -344,7 +435,7 @@ fn assert_declared_composition() {
 /// only read stream-route edges would agree with a broader graph today by
 /// coincidence and disagree the day a fixture bound one more class to the
 /// probe.
-fn declared_capabilities(component: &[u8]) -> usize {
+fn declared_capabilities(graph: &GraphView, component: &[u8]) -> usize {
     let control = usize::from(super::FABRIC_CLIENTS.contains(&component));
     let call = usize::from(super::FABRIC_CALL_CLIENTS.contains(&component));
     let operation = usize::from(super::FABRIC_OPERATION_CLIENTS.contains(&component));
@@ -352,7 +443,7 @@ fn declared_capabilities(component: &[u8]) -> usize {
         .iter()
         .filter(|(holder, _, _, _, _)| *holder == component)
         .count();
-    control + call + operation + notifications + declared_edges(component)
+    control + call + operation + notifications + graph.declared_edges(component)
 }
 
 /// One decimal count on the current line.
@@ -392,6 +483,7 @@ fn serve(
     control: u32,
     component: &'static [u8],
     routes: &[[u8; 32]; ROUTE_COUNT],
+    graph: &GraphView,
     trace: &mut Trace,
     granted: &mut u32,
 ) -> Served {
@@ -437,7 +529,7 @@ fn serve(
         deny(control, STATUS_BAD_REQUEST, trace);
         return Served::Answered;
     };
-    provision(control, component, &request, routes, trace, granted);
+    provision(control, component, &request, routes, graph, trace, granted);
     Served::Answered
 }
 
@@ -477,10 +569,11 @@ fn provision(
     component: &'static [u8],
     request: &WireFabricRequest,
     routes: &[[u8; 32]; ROUTE_COUNT],
+    graph: &GraphView,
     trace: &mut Trace,
     granted: &mut u32,
 ) {
-    let edges = declared_edges(component);
+    let edges = graph.declared_edges(component);
     if edges == 0 {
         slime_rt::debug_write(b"[fabric] matrix denied ungranted: ");
         slime_rt::debug_write(component);
@@ -494,7 +587,7 @@ fn provision(
     let Some(route) = ROUTE_NAMES
         .iter()
         .position(|candidate| candidate.as_bytes() == named)
-        .filter(|route| declares_edge_on(component, ROUTE_NAMES[*route]))
+        .filter(|route| graph.declares_edge_on(component, *route))
     else {
         // Either no such route, or one this component holds no edge on. The
         // two are deliberately one answer: distinguishing them would confirm
@@ -520,42 +613,18 @@ fn provision(
 
     // The exact compatible tuple. One narrowed, non-delegable role per
     // direction the graph declares for this component on this route.
-    for (_, declared_route, _, direction) in super::FABRIC_PARTICIPANTS
-        .iter()
-        .filter(|(name, _, _, _)| *name == component)
-    {
-        if *declared_route != ROUTE_NAMES[route] {
-            continue;
-        }
-        let rights = if *direction == DIRECTION_PUBLISH {
+    for direction in graph.directions(component, route) {
+        let rights = if direction == DIRECTION_PUBLISH {
             RIGHT_SEND
         } else {
             RIGHT_RECV
         };
-        descriptor(control, rights, *direction, &routes[route]);
+        descriptor(control, rights, direction, &routes[route]);
         *granted += 1;
     }
     slime_rt::debug_write(b"[fabric] matrix matched exact tuple: ");
     slime_rt::debug_write(component);
     slime_rt::debug_write(b"\n");
-}
-
-/// Whether the graph declares any edge for `component` on a route this broker
-/// carries. Zero is a denial: authority is never ambient, so absence from the
-/// participant table is not a default role.
-fn declared_edges(component: &[u8]) -> usize {
-    super::FABRIC_PARTICIPANTS
-        .iter()
-        .filter(|(name, route, _, _)| {
-            *name == component && ROUTE_NAMES.iter().any(|declared| declared == route)
-        })
-        .count()
-}
-
-fn declares_edge_on(component: &[u8], route: &str) -> bool {
-    super::FABRIC_PARTICIPANTS
-        .iter()
-        .any(|(name, declared, _, _)| *name == component && *declared == route)
 }
 
 fn route_type_tag(route: usize) -> u64 {

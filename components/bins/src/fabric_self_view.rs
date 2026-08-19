@@ -99,9 +99,19 @@ pub fn history_depth_of(component_identity: &[u8; 32], route_index: u32) -> Opti
     }
 }
 
+/// A whole-graph read that did not complete.
+///
+/// Distinct from an empty table, and named rather than `()` so a caller cannot
+/// read it as "no rows": every negative assertion a broker makes about the
+/// graph — that some component holds no declared edge — is unfounded on this
+/// value, and treating it as an empty result would satisfy that assertion out
+/// of a failed syscall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IncompleteRead;
+
 /// Rows a whole-graph read may need to hold at once. The largest seL4 graph
 /// declares 15 participants; the contract ceiling is 32.
-const MAX_GRAPH_ROWS: usize = 32;
+pub const MAX_GRAPH_ROWS: usize = 32;
 
 /// One participant row, decoded to the fields a broker asks about.
 #[derive(Clone, Copy)]
@@ -119,35 +129,40 @@ pub struct Row {
 /// declared edge with. The caller supplies the buffer because a `no_std`
 /// component has no allocator, and `MAX_GRAPH_ROWS` bounds what one can hold.
 ///
-/// Returns how many rows were written. A short count is the end of the table,
-/// not an error.
-pub fn rows(out: &mut [Row; MAX_GRAPH_ROWS]) -> usize {
+/// `Ok(n)` is a complete read of `n` rows; a short count is the end of the
+/// table, not an error. `Err` is a read that did not complete, and callers must
+/// not treat it as an empty table: a broker asserting that some component holds
+/// *no* declared edge would otherwise satisfy that assertion out of a failed
+/// syscall rather than out of the graph. Truncation at `MAX_GRAPH_ROWS` is an
+/// error for the same reason -- the rows past the bound went unread, so any
+/// negative claim over them would be unfounded.
+pub fn rows(out: &mut [Row; MAX_GRAPH_ROWS]) -> Result<usize, IncompleteRead> {
     let mut buffer = [0u8; MAX_OWN_ROWS * PARTICIPANT_ENTRY_BYTES];
     let mut cursor = 0usize;
     let mut written = 0usize;
     loop {
         let Ok(count) = slime_rt::graph_read(cursor, &mut buffer) else {
-            return written;
+            return Err(IncompleteRead);
         };
         if count == 0 {
-            return written;
+            return Ok(written);
         }
         for row in 0..count {
             if written == out.len() {
-                return written;
+                return Err(IncompleteRead);
             }
             let bytes = &buffer[row * PARTICIPANT_ENTRY_BYTES..(row + 1) * PARTICIPANT_ENTRY_BYTES];
             let Ok(component_identity) = <[u8; 32]>::try_from(&bytes[COMPONENT_IDENTITY]) else {
-                return written;
+                return Err(IncompleteRead);
             };
             let Ok(route) = bytes[ROUTE_INDEX].try_into() else {
-                return written;
+                return Err(IncompleteRead);
             };
             let Ok(direction) = bytes[DIRECTION].try_into() else {
-                return written;
+                return Err(IncompleteRead);
             };
             let Ok(depth) = bytes[HISTORY_DEPTH].try_into() else {
-                return written;
+                return Err(IncompleteRead);
             };
             out[written] = Row {
                 component_identity,
@@ -159,7 +174,7 @@ pub fn rows(out: &mut [Row; MAX_GRAPH_ROWS]) -> usize {
         }
         cursor += count;
         if count < MAX_OWN_ROWS {
-            return written;
+            return Ok(written);
         }
     }
 }

@@ -397,32 +397,47 @@ impl Broker {
             < MAX_PENDING_TERMINALS_PER_CLIENT
     }
 
+    /// Every edge this broker requires, read from the generation graph resource
+    /// rather than a build-time table (B70/CP2).
+    ///
+    /// Called once from `run`, so the read is not in the pump loop. The
+    /// interface is folded into the route identity rather than compared as a
+    /// name: a `parameters` route carrying a different contract resolves to no
+    /// index at all instead of matching by string.
     fn verify_graph(&self) {
+        let mut graph_rows = slime_components::fabric_self_view::EMPTY_ROWS;
+        let Ok(row_count) = slime_components::fabric_self_view::rows(&mut graph_rows) else {
+            fail(b"call graph read did not complete");
+        };
+        let rows = &graph_rows[..row_count];
+        let route = boot_contracts::fabric_graph::route_identity(
+            ROUTE_NAME,
+            &parameter_call::INTERFACE_IDENTITY,
+            boot_contracts::fabric_graph::CONTRACT_KIND_CALL,
+        );
+        let Ok(route_index) = slime_rt::graph_route_index(&route) else {
+            fail(b"call route is not declared by this graph");
+        };
+        let declared = |component: &[u8], direction: u32| {
+            let identity = boot_contracts::fabric_graph::component_identity(
+                core::str::from_utf8(component)
+                    .unwrap_or_else(|_| fail(b"component name is not utf-8")),
+            );
+            rows.iter()
+                .filter(|row| {
+                    row.component_identity == identity
+                        && row.route_index == route_index as u32
+                        && row.direction == direction
+                })
+                .count()
+        };
         let declared_clients: [&[u8]; CLIENTS] = [b"fabric-call-client", b"fabric-call-client-b"];
         for component in declared_clients {
-            let expected = FABRIC_PARTICIPANTS
-                .iter()
-                .filter(|(name, route_name, interface, direction)| {
-                    *name == component
-                        && *route_name == ROUTE_NAME
-                        && *interface == "ParameterCall"
-                        && *direction == DIRECTION_CLIENT
-                })
-                .count();
-            if expected != 1 {
+            if declared(component, DIRECTION_CLIENT) != 1 {
                 fail(b"call client graph declaration");
             }
         }
-        let servers = FABRIC_PARTICIPANTS
-            .iter()
-            .filter(|(name, route_name, interface, direction)| {
-                *name == b"fabric-call-server"
-                    && *route_name == ROUTE_NAME
-                    && *interface == "ParameterCall"
-                    && *direction == DIRECTION_SERVER
-            })
-            .count();
-        if servers != 1 {
+        if declared(b"fabric-call-server", DIRECTION_SERVER) != 1 {
             fail(b"call server graph declaration");
         }
     }

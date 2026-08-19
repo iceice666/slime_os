@@ -56,7 +56,6 @@ use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX
 
 const ROUTE_NAME: &str = "navigation";
 const BACKUP_ROUTE_NAME: &str = "nav-backup";
-const INTERFACE_NAME: &str = "NavigationOperation";
 /// The session the fabric presents to the server. Distinct from every client
 /// session, so a client cannot forge a record that looks like it came from the
 /// transport itself.
@@ -226,6 +225,13 @@ pub struct Broker {
     /// The `navigation` route identity, folded in `run` because the fold hashes
     /// and the constructor is `const`.
     route: u64,
+    /// Every graph row this worker may read, read once in `run`.
+    ///
+    /// The read is a syscall and `declared_edges` is called from the pump loop,
+    /// so it is hoisted here rather than repeated per sweep.
+    graph_rows: [slime_components::fabric_self_view::Row;
+        slime_components::fabric_self_view::MAX_GRAPH_ROWS],
+    graph_row_count: usize,
 }
 
 impl Broker {
@@ -266,6 +272,8 @@ impl Broker {
             server_settled: false,
             trace: trace_log::Trace::new(FABRIC_TRACE_DEPTH),
             route: 0,
+            graph_rows: slime_components::fabric_self_view::EMPTY_ROWS,
+            graph_row_count: 0,
         }
     }
 
@@ -328,6 +336,10 @@ impl Broker {
     }
 
     pub fn run(&mut self) {
+        let Ok(row_count) = slime_components::fabric_self_view::rows(&mut self.graph_rows) else {
+            fail(b"operation graph read did not complete");
+        };
+        self.graph_row_count = row_count;
         self.verify_graph();
         self.route = trace_log::route_word(&boot_contracts::fabric_graph::route_identity(
             ROUTE_NAME,
@@ -507,14 +519,32 @@ impl Broker {
     fn verify_graph(&self) {
         let declared_clients: [&[u8]; CLIENTS] = [b"fabric-op-client", b"fabric-op-client-b"];
         for component in declared_clients {
-            if declared_edges(component, ROUTE_NAME, DIRECTION_CLIENT) != 1 {
+            if declared_edges(
+                &self.graph_rows[..self.graph_row_count],
+                component,
+                ROUTE_NAME,
+                DIRECTION_CLIENT,
+            ) != 1
+            {
                 fail(b"operation client graph declaration");
             }
         }
-        if declared_edges(b"fabric-op-client", BACKUP_ROUTE_NAME, DIRECTION_CLIENT) != 1 {
+        if declared_edges(
+            &self.graph_rows[..self.graph_row_count],
+            b"fabric-op-client",
+            BACKUP_ROUTE_NAME,
+            DIRECTION_CLIENT,
+        ) != 1
+        {
             fail(b"backup operation graph declaration");
         }
-        if declared_edges(b"fabric-op-server", ROUTE_NAME, DIRECTION_SERVER) != 1 {
+        if declared_edges(
+            &self.graph_rows[..self.graph_row_count],
+            b"fabric-op-server",
+            ROUTE_NAME,
+            DIRECTION_SERVER,
+        ) != 1
+        {
             fail(b"operation server graph declaration");
         }
     }
@@ -523,7 +553,13 @@ impl Broker {
         if client != 1 || self.replacement_control_closed || self.clients[client].is_some() {
             return false;
         }
-        if declared_edges(b"fabric-op-client-b-restart", ROUTE_NAME, DIRECTION_CLIENT) != 1 {
+        if declared_edges(
+            &self.graph_rows[..self.graph_row_count],
+            b"fabric-op-client-b-restart",
+            ROUTE_NAME,
+            DIRECTION_CLIENT,
+        ) != 1
+        {
             fail(b"replacement operation graph declaration");
         }
         self.clients[client] = Some(self.replacement_control);
@@ -1407,14 +1443,37 @@ fn declared_history_depth(client: usize) -> u32 {
         .unwrap_or_else(|| fail(b"operation history depth")) as u32
 }
 
-fn declared_edges(component: &[u8], route: &str, direction: u32) -> usize {
-    FABRIC_PARTICIPANTS
-        .iter()
-        .filter(|(name, route_name, interface, declared)| {
-            *name == component
-                && *route_name == route
-                && *interface == INTERFACE_NAME
-                && *declared == direction
+/// How many edges the generation graph declares for `component` on `route` in
+/// `direction`, read from the graph resource rather than a build-time table
+/// (B70/CP2).
+///
+/// `rows` is read once in [`Broker::run`]: this is called from the pump loop
+/// (`pump_replacement`), and a `graph_read` per sweep would put a syscall in a
+/// spin. The interface is folded into the route identity rather than compared
+/// as a name, so a route carrying a different contract resolves to no index at
+/// all instead of matching by string.
+fn declared_edges(
+    rows: &[slime_components::fabric_self_view::Row],
+    component: &[u8],
+    route: &str,
+    direction: u32,
+) -> usize {
+    let identity = boot_contracts::fabric_graph::component_identity(
+        core::str::from_utf8(component).unwrap_or_else(|_| fail(b"component name is not utf-8")),
+    );
+    let route_identity = boot_contracts::fabric_graph::route_identity(
+        route,
+        &navigation_operation::INTERFACE_IDENTITY,
+        boot_contracts::fabric_graph::CONTRACT_KIND_OPERATION,
+    );
+    let Ok(index) = slime_rt::graph_route_index(&route_identity) else {
+        return 0;
+    };
+    rows.iter()
+        .filter(|row| {
+            row.component_identity == identity
+                && row.route_index == index as u32
+                && row.direction == direction
         })
         .count()
 }
