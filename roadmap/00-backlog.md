@@ -377,6 +377,67 @@ generator expressions and their entries in the checked-in
 `default_fabric_profile.rs`. `fabric_profile` drops from 51 constants to 49.
 **Evidence:** [`devlog/2026-08-19-supervision-binding-naming/`](../devlog/2026-08-19-supervision-binding-naming/index.md)
 
+**Progress (2026-08-20, ceiling route falsified; boot action deferred):** two of
+the three remaining routes are closed by measurement, and the first **corrects
+the note below** claiming the declared bounds are closable by compiling the
+published ceiling.
+
+`FABRIC_TRACE_DEPTH` cannot take that route. `check-sel4-trace-plane.py`'s
+`check_bounds` asserts `capacity == declared_depth(fixture)` **exactly**, reading
+`traceDepth` out of the `.zti` rather than restating it, precisely so "a plane
+whose records fit comfortably would pass under any declared depth". Its three
+planes declare 16 (`sel4-qos`), 64 (`sel4-call`), 64 (`sel4-operation`), so no
+single compiled constant satisfies all three: a ceiling build makes the qos sink
+report `capacity=64` against a declared 16 and the gate goes red. The per-plane
+value is gate-asserted behavior, not merely a bound. This refines the
+ceiling-vs-budget rule established for `MAX_PARTICIPANTS`, which failed on the
+16 KiB `COMPONENT_DEFAULT_STACK_BYTES` budget instead: a ceiling substitution is
+legitimate only where the per-plane value is neither stack-bound nor
+independently asserted, and trace depth fails the second test. Every other plane
+gate asserts only the weak direction (`records > capacity` fails), so this is
+specific to the trace gate, not general.
+
+The `fabric_self_view.rs` precedent — CP2 step 2 retiring `FABRIC_HISTORY_DEPTHS`
+by reading the component's own participant row — does not transfer either.
+`traceDepth` is a *per-graph* scalar: `contracts/fabric-graph/v1/schema.zt`
+contains zero occurrences of `trace`, `boot-contracts/src/generated/` publishes
+no trace constant, and `GRAPH_READ` stages participant rows only and never the
+header, so `GraphLimits` is unreachable from a component. Carrying it would need
+a schema field, a regen, root staging, and a runtime read.
+
+**That work is not worth doing yet, because it closes zero `include!` sites.**
+Every file consuming `FABRIC_TRACE_DEPTH` also consumes `GENERATION_BOOT_ACTION`
+from the same `include!` — the four participants and `fabric-service` alike —
+so the file keeps including either way.
+
+`GENERATION_BOOT_ACTION` is therefore the binding constraint, and all three
+self-scoped axes are now measured negative for the four participant files. Every
+use selects behavior (`if … == "traffic"`, `!= "dango"`); none merely labels
+output. Across the six planes they branch on, `fabric-publisher`,
+`fabric-subscriber`, `fabric-subscriber-b` and `fabric-publisher-b` hold
+identical capability grants, identical notification grants, and **byte-identical
+participant rows** — `fabric-publisher` is `publish/retained/historyDepth=4/
+retainedDepth=2/lifespanNs=300/visibility=graph` on all of boot, traffic, qos,
+stream, visibility and matrix. Nothing a component may ask about itself
+distinguishes the compositions its code branches on, which is the same result
+already recorded for `fabric-op-server`, `fabric-call-server` and `fabric-probe`.
+
+`fabric-service` is the exception and is *not* blocked: its grant set separates
+all six actions (`fabric-call-*-control` under call, `fabric-op-*-control` under
+operation, `telemetry-alt-*` only under matrix, `fabric-observer-control` absent
+under visibility). A `resolve_binding`-driven dispatch could replace its
+`main()` ladder. It still `include!`s for the graph facts, so this too closes no
+site alone.
+
+**Deferred rather than skipped**, per the backlog's own rule. Closing the boot
+action needs the label-40 per-generation scalar query deliberately left
+unassigned in `slime-root/src/ipc.rs`'s routes-nowhere list; that is new
+mechanism and belongs to CP3/CP4 with the `fabric-graph` read, not to an
+incremental migration. Doing the trace-depth carrier first would spend a
+contract change, a regen and a root path for no clause progress. No code was
+changed by this investigation.
+
+
 B70's remaining surface is 18 `include!` sites over three tables.
 `fabric_profile`'s 49 constants (2026-08-19: `FABRIC_SUPERVISION` and
 `FABRIC_SUBSCRIBERS` deleted): one remaining slot table,
