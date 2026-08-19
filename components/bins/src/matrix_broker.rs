@@ -47,10 +47,7 @@ use slime_proto::{valid_fabric_request, valid_visibility_request};
 use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::trace_log::{self, Trace};
-use super::{
-    FABRIC_INTERPOSITIONS, FABRIC_TRACE_DEPTH, FABRIC_VISIBILITY, control_clients, fail,
-    release_received,
-};
+use super::{FABRIC_INTERPOSITIONS, FABRIC_TRACE_DEPTH, control_clients, fail, release_received};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
@@ -64,9 +61,6 @@ const DOWNSTREAM: &[u8] = b"fabric-subscriber";
 const PROBE: &[u8] = b"fabric-probe";
 /// The read-only introspection client.
 const OBSERVER: &[u8] = b"fabric-observer";
-
-const VISIBILITY_PRIVATE: u8 = 1;
-const VISIBILITY_GRAPH: u8 = 2;
 
 /// Refusal codes. Distinct so the transcript shows *which* mismatch refused an
 /// edge: a caller the graph declares nothing for, a caller asking under a route
@@ -336,6 +330,43 @@ impl GraphView {
         })
     }
 
+    /// Every declared row on one of this broker's routes.
+    ///
+    /// Keyed by the route's resolved graph index rather than by its position in
+    /// `ROUTE_NAMES`: the graph orders its participant table by grant identity,
+    /// and this plane's three routes need not occupy the same positions there.
+    fn rows_on(
+        &self,
+        route: usize,
+    ) -> impl Iterator<Item = &slime_components::fabric_self_view::Row> + '_ {
+        let wanted = self.route_indices[route];
+        self.declared()
+            .iter()
+            .filter(move |row| row.route_index == wanted)
+    }
+
+    /// Whether the generation grants `component` graph-wide visibility anywhere.
+    ///
+    /// Scanned over every declared row rather than only this broker's routes,
+    /// because the grant is a property of the holder: one `graph` edge is what
+    /// admits it to every route declared `graph`.
+    fn sees_graph(&self, component: &[u8]) -> bool {
+        let identity = component_identity_of(component);
+        self.declared().iter().any(|row| {
+            row.component_identity == identity
+                && row.visibility == boot_contracts::fabric_graph::VISIBILITY_GRAPH
+        })
+    }
+
+    /// Whether the generation grants `component` a `private` view of `route`.
+    fn sees_private(&self, component: &[u8], route: usize) -> bool {
+        let identity = component_identity_of(component);
+        self.rows_on(route).any(|row| {
+            row.component_identity == identity
+                && row.visibility == boot_contracts::fabric_graph::VISIBILITY_PRIVATE
+        })
+    }
+
     /// Every direction the graph declares for `component` on `route`.
     fn directions(&self, component: &[u8], route: usize) -> impl Iterator<Item = u32> + '_ {
         let identity = component_identity_of(component);
@@ -406,13 +437,14 @@ fn assert_declared_composition(graph: &GraphView) {
     // on one route under a `private` grant, so it must see that route and must
     // not see the two telemetry routes it holds nothing on — which is the
     // difference between a filter and a pass-through.
-    let private = FABRIC_VISIBILITY
-        .iter()
-        .any(|(holder, _, visibility)| *holder == OBSERVER && *visibility == VISIBILITY_PRIVATE);
+    let private = graph.declared().iter().any(|row| {
+        row.component_identity == component_identity_of(OBSERVER)
+            && row.visibility == boot_contracts::fabric_graph::VISIBILITY_PRIVATE
+    });
     if !private {
         fail(b"the observer holds no private visibility grant");
     }
-    if nth_visible_route(OBSERVER, 1).is_some() {
+    if nth_visible_route(graph, OBSERVER, 1).is_some() {
         fail(b"the observer's filtered view spans more than its grant");
     }
     // Every route this broker indexes is one the generation declares —
@@ -519,7 +551,7 @@ fn serve(
             send_message(control, &terminal_view(0).encode());
             return Served::Answered;
         };
-        answer_view(control, component, request.cursor, routes, trace);
+        answer_view(control, component, request.cursor, routes, graph, trace);
         return Served::Answered;
     }
 
@@ -646,9 +678,10 @@ fn answer_view(
     component: &[u8],
     cursor: u8,
     routes: &[[u8; 32]; ROUTE_COUNT],
+    graph: &GraphView,
     trace: &mut Trace,
 ) {
-    let Some(route) = nth_visible_route(component, usize::from(cursor)) else {
+    let Some(route) = nth_visible_route(graph, component, usize::from(cursor)) else {
         send_message(control, &terminal_view(cursor).encode());
         return;
     };
@@ -708,22 +741,21 @@ fn terminal_view(cursor: u8) -> WireVisibilityRouteRecord {
 /// `graph`; otherwise it sees only the routes it holds a `private` grant on. A
 /// caller granted neither sees nothing — not an empty list of known routes, but
 /// no route at all.
-fn nth_visible_route(component: &[u8], wanted: usize) -> Option<usize> {
-    let graph = FABRIC_VISIBILITY
-        .iter()
-        .any(|(holder, _, visibility)| *holder == component && *visibility == VISIBILITY_GRAPH);
+///
+/// Read from the graph resource rather than the generated visibility table
+/// (B70/CP2). The policy is unchanged; its source is now the same participant
+/// rows every other decision here reads, which is what lets a component built
+/// outside this repo answer the question at all.
+fn nth_visible_route(graph: &GraphView, component: &[u8], wanted: usize) -> Option<usize> {
+    let sees_graph = graph.sees_graph(component);
     let mut visible = 0;
-    for (route, name) in ROUTE_NAMES.iter().enumerate() {
-        let admitted = if graph {
-            FABRIC_VISIBILITY.iter().any(|(_, candidate, visibility)| {
-                candidate == name && *visibility == VISIBILITY_GRAPH
-            })
+    for route in [TELEMETRY, TELEMETRY_ALT, DIAGNOSTICS] {
+        let admitted = if sees_graph {
+            graph
+                .rows_on(route)
+                .any(|row| row.visibility == boot_contracts::fabric_graph::VISIBILITY_GRAPH)
         } else {
-            FABRIC_VISIBILITY
-                .iter()
-                .any(|(holder, candidate, visibility)| {
-                    *holder == component && candidate == name && *visibility == VISIBILITY_PRIVATE
-                })
+            graph.sees_private(component, route)
         };
         if admitted {
             if visible == wanted {
