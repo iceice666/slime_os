@@ -132,6 +132,17 @@ fn prove_graph_self_view() {
     if count != own {
         fail(b"graph self view returned rows this component does not declare");
     }
+    // The edge scope must also *refuse*. This component's only declared edge is
+    // to `fabric-service`, so a sibling participant it shares no grant with must
+    // not appear -- otherwise the second scope would be enumeration wearing a
+    // filter, and C8.8's "an ungranted caller inferred nothing" would rest on
+    // nothing. Checked by identity because rows carry identities, not names.
+    let sibling = boot_contracts::fabric_graph::component_identity("fabric-subscriber");
+    for row in 0..count {
+        if rows[row * 128 + 32..row * 128 + 64] == sibling {
+            fail(b"graph read disclosed a component this one shares no edge with");
+        }
+    }
     slime_rt::debug_write(b"[fabric-publisher] graph read is scoped to this component\n");
 }
 

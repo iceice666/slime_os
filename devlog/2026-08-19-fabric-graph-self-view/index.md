@@ -169,3 +169,28 @@ generator in `build-generation.py`, and its entry in the checked-in
 `default_fabric_profile.rs`. `fabric_profile` drops 49 → 48 constants. Both
 compilation paths were booted: `just sel4_operation_check` for the holder path
 and `just sel4_boot_check` for the worker-as-peer path.
+
+**2026-08-19 — the ABI text was stale, and the edge scope was untested for what
+it refuses.** Two gaps in the commit above, both about evidence rather than
+behaviour.
+
+`contracts/syscall-abi/v1/schema.zt` and `docs/syscall-abi.md` still said "every
+other instance reads its *own* rows **and nothing else**". That became false the
+moment the edge scope landed. The contract is the authority on what this
+operation may disclose, and `generate-syscall-abi-bindings.py --check` only
+verifies that a declared label is documented, not that the prose matches the
+code — so nothing would have caught it. Both now describe the two scopes and why
+the second discloses nothing new.
+
+More importantly, the edge scope was verified only where it *answers*. Every
+gate run showed a caller getting rows it was entitled to; none showed a caller
+being refused rows it was not. A scope that never refuses is enumeration wearing
+a filter, and it would have passed every one of those gates.
+
+`fabric-publisher` now checks it directly: its only declared edge is to
+`fabric-service`, so `fabric-subscriber` — a sibling on the same route, sharing
+no grant with it — must not appear in its read. Verified non-vacuous by pointing
+the check at the publisher's own identity, which fails the plane with `graph read
+disclosed a component this one shares no edge with`. That makes C8.8's
+"an ungranted caller inferred nothing" rest on an observation rather than on the
+absence of a counterexample.

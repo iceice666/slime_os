@@ -81,17 +81,22 @@ operations :: List Operation = {
   -- declared to do: `FabricGraph` carries a `fabricComponentIdentity`, and the
   -- root already folds instance names to that identity to admit the graph at
   -- all (`fabric_graph_participants_are_declared`), so the test is a property
-  -- of the generation rather than a policy judgement. Every other instance
-  -- reads its *own* rows and nothing else, which is the scoping
-  -- `RESOLVE_BINDING` already applies: a component learns what the generation
-  -- declares about it, and nothing about anyone else.
+  -- of the generation rather than a policy judgement.
+  --
+  -- Every other instance reads two things and no more: its *own* rows, and the
+  -- rows of components it shares a *declared capability edge* with. The first is
+  -- the scoping `RESOLVE_BINDING` already applies -- a component learns what the
+  -- generation declares about it. The second exists for a route worker, which
+  -- brokers for participants it neither spawned nor holds the graph of, and
+  -- discloses nothing new: the caller already holds an endpoint the root placed
+  -- from the manifest, so it could already reach that component.
   --
   -- Deliberately not a general graph read. C8.8 makes *which routes exist* a
   -- filtered, per-caller answer the fabric enforces, and
   -- `just sel4_visibility_check` asserts an ungranted caller infers nothing; a
   -- caller that could enumerate the whole graph would bypass that gate rather
-  -- than implement it. A component with no declared rows reads nothing, so the
-  -- self-scoped half discloses only what its holder already knew.
+  -- than implement it. A component with no rows and no edges reads nothing, so
+  -- neither scope discloses what its holder did not already have.
   --
   -- Cursor-paged, because one participant record is 128 bytes against a
   -- 64-byte message bound. The reply travels through the caller's transfer
