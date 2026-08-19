@@ -25,26 +25,30 @@ use boot_contracts::generation::{
     RIGHT_SPAWN, RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 
-/// The resolved fabric profile for the graph this binary was built against.
-/// Init reads only `FABRIC_MINTED_GRANTS` from it: how many capabilities each
-/// child's manifest says its owner must supply at spawn. That count used to be
-/// a hardcoded list here, which was the stream graph's, so every other plane's
-/// spawn was refused for a count init had no way to know (B50/R2).
-#[allow(dead_code)]
-mod profile {
-    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
-}
-
-/// How many capabilities `component`'s manifest says its owner must hand it at
-/// spawn. The root matches a spawn request positionally against the child's
-/// declarations in ascending destination-slot order and refuses any other
-/// count, so this is the one number init must agree with -- and it is read
-/// from the resolved profile rather than restated here per plane.
-fn declared_minted_grants(component: &[u8]) -> usize {
-    profile::FABRIC_MINTED_GRANTS
-        .iter()
-        .find(|(holder, _)| *holder == component)
-        .map_or(0, |(_, count)| *count)
+/// Whether the child this instance owns declares a minted binding called
+/// `name` -- the handle init must create and supply at spawn.
+///
+/// The generated `FABRIC_MINTED_GRANTS` table stated this as a *count* per
+/// holder, and init compared that count against a vector length. A count is a
+/// lossy summary of the composition: two planes reach the same total through
+/// different sets, so it answers "how many" when what init needs is "which".
+/// Asking the root by name answers the real question and has no order to be
+/// sensitive to, which is what let the generated table go.
+///
+/// The child is not named because the handle already identifies it: this owner
+/// declares each minted name at most once, and two children declaring the same
+/// one is an ambiguity `owned-minted:` refuses rather than resolving to
+/// whichever the builder emitted first.
+fn declares_minted(name: &[u8]) -> bool {
+    let mut query = [0u8; 64];
+    let prefix = b"owned-minted:";
+    let end = prefix.len() + name.len();
+    if end > query.len() {
+        return false;
+    }
+    query[..prefix.len()].copy_from_slice(prefix);
+    query[prefix.len()..end].copy_from_slice(name);
+    slime_rt::resolve_binding(&query[..end]).is_ok()
 }
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
@@ -439,9 +443,9 @@ fn drive_boot_plane() -> ! {
     // Endpoint the root installed into both declaring instances before this
     // task, or any child it spawns, ran at all. Init places nothing.
     slime_rt::debug_write(b"[init] fabric boot control channels minted\n");
-    // The stream broker's loan receivers, in the order the resolved profile
-    // numbers them at slots 9..14. `FABRIC_SUPERVISION` derives that order, and
-    // the fixture's minted bindings must agree row for row.
+    // The stream broker's loan receivers. Spawn order is the order the
+    // fixture's minted bindings declare, ascending by slot, because the root
+    // matches a spawn's grant vector positionally against those declarations.
     let publisher = spawn_boot(b"executable:fabric-publisher");
     let subscriber = spawn_boot(b"executable:fabric-subscriber");
     let publisher_b = spawn_boot(b"executable:fabric-publisher-b");
@@ -1215,9 +1219,12 @@ fn drive_matrix_plane() {
 
     // Positional against the child's ascending declared slot, exactly as every
     // other fabric plane: the factory first, then one supervision handle per
-    // holder in the order `FABRIC_SUPERVISION` lists them. `FABRIC_MINTED_GRANTS`
-    // states how many the generation expects, so a composition that drifted from
-    // the fixture is refused at spawn rather than mis-bound.
+    // holder. A composition that drifted from the fixture is refused at spawn
+    // rather than mis-bound -- by the root, which derives the expected count
+    // from the generation in `preflight_spawn_grants` and reports both operands.
+    // Init carried a copy of that check against a generated table; both sides
+    // regenerated from one manifest together, so it could only confirm the
+    // table agreed with itself.
     //
     // The probe's handle is in the vector even though it holds no edge. The
     // broker's dispatch loop needs it to know the refused caller has stopped
@@ -1233,11 +1240,6 @@ fn drive_matrix_plane() {
         grant(probe, RIGHT_SUPERVISE),
         grant(proxy, RIGHT_SUPERVISE),
     ];
-    let declared = declared_minted_grants(b"fabric-service");
-    if declared != grants.len() {
-        slime_rt::debug_write(b"[init] matrix plane fail: fabric-service grant count\n");
-        slime_rt::exit(1);
-    }
     let service = spawn_boot_with(b"executable:fabric-service", &grants);
     plane_marker(b"matrix", b" fabric spawned\n");
 
@@ -1575,11 +1577,17 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
     // What init still passes is exactly what the generation cannot place: the
     // shared-buffer factory it holds, and one supervision handle per ring
     // participant and declared proxy, which only exist once those tasks do.
-    // Matching is positional against ascending declared slot: factory at 1,
-    // plane declaring an interposition names the proxy among them. Which those
-    // are is a manifest fact, not a build flag: `FABRIC_MINTED_GRANTS` states
-    // how many capabilities this child's owner must supply, so the set is
-    // sliced to that generated count.
+    // Matching is positional against ascending declared slot, so the order here
+    // is the order the fixtures declare: factory first, then publisher(7),
+    // subscriber(8), the proxy where a plane interposes one, then the b-pair.
+    //
+    // Which planes interpose is a manifest fact, and the question is *which*
+    // rather than *how many*: `sel4-visibility` declares
+    // `fabric-intruder-supervision` between subscriber and publisher-b, and
+    // `sel4-stream` declares no such handle at all. Asking the root by name
+    // answers that directly. The generated count this replaced could only say
+    // "six or five", which happens to discriminate here but is a summary of the
+    // composition rather than a statement about it.
     let grants = [
         grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
         grant(publisher.supervision_slot, RIGHT_SUPERVISE),
@@ -1589,16 +1597,16 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
         grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
     ];
     let without_proxy = [grants[0], grants[1], grants[2], grants[4], grants[5]];
-    let declared = declared_minted_grants(b"fabric-service");
+    // A failed resolve *is* absence, stated by the generation rather than
+    // papered over at build time -- the same reading the notification axis
+    // established when it replaced an always-emitted `SLOT_ABSENT`.
+    let interposes = declares_minted(b"fabric-intruder-supervision");
     let service = slime_rt::spawn(
         resolve_executable(b"executable:fabric-service"),
-        if declared == grants.len() {
+        if interposes {
             &grants[..]
-        } else if declared == without_proxy.len() {
-            &without_proxy[..]
         } else {
-            slime_rt::debug_write(b"[init] fabric-service grant count is not a declared shape\n");
-            slime_rt::exit(1)
+            &without_proxy[..]
         },
     )
     .unwrap_or_else(|_| slime_rt::exit(1));

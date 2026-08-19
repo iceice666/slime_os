@@ -837,7 +837,14 @@ test_sel4_root:
     # a generation instance name. It replaces an `assert_declared_chain` that
     # lived in each fabric broker and compared a build-time table against a
     # constant compiled beside it.
-    expected=130
+    #
+    # B70: 130 -> 131. `ipc` gained
+    # `owned_minted_names_are_their_own_namespace`, covering the
+    # `owned-minted:` axis that answers `mintedBindings` from the owner's side
+    # rather than the holder's. It pins the dispatch property the two arms
+    # depend on -- neither prefix is a prefix of the other -- so an owner's
+    # question cannot be answered against a holder's instance index.
+    expected=131
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

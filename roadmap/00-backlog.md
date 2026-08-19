@@ -639,6 +639,106 @@ routes each plane carries. It was previously counted among the graph facts; it i
 really a component asserting which graph it belongs to, and a graph read is what
 would let it stop.
 
+**Progress (2026-08-19, `FABRIC_MINTED_GRANTS` design):** design only, no code
+moved. Recorded before touching Rust because the census note above understates
+the work and misplaces the difficulty.
+
+**This corrects that note in two respects.** `FABRIC_MINTED_GRANTS` is read at
+one *site* (`init.rs:44`) but through a helper with **two call sites**, and they
+are not the same question. `init.rs:1236` asserts a count equals a fixed
+8-element array's length on the matrix plane; `init.rs:1592` *selects between two
+grant shapes*, 6 with the interposition proxy's supervision handle and 5 without,
+on the stream and visibility planes. Only the first is the cheap deletion the
+note implies. And the blocker recorded earlier — that `minted:` is holder-scoped
+while init is only the *owner* — is not a data-model gap: `MintedBinding` already
+carries `owner`, so the missing piece is a query, not a schema field.
+
+The count site is **redundant with the root**. `preflight_spawn_grants`
+(`slime-root/src/main.rs:3559`) derives `parent_supplied + minted_count` at
+runtime from the generation and returns `IpcError::BadCapability` on mismatch,
+which is precisely the `minted + supplied` sum `declared_spawn_grant_counts`
+computes at build time. `spawn_boot_with` fails closed on any spawn error, so
+deleting init's check relocates the same refusal to the authority that owns the
+number, with a diagnostic naming both operands. Neither init error string
+(`matrix plane fail: fabric-service grant count`, `grant count is not a declared
+shape`) is asserted by any script under `scripts/`, so no gate depends on where
+the refusal is stated.
+
+This is the `FABRIC_INTERPOSITIONS` shape exactly: a build-time table checked
+against a constant regenerated from the same manifest, so the assertion can only
+confirm the table agrees with itself. Substituting a component here would move
+both operands together and leave the gate green, as it did there.
+
+The shape site needs one fact, and the count is a poor proxy for it. Read
+directly from the fixtures, `fabric-service`'s minted bindings in **ascending
+slot** order — the order `declarations_below` actually matches on — are
+publisher(7), subscriber(8), publisher-b(9), subscriber-b(10) on `sel4-stream`,
+and publisher(7), subscriber(8), **intruder(9)**, publisher-b(10),
+subscriber-b(11) on `sel4-visibility`. With the factory ahead of them that is
+init's `grants` array with the proxy at index 3, and `without_proxy` when it is
+absent. The 6-vs-5 count encodes one boolean: does this owner's child declare a
+minted binding named `fabric-intruder-supervision`.
+
+**Planned fix:** a sixth `resolve_binding` axis, `owned-minted:<name>`, scoped to
+`owner == caller` rather than `holder == caller`, over the same `mintedBindings`
+table the `minted:` arm reads. Its own prefix rather than relaxing the existing
+filter, on the rule `ipc.rs` already states for `executable:`: these are
+different questions over one table, and letting an owner-scoped lookup answer a
+holder-scoped name is the shadowing the prefixes exist to prevent. Init then asks
+for `fabric-intruder-supervision` and branches on resolve-versus-refuse, and both
+call sites plus the helper, the `profile` module, and `init.rs`'s
+`include!(".../fabric_profile.rs")` go with them — a second of the four
+`build.rs`-private tables named in the problem statement leaving `init` entirely.
+Presence-by-refusal is the pattern the notification axis already established: a
+failed resolve *is* absence, stated by the generation rather than papered over at
+build time.
+
+Order-sensitivity does not return. CP1 sorted `declared_spawn_grant_counts`
+because its output compiled into an ELF; a name lookup has no order to be
+sensitive to, and deleting the table removes the reason the sort exists rather
+than depending on it.
+
+Two things to verify against, not assume. `sel4-qos` declares
+`fabric-service-shared-buffer-factory` at slot 1 where `sel4-stream` does not,
+yet init passes a factory as `grants[0]` on both and both total 5 by different
+compositions — so the count is not a function of the supervision set alone, and
+the factory row must be re-read when the branch changes. And the earlier B71
+claim at `build-generation.py:3767` that this table has "one derivation, both
+readers" is **wrong**: `contracts/boot-layout/v1`'s `LayoutEntry` is
+`{name_identity, slot, role, rights}` with no count field, the counts land in the
+fabric-graph artifact's `mintedGrants` rows, and `boot-contracts/src/fabric_graph.rs`
+decodes no minted field at all. The rendered Rust constant is the table's only
+reader; deleting it deletes the last one, and that comment should go with it.
+
+**Progress (2026-08-19, `FABRIC_MINTED_GRANTS` migrated):** the design above is
+implemented and verified, and `init.rs` now `include!`s **nothing** — the second
+of the four `build.rs`-private tables named in the problem statement to leave a
+component entirely.
+
+`owned-minted:<name>` is a sixth `resolve_binding` axis, scoping `mintedBindings`
+by `owner` where `minted:` scopes by `holder`. The matrix count assertion is
+deleted rather than migrated: `preflight_spawn_grants` already refuses the same
+mismatch with a diagnostic naming both operands, so init's copy was the
+`FABRIC_INTERPOSITIONS` shape — two operands derived from one manifest, able only
+to confirm the table agreed with itself. The stream/visibility shape selection
+branches on whether `fabric-intruder-supervision` resolves.
+
+Both gate directions are proven non-vacuous, which matters because the branch has
+a plausible failure mode in each direction: forcing the query `false` fails
+`just sel4_visibility_check`, forcing it `true` fails `just sel4_stream_check`,
+each as `SLIME_ROOT FATAL … required instance init exit status=1`. The root
+catches both, which is the argument for deleting init's own check. B23 pin 130 to
+131 for `owned_minted_names_are_their_own_namespace`, which pins the dispatch
+property the two arms rest on: neither prefix is a prefix of the other.
+`just sel4_boot_layout_check` passes **unchanged** at 25 plane layouts, as
+expected — init's own resolved slots did not move.
+
+`FABRIC_MINTED_GRANTS` is still generated and rendered with no consumer left;
+deleting the generator expression, the emission, and the checked-in rows is the
+close-out, together with the false B71 "one derivation, both readers" comment
+above it.
+**Evidence:** [`devlog/2026-08-19-owned-minted-shape-selection/`](../devlog/2026-08-19-owned-minted-shape-selection/index.md)
+
 
 ### B72 — the visibility plane's QoS view records are counted but never checked against the route they describe
 

@@ -533,6 +533,23 @@ pub fn resolve_binding_slot(
     if let Some(minted) = name.strip_prefix("minted:") {
         return resolve_minted_slot(generation, instance_index, minted);
     }
+    // The same table asked from the other side -- `owned-minted:<name>`.
+    //
+    // A minted binding names two instances: the `holder` whose slot it fixes,
+    // and the `owner` who must create the object and hand it over at spawn. The
+    // arm above answers the holder's question, "which of my slots is this?". An
+    // owner asks a different one -- "does the child I am about to spawn declare
+    // this handle?" -- because what it must supply is a property of the child's
+    // declarations, not of its own.
+    //
+    // Its own prefix rather than a relaxation of the filter above, on the rule
+    // the `executable:` fix established: these are two questions over one table,
+    // and a name answering both would let an owner-scoped lookup satisfy a
+    // holder-scoped one. The slot returned is the *holder's*, which is what a
+    // spawn's positional match is against.
+    if let Some(minted) = name.strip_prefix("owned-minted:") {
+        return resolve_owned_minted_slot(generation, instance_index, minted);
+    }
     None
 }
 
@@ -555,6 +572,41 @@ fn resolve_minted_slot(
     for index in 0..generation.minted_binding_count() {
         let binding = generation.minted_binding(index).ok()?;
         if binding.holder != holder || binding.name != name {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(binding.slot);
+    }
+    found
+}
+
+/// Which slot the minted binding named `name` declares, among those `owner`
+/// must supply.
+///
+/// Scoped to the caller's authenticated *owner* index, where `resolve_minted_slot`
+/// scopes to `holder`. Both read `mintedBindings`; they differ in which end of
+/// the record the caller is standing on. An owner needs this to know whether a
+/// child declares a given handle at all, since a spawn is matched positionally
+/// against the child's declarations and a composition that omits one expects a
+/// shorter vector.
+///
+/// Returns the holder's slot, not the owner's: the owner holds no slot for a
+/// minted binding, and the holder's is the number the positional match uses.
+///
+/// Ambiguity refuses, as on every axis here. One owner declaring the same minted
+/// name for two children is answerable only by naming the child, and this
+/// question does not.
+fn resolve_owned_minted_slot(
+    generation: &boot_contracts::generation::Generation<'_>,
+    owner: usize,
+    name: &str,
+) -> Option<usize> {
+    let mut found: Option<usize> = None;
+    for index in 0..generation.minted_binding_count() {
+        let binding = generation.minted_binding(index).ok()?;
+        if binding.owner != owner || binding.name != name {
             continue;
         }
         if found.is_some() {
@@ -1229,5 +1281,32 @@ mod tests {
         assert!(!"minted:x".starts_with("kind:"));
         assert!(!"minted:x".starts_with("notification:"));
         assert!(!"kind:endpoint".starts_with("minted:"));
+    }
+
+    /// The owner-scoped view of `mintedBindings` is a distinct namespace from
+    /// the holder-scoped one, and the two prefixes cannot claim one name.
+    ///
+    /// One minted record names two instances: the `holder` whose slot it fixes
+    /// and the `owner` who creates the object and supplies it at spawn. Which
+    /// end asks changes the answer, so `owned-minted:` cannot be a synonym for
+    /// `minted:`. The property that matters for dispatch is that the arms are
+    /// unreachable from each other: `owned-minted:x` must not be routed by the
+    /// `minted:` arm, which is what the prefix test below fixes -- the arms are
+    /// matched in order and a name starting with `owned-minted:` does not start
+    /// with `minted:`.
+    #[test]
+    fn owned_minted_names_are_their_own_namespace() {
+        assert!(binding_name_admissible(
+            b"owned-minted:fabric-intruder-supervision"
+        ));
+        // The dispatch property. If this were false the holder arm would answer
+        // an owner's question against the wrong instance index.
+        assert!(!"owned-minted:fabric-intruder-supervision".starts_with("minted:"));
+        // ...and the reverse, so the owner arm cannot claim a holder's name.
+        assert!(!"minted:fabric-intruder-supervision".starts_with("owned-minted:"));
+        // Unprefixed grant names reach neither.
+        assert!(!"fabric-intruder-supervision".starts_with("owned-minted:"));
+        assert!(!"owned-minted:x".starts_with("kind:"));
+        assert!(!"owned-minted:x".starts_with("notification:"));
     }
 }
