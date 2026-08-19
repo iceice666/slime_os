@@ -308,3 +308,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-19 | [Interposition hop identity moves from broker constants to root admission](2026-08-19-interposition-hop-identity/index.md) | Defect | Verified | B70 |
 | 2026-08-19 | [Init asks which handle a child declares, not how many](2026-08-19-owned-minted-shape-selection/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [B72: the visibility plane's QoS records are decoded and frozen](2026-08-19-b72-frozen-visibility-view/index.md) | Defect | Verified | B72 |
+| 2026-08-20 | [B73: the matrix plane's graph-wide view is read, not just counted](2026-08-20-b73-matrix-graph-view/index.md) | Defect | Verified | B73 |

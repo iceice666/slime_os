@@ -311,6 +311,65 @@ fn matrix_main() {
         fail(b"matrix publish");
     }
     slime_rt::debug_write(b"[fabric-publisher] matrix sample published\n");
+
+    // B73: page this component's own graph-wide view and assert what it admits.
+    //
+    // The plane already proves the `private` branch through `fabric-observer`,
+    // which sees exactly `diagnostics`. Nothing observed the `graph` branch, so
+    // the route set a graph holder is shown went unasserted: the view was paged
+    // and counted elsewhere, never read. Counting alone is invariant under any
+    // permutation of the contents, so the names are asserted in order.
+    //
+    // The expected names are source literals rather than anything derived from
+    // `sel4-matrix.zti`. An expectation generated from the same fixture a
+    // mutation edits moves with it and stays green — the vacuity that retired
+    // `FABRIC_INTERPOSITIONS`. These are the graph's public shape, which is
+    // what `graph` visibility means, not another component's private data.
+    let mut cursor = 0;
+    let mut routes = 0;
+    loop {
+        match request_page(CONTROL_SLOT, cursor).unwrap_or_else(|_| fail(b"matrix graph view")) {
+            ViewPage::Route(record) => {
+                let expected = if routes == 0 {
+                    b"telemetry".as_slice()
+                } else if routes == 1 {
+                    b"telemetry-alt".as_slice()
+                } else if routes == 2 {
+                    b"diagnostics".as_slice()
+                } else {
+                    fail(b"matrix graph view exposed extra route")
+                };
+                if &record.route_name[..record.route_name_len as usize] != expected {
+                    // Name the route that should have been at this position.
+                    // A route dropping out of the view shifts every later one
+                    // forward, so the position that mismatches is the position
+                    // the missing route vacated.
+                    slime_rt::debug_write(b"[fabric-publisher] matrix graph view expected ");
+                    slime_rt::debug_write(expected);
+                    slime_rt::debug_write(b" but was shown ");
+                    slime_rt::debug_write(&record.route_name[..record.route_name_len as usize]);
+                    slime_rt::debug_write(b"\n");
+                    fail(b"matrix graph view route order");
+                }
+                if record.contract_kind != CONTRACT_KIND_STREAM as u8 {
+                    fail(b"matrix graph route metadata");
+                }
+                routes += 1;
+                cursor = record.cursor;
+            }
+            // The matrix broker answers routes only; kept for shape parity with
+            // the visibility plane's loop, and deliberately not counted.
+            ViewPage::Qos(record) => cursor = record.cursor,
+            ViewPage::End(record) => {
+                let _ = record.cursor;
+                break;
+            }
+        }
+    }
+    if routes != 3 {
+        fail(b"matrix graph view bound");
+    }
+    slime_rt::debug_write(b"[fabric-publisher] matrix graph view routes=3\n");
 }
 fn visibility_main() {
     let mut cursor = 0;

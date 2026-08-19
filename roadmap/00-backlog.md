@@ -756,37 +756,6 @@ the same reassurance.
 **Evidence:** [`devlog/2026-08-19-owned-minted-shape-selection/`](../devlog/2026-08-19-owned-minted-shape-selection/index.md)
 
 
-### B73 — the matrix plane never checks the view a graph-visibility holder pages, only the observer's
-
-`check-sel4-matrix-plane.py` requires `[fabric-observer] matrix filtered view
-routes=1` and that the view granted no route authority. That covers the
-`private` branch of the plane's visibility policy for one holder. Nothing checks
-the `graph` branch: no component on this plane asserts how many routes a holder
-granted `graph` visibility pages, or which ones.
-
-Observed 2026-08-19 while migrating `matrix_broker` off the generated tables
-(B70/CP2): a fixture mutation flipping both of `telemetry-alt`'s participants
-from `graph` to `private` passed `just sel4_matrix_check` unchanged. That
-mutation removes `telemetry-alt` from every graph-visibility holder's view,
-taking `fabric-publisher`, `fabric-publisher-b`, and `fabric-subscriber-b` from
-three visible routes to two, and shifts `diagnostics` from view position 2 to
-position 1. The plane declares `telemetry-alt` specifically to prove alternate
-names stay distinct, so a mutation that erases it from every view should not be
-invisible.
-
-The gap is in the gate, not in the implementation: the same mutation was tested
-against unmodified pre-migration code and survived there too, so no regression
-was introduced by the migration. A mutation that does break the migrated policy
-— dropping the holder-identity check from the private branch — fails the gate,
-so the `private` half is covered.
-
-Same shape as [B72](#b72--the-visibility-planes-qos-view-records-are-counted-but-never-checked-against-the-route-they-describe): a view is paged and counted, but the
-contents of what it admits go unasserted.
-
-**Exit condition:** a mutation that flips `telemetry-alt`'s declared visibility
-from `graph` to `private` in `contracts/generation/v1/fixtures/sel4-matrix.zti`,
-changing no route name, fails `just sel4_matrix_check`.
-
 ### B74 — the aggregate gate's traffic schedule failed twice in one session on a gate B68 closed as deterministic
 
 `just sel4_fabric_aggregate_check` boots each of two schedules twice over one
@@ -836,6 +805,20 @@ successor closes it.
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
 ## Resolved
+### B73 — the matrix plane never checks the view a graph-visibility holder pages, only the observer's
+
+**Status:** Resolved 2026-08-20. **Class:** Defect (a plane that asserted one
+branch of its visibility policy and was read as covering both).
+**Was:** the matrix plane asserted only what a `private` holder is denied, so
+the route set shown to a `graph` holder was computed every boot and never read,
+and a mutation erasing `telemetry-alt` from every graph-wide view stayed green.
+**Exit condition (observed):** `fabric-publisher` now pages its own view and
+asserts the three declared route names in order, and the admission-neutral flip
+of both `telemetry-alt` participants from `graph` to `private` failed
+`just sel4_matrix_check` naming `telemetry-alt`; restoring the fixture returned
+it to green.
+**Evidence:** [`devlog/2026-08-20-b73-matrix-graph-view/`](../devlog/2026-08-20-b73-matrix-graph-view/index.md)
+
 ### B72 — the visibility plane's QoS view records are counted but never checked against the route they describe
 
 **Status:** Resolved 2026-08-19. **Class:** Defect (a gate that asserted a

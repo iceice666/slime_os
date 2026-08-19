@@ -107,7 +107,9 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # build-time table against a constant compiled beside it -- a check
     # that stayed green when the fixture named a different proxy.
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 26),
-    ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 25),
+    # B73 raised this from 25: the graph-wide view's route order is now
+    # asserted by `fabric-publisher`, the half the plane never read.
+    ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 26),
     # C8.13: three chains -- admission, init's single-threaded spawn order, and
     # the close -- deliberately short. Everything a genuinely concurrent
     # schedule cannot guarantee an order for (per-plane traffic markers,

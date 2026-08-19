@@ -141,6 +141,23 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        # B73. The filtered half above proves what a `private` holder is denied.
+        # This is the other half: what a `graph` holder is *shown*. Both halves
+        # are needed — the plane counted views without reading them, so a route
+        # silently leaving the graph-wide view changed no assertion.
+        #
+        # The publisher asserts the three declared route names in view order
+        # against source literals, so flipping `telemetry-alt`'s participants
+        # from `graph` to `private` in the fixture fails here. That mutation is
+        # admission-neutral: the graph is still admitted with the same schema,
+        # route, participant, and interposition counts asserted above, so
+        # nothing else on this plane moves.
+        "a graph-wide view shows every route declared graph",
+        (
+            r"\[fabric-publisher\] matrix graph view routes=3",
+        ),
+    ),
+    (
         # C8.12 required check 4, first half: the sample reaches the
         # subscriber only through the declared proxy. Only the publish-then-
         # relay edge is causal — the publisher prints after its blocking
