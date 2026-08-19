@@ -3,6 +3,7 @@
 """C8.9 typed full-profile and resource-bound closure gate."""
 
 from __future__ import annotations
+
 import sys as _sys
 from pathlib import Path as _Path
 
@@ -10,6 +11,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import copy
 import os
+import re
 import struct
 import subprocess
 import tempfile
@@ -111,17 +113,17 @@ with tempfile.TemporaryDirectory(prefix="slime-data-fabric-profile-") as tempora
     # The participant *table* retired with B70/CP2 -- a component reads the graph
     # for what it used to compile in. What this still has to catch is the failure
     # the table check caught: rendered Rust silently disagreeing with the canonical
-    # profile. `FABRIC_QOS` and `FABRIC_VISIBILITY` are rendered one row per
-    # participant from the same list, so each must carry every declared participant
-    # and carry exactly as many rows as there are participants.
+    # profile. `FABRIC_QOS` is rendered one row per participant from the declared
+    # list, so it must carry every declared participant and carry exactly as many
+    # rows as there are participants.
     #
     # Both halves are load-bearing, and each was observed failing without the other.
     # Searching the whole file for a `(b"component", "route", ` prefix proves
     # nothing, because `FABRIC_NOTIFICATION_BINDINGS` renders that same prefix and
-    # keeps the substring alive after `FABRIC_QOS` and `FABRIC_VISIBILITY` have lost
-    # the row -- so the search is scoped to one table body at a time. Membership
-    # alone is likewise not enough: a duplicated participant covers for a dropped
-    # one, which the row count catches and the substring search does not.
+    # keeps the substring alive after `FABRIC_QOS` has lost the row -- so the search
+    # is scoped to one table body. Membership alone is likewise not enough: a
+    # duplicated participant covers for a dropped one, which the row count catches
+    # and the substring search does not.
     def table_body(name):
         opening = f"pub const {name}"
         start = rust.find(opening)
@@ -133,21 +135,47 @@ with tempfile.TemporaryDirectory(prefix="slime-data-fabric-profile-") as tempora
             fail(f"rendered Rust {name} table is not delimited as expected")
         return rust[start + 2 : end]
 
-    for name in ("FABRIC_QOS", "FABRIC_VISIBILITY"):
-        body = table_body(name)
-        rows = [line for line in body.splitlines() if line.strip()]
-        if len(rows) != len(first.artifact["participants"]):
+    body = table_body("FABRIC_QOS")
+    rows = [line for line in body.splitlines() if line.strip()]
+    if len(rows) != len(first.artifact["participants"]):
+        fail(
+            f"rendered Rust FABRIC_QOS has {len(rows)} rows for "
+            f"{len(first.artifact['participants'])} declared participants"
+        )
+    for row in first.artifact["participants"]:
+        expected = f'(b"{row["component"]}", "{row["route"]}", '
+        if expected not in body:
+            fail("rendered Rust FABRIC_QOS diverges from the canonical profile participants")
+
+    # Limits are checked by *name*, not by value-anywhere-in-the-file. The older
+    # `f" = {value};" not in rust` search could not fail for most limits: `routes`,
+    # `queueDepth`, `historyDepth`, and `eventDepth` all declare 8, and `buffers`,
+    # `mappings`, and `loans` all declare 14, so one surviving constant satisfied
+    # the search for every other limit sharing its value.
+    #
+    # The property that actually holds is bidirectional and survives the profile
+    # choosing to render fewer constants than the graph declares: every rendered
+    # `FABRIC_MAX_*` must name a declared limit and carry that limit's exact value,
+    # and the profile must still render some. A renamed, dropped, or drifted
+    # constant fails; a deliberate emission change does not.
+    def limit_const(key):
+        return "FABRIC_MAX_" + re.sub(r"(?<!^)(?=[A-Z])", "_", key).upper()
+
+    declared = {limit_const(e["name"]): (e["name"], e["value"]) for e in first.artifact["limits"]}
+    rendered = dict(
+        re.findall(r"^pub const (FABRIC_MAX_[A-Z0-9_]+): \w+ = (\d+);", rust, re.MULTILINE)
+    )
+    if not rendered:
+        fail("rendered Rust declared no limit constants at all")
+    for name, value in rendered.items():
+        if name not in declared:
+            fail(f"rendered Rust declares {name}, which is not a limit of the canonical profile")
+        key, expected_value = declared[name]
+        if int(value) != expected_value:
             fail(
-                f"rendered Rust {name} has {len(rows)} rows for "
-                f"{len(first.artifact['participants'])} declared participants"
+                f"rendered Rust {name} is {value}, but the canonical profile "
+                f"declares {key} = {expected_value}"
             )
-        for row in first.artifact["participants"]:
-            expected = f'(b"{row["component"]}", "{row["route"]}", '
-            if expected not in body:
-                fail(f"rendered Rust {name} diverges from the canonical profile participants")
-    for entry in first.artifact["limits"]:
-        if f" = {entry['value']};" not in rust:
-            fail(f"Rust profile omitted the {entry['name']} limit value")
 
     schema_bytes = left_paths[2].read_bytes()
     header = NORMALIZED_SCHEMAS_HEADER.unpack_from(schema_bytes)

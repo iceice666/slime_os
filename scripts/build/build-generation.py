@@ -1795,10 +1795,6 @@ def render_fabric_profile_rust(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['deadlineNs']}, {row['lifespanNs']}, {row['leaseNs']}, {row['historyDepth']}, {row['retainedDepth']}, {row['reliability']}, {row['durability']}, {row['liveliness']}),\n"
         for row in participants
     )
-    visibility_rows = "".join(
-        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['visibility']}),\n"
-        for row in participants
-    )
     notification_grants = {grant["name"]: grant for grant in resolved.manifest.get("notificationGrants", [])}
     notification_bindings = resolved.manifest.get("notificationBindings", [])
     notification_by_holder = {
@@ -1854,14 +1850,6 @@ def render_fabric_profile_rust(
     controls = lambda name: "".join(
         f"    b{rust_string(row['component'])},\n" for row in planes[name]
     )
-    # C8.10 bounded route workers. One row per worker: the routes it carries and
-    # the number of live wake sources it must hold at once. The fabric parks on
-    # exactly this set, so the generation — not a runtime heuristic — decides how
-    # the graph is partitioned across per-worker wake-source sets.
-    worker_rows = "".join(
-        f"    ({rust_string(row['name'])}, &[{', '.join(rust_string(route) for route in row['routes'])}], {row['waitSources']}),\n"
-        for row in artifact["workers"]
-    )
     minted_grant_rows = "".join(
         f"    (b{rust_string(row['holder'])}, {row['count']}),\n"
         for row in artifact["mintedGrants"]
@@ -1870,16 +1858,12 @@ def render_fabric_profile_rust(
         f"    ({rust_string(row['name'])}, {rust_string(row['identity'])}, 0x{row['typeTag']}, {row['contractKind']}, {row['maxEncodedBytes']}),\n"
         for row in artifact["schemas"]
     )
-    route_rows = "".join(
-        f"    ({rust_string(row['name'])}, {rust_string(row['interface'])}, {rust_string(row['identity'])}, {row['contractKind']}),\n"
-        for row in artifact["routes"]
-    )
     deadline_absent = (1 << 64) - 1
 
     def deadline(route: str) -> int:
         """The tightest deadline any request/response participant declares.
 
-        `FABRIC_DEADLINE_ABSENT`, not zero, denotes a graph with no such route.
+        `u64::MAX`, not zero, denotes a graph with no such route.
         Zero remains available as a real immediate deadline and cannot be
         conflated with absence by generated consumers.
         """
@@ -1893,66 +1877,15 @@ def render_fabric_profile_rust(
     return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
 mod generated_fabric_profile {{
-pub const FABRIC_PROFILE_NAME: &str = {rust_string(artifact['name'])};
 #[allow(dead_code)]
 pub const GENERATION_BOOT_ACTION: &str = {rust_string(boot_action)};
 #[allow(dead_code)]
 pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
-#[allow(dead_code)]
-pub const FABRIC_ROUTES: &[(&str, &str, &str, u32)] = &[\n{route_rows}];
 pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
 pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
 {notification_rows}];
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
-pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[\n{visibility_rows}];
-pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
-pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[\n{worker_rows}];
-/// The wake sources the generation declares one worker parks on at once, or
-/// `WORKER_ABSENT` when this graph declares no route that worker carries.
-///
-/// `const fn` so a broker can bind its own notification array to this number in a
-/// `const _: () = assert!(..)`. The declared peak and the array that has to hold
-/// it then cannot drift apart silently: a broker that grows its park set past
-/// what the generation resolved stops compiling instead of overflowing at boot.
-///
-/// Absent is a real answer rather than a panic, because a broker is a *module*
-/// of `fabric-service` and is therefore compiled into every graph, including
-/// ones that declare no route for it. A stream-only graph has no call or
-/// operation plane; panicking here would make such a graph fail to build over a
-/// constant nothing in it ever reads. The asserts that consume this admit
-/// `WORKER_ABSENT` and keep their exact check for every graph that does declare
-/// the plane, so the drift they exist to catch is still caught.
-#[allow(dead_code)]
-pub const WORKER_ABSENT: usize = usize::MAX;
-#[allow(dead_code)]
-pub const fn fabric_worker_wait_sources(name: &str) -> usize {{
-    let mut index = 0;
-    while index < FABRIC_WORKERS.len() {{
-        let (candidate, _, sources) = FABRIC_WORKERS[index];
-        if konst_str_eq(candidate, name) {{
-            return sources;
-        }}
-        index += 1;
-    }}
-    WORKER_ABSENT
-}}
-
-/// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.
-const fn konst_str_eq(left: &str, right: &str) -> bool {{
-    let (left, right) = (left.as_bytes(), right.as_bytes());
-    if left.len() != right.len() {{
-        return false;
-    }}
-    let mut index = 0;
-    while index < left.len() {{
-        if left[index] != right[index] {{
-            return false;
-        }}
-        index += 1;
-    }}
-    true
-}}
 pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
 pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
 pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
@@ -1963,21 +1896,9 @@ pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
 /// with nothing.
 #[allow(dead_code)]
 pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n{minted_grant_rows}];
-#[allow(dead_code)]
-pub const FABRIC_MAX_ROUTES: usize = {limits['routes']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_INGRESS_SOURCES: usize = {limits['ingressSources']};
 pub const FABRIC_MAX_PUBLISHERS: usize = {limits['publishers']};
 pub const FABRIC_MAX_SUBSCRIBERS: usize = {limits['subscribers']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_CLIENTS: usize = {limits['clients']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_SERVERS: usize = {limits['servers']};
 pub const FABRIC_MAX_SAMPLE_BYTES: usize = {limits['sampleBytes']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_QUEUE_DEPTH: usize = {limits['queueDepth']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_HISTORY_DEPTH: usize = {limits['historyDepth']};
 pub const FABRIC_MAX_EVENT_DEPTH: usize = {limits['eventDepth']};
 pub const FABRIC_MAX_RETAINED_SAMPLES: usize = {limits['retainedSamples']};
 pub const FABRIC_MAX_RETRIES: u8 = {limits['retries']};
@@ -1985,10 +1906,6 @@ pub const FABRIC_MAX_IN_FLIGHT_CALLS: usize = {limits['inFlightCalls']};
 pub const FABRIC_MAX_IN_FLIGHT_OPERATIONS: usize = {limits['inFlightOperations']};
 pub const FABRIC_MAX_BUFFER_PAGES: usize = {limits['bufferPages']};
 pub const FABRIC_MAX_BUFFERS: usize = {limits['buffers']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_MAPPINGS: usize = {limits['mappings']};
-#[allow(dead_code)]
-pub const FABRIC_MAX_LOANS: usize = {limits['loans']};
 pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = {limits['capabilitySlots']};
 pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = {artifact['requiredCapabilitySlots']};
 pub const FABRIC_FRAME_CAPACITY: usize = {artifact['frameCapacity']};
@@ -1999,7 +1916,6 @@ pub const FABRIC_COPY_PAGES: usize = {artifact['copyPages']};
 pub const FABRIC_TRACE_DEPTH: usize = {artifact['traceDepth']};
 pub const FABRIC_TRACE_OVERFLOW: u32 = {artifact['traceOverflow']};
 /// No request/response route of this class exists in the resolved graph.
-pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {deadline('navigation')};
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {artifact['firstControlSlot']};
