@@ -404,8 +404,27 @@ groups:
   what it could compile against instead is the published ceiling, with the
   per-graph value checked at runtime against what the component was built to
   hold. B70's exit clause asks that no component `include!` a `build.rs`-private
-  manifest-derived table — it does not ask that the value be runtime-resolved, so
-  the bounds are closable by *moving their home*, and no syscall is involved.
+  manifest-derived table — it does not ask that the value be runtime-resolved.
+
+  **Tried, and refused on a real boot (2026-08-19).** Compiling `MAX_PARTICIPANTS`
+  against the published ceiling — 7 on the stream graph against 32+32 — faults the
+  component: `SLIME_GRAPH FAIL required instance fabric-service fault`. The arrays
+  are `main`'s stack locals, so `.bss` was byte-identical between the two builds
+  and the ELF grew 32 bytes; the binding constraint is
+  `COMPONENT_DEFAULT_STACK_BYTES = 16384`, against which two ceiling-sized
+  `[Option<_>; 64]` arrays are ~10 KB. Neither of the cheap measurements could
+  have shown this — only the boot did.
+
+  So a component can compile against a ceiling only where that ceiling is close
+  enough to the real value to fit its budget. `components/proto/src/trace_sink.rs`
+  already does exactly this and works, because `MAX_TRACE_DEPTH` is 64 records:
+  storage at the ceiling, per-graph depth as a runtime `capacity` field, asserted
+  in a `const fn`. The split is therefore not "bounds vs graph facts" but **per
+  bound, whether its ceiling fits the budget** — and for the participant arrays it
+  is 9× too large. That makes the remainder genuine CP3/CP4 work: an out-of-tree
+  component needs its own declared capacity, admitted against the graph it is
+  composed into.
+  **Evidence:** [`devlog/2026-08-19-fabric-graph-read-scope/`](../devlog/2026-08-19-fabric-graph-read-scope/index.md)
 - **31 uses are `GENERATION_BOOT_ACTION`** — a single string every fabric
   component branches on to pick which plane's schedule to run
   (`== "traffic"`, `== "matrix"`). Not graph data at all: it is *which

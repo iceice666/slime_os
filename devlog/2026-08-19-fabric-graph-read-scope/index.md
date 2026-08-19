@@ -119,3 +119,45 @@ gate, and `devlog_check`/`typos` are hygiene the README treats as assumed. Named
 here because this entry changed no runtime behaviour: what it asserts is a
 measurement over source, reproducible by the per-symbol counts in the
 investigation log, and there is no plane whose boot would confirm or refute it.
+
+**2026-08-19 — "compile against the published ceiling" is refuted on a real
+boot.** The correction above argued the 39 capacity bounds are closable by moving
+their home: compile against `boot-contracts`' published ceiling, check the
+per-graph value at runtime. Tried against `MAX_PARTICIPANTS` — the smallest
+useful case, 7 on the stream graph against a ceiling of 32 publishers + 32
+subscribers — and it **faults the component**:
+
+```
+SLIME_ROOT FATAL SLIME_GRAPH FAIL required instance fabric-service fault
+seL4 stream plane check: failure marker in serial transcript
+```
+
+The reason is that the arrays are `main`'s stack locals, not statics.
+`.bss` was byte-identical between the two builds (65,624 either way) and the ELF
+grew 32 bytes, so both of the measurements that were easy to take said "free";
+the binding constraint is `COMPONENT_DEFAULT_STACK_BYTES = 16384`, against which
+two ceiling-sized `[Option<Publisher/Subscriber>; 64]` arrays are roughly 10 KB —
+over half the stack before `Frame` or anything else is placed. An ELF-size or
+`.bss` comparison could never have shown this; only the boot did.
+
+So the bounds are **not** closable by re-homing them, and the earlier correction
+was wrong in the opposite direction to the note it corrected: the first said they
+needed a contract that does not exist, the second said the existing contract was
+enough. Neither holds. A component can compile against a ceiling only where the
+ceiling is close enough to the real value to fit its budget, and for the
+participant arrays it is 9× too large.
+
+**What does work is already in the tree, and is the pattern to follow.**
+`components/proto/src/trace_sink.rs:145` sizes its storage at the published
+ceiling `[BLANK; MAX_TRACE_DEPTH]` and carries the per-graph depth as a *runtime*
+`capacity` field, asserting `capacity <= MAX_TRACE_DEPTH` in a `const fn`. That
+works there because `MAX_TRACE_DEPTH` is 64 records, small enough that the
+ceiling-sized array is affordable. It is the right shape for the bounds whose
+ceilings are near their real values, and the wrong shape for the participant
+arrays — so the split is not "bounds vs graph facts" but **per bound, whether its
+ceiling fits the budget**.
+
+That makes this genuinely CP3/CP4 work rather than a filing change: an
+out-of-tree component needs its *own* declared capacity, admitted against the
+graph it is composed into, which is a contract question about component
+specification and not a table that can be moved.
