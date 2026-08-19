@@ -139,3 +139,42 @@ on its own terms rather than as a side effect of retiring a build table.
 
 - Predecessor: [`devlog/2026-08-19-fabric-graph-read-scope/`](../2026-08-19-fabric-graph-read-scope/index.md)
 - Related roadmap item: [B70](../../roadmap/00-backlog.md), [CP2](../../roadmap/10-component-platform.md)
+
+## Corrections
+
+**2026-08-19, same day — the participant fix is wrong, and the reason is
+security.** This entry recommends reading `slot_count` from the ring header
+instead of the graph, and calls it "worth doing regardless of which option below
+is chosen". That is refuted by `Ring::attach`'s own contract, which the entry
+cited for the comparison but did not read as an argument:
+
+> `expected_slots` and `expected_type` come from the caller's own provisioning
+> record, never from the mapping: those are exactly the values a hostile or
+> broken peer would want to choose.
+
+The ring crosses as a **writable** loan — `shared_buffer_loan(..., true)` in
+`fabric-service.rs:797`, writable because the two peers advance disjoint header
+fields — so the header is in a region the peer can write. Taking `slot_count`
+from it would let a compromised peer choose the value the reader then trusts,
+which is the exact substitution `attach` refuses by requiring an independent
+expectation. The current shape is not a redundancy to remove: the header carries
+the value *and* the caller supplies it, and `valid_ring_header` compares them,
+so agreement between two independently-derived numbers is the check.
+
+The correct reading of the participants' comments is therefore the opposite of
+this entry's. "A hardcoded constant here is a disagreement waiting to happen"
+argues for deriving the expectation from the *generation* rather than a literal
+— which is what `FABRIC_HISTORY_DEPTHS` does today. Those four uses are real
+graph reads, not accidental ones, and they belong to whichever option serves
+participants: **Option C's self-view**, since a participant asking for its own
+declared depth is asking for its own row.
+
+`WireCapabilityTransfer` was checked as an alternative carrier and does not hold
+the depth either (magic, version, status, flags, object_kind, direction,
+rights_mask, route_identity).
+
+**Consequence for the staging.** The recommendation was "participant fix first,
+then B, then C's self-view if justified". With the participant fix withdrawn,
+the self-view is no longer optional — it is the only thing that serves those four
+components, so C is a two-step plan (B, then the self-view) rather than three,
+and the 4 uses move from "needs no mechanism" to "needs C".
