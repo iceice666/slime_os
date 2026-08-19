@@ -437,6 +437,52 @@ incremental migration. Doing the trace-depth carrier first would spend a
 contract change, a regen and a root path for no clause progress. No code was
 changed by this investigation.
 
+**Progress (2026-08-20, non-fabric sites measured; survey complete):** the two
+`include!` sites never examined before — `bin/spawn-service.rs:32`
+(`command_profile.rs`) and `bin/dango.rs:48` (`dango_profile.rs`) — are now
+measured, and both are blocked for reasons *unrelated* to the fabric analysis
+above. With this, every one of the 15 migratable sites has a recorded blocker
+and none is merely unexamined.
+
+`dango.rs` is blocked structurally, not by any property of its own table. It
+carries **two** includes: `dango_profile` at `:48` and `fabric_profile` at `:50`,
+the latter for `GENERATION_BOOT_ACTION`, which it branches on four times
+(`:79,86,92,97`). Retiring `COMMAND_NAMES` and `CLIENT_BUDGET` perfectly would
+leave `:50` standing, so it is a zero-progress site by the same arithmetic that
+killed the trace-depth carrier — established *before* measuring its grants, which
+is the ordering the fabric investigation only reached in hindsight.
+
+`spawn-service.rs` has a single include and is the last file where one migration
+could close a site. It cannot, because its three symbols fail independently and
+two were already documented as refused. `RPC_SLOT` stays derived: `sel4-dango.zti`
+grants the component three `send`+`recv` endpoints, so CP2's
+`kind:endpoint+send,recv` role is ambiguous and the query refuses — correctly,
+since which endpoint carries requests is a graph-shape fact. `COMMAND_PROFILE`
+maps a command *name* to an executable slot, likewise graph shape, and its
+executables share one kind and rights set. Only `CLIENT_BUDGET` was open.
+
+`CLIENT_BUDGET` is not closable by the published-ceiling route either, and it
+fails the rule's *first* test rather than the trace depth's second. It sizes
+`[Option<LiveChild>; CLIENT_BUDGET]`, a fixed array in type position on a 16 KiB
+`COMPONENT_DEFAULT_STACK_BYTES` stack — the `MAX_PARTICIPANTS` failure exactly —
+and `boot-contracts` publishes only `MAX_SPAWN_TEMPLATES = 48`, six times the
+declared 8, so a ceiling build would grow the array sixfold. It is additionally
+wire-visible: `valid_request` at `:222` rejects any request whose
+`client_budget` differs, so the constant is a protocol term shared with clients,
+not a private bound. Unlike `traceDepth` no gate asserts it (`scripts/check/`
+contains zero references), so the *gate* is not what blocks it here.
+
+One measurement worth recording against a future attempt: `CLIENT_BUDGET` is read
+from the **profile owner**, not from `spawn-service`. `build.rs`'s
+`command_profile_executable` selects the executable declaring a non-empty
+`commandProfile` — `dango` under `sel4-dango.zti` and `valid.zti`,
+`spawn-service` itself under `sel4.zti` — and falls back to `spawn-service`'s own
+`spawnBudget` when no profile exists. So the constant is one component reading
+*another's* declared budget, which no self-scoped axis can answer by
+construction. It evaluates to 8 in all three fixtures that declare the component
+(`sel4-dango`, `sel4`, `valid`); the uniformity is incidental, since the
+component's own `spawnBudget` is 8 while `dango`'s is also 8 and `init`'s is 4.
+
 
 B70's remaining surface is 18 `include!` sites over three tables.
 `fabric_profile`'s 49 constants (2026-08-19: `FABRIC_SUPERVISION` and
