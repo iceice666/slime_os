@@ -228,3 +228,40 @@ What was *not* established is why two specific components fail to match. Several
 hypotheses were tried without confirming any — the honest state is that the
 cause is unknown, not that a fix is close. The attempt is reverted rather than
 left half-applied, so the tree is at the last green commit.
+
+**2026-08-19 — second attempt: the main bug is found, a second one is not.**
+Reverted again, but two things are now established rather than guessed, and the
+first was the actual cause of the earlier failure.
+
+**Measuring first was what found it.** A temporary probe printing every row the
+component receives, booted directly under QEMU rather than through the gate
+(which suppresses serial on success), showed the data is clean: all six rows
+arrive, route indices map identity on this plane (`local 0 -> graph 0`,
+`local 1 -> graph 1`), and every direction matches the compiled table. So the
+read, the translation, and the encoding were all correct all along — every
+hypothesis about them was wrong.
+
+**The bug was where the read is called.** With the read hoisted above the client
+loop, `fabric-publisher` and `fabric-subscriber` provision correctly and **all
+six edges provision**, where before only three did. `graph_read` stages its reply
+through the component's single transfer window, which `provision_edge` also uses
+to hand out role descriptors; calling it inside the loop had the two contending.
+That was not visible from any hypothesis about identities or orderings — only
+from putting the read somewhere else and watching six edges appear.
+
+**A second failure remains and is not understood.** After all six provision, the
+plane still fails at `[fabric] reject: descriptor validation`, in the loan-admit
+path (`fabric-service.rs:1518`), which checks a sample descriptor against
+`type_tags[route]`. The plausible reading is that a row's local route index is
+reaching a path expecting a different domain, but that was not confirmed, and
+guessing at it is what cost the previous attempt.
+
+Worth noting for the next attempt: `-b` components now provision **diagnostics
+before telemetry**, where the generated table gave telemetry first, because the
+resource sorts rows by grant identity. Nothing has been shown to depend on that
+order — the subscriber matches its rings by route identity — but it is the one
+observable difference between the two row sources, and it is where I would look
+first.
+
+`declared_edges` remains cleanly migratable and independently proven
+non-vacuous; it does not depend on any of the above and could land alone.
