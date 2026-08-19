@@ -83,9 +83,6 @@ const INLINE_SAMPLES: u64 = 2;
 /// are what make that gap exist.
 const STALL_SAMPLES: u64 = 4;
 
-/// This component's name, as the generation's participant table spells it.
-const COMPONENT: &[u8] = b"fabric-publisher";
-
 /// This participant's declared ring depth for `route`, as the generation
 /// resolved it.
 ///
@@ -117,29 +114,29 @@ fn ring_slots_checked(identity: &[u8; 32]) -> usize {
 ///
 /// Step 1 refused this component outright; step 2 answers it its own share. The
 /// property that must still hold is the one C8.8 depends on: it cannot see the
-/// graph. This component is one of six participants on the stream plane and
-/// declares one row, so a read returning more than its own would mean the
-/// self-scope leaked — which is the failure this checks for, not that a read
-/// succeeds.
+/// graph.
+///
+/// Carried a cross-check against `FABRIC_PARTICIPANTS` while both statements of
+/// the graph existed; the table is gone, so the count this component expects can
+/// no longer be derived from anywhere but the reply itself, and comparing a reply
+/// against a number read out of that same reply asserts nothing. What replaces it
+/// is stronger than the count it drops: every returned row must carry *this*
+/// component's identity. That claim is independent of the root because
+/// `component_identity` is a hash of a name this component spells itself, and it
+/// subsumes the old sibling-refusal check -- a leaked row fails it whether the
+/// leak names `fabric-subscriber` or anything else (B70/CP2).
 fn prove_graph_self_view() {
-    let mut rows = [0u8; 8 * 128];
-    let count = slime_rt::graph_read(0, &mut rows)
+    let mut rows = slime_components::fabric_self_view::EMPTY_ROWS;
+    let count = slime_components::fabric_self_view::rows(&mut rows)
         .unwrap_or_else(|_| fail(b"graph read refused a declared participant"));
-    let own = FABRIC_PARTICIPANTS
-        .iter()
-        .filter(|(component, _, _, _)| *component == COMPONENT)
-        .count();
-    if count != own {
-        fail(b"graph self view returned rows this component does not declare");
+    // A participant declares at least one row on every plane it runs on, so an
+    // empty answer is a failed read wearing the shape of a scoped one.
+    if count == 0 {
+        fail(b"graph self view answered no rows to a declared participant");
     }
-    // The edge scope must also *refuse*. This component's only declared edge is
-    // to `fabric-service`, so a sibling participant it shares no grant with must
-    // not appear -- otherwise the second scope would be enumeration wearing a
-    // filter, and C8.8's "an ungranted caller inferred nothing" would rest on
-    // nothing. Checked by identity because rows carry identities, not names.
-    let sibling = boot_contracts::fabric_graph::component_identity("fabric-subscriber");
-    for row in 0..count {
-        if rows[row * 128 + 32..row * 128 + 64] == sibling {
+    let own = boot_contracts::fabric_graph::component_identity("fabric-publisher");
+    for row in rows.iter().take(count) {
+        if row.component_identity != own {
             fail(b"graph read disclosed a component this one shares no edge with");
         }
     }

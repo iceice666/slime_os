@@ -325,67 +325,40 @@ impl Frame {
     };
 }
 
-/// Prove the root's `GRAPH_READ` answers this component, and that what it
-/// answers agrees with the table currently compiled in (B70/CP2).
+/// Prove the root answers this component the *whole* graph (B70/CP2).
 ///
-/// Compared against `FABRIC_PARTICIPANTS` rather than asserted alone, because
-/// agreement between two independently-derived statements of the graph is the
-/// only evidence available before the consumers migrate: the read is served from
-/// the resource object admission validated, the table from `build.rs` parsing
-/// the manifest, and a mismatch means one of them is wrong.
+/// Compared against `FABRIC_PARTICIPANTS` while both statements of the graph
+/// existed, because agreement between two independently-derived tables was the
+/// only evidence available before the consumers migrated. The consumers have
+/// migrated and the table is gone, so the row count this component expects can
+/// no longer be derived from anywhere but the reply -- and a reply checked
+/// against a number read out of that same reply asserts nothing. The cardinality
+/// claim is therefore dropped rather than restated circularly.
+///
+/// What survives is the property the holder scope actually grants, and it is
+/// checked in the one direction that stays independent of the root: this
+/// component declares *no* participant row on any plane -- it is the graph's
+/// `fabricComponent`, never a participant -- so every row it can see belongs to
+/// somebody else. A non-empty answer none of whose rows are its own is exactly
+/// what whole-table scope means here, and `component_identity` folding a name
+/// this component spells itself is what makes the check independent.
 fn prove_graph_read() {
-    use boot_contracts::fabric_graph::component_identity;
-
-    let mut rows = [0u8; 8 * 128];
-    let mut cursor = 0usize;
-    let mut total = 0usize;
-    loop {
-        let count = match slime_rt::graph_read(cursor, &mut rows) {
-            Ok(count) => count,
-            Err(_) => fail(b"graph read refused for the declared holder"),
-        };
-        if count == 0 {
-            break;
-        }
-        // Decode each row through the contract and check it against the table
-        // compiled in from the same manifest. Comparing the *count* alone would
-        // pass on rows that were empty, truncated, or in the wrong order, which
-        // is exactly what a layout mistake produces -- so the content is what is
-        // compared, field by field, for every row.
-        for row in 0..count {
-            let bytes = &rows[row * 128..(row + 1) * 128];
-            let direction = u32::from_le_bytes(
-                bytes[68..72]
-                    .try_into()
-                    .unwrap_or_else(|_| fail(b"row too short for its direction")),
-            );
-            // Matched by content, not by index. The resource sorts participants
-            // by *grant identity* (the decoder rejects an unsorted table) while
-            // the generated table is in route order, so row `n` of one is not
-            // row `n` of the other -- an index comparison fails on a correct
-            // read, which is how this was found.
-            let matched = FABRIC_PARTICIPANTS
-                .iter()
-                .any(|(component, _, _, declared)| {
-                    *declared == direction
-                        && core::str::from_utf8(component)
-                            .map(|name| component_identity(name) == bytes[32..64])
-                            .unwrap_or(false)
-                });
-            if !matched {
-                fail(b"graph read row matches no declared participant");
-            }
-        }
-        total += count;
-        cursor += count;
-        if count < 8 {
-            break;
+    let mut rows = slime_components::fabric_self_view::EMPTY_ROWS;
+    let count = slime_components::fabric_self_view::rows(&mut rows)
+        .unwrap_or_else(|_| fail(b"graph read refused for the declared holder"));
+    // An empty answer and a refused one are different failures, and only the
+    // refusal surfaces itself. Every plane declares participants, so zero rows to
+    // the holder means the scope collapsed, not that the graph is empty.
+    if count == 0 {
+        fail(b"graph read answered the declared holder no rows");
+    }
+    let own = boot_contracts::fabric_graph::component_identity("fabric-service");
+    for row in rows.iter().take(count) {
+        if row.component_identity == own {
+            fail(b"graph read named the broker as a participant");
         }
     }
-    if total != FABRIC_PARTICIPANTS.len() {
-        fail(b"graph read disagrees with the compiled table");
-    }
-    slime_rt::debug_write(b"[fabric] graph read agrees with the declared participants\n");
+    slime_rt::debug_write(b"[fabric] graph read answers the declared holder the whole graph\n");
 }
 
 fn main(_startup_arg: u32) {

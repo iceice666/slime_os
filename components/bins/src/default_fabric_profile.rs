@@ -17,21 +17,11 @@ pub const FABRIC_ROUTES: &[(&str, &str, &str, u32)] = &[
     ("nav-backup", "NavigationOperation", "7c7c3c6671a5de402ab153fb8e5eedca498016c0c4aaa3d7e20c775a410cc448", 3),
     ("navigation", "NavigationOperation", "fef4f95b51f51190b8b30b8cc4ae06aedbce2de0589cf168c366243320258215", 3),
 ];
-pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[
-    (b"fabric-publisher", "telemetry", "TelemetryStream", 1),
-    (b"fabric-subscriber", "telemetry", "TelemetryStream", 2),
-    (b"fabric-call-client", "parameters", "ParameterCall", 3),
-    (b"fabric-call-server", "parameters", "ParameterCall", 4),
-    (b"fabric-op-client", "nav-backup", "NavigationOperation", 3),
-    (b"fabric-op-client", "navigation", "NavigationOperation", 3),
-    (b"fabric-op-server", "navigation", "NavigationOperation", 4),
-];
 pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
 pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
     (b"fabric-publisher", "telemetry", 1, 0, 1),
     (b"fabric-subscriber", "telemetry", 2, 2, 3),
 ];
-
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[
     (b"fabric-publisher", "telemetry", 0, 300, 0, 4, 2, 1, 2, 1),

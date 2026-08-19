@@ -108,10 +108,17 @@ with tempfile.TemporaryDirectory(prefix="slime-data-fabric-profile-") as tempora
             fail(f"{left_path.name} is not byte deterministic")
     zti_check(left_paths[0])
     rust = left_paths[1].read_text(encoding="utf-8")
+    # The participant *table* retired with B70/CP2 -- a component reads the graph
+    # for what it used to compile in. What this still has to catch is the failure
+    # the table check caught: rendered Rust silently disagreeing with the canonical
+    # profile. The QoS and visibility rows are rendered from the same participant
+    # list, so every declared participant must still surface as a (component, route)
+    # pair in what is rendered, and a dropped or misspelled participant fails here
+    # exactly as it did before.
     for row in first.artifact["participants"]:
-        expected = f'(b"{row["component"]}", "{row["route"]}", "{row["interface"]}", {row["direction"]})'
+        expected = f'(b"{row["component"]}", "{row["route"]}", '
         if expected not in rust:
-            fail("Rust participant table diverges from the canonical profile")
+            fail("rendered Rust rows diverge from the canonical profile participants")
     for entry in first.artifact["limits"]:
         if f" = {entry['value']};" not in rust:
             fail(f"Rust profile omitted the {entry['name']} limit value")

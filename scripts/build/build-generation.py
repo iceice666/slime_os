@@ -1791,10 +1791,6 @@ def render_fabric_profile_rust(
     limits = {entry["name"]: entry["value"] for entry in artifact["limits"]}
     participants = artifact["participants"]
     rust_string = lambda value: json.dumps(value, ensure_ascii=True)
-    participant_rows = "".join(
-        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {rust_string(row['interface'])}, {row['direction']}),\n"
-        for row in participants
-    )
     qos_rows = "".join(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['deadlineNs']}, {row['lifespanNs']}, {row['leaseNs']}, {row['historyDepth']}, {row['retainedDepth']}, {row['reliability']}, {row['durability']}, {row['liveliness']}),\n"
         for row in participants
@@ -1906,7 +1902,6 @@ pub const GENERATION_BOOT_ACTION: &str = {rust_string(boot_action)};
 pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
 #[allow(dead_code)]
 pub const FABRIC_ROUTES: &[(&str, &str, &str, u32)] = &[\n{route_rows}];
-pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{participant_rows}];
 pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
 pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
 {notification_rows}];
