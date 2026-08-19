@@ -2892,6 +2892,31 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // The graph index for a route the caller names by identity (B70).
+            capability_table_labels::GRAPH_ROUTE_INDEX => {
+                let response = match words.get(1).copied() {
+                    Some(transfer) if transfer_window::descriptor_len(transfer) == 32 => {
+                        match transfer_window::read_staged_array(
+                            windows.bound(id, descriptor_thread(transfer)),
+                            transfer,
+                            &words,
+                            scratch,
+                        ) {
+                            Ok(frame) => match <[u8; 32]>::try_from(frame.bytes()) {
+                                Ok(identity) => match ipc::route_index_for(generation, &identity) {
+                                    Some(index) => Response::success(index as i64, 0),
+                                    None => Response::error(IpcError::InvalidOperation),
+                                },
+                                Err(_) => Response::error(IpcError::InvalidLength),
+                            },
+                            Err(error) => Response::error(error),
+                        }
+                    }
+                    Some(_) => Response::error(IpcError::InvalidLength),
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(
                     generation, launched, allocator, tasks, id, &words,

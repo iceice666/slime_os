@@ -81,12 +81,31 @@ const COMPONENT: &[u8] = b"fabric-subscriber";
 /// one: a ring formatted at the declared depth failed to attach against a
 /// local guess. Floored at `MIN_RING_SLOTS` exactly as the fabric floors it.
 fn ring_slots(route: &str) -> usize {
-    FABRIC_HISTORY_DEPTHS
+    let identity = route_identity(
+        route,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    ring_slots_checked(route, &identity)
+}
+
+/// The root's answer, cross-checked against the table this migration replaces
+/// while both exist. Agreement between the generation's own resource and the
+/// compiled copy is the evidence the read is right; the check goes away with
+/// the table (B70/CP2).
+fn ring_slots_checked(route: &str, identity: &[u8; 32]) -> usize {
+    let resolved = slime_components::fabric_self_view::ring_slots(identity)
+        .unwrap_or_else(|| fail(b"route declares no history depth"));
+    let compiled = FABRIC_HISTORY_DEPTHS
         .iter()
         .find(|(name, entry, _)| *name == COMPONENT && *entry == route)
         .map(|(_, _, depth)| *depth as usize)
         .unwrap_or_else(|| fail(b"route declares no history depth"))
-        .max(slime_proto::fabric_ring::MIN_RING_SLOTS)
+        .max(slime_proto::fabric_ring::MIN_RING_SLOTS);
+    if resolved != compiled {
+        fail(b"graph read ring depth disagrees with the compiled table");
+    }
+    resolved
 }
 
 fn fail(reason: &[u8]) -> ! {

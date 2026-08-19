@@ -32,6 +32,7 @@ pub mod capability_table_labels {
     pub const OCCUPANCY: u64 = 31;
     pub const RESOLVE_BINDING: u64 = 37;
     pub const GRAPH_READ: u64 = 38;
+    pub const GRAPH_ROUTE_INDEX: u64 = 39;
 }
 
 pub mod directory_labels {

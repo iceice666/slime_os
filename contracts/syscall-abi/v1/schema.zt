@@ -76,19 +76,22 @@ operations :: List Operation = {
   -- participant rows of the graph its generation embeds, instead of compiling
   -- them in from `build.rs`'s `FABRIC_PARTICIPANTS`.
   --
-  -- Answered *only* to the instance the graph itself names as its fabric
-  -- component: `FabricGraph` carries a `fabricComponentIdentity`, and the root
-  -- already folds instance names to that identity to admit the graph at all
-  -- (`fabric_graph_participants_are_declared`). So the authority test is
-  -- "are you the holder this graph declares", which is a property of the
-  -- generation rather than a policy judgement.
+  -- What a caller sees depends on who it is. The instance the graph names as
+  -- its fabric component reads every row, because brokering is what it is
+  -- declared to do: `FabricGraph` carries a `fabricComponentIdentity`, and the
+  -- root already folds instance names to that identity to admit the graph at
+  -- all (`fabric_graph_participants_are_declared`), so the test is a property
+  -- of the generation rather than a policy judgement. Every other instance
+  -- reads its *own* rows and nothing else, which is the scoping
+  -- `RESOLVE_BINDING` already applies: a component learns what the generation
+  -- declares about it, and nothing about anyone else.
   --
   -- Deliberately not a general graph read. C8.8 makes *which routes exist* a
   -- filtered, per-caller answer the fabric enforces, and
-  -- `just sel4_visibility_check` asserts an ungranted caller infers nothing;
-  -- serving the raw graph to any caller would bypass that gate rather than
-  -- implement it. Other components keep asking the fabric over their declared
-  -- control endpoints, as they do today.
+  -- `just sel4_visibility_check` asserts an ungranted caller infers nothing; a
+  -- caller that could enumerate the whole graph would bypass that gate rather
+  -- than implement it. A component with no declared rows reads nothing, so the
+  -- self-scoped half discloses only what its holder already knew.
   --
   -- Cursor-paged, because one participant record is 128 bytes against a
   -- 64-byte message bound. The reply travels through the caller's transfer
@@ -96,6 +99,20 @@ operations :: List Operation = {
   -- `MAX_STAGED_ARRAY_BYTES`, so a call answers at most 8 rows and the caller
   -- resumes from the cursor it is returned.
   operation "capabilityTable" "GRAPH_READ" 38;
+  -- The graph's index for a route the caller names by identity.
+  --
+  -- A participant knows its route by identity — it folds the route name, its
+  -- interface identity, and the contract kind exactly as the builder does — but
+  -- a participant row names the route by *index* into a table the resource
+  -- sorts by that identity. Answering the fold here keeps the sort order inside
+  -- the decoder that owns it; a component deriving the index locally would be
+  -- assuming the resource's ordering, which is the coupling `GRAPH_READ`
+  -- exists to remove.
+  --
+  -- Unscoped, and safe to answer for any caller: a route identity is something
+  -- the asker already holds, so the answer confirms a fold it computed itself
+  -- and names no route it did not already name.
+  operation "capabilityTable" "GRAPH_ROUTE_INDEX" 39;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

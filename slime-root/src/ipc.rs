@@ -53,6 +53,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::OCCUPANCY
         | capability_table_labels::RESOLVE_BINDING
         | capability_table_labels::GRAPH_READ
+        | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_transfer_labels::EXPORT
         | capability_transfer_labels::IMPORT
         | capability_transfer_labels::EXPORT_CANCEL
@@ -790,25 +791,81 @@ pub fn is_declared_fabric_holder(
         == graph.fabric_component_identity()
 }
 
+/// The graph's index for the route whose identity is `identity`.
+///
+/// A participant knows its route by *identity* — it folds the route name, its
+/// interface identity, and the contract kind, exactly as the builder does — but
+/// a participant row names the route by *index* into a table sorted by that
+/// identity. Resolving the two here keeps the ordering rule inside the decoder
+/// that owns it: a component deriving the index locally would be assuming the
+/// resource's sort order, which is precisely the coupling this operation
+/// removes.
+///
+/// Unscoped on purpose, and safe to answer for any caller: a route identity is
+/// something the asker already holds, so the answer confirms a fold it computed
+/// itself and discloses no route it did not already name.
+pub fn route_index_for(
+    generation: &boot_contracts::generation::Generation<'_>,
+    identity: &[u8; 32],
+) -> Option<usize> {
+    let Some(Ok(graph)) = crate::generation::fabric_graph_object(generation) else {
+        return None;
+    };
+    (0..graph.route_count()).find(|index| {
+        graph
+            .route(*index)
+            .is_some_and(|route| route.route_identity == *identity)
+    })
+}
+
 /// Copy participant rows `cursor..` into `out`, returning how many were written.
 ///
-/// `None` when the caller is not the declared holder or the generation embeds no
-/// graph — the same answer in both cases, so a refused caller cannot distinguish
-/// "not yours" from "none exists" and learn that a graph is present.
+/// **What the caller sees depends on who it is, and only on that.** The graph's
+/// declared fabric component reads every row, because brokering is what it is
+/// declared to do. Any other instance reads *its own* rows — the ones whose
+/// `component_identity` is its own — and nothing else. Both are answered from
+/// the same table by the same walk; the filter is the only difference.
+///
+/// The self-scoped half is the rule `resolve_binding_slot` already applies to
+/// bindings: a component learns what the generation declares *about it*, which
+/// it knew at compile time from a generated table, and nothing about anyone
+/// else. It is not a relaxation of the holder rule — a participant still cannot
+/// enumerate the graph, so C8.8's per-caller route filtering stays the fabric's
+/// to enforce and `sel4_visibility_check`'s "an ungranted caller inferred
+/// nothing" is untouched: a component with no rows reads nothing.
+///
+/// `None` only when the generation embeds no graph. A caller with no rows gets
+/// `Some(0)` rather than a refusal, because "no graph here" and "no rows for
+/// you" are different facts and the second is one the caller already knows.
 pub fn read_graph_participants(
     generation: &boot_contracts::generation::Generation<'_>,
     instance: usize,
     cursor: usize,
     out: &mut [u8],
 ) -> Option<usize> {
-    if !is_declared_fabric_holder(generation, instance) {
-        return None;
-    }
     let Some(Ok(graph)) = crate::generation::fabric_graph_object(generation) else {
         return None;
     };
+    let holder = is_declared_fabric_holder(generation, instance);
+    let own = generation
+        .instance(instance)
+        .ok()
+        .map(|instance| boot_contracts::fabric_graph::component_identity(instance.name));
     let mut written = 0;
-    for index in cursor..graph.participant_count() {
+    let mut seen = 0;
+    for index in 0..graph.participant_count() {
+        let participant = graph.participant(index)?;
+        if !holder && own != Some(participant.component_identity) {
+            continue;
+        }
+        // `cursor` counts the rows this caller may see, not rows of the table.
+        // Paging over the unfiltered index would let a participant infer where
+        // its rows sit among everyone else's.
+        if seen < cursor {
+            seen += 1;
+            continue;
+        }
+        seen += 1;
         let end = written + GRAPH_ROW_BYTES;
         if end > out.len() || written / GRAPH_ROW_BYTES >= GRAPH_ROWS_PER_CALL {
             break;
@@ -928,8 +985,8 @@ mod tests {
             // until B70's `GRAPH_READ`. Moving one out of this list is the whole
             // change: a number this test asserts routes nowhere and a number the
             // contract declares are the same fact stated twice, so assigning a
-            // label must fail here first — as it did for 38.
-            39,
+            // label must fail here first — as it did for 38 and 39.
+            40,
             64,
             sel4::Word::MAX,
         ] {

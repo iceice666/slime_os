@@ -540,6 +540,21 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
     }
 }
 
+/// The graph's index for the route whose identity is `identity`.
+///
+/// A participant folds its route name, interface identity, and contract kind
+/// into that identity; a participant row names the route by index into a table
+/// the resource sorts by identity. This resolves the two without the component
+/// assuming that sort order (B70).
+pub fn graph_route_index(identity: &[u8; 32]) -> Result<usize, i64> {
+    let result = transport::graph_route_index(identity);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

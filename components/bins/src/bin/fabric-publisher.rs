@@ -95,23 +95,53 @@ const COMPONENT: &[u8] = b"fabric-publisher";
 /// one: a ring formatted at the declared depth failed to attach against a
 /// local guess. Floored at `MIN_RING_SLOTS` exactly as the fabric floors it.
 fn ring_slots(route: &str) -> usize {
-    FABRIC_HISTORY_DEPTHS
+    let identity = route_identity(
+        route,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    ring_slots_checked(route, &identity)
+}
+
+/// The root's answer, cross-checked against the table this migration replaces
+/// while both exist. Agreement between the generation's own resource and the
+/// compiled copy is the evidence the read is right; the check goes away with
+/// the table (B70/CP2).
+fn ring_slots_checked(route: &str, identity: &[u8; 32]) -> usize {
+    let resolved = slime_components::fabric_self_view::ring_slots(identity)
+        .unwrap_or_else(|| fail(b"route declares no history depth"));
+    let compiled = FABRIC_HISTORY_DEPTHS
         .iter()
         .find(|(name, entry, _)| *name == COMPONENT && *entry == route)
         .map(|(_, _, depth)| *depth as usize)
         .unwrap_or_else(|| fail(b"route declares no history depth"))
-        .max(slime_proto::fabric_ring::MIN_RING_SLOTS)
+        .max(slime_proto::fabric_ring::MIN_RING_SLOTS);
+    if resolved != compiled {
+        fail(b"graph read ring depth disagrees with the compiled table");
+    }
+    resolved
 }
 
-/// A non-holder must be refused (B70/CP2). This component holds a participant
-/// row of its own, so a read that answered it would prove the authority test is
-/// about participation rather than about being the graph's declared holder.
-fn prove_graph_read_refused() {
-    let mut rows = [0u8; 128];
-    if slime_rt::graph_read(0, &mut rows).is_ok() {
-        fail(b"graph read answered a non-holder");
+/// A non-holder reads *its own* rows and nothing else (B70/CP2 step 2).
+///
+/// Step 1 refused this component outright; step 2 answers it its own share. The
+/// property that must still hold is the one C8.8 depends on: it cannot see the
+/// graph. This component is one of six participants on the stream plane and
+/// declares one row, so a read returning more than its own would mean the
+/// self-scope leaked — which is the failure this checks for, not that a read
+/// succeeds.
+fn prove_graph_self_view() {
+    let mut rows = [0u8; 8 * 128];
+    let count = slime_rt::graph_read(0, &mut rows)
+        .unwrap_or_else(|_| fail(b"graph read refused a declared participant"));
+    let own = FABRIC_PARTICIPANTS
+        .iter()
+        .filter(|(component, _, _, _)| *component == COMPONENT)
+        .count();
+    if count != own {
+        fail(b"graph self view returned rows this component does not declare");
     }
-    slime_rt::debug_write(b"[fabric-publisher] graph read refused for a non-holder\n");
+    slime_rt::debug_write(b"[fabric-publisher] graph read is scoped to this component\n");
 }
 
 fn fail(reason: &[u8]) -> ! {
@@ -122,7 +152,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    prove_graph_read_refused();
+    prove_graph_self_view();
     if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;

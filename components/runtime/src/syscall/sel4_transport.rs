@@ -1057,6 +1057,19 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> i64 {
     }
 }
 
+/// Resolve a route identity to the graph's index for it.
+pub fn graph_route_index(identity: &[u8; 32]) -> i64 {
+    let transfer = match stage(identity, &[]) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (operands, used) = payload_operands(0, transfer, identity);
+    result_of(
+        capability_table_labels::GRAPH_ROUTE_INDEX,
+        &operands[..used],
+    )
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

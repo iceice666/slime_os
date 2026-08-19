@@ -6,6 +6,7 @@ pub mod dango_runtime;
 pub mod fabric_boot;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_matrix;
+pub mod fabric_self_view;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_visibility;
 #[cfg(feature = "component-runtime")]
