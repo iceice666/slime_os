@@ -376,7 +376,7 @@ fn finish_proxy_loss(
 /// Bounded by its supervision handle for the same reason the proxy wait is: a
 /// native Endpoint never reports `ERR_PEER_DEAD`, so a subscriber that has
 /// already exited would leave this loop spinning forever.
-fn serve_event_view(control: u32, component: &[u8]) {
+fn serve_event_view(control: u32, component: &'static [u8]) {
     let supervision = supervision_slot_for(component);
     loop {
         let mut message = [0u8; MAX_MSG];
@@ -440,7 +440,7 @@ fn relay_unrelated_route(_roles: &mut Roles) {
 /// reports no peer death, so a dead peer is indistinguishable from a silent one
 /// on the endpoint alone. An error reading the handle means the handle itself
 /// is gone, which is that same answer.
-fn await_exit(component: &[u8]) {
+fn await_exit(component: &'static [u8]) {
     let supervision = supervision_slot_for(component);
     while let Ok(None) = slime_rt::supervision_status(supervision) {
         slime_rt::yield_now();

@@ -351,3 +351,31 @@ Verified: `just sel4_stream_check`, `just sel4_qos_check`, `just
 sel4_fabric_aggregate_check` (280 byte-identical records across four boots,
 covering the traffic walk), `just sel4_matrix_check`, `just
 sel4_visibility_check`, `just fmt_check_all`, `just lint_all`, `just ruff`.
+
+**2026-08-19 — the memo, and a wording correction.** Two `supervision_slot_for`
+callers are on dispatch loops, not startup paths: `receive_time`'s peer-death arm
+runs every iteration of the stream broker's main loop, and `matrix_broker`'s
+`settled` runs on every `Served::Idle` poll. Migrating them off the generated
+table therefore put a syscall where a table read had been — the same defect the
+route-slot migration introduced and fixed one commit earlier, reintroduced
+because the earlier review only asked which *planes* reached these sites, not at
+what *rate*.
+
+`supervision_slot_for` now memoizes into a 12-entry table keyed by the component
+identity. Capacity checked rather than guessed: the largest supervision table any
+seL4 plane declares is 7 (matrix), and overflow degrades to re-resolving rather
+than failing, since a memo is an optimization and a larger graph should get
+slower, not refuse to boot.
+
+The first draft widened the stored identity's lifetime with `transmute`, which
+was unnecessary: every caller already passes a `&'static` row of the generated
+profile or a module `const`, so requiring `'static` at the signature makes the
+memo sound by type rather than by assertion. Doing that surfaced two
+`visibility_broker` functions taking a shorter lifetime purely by omission — the
+compiler located them, and their four call sites all pass module `const`s.
+
+Separately, `await_participants`'s docstring claimed the provisioned set and the
+supervision table "agree by construction". They agree, but as an *observation*:
+the two coincide only because every declared ring participant does in fact
+provision, which is checked per plane and is not a structural guarantee. Reworded,
+since "by construction" would tell a later reader not to re-check it.

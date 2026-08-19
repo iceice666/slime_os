@@ -408,14 +408,16 @@ fn main(_startup_arg: u32) {
 
 /// Block until every participant this service provisioned a ring for has ended.
 ///
-/// The set comes from the provisioned arrays rather than from
-/// `FABRIC_SUPERVISION`, and the two agree by construction: a row exists in that
-/// table exactly for the components holding a ring or an interposition chain
-/// (`resolve_fabric_profile`'s `holders`), and an entry exists here exactly for
-/// the components that asked for and received a ring role. Verified against
-/// every plane reaching a teardown: on `stream` and `qos` the two sets are
-/// equal, and on `traffic` the table's extra rows are precisely the components
-/// that never provision.
+/// The set comes from the provisioned arrays rather than from the generated
+/// supervision table the walk used to read. The two agreed, but as an
+/// observation rather than a construction: a row existed in that table for every
+/// component holding a ring or an interposition chain
+/// (`resolve_fabric_profile`'s `holders`), and an entry exists here for every
+/// component that asked for and received a ring role — which coincide only
+/// because every declared ring participant does in fact provision. Checked on
+/// each plane reaching a teardown: on `stream` and `qos` the two sets are equal,
+/// and on `traffic` the table's extra rows are precisely the components that
+/// never provision.
 ///
 /// That last point is why this replaces a hardcoded skip list rather than merely
 /// restating one. The traffic walk named `fabric-proxy` and `fabric-observer` as
@@ -2347,7 +2349,58 @@ fn send_qos_event(
 /// component this function is already given *is* the name to ask for. That name
 /// means the same thing under every generation declaring it, which the three
 /// spellings this convention replaced did not.
-fn supervision_slot_for(component: &[u8]) -> u32 {
+fn supervision_slot_for(component: &'static [u8]) -> u32 {
+    if let Some(slot) = memoized_supervision_slot(component) {
+        return slot;
+    }
+    let slot = resolve_supervision_slot(component);
+    memoize_supervision_slot(component, slot);
+    slot
+}
+
+/// Component identities are `&'static [u8]` — every caller passes a row of the
+/// generated profile or a `const` in this file — so the memo stores the identity
+/// itself and needs no copy and no unsafe lifetime widening. Requiring `'static`
+/// at the signature is what makes that sound rather than asserted.
+///
+/// Sized by the largest supervision table any seL4 plane declares (7, on the
+/// matrix graph) with headroom. Overflow degrades to re-resolving rather than
+/// failing: the memo is an optimization, and a graph past this bound should get
+/// slower, not refuse to boot.
+static mut SUPERVISION_MEMO: [(&[u8], u32); 12] = [(b"", u32::MAX); 12];
+static mut SUPERVISION_MEMO_LEN: usize = 0;
+
+fn memoized_supervision_slot(component: &'static [u8]) -> Option<u32> {
+    // SAFETY: single-threaded, and every caller is on the one dispatch loop.
+    let (memo, len) = unsafe {
+        (
+            core::ptr::addr_of!(SUPERVISION_MEMO).read(),
+            *core::ptr::addr_of!(SUPERVISION_MEMO_LEN),
+        )
+    };
+    memo[..len]
+        .iter()
+        .find(|(name, _)| *name == component)
+        .map(|(_, slot)| *slot)
+}
+
+fn memoize_supervision_slot(component: &'static [u8], slot: u32) {
+    // SAFETY: as above.
+    unsafe {
+        let len = *core::ptr::addr_of!(SUPERVISION_MEMO_LEN);
+        let memo = &mut *core::ptr::addr_of_mut!(SUPERVISION_MEMO);
+        if let Some(entry) = memo.get_mut(len) {
+            *entry = (component, slot);
+            *core::ptr::addr_of_mut!(SUPERVISION_MEMO_LEN) = len + 1;
+        }
+    }
+}
+
+/// Ask the root, formatting the `minted:` name the convention fixes.
+///
+/// Split from the memo so the resolve path stays readable: this is what runs
+/// once per component, and `supervision_slot_for` is what the hot loops call.
+fn resolve_supervision_slot(component: &'static [u8]) -> u32 {
     // `minted:` + the longest component name + `-supervision`. A supervision
     // object cannot exist before the task it names, so the generation declares
     // where it will land rather than granting it, and `minted:` is the axis that

@@ -448,7 +448,7 @@ fn serve(
 /// Endpoint reports no peer death, so a caller that has finished asking and one
 /// that is merely slow look identical on the endpoint alone. An error reading
 /// the handle means the handle itself is gone, which is that same answer.
-fn settled(component: &[u8]) -> bool {
+fn settled(component: &'static [u8]) -> bool {
     // Resolved from the root by the supervised task's own name, rather than
     // looked up in a generated table. `supervision_slot_for` refuses a component
     // the generation granted no handle for, which is the same answer this
