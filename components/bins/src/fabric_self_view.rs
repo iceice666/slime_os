@@ -21,7 +21,7 @@
 //! supplies it independently; `valid_ring_header` compares them, and that
 //! agreement is the check. This module supplies the caller's half.
 
-use boot_contracts::fabric_graph::PARTICIPANT_ENTRY_BYTES;
+use boot_contracts::fabric_graph::{PARTICIPANT_ENTRY_BYTES, TransportQos};
 
 /// Rows one read may return. A component's own share is small — the largest any
 /// seL4 manifest declares for one participant is two — so a single call is
@@ -30,11 +30,21 @@ const MAX_OWN_ROWS: usize = 8;
 
 /// Byte offsets into a participant record. Named from the contract's own
 /// decoder (`FabricGraph::participant`) rather than re-derived, and used only to
-/// read two fields out of a record this component received whole.
+/// read fields out of a record this component received whole. They must stay in
+/// step with that decoder: the root stages raw `participant_bytes`, so these
+/// offsets are this side's half of one contract layout.
 const COMPONENT_IDENTITY: core::ops::Range<usize> = 32..64;
 const ROUTE_INDEX: core::ops::Range<usize> = 64..68;
 const DIRECTION: core::ops::Range<usize> = 68..72;
+const VISIBILITY: core::ops::Range<usize> = 72..76;
+const DEADLINE_NS: core::ops::Range<usize> = 80..88;
+const LIFESPAN_NS: core::ops::Range<usize> = 88..96;
+const LEASE_NS: core::ops::Range<usize> = 96..104;
 const HISTORY_DEPTH: core::ops::Range<usize> = 104..108;
+const RETAINED_DEPTH: core::ops::Range<usize> = 108..112;
+const RELIABILITY: usize = 112;
+const DURABILITY: usize = 113;
+const LIVELINESS: usize = 114;
 
 /// The KEEP_LAST depth this component's row declares for `route_index`, or
 /// `None` if the generation declares no such row.
@@ -123,12 +133,17 @@ pub struct IncompleteRead;
 pub const MAX_GRAPH_ROWS: usize = 32;
 
 /// One participant row, decoded to the fields a broker asks about.
+///
+/// `history_depth` is kept as its own field because it predates the rest and
+/// several callers read only it; it is the same number as `qos.history_depth`.
 #[derive(Clone, Copy)]
 pub struct Row {
     pub component_identity: [u8; 32],
     pub route_index: u32,
     pub direction: u32,
+    pub visibility: u32,
     pub history_depth: usize,
+    pub qos: TransportQos,
 }
 
 /// Every row this caller may read, in the order the resource stores them.
@@ -181,11 +196,44 @@ pub fn rows(out: &mut [Row; MAX_GRAPH_ROWS]) -> Result<usize, IncompleteRead> {
             let Ok(depth) = bytes[HISTORY_DEPTH].try_into() else {
                 return Err(IncompleteRead);
             };
+            let Ok(visibility) = bytes[VISIBILITY].try_into() else {
+                return Err(IncompleteRead);
+            };
+            let Ok(deadline) = bytes[DEADLINE_NS].try_into() else {
+                return Err(IncompleteRead);
+            };
+            let Ok(lifespan) = bytes[LIFESPAN_NS].try_into() else {
+                return Err(IncompleteRead);
+            };
+            let Ok(lease) = bytes[LEASE_NS].try_into() else {
+                return Err(IncompleteRead);
+            };
+            let Ok(retained) = bytes[RETAINED_DEPTH].try_into() else {
+                return Err(IncompleteRead);
+            };
+            let (Some(reliability), Some(durability), Some(liveliness)) = (
+                bytes.get(RELIABILITY).copied(),
+                bytes.get(DURABILITY).copied(),
+                bytes.get(LIVELINESS).copied(),
+            ) else {
+                return Err(IncompleteRead);
+            };
             out[written] = Row {
                 component_identity,
                 route_index: u32::from_le_bytes(route),
                 direction: u32::from_le_bytes(direction),
+                visibility: u32::from_le_bytes(visibility),
                 history_depth: u32::from_le_bytes(depth) as usize,
+                qos: TransportQos {
+                    deadline_ns: u64::from_le_bytes(deadline),
+                    lifespan_ns: u64::from_le_bytes(lifespan),
+                    lease_ns: u64::from_le_bytes(lease),
+                    history_depth: u32::from_le_bytes(depth),
+                    retained_depth: u32::from_le_bytes(retained),
+                    reliability,
+                    durability,
+                    liveliness,
+                },
             };
             written += 1;
         }
@@ -201,5 +249,16 @@ pub const EMPTY_ROWS: [Row; MAX_GRAPH_ROWS] = [Row {
     component_identity: [0; 32],
     route_index: 0,
     direction: 0,
+    visibility: 0,
     history_depth: 0,
+    qos: TransportQos {
+        deadline_ns: 0,
+        lifespan_ns: 0,
+        lease_ns: 0,
+        history_depth: 0,
+        retained_depth: 0,
+        reliability: 0,
+        durability: 0,
+        liveliness: 0,
+    },
 }; MAX_GRAPH_ROWS];

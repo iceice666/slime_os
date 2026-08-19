@@ -466,6 +466,29 @@ really a component asserting which graph it belongs to, and a graph read is what
 would let it stop.
 
 
+### B72 — the visibility plane's QoS view records are counted but never checked against the route they describe
+
+`check-sel4-visibility-plane.py` requires each client's view to page a fixed
+number of route and QoS records, and `fabric-publisher` additionally checks
+`matched`, the contract kind, and the route name of each route record. Nothing
+checks a **QoS record's payload against the route it belongs to**.
+`fabric-subscriber`'s `visibility_main` counts `routes != 1 || qos != 1` and
+reads no field of either record.
+
+Observed 2026-08-19 while migrating `visibility_broker` off the generated
+tables (B70/CP2): a mutation that swapped the two routes' QoS values while
+leaving every route name intact passed `just sel4_visibility_check` unchanged,
+on both the pre-migration and post-migration code. The plane declares two routes
+whose QoS differ on every axis — telemetry is retained/4/2, diagnostics is
+volatile/2/0 — so this is not a case of the values being coincidentally equal.
+
+The gap is in the gate, not in either implementation: the mutation was tested
+against unmodified pre-migration code and survived there too, so no regression
+was introduced by the migration.
+
+**Exit condition:** a mutation that swaps the declared QoS of `telemetry` and
+`diagnostics`, changing no route name, fails `just sel4_visibility_check`.
+
 ## Deferred follow-ups
 
 Real, unclosed follow-up work surfaced by resolved entries, not new backlog
