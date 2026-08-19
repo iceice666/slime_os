@@ -193,3 +193,29 @@ table must hold the rings this graph declares". An out-of-tree component cannot
 rely on this repository's builder to check that, so the declared-capacity
 contract owes it a way to say the same thing. This is a requirement to
 reintroduce, not dead weight, and the comment left in its place says so.
+
+**2026-08-19 — the read's authority question, before any ABI is drafted.** With
+the const-context blocker gone the read is buildable, but *what it may answer* is
+not a detail to settle while writing it. The graph is one object shared by every
+participant, and C8.8 already treats "which routes exist" as **policy the fabric
+enforces**, not public data: `visibility_broker`'s `nth_visible_route` filters
+routes per caller through `FABRIC_VISIBILITY`, admitting a `VISIBILITY_GRAPH`
+holder to graph-visible routes and everyone else only to their own private ones,
+and `just sel4_visibility_check` asserts on a real boot that "an ungranted caller
+inferred nothing".
+
+A root-served read that returned the graph verbatim would hand every caller the
+route set that gate exists to withhold — bypassing the filter rather than
+implementing it. So the read is not "expose the object"; it is at minimum
+per-caller filtered, and the filter is the C8.8 policy the fabric currently owns.
+That is a design decision with a milestone behind it, not an implementation
+choice, and it wants stating before code exists that assumes an answer.
+
+Two facts do carry over unchanged and make the eventual build small. The reply
+path is proven: `slime-root/src/directory.rs` and `console.rs` already return
+variable-length payloads through `transfer_window::write_staged_region_with`,
+so a record-at-a-time or cursor-paged reply needs no new transport — which
+matters because one `ParticipantEntry` is 128 bytes against a 64-byte message
+bound, so the answer cannot be a single reply word. And `fabric_graph_object` in
+`slime-root/src/generation.rs` already locates and decodes the resource for
+admission, so the root reaches the data today.
