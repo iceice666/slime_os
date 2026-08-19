@@ -174,8 +174,10 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
   = caps => [
     root := env.get caps.env "SLIME_FABRIC_VISIBILITY_BINDINGS_ROOT" ?? ".";
     bindings := gen.render format;
-    path := t.join "" { root; "/components/proto/src/fabric_visibility.rs"; };
-    fs.writeAll caps.write path bindings.rust
+    rustPath := t.join "" { root; "/components/proto/src/fabric_visibility.rs"; };
+    pythonPath := t.join "" { root; "/scripts/lib/fabric_visibility_contract.py"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write pythonPath bindings.python
   ];
 
 main

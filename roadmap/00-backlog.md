@@ -756,29 +756,6 @@ the same reassurance.
 **Evidence:** [`devlog/2026-08-19-owned-minted-shape-selection/`](../devlog/2026-08-19-owned-minted-shape-selection/index.md)
 
 
-### B72 — the visibility plane's QoS view records are counted but never checked against the route they describe
-
-`check-sel4-visibility-plane.py` requires each client's view to page a fixed
-number of route and QoS records, and `fabric-publisher` additionally checks
-`matched`, the contract kind, and the route name of each route record. Nothing
-checks a **QoS record's payload against the route it belongs to**.
-`fabric-subscriber`'s `visibility_main` counts `routes != 1 || qos != 1` and
-reads no field of either record.
-
-Observed 2026-08-19 while migrating `visibility_broker` off the generated
-tables (B70/CP2): a mutation that swapped the two routes' QoS values while
-leaving every route name intact passed `just sel4_visibility_check` unchanged,
-on both the pre-migration and post-migration code. The plane declares two routes
-whose QoS differ on every axis — telemetry is retained/4/2, diagnostics is
-volatile/2/0 — so this is not a case of the values being coincidentally equal.
-
-The gap is in the gate, not in either implementation: the mutation was tested
-against unmodified pre-migration code and survived there too, so no regression
-was introduced by the migration.
-
-**Exit condition:** a mutation that swaps the declared QoS of `telemetry` and
-`diagnostics`, changing no route name, fails `just sel4_visibility_check`.
-
 ### B73 — the matrix plane never checks the view a graph-visibility holder pages, only the observer's
 
 `check-sel4-matrix-plane.py` requires `[fabric-observer] matrix filtered view
@@ -859,6 +836,22 @@ successor closes it.
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
 ## Resolved
+### B72 — the visibility plane's QoS view records are counted but never checked against the route they describe
+
+**Status:** Resolved 2026-08-19. **Class:** Defect (a gate that asserted a
+structural property and was read as covering a semantic one).
+**Was:** `just sel4_visibility_check` counted the composition's twelve view
+records and two distinct traces but decoded none of them, so every field the
+broker copies out of the declared graph — each route's name and its transport
+QoS — went unconstrained, and a mutation swapping the two routes' declared QoS
+left the gate green.
+**Exit condition (observed):** the gate decoded all twelve records against a
+frozen fixture using offsets the visibility contract renders itself, and an
+admission-neutral swap of the two routes' declared `historyDepth` failed
+`just sel4_visibility_check`, naming the two records that moved; restoring the
+fixture returned it to green.
+**Evidence:** [`devlog/2026-08-19-b72-frozen-visibility-view/`](../devlog/2026-08-19-b72-frozen-visibility-view/index.md)
+
 ### B71 — the boot-layout resource's binary encoding was never cross-checked against the manifest's real bindings, and unnamed roles are never narrowed
 
 **Status:** Resolved 2026-08-18. **Class:** Defect (write-only generated data

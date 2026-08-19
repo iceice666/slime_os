@@ -1,0 +1,12 @@
+ 0 route cursor=1 name=telemetry name_len=9 contract_kind=1 schema=f6e951eb0e36539002a32aff3f33df1082ea2ecc2413430f2d686f92e141ba25 flags=0
+ 1 qos   cursor=2 name=telemetry reliability=best-effort durability=retained liveliness=automatic matched=1 history=4 retained=2 deadline_ns=0 lifespan_ns=300 lease_ns=0 event_mask=0 flags=0
+ 2 route cursor=3 name=diagnostics name_len=11 contract_kind=1 schema=96db0f1542edcd4d80a82ef27f1fe6b8e6fcc35af4c7f27030aabfebbb811294 flags=0
+ 3 qos   cursor=4 name=diagnostics reliability=reliable durability=volatile liveliness=manual matched=1 history=2 retained=0 deadline_ns=100 lifespan_ns=0 lease_ns=200 event_mask=0 flags=0
+ 4 end   cursor=4
+ 5 route cursor=1 name=telemetry name_len=9 contract_kind=1 schema=f6e951eb0e36539002a32aff3f33df1082ea2ecc2413430f2d686f92e141ba25 flags=0
+ 6 qos   cursor=2 name=telemetry reliability=best-effort durability=volatile liveliness=automatic matched=1 history=8 retained=0 deadline_ns=0 lifespan_ns=0 lease_ns=0 event_mask=0 flags=0
+ 7 end   cursor=2
+ 8 end   cursor=0
+ 9 route cursor=1 name=telemetry name_len=9 contract_kind=1 schema=f6e951eb0e36539002a32aff3f33df1082ea2ecc2413430f2d686f92e141ba25 flags=0
+10 qos   cursor=2 name=telemetry reliability=best-effort durability=volatile liveliness=automatic matched=1 history=8 retained=0 deadline_ns=0 lifespan_ns=0 lease_ns=0 event_mask=1 flags=0
+11 end   cursor=2

@@ -16,6 +16,25 @@ rather than about what the parent happened to hand out.
 Beyond the causal chains, this gate re-derives the oracle's two structural
 assertions from the transcript: the composition emits exactly twelve serialized
 view records, and exactly two interposition traces that differ from each other.
+
+# The frozen view (B72)
+
+Counting records proves the broker showed each caller the right *number* of
+routes; it says nothing about what those records carry. Every field the broker
+copies out of the declared graph -- each route's name and its transport QoS --
+went unchecked, so swapping two routes' declared QoS left every gate green.
+
+So the twelve records are decoded and frozen, field by field, against
+`contracts/fabric-visibility/v1/fixtures/sel4-visibility.view`. The decode uses
+the offsets the visibility contract itself renders into
+`scripts/lib/fabric_visibility_contract.py`; this gate is not a second
+authority on the 64-byte layout.
+
+The expectation is *frozen*, not re-derived from the generation fixture. A
+guard that parsed the declared QoS out of `sel4-visibility.zti` would move both
+sides of the comparison together when that fixture changed, and stay green --
+the self-confirming shape deleted under B70. Regenerate with `--bless`; the
+resulting diff is the evidence that a view change was intended.
 """
 
 from __future__ import annotations
@@ -34,6 +53,13 @@ from typing import NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from fabric_visibility_contract import (  # noqa: E402
+    VISIBILITY_QOS_MAGIC,
+    VISIBILITY_QOS_RECORD,
+    VISIBILITY_ROUTE_MAGIC,
+    VISIBILITY_ROUTE_RECORD,
+    VISIBILITY_STATUS_END,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -41,6 +67,9 @@ IMAGE = ROOT / "build" / "slime-sel4-visibility.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-visibility.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-visibility.zti"
+VIEW_FIXTURE = (
+    ROOT / "contracts" / "fabric-visibility" / "v1" / "fixtures" / "sel4-visibility.view"
+)
 IMAGE_VARIANT = "visibility"
 BOOT_TIMEOUT_SECONDS = 240
 
@@ -384,14 +413,143 @@ def composition(transcript: str) -> str:
     return transcript[: complete.end() + exit_match.end()]
 
 
-def check_records(transcript: str) -> None:
-    """The oracle's two structural assertions, re-derived here.
+# The declared spellings, so a fixture diff reads as a policy change rather than
+# as a pair of integers moving. Sourced from the QoS contract's own enumerations.
+RELIABILITY_NAMES = {1: "best-effort", 2: "reliable"}
+DURABILITY_NAMES = {1: "volatile", 2: "retained"}
+LIVELINESS_NAMES = {1: "automatic", 2: "manual"}
+
+
+def route_name_text(raw: bytes) -> str:
+    """The NUL-padded 16-byte route name as its declared spelling."""
+    return raw.split(b"\x00")[0].decode("ascii", errors="replace")
+
+
+def enum_text(names: dict[int, str], value: int) -> str:
+    return names.get(value, f"unknown({value})")
+
+
+def render_view(records: list[str]) -> str:
+    """The twelve view records as one line each, every field spelled out.
+
+    Decoded with the `struct.Struct`s and offsets the visibility contract
+    renders itself, so a layout change reaches this gate through the schema
+    rather than through a hand-copied offset.
+    """
+    lines: list[str] = []
+    for index, text in enumerate(records):
+        try:
+            data = bytes.fromhex(text)
+        except ValueError:
+            fail(f"view record {index} is not hex: {text!r}")
+        if len(data) != VISIBILITY_ROUTE_RECORD.size:
+            fail(
+                f"view record {index} is {len(data)} bytes, "
+                f"expected {VISIBILITY_ROUTE_RECORD.size}"
+            )
+        magic = int.from_bytes(data[:4], "little")
+        if magic == VISIBILITY_ROUTE_MAGIC:
+            (
+                _magic,
+                _version,
+                status,
+                cursor,
+                contract_kind,
+                route_name_len,
+                _reserved0,
+                route_name,
+                schema_identity,
+                flags,
+            ) = VISIBILITY_ROUTE_RECORD.unpack(data)
+            if status == VISIBILITY_STATUS_END:
+                lines.append(f"{index:2} end   cursor={cursor}")
+                continue
+            lines.append(
+                f"{index:2} route cursor={cursor} name={route_name_text(route_name)} "
+                f"name_len={route_name_len} contract_kind={contract_kind} "
+                f"schema={schema_identity.hex()} flags={flags}"
+            )
+        elif magic == VISIBILITY_QOS_MAGIC:
+            (
+                _magic,
+                _version,
+                _status,
+                cursor,
+                flags,
+                route_name,
+                reliability,
+                durability,
+                liveliness,
+                matched,
+                history_depth,
+                retained_depth,
+                deadline_ns,
+                lifespan_ns,
+                lease_ns,
+                event_mask,
+            ) = VISIBILITY_QOS_RECORD.unpack(data)
+            lines.append(
+                f"{index:2} qos   cursor={cursor} name={route_name_text(route_name)} "
+                f"reliability={enum_text(RELIABILITY_NAMES, reliability)} "
+                f"durability={enum_text(DURABILITY_NAMES, durability)} "
+                f"liveliness={enum_text(LIVELINESS_NAMES, liveliness)} "
+                f"matched={matched} history={history_depth} retained={retained_depth} "
+                f"deadline_ns={deadline_ns} lifespan_ns={lifespan_ns} "
+                f"lease_ns={lease_ns} event_mask={event_mask} flags={flags}"
+            )
+        else:
+            fail(f"view record {index} carries unknown magic {magic}")
+    return "\n".join(lines) + "\n"
+
+
+def check_view(records: list[str], bless: bool) -> None:
+    """Every field of every view record, against the frozen expectation.
+
+    Counting records leaves each record's contents free (B72): the broker copies
+    each route's name and declared transport QoS out of the graph, and nothing
+    compared either against what the generation declared. Freezing the decode
+    closes that -- including `route_name`, which no component checked at all, so
+    a record naming the wrong route was previously undetectable.
+    """
+    observed = render_view(records)
+    if bless:
+        VIEW_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        VIEW_FIXTURE.write_text(observed)
+        print(f"blessed {len(records)} view records into {VIEW_FIXTURE.relative_to(ROOT)}")
+        return
+    if not VIEW_FIXTURE.is_file():
+        fail(
+            f"no view fixture {VIEW_FIXTURE.relative_to(ROOT)}; "
+            "run `just sel4_visibility_bless` to record it"
+        )
+    expected = VIEW_FIXTURE.read_text()
+    if observed == expected:
+        return
+    expected_lines = expected.splitlines()
+    observed_lines = observed.splitlines()
+    for index in range(max(len(expected_lines), len(observed_lines))):
+        was = expected_lines[index] if index < len(expected_lines) else "<absent>"
+        now = observed_lines[index] if index < len(observed_lines) else "<absent>"
+        if was != now:
+            print(f"    was: {was}")
+            print(f"    now: {now}")
+    fail(
+        f"the composition's view records differ from "
+        f"{VIEW_FIXTURE.relative_to(ROOT)}"
+    )
+
+
+def check_records(transcript: str, bless: bool = False) -> None:
+    """The oracle's two structural assertions, plus the frozen view.
 
     Exactly twelve view records is what this graph's three paging callers produce
     against their exact grants; a broker that leaked one route into one caller's
     view, or dropped one, moves this number. Exactly two *distinct* traces is one
     relay plus one loss: identical traces would mean the loss trace carried the
     relay's event, and a third would mean a route emitted one it should not.
+
+    The count is necessary but not sufficient, so `check_view` then decodes all
+    twelve and compares every field against the frozen fixture (B72).
     """
     head = composition(transcript)
     views = VIEW_PATTERN.findall(head)
@@ -411,6 +569,7 @@ def check_records(transcript: str) -> None:
     if len(set(traces)) != EXPECTED_TRACE_RECORDS:
         report_transcript(transcript)
         fail("the relay and loss traces are byte-identical; they must differ")
+    check_view(views, bless)
 
 
 def check_task_lifecycle(transcript: str) -> None:
@@ -451,7 +610,7 @@ def check_task_lifecycle(transcript: str) -> None:
         fail(f"a component failed inside the composition: {reported}")
 
 
-def check_transcript(transcript: str) -> None:
+def check_transcript(transcript: str, bless: bool = False) -> None:
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
         if match is not None:
@@ -467,12 +626,13 @@ def check_transcript(transcript: str) -> None:
                     fail(f"{label}: marker out of order: {pattern}")
                 fail(f"{label}: missing marker: {pattern}")
             position = match.end()
-    check_records(transcript)
+    check_records(transcript, bless)
     check_task_lifecycle(transcript)
     print(
         f"transcript: {sum(len(chain) for _, chain in CHAINS)} markers observed "
-        f"across {len(CHAINS)} causal chains; {EXPECTED_VIEW_RECORDS} view records and "
-        f"{EXPECTED_TRACE_RECORDS} distinct traces; six spawned tasks exited cleanly",
+        f"across {len(CHAINS)} causal chains; {EXPECTED_VIEW_RECORDS} view records "
+        f"matching their frozen fields and {EXPECTED_TRACE_RECORDS} distinct traces; "
+        f"six spawned tasks exited cleanly",
         flush=True,
     )
 
@@ -486,6 +646,11 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--bless",
+        action="store_true",
+        help="rewrite the view fixture from the observed records",
+    )
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
@@ -498,7 +663,10 @@ def main() -> None:
     check_manifest()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
-    check_transcript(boot(profile))
+    check_transcript(boot(profile), arguments.bless)
+    if arguments.bless:
+        print("seL4 visibility plane check: blessed")
+        return
     print(
         "seL4 visibility plane check: three callers received different bounded views "
         "from their exact grants, an ungranted caller inferred nothing, telemetry "

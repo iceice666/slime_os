@@ -190,6 +190,11 @@ sel4_operation_check: sel4_pin_check
 sel4_visibility_check: sel4_pin_check
     python3 scripts/check/check-sel4-visibility-plane.py
 
+# B72: rewrite the frozen view fixture from an observed boot. The resulting diff
+# is the evidence that a route-name or declared-QoS change was intended.
+sel4_visibility_bless: sel4_pin_check
+    python3 scripts/check/check-sel4-visibility-plane.py --bless
+
 # C8.12: build the matrix image, boot it, and require the whole matching,
 # visibility, and denial matrix at once — only the exact compatible tuple
 # matched, alternate names and conflicting types kept distinct, every
@@ -474,6 +479,12 @@ fabric_ring_gen:
 # C8.11: regenerate the bounded semantic-trace bindings from their contract.
 fabric_trace_gen:
     python3 scripts/generate/generate-fabric-trace-bindings.py
+
+# C8.8: regenerate the visibility record bindings from their contract — the
+# Rust records the broker encodes and the Python offsets the plane gate decodes
+# them with (B72).
+fabric_visibility_gen:
+    python3 scripts/generate/generate-fabric-visibility-bindings.py
 
 # Regenerate the fabric-graph resource bindings (C8.2); part of the boot set.
 fabric_graph_gen: boot_gen
