@@ -359,3 +359,43 @@ the one order-dependent quantity found so far, and the next thing to measure.
 
 Exactly one rejection occurs, on the large-sample loan path, after all six edges
 provision successfully.
+
+**2026-08-19 — `ordinal` measured on both sides: no collision, but route and
+ring address are transposed.** Probing `provision_edge` under both row sources
+gives the exact difference:
+
+```
+baseline : pub-b route0@ordinal2  route1@ordinal3 | sub-b route0@4 route1@5
+migrated : pub-b route1@ordinal2  route0@ordinal3 | sub-b route1@4 route0@5
+```
+
+Ordinals are dense and distinct in both, so `ring_base = RING_BASE + ordinal *
+PAGE` allocates six non-overlapping pages either way — the collision this probe
+was looking for does not happen. What changes is *which route lives at which
+address*: the same `ring_base` holds telemetry in one ordering and diagnostics
+in the other.
+
+That is internally consistent on the fabric's side — `Ring::format` writes the
+type tag and slot count from `route_index`, and `Publisher.ring_base` travels
+with `Publisher.route` — so no single-sided reasoning explains a failure. Three
+further order-dependent candidates were checked and eliminated:
+
+- The receivers map by matched slot, not arrival: `fabric-publisher-b` pairs
+  each arriving role on `descriptor.route_identity` before mapping, and its two
+  ring bases are its own constants.
+- `ring_slots` is derived per route (telemetry 4, diagnostics 2) and
+  `Ring::attach` compares the header's count against the caller's expectation,
+  so a mis-paired depth fails loudly rather than silently.
+- The copy path uses a fixed `COPY_BASE`, not an ordinal.
+
+So the measurement closes the `ordinal` hypothesis as stated — the addresses are
+sound — while confirming the route/address transposition is real. The mechanism
+connecting that transposition to a `telemetry` sample arriving where
+`diagnostics` was expected is still not established, and the honest position is
+that four hypotheses have now been eliminated with evidence and none confirmed.
+
+The remaining untested surface is narrow: the fabric maps each ring at
+`ring_base` *before* the participant maps its own copy, and both sides then
+attach independently. Whether anything outside this file caches a base→route
+association across that boundary is the next thing to look at, and it is the
+first hypothesis so far that reaches beyond `fabric-service.rs`.
