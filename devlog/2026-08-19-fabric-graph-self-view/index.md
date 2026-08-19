@@ -321,3 +321,41 @@ way. Not confirmed — stated as the next thing to measure, not as the answer.
 The mechanism is still open. What has changed is that the failure is now a named
 transposition between two specific interfaces rather than an unexplained
 validation error, and one hypothesis is closed off with evidence.
+
+**2026-08-19 — the pairing is correct; the order is what differs.** Probing the
+migrated walk at its `provision_edge` call site prints exactly what it pairs:
+
+```
+[pair] fabric-publisher    graph_route=0 local=0 dir=1
+[pair] fabric-subscriber   graph_route=0 local=0 dir=2
+[pair] fabric-publisher-b  graph_route=1 local=1 dir=1
+[pair] fabric-publisher-b  graph_route=0 local=0 dir=1
+[pair] fabric-subscriber-b graph_route=1 local=1 dir=2
+[pair] fabric-subscriber-b graph_route=0 local=0 dir=2
+```
+
+**Every route/direction pair is right**, and every graph index translates to the
+right local index. So the route/direction hypothesis this entry proposed last is
+also wrong — nothing is transposed in the pairing.
+
+What differs is the *sequence*: the two-route components are provisioned
+`diagnostics` first and `telemetry` second, where the generated table gave
+telemetry first. That is the resource's grant-identity sort showing through, and
+it is the only observable difference left between the two row sources.
+
+Two candidate consequences were checked and **eliminated**:
+
+- The receivers do not assign by arrival. `fabric-publisher-b` and
+  `fabric-subscriber-b` both match each arriving role on `descriptor.route_identity`
+  and would fail loudly (`role names no declared route`) otherwise.
+- `Publisher`/`Subscriber` each carry their own `route`, and `pump_publisher`
+  reads `publisher.route`, so a table position does not decide a type tag.
+
+What remains unexamined is `provision_edge`'s `ordinal` — `ring_base = RING_BASE +
+ordinal * PAGE`, where `ordinal` counts already-provisioned entries. Reordering
+provisioning therefore assigns different ring *addresses* to the same routes on
+the fabric's side. Whether that is the mechanism is not established; it is simply
+the one order-dependent quantity found so far, and the next thing to measure.
+
+Exactly one rejection occurs, on the large-sample loan path, after all six edges
+provision successfully.
