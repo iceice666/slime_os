@@ -200,6 +200,26 @@ where the code runs — `matrix_broker` additionally covers
 `sel4-matrix-unsatisfiable`, which B62 reduced to a single participant-QoS
 override of the same fixture, leaving grant names identical.
 
+**A limit worth stating plainly, because this trade is not the same one the
+supervision rename made.** Those names are *manifest-prefixed*:
+`matrix-telemetry-ingress` and `visibility-telemetry-ingress` are the same graph
+fact — `fabric-publisher → fabric-service` telemetry ingress — under two
+spellings, and the same holds for the proxy and diagnostics edges. So each
+broker is still coupled to one manifest's vocabulary; what changed is *which
+kind* of coupling. Before, the broker reconstructed the builder's slot-numbering
+rule out of two generated tables, which breaks silently when a participant is
+added. Now it names an edge, which breaks loudly if the name is absent. That is
+strictly better and it is not the end state: unlike `FABRIC_SUPERVISION`, these
+resolve without a generated table at all, which is the clause B70's exit
+condition actually tests.
+
+Making them genuinely portable would need the route grants renamed to their graph
+fact (`telemetry-ingress`, not `matrix-telemetry-ingress`) across the two
+fixtures — the same shape as the supervision rename, deferred rather than done
+because the two brokers are distinct C8.8/C8.12 planes with no present
+requirement to share source, and every such rename moves `generation.bin`'s
+bytes.
+
 **What remains is 2, not 5.** Both are the `.iter()` teardown walks
 (`fabric-service.rs:392,536`), which enumerate the holder set to wait on every
 participant's exit. Those do need *membership*, and the traffic walk additionally

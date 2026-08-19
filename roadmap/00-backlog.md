@@ -293,6 +293,17 @@ the names resolve against one manifest; `matrix_broker` also covers
 `sel4-matrix-unsatisfiable`, which B62 reduced to a one-field QoS override of the
 same fixture.
 
+These three close **partially**, and the record should say so. The names are
+manifest-prefixed — `matrix-telemetry-ingress` and `visibility-telemetry-ingress`
+are one graph fact under two spellings — so each broker still knows one
+manifest's vocabulary, which is the coupling `ipc.rs`'s `kind:` rationale warns
+about. What changed is the *kind* of coupling: reconstructing the builder's
+slot-numbering rule from two generated tables became naming an edge, which fails
+loudly rather than silently and, unlike `FABRIC_SUPERVISION`, needs no generated
+table at all — the clause B70's exit condition tests. Making them portable enough
+for an out-of-tree broker needs the route grants renamed to their graph fact
+(`telemetry-ingress`), the same shape as the supervision rename above.
+
 **2** uses remain, both the `.iter()` teardown walks
 (`fabric-service.rs:392,536`). These do need the holder set's *membership*, and
 the traffic walk additionally filters it by which components this graph parks

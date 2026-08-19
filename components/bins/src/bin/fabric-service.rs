@@ -124,9 +124,22 @@ const BUFFER_FACTORY_SLOT: u32 = 1;
 /// only two graphs declaring a clock, and both name this grant identically.
 /// Verified equal to the derived number before the change:
 /// `fabric-publisher-b-clock` is 11 under `sel4-qos.zti`.
+/// Resolved on first use and cached, following `fabric_call_scenario`'s
+/// `WAKE_SLOT`: `receive_time` runs on every iteration of the broker's dispatch
+/// loop, so resolving per call would put a syscall where a constant was.
+static mut TIME_SLOT_CACHE: u32 = u32::MAX;
+
 fn time_slot() -> u32 {
-    slime_rt::resolve_binding(b"fabric-publisher-b-clock")
-        .unwrap_or_else(|_| fail(b"clock control slot"))
+    // SAFETY: single-threaded, and every reader is on the one dispatch loop.
+    let cached = unsafe { *core::ptr::addr_of!(TIME_SLOT_CACHE) };
+    if cached != u32::MAX {
+        return cached;
+    }
+    let slot = slime_rt::resolve_binding(b"fabric-publisher-b-clock")
+        .unwrap_or_else(|_| fail(b"clock control slot"));
+    // SAFETY: as above.
+    unsafe { *core::ptr::addr_of_mut!(TIME_SLOT_CACHE) = slot };
+    slot
 }
 /// The component that owns the other end of `time_slot()`. Named rather than
 /// numbered because its supervision handle is what reports the clock's exit:

@@ -78,6 +78,7 @@ const STATUS_TYPE_MISMATCH: i32 = -4;
 const STATUS_BAD_REQUEST: i32 = -2;
 
 pub(super) fn run() {
+    resolve_route_slots();
     assert_declared_chain();
     assert_declared_composition();
     let routes = route_identities();
@@ -836,14 +837,45 @@ fn send_message(slot: u32, message: &[u8; MAX_MSG]) {
 /// `sel4-matrix-unsatisfiable` variant, which B62 reduced to a single
 /// participant-QoS override of that same fixture, leaving every grant name
 /// identical.
+/// Resolved once at startup and cached, following `fabric_call_scenario`'s
+/// `WAKE_SLOT`. These are read from `advance_relay`, which is a *poll* arm the
+/// dispatch loop re-enters until the sample arrives, so resolving per read would
+/// put a syscall in a spin loop that previously touched a constant.
+static mut ROUTE_SLOTS: [u32; 3] = [u32::MAX; 3];
+
+const TELEMETRY_INGRESS: usize = 0;
+const PROXY_UPSTREAM: usize = 1;
+const PROXY_UPSTREAM_ACK: usize = 2;
+
+/// Resolve this broker's declared route edges through the root, once, before the
+/// dispatch loop runs.
+fn resolve_route_slots() {
+    let slots = [
+        route_slot(b"matrix-telemetry-ingress"),
+        route_slot(b"matrix-proxy-upstream"),
+        route_slot(b"matrix-proxy-upstream-ack"),
+    ];
+    // SAFETY: single-threaded, and called once before any read below.
+    unsafe { *core::ptr::addr_of_mut!(ROUTE_SLOTS) = slots };
+}
+
 fn telemetry_ingress_slot() -> u32 {
-    route_slot(b"matrix-telemetry-ingress")
+    route_slot_at(TELEMETRY_INGRESS)
 }
 fn proxy_upstream_slot() -> u32 {
-    route_slot(b"matrix-proxy-upstream")
+    route_slot_at(PROXY_UPSTREAM)
 }
 fn proxy_upstream_ack_slot() -> u32 {
-    route_slot(b"matrix-proxy-upstream-ack")
+    route_slot_at(PROXY_UPSTREAM_ACK)
+}
+
+fn route_slot_at(index: usize) -> u32 {
+    // SAFETY: single-threaded, as above.
+    let slot = unsafe { core::ptr::addr_of!(ROUTE_SLOTS).read()[index] };
+    if slot == u32::MAX {
+        fail(b"matrix route slot read before resolve");
+    }
+    slot
 }
 
 /// One declared route edge, by grant name. Absence is a composition defect on
