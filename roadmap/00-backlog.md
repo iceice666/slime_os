@@ -459,6 +459,37 @@ names: `ParticipantEntry` carries `component_identity`/`route_index`, while
 already call `route_identity()` from that same module, so the fold is available to
 them; a consumer would ask by identity and stop holding the name at all.
 
+**Progress (2026-08-19, site-count correction):** The two notes below report
+site totals against the wrong population, and both figures they quote are wrong.
+B70's problem statement counts `include!` sites across **all three** generated
+profiles — `fabric_profile`, `command_profile`, `dango_profile` — while the
+recent census counted the `fabric_profile` sites only. Mixing the two produced
+"19 sites to 17" and "17 sites to 13", neither of which is a real transition.
+
+Measured with `git grep -c 'include!(concat!(env!("OUT_DIR")' <rev> --
+components/bins/src`, the actual totals are:
+
+| Commit | All-profile sites | `fabric_profile` sites |
+| --- | --- | --- |
+| `969fbac` (problem statement) | 19 | 16 |
+| `efc0fbd`…`dc9e9e4` | 18 | 16 |
+| `f52efe9` (two dead sites) | 16 | 14 |
+| `5876f54` (third dead site) | 15 | 13 |
+
+So the two deletions took the all-profile count 18 → 16, not 19 → 17, and the
+third took it 16 → 15, not 17 → 13. The 19 → 18 step is unrelated to either and
+predates them: `init.rs` lost its second site during the boot-layout close-out
+recorded above.
+
+What survives unchanged is the census itself. Its 1/5/8 partition was computed
+over the 14 `fabric_profile` sites present at `5876f54^` and those are the right
+14; deleting `fabric_call_scenario.rs` leaves **13 `fabric_profile` sites, plus
+`spawn-service.rs`'s `command_profile` and `dango.rs`'s `dango_profile`, for 15
+in total**. The conclusion the census was written to support — that a boot-action
+syscall closes 5 sites and leaves the 8 hardest — is a statement about the
+`fabric_profile` population and is unaffected. The two `command_profile` /
+`dango_profile` sites sit outside it entirely and are still unexamined.
+
 **Progress (2026-08-19, site-closure census):** Counting *uses* of a generated
 symbol is not the same as counting `include!` sites it would close: a site only
 disappears when the file stops referencing **every** profile symbol. A per-file
