@@ -45,6 +45,12 @@ const HISTORY_DEPTH: core::ops::Range<usize> = 104..108;
 pub fn history_depth(route_index: u32) -> Option<usize> {
     let mut rows = [0u8; MAX_OWN_ROWS * PARTICIPANT_ENTRY_BYTES];
     let count = slime_rt::graph_read(0, &mut rows).ok()?;
+    // See `rows`: the root's per-call bound and `MAX_OWN_ROWS` are derived
+    // independently, so a reply naming more rows than were staged is drift to
+    // refuse rather than an index to trust.
+    if count > MAX_OWN_ROWS {
+        return None;
+    }
     for row in 0..count {
         let bytes = &rows[row * PARTICIPANT_ENTRY_BYTES..(row + 1) * PARTICIPANT_ENTRY_BYTES];
         let declared = u32::from_le_bytes(bytes[ROUTE_INDEX].try_into().ok()?);
@@ -80,6 +86,9 @@ pub fn history_depth_of(component_identity: &[u8; 32], route_index: u32) -> Opti
     loop {
         let count = slime_rt::graph_read(cursor, &mut rows).ok()?;
         if count == 0 {
+            return None;
+        }
+        if count > MAX_OWN_ROWS {
             return None;
         }
         for row in 0..count {
@@ -146,6 +155,14 @@ pub fn rows(out: &mut [Row; MAX_GRAPH_ROWS]) -> Result<usize, IncompleteRead> {
         };
         if count == 0 {
             return Ok(written);
+        }
+        // The reply cannot name more rows than the buffer it was staged into.
+        // `MAX_OWN_ROWS` here and `GRAPH_ROWS_PER_CALL` in the root both work out
+        // to eight, but they are derived independently -- one from this array, one
+        // from the transfer window's staging bound. If they ever drift apart, this
+        // is a short read to re-ask, not a licence to index past the buffer.
+        if count > MAX_OWN_ROWS {
+            return Err(IncompleteRead);
         }
         for row in 0..count {
             if written == out.len() {
