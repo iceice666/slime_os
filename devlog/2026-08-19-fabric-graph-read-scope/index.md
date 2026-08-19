@@ -77,3 +77,45 @@ No source changed. The classification is the deliverable.
 
 - Related roadmap item: [B70](../../roadmap/00-backlog.md), [CP2](../../roadmap/10-component-platform.md)
 - Predecessor: [`devlog/2026-08-19-supervision-binding-naming/`](../2026-08-19-supervision-binding-naming/index.md)
+
+## Corrections
+
+**2026-08-19, same day — the bounds are not blocked, and the exit clause is
+structural.** The follow-up above says the 39 capacity bounds "need a
+declared-capacity contract an out-of-tree component can compile against — a
+CP3/CP4 question". Half right and half wrong, and the wrong half would have
+mis-sequenced a milestone.
+
+Right: they cannot be runtime-resolved, because they size fixed arrays in a
+`no_std` component. Wrong: the contract they need is not owed by anyone, it
+already exists. `contracts/fabric-graph/v1/schema.zt` declares every structural
+ceiling — `maxParticipants = 32`, `limitSampleBytes`, `limitCapabilitySlots`,
+`maxIngressSources` — and `boot-contracts/src/generated/fabric_graph.rs`
+publishes them as Rust constants generated from that schema
+(`pub const MAX_PARTICIPANTS: usize = 32;`), which `FabricGraph::validate_against`
+already enforces every generation's declared limits against at admission.
+
+That distinction matters because B70's exit clause reads "no component source
+file `include!`s a **`build.rs`-private**, manifest-derived constant table". It
+constrains where the table *lives*, not whether the value is compile-time. A
+component compiling against the published ceiling, with the per-graph value
+checked at runtime against the capacity it was built to hold, satisfies the
+clause with no syscall — so the bounds are closable by moving their home, and are
+not a reason B70 must wait on CP3.
+
+**`GENERATION_BOOT_ACTION` is not free either.** The follow-up says the root
+"already delivers a boot action to the bootstrap instance", implying the path
+exists. It does, and it is *bootstrap-only*: `slime-root/src/main.rs:1964-1968`
+passes `boot_action.id()` as the startup argument when
+`instance_index == generation.bootstrap()` and `0` otherwise, with the comment
+"Only the bootstrap instance composes a boot graph, so only it is told which
+one." `fabric-service` and the participants branching on this string are not the
+bootstrap instance, so closing those 31 uses means widening that delivery or
+answering it through the root — and the boot action is deliberately a fact only
+`init` holds, so it carries an authority question rather than being plumbing.
+
+**On this entry's gates.** `Status: Verified` normally requires a behavioural
+gate, and `devlog_check`/`typos` are hygiene the README treats as assumed. Named
+here because this entry changed no runtime behaviour: what it asserts is a
+measurement over source, reproducible by the per-symbol counts in the
+investigation log, and there is no plane whose boot would confirm or refute it.

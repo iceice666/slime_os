@@ -390,16 +390,34 @@ groups:
   arrays* in a `no_std` component with no allocator (`MAX_PARTICIPANTS =
   FABRIC_MAX_PUBLISHERS + FABRIC_MAX_SUBSCRIBERS`, `Trace::new(FABRIC_TRACE_DEPTH)`
   through a `const fn`), and several back `const _: () = assert!` drift guards.
-  A runtime read cannot replace a value the type system needs at compile time.
-  These are **not** closable by any query and should stop being counted as B70
-  surface; what CP3/CP4 owe them is a declared-capacity contract an out-of-tree
-  component compiles against, not a syscall.
+  A runtime read cannot replace a value the type system needs at compile time,
+  so these are not closable by any query.
+
+  **But that does not make them B70-blocked, and a first revision of this note
+  was wrong to imply CP3/CP4 owed them a new contract.** The contract exists:
+  `contracts/fabric-graph/v1/schema.zt` already declares every structural ceiling
+  (`maxParticipants`, `limitSampleBytes`, `limitCapabilitySlots`, …) and
+  `boot-contracts/src/generated/fabric_graph.rs` already publishes them as Rust
+  constants generated from that schema, which `FabricGraph::validate_against`
+  enforces every declared limit against at admission. What a component
+  `include!`s today is the *per-graph* value out of a `build.rs`-private table;
+  what it could compile against instead is the published ceiling, with the
+  per-graph value checked at runtime against what the component was built to
+  hold. B70's exit clause asks that no component `include!` a `build.rs`-private
+  manifest-derived table — it does not ask that the value be runtime-resolved, so
+  the bounds are closable by *moving their home*, and no syscall is involved.
 - **31 uses are `GENERATION_BOOT_ACTION`** — a single string every fabric
   component branches on to pick which plane's schedule to run
   (`== "traffic"`, `== "matrix"`). Not graph data at all: it is *which
-  composition am I booted into*, and the root already delivers a boot action to
-  the bootstrap instance. Closing it is a distinct, smaller question than the
-  graph read.
+  composition am I booted into*.
+
+  Not free, though, and the reason is worth recording: `main.rs` delivers
+  `boot_action.id()` as the startup argument **only** to the bootstrap instance
+  and zero to every other, so `fabric-service` and the eleven participants that
+  branch on this string cannot ask for it today. Closing it means either widening
+  that delivery or answering it through the root — a distinct, smaller question
+  than the graph read, and one with its own authority consequence, since the boot
+  action is currently a fact only `init` is told.
 - **55 uses / 10 symbols are genuine graph data** — `FABRIC_PARTICIPANTS` (17),
   `FABRIC_VISIBILITY` (9), `FABRIC_HISTORY_DEPTHS` (7), `FABRIC_QOS` (6),
   `FABRIC_CLIENTS`/`FABRIC_INTERPOSITIONS` (4 each), and the client and schema
