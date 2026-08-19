@@ -13,7 +13,6 @@ use slime_proto::interface_schema::telemetry_stream::TYPE_TAG;
 use slime_proto::sample_descriptor::{DESCRIPTOR_LEN, WireSampleDescriptor};
 use slime_proto::valid_sample_descriptor;
 use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 

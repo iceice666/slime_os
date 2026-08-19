@@ -459,6 +459,27 @@ names: `ParticipantEntry` carries `component_identity`/`route_index`, while
 already call `route_identity()` from that same module, so the fold is available to
 them; a consumer would ask by identity and stop holding the name at all.
 
+**Progress (2026-08-19, two dead `include!` sites deleted):** `sample-lender.rs`
+and `sample-receiver.rs` — both named in the problem statement's list of 17 files
+— `include!`d the fabric profile at module scope and referenced **zero** of its
+symbols. Checked against the 27 symbols the checked-in fallback defines and
+against the union of 48 symbols across every per-plane profile rendered into
+`target/`, neither file names one. `#[allow(dead_code)]` on the emitted tables is
+why the compiler never flagged it. Two lines deleted, no mechanism, no contract
+change; `just sel4_sample_check` passes, and its own marker line already asserted
+these two "carry no compile-time product branch". This takes the third clause
+from 19 sites to 17.
+
+The same census corrected a scoping error worth recording: the profile `include!`
+surface is **14 files**, not the two (`fabric-service.rs`, `fabric-publisher.rs`)
+a prior working note claimed. `components/bins/build.rs` also does not parse the
+manifest for this file — `generate_fabric_profile` only copies whatever
+`SLIME_DATA_FABRIC_PROFILE` points at, which `build-generation.py:2303` sets
+per-plane; the checked-in `default_fabric_profile.rs` is just the plain-`cargo`
+fallback. So the fabric profile is manifest-derived but not `build.rs`-private,
+unlike `command_profile.rs`/`dango_profile.rs`, which `build.rs` really does
+string-parse from the manifest.
+
 **Progress (2026-08-19, `FABRIC_INTERPOSITIONS` deleted):** the interposition
 group closes, and the table it read was **never checking anything**. Both fabric
 brokers carried an `assert_declared_chain` comparing this generated table against

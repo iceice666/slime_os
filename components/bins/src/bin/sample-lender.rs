@@ -21,7 +21,6 @@ use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, FLAG_LAST, FORMAT_VERSION, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 use slime_rt::{CapabilityDisposition, ERR_BAD_CAP, ERR_SUCCESS, MAX_MSG};
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 
