@@ -5,9 +5,9 @@
 | Date | 2026-08-19 |
 | Kind | Change |
 | Status | Verified |
-| Scope | `contracts/generation/v1/fixtures/sel4-{boot,traffic,call,operation,generation,sample}.zti`, `scripts/build/build-generation.py` |
+| Scope | `contracts/generation/v1/fixtures/sel4-{boot,traffic,call,operation,generation,sample,matrix,visibility}.zti`, `scripts/build/build-generation.py`, `components/bins/src/{bin/fabric-service.rs,matrix_broker.rs,visibility_broker.rs}` |
 | Roadmap | B70, CP2 |
-| Gates | `just contracts_check`, `just generation_check`, `just system_spec_check`, `just sel4_boot_layout_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_sample_check`, `just sel4_generation_check`, `just sel4_fabric_aggregate_check`, `just ruff`, `just typos` |
+| Gates | `just contracts_check`, `just generation_check`, `just system_spec_check`, `just sel4_boot_layout_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_sample_check`, `just sel4_generation_check`, `just sel4_matrix_check`, `just sel4_visibility_check`, `just sel4_qos_check`, `just sel4_stream_check`, `just sel4_fabric_aggregate_check`, `just test_sel4_root`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos` |
 | Trigger | B70's `minted:` axis landed (ad34017) but could not be migrated onto: `FABRIC_SUPERVISION`'s 13 uses resolve names spelled three incompatible ways across 8 manifests |
 | Baseline | 55 minted supervision bindings across 10 seL4 manifests, named by three conventions; `minted:<name>` resolvable in principle, unusable from a component in practice |
 
@@ -273,3 +273,33 @@ binding, with the grant's name excluded, is byte-identical before and after. Onl
 `sel4-matrix` and `sel4-visibility` changed `generation.bin`; the other 26 are
 unchanged. `just sel4_matrix_check`, `just sel4_visibility_check`, `just
 contracts_check`, `just fmt_check_all` and `just lint_all` pass.
+
+**Why the route convention is applied but not asserted.** The supervision rename
+gained a builder invariant so a fourth convention becomes a build failure; the
+route rename has no equivalent, and that asymmetry is deliberate rather than
+overlooked.
+
+A supervision name is checkable because the thing it must name — the supervised
+instance — is a record the builder already holds. A route grant's name is not: the
+route it serves is recoverable from neither the grant record (`telemetry-alt-
+ingress` and `diagnostics-ingress` are both `fabric-publisher-b ->
+fabric-service` with identical rights) nor the `fabricGraph` routes, which carry
+no reference back to a grant. So "this grant is named for its route" is not
+derivable from the manifest, and cannot be asserted.
+
+The narrower clause that *did* catch the four `*-proxy-downstream*` grants — no
+grant name may begin with its own manifest's stem — was checked against all 28
+manifests before being considered, and **13 would violate it**: `sel4-storage`
+declares `storage-probe-device`, `sel4-dango` declares `dango-a-input`,
+`sel4-transfer` declares `transfer-b-source`. Those are named for their
+*component*, which happens to share the manifest's stem, so the clause would
+reject correct names in half the fixtures. It is a good one-off sweep and a bad
+invariant.
+
+What holds this convention today is therefore the two brokers themselves: a
+reintroduced `matrix-` prefix makes `resolve_binding` fail and the plane exits
+rather than boots, which `just sel4_matrix_check` and `just
+sel4_visibility_check` observe. That is weaker than the supervision guard —
+it catches a name a broker *reads*, not every name a fixture declares. A grant no
+component resolves could drift back silently, which is exactly how the four
+downstream grants were missed on the first pass.
