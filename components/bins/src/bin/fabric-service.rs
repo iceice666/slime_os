@@ -334,6 +334,8 @@ impl Frame {
 /// the resource object admission validated, the table from `build.rs` parsing
 /// the manifest, and a mismatch means one of them is wrong.
 fn prove_graph_read() {
+    use boot_contracts::fabric_graph::component_identity;
+
     let mut rows = [0u8; 8 * 128];
     let mut cursor = 0usize;
     let mut total = 0usize;
@@ -345,6 +347,35 @@ fn prove_graph_read() {
         if count == 0 {
             break;
         }
+        // Decode each row through the contract and check it against the table
+        // compiled in from the same manifest. Comparing the *count* alone would
+        // pass on rows that were empty, truncated, or in the wrong order, which
+        // is exactly what a layout mistake produces -- so the content is what is
+        // compared, field by field, for every row.
+        for row in 0..count {
+            let bytes = &rows[row * 128..(row + 1) * 128];
+            let direction = u32::from_le_bytes(
+                bytes[68..72]
+                    .try_into()
+                    .unwrap_or_else(|_| fail(b"row too short for its direction")),
+            );
+            // Matched by content, not by index. The resource sorts participants
+            // by *grant identity* (the decoder rejects an unsorted table) while
+            // the generated table is in route order, so row `n` of one is not
+            // row `n` of the other -- an index comparison fails on a correct
+            // read, which is how this was found.
+            let matched = FABRIC_PARTICIPANTS
+                .iter()
+                .any(|(component, _, _, declared)| {
+                    *declared == direction
+                        && core::str::from_utf8(component)
+                            .map(|name| component_identity(name) == bytes[32..64])
+                            .unwrap_or(false)
+                });
+            if !matched {
+                fail(b"graph read row matches no declared participant");
+            }
+        }
         total += count;
         cursor += count;
         if count < 8 {
@@ -352,11 +383,6 @@ fn prove_graph_read() {
         }
     }
     if total != FABRIC_PARTICIPANTS.len() {
-        slime_rt::debug_write(b"[fabric] graph read rows=");
-        write_u32(total as u32);
-        slime_rt::debug_write(b" table=");
-        write_u32(FABRIC_PARTICIPANTS.len() as u32);
-        slime_rt::debug_write(b"\n");
         fail(b"graph read disagrees with the compiled table");
     }
     slime_rt::debug_write(b"[fabric] graph read agrees with the declared participants\n");

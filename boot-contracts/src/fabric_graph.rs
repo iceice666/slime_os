@@ -632,6 +632,22 @@ impl<'a> FabricGraph<'a> {
         self.route_offset() + self.route_count * ROUTE_ENTRY_BYTES
     }
 
+    /// The encoded bytes of participant `index`, exactly as the resource holds
+    /// them.
+    ///
+    /// For a server relaying rows to a component that will decode them with
+    /// [`Self::participant`]: the payload is already in the contract's record
+    /// format, so copying it keeps one layout statement. Re-encoding a decoded
+    /// `ParticipantEntry` field by field would be a second, hand-written copy of
+    /// this record's layout, which is the shape the repository's schema rule
+    /// exists to prevent.
+    pub fn participant_bytes(&self, index: usize) -> Option<&'a [u8]> {
+        (index < self.participant_count).then(|| {
+            let offset = self.participant_offset() + index * PARTICIPANT_ENTRY_BYTES;
+            &self.bytes[offset..offset + PARTICIPANT_ENTRY_BYTES]
+        })
+    }
+
     fn interposition_offset(&self) -> usize {
         self.participant_offset() + self.participant_count * PARTICIPANT_ENTRY_BYTES
     }

@@ -105,3 +105,53 @@ passes by never running.
 
 - Predecessor: [`devlog/2026-08-19-fabric-graph-read-options/`](../2026-08-19-fabric-graph-read-options/index.md)
 - Related roadmap item: [B70](../../roadmap/00-backlog.md), [CP2](../../roadmap/10-component-platform.md)
+
+## Corrections
+
+**2026-08-19, same day — the proof checked only the row count, and the encoder
+was a second layout statement.** Two defects in what this entry first recorded,
+found together.
+
+The entry claimed the holder's read "agrees row-for-row with the table compiled
+in today". It did not: `prove_graph_read` filled a buffer it never read and
+asserted only `total != FABRIC_PARTICIPANTS.len()`. Scrambling every field of a
+row would have passed, and so would the inversion test — which proved the *count
+comparison* executes, not that the comparison looks at the right thing.
+
+Underneath that, `read_graph_participants` re-encoded each decoded
+`ParticipantEntry` field by field, at hand-written offsets
+(0/32/64/68/72/76/80/88/96/104/108/112/113/114) mirroring
+`FabricGraph::participant`'s decoder. That is a hand-written wire layout for a
+format that crosses a process boundary — the exact thing CLAUDE.md's schema rule
+forbids — and it was untested, so the two copies could drift silently.
+
+Both are fixed by not encoding at all. `FabricGraph::participant_bytes` (new,
+in the contract's own decoder beside `participant`) returns the record's stored
+bytes, and the root copies them. The payload is already in the contract's format,
+so there is now one layout statement rather than two, and a layout bug is
+impossible rather than merely unobserved.
+
+**The stronger proof immediately found a real disagreement**, which is the
+argument for having written it: matching row `n` of the read against row `n` of
+the table fails, because **the resource sorts participants by grant identity**
+(the decoder rejects an unsorted table) while the generated table is in route
+order. Neither is wrong; the index assumption was. The proof now matches by
+content — each row's component identity and direction must correspond to some
+declared participant — and that is verified non-vacuous by shifting the compared
+byte range one byte, which fails the plane with `graph read row matches no
+declared participant`.
+
+This is worth keeping for the consumers step 2 migrates: **a consumer cannot
+assume the read's row order matches the generated table's.** Anything positional
+against `FABRIC_PARTICIPANTS` must key on identity instead.
+
+**Also corrected: two planes were unverified.** `prove_graph_read` runs
+unconditionally at the top of `main()`, so it executes on the call and operation
+planes too, and neither gate had been run when this entry was first written.
+Both were run afterwards.
+
+**One transitional note the Regression guards table above overstates.** The
+holder proof compares against `FABRIC_PARTICIPANTS`, the table step 2 exists to
+delete, and holds a 1 KiB stack buffer in a component whose stack budget is 16
+KiB. It is a transitional check that expires with the thing it validates, not a
+permanent guard.

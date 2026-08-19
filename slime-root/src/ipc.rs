@@ -813,30 +813,10 @@ pub fn read_graph_participants(
         if end > out.len() || written / GRAPH_ROW_BYTES >= GRAPH_ROWS_PER_CALL {
             break;
         }
-        let participant = graph.participant(index)?;
-        encode_participant(&participant, &mut out[written..end]);
+        out[written..end].copy_from_slice(graph.participant_bytes(index)?);
         written = end;
     }
     Some(written / GRAPH_ROW_BYTES)
-}
-
-/// Lay one participant row out in the contract's own record order.
-fn encode_participant(entry: &boot_contracts::fabric_graph::ParticipantEntry, out: &mut [u8]) {
-    out[..32].copy_from_slice(&entry.grant_identity);
-    out[32..64].copy_from_slice(&entry.component_identity);
-    out[64..68].copy_from_slice(&entry.route_index.to_le_bytes());
-    out[68..72].copy_from_slice(&entry.direction.to_le_bytes());
-    out[72..76].copy_from_slice(&entry.visibility.to_le_bytes());
-    out[76..80].copy_from_slice(&entry.interposition_head.to_le_bytes());
-    out[80..88].copy_from_slice(&entry.qos.deadline_ns.to_le_bytes());
-    out[88..96].copy_from_slice(&entry.qos.lifespan_ns.to_le_bytes());
-    out[96..104].copy_from_slice(&entry.qos.lease_ns.to_le_bytes());
-    out[104..108].copy_from_slice(&entry.qos.history_depth.to_le_bytes());
-    out[108..112].copy_from_slice(&entry.qos.retained_depth.to_le_bytes());
-    out[112] = entry.qos.reliability;
-    out[113] = entry.qos.durability;
-    out[114] = entry.qos.liveliness;
-    out[115..GRAPH_ROW_BYTES].fill(0);
 }
 
 /// The bounds `resolve_binding_slot` applies before it looks anything up.
