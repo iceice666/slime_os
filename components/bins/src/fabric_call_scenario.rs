@@ -514,6 +514,23 @@ pub fn expect_reply(slot: u32, session: u64, request_id: u64, status: i32) -> Wi
     {
         fail(b"reply mismatch")
     }
+    // Ack the reply, for the same reason `expect_terminal` acks a terminal:
+    // the broker offers it with `seL4_NBSend`, which reports nothing, so the
+    // ack is the only thing that retires the call record (B75). A blocking
+    // send would deadlock -- the broker may be mid-sweep offering something
+    // else to this very client -- and `try_send` would drop unobservably, so
+    // `Call` is the only primitive that both arrives and cannot wedge.
+    //
+    // The ack carries no payload: `KIND_REPLY_ACK` is a settlement, and the
+    // envelope validator rejects one bearing a payload.
+    let mut ack = reply;
+    ack.kind = KIND_REPLY_ACK;
+    ack.payload_len = 0;
+    ack.payload = [0; 16];
+    let mut answer = [0u8; MAX_MSG];
+    if slime_rt::call(slot, &ack.encode(), &mut answer) < 0 {
+        fail(b"reply ack")
+    }
     reply
 }
 

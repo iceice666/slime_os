@@ -555,9 +555,14 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
         || value.request_id == 0
         || value.type_identity == 0
         || value.type_identity != expected_type
-        || (!matches!(value.kind, KIND_TERMINAL | KIND_TERMINAL_ACK)
-            && value.payload_len as usize > INLINE_BYTES)
-        || (matches!(value.kind, KIND_TERMINAL | KIND_TERMINAL_ACK) && value.payload_len != 0)
+        || (!matches!(
+            value.kind,
+            KIND_TERMINAL | KIND_TERMINAL_ACK | KIND_REPLY_ACK
+        ) && value.payload_len as usize > INLINE_BYTES)
+        || (matches!(
+            value.kind,
+            KIND_TERMINAL | KIND_TERMINAL_ACK | KIND_REPLY_ACK
+        ) && value.payload_len != 0)
         || value.payload[value.payload_len.min(value.payload.len() as u32) as usize..]
             .iter()
             .any(|byte| *byte != 0)
@@ -567,6 +572,17 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
     match value.kind {
         KIND_REQUEST => value.status == STATUS_SUCCESS,
         KIND_REPLY => matches!(
+            value.status,
+            STATUS_SUCCESS | STATUS_REJECTED | STATUS_CANCELLED
+        ),
+        // The client's word that it took an inline reply, naming the request
+        // that reply answered. It mirrors the reply's own status so a broker
+        // cannot retire a record on an ack for some other outcome.
+        //
+        // Unlike a terminal ack this does not require `flags == 0`: a reply
+        // carries whatever flags its server chose, and the non-idempotent bit
+        // is echoed back from the request it answers.
+        KIND_REPLY_ACK => matches!(
             value.status,
             STATUS_SUCCESS | STATUS_REJECTED | STATUS_CANCELLED
         ),

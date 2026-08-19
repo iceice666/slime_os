@@ -27,6 +27,11 @@ kindTerminal :: Int = 4;
 -- itself sending -- so the record is retired on the client's word, not the
 -- sender's guess.
 kindTerminalAck :: Int = 5;
+-- Acknowledges an inline reply, naming the request it answers. The broker
+-- offers a reply the same way it offers a terminal -- `seL4_NBSend`, because a
+-- blocking send deadlocks against a client that is itself sending -- so the
+-- call record is retired on the client's word rather than the sender's guess.
+kindReplyAck :: Int = 6;
 flagNonIdempotent :: Int = 1;
 flagSharedPayload :: Int = 2;
 knownFlags :: Int = 3;
@@ -94,6 +99,7 @@ format ::= {
   kindCancel =;
   kindTerminal =;
   kindTerminalAck =;
+  kindReplyAck =;
   flagNonIdempotent =;
   flagSharedPayload =;
   knownFlags =;

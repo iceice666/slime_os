@@ -1,10 +1,10 @@
 use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
 use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::{
-    CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REQUEST,
-    KIND_TERMINAL, KIND_TERMINAL_ACK, STATUS_CANCELLED, STATUS_DUPLICATE, STATUS_MALFORMED_REPLY,
-    STATUS_PEER_DEAD, STATUS_REJECTED, STATUS_RETRY_EXHAUSTED, STATUS_STALE, STATUS_TIMEOUT,
-    WireCallEnvelope, WireCallTimeAdvance,
+    CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REPLY_ACK,
+    KIND_REQUEST, KIND_TERMINAL, KIND_TERMINAL_ACK, STATUS_CANCELLED, STATUS_DUPLICATE,
+    STATUS_MALFORMED_REPLY, STATUS_PEER_DEAD, STATUS_REJECTED, STATUS_RETRY_EXHAUSTED,
+    STATUS_STALE, STATUS_TIMEOUT, WireCallEnvelope, WireCallTimeAdvance,
 };
 use slime_proto::interface_schema::parameter_call;
 use slime_proto::sample_descriptor::{
@@ -361,11 +361,15 @@ impl Broker {
             // release this broker cannot arrive -- and the terminal it is
             // holding is the very thing that would let the client run again.
             // Re-offering is the only way out, so it yields instead.
-            let owed = self
-                .calls
-                .iter()
-                .any(|call| call.phase == Phase::PendingTerminal)
-                || self.pending_terminals.iter().any(Option::is_some);
+            // `ForwardingReply` joins this for the same reason (B75): a
+            // client blocked in `recv` awaiting its reply signals nothing, so
+            // the wake that would release this broker cannot arrive -- and the
+            // reply it is holding is the very thing that would let the client
+            // run again.
+            let owed =
+                self.calls.iter().any(|call| {
+                    matches!(call.phase, Phase::PendingTerminal | Phase::ForwardingReply)
+                }) || self.pending_terminals.iter().any(Option::is_some);
             // A call at the server is also a reason not to park. The server
             // signals before its reply, but it may exit instead of replying --
             // this plane injects exactly that -- and a peer that has exited
@@ -508,6 +512,27 @@ impl Broker {
                         0,
                         slime_proto::fabric_qos::EVENT_MATCHED,
                     );
+                    return true;
+                }
+                // Same discipline for the reply the broker offered (B75). The
+                // reply is what the client was waiting for, so its ack cannot
+                // be refused as a stale call either: that refusal queues a
+                // terminal the client is not reading, and the record it should
+                // have settled stays open forever.
+                if message.kind == KIND_REPLY_ACK {
+                    // Reply *first*, for the same reason as above: the caller
+                    // is blocked in `seL4_Call` and any intervening IPC -- a
+                    // `debug_write` included -- overwrites the reply capability
+                    // stored when this thread was last called.
+                    let _ = slime_rt::reply(&message.encode());
+                    self.retire_reply(client, message.request_id);
+                    // Not traced, unlike a terminal ack. A terminal is only
+                    // ever reported by its ack, so without that record the
+                    // settlement is invisible; a reply is already recorded
+                    // where it was correlated, and this ack only says the
+                    // transport handed it over. Recording it would add one
+                    // entry per reply to a sink the plane declares at 64 --
+                    // enough to saturate it and drop the evidence that matters.
                     return true;
                 }
                 if message.session == SESSION {
@@ -816,6 +841,23 @@ impl Broker {
                 call.client_index as usize == client && call.request_id == request_id
             }) {
                 *pending = None;
+            }
+        }
+    }
+
+    /// Retire the reply `client` acknowledged.
+    ///
+    /// Matching on the request id for the same reason `retire_terminal` does:
+    /// an ack settles the record it names, never a batch, so a client
+    /// acknowledging twice cannot drop a reply it has not seen.
+    fn retire_reply(&mut self, client: usize, request_id: u64) {
+        for index in 0..self.calls.len() {
+            if self.calls[index].phase == Phase::ForwardingReply
+                && self.calls[index].client_index as usize == client
+                && self.calls[index].request_id == request_id
+            {
+                settle_payload(self.calls[index].payload);
+                self.calls[index] = Call::EMPTY;
             }
         }
     }
@@ -1199,15 +1241,39 @@ impl Broker {
         }
     }
 
+    /// Offer an inline reply to its client, and keep the record until the
+    /// client acknowledges it.
+    ///
+    /// This offers rather than sends. A blocking `send` here wedges the whole
+    /// broker (B75): it completes only against a client already parked in
+    /// `recv`, and a client that is pipelining requests is itself blocked in
+    /// `send` -- so neither side is receiving, the rendezvous never happens,
+    /// and no later sweep runs. `seL4_NBSend` cannot block, but it also cannot
+    /// report delivery, so the record is retired on the client's ack rather
+    /// than on this call's return, exactly as terminals are.
     fn deliver_inline_reply(&mut self, index: usize, outward: WireCallEnvelope) {
+        self.calls[index].phase = Phase::ForwardingReply;
+        self.calls[index].payload = Payload::InlineReply(outward);
+        self.calls[index].offered = false;
+        self.offer_inline_reply(index, outward);
+    }
+
+    /// Put one reply in front of its client, without blocking.
+    ///
+    /// Repeating an offer is harmless: a reply is idempotent, the client takes
+    /// exactly one message per receive, and a duplicate arriving after the ack
+    /// has retired the record cannot be produced, because nothing re-offers a
+    /// record that no longer exists.
+    fn offer_inline_reply(&mut self, index: usize, outward: WireCallEnvelope) -> bool {
         let client = self.calls[index].client_slot;
-        match slime_rt::send(client, &outward.encode(), &[]) {
-            ERR_SUCCESS => self.calls[index] = Call::EMPTY,
-            ERR_WOULDBLOCK => {
-                self.calls[index].phase = Phase::ForwardingReply;
-                self.calls[index].payload = Payload::InlineReply(outward);
+        match slime_rt::try_send(client, &outward.encode(), &[]) {
+            // `try_send` reports nothing about delivery, so this claims none:
+            // the record stays until its client acks.
+            ERR_SUCCESS => false,
+            ERR_PEER_DEAD => {
+                self.drop_dead_client(index, b"client endpoint drop");
+                true
             }
-            ERR_PEER_DEAD => self.drop_dead_client(index, b"client endpoint drop"),
             _ => fail(b"reply delivery"),
         }
     }
@@ -1277,18 +1343,7 @@ impl Broker {
             let call = self.calls[index];
             match call.payload {
                 Payload::InlineReply(reply) => {
-                    match slime_rt::send(call.client_slot, &reply.encode(), &[]) {
-                        ERR_SUCCESS => {
-                            self.calls[index] = Call::EMPTY;
-                            progressed = true;
-                        }
-                        ERR_WOULDBLOCK => {}
-                        ERR_PEER_DEAD => {
-                            self.drop_dead_client(index, b"client endpoint drop");
-                            progressed = true;
-                        }
-                        _ => fail(b"reply delivery"),
-                    }
+                    progressed |= self.offer_inline_reply(index, reply);
                 }
                 Payload::SharedReply {
                     buffer_slot,
@@ -1567,6 +1622,12 @@ impl Broker {
                         },
                         _ => Payload::None,
                     };
+                    // The server is now executing this cancel and will not
+                    // receive again until it has answered, exactly as after an
+                    // ordinary forward. Without this the deferred-forward retry
+                    // just below reads the server as idle and blocks against a
+                    // peer that is mid-cancel, wedging the broker (B75).
+                    self.server_call = Some(self.calls[index].server_request_id);
                     progressed = true;
                 }
                 ERR_PEER_DEAD => {
@@ -1617,9 +1678,12 @@ impl Broker {
                 continue;
             }
             for index in 0..self.calls.len() {
-                if self.calls[index].phase == Phase::PendingTerminal
-                    && self.calls[index].client_index as usize == client
+                if matches!(
+                    self.calls[index].phase,
+                    Phase::PendingTerminal | Phase::ForwardingReply
+                ) && self.calls[index].client_index as usize == client
                 {
+                    settle_payload(self.calls[index].payload);
                     self.calls[index] = Call::EMPTY;
                     progressed = true;
                 }
