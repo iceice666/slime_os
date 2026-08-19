@@ -194,3 +194,37 @@ the check at the publisher's own identity, which fails the plane with `graph rea
 disclosed a component this one shares no edge with`. That makes C8.8's
 "an ungranted caller inferred nothing" rest on an observation rather than on the
 absence of a counterexample.
+
+**2026-08-19 — `fabric-service`'s provisioning walk: attempted, reverted,
+partially understood.** Migrating the two remaining `FABRIC_PARTICIPANTS`
+consumers in `fabric-service` was attempted and backed out. Recording it because
+the half that worked and the half that did not are both useful to the next
+attempt.
+
+`declared_edges` migrated cleanly and was proven non-vacuous: forcing it to
+return zero denies every participant with `ungranted component denied`, so the
+migrated function does drive authority rather than passing silently. That part
+is sound and could land on its own.
+
+The provisioning walk did not. With it migrated, three of six edges provision —
+`fabric-publisher-b` and `fabric-subscriber-b` succeed, `fabric-publisher` and
+`fabric-subscriber` never do — and the plane fails at `reject: descriptor
+validation`. The root's own markers show the holder receiving all six rows
+(`rows=6`), so the read is not the problem; the loss is on the component side.
+
+Established along the way, and worth keeping:
+
+- A resource row's `route_index` indexes `ordered`, the route list sorted by
+  route identity (`build-generation.py:2140`), while a broker's `ROUTE_NAMES` is
+  its own hand-written dispatch order. The two genuinely differ and the
+  translation through `graph_route_index` is the right instrument.
+- Direction encodings agree: `FABRIC_DIRECTION` and the generated
+  `DIRECTION_PUBLISH`/`SUBSCRIBE` are both 1 and 2.
+- Reading the graph inside the client loop puts a syscall in a hot path; the
+  read belongs at the top of `provision`, and `declared_edges` should take the
+  rows rather than re-read them.
+
+What was *not* established is why two specific components fail to match. Several
+hypotheses were tried without confirming any — the honest state is that the
+cause is unknown, not that a fix is close. The attempt is reverted rather than
+left half-applied, so the tree is at the last green commit.
