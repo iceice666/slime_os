@@ -399,3 +399,42 @@ The remaining untested surface is narrow: the fabric maps each ring at
 attach independently. Whether anything outside this file caches a base→route
 association across that boundary is the next thing to look at, and it is the
 first hypothesis so far that reaches beyond `fabric-service.rs`.
+
+**2026-08-19 — mechanism found and fixed: the pump validated every arriving
+descriptor against its own record's route, but the control endpoint is one per
+component.** Re-reading `pump_publisher` with the transposition in hand exposed
+what four measurements could not: after `recv` on `control_slot`, the incoming
+sample descriptor was validated with `type_tags[route]` where `route` belongs
+to *whichever publisher record is currently being pumped*. The control endpoint
+is per-component (`control_clients` hands each component exactly one slot), so
+a two-route publisher's descriptors all arrive on one endpoint, and whichever
+of its records happened to be mid-pump claimed them. The baseline table order
+put the telemetry record where it always received the telemetry descriptor —
+a scheduling accident the generated table froze into place. The graph's
+identity-sorted order broke the accident, not the contract.
+
+The fix is demultiplexing, not order restoration: the pump now selects among
+this same component's own publisher records by the descriptor's
+`type_identity`. Authority still comes from the endpoint and the graph — the
+type only chooses between edges the graph already grants the caller, and an
+identity naming none of them falls through to the current record, whose
+validation rejects it exactly as before. With that in place the provisioning
+walk moved off `FABRIC_PARTICIPANTS` onto the graph rows.
+
+Two order assumptions surfaced downstream and were fixed the same way:
+
+- `check-sel4-stream-plane.py` asserted the old within-component provisioning
+  order as a causal chain; the chain now states the resource's identity-sorted
+  order, which is deterministic per generation.
+- `fabric_boot::accept_roles` consumed roles strictly in its caller's declared
+  edge order, which re-encoded the worker's order as a contract. It now matches
+  each arriving role by its own declared route and direction with per-edge
+  budgets, so a duplicate fails once its edge is spent.
+
+Verified: `sel4_stream_check`, `sel4_boot_check`, `sel4_call_check`,
+`sel4_operation_check`, `sel4_visibility_check`, `sel4_matrix_check`,
+`sel4_qos_check`, `sel4_traffic_check`, `sel4_gate_control_check` (32 gates
+still reject 1229 mutated transcripts), `fmt_check_all`, `lint_all` — all
+green. The dead `route_index(name)` helper is gone with the walk, leaving
+`fabric-service` reading `FABRIC_PARTICIPANTS` only in the startup cross-check
+that compares the graph resource against the generated table.

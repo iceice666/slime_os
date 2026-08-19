@@ -791,16 +791,23 @@ fn provision(
             // One request provisions every edge the graph declares for this
             // component: a participant on two routes receives two roles, each
             // narrowed on its own. The client learns how many to expect from
-            // the same graph, so no count crosses as authority.
-            for (component, route_name, _, direction) in FABRIC_PARTICIPANTS.iter() {
-                if *component != client.component {
+            // the same graph, so no count crosses as authority. The rows come
+            // from the graph resource, in its identity-sorted order; nothing
+            // downstream may depend on provisioning order, and the descriptor
+            // demultiplexing in `pump_publisher` is what makes that true.
+            let identity = boot_contracts::fabric_graph::component_identity(
+                core::str::from_utf8(client.component)
+                    .unwrap_or_else(|_| fail(b"component name is not utf-8")),
+            );
+            for row in graph_rows[..row_count].iter() {
+                if row.component_identity != identity {
                     continue;
                 }
                 // A route this service does not carry is not this service's to
                 // provision. Call and operation routes are declared in the same
                 // graph and owned by C8.6/C8.7; skipping them here is why a
                 // component on one holds no stream authority by accident.
-                let Some(route) = route_index(route_name) else {
+                let Some(route) = local_route_index(row.route_index) else {
                     continue;
                 };
                 provision_edge(
@@ -808,7 +815,7 @@ fn provision(
                     control_slot,
                     &routes[route],
                     route,
-                    *direction,
+                    row.direction,
                     publishers,
                     subscribers,
                 );
@@ -1431,21 +1438,50 @@ fn pump_publisher(
         && n as usize == MAX_MSG
         && u32::from_le_bytes(message[..4].try_into().expect("magic")) == SAMPLE_DESCRIPTOR_MAGIC
     {
-        let sequence = WireSampleDescriptor::decode(&message)
-            .map(|value| value.sequence)
-            .unwrap_or(0);
+        let decoded = WireSampleDescriptor::decode(&message);
+        let sequence = decoded.as_ref().map(|value| value.sequence).unwrap_or(0);
+        // The control endpoint is one per *component*, not one per route, so a
+        // two-route publisher's descriptors all arrive here regardless of
+        // which of its records ran this pump. Demultiplex by the descriptor's
+        // type identity among this same component's own publisher records --
+        // authority still comes from the endpoint and the graph, the type only
+        // selects between edges the graph already grants this component. An
+        // identity naming none of them falls through to this record, whose
+        // validation rejects it exactly as before.
+        let (admit_index, admit_route) = decoded
+            .as_ref()
+            .and_then(|descriptor| {
+                publishers.iter().enumerate().find_map(|(other, entry)| {
+                    entry.as_ref().and_then(|publisher| {
+                        (publisher.control_slot == control_slot
+                            && type_tags[publisher.route] == descriptor.type_identity)
+                            .then_some((other, publisher.route))
+                    })
+                })
+            })
+            .unwrap_or((index, route));
         // A delegated loan is a root-recorded export, not an in-message
         // capability: only a native Endpoint travels in the message itself, so
         // `received[0]` is empty here and the authority is claimed instead.
         let loan_slot = slime_rt::capability_import().ok();
-        if let Some(frame) = admit_shared(&message, type_tags[route], loan_slot, frames) {
+        if let Some(frame) = admit_shared(&message, type_tags[admit_route], loan_slot, frames) {
             frames[frame].admitted_ns = now_ns;
-            publishers[index].as_mut().expect("publisher").finished |=
-                frames[frame].flags & FLAG_LAST != 0;
-            fan_out(frame, route, index, &publisher_qos, subscribers, frames);
-            retain_sample(index, frame, publishers, frames);
+            publishers[admit_index]
+                .as_mut()
+                .expect("publisher")
+                .finished |= frames[frame].flags & FLAG_LAST != 0;
+            let admit_qos = publishers[admit_index].as_ref().expect("publisher").qos;
+            fan_out(
+                frame,
+                admit_route,
+                admit_index,
+                &admit_qos,
+                subscribers,
+                frames,
+            );
+            retain_sample(admit_index, frame, publishers, frames);
         }
-        credit_publisher(control_slot, type_tags[route], sequence);
+        credit_publisher(control_slot, type_tags[admit_route], sequence);
         progressed = true;
     } else if n >= 0 {
         release_received(&received);
@@ -2007,11 +2043,6 @@ fn release_received(received: &[u64]) {
     for slot in received.iter().filter(|slot| **slot != 0) {
         let _ = slime_rt::cap_drop(*slot as u32);
     }
-}
-
-/// Index of `name` in [`ROUTE_NAMES`].
-fn route_index(name: &str) -> Option<usize> {
-    ROUTE_NAMES.iter().position(|route| *route == name)
 }
 
 /// The (ready, credit) notification slot pair the generation declares for one

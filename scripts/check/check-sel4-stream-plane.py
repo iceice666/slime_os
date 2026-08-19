@@ -165,14 +165,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # Each edge is recorded by the fabric after it registers the
         # participant, so these are asserted as their own ordered chain rather
         # than interleaved with the participants' markers, which race them.
+        # Within one participant the two routes appear in the generation
+        # graph resource's identity-sorted row order (diagnostics before
+        # telemetry), which is deterministic per generation -- the fabric
+        # walks its own graph rows, not a build-time table (B70/CP2).
         "every declared edge is recorded",
         (
             r"\[fabric\] provisioned fabric-publisher telemetry publish ring",
             r"\[fabric\] provisioned fabric-subscriber telemetry subscribe ring",
-            r"\[fabric\] provisioned fabric-publisher-b telemetry publish ring",
             r"\[fabric\] provisioned fabric-publisher-b diagnostics publish ring",
-            r"\[fabric\] provisioned fabric-subscriber-b telemetry subscribe ring",
+            r"\[fabric\] provisioned fabric-publisher-b telemetry publish ring",
             r"\[fabric\] provisioned fabric-subscriber-b diagnostics subscribe ring",
+            r"\[fabric\] provisioned fabric-subscriber-b telemetry subscribe ring",
             r"\[fabric\] every declared stream edge provisioned",
         ),
     ),

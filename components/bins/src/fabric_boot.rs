@@ -100,8 +100,9 @@ pub fn provision_and_park(
 /// One request provisions every edge the graph declares for a component, so the
 /// worker answers with all of them and each is checked against its own
 /// (route, direction) pair. `edges` is `(route identity, direction, capability
-/// count)` in the order the graph declares them, because the roles arrive in
-/// that order — a participant and its worker read the same table.
+/// count)` as an unordered set: each arriving role is matched by its own
+/// declared route and direction, never by arrival position, so the worker's
+/// provisioning order is not part of the contract.
 pub fn provision_multi_and_park(
     name: &'static [u8],
     route_name: &str,
@@ -137,21 +138,42 @@ fn provision(name: &'static [u8], route_name: &str, type_tag: u64, direction: u3
 }
 
 fn accept_roles(name: &'static [u8], edges: &[([u8; 32], u32, usize)]) {
-    for (route, direction, roles) in edges {
-        for _ in 0..*roles {
-            let descriptor = receive_role(name);
-            if descriptor.status != 0 {
-                fail(name, b"declared participant was denied");
-            }
-            if !valid_capability_transfer(
-                &descriptor,
-                route,
-                *direction,
-                OBJECT_KIND_SHARED_BUFFER_LOAN,
-            ) {
-                fail(name, b"boot role binding");
-            }
+    // Roles are matched to edges by their own declared route and direction,
+    // not by arrival order: the worker provisions from the generation graph
+    // resource, whose row order is the identity sort, and nothing here may
+    // re-encode that order as an expectation. `remaining` makes each edge's
+    // count a budget, so a duplicate role fails the same way an unknown one
+    // does once its edge is spent.
+    const MAX_EDGES: usize = 4;
+    if edges.len() > MAX_EDGES {
+        fail(name, b"boot edge count");
+    }
+    let mut remaining = [0usize; MAX_EDGES];
+    for (index, (_, _, roles)) in edges.iter().enumerate() {
+        remaining[index] = *roles;
+    }
+    let total: usize = edges.iter().map(|(_, _, roles)| *roles).sum();
+    for _ in 0..total {
+        let descriptor = receive_role(name);
+        if descriptor.status != 0 {
+            fail(name, b"declared participant was denied");
         }
+        let Some(edge) = edges
+            .iter()
+            .enumerate()
+            .position(|(index, (route, direction, _))| {
+                remaining[index] > 0
+                    && valid_capability_transfer(
+                        &descriptor,
+                        route,
+                        *direction,
+                        OBJECT_KIND_SHARED_BUFFER_LOAN,
+                    )
+            })
+        else {
+            fail(name, b"boot role binding");
+        };
+        remaining[edge] -= 1;
     }
     slime_rt::debug_write(b"[");
     slime_rt::debug_write(name);
