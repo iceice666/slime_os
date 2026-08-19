@@ -348,10 +348,13 @@ generator expressions and their entries in the checked-in
 B70's remaining surface is 18 `include!` sites over three tables.
 `fabric_profile`'s 49 constants (2026-08-19: `FABRIC_SUPERVISION` and
 `FABRIC_SUBSCRIBERS` deleted): one remaining slot table,
-`FABRIC_NOTIFICATION_BINDINGS`, plus 3 capability-slot ceilings and the rest
-graph facts (routes, QoS depths, trace depth, participant and worker tables)
-belonging to an authenticated `fabric-graph` read — still no resource-read
-syscall exists, the one item with no available mechanism at all.
+`FABRIC_NOTIFICATION_BINDINGS`, plus declared bounds and graph facts. The split
+between those last two is measured below rather than estimated — an earlier
+revision of this paragraph said "44 graph facts belonging to an authenticated
+`fabric-graph` read", which counted the capacity bounds as though a read could
+retire them. It cannot: they size fixed arrays at compile time. Only 55 of the
+128 live uses are graph data, and the resource-read syscall those need still does
+not exist, the one item with no available mechanism at all.
 
 `FABRIC_NOTIFICATION_BINDINGS` is worth distinguishing from the notification work
 already closed above. That migration moved each component's own wake slots onto
@@ -375,6 +378,52 @@ blocked: B71 made the resource derive from the same bindings the root places
 from, and `init.rs`'s `main()` now resolves its three executables through the
 query.
 **Evidence:** [`devlog/2026-08-18-cp2-runtime-binding-query/`](../devlog/2026-08-18-cp2-runtime-binding-query/index.md)
+
+**Progress (2026-08-19, remaining surface measured):** before building the
+`fabric-graph` read, the 18 `include!` sites were counted by *what each symbol
+is* rather than by symbol count, because the raw count overstates what a graph
+read can retire. 128 live uses of generated `fabric_profile` symbols, in four
+groups:
+
+- **39 uses / 19 symbols are declared bounds** — `FABRIC_MAX_PUBLISHERS`,
+  `FABRIC_TRACE_DEPTH`, `FABRIC_MAX_SAMPLE_BYTES` and so on. These size *fixed
+  arrays* in a `no_std` component with no allocator (`MAX_PARTICIPANTS =
+  FABRIC_MAX_PUBLISHERS + FABRIC_MAX_SUBSCRIBERS`, `Trace::new(FABRIC_TRACE_DEPTH)`
+  through a `const fn`), and several back `const _: () = assert!` drift guards.
+  A runtime read cannot replace a value the type system needs at compile time.
+  These are **not** closable by any query and should stop being counted as B70
+  surface; what CP3/CP4 owe them is a declared-capacity contract an out-of-tree
+  component compiles against, not a syscall.
+- **31 uses are `GENERATION_BOOT_ACTION`** — a single string every fabric
+  component branches on to pick which plane's schedule to run
+  (`== "traffic"`, `== "matrix"`). Not graph data at all: it is *which
+  composition am I booted into*, and the root already delivers a boot action to
+  the bootstrap instance. Closing it is a distinct, smaller question than the
+  graph read.
+- **55 uses / 10 symbols are genuine graph data** — `FABRIC_PARTICIPANTS` (17),
+  `FABRIC_VISIBILITY` (9), `FABRIC_HISTORY_DEPTHS` (7), `FABRIC_QOS` (6),
+  `FABRIC_CLIENTS`/`FABRIC_INTERPOSITIONS` (4 each), and the client and schema
+  tables. These are what a `fabric-graph` read would answer.
+- **3 uses are slot-ish** — `FABRIC_NOTIFICATION_BINDINGS` (2) and
+  `FABRIC_MINTED_GRANTS` (1), covered above.
+
+Two facts scope the graph read itself. The resource object already exists and is
+already embedded in every generation declaring a `fabricGraph`
+(`build-generation.py` writes `resolved_profile.graph_bytes` as the `fabric-graph`
+object), and `boot_contracts::fabric_graph::FabricGraph` is a complete decoder the
+root already uses for admission — so the work is an access path, not a format.
+But the resource keys on **identity hashes** where the generated tables key on
+names: `ParticipantEntry` carries `component_identity`/`route_index`, while
+`declared_qos(component: &[u8], route: &str)` matches on the strings. Components
+already call `route_identity()` from that same module, so the fold is available to
+them; a consumer would ask by identity and stop holding the name at all.
+
+One more thing has no mechanism: `ROUTE_NAMES` is **not** generated — it is a
+hand-written `const` in `fabric-service.rs` and `matrix_broker.rs` naming the
+routes each plane carries. It was previously counted among the graph facts; it is
+really a component asserting which graph it belongs to, and a graph read is what
+would let it stop.
+
 
 ## Deferred follow-ups
 
