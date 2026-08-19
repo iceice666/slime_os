@@ -286,3 +286,38 @@ shipping a change whose failure mode I cannot account for. Splitting the two was
 possible because they share only the hoisted read, which is now in place — so
 the walk's next attempt starts from a green tree with the placement bug already
 fixed.
+
+**2026-08-19 — the descriptor rejection is a route/type mismatch, and the two
+route orderings are *not* the cause.** Instrumenting the four conditions at
+`fabric-service.rs:1518` and booting directly under QEMU named the failing arm
+and its values:
+
+```
+[fabric] reject: descriptor validation valid=0 kind=1 len=8192
+         want_type=2845549244 got_type=148575099
+```
+
+`kind` and `len` are fine; only the type check fails. Resolving both tags against
+`components/proto/src/interface_schema.rs`: the fabric expected
+`diagnostics_stream` (`0xc5508e6f_a99ba2bc`) and the sample carried
+`telemetry_stream` (`0x11641539_08db137b`). So a telemetry sample is being
+admitted against the diagnostics route — the two are transposed somewhere on the
+migrated path.
+
+**The obvious suspect is eliminated.** The resource's route order was computed
+directly from the manifest: route identities sort to `route_index 0 = telemetry`,
+`1 = diagnostics`, which is exactly `ROUTE_NAMES`' order, and the boot probe
+already showed the mapping is identity on this plane (`local 0 -> graph 0`,
+`local 1 -> graph 1`). The `routes` and `type_tags` arrays agree with that order
+too. So the earlier guess that the identity-sorted resource disagrees with
+`ROUTE_NAMES` is **wrong on this plane**, and the transposition is elsewhere.
+
+That leaves the direction/route pairing inside the migrated walk as the place to
+look: a participant on two routes gets two rows, and if a row's route reaches
+`provision_edge` while its direction selects the other row's handling, the
+publisher and subscriber halves of one component would be crossed exactly this
+way. Not confirmed — stated as the next thing to measure, not as the answer.
+
+The mechanism is still open. What has changed is that the failure is now a named
+transposition between two specific interfaces rather than an unexplained
+validation error, and one hypothesis is closed off with evidence.
