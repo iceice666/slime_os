@@ -106,17 +106,23 @@ be tolerated.
 
 ## Open risks and follow-ups
 
-- [ ] `build-generation.py:3767` still claims this table has "one derivation,
-      both readers", naming the boot-layout resource as the second. That is
-      wrong: `contracts/boot-layout/v1`'s `LayoutEntry` is
-      `{name_identity, slot, role, rights}` with no count field, the counts land
-      in the fabric-graph artifact's `mintedGrants` rows, and
+- [x] **Closed in the same session.** `FABRIC_MINTED_GRANTS` is deleted
+      outright, with its whole chain: `declared_spawn_grant_counts`, the
+      artifact's `mintedGrants` rows, `minted_grant_rows`, the rendered
+      constant, the checked-in `default_fabric_profile.rs` table, and the
+      no-fabric fallback's copy — which now emits only `GENERATION_BOOT_ACTION`,
+      the sole symbol a fabric-less graph reads. `generation.bin` is
+      byte-identical across the deletion (`bbd22ea7…`), confirming the table
+      never reached the generation. Verified on the 21 fixtures taking that
+      branch via `just sel4_boot_layout_check` (25 layouts) and
+      `just sel4_root_boot_check` (the product graph), plus `just ruff` and
+      `just contracts_check`.
+- [x] The false B71 "one derivation, both readers" comment is deleted with it.
+      It claimed `build_generation` encoded this table into the boot-layout
+      resource; `contracts/boot-layout/v1`'s `LayoutEntry` is
+      `{name_identity, slot, role, rights}` with no count field, and
       `boot-contracts/src/fabric_graph.rs` decodes no minted field at all. The
-      rendered Rust constant was the only reader.
-- [ ] `FABRIC_MINTED_GRANTS` is still generated and still rendered into
-      `fabric_profile.rs`, now with no consumer. Deleting it — the generator
-      expression, the emission, and the checked-in default rows — is the
-      close-out, on the `FABRIC_INTERPOSITIONS` pattern.
+      rendered Rust constant was always the only reader.
 - [ ] `FABRIC_TRACE_DEPTH` remains the highest site-closure-per-symbol move
       left, blocking four participant files through the two
       `const _: () = assert!(super::FABRIC_TRACE_DEPTH …)` guards in

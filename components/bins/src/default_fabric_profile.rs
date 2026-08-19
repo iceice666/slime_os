@@ -38,39 +38,6 @@ pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[
     b"fabric-op-server",
     b"fabric-op-time",
 ];
-/// How many capabilities each child's owner must hand it at spawn: its minted
-/// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
-/// total `preflight_spawn_grants` checks a request against, so it is the one
-/// number an owner must agree with. A child absent from this table is spawned
-/// with nothing.
-#[allow(dead_code)]
-pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
-    (b"console", 0),
-    (b"dango", 3),
-    (b"echo-agent", 0),
-    (b"fabric-call-client", 1),
-    (b"fabric-call-server", 1),
-    (b"fabric-call-time", 0),
-    (b"fabric-call-worker", 1),
-    (b"fabric-op-client", 0),
-    (b"fabric-op-server", 0),
-    (b"fabric-op-time", 0),
-    (b"fabric-op-worker", 0),
-    (b"fabric-publisher", 0),
-    (b"fabric-service", 1),
-    (b"fabric-subscriber", 0),
-    (b"filesystem-service", 0),
-    (b"generation-inspect", 0),
-    (b"generation-list", 0),
-    (b"generation-manager", 0),
-    (b"generation-rollback", 0),
-    (b"generation-select", 0),
-    (b"generation-stage", 0),
-    (b"init", 2),
-    (b"powerbox-chooser", 2),
-    (b"spawn-service", 3),
-    (b"sysinfo", 0),
-];
 pub const FABRIC_MAX_PUBLISHERS: usize = 3;
 pub const FABRIC_MAX_SUBSCRIBERS: usize = 4;
 pub const FABRIC_MAX_SAMPLE_BYTES: usize = 8192;

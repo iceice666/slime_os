@@ -754,54 +754,6 @@ def assign_declared_slots(manifest: dict) -> dict:
     return manifest
 
 
-def declared_spawn_grant_counts(manifest: dict) -> list[tuple[dict, int]]:
-    """Per instance, how many capabilities its owner must supply at spawn.
-
-    This is the total `preflight_spawn_grants` checks a request against: the
-    instance's `mintedBindings`, plus its grant-backed bindings that are neither
-    an endpoint half -- the root materializes a native Endpoint itself -- nor a
-    self-loop, which is authority the child holds in its own right. Neither
-    crosses the spawn boundary, so neither is counted.
-
-    One implementation, because an owner that disagrees with the root by one is
-    refused with no way to see why: init used to carry a hardcoded list, which
-    was the stream graph's, and every other plane's spawn failed for a count it
-    had no way to know (B50/R2).
-    """
-    grants_by_name = {grant["name"]: grant for grant in manifest.get("grants", [])}
-    counts = []
-    for instance in manifest.get("instances", []):
-        minted = sum(
-            1
-            for entry in manifest.get("mintedBindings", [])
-            if entry["holder"] == instance["name"]
-        )
-        supplied = sum(
-            1
-            for binding in instance.get("bindings", [])
-            for grant in [grants_by_name.get(binding["grant"])]
-            if grant is not None
-            and not set(grant.get("rights", [])) & {"send", "recv"}
-            and not (
-                grant.get("source") == instance["name"]
-                and grant.get("target") == instance["name"]
-            )
-        )
-        counts.append((instance, minted + supplied))
-    # By holder name, so this table is a function of the manifest's *content*
-    # rather than of the order its instances happen to be written in.
-    #
-    # CP1 found this: deriving `sel4-channel.zti` in canonical order produced a
-    # semantically identical manifest whose `generation.bin` nevertheless
-    # differed, because this list is rendered straight into
-    # `FABRIC_MINTED_GRANTS` and compiled into `init`, so reordering two
-    # instances changed a component ELF and therefore the generation identity.
-    # Every reader looks entries up by holder name (`init.rs`'s
-    # `declared_minted_grants`), so the order was never meaningful — only
-    # accidentally load-bearing.
-    counts.sort(key=lambda entry: entry[0]["name"])
-    return counts
-
 def resolve_target_profile(target: object) -> TargetProfile:
     if not isinstance(target, str):
         fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
@@ -1712,15 +1664,6 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
             {"name": "operationReplacement", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(operation_controls) + index} for index, component in enumerate(replacement_controls)]},
         ],
         "supervision": supervision,
-        # What the *owner* must hand each child at spawn (B50/R2), by the one
-        # rule in `declared_spawn_grant_counts`. Emitting it removes the last
-        # place a plane's grant set was hand-written: init carried one hardcoded
-        # list, which was the stream graph's, so every other plane's spawn was
-        # refused for a count init had no way to know.
-        "mintedGrants": [
-            {"holder": instance["name"], "count": count}
-            for instance, count in declared_spawn_grant_counts(manifest)
-        ],
     }
     _assert_declared_control_slots(
         manifest,
@@ -1850,10 +1793,6 @@ def render_fabric_profile_rust(
     controls = lambda name: "".join(
         f"    b{rust_string(row['component'])},\n" for row in planes[name]
     )
-    minted_grant_rows = "".join(
-        f"    (b{rust_string(row['holder'])}, {row['count']}),\n"
-        for row in artifact["mintedGrants"]
-    )
     schema_rows = "".join(
         f"    ({rust_string(row['name'])}, {rust_string(row['identity'])}, 0x{row['typeTag']}, {row['contractKind']}, {row['maxEncodedBytes']}),\n"
         for row in artifact["schemas"]
@@ -1889,13 +1828,6 @@ pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
 pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
 pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
 pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
-/// How many capabilities each child's owner must hand it at spawn: its minted
-/// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
-/// total `preflight_spawn_grants` checks a request against, so it is the one
-/// number an owner must agree with. A child absent from this table is spawned
-/// with nothing.
-#[allow(dead_code)]
-pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n{minted_grant_rows}];
 pub const FABRIC_MAX_PUBLISHERS: usize = {limits['publishers']};
 pub const FABRIC_MAX_SUBSCRIBERS: usize = {limits['subscribers']};
 pub const FABRIC_MAX_SAMPLE_BYTES: usize = {limits['sampleBytes']};
@@ -3749,25 +3681,14 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             encoding="utf-8",
         )
     else:
-        # A graph with no fabric still has owners that spawn children, and init
-        # reads its declared spawn-grant counts from this profile. Emit that one
-        # table rather than nothing, so the same `init.rs` compiles against every
-        # manifest instead of the constant existing only where a fabric does.
+        # A graph with no fabric still needs its boot action, which selects which
+        # plane `init` drives. Nothing else in this profile is read without a
+        # fabric, so this is the whole file.
         profile_path.write_text(
-            "#[allow(dead_code)]\n"
-            + f"pub const GENERATION_BOOT_ACTION: &str = {json.dumps(manifest['bootAction'], ensure_ascii=True)};\n"
-            + "pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n"
-            + "".join(
-                f"    (b{json.dumps(instance['name'], ensure_ascii=True)}, {count}),\n"
-                for instance, count in declared_spawn_grant_counts(manifest)
-            )
-            + "];\n",
+            f"pub const GENERATION_BOOT_ACTION: &str = {json.dumps(manifest['bootAction'], ensure_ascii=True)};\n",
             encoding="utf-8",
         )
     executable_names = {executable["name"] for executable in manifest["executables"]}
-    # One derivation, both readers. `build_generation` encodes this same table
-    # into the boot-layout resource, so the constants a component compiles
-    # against and the resource the root serves at runtime cannot disagree (B71).
     built = build_rust_components(
         manifest["generation"],
         profile_path,

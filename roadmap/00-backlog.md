@@ -737,6 +737,22 @@ expected — init's own resolved slots did not move.
 deleting the generator expression, the emission, and the checked-in rows is the
 close-out, together with the false B71 "one derivation, both readers" comment
 above it.
+**Progress (2026-08-19, `FABRIC_MINTED_GRANTS` deleted):** the close-out landed
+in the same session. The symbol is gone along with its entire chain —
+`declared_spawn_grant_counts`, the artifact's `mintedGrants` rows,
+`minted_grant_rows`, the rendered constant, the checked-in
+`default_fabric_profile.rs` table, and the no-fabric fallback's copy, which now
+emits only `GENERATION_BOOT_ACTION`. `mintedGrants` was never in a Zutai schema:
+it was a Python-side artifact key feeding one Rust renderer, so no contract
+changed. `generation.bin` is byte-identical across the deletion (`bbd22ea7…`),
+which is the direct evidence the table never reached the generation at all.
+
+The false B71 comment goes with it. It claimed `build_generation` encoded this
+table into the boot-layout resource so a component's constants and the root's
+served resource "cannot disagree"; `LayoutEntry` has no count field and
+`fabric_graph.rs` decodes no minted field, so the guarantee it vouched for never
+existed. Worth noting for the remaining `include!` sites, which may be leaning on
+the same reassurance.
 **Evidence:** [`devlog/2026-08-19-owned-minted-shape-selection/`](../devlog/2026-08-19-owned-minted-shape-selection/index.md)
 
 
