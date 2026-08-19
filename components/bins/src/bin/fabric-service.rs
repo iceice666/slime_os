@@ -728,6 +728,15 @@ fn provision(
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
 ) {
+    // Read once, before any client is answered.
+    //
+    // `graph_read` stages its reply through this component's single transfer
+    // window, which `provision_edge` also uses to hand out role descriptors. A
+    // read inside the loop had the two contending for one window and left three
+    // of six edges unprovisioned — so hoisting is not an optimization here, it
+    // is what keeps the two uses disjoint.
+    let mut graph_rows = slime_components::fabric_self_view::EMPTY_ROWS;
+    let row_count = slime_components::fabric_self_view::rows(&mut graph_rows);
     while clients.iter().any(|client| !client.answered) {
         // Sweep every unanswered control endpoint through its non-blocking ABI
         // first. Only when all of them would block is parking correct: probing
@@ -771,7 +780,7 @@ fn provision(
             // the same answer as one supplying nothing.
             let _ = (request.direction, request.type_identity, request.route_name);
 
-            if declared_edges(client.component) == 0 {
+            if declared_edges(&graph_rows[..row_count], client.component) == 0 {
                 slime_rt::debug_write(b"[fabric] ungranted component denied: ");
                 slime_rt::debug_write(client.component);
                 slime_rt::debug_write(b"\n");
@@ -2036,11 +2045,43 @@ fn notification_slots(component: &[u8], route: &str, direction: u32) -> (u32, u3
 /// `component`. Zero is a denial: authority is never ambient, so absence from
 /// the table is not a default role — and a component declared only on a call or
 /// operation route holds no stream authority either.
-fn declared_edges(component: &[u8]) -> usize {
-    FABRIC_PARTICIPANTS
-        .iter()
-        .filter(|(name, route, _, _)| *name == component && route_index(route).is_some())
+fn declared_edges(rows: &[slime_components::fabric_self_view::Row], component: &[u8]) -> usize {
+    let identity = boot_contracts::fabric_graph::component_identity(
+        core::str::from_utf8(component).unwrap_or_else(|_| fail(b"component name is not utf-8")),
+    );
+    rows.iter()
+        .filter(|row| {
+            row.component_identity == identity && local_route_index(row.route_index).is_some()
+        })
         .count()
+}
+
+/// This service's own index for a route the graph names by *its* index.
+///
+/// The two orderings differ and neither is derivable from the other: the
+/// resource sorts routes by identity, while `ROUTE_NAMES` is this service's
+/// dispatch order. Translating through the identity both sides agree on is what
+/// keeps a row's route meaningful here — and it is also the "does this service
+/// carry that route" test, since a call or operation route folds an identity
+/// `ROUTE_NAMES` never names and so resolves to nothing.
+fn local_route_index(graph_route: u32) -> Option<usize> {
+    (0..ROUTE_COUNT).find(|local| graph_route_index_of(*local) == Some(graph_route))
+}
+
+/// The graph's index for one of this service's own routes.
+fn graph_route_index_of(local: usize) -> Option<u32> {
+    let identity = route_identity(
+        ROUTE_NAMES[local],
+        if local == 0 {
+            &telemetry_stream::INTERFACE_IDENTITY
+        } else {
+            &diagnostics_stream::INTERFACE_IDENTITY
+        },
+        CONTRACT_KIND_STREAM,
+    );
+    slime_rt::graph_route_index(&identity)
+        .ok()
+        .map(|i| i as u32)
 }
 
 /// The KEEP_LAST depth the generation declared for one participant on one

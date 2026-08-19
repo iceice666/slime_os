@@ -33,6 +33,7 @@ const MAX_OWN_ROWS: usize = 8;
 /// read two fields out of a record this component received whole.
 const COMPONENT_IDENTITY: core::ops::Range<usize> = 32..64;
 const ROUTE_INDEX: core::ops::Range<usize> = 64..68;
+const DIRECTION: core::ops::Range<usize> = 68..72;
 const HISTORY_DEPTH: core::ops::Range<usize> = 104..108;
 
 /// The KEEP_LAST depth this component's row declares for `route_index`, or
@@ -97,3 +98,76 @@ pub fn history_depth_of(component_identity: &[u8; 32], route_index: u32) -> Opti
         }
     }
 }
+
+/// Rows a whole-graph read may need to hold at once. The largest seL4 graph
+/// declares 15 participants; the contract ceiling is 32.
+const MAX_GRAPH_ROWS: usize = 32;
+
+/// One participant row, decoded to the fields a broker asks about.
+#[derive(Clone, Copy)]
+pub struct Row {
+    pub component_identity: [u8; 32],
+    pub route_index: u32,
+    pub direction: u32,
+    pub history_depth: usize,
+}
+
+/// Every row this caller may read, in the order the resource stores them.
+///
+/// For the graph's declared holder that is the whole participant table; for
+/// anyone else it is their own rows plus those of components they share a
+/// declared edge with. The caller supplies the buffer because a `no_std`
+/// component has no allocator, and `MAX_GRAPH_ROWS` bounds what one can hold.
+///
+/// Returns how many rows were written. A short count is the end of the table,
+/// not an error.
+pub fn rows(out: &mut [Row; MAX_GRAPH_ROWS]) -> usize {
+    let mut buffer = [0u8; MAX_OWN_ROWS * PARTICIPANT_ENTRY_BYTES];
+    let mut cursor = 0usize;
+    let mut written = 0usize;
+    loop {
+        let Ok(count) = slime_rt::graph_read(cursor, &mut buffer) else {
+            return written;
+        };
+        if count == 0 {
+            return written;
+        }
+        for row in 0..count {
+            if written == out.len() {
+                return written;
+            }
+            let bytes = &buffer[row * PARTICIPANT_ENTRY_BYTES..(row + 1) * PARTICIPANT_ENTRY_BYTES];
+            let Ok(component_identity) = <[u8; 32]>::try_from(&bytes[COMPONENT_IDENTITY]) else {
+                return written;
+            };
+            let Ok(route) = bytes[ROUTE_INDEX].try_into() else {
+                return written;
+            };
+            let Ok(direction) = bytes[DIRECTION].try_into() else {
+                return written;
+            };
+            let Ok(depth) = bytes[HISTORY_DEPTH].try_into() else {
+                return written;
+            };
+            out[written] = Row {
+                component_identity,
+                route_index: u32::from_le_bytes(route),
+                direction: u32::from_le_bytes(direction),
+                history_depth: u32::from_le_bytes(depth) as usize,
+            };
+            written += 1;
+        }
+        cursor += count;
+        if count < MAX_OWN_ROWS {
+            return written;
+        }
+    }
+}
+
+/// The empty row set, for a caller sizing its own array.
+pub const EMPTY_ROWS: [Row; MAX_GRAPH_ROWS] = [Row {
+    component_identity: [0; 32],
+    route_index: 0,
+    direction: 0,
+    history_depth: 0,
+}; MAX_GRAPH_ROWS];

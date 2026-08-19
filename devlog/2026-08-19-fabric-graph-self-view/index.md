@@ -265,3 +265,24 @@ first.
 
 `declared_edges` remains cleanly migratable and independently proven
 non-vacuous; it does not depend on any of the above and could land alone.
+
+**2026-08-19 — `declared_edges` lands.** The half of the `fabric-service`
+migration that was independently sound is committed: `declared_edges` reads the
+graph instead of `FABRIC_PARTICIPANTS`, which drops 18 → 17 live uses.
+
+It ships with the placement fix the second attempt found, because it needs it:
+the read is hoisted above the client loop, since `graph_read` stages its reply
+through the component's single transfer window and `provision_edge` uses the
+same window to hand out role descriptors. A read inside the loop leaves three of
+six edges unprovisioned.
+
+Re-proven non-vacuous in this exact arrangement rather than inherited from the
+earlier run: forcing the count to zero denies every participant with
+`ungranted component denied`, so the migrated function does gate authority.
+
+**The provisioning walk stays on the generated table.** It is the site whose
+descriptor-validation failure is still unexplained, and landing it would mean
+shipping a change whose failure mode I cannot account for. Splitting the two was
+possible because they share only the hoisted read, which is now in place — so
+the walk's next attempt starts from a green tree with the placement bug already
+fixed.
