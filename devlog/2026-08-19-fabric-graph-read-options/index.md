@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-08-19 |
 | Kind | Decision |
-| Status | Proposed |
+| Status | Verified |
 | Scope | `slime-root/src/generation.rs` (`fabric_graph_object`), `contracts/syscall-abi/v1`, `components/bins/src/{visibility_broker,matrix_broker,call_broker,operation_broker}.rs`, `components/bins/src/bin/fabric-*.rs` |
 | Roadmap | B70, CP2 |
 | Gates | `just sel4_visibility_check`, `just sel4_matrix_check`, `just sel4_fabric_aggregate_check` |
@@ -141,6 +141,12 @@ on its own terms rather than as a side effect of retiring a build table.
 - Related roadmap item: [B70](../../roadmap/00-backlog.md), [CP2](../../roadmap/10-component-platform.md)
 
 ## Corrections
+
+**2026-08-19 — outcome.** Option C was chosen. Step 1 (serve the declared
+holder) is built and verified in
+[`devlog/2026-08-19-fabric-graph-read/`](../2026-08-19-fabric-graph-read/index.md);
+step 2 (the self-scoped participant view) is not. The participant-fix leg this
+entry recommended was withdrawn on security grounds — see below.
 
 **2026-08-19, same day — the participant fix is wrong, and the reason is
 security.** This entry recommends reading `slot_count` from the ring header

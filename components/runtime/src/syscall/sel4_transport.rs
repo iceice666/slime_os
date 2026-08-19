@@ -1026,6 +1026,37 @@ pub fn resolve_binding(name: &[u8]) -> i64 {
     result_of(capability_table_labels::RESOLVE_BINDING, &operands[..used])
 }
 
+/// Read this generation's declared fabric participant rows from `cursor`.
+///
+/// Answers into `out` and returns the row count, or a negative error. Refused
+/// unless this component is the one the graph names as its fabric holder, and
+/// refused identically when the generation embeds no graph -- so a component
+/// that is not the holder cannot learn whether a graph exists.
+///
+/// Paged because one row is 128 bytes against the message bound; the caller
+/// resumes from `cursor + count` until a call answers fewer rows than `out`
+/// could hold.
+pub fn graph_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::GRAPH_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

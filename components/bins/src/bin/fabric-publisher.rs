@@ -103,6 +103,17 @@ fn ring_slots(route: &str) -> usize {
         .max(slime_proto::fabric_ring::MIN_RING_SLOTS)
 }
 
+/// A non-holder must be refused (B70/CP2). This component holds a participant
+/// row of its own, so a read that answered it would prove the authority test is
+/// about participation rather than about being the graph's declared holder.
+fn prove_graph_read_refused() {
+    let mut rows = [0u8; 128];
+    if slime_rt::graph_read(0, &mut rows).is_ok() {
+        fail(b"graph read answered a non-holder");
+    }
+    slime_rt::debug_write(b"[fabric-publisher] graph read refused for a non-holder\n");
+}
+
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[fabric-publisher] fail: ");
     slime_rt::debug_write(reason);
@@ -111,6 +122,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
+    prove_graph_read_refused();
     if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;

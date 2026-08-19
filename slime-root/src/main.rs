@@ -2847,6 +2847,51 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // B70's fabric-graph read, answered only to the instance the graph
+            // names as its own fabric component.
+            //
+            // The refusal is uniform: a caller that is not the holder, and a
+            // generation that embeds no graph, both answer `InvalidOperation`.
+            // Distinguishing them would let any component learn whether a graph
+            // is present, which is the first bit of the route set C8.8 exists to
+            // withhold.
+            capability_table_labels::GRAPH_READ => {
+                let cursor = words.first().copied().unwrap_or(0) as usize;
+                let response = match words.get(2).copied() {
+                    Some(transfer) => {
+                        let mut rows = [0u8; ipc::GRAPH_ROWS_PER_CALL * ipc::GRAPH_ROW_BYTES];
+                        match ipc::read_graph_participants(generation, instance, cursor, &mut rows)
+                        {
+                            Some(count) => {
+                                let bytes = &rows[..count * ipc::GRAPH_ROW_BYTES];
+                                match transfer_window::write_staged_region(
+                                    windows.bound(id, descriptor_thread(transfer)),
+                                    bytes,
+                                    scratch,
+                                ) {
+                                    Ok(descriptor) => {
+                                        sel4::debug_println!(
+                                            "SLIME_GRAPH graph read task={} instance={instance} cursor={cursor} rows={count}",
+                                            id.0,
+                                        );
+                                        Response::success(count as i64, descriptor)
+                                    }
+                                    Err(error) => Response::error(error),
+                                }
+                            }
+                            None => {
+                                sel4::debug_println!(
+                                    "SLIME_GRAPH graph read refused task={} instance={instance}",
+                                    id.0,
+                                );
+                                Response::error(IpcError::InvalidOperation)
+                            }
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(
                     generation, launched, allocator, tasks, id, &words,

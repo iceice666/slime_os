@@ -31,6 +31,7 @@ pub mod capability_table_labels {
     pub const DROP: u64 = 13;
     pub const OCCUPANCY: u64 = 31;
     pub const RESOLVE_BINDING: u64 = 37;
+    pub const GRAPH_READ: u64 = 38;
 }
 
 pub mod directory_labels {

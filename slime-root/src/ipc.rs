@@ -52,6 +52,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         capability_table_labels::DROP
         | capability_table_labels::OCCUPANCY
         | capability_table_labels::RESOLVE_BINDING
+        | capability_table_labels::GRAPH_READ
         | capability_transfer_labels::EXPORT
         | capability_transfer_labels::IMPORT
         | capability_transfer_labels::EXPORT_CANCEL
@@ -745,6 +746,99 @@ fn resolve_layout_slot(
     found
 }
 
+/// Bytes one encoded participant row occupies in a `GRAPH_READ` reply.
+///
+/// The contract's own record size, not a number chosen here: the caller decodes
+/// with `boot_contracts::fabric_graph`, so a reply laid out to any other stride
+/// would decode as garbage rather than fail.
+pub const GRAPH_ROW_BYTES: usize = boot_contracts::fabric_graph::PARTICIPANT_ENTRY_BYTES;
+
+/// Participant rows one `GRAPH_READ` call may answer.
+///
+/// One row is 128 bytes against a 64-byte message bound, so the answer travels
+/// through the caller's transfer window and is paged. The real graphs need one
+/// or two calls (15 participants is the largest any seL4 manifest declares) and
+/// the contract ceiling of 32 needs four.
+pub const GRAPH_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / GRAPH_ROW_BYTES;
+
+/// Whether `instance` is the component this generation's graph names as its
+/// fabric holder.
+///
+/// The authority test for `GRAPH_READ`, and deliberately the *whole* test. The
+/// graph carries a `fabricComponentIdentity`, and admission already folds
+/// instance names to that identity to check every participant is declared
+/// (`generation::fabric_graph_participants_are_declared`), so this asks a
+/// question the generation answers about itself rather than applying a policy.
+///
+/// Every other caller is refused, including one holding a participant row of its
+/// own. C8.8 makes *which routes exist* a filtered, per-caller answer the fabric
+/// enforces — `just sel4_visibility_check` asserts an ungranted caller infers
+/// nothing — so serving the raw graph to any caller would bypass that gate
+/// rather than implement it.
+pub fn is_declared_fabric_holder(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+) -> bool {
+    let Some(Ok(graph)) = crate::generation::fabric_graph_object(generation) else {
+        return false;
+    };
+    let Ok(instance) = generation.instance(instance) else {
+        return false;
+    };
+    boot_contracts::fabric_graph::component_identity(instance.name)
+        == graph.fabric_component_identity()
+}
+
+/// Copy participant rows `cursor..` into `out`, returning how many were written.
+///
+/// `None` when the caller is not the declared holder or the generation embeds no
+/// graph — the same answer in both cases, so a refused caller cannot distinguish
+/// "not yours" from "none exists" and learn that a graph is present.
+pub fn read_graph_participants(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    if !is_declared_fabric_holder(generation, instance) {
+        return None;
+    }
+    let Some(Ok(graph)) = crate::generation::fabric_graph_object(generation) else {
+        return None;
+    };
+    let mut written = 0;
+    for index in cursor..graph.participant_count() {
+        let end = written + GRAPH_ROW_BYTES;
+        if end > out.len() || written / GRAPH_ROW_BYTES >= GRAPH_ROWS_PER_CALL {
+            break;
+        }
+        let participant = graph.participant(index)?;
+        encode_participant(&participant, &mut out[written..end]);
+        written = end;
+    }
+    Some(written / GRAPH_ROW_BYTES)
+}
+
+/// Lay one participant row out in the contract's own record order.
+fn encode_participant(entry: &boot_contracts::fabric_graph::ParticipantEntry, out: &mut [u8]) {
+    out[..32].copy_from_slice(&entry.grant_identity);
+    out[32..64].copy_from_slice(&entry.component_identity);
+    out[64..68].copy_from_slice(&entry.route_index.to_le_bytes());
+    out[68..72].copy_from_slice(&entry.direction.to_le_bytes());
+    out[72..76].copy_from_slice(&entry.visibility.to_le_bytes());
+    out[76..80].copy_from_slice(&entry.interposition_head.to_le_bytes());
+    out[80..88].copy_from_slice(&entry.qos.deadline_ns.to_le_bytes());
+    out[88..96].copy_from_slice(&entry.qos.lifespan_ns.to_le_bytes());
+    out[96..104].copy_from_slice(&entry.qos.lease_ns.to_le_bytes());
+    out[104..108].copy_from_slice(&entry.qos.history_depth.to_le_bytes());
+    out[108..112].copy_from_slice(&entry.qos.retained_depth.to_le_bytes());
+    out[112] = entry.qos.reliability;
+    out[113] = entry.qos.durability;
+    out[114] = entry.qos.liveliness;
+    out[115..GRAPH_ROW_BYTES].fill(0);
+}
+
 /// The bounds `resolve_binding_slot` applies before it looks anything up.
 ///
 /// Separated from the lookup so the guards are reachable without a decoded
@@ -850,11 +944,12 @@ mod tests {
             18,
             19,
             20,
-            // 37 was here until CP2 assigned it to `RESOLVE_BINDING`. Moving it
-            // out of this list is the whole change: a number this test asserts
-            // routes nowhere and a number the contract declares are the same
-            // fact stated twice, so assigning a label must fail here first.
-            38,
+            // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, and 38
+            // until B70's `GRAPH_READ`. Moving one out of this list is the whole
+            // change: a number this test asserts routes nowhere and a number the
+            // contract declares are the same fact stated twice, so assigning a
+            // label must fail here first — as it did for 38.
+            39,
             64,
             sel4::Word::MAX,
         ] {

@@ -298,4 +298,5 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-18 | [B71 — boot-layout binary/Rust drift](2026-08-18-b71-boot-layout-binary-drift/index.md) | Defect | Verified | B70, B71 |
 | 2026-08-19 | [Supervision binding naming convention](2026-08-19-supervision-binding-naming/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [Scoping the fabric-graph read against measured consumer needs](2026-08-19-fabric-graph-read-scope/index.md) | Audit | Verified | B70, CP2 |
-| 2026-08-19 | [Fabric-graph read: authority shape and what each option reaches](2026-08-19-fabric-graph-read-options/index.md) | Decision | Proposed | B70, CP2 |
+| 2026-08-19 | [Fabric-graph read: authority shape and what each option reaches](2026-08-19-fabric-graph-read-options/index.md) | Decision | Verified | B70, CP2 |
+| 2026-08-19 | [CAPABILITY GRAPH READ: serving the fabric graph to its declared holder](2026-08-19-fabric-graph-read/index.md) | Change | Verified | B70, CP2 |

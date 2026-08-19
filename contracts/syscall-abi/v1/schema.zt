@@ -72,6 +72,30 @@ operations :: List Operation = {
   -- caller identity to forge. A name the caller was not granted answers
   -- `INVALID_ARG`, never another instance's slot.
   operation "capabilityTable" "RESOLVE_BINDING" 37;
+  -- B70's fabric-graph read. A component asks the root for the declared
+  -- participant rows of the graph its generation embeds, instead of compiling
+  -- them in from `build.rs`'s `FABRIC_PARTICIPANTS`.
+  --
+  -- Answered *only* to the instance the graph itself names as its fabric
+  -- component: `FabricGraph` carries a `fabricComponentIdentity`, and the root
+  -- already folds instance names to that identity to admit the graph at all
+  -- (`fabric_graph_participants_are_declared`). So the authority test is
+  -- "are you the holder this graph declares", which is a property of the
+  -- generation rather than a policy judgement.
+  --
+  -- Deliberately not a general graph read. C8.8 makes *which routes exist* a
+  -- filtered, per-caller answer the fabric enforces, and
+  -- `just sel4_visibility_check` asserts an ungranted caller infers nothing;
+  -- serving the raw graph to any caller would bypass that gate rather than
+  -- implement it. Other components keep asking the fabric over their declared
+  -- control endpoints, as they do today.
+  --
+  -- Cursor-paged, because one participant record is 128 bytes against a
+  -- 64-byte message bound. The reply travels through the caller's transfer
+  -- window like `directory`'s and `console`'s, bounded by
+  -- `MAX_STAGED_ARRAY_BYTES`, so a call answers at most 8 rows and the caller
+  -- resumes from the cursor it is returned.
+  operation "capabilityTable" "GRAPH_READ" 38;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

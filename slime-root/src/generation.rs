@@ -390,7 +390,13 @@ struct FabricShape {
 ///
 /// The same shape as the retired kernel's: a `KIND_RESOURCE` object whose
 /// payload carries the fabric-graph magic, first match wins.
-fn fabric_graph_object<'a>(
+/// The generation's embedded fabric-graph resource, decoded.
+///
+/// `pub(crate)` so `ipc`'s `GRAPH_READ` answers from the same object admission
+/// validated, rather than locating the resource a second way. A second lookup
+/// is how the boot-layout resource drifted from the bindings it described
+/// (B71): two statements of one fact, kept in agreement by nothing.
+pub(crate) fn fabric_graph_object<'a>(
     generation: &Generation<'a>,
 ) -> Option<Result<FabricGraph<'a>, fabric_graph::DecodeError>> {
     for index in 0..generation.object_count() {

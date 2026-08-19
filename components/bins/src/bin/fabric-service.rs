@@ -325,7 +325,45 @@ impl Frame {
     };
 }
 
+/// Prove the root's `GRAPH_READ` answers this component, and that what it
+/// answers agrees with the table currently compiled in (B70/CP2).
+///
+/// Compared against `FABRIC_PARTICIPANTS` rather than asserted alone, because
+/// agreement between two independently-derived statements of the graph is the
+/// only evidence available before the consumers migrate: the read is served from
+/// the resource object admission validated, the table from `build.rs` parsing
+/// the manifest, and a mismatch means one of them is wrong.
+fn prove_graph_read() {
+    let mut rows = [0u8; 8 * 128];
+    let mut cursor = 0usize;
+    let mut total = 0usize;
+    loop {
+        let count = match slime_rt::graph_read(cursor, &mut rows) {
+            Ok(count) => count,
+            Err(_) => fail(b"graph read refused for the declared holder"),
+        };
+        if count == 0 {
+            break;
+        }
+        total += count;
+        cursor += count;
+        if count < 8 {
+            break;
+        }
+    }
+    if total != FABRIC_PARTICIPANTS.len() {
+        slime_rt::debug_write(b"[fabric] graph read rows=");
+        write_u32(total as u32);
+        slime_rt::debug_write(b" table=");
+        write_u32(FABRIC_PARTICIPANTS.len() as u32);
+        slime_rt::debug_write(b"\n");
+        fail(b"graph read disagrees with the compiled table");
+    }
+    slime_rt::debug_write(b"[fabric] graph read agrees with the declared participants\n");
+}
+
 fn main(_startup_arg: u32) {
+    prove_graph_read();
     if GENERATION_BOOT_ACTION == "boot" {
         boot_graph();
         return;

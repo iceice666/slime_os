@@ -520,6 +520,26 @@ pub fn resolve_binding(name: &[u8]) -> Result<u32, i64> {
     }
 }
 
+/// Read this generation's declared fabric participant rows, from `cursor`.
+///
+/// Fills `out` with contract-encoded `ParticipantEntry` records and returns how
+/// many were written; the caller decodes them with
+/// `boot_contracts::fabric_graph` and resumes from `cursor + count` until a call
+/// answers fewer than `out` could hold.
+///
+/// Served only to the component the graph names as its fabric holder (B70), and
+/// refused identically where no graph exists, so a non-holder cannot learn a
+/// graph is present. Every other component asks the fabric over its declared
+/// control endpoint, which is where C8.8's per-caller visibility filter lives.
+pub fn graph_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::graph_read(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
