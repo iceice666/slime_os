@@ -36,8 +36,7 @@ use slime_proto::{
     valid_fs_request,
 };
 use slime_rt::{
-    CapabilityDisposition, ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH,
-    MAX_MSG,
+    CapabilityDisposition, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG,
 };
 
 // B59: rights bit numbering is generated from
@@ -636,10 +635,6 @@ fn send_reply(reply: WireFsReply, derived_cap: Option<u32>) {
         };
         match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => {
-                drop_capability(derived_cap);
-                slime_rt::exit(0);
-            }
             result if result < 0 => {
                 drop_capability(derived_cap);
                 slime_rt::exit(1);

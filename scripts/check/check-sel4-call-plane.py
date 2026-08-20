@@ -54,14 +54,19 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-client-b ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-server ",
             r"\[init\] call participants spawned",
-            # The broker's four grants are the shared-buffer factory plus one
-            # supervision handle per participant. Delegation is now part of the
-            # spawn rather than a later export/import pair, so the grant count
-            # on this line *is* the evidence that supervision was handed over.
-            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service grants=4 ",
+            # The clock is one of those participants now, and for the same
+            # reason: B76 gave it its own supervision handle, because it is a
+            # separately declared instance whose exit the server's handle does
+            # not report. So it precedes the broker too.
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-time ",
+            # The broker's five grants are the shared-buffer factory plus one
+            # supervision handle per participant, the clock included. Delegation
+            # is part of the spawn rather than a later export/import pair, so
+            # the grant count on this line *is* the evidence that supervision
+            # was handed over.
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service grants=5 ",
             r"\[init\] call fabric spawned",
             r"\[init\] call supervision delegated",
-            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-time ",
             r"\[fabric\] call endpoints ready",
         ),
     ),
@@ -184,13 +189,14 @@ SPAWN_PATTERN = re.compile(
 )
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
 # Participants precede the broker: it is granted a supervision handle naming
-# each of them, and a handle cannot exist before its task.
+# each of them, and a handle cannot exist before its task. The clock is one of
+# them since B76 gave it its own handle, so it moved ahead of the broker too.
 EXPECTED_SPAWNED = (
     "fabric-call-client",
     "fabric-call-client-b",
     "fabric-call-server",
-    "fabric-service",
     "fabric-call-time",
+    "fabric-service",
 )
 
 
@@ -365,15 +371,18 @@ def check_task_lifecycle(transcript: str) -> None:
 
     # Supervision is delegated as part of the broker's spawn rather than a
     # later export/import pair, so the evidence is the grant count on that
-    # spawn: the shared-buffer factory plus one handle per participant.
+    # spawn: the shared-buffer factory plus one handle per participant. The
+    # clock is a participant here since B76 -- it is separately declared, so the
+    # server's handle reports nothing about it -- which is what makes this five.
     broker = [match for match in spawns if match[2] == "fabric-service"]
     if len(broker) != 1:
         fail(f"expected exactly one fabric-service spawn, saw {len(broker)}")
     grants = int(broker[0][3])
-    if grants != 4:
+    if grants != 5:
         fail(
-            f"fabric-service was spawned with grants={grants}, expected 4 "
-            "(shared-buffer factory plus one supervision handle per participant)"
+            f"fabric-service was spawned with grants={grants}, expected 5 "
+            "(shared-buffer factory plus one supervision handle per participant, "
+            "the clock included)"
         )
 
 
@@ -433,7 +442,7 @@ def main() -> None:
     check_transcript(boot(profile))
     print(
         "seL4 call plane check: init minted authenticated control pairs, delivered "
-        "three post-spawn supervision introductions, every C8.6 bounded-call arm ran "
+        "four post-spawn supervision introductions, every C8.6 bounded-call arm ran "
         "with the unmodified participants, and all five spawned tasks exited cleanly"
     )
 

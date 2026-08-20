@@ -4,7 +4,7 @@
 #[path = "../fabric_call_scenario.rs"]
 mod scenario;
 
-use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -56,7 +56,6 @@ impl PhaseBuffer {
             // blocks in `send`: polling here would leave both sides waiting.
             match slime_rt::recv_blocking(1, &mut bytes, &mut caps) {
                 ERR_WOULDBLOCK => slime_rt::yield_now(),
-                ERR_PEER_DEAD => scenario::fail(b"time phase peer died"),
                 value if value < 0 => scenario::fail(b"time phase receive"),
                 1 if (1..=3).contains(&bytes[0]) => {
                     let bit = 1 << bytes[0];

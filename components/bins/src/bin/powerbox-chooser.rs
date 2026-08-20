@@ -6,9 +6,7 @@ use slime_proto::{
     powerbox::{self, WirePowerboxReply, WirePowerboxRequest},
     valid_powerbox_request,
 };
-use slime_rt::{
-    CapabilityDisposition, ERR_PEER_DEAD, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG,
-};
+use slime_rt::{CapabilityDisposition, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG};
 
 // B59: rights bit numbering is generated from
 // `contracts/generation/v5/schema.zt`. The powerbox protocol carries a 32-bit
@@ -34,7 +32,6 @@ fn main(_startup_arg: u32) {
         let length = loop {
             match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
                 ERR_WOULDBLOCK => slime_rt::yield_now(),
-                ERR_PEER_DEAD => return,
                 result if result < 0 => slime_rt::exit(1),
                 result => break result as usize,
             }
@@ -189,10 +186,6 @@ fn send_reply(reply: WirePowerboxReply, capability: Option<u32>) {
         };
         match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => {
-                drop_capability(capability);
-                return;
-            }
             result if result < 0 => {
                 drop_capability(capability);
                 slime_rt::exit(1);

@@ -41,6 +41,10 @@ const TIME_SLOT: u32 = 5;
 const CLIENT_A_SUPERVISION_SLOT: u32 = 6;
 const CLIENT_B_SUPERVISION_SLOT: u32 = 7;
 const SERVER_SUPERVISION_SLOT: u32 = 8;
+/// The clock's own supervision handle. Its exit is observable no other way: a
+/// native Endpoint reports no peer death, and this plane's clock is a separately
+/// declared instance, so the server's handle says nothing about it (B76).
+const TIME_SUPERVISION_SLOT: u32 = 9;
 
 fn main(_startup_arg: u32) {
     call_broker::Broker::new(
@@ -52,6 +56,7 @@ fn main(_startup_arg: u32) {
             CLIENT_A_SUPERVISION_SLOT,
             CLIENT_B_SUPERVISION_SLOT,
             SERVER_SUPERVISION_SLOT,
+            TIME_SUPERVISION_SLOT,
         ],
     )
     .run();

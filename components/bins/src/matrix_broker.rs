@@ -44,7 +44,7 @@ use slime_proto::fabric_visibility::{
 };
 use slime_proto::interface_schema::{diagnostics_stream, telemetry_stream};
 use slime_proto::{valid_fabric_request, valid_visibility_request};
-use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::trace_log::{self, Trace};
 use super::{FABRIC_TRACE_DEPTH, control_clients, fail, release_received};
@@ -197,10 +197,6 @@ pub(super) fn run() {
                             _ => client.answered = true,
                         }
                     }
-                }
-                Served::Gone => {
-                    client.answered = true;
-                    progressed = true;
                 }
             }
         }
@@ -494,8 +490,6 @@ enum Served {
     /// Nothing waiting. Says nothing about whether more is coming: only the
     /// caller's supervision handle answers that.
     Idle,
-    /// The endpoint reported its peer gone, so nothing more can arrive.
-    Gone,
 }
 
 /// Answer one control endpoint if it has a request waiting.
@@ -511,7 +505,9 @@ fn serve(
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     let length = match slime_rt::recv(control, &mut message, &mut received) {
         ERR_WOULDBLOCK => return Served::Idle,
-        ERR_PEER_DEAD => return Served::Gone,
+        // No `ERR_PEER_DEAD` arm: a native seL4 Endpoint never answers one, so
+        // an empty poll is the only "nothing waiting" this can report and
+        // `settled` above is what distinguishes gone from slow (B76).
         n if n < 0 => fail(b"matrix control recv"),
         n => n as usize,
     };
@@ -832,14 +828,15 @@ fn advance_relay(
 
 /// One message from `slot`, or `None` if none is waiting.
 ///
-/// A peer that is gone is `None` too: this loop's terminal condition is every
-/// caller settled, which the supervision handles answer, so a dead peer here is
-/// simply a source that will never be ready again.
+/// A peer that is gone is `None` too, and is indistinguishable from one that is
+/// merely slow: a native seL4 Endpoint never reports peer death (B76). That
+/// costs nothing here, because this loop's terminal condition is every caller
+/// settled, which the supervision handles answer.
 fn poll_message(slot: u32) -> Option<[u8; MAX_MSG]> {
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     match slime_rt::recv(slot, &mut message, &mut received) {
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => None,
+        ERR_WOULDBLOCK => None,
         n if n < 0 => fail(b"matrix relay recv"),
         n if n as usize != MAX_MSG => fail(b"matrix relay message length"),
         _ => {

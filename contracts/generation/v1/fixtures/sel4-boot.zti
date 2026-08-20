@@ -1455,6 +1455,17 @@
       transferable = false;
     };
     {
+      name = "fabric-call-time-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-call-worker";
+      rights = [
+        "supervise";
+      ];
+      slot = 9;
+      transferable = false;
+    };
+    {
       name = "fabric-op-client-supervision";
       capabilityKind = "supervision";
       owner = "init";

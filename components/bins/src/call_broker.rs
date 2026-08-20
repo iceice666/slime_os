@@ -24,8 +24,8 @@ mod fabric_profile {
 use super::trace_log;
 use fabric_profile::*;
 use slime_rt::{
-    CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
-    MAX_CAPS_PER_MSG, MAX_MSG,
+    CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
+    MAX_MSG,
 };
 
 const SESSION: u64 = 0x000e_0000_0000_0001;
@@ -42,6 +42,20 @@ const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * 2;
 /// call route, and a client replaced at runtime reuses its slot, so this bounds
 /// the park set rather than the number of components that ever hold a role.
 const CLIENTS: usize = 2;
+/// Index of the server's handle in `supervision`, after the per-client handles.
+const SERVER_SUPERVISION: usize = CLIENTS;
+/// Index of the clock's handle in `supervision`.
+///
+/// A handle of its own rather than a reuse of the server's: `fabric-call-time`
+/// is a separately declared instance with its own executable and its own
+/// control edge, so the server's termination says nothing about the clock's. It
+/// used to be read through `SERVER_SUPERVISION`, which meant a clock that
+/// exited while the server lived was observed by nothing and this broker's exit
+/// predicate -- the sole trace-flush site -- waited forever (B76).
+const CLOCK_SUPERVISION: usize = CLIENTS + 1;
+/// Supervision handles this broker holds: one per client, then the server, then
+/// the clock.
+const SUPERVISION_HANDLES: usize = CLIENTS + 2;
 /// The one route this broker carries, as the graph names it. The literal was
 /// already spelled twice in `verify_graph`; naming it once keeps the identity
 /// the trace folds and the declaration it checks from drifting apart.
@@ -142,7 +156,7 @@ pub struct Broker {
     clients: [Option<u32>; CLIENTS],
     server_slot: Option<u32>,
     time_control: u32,
-    supervision: [u32; 3],
+    supervision: [u32; SUPERVISION_HANDLES],
     calls: [Call; MAX_CALLS],
     high_water: [u64; 2],
     /// The most calls this broker has ever held live at once.
@@ -166,7 +180,30 @@ pub struct Broker {
     next_server_request_id: u64,
     now_ns: u64,
     pending_terminals: [Option<Call>; MAX_PENDING_TERMINALS],
+    /// No further time advance can arrive, so the exit predicate may proceed.
+    ///
+    /// Set only by [`Self::pump_time`], and only from a drain that follows a
+    /// latched termination -- never from the endpoint. A native seL4 Endpoint
+    /// has no closed-peer signal, so a receive cannot distinguish an exited
+    /// clock from a slow one and this can never be concluded from a read alone
+    /// (B76).
     time_closed: bool,
+    /// The clock's supervision handle reported it terminated.
+    ///
+    /// Latched separately from `time_closed` because termination alone is not
+    /// evidence that no advance remains: the clock's final `WireCallTimeAdvance`
+    /// is already queued on the control endpoint while its task is already gone,
+    /// so concluding closure from supervision alone races that queued send and
+    /// makes the trace differ between two boots of one composition. This is the
+    /// same latch-then-drain ordering `fabric-service`'s publisher sweep uses
+    /// (B75).
+    time_terminated: bool,
+    /// The server's supervision handle has been observed terminated.
+    ///
+    /// Its own latch rather than a reuse of `time_closed`: those are now
+    /// separate facts read from separate handles, and sharing one made the
+    /// server's death close the clock (B76).
+    server_death_reported: bool,
     /// The call the server is currently executing, if any.
     ///
     /// A native `send` blocks until the peer receives, and this server handles
@@ -203,7 +240,7 @@ impl Broker {
         clients: [u32; CLIENTS],
         server_slot: u32,
         time_control: u32,
-        supervision: [u32; 3],
+        supervision: [u32; SUPERVISION_HANDLES],
     ) -> Self {
         Self {
             buffer_factory_slot,
@@ -220,6 +257,8 @@ impl Broker {
             now_ns: 0,
             pending_terminals: [None; MAX_PENDING_TERMINALS],
             time_closed: false,
+            time_terminated: false,
+            server_death_reported: false,
             server_call: None,
             trace: trace_log::Trace::new(FABRIC_TRACE_DEPTH),
             // Folded in `run` rather than here: `route_identity` hashes, which
@@ -382,7 +421,21 @@ impl Broker {
             // declaring no wake object resolves to nothing, which is the same
             // "yield instead of parking" case the sentinel used to mark.
             let wake = slime_rt::resolve_binding(b"notification:fabric-service-parameters-ready");
-            if owed || self.server_call.is_some() || wake.is_err() {
+            // Once both clients and the server are gone, the clock is the only
+            // peer left who could ever signal this notification again -- and its
+            // own death is exactly the fact that produces no signal (B76). Every
+            // earlier state is safe to park in: some live peer still owes this
+            // broker a signal before its next send, including the clock's own
+            // next advance if it has one. Parking here instead would wait on a
+            // wake that can only ever arrive from a task that no longer exists.
+            let clock_unobservable_while_parked = !self.time_closed
+                && self.clients.iter().all(Option::is_none)
+                && self.server_slot.is_none();
+            if owed
+                || self.server_call.is_some()
+                || wake.is_err()
+                || clock_unobservable_while_parked
+            {
                 slime_rt::yield_now();
                 continue;
             }
@@ -457,14 +510,9 @@ impl Broker {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.clients[client] = None;
-                self.reclaim_client(slot);
-                if slime_rt::cap_drop(slot) != ERR_SUCCESS {
-                    fail(b"client endpoint drop")
-                }
-                return true;
-            }
+            // No `ERR_PEER_DEAD` arm: a native seL4 Endpoint never answers one,
+            // so a client's exit is observed through its supervision handle in
+            // `reclaim_dead_clients` instead (B76).
             value if value < 0 => fail(b"client recv"),
             value => value as usize,
         };
@@ -699,23 +747,20 @@ impl Broker {
     /// Retire the server: record its death once, settle every call it owed, and
     /// let the loop reach its exit.
     ///
-    /// Four paths learn the server is gone -- the supervision handle, and an
-    /// `ERR_PEER_DEAD` from a forward, a reply read, or a terminal send -- and
-    /// they race. Wiring the consequences to the supervision arm alone made them
-    /// depend on which observation won: `observe_server_death` returns early
-    /// once `server_slot` is `None`, so an endpoint error that cleared the slot
-    /// first permanently suppressed the arm that set `time_closed`. Since the
-    /// exit predicate is the sole flush site, the worker then never flushed and
-    /// its whole trace was silently lost.
+    /// One path learns the server is gone: its supervision handle, read by
+    /// [`Self::observe_server_death`]. The endpoint arms that used to race it
+    /// were `ERR_PEER_DEAD` arms on a forward, a reply read, and a terminal
+    /// send, and none of them could ever fire -- a native seL4 Endpoint has no
+    /// closed-peer signal, so nothing on this transport ever answers that
+    /// status. They are removed rather than left as unreachable redundancy,
+    /// which is what made the shared `time_closed` latch below look safe (B76).
     ///
-    /// What this does *not* do is close the clock. `time_closed` stops
-    /// `pump_time` consuming further advances, and an `ERR_PEER_DEAD` from the
-    /// server's route endpoint is not evidence that the clock component has gone:
-    /// they are separate declared instances. Closing it here would cut the run
-    /// short by however many advances were still to come, and which observation
-    /// won that race would then change the artifact between two boots. Only the
-    /// supervision arm and an `ERR_PEER_DEAD` from the clock endpoint itself
-    /// close it.
+    /// What this does *not* do is close the clock. `fabric-call-time` is a
+    /// separately declared instance with its own executable and its own control
+    /// edge, so the server's death is no evidence about it, and closing here
+    /// would cut the run short by however many advances were still to come. The
+    /// clock closes on its own supervision handle, drained, in
+    /// [`Self::pump_time`].
     ///
     /// Idempotent: the second observation of one death does nothing.
     fn retire_server(&mut self) {
@@ -795,7 +840,7 @@ impl Broker {
             call.request_id,
             call.terminal_status,
         ) {
-            ERR_SUCCESS | ERR_PEER_DEAD => {
+            ERR_SUCCESS => {
                 self.calls[index] = Call::EMPTY;
                 true
             }
@@ -864,7 +909,6 @@ impl Broker {
 
     fn pump_pending_terminals(&mut self) -> bool {
         let mut progressed = false;
-        let mut dead_slot = None;
         // Same ordering rule as `pump_terminals`: only the client's lowest
         // outstanding id, so a later terminal cannot reach a client waiting on
         // an earlier one.
@@ -887,23 +931,13 @@ impl Broker {
                     *pending = None;
                     progressed = true;
                 }
-                ERR_PEER_DEAD => {
-                    *pending = None;
-                    dead_slot = Some(call.client_slot);
-                    progressed = true;
-                    break;
-                }
+                // No `ERR_PEER_DEAD` arm, and so no dead-client sweep below: a
+                // native seL4 Endpoint never answers that status, so a client
+                // that exits still owed a terminal is reclaimed by
+                // `reclaim_dead_clients` reading its supervision handle (B76).
                 ERR_WOULDBLOCK => {}
                 _ => fail(b"call terminal"),
             }
-        }
-        if let Some(slot) = dead_slot {
-            for pending in &mut self.pending_terminals {
-                if pending.is_some_and(|call| call.client_slot == slot) {
-                    *pending = None;
-                }
-            }
-            self.reclaim_client(slot);
         }
         progressed
     }
@@ -941,7 +975,7 @@ impl Broker {
                 descriptor.sequence = call.server_request_id;
                 let loan = match slime_rt::shared_buffer_loan(
                     buffer_slot,
-                    self.supervision[2],
+                    self.supervision[SERVER_SUPERVISION],
                     0,
                     descriptor.length,
                     false,
@@ -1025,10 +1059,7 @@ impl Broker {
                     }
                 }
             }
-            ERR_PEER_DEAD => {
-                self.retire_server();
-                self.finish(index, STATUS_PEER_DEAD);
-            }
+            // Likewise no `ERR_PEER_DEAD` arm on the forward itself.
             _ => fail(b"call forward"),
         }
     }
@@ -1122,10 +1153,9 @@ impl Broker {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.retire_server();
-                return true;
-            }
+            // No `ERR_PEER_DEAD` arm: the server's exit reaches this broker
+            // through `observe_server_death`'s supervision read, never through
+            // this endpoint (B76).
             value if value < 0 => fail(b"server recv"),
             value => value as usize,
         };
@@ -1270,10 +1300,8 @@ impl Broker {
             // `try_send` reports nothing about delivery, so this claims none:
             // the record stays until its client acks.
             ERR_SUCCESS => false,
-            ERR_PEER_DEAD => {
-                self.drop_dead_client(index, b"client endpoint drop");
-                true
-            }
+            // No `ERR_PEER_DEAD` arm: a dead client is reclaimed from its
+            // supervision handle in `reclaim_dead_clients` (B76).
             _ => fail(b"reply delivery"),
         }
     }
@@ -1325,11 +1353,8 @@ impl Broker {
                     descriptor,
                 };
             }
-            ERR_PEER_DEAD => {
-                let _ = slime_rt::shared_buffer_revoke(buffer_slot, loan.id);
-                let _ = slime_rt::shared_buffer_release(buffer_slot);
-                self.drop_dead_client(index, b"shared client endpoint drop");
-            }
+            // No `ERR_PEER_DEAD` arm: a dead client is reclaimed from its
+            // supervision handle in `reclaim_dead_clients` (B76).
             _ => fail(b"shared reply delivery"),
         }
     }
@@ -1378,12 +1403,7 @@ impl Broker {
                         ERR_WOULDBLOCK => {
                             let _ = slime_rt::shared_buffer_revoke(buffer_slot, loan.id);
                         }
-                        ERR_PEER_DEAD => {
-                            let _ = slime_rt::shared_buffer_revoke(buffer_slot, loan.id);
-                            let _ = slime_rt::shared_buffer_release(buffer_slot);
-                            self.drop_dead_client(index, b"shared client endpoint drop");
-                            progressed = true;
-                        }
+                        // No `ERR_PEER_DEAD` arm here either.
                         _ => fail(b"shared reply delivery"),
                     }
                 }
@@ -1393,17 +1413,23 @@ impl Broker {
         progressed
     }
 
-    fn drop_dead_client(&mut self, index: usize, reason: &[u8]) {
-        let client_index = self.calls[index].client_index as usize;
-        let client = self.calls[index].client_slot;
-        settle_payload(self.calls[index].payload);
-        self.clients[client_index] = None;
-        self.calls[index] = Call::EMPTY;
-        if slime_rt::cap_drop(client) != ERR_SUCCESS {
-            fail(reason)
-        }
-    }
-
+    /// Consume one time advance, and decide whether the clock can still send.
+    ///
+    /// The `ERR_WOULDBLOCK` arm is where the clock's death is concluded, because
+    /// it is the only place an empty input is observed. There is no
+    /// `ERR_PEER_DEAD` arm to conclude it from: a native seL4 Endpoint has no
+    /// closed-peer signal, so this receive answers `ERR_WOULDBLOCK` forever
+    /// after the clock exits and a read alone cannot tell that from a slow
+    /// clock (B76). The clock's supervision handle is the only observation that
+    /// reports the difference, which is the same answer peer death needed
+    /// everywhere else on this transport.
+    ///
+    /// Ordered latch-then-drain, not "supervision says terminated, so closed":
+    /// the clock's last advance is queued while its task is already gone, so
+    /// concluding closure directly from the handle would race that queued send
+    /// and drop a record from one boot's trace but not the other's (B75). The
+    /// termination is latched, and closure waits for an *empty* input observed
+    /// after it -- so a queued advance is always consumed first.
     fn pump_time(&mut self) -> bool {
         if self.time_closed {
             return false;
@@ -1411,9 +1437,25 @@ impl Broker {
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(self.time_control, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.time_closed = true;
+            ERR_WOULDBLOCK => {
+                if self.time_terminated {
+                    // Drained after the latch: nothing more can arrive.
+                    self.time_closed = true;
+                    return true;
+                }
+                // `Ok(None)` is "still running"; `Ok(Some(_))` is a termination
+                // this run must not wait past. Latched rather than acted on, so
+                // the next sweep re-establishes emptiness against whatever the
+                // clock wrote on its way out. `Err(_)` means the handle itself
+                // is broken -- an ungranted or malformed slot -- which is a
+                // composition defect, not a death; `observe_server_death` fails
+                // loudly on the same condition and this should not disagree.
+                match slime_rt::supervision_status(self.supervision[CLOCK_SUPERVISION]) {
+                    Ok(None) => return false,
+                    Ok(Some(_)) => {}
+                    Err(_) => fail(b"call time supervision"),
+                }
+                self.time_terminated = true;
                 return true;
             }
             value if value < 0 => fail(b"call time recv"),
@@ -1487,23 +1529,28 @@ impl Broker {
 
     /// Observe the server's termination through its supervision handle.
     ///
-    /// Deliberately *not* guarded on `server_slot.is_some()`. An `ERR_PEER_DEAD`
-    /// from the route endpoint clears the slot first about as often as not, and
-    /// the old guard then suppressed this arm permanently -- which mattered
-    /// because this is the only place that closes the clock, and the exit
-    /// predicate waits on it. `time_closed` short-circuits the body, so the
-    /// supervision handle is read once per death rather than every sweep.
+    /// Deliberately *not* guarded on `server_slot.is_some()`: the endpoint
+    /// errors that used to clear the slot first suppressed this arm
+    /// permanently, and the settlement it drives is what lets the exit
+    /// predicate be reached at all. `server_death_reported` is the latch that
+    /// keeps the handle read -- and the marker written -- once per death rather
+    /// than every sweep.
+    ///
+    /// This does **not** close the clock. It used to, on the claim that the
+    /// server's task hosts this plane's clock; the fixture settles that it does
+    /// not -- `fabric-call-time` is its own declared instance with its own
+    /// executable -- so closing here reported a death the clock had not
+    /// suffered, and left a clock that outlived the server unobserved. The
+    /// clock has its own handle, read by [`Self::pump_time`] (B76).
     fn observe_server_death(&mut self) -> bool {
-        if self.time_closed {
+        if self.server_death_reported {
             return false;
         }
-        match slime_rt::supervision_status(self.supervision[2]) {
+        match slime_rt::supervision_status(self.supervision[SERVER_SUPERVISION]) {
             Ok(None) => false,
             Ok(Some(_)) => {
+                self.server_death_reported = true;
                 self.retire_server();
-                // The server's task hosts this plane's clock, so its confirmed
-                // termination is what says no further advance can arrive.
-                self.time_closed = true;
                 slime_rt::debug_write(b"[fabric] call peer death propagated\n");
                 true
             }
@@ -1530,7 +1577,7 @@ impl Broker {
             call.request_id,
             status,
         ) {
-            ERR_SUCCESS | ERR_PEER_DEAD => self.calls[index] = Call::EMPTY,
+            ERR_SUCCESS => self.calls[index] = Call::EMPTY,
             ERR_WOULDBLOCK => {
                 self.calls[index].phase = Phase::PendingTerminal;
                 self.calls[index].terminal_status = status;
@@ -1630,11 +1677,7 @@ impl Broker {
                     self.server_call = Some(self.calls[index].server_request_id);
                     progressed = true;
                 }
-                ERR_PEER_DEAD => {
-                    self.retire_server();
-                    self.finish(index, STATUS_PEER_DEAD);
-                    progressed = true;
-                }
+                // No `ERR_PEER_DEAD` arm on the cancel forward either.
                 _ => fail(b"call cancel forward"),
             }
         }

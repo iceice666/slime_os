@@ -52,7 +52,7 @@ mod fabric_profile {
 // includes both brokers and a file may be a module only once in a crate.
 use super::trace_log;
 use fabric_profile::*;
-use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 const ROUTE_NAME: &str = "navigation";
 const BACKUP_ROUTE_NAME: &str = "nav-backup";
@@ -216,7 +216,6 @@ pub struct Broker {
     next_retained_age: u64,
     next_pending_order: u64,
     now_ns: u64,
-    time_closed: bool,
     server_settled: bool,
     /// C8.11's bounded semantic trace for this worker. One sink per worker: the
     /// three route workers are separate tasks, and a shared sink would need an
@@ -268,7 +267,6 @@ impl Broker {
             next_retained_age: 1,
             next_pending_order: 1,
             now_ns: 0,
-            time_closed: false,
             server_settled: false,
             trace: trace_log::Trace::new(FABRIC_TRACE_DEPTH),
             route: 0,
@@ -279,13 +277,16 @@ impl Broker {
 
     /// Retire the server: record its death once, on whichever path observes it.
     ///
-    /// Four paths learn the server is gone -- the supervision handle, and an
-    /// `ERR_PEER_DEAD` from a goal forward, a cancel forward, or a reply read --
-    /// and they race. Wiring the trace record to the supervision arm alone made
-    /// the evidence depend on which observation won: `settle_all` also sets
-    /// `server_settled`, so `finished()` could become true on an endpoint-error
-    /// path and the worker would flush a complete, terminal-bearing trace that
-    /// simply lacked its peer-death record, with nothing reporting the omission.
+    /// One path learns the server is gone: its supervision handle, read by
+    /// [`Self::observe_server_death`]. The three that used to race it were
+    /// `ERR_PEER_DEAD` arms on a goal forward, a cancel forward, and a reply
+    /// read, and none could fire -- a native seL4 Endpoint has no closed-peer
+    /// signal -- so they are removed rather than kept as redundancy that reads
+    /// as working (B76). `settle_all` also sets `server_settled`, which
+    /// `finished()` waits on, so an arm that could reach here without the trace
+    /// record would flush a complete-looking trace missing its peer-death
+    /// record; keeping the record here rather than at the observation site is
+    /// what makes that impossible regardless of caller.
     ///
     /// Idempotent: the second observation of one death records nothing.
     fn retire_server(&mut self) {
@@ -483,11 +484,8 @@ impl Broker {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.backup_route_slot = None;
-                let _ = slime_rt::cap_drop(slot);
-                return true;
-            }
+            // No `ERR_PEER_DEAD` arm; client A's supervision transition closes
+            // this route in `observe_client_death`.
             value if value < 0 => fail(b"backup operation recv"),
             value => value as usize,
         };
@@ -504,11 +502,8 @@ impl Broker {
             match slime_rt::send(slot, &bytes[..1], &[]) {
                 ERR_SUCCESS => break,
                 ERR_WOULDBLOCK => slime_rt::yield_now(),
-                ERR_PEER_DEAD => {
-                    self.backup_route_slot = None;
-                    let _ = slime_rt::cap_drop(slot);
-                    return true;
-                }
+                // No `ERR_PEER_DEAD` arm; client A's supervision transition
+                // closes this route in `observe_client_death`.
                 _ => fail(b"backup operation reply"),
             }
         }
@@ -592,11 +587,9 @@ impl Broker {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.clients[client] = None;
-                self.reclaim_client(client, slot);
-                return true;
-            }
+            // No `ERR_PEER_DEAD` arm: a native seL4 Endpoint never answers one,
+            // so a client's exit is observed by `observe_client_death` reading
+            // its supervision handle (B76).
             value if value < 0 => fail(b"client recv"),
             value => value as usize,
         };
@@ -743,18 +736,7 @@ impl Broker {
                 );
                 return;
             }
-            ERR_PEER_DEAD => {
-                self.queue_terminal(
-                    client,
-                    slot,
-                    record.session,
-                    record.operation_id,
-                    STATUS_PEER_DEAD,
-                );
-                self.retire_server();
-                self.settle_all(STATUS_PEER_DEAD);
-                return;
-            }
+            // No `ERR_PEER_DEAD` arm; see `pump_client`.
             _ => fail(b"operation goal forward"),
         }
         self.operations[index] = Operation {
@@ -819,10 +801,7 @@ impl Broker {
                 self.settle(index, status);
                 slime_rt::debug_write(b"[fabric] operation cancel retry exhausted\n");
             }
-            ERR_PEER_DEAD => {
-                self.retire_server();
-                self.settle_all(STATUS_PEER_DEAD);
-            }
+            // No `ERR_PEER_DEAD` arm; see `pump_server`.
             _ => fail(b"operation cancel forward"),
         }
     }
@@ -903,12 +882,9 @@ impl Broker {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.retire_server();
-                self.settle_all(STATUS_PEER_DEAD);
-                slime_rt::debug_write(b"[fabric] operation peer death propagated\n");
-                return true;
-            }
+            // No `ERR_PEER_DEAD` arm: the server's exit is reported by
+            // `observe_server_death`'s supervision read, which is where this
+            // plane's peer-death marker and settlement come from (B76).
             value if value < 0 => fail(b"server recv"),
             value => value as usize,
         };
@@ -1008,7 +984,7 @@ impl Broker {
             ERR_WOULDBLOCK => {
                 slime_rt::debug_write(b"[fabric] operation feedback dropped at bound\n");
             }
-            ERR_PEER_DEAD => self.drop_dead_client(index),
+            // No `ERR_PEER_DEAD` arm; see `pump_client`.
             _ => fail(b"operation feedback delivery"),
         }
     }
@@ -1161,12 +1137,7 @@ impl Broker {
             match slime_rt::send(slot, &record.encode(), &[]) {
                 ERR_SUCCESS => return true,
                 ERR_WOULDBLOCK => {}
-                ERR_PEER_DEAD => {
-                    self.clients[client] = None;
-                    self.reclaim_client(client, slot);
-                    let _ = slime_rt::cap_drop(slot);
-                    return false;
-                }
+                // No `ERR_PEER_DEAD` arm; see `pump_client`.
                 _ => fail(failure),
             }
         }
@@ -1207,13 +1178,7 @@ impl Broker {
                     progressed = true;
                 }
                 ERR_WOULDBLOCK => {}
-                ERR_PEER_DEAD => {
-                    self.pending_deliveries[index] = None;
-                    self.clients[client] = None;
-                    self.reclaim_client(client, value.slot);
-                    let _ = slime_rt::cap_drop(value.slot);
-                    progressed = true;
-                }
+                // No `ERR_PEER_DEAD` arm; see `pump_client`.
                 _ => fail(b"pending operation delivery"),
             }
         }
@@ -1225,18 +1190,33 @@ impl Broker {
     /// Time is the only thing that expires an operation or a retained result, and
     /// it arrives as an explicit capability-routed record — never a poll — so
     /// every deadline transition is deterministic and replayable.
+    ///
+    /// **This plane's clock carries no supervision handle, deliberately (B76).**
+    /// `fabric-op-time` is a separately declared instance, so nothing here
+    /// observes its exit, and a clock that stops silently stops every expiry
+    /// sweep below with it — no `STATUS_TIMEOUT`, no `STATUS_CANCELLED`, no
+    /// `STATUS_EXPIRED`. That is accepted rather than fixed, for two reasons.
+    /// First, it is not a hang: `finished()` does not wait on time, so the plane
+    /// still terminates through its clients and server, and the missing expiries
+    /// surface as absent markers that `just sel4_operation_check`'s
+    /// timeout-and-expiry chain fails on. Second, this worker parks on 9 of
+    /// `MAX_WAIT_SOURCES = 9` sources, counting one supervision source per
+    /// client slot plus the server's, so a tenth would be refused at build time
+    /// by `build-generation.py`'s wake-source ceiling — the handle cannot be
+    /// added here without restructuring the park set, which is a larger change
+    /// than the gate-visible failure it would buy.
+    ///
+    /// The call plane is different and does have one: there, closure is in the
+    /// exit predicate, so a silent clock wedges the broker and loses its whole
+    /// trace rather than dropping a marker.
     fn pump_time(&mut self) -> bool {
-        if self.time_closed {
-            return false;
-        }
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(self.time_control, &mut bytes, &mut caps) {
+            // No `ERR_PEER_DEAD` arm: a native seL4 Endpoint never answers one,
+            // so the `time_closed` self-latch this used to set was written by
+            // nothing and read only by its own early return (B76).
             ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.time_closed = true;
-                return true;
-            }
             value if value < 0 => fail(b"operation time recv"),
             value => value as usize,
         };
@@ -1368,15 +1348,6 @@ impl Broker {
         self.operations.iter().position(|operation| {
             operation.phase != Phase::Free && operation.server_operation_id == server_operation_id
         })
-    }
-
-    fn drop_dead_client(&mut self, index: usize) {
-        let operation = self.operations[index];
-        let client_index = operation.client_index as usize;
-        let slot = operation.client_slot;
-        self.operations[index] = Operation::EMPTY;
-        self.clients[client_index] = None;
-        self.reclaim_client(client_index, slot);
     }
 
     /// Release everything a departed client held. Active operations and queued

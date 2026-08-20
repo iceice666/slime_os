@@ -476,9 +476,12 @@ fn drive_boot_plane() -> ! {
     let call_client = spawn_boot(b"executable:fabric-call-client");
     let call_client_b = spawn_boot(b"executable:fabric-call-client-b");
     let call_server = spawn_boot(b"executable:fabric-call-server");
-    // The clock asks for nothing and is named by no handle: the worker observes
-    // its exit through the control endpoint's own peer state.
-    spawn_boot(b"executable:fabric-call-time");
+    // The clock precedes the worker for the same reason the participants do: the
+    // worker is granted a supervision handle naming it, and a handle cannot
+    // exist before its task (B76). Its exit is not observable any other way --
+    // a native Endpoint reports no peer death, and the control endpoint's own
+    // state reports nothing at all.
+    let call_time = spawn_boot(b"executable:fabric-call-time");
     // The call worker copies large payloads, so it holds buffer-creation
     // authority of its own, bounded by its declared quota.
     spawn_boot_with(
@@ -488,6 +491,7 @@ fn drive_boot_plane() -> ! {
             grant(call_client, RIGHT_SUPERVISE),
             grant(call_client_b, RIGHT_SUPERVISE),
             grant(call_server, RIGHT_SUPERVISE),
+            grant(call_time, RIGHT_SUPERVISE),
         ],
     );
     slime_rt::debug_write(b"[init] fabric boot call plane spawned\n");
@@ -591,6 +595,7 @@ fn drive_traffic_plane() -> ! {
             grant(call_client, RIGHT_SUPERVISE),
             grant(call_client_b, RIGHT_SUPERVISE),
             grant(call_server, RIGHT_SUPERVISE),
+            grant(call_time, RIGHT_SUPERVISE),
         ],
     );
     slime_rt::debug_write(b"[init] traffic call plane spawned\n");
@@ -909,6 +914,16 @@ fn launch_fabric_calls() {
     // shared-buffer factory it holds, and one supervision handle per
     // participant, which only exist once those tasks do. Matching is positional
     // against ascending declared slot: factory at 1, then the handles.
+    //
+    // The clock is spawned here, before the broker, for the same reason the
+    // three participants are: the broker is granted a supervision handle naming
+    // it too (B76). It used to be spawned last, when nothing named it -- and
+    // the broker then inferred the clock's exit from the *server's* handle,
+    // which names a different task. A clock that exits while the server lives
+    // was observed by nothing, and the exit predicate that gates the trace
+    // flush waited forever.
+    let time = slime_rt::spawn(resolve_executable(b"executable:fabric-call-time"), &[])
+        .unwrap_or_else(|_| slime_rt::exit(1));
     let service = slime_rt::spawn(
         resolve_executable(b"executable:fabric-service"),
         &[
@@ -916,13 +931,12 @@ fn launch_fabric_calls() {
             grant(client.supervision_slot, RIGHT_SUPERVISE),
             grant(client_b.supervision_slot, RIGHT_SUPERVISE),
             grant(server.supervision_slot, RIGHT_SUPERVISE),
+            grant(time.supervision_slot, RIGHT_SUPERVISE),
         ],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] call fabric spawned\n");
     slime_rt::debug_write(b"[init] call supervision delegated\n");
-    let time = slime_rt::spawn(resolve_executable(b"executable:fabric-call-time"), &[])
-        .unwrap_or_else(|_| slime_rt::exit(1));
     wait_clean(&[
         client.supervision_slot,
         client_b.supervision_slot,

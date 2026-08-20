@@ -4,7 +4,7 @@ use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
 use slime_proto::fabric_operation::*;
 use slime_proto::fabric_time::{TIME_ADVANCE_LEN, TIME_ADVANCE_MAGIC, WireTimeAdvance};
 use slime_proto::interface_schema::navigation_operation;
-use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 /// Slot 0 is the participant's primary direct operation endpoint.
 const CONTROL_SLOT: u32 = 0;
@@ -245,7 +245,8 @@ pub fn run_server() {
                 slime_rt::yield_now();
                 continue;
             }
-            ERR_PEER_DEAD => return,
+            // No `ERR_PEER_DEAD` arm: a native seL4 Endpoint never answers one
+            // (B76).
             value if value < 0 => fail(b"server receive"),
             value => value as usize,
         };
@@ -455,7 +456,6 @@ fn recv_record(slot: u32) -> WireOperationEnvelope {
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => fail(b"operation peer died"),
             value if value < 0 => fail(b"operation receive"),
             value => {
                 release_caps(&caps);
@@ -520,7 +520,6 @@ pub fn expect_terminal_parked(slot: u32, session: u64, operation_id: u64, status
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
             value => {
                 release_caps(&caps);

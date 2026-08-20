@@ -7,9 +7,7 @@ use slime_proto::interface_schema::parameter_call;
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
-use slime_rt::{
-    CapabilityDisposition, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
-};
+use slime_rt::{CapabilityDisposition, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 const FACTORY_SLOT: u32 = 1;
 
@@ -138,7 +136,9 @@ pub fn run_server() {
                 slime_rt::yield_now();
                 continue;
             }
-            ERR_PEER_DEAD => return,
+            // No `ERR_PEER_DEAD` arm: a native seL4 Endpoint never answers one,
+            // so this server returns when its own scenario is done rather than
+            // when the broker's endpoint reports a closed peer (B76).
             value if value < 0 => fail(b"server receive"),
             value => value as usize,
         };
@@ -454,7 +454,6 @@ pub fn recv_call(slot: u32) -> WireCallEnvelope {
     loop {
         match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => fail(b"call peer died"),
             value if value < 0 => fail(b"call receive"),
             value => {
                 release_caps(&caps);
@@ -547,7 +546,6 @@ pub fn expect_terminal_parked(slot: u32, session: u64, request_id: u64, status: 
     loop {
         match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
             value => {
                 release_caps(&caps);

@@ -480,6 +480,17 @@
       slot = 8;
       transferable = false;
     };
+    {
+      name = "fabric-call-time-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 9;
+      transferable = false;
+    };
   ];
   notificationGrants = [
     { name = "fabric-service-parameters-ready"; source = "fabric-call-client"; target = "fabric-service"; };

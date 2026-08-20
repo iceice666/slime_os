@@ -88,7 +88,14 @@ pub enum IpcError {
     UnsupportedCapabilityTransfer,
     QueueFull,
     WouldBlock,
-    PeerDead,
+    // No `PeerDead`. A native seL4 Endpoint has no closed-peer signal, so no
+    // root path can observe that a peer died and no status the root returns can
+    // report one. Death travels on a supervision capability instead
+    // (`supervision_labels::STATUS`, which the holder polls), and that is this
+    // system's sole death-detection mechanism -- not a fallback beside an
+    // endpoint error. A variant here that nothing constructs reads as working
+    // redundancy to the next author and is what produced B75's shipped defect,
+    // so the absence is deliberate and documented rather than left open (B76).
     DestinationSlotsExhausted,
     TransferFailed,
     StalePlan,
@@ -122,11 +129,10 @@ impl IpcError {
     /// which internal predicate rejected it.
     pub const fn slime_status(self) -> i64 {
         use slime_proto::syscall_abi::{
-            ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_WOULDBLOCK,
+            ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_WOULDBLOCK,
         };
         match self {
             Self::BadCapability => ERR_BAD_CAP,
-            Self::PeerDead => ERR_PEER_DEAD,
             Self::QueueFull | Self::WouldBlock => ERR_WOULDBLOCK,
             // `ERR_BAD_CAP`, with the other capability failures: `sys_send`
             // answers that for a capability it will not move, and a component

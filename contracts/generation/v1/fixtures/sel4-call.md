@@ -70,7 +70,12 @@ The fabric handle is passed to the client and server so each can name the
 fabric as a loan receiver. Each participant handle is passed by init to the
 broker after that participant sends its role request, authenticating the caller
 without ambient task ids or requiring a component to hold authority naming
-itself. The clock handle remains with init and needs no transfer authority.
+itself. The clock's supervision handle is granted to the broker the same way,
+spawned before it for the same reason (B76): `fabric-call-time` is a
+separately declared instance, so nothing but its own handle reports its exit,
+and the broker's exit predicate waits on that report. Its *executable* grant
+is the one that stays with init and needs no transfer authority -- nothing ever
+delegates the authority to spawn the clock.
 
 The layout and the fixture agree bit for bit (B10): `SEL4_CALL_LAYOUT` gives
 `fabric-service` and the three participants `0x1000c`, while

@@ -13,7 +13,7 @@
 #[path = "../fabric_operation_scenario.rs"]
 mod scenario;
 
-use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -47,7 +47,6 @@ fn try_wait_phase(expected: u8) -> Option<()> {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     match slime_rt::recv(PHASE_SLOT, &mut bytes, &mut caps) {
         ERR_WOULDBLOCK => None,
-        ERR_PEER_DEAD => scenario::fail(b"time phase peer died"),
         value if value < 0 => scenario::fail(b"time phase receive"),
         1 if bytes[0] == expected => Some(()),
         _ => scenario::fail(b"time phase mismatch"),

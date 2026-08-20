@@ -94,8 +94,8 @@ use slime_proto::sample_descriptor::{
 };
 use slime_proto::{valid_fabric_request, valid_sample_descriptor};
 use slime_rt::{
-    CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
-    MAX_CAPS_PER_MSG, MAX_MSG,
+    CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
+    MAX_MSG,
 };
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -398,7 +398,10 @@ fn main(_startup_arg: u32) {
             controls.clients,
             controls.server,
             controls.time,
-            [6, 7, 8],
+            // Client A, client B, server, then the clock's own handle: a
+            // separately declared instance whose exit the server's handle does
+            // not report (B76).
+            [6, 7, 8, 9],
         )
         .run();
         slime_rt::debug_write(b"[fabric] call plane complete\n");
@@ -2284,10 +2287,12 @@ fn receive_time(pending_time: &mut Option<u64>, time_dead: &mut bool) {
             update_time_liveness(pending_time, time_dead, TimeReceive::WouldBlock);
             return;
         }
-        ERR_PEER_DEAD => {
-            update_time_liveness(pending_time, time_dead, TimeReceive::PeerDead);
-            return;
-        }
+        // No `ERR_PEER_DEAD` arm. The status exists in the ABI but nothing on
+        // this transport produces it, so an arm here was unreachable
+        // redundancy beside the supervision check above -- which is the whole
+        // detection mechanism, not a fallback (B76). `TimeReceive::PeerDead`
+        // remains: it is this function's own classification of what that check
+        // found, not a status read off the endpoint.
         n if n < 0 => fail(b"time recv"),
         n => n as usize,
     };
@@ -2442,7 +2447,7 @@ fn apply_time(
     };
     match slime_rt::send(time_slot(), &credit.encode(), &[]) {
         ERR_SUCCESS => {}
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => fail(b"time credit blocked"),
+        ERR_WOULDBLOCK => fail(b"time credit blocked"),
         _ => fail(b"time credit"),
     }
     true
@@ -2504,7 +2509,8 @@ fn send_qos_event(
     };
     match slime_rt::send(slot, &record.encode(), &[]) {
         ERR_SUCCESS => true,
-        ERR_PEER_DEAD => false,
+        // No `ERR_PEER_DEAD` arm: the supervision check above is what reports a
+        // gone subscriber; the endpoint never does (B76).
         _ => fail(b"QoS event"),
     }
 }

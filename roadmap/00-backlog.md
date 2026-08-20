@@ -24,87 +24,6 @@ full and says why.
 
 ## Open
 
-### B76 — `IpcError::PeerDead` is declared and status-mapped but never constructed, so three brokers carry unreachable death-detection arms
-
-**Problem:** `slime-root/src/ipc.rs:91` declares `IpcError::PeerDead` and `:129`
-maps it to `ERR_PEER_DEAD`, but no site in `slime-root` ever constructs the
-variant — a repo-wide grep under `slime-root/src/` returns only the declaration
-and the mapping arm. A native seL4 Endpoint has no closed-peer signal, so
-`slime_rt::recv` cannot answer `ERR_PEER_DEAD` on any path. Roughly 40 arms
-across 14 files branch on it; most are `fail(...)` aborts, harmless while
-unreachable. The dangerous class is the arm that sets state an exit predicate
-waits on, and there the three clock receivers differ from each other:
-
-- `fabric-service.rs` is **correct and is the pattern to copy.** Its
-  `ERR_WOULDBLOCK` arm (`:2270-2283`) consults
-  `supervision_status(supervision_slot_for(TIME_COMPONENT))` and promotes a
-  silent clock to `PeerDead`, so `time_dead` (in the exit predicate at `:1264`)
-  is reached by a path that fires. Its unreachable `ERR_PEER_DEAD` arm at
-  `:2287-2289` is redundant, and its comment at `:2271-2276` states the rule
-  correctly. `TIME_COMPONENT` is `fabric-publisher-b`. The
-  `fabric-publisher-b-clock` edge is declared only on the two planes that gate on
-  it — `sel4-qos.zti:286` and `sel4-traffic.zti:693` — and both also carry the
-  `fabric-publisher-b-supervision` binding (`sel4-qos.zti:561`,
-  `sel4-traffic.zti:1547`), so the fallback resolves a real handle exactly where
-  `qos_check()` requires it. The other planes declaring `fabric-service`
-  (`sel4-boot`, `sel4-matrix`, `sel4-stream`, `sel4-visibility`) carry the
-  supervision binding but no clock edge, so the arm is inert there rather than
-  broken.
-
-- `call_broker.rs` reaches `time_closed` (exit predicate `:307`, and that
-  predicate is the sole trace-flush site) only through `observe_server_death`
-  (`:1497-1512`), which reads `supervision[2]` — `SERVER_SUPERVISION_SLOT` per
-  `fabric-call-worker.rs:43`. **That handle supervises the server, not the
-  clock.** `sel4-call.zti` declares `fabric-call-time` as its own component with
-  its own executable (`:410-412`) and its own control edge, and the plane
-  declares exactly three supervision bindings — client, client-b, server
-  (`:451,462,473`) — **none for the clock.** Two comments in the file disagree
-  about this and both are wrong in the same direction: `retire_server`'s doc
-  (`:711-718`) says server and clock "are separate declared instances" and that
-  "the supervision arm and an `ERR_PEER_DEAD` from the clock endpoint itself"
-  close the clock — the second mechanism cannot fire — while
-  `observe_server_death:1504-1505` says "The server's task hosts this plane's
-  clock." The fixture settles it: they are separate, so the surviving path
-  closes the clock on the wrong component's death. A clock that exits while the
-  server lives is not observed by anything, and the exit predicate — hence the
-  trace flush — waits forever.
-
-- `operation_broker.rs`'s `time_closed` is **not in `finished()`**
-  (`:465-473`, which requires only `Phase::Free`, drained deliveries and
-  deferrals, `server_settled`, and no backup route). It is set at `:1237` from
-  the unreachable arm and read at `:1229` by `pump_time`'s own early return, and
-  nowhere else: a pure inert self-gate. Termination does not depend on it, so
-  there is no clock-retirement path here to audit — the real gap is that
-  `supervision: [u32; CLIENTS + 1]` with `CLIENTS = 2` (`:63,:192`) covers two
-  clients plus the server and `fabric-op-worker.rs` passes only slots 8/9/10,
-  so **the separately-declared `fabric-op-time` component
-  (`sel4-operation.zti:49-50,230-237`) has no supervision handle at all.** A dead
-  op clock silently stops all expiry — deadline sweeps emitting
-  `STATUS_TIMEOUT`/`STATUS_CANCELLED` (`:1259-1285`) and retention sweeps
-  emitting `STATUS_EXPIRED` (`:1286-1306`) simply never fire — with no
-  observation that reports the difference from an idle plane.
-
-All three clock components are `health = "optional"`, so none of this is caught
-by admission. Several files already document the impossibility
-(`visibility_broker.rs:456`, `fabric-service.rs:146,1110,2271,2477`,
-`matrix_broker.rs:569`, `sel4-generation-manager.rs:40`,
-`sel4-filesystem-service.rs:72`) while still carrying live arms for it, which is
-what makes the arms read as working redundancy — the same misreading that
-produced B75's shipped defect.
-
-**Exit condition:** either `IpcError::PeerDead` gains a real producer with a gate
-that observes it, or the variant and every unreachable arm branching on it are
-removed and the surviving supervision-based paths are commented as the sole
-detection mechanism. Independently of that choice, `call_broker` needs a clock
-supervision binding and a `WOULDBLOCK`-arm fallback on it (the two contradictory
-comments corrected to match), and the operation plane needs a decision recorded
-on whether its clock warrants a supervision handle or its expiry sweeps are
-allowed to stop silently.
-
-**Evidence:** [`devlog/2026-08-20-b75-stream-peer-death-race/`](../devlog/2026-08-20-b75-stream-peer-death-race/index.md)
-(found during that entry's `pump_time` audit, and corrected under that entry's
-`## Corrections`; not yet its own entry)
-
 ### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
 
 Split out of B74, which closed on making the failure *reportable*; this is the
@@ -1075,6 +994,25 @@ successor closes it.
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
 ## Resolved
+### B76 — `IpcError::PeerDead` is declared and status-mapped but never constructed, so three brokers carry unreachable death-detection arms
+
+**Status:** Resolved 2026-08-20. **Class:** Defect (a status the transport can
+never produce, read as working redundancy behind two real detection gaps).
+**Was:** `IpcError::PeerDead` had zero constructors and 43 unreachable
+consuming arms across 14 files; `call_broker` inferred its clock's death from
+the *server's* unrelated supervision handle, and `operation_broker`'s
+`time_closed` was a write-only self-latch nothing else read.
+**Exit condition (observed):** the variant and every unreachable arm were
+removed; the call-plane clock was granted its own supervision handle
+(`fabric-call-time-supervision`, slot 9, three fixtures) and the broker's exit
+predicate now closes on it directly, with a park-condition fix (found by
+review) preventing the broker from blocking on a wake no remaining peer could
+signal; the operation plane's lack of clock supervision was recorded as a
+deliberate decision rather than left implicit. `just sel4_call_check`,
+`just sel4_operation_check`, and `just sel4_fabric_aggregate_check` (279
+byte-identical trace records) all pass.
+**Evidence:** [`devlog/2026-08-20-b76-peer-death-cleanup/`](../devlog/2026-08-20-b76-peer-death-cleanup/index.md)
+
 ### B74 — the aggregate gate's traffic schedule failed twice in one session on a gate B68 closed as deterministic
 
 **Status:** Resolved 2026-08-20. **Class:** Defect (a root that stopped serving

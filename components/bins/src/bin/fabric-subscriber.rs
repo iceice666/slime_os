@@ -373,7 +373,6 @@ fn receive_message(slot: u32) -> Option<[u8; MAX_MSG]> {
     loop {
         match slime_rt::recv(slot, &mut message, &mut received) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            slime_rt::ERR_PEER_DEAD => return None,
             n if n < 0 => fail(b"visibility receive"),
             _ => return Some(message),
         }

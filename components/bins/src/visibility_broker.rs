@@ -27,7 +27,7 @@ use slime_proto::{
     valid_fabric_request, valid_interposition_trace, valid_stream_ack, valid_stream_sample,
     valid_visibility_request,
 };
-use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::{
     FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail, release_received, supervision_slot_for,
@@ -125,7 +125,10 @@ pub(super) fn run() {
             let length = loop {
                 match slime_rt::recv(client.control_slot, &mut message, &mut received) {
                     ERR_WOULDBLOCK => slime_rt::yield_now(),
-                    ERR_PEER_DEAD => fail(b"visibility client died before provisioning"),
+                    // No `ERR_PEER_DEAD` arm: a client that exits before
+                    // provisioning is silent on a native Endpoint, so this loop
+                    // is bounded by the caller's own supervision-driven
+                    // sequencing rather than by an endpoint status (B76).
                     n if n < 0 => fail(b"visibility control recv"),
                     n => break n as usize,
                 }
@@ -452,9 +455,9 @@ fn finish_proxy_loss(
 
 /// Answer the downstream subscriber's post-loss view requests until it exits.
 ///
-/// Bounded by its supervision handle for the same reason the proxy wait is: a
-/// native Endpoint never reports `ERR_PEER_DEAD`, so a subscriber that has
-/// already exited would leave this loop spinning forever.
+/// Bounded by its supervision handle, which is the *only* thing that can bound
+/// it: a native Endpoint never reports peer death, so a subscriber that has
+/// already exited would otherwise leave this loop spinning forever (B76).
 fn serve_event_view(graph: &GraphView, control: u32, component: &'static [u8]) {
     let supervision = supervision_slot_for(component);
     loop {
@@ -468,7 +471,6 @@ fn serve_event_view(graph: &GraphView, control: u32, component: &'static [u8]) {
                 slime_rt::yield_now();
                 continue;
             }
-            ERR_PEER_DEAD => return,
             n if n < 0 => fail(b"event view recv"),
             n => n as usize,
         };
@@ -725,7 +727,8 @@ fn descriptor(control: u32, rights: u64, direction: u32, route: &[u8; 32]) {
 fn send_proxy_message(slot: u32, message: &[u8; MAX_MSG]) -> bool {
     match slime_rt::send(slot, message, &[]) {
         ERR_SUCCESS => true,
-        ERR_PEER_DEAD => false,
+        // A native seL4 Endpoint never answers `ERR_PEER_DEAD`, so this reports
+        // only what a send can really fail with (B76).
         _ => false,
     }
 }
@@ -736,7 +739,9 @@ fn recv_proxy_message(slot: u32) -> Option<[u8; MAX_MSG]> {
     loop {
         match slime_rt::recv(slot, &mut message, &mut received) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => return None,
+            // No `ERR_PEER_DEAD` arm: it would be answered by the negative
+            // guard below in any case, and a native seL4 Endpoint never
+            // produces it (B76).
             n if n < 0 || n as usize != MAX_MSG => return None,
             _ => {
                 if received.iter().any(|slot| *slot != 0) {
