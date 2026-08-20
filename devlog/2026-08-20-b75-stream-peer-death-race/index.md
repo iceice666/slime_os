@@ -259,12 +259,13 @@ inert self-gate that termination never consults. The real gap is a different one
 `supervision: [u32; CLIENTS + 1]`, `CLIENTS = 2` (`:63,:192`), covers two clients
 and the server, so the separately-declared `fabric-op-time`
 (`sel4-operation.zti:49-50,230-237`) has **no supervision handle**. A dead op clock
-stops deadline sweeps (`:1259-1285`) and retention sweeps (`:1286-1305`) silently.
+stops deadline sweeps (`:1259-1285`) and retention sweeps (`:1286-1306`) silently.
 
 **`fabric-service` is confirmed as recorded**, and is the only correct one:
-`valid.zti` shows `fabric-publisher-b` both owning the `fabric-publisher-b-clock`
-edge and carrying a supervision binding, so its `ERR_WOULDBLOCK` fallback resolves
-a real handle. All three clock components are `health = "optional"`, so admission
+the `fabric-publisher-b-clock` edge is declared only on `sel4-qos.zti:286` and
+`sel4-traffic.zti:693`, the two planes whose `qos_check()` gates on it, and both
+also carry `fabric-publisher-b-supervision` (`:561`, `:1547`), so its
+`ERR_WOULDBLOCK` fallback resolves a real handle wherever the clock exists. All three clock components are `health = "optional"`, so admission
 catches none of this.
 
 The scope figure was also understated: roughly 40 unreachable arms across 14 files,

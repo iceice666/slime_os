@@ -41,8 +41,15 @@ waits on, and there the three clock receivers differ from each other:
   silent clock to `PeerDead`, so `time_dead` (in the exit predicate at `:1264`)
   is reached by a path that fires. Its unreachable `ERR_PEER_DEAD` arm at
   `:2287-2289` is redundant, and its comment at `:2271-2276` states the rule
-  correctly. `TIME_COMPONENT` is `fabric-publisher-b`, which `valid.zti` confirms
-  both owns the `fabric-publisher-b-clock` edge and carries a supervision binding.
+  correctly. `TIME_COMPONENT` is `fabric-publisher-b`. The
+  `fabric-publisher-b-clock` edge is declared only on the two planes that gate on
+  it — `sel4-qos.zti:286` and `sel4-traffic.zti:693` — and both also carry the
+  `fabric-publisher-b-supervision` binding (`sel4-qos.zti:561`,
+  `sel4-traffic.zti:1547`), so the fallback resolves a real handle exactly where
+  `qos_check()` requires it. The other planes declaring `fabric-service`
+  (`sel4-boot`, `sel4-matrix`, `sel4-stream`, `sel4-visibility`) carry the
+  supervision binding but no clock edge, so the arm is inert there rather than
+  broken.
 
 - `call_broker.rs` reaches `time_closed` (exit predicate `:307`, and that
   predicate is the sole trace-flush site) only through `observe_server_death`
@@ -74,7 +81,7 @@ waits on, and there the three clock receivers differ from each other:
   (`sel4-operation.zti:49-50,230-237`) has no supervision handle at all.** A dead
   op clock silently stops all expiry — deadline sweeps emitting
   `STATUS_TIMEOUT`/`STATUS_CANCELLED` (`:1259-1285`) and retention sweeps
-  emitting `STATUS_EXPIRED` (`:1286-1305`) simply never fire — with no
+  emitting `STATUS_EXPIRED` (`:1286-1306`) simply never fire — with no
   observation that reports the difference from an idle plane.
 
 All three clock components are `health = "optional"`, so none of this is caught
