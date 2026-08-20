@@ -281,8 +281,10 @@ corrected findings and exit condition.
 ### The residual divergences, root-caused
 
 The three signatures left open above were treated as one class — "values sampled
-from scheduling state". Reading the code rather than the signatures, they are two
-mechanisms, and **neither is the trace log's stamping**.
+from scheduling state". Reading the code rather than the signatures, **two** of them
+are root-caused here, to two distinct mechanisms, and **neither is the trace log's
+stamping**. The third is B74's, and this pass does not explain it: routing a
+signature to another item's ledger records where it belongs, not why it happens.
 
 One of the two candidate mechanisms this entry recorded was cited wrongly:
 `fabric-service.rs:2296` is `fail(b"time decode")`, not a `retry_count` race.
@@ -314,7 +316,8 @@ completes in. Whether the empty read lands before or after the next `advance` is
 host-scheduling-dependent, so the stamp moves by one clock tick.
 
 **`correlation=22` vs `4` (run 10)** is B74's fourth signature on the call plane
-and is unrelated to either of the above; it stays where it is recorded.
+and is unrelated to either of the above; it stays where it is recorded, and stays
+un-root-caused there. Nothing in this pass narrowed it.
 
 The consequence for B75's exit condition: two of the three are **not fixable by
 ordering** the way the peer-death race was, because the diverging value is a

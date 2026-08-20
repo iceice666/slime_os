@@ -135,7 +135,13 @@ inventing a root-side discriminator.
 
 **Exit condition:** the stall is root-caused to a specific race with a
 mutation-backed regression guard, and `just sel4_fabric_aggregate_check` passes
-10 consecutive runs at 24 spinners on 18 cores without an `-icount` pin.
+10 consecutive runs at 24 spinners on 18 cores without an `-icount` pin — or, for
+the occupancy and timestamp fields the progress note below shows to be faithful
+observations of genuinely varying quantities, the byte-identical comparison's
+treatment of them is revised by the decision entry that note calls for. As written
+without that clause the bar was unsatisfiable: those two fields cannot be made
+constant by ordering, and the `-icount` pin that does make them constant is the one
+thing this condition forbids.
 
 **Progress (2026-08-20, open):** two of the recorded mechanisms are closed. The
 call-broker wedge fell to `1bc21a6`, and the publisher-death race — where the broker
@@ -156,8 +162,10 @@ scheduling state rather than from control flow, which is a different class of de
 from the ordering races already closed and likely wants its own item once
 root-caused.
 
-Those three have now been root-caused by reading the emitting code, and they are
-**two mechanisms, not one class, and neither is the trace log's stamping**. The
+**Two** of the three have now been root-caused by reading the emitting code, and
+they are **two mechanisms, not one class, and neither is the trace log's stamping**.
+The third is B74's separately-recorded call-plane signature, which remains
+un-root-caused wherever it is tracked; attributing it there is not explaining it. The
 `high_water` divergence is a poll-rate artefact: `peak_frames` maxes over
 `live_frames`, read once per dispatch-loop iteration at `fabric-service.rs:1190`
 after both pumps have run, so two publishers admitted within one iteration sample 2
