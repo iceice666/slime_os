@@ -228,3 +228,51 @@ Recorded as [B76](../../roadmap/00-backlog.md). Worth stating plainly why it bel
 next to this entry: an unreachable arm that *looks* like working redundancy is the
 same misreading that produced the defect above — a source comment describing
 intended behaviour, taken for an observation of actual behaviour.
+
+### The `pump_time` audit, corrected
+
+*Appended 2026-08-20. The subsection above stays as written; it is wrong in two
+places and this records how, rather than editing the record.*
+
+Re-reading the three clock receivers against the generation fixtures — instead of
+against their own doc comments — inverts two of that audit's three conclusions.
+
+**`call_broker` is worse than recorded, not "latent".** The audit above says its
+clock "does still close" through `observe_server_death`. That call reads
+`supervision[2]`, which `fabric-call-worker.rs:43` fixes as
+`SERVER_SUPERVISION_SLOT` — the **server's** handle. `sel4-call.zti` declares
+`fabric-call-time` as a component in its own right, with its own executable
+(`:410-412`), and declares exactly three supervision bindings — client, client-b,
+server (`:451,462,473`) — **none for the clock.** So `time_closed`, which the exit
+predicate at `:307` waits on and which gates the sole trace flush, is set by the
+wrong component's death. A clock exiting while the server lives is unobserved and
+the worker never flushes. Two comments in the file assert otherwise and disagree
+with each other besides: `:711-718` calls server and clock "separate declared
+instances" (true) while naming a clock-endpoint `ERR_PEER_DEAD` as a closing
+mechanism (impossible), and `:1504-1505` claims "the server's task hosts this
+plane's clock" (false).
+
+**`operation_broker` is not "resting on one unaudited path"** — it has no path at
+all, and needs none. `time_closed` there is absent from `finished()` (`:465-473`):
+it is set at `:1237` and read only by `pump_time`'s own early return at `:1229`, an
+inert self-gate that termination never consults. The real gap is a different one:
+`supervision: [u32; CLIENTS + 1]`, `CLIENTS = 2` (`:63,:192`), covers two clients
+and the server, so the separately-declared `fabric-op-time`
+(`sel4-operation.zti:49-50,230-237`) has **no supervision handle**. A dead op clock
+stops deadline sweeps (`:1259-1285`) and retention sweeps (`:1286-1305`) silently.
+
+**`fabric-service` is confirmed as recorded**, and is the only correct one:
+`valid.zti` shows `fabric-publisher-b` both owning the `fabric-publisher-b-clock`
+edge and carrying a supervision binding, so its `ERR_WOULDBLOCK` fallback resolves
+a real handle. All three clock components are `health = "optional"`, so admission
+catches none of this.
+
+The scope figure was also understated: roughly 40 unreachable arms across 14 files,
+not three. Most are `fail(...)` aborts and harmless while unreachable; the arms that
+matter are those setting state an exit predicate waits on.
+
+Both errors have the same cause as the defect this entry is about, one level up: I
+read `retire_server`'s and `observe_server_death`'s doc comments as descriptions of
+what the code does. A source comment is a claim. The fixtures were the observation,
+and they were one grep away. [B76](../../roadmap/00-backlog.md) carries the
+corrected findings and exit condition.
