@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and all of C8 (C8.1–C8.15) are complete under their named QEMU gates. The C8 track closed on 2026-08-17: C8.13's concurrent cross-plane traffic and resource ceilings (with C8.13.1–C8.13.3), C8.14's degradation and fault-isolation envelope, and C8.15's aggregate determinism gate, which boots both aggregate schedules twice over one declared composition and compares 280 byte-identical semantic-trace records. The backlog is clear: B55's full-graph boot defects and B56's unpassable C8.9 profile check are both resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C9 (robot runtime authority) and C10 (bounded private component memory) are the track's remaining open milestones.
+**Status:** C7 and all of C8 (C8.1–C8.15) are complete under their named QEMU gates. The C8 track closed on 2026-08-17: C8.13's concurrent cross-plane traffic and resource ceilings (with C8.13.1–C8.13.3), C8.14's degradation and fault-isolation envelope, and C8.15's aggregate determinism gate, which boots both aggregate schedules twice over one declared composition and compares 279 semantically identical trace records field by field. The backlog is clear: B55's full-graph boot defects and B56's unpassable C8.9 profile check are both resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C9 (robot runtime authority) and C10 (bounded private component memory) are the track's remaining open milestones.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -730,14 +730,22 @@ manifest structurally cannot satisfy — C8.9's exit condition was therefore
 unobserved on the tree the roadmap recorded it against. Fixed and closed.
 **Exit condition (observed):** `just sel4_fabric_aggregate_check` (`just
 data_fabric_check`) boots both aggregate schedules twice each — four boots
-over one declared composition — and compares their `[trace]` records
-verbatim: 140 records per boot, 280 byte-identical in total. A
+over one declared composition — and compares their `[trace]` records field by
+field: 139 records per traffic boot and 140 per fault boot, 279 semantically
+identical in total. A
 generation-declared graph of isolated native publishers, subscribers,
 service clients/servers, operation participants, introspection clients, and
 declared proxies exchanges bounded typed data under explicit QoS and graph
 grants; denied and incompatible edges are neither usable nor visible, every
 resource and fault path stays bounded and isolated, and identical inputs
-produce byte-identical semantic traces. Determinism is compared over the
+produce identical semantic traces. What "semantic" covers is declared by the
+gate and was narrowed by B75, which measured three rendered fields to be
+observations of the run rather than properties of the composition: a resource
+record's `high_water` on the ten counters that are poll samples, the
+per-instant arrival ordinal `sequence`, and the stream worker's deferred
+peer-death instant. Each record's declared position — its instant and tie
+class — is still compared positionally, and its remaining content as a
+multiset. Determinism is compared over the
 C8.11 trace records alone (which carry simulated time and forbid task ids or
 addresses), not serial markers, which several legitimately race; the record
 count is pinned so a regression that silenced every worker could not pass as

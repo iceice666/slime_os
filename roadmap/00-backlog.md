@@ -24,119 +24,6 @@ full and says why.
 
 ## Open
 
-### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
-
-Split out of B74, which closed on making the failure *reportable*; this is the
-failure itself. Under CPU oversubscription (24 spinners on 18 cores) the graph
-stops making progress with 7-8 tasks still live: no task exits with a non-zero
-status, 12-13 of 19 participants have exited rather than the full set, and the
-root runs its 32768-iteration dispatcher bound out and stops serving. Measured
-at 6/10 boot-pairs under that load, 0/10 idle and 0/10 at 4 spinners; a fixed
-`-icount shift=3`, which pins the guest clock to instructions retired rather
-than host wall time, took it to 0/10 with load held throughout.
-
-A second signature — a trace divergence in the byte-identical comparison — appears
-under the same conditions and is likely the same underlying race. Two candidate
-mechanisms are recorded but unconfirmed: sink-shared `sequence`/`now_ns`
-stamping in `TraceLog::blank()` (`components/bins/src/fabric_trace_log.rs:233`),
-where `sequence` is a per-instant ordinal that encodes cross-kind arrival order,
-and a `retry_count` drain-vs-tick race — cited as `fabric-service.rs:2296`, which is `fail(b"time decode")`; `retry_count` is at `:2360-2385`. Both
-candidates have since been read and **neither explains the residual
-divergences** (see the progress note below).
-`send_qos_event`'s check-then-act blocking send is an unverified hypothesis for
-the stall.
-
-Note that the root cannot distinguish this from success on its own: B55's
-full-graph boot declares every required task parked forever as its success
-state, so exhausting the bound with live tasks is legitimate there. Any fix must
-preserve that, which is why B74 moved the verdict to the gate rather than
-inventing a root-side discriminator.
-
-**Exit condition:** the stall is root-caused to a specific race with a
-mutation-backed regression guard, and `just sel4_fabric_aggregate_check` passes
-10 consecutive runs at 24 spinners on 18 cores without an `-icount` pin — or, for
-the occupancy and timestamp fields the progress note below shows to be faithful
-observations of genuinely varying quantities, the byte-identical comparison's
-treatment of them is revised by the decision entry that note calls for. As written
-without that clause the bar was unsatisfiable: those two fields cannot be made
-constant by ordering, and the `-icount` pin that does make them constant is the one
-thing this condition forbids.
-
-**Progress (2026-08-20, open):** two of the recorded mechanisms are closed. The
-call-broker wedge fell to `1bc21a6`, and the publisher-death race — where the broker
-concluded death from supervision alone and so raced the peer's own final write — fell
-to `da4e207`, which latches the termination and concludes death only from a drain
-that follows it. The stream, QoS, and fault planes now script a genuine peer death
-rather than depending on that race.
-
-A 10-run campaign at 24 spinners on 18 cores, no `-icount` pin, then measured
-**6/10** — so the exit condition above is **not met** and this item stays open. What
-it did establish is that the two halves of the exit condition have come apart: the
-*stall* did not recur once in ten runs (every run finished in 2-5s; each failure was
-the trace comparison returning 1, never a dispatcher-bound exhaustion), while the
-*divergence* persists in three signatures that are not the fixed race — a resource
-record's `high_water` peak sample, a peer-death record's `now=` timestamp, and a
-call-plane `correlation` at equal sequence. All three read values sampled from
-scheduling state rather than from control flow, which is a different class of defect
-from the ordering races already closed and likely wants its own item once
-root-caused.
-
-**Two** of the three have now been root-caused by reading the emitting code, and
-they are **two mechanisms, not one class, and neither is the trace log's stamping**.
-The third is B74's separately-recorded call-plane signature, which remains
-un-root-caused wherever it is tracked; attributing it there is not explaining it. The
-`high_water` divergence is a poll-rate artefact: `peak_frames` maxes over
-`live_frames`, read once per dispatch-loop iteration at `fabric-service.rs:1190`
-after both pumps have run, so two publishers admitted within one iteration sample 2
-and the same two split across iterations sample 1 — both truthful readings of a real
-instant. The `now=` divergence is the same shape one level up: a record's stamp is
-`self.now_ns` (`fabric_trace_log.rs:234`), written only by `advance` (`:135`), and
-the peer-death conclusion is deliberately deferred to a post-termination drain
-(`fabric-service.rs:1116-1130`) whose completion instant is scheduling-dependent —
-the fix made the record's *presence* deterministic, never its instant. The call-plane
-`correlation` is B74's separate signature. Consequence: two of the three are not
-fixable by ordering, because the diverging value is a faithful observation of a
-genuinely varying quantity, and the open question is the gate-side one of whether
-these fields belong in a byte-identical comparison at all. That is a change to the
-meaning of every plane's determinism claim and wants its own decision entry rather
-than an edit here.
-
-**The shared-supervision-slot suspicion recorded against this item is refuted.**
-It was that `supervision_slot_for` memoizes per *component*
-(`fabric-service.rs:2523`) while `Publisher` is per *route* (constructed at
-`:890-901`, the slot assigned at `:901`), so a
-two-route publisher's entries share one slot. They do — `fabric-publisher-b` is on
-both routes of every stream plane (`sel4-stream.zti:118,152`) — but sharing is
-correct, not a defect: a supervision handle names a **task**, and one task on two
-routes has one termination. The root's read is pure and idempotent
-(`slime-root/src/supervision.rs:101`, `get` is `&self` and returns a copy), so two
-`Publisher`s polling one slot both observe the same answer without consuming it,
-exactly as they already share `control_slot`. The per-route state that must differ
-— `finished`, `died`, `terminated`, `drained` — is per `Publisher` and is not
-shared. Nothing re-provisions an entry (`provision_edge` has one call site,
-`:800`, and no publisher slot is ever cleared), so a memoized slot cannot go stale
-either. No code change; the suspicion is closed by observation.
-
-The audit did find one false comment, benign. `SUPERVISION_MEMO` is sized 12 and
-its comment (`fabric-service.rs:2537-2538`) justifies that as "the largest
-supervision table any seL4 plane declares (7, on the matrix graph) with headroom".
-The 7 is wrong as stated: `sel4-boot.zti` and `sel4-traffic.zti` each declare
-**13** `capabilityKind = "supervision"` capabilities, above the bound. The memo
-cannot actually overflow, but not for the reason given — it is filled only from
-`provision_edge` and `TIME_COMPONENT`, so it holds at most
-`MAX_PARTICIPANTS + 1 = 8` entries (`:175`, from declared ceilings of 3 publishers
-and 4 subscribers). The bound is safe; its stated derivation counts the wrong set.
-Filed as a comment correction rather than a defect, per the standing rule that a
-source comment is a claim, not an observation.
-
-The mutation-backed guard the exit condition also names remains
-unwritten, and is blocked rather than skipped: the broker is not host-testable —
-`components/bins/tests/` does not exist and the module is not exported from
-`components/bins/src/lib.rs` — so a guard needs that seam built first.
-
-**Evidence:** [`devlog/2026-08-20-b74-aggregate-flake/`](../devlog/2026-08-20-b74-aggregate-flake/index.md),
-[`devlog/2026-08-20-b75-stream-peer-death-race/`](../devlog/2026-08-20-b75-stream-peer-death-race/index.md)
-
 ### B70 — component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser, blocking out-of-tree components
 
 **Problem:** Slime OS has no component-level specification independent of the
@@ -994,6 +881,25 @@ successor closes it.
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
 ## Resolved
+### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
+
+**Status:** Resolved 2026-08-20. **Class:** Defect (a gate asserting a property
+the system never had, over three fields sampled from scheduling state rather
+than determined by control flow).
+**Was:** `just sel4_fabric_aggregate_check` compared every rendered `[trace]`
+field verbatim and measured 6/10 under 24 spinners on 18 cores, diverging on a
+resource record's `high_water` peak, a peer-death record's `now=` instant, and a
+call-plane ack's arrival ordinal.
+**Exit condition (observed):** the stall half closed by measurement — it did not
+recur once in twenty loaded runs — and the divergence half closed on the exit
+condition's second branch, the comparison being revised by a decision entry to
+separate the fields a composition declares from those a run observes, scoped per
+resource counter and per `(worker, order)` so a stream `resourceMapping`
+regression and the call and operation planes' undeferred peer-death instants
+stay compared; `just sel4_fabric_aggregate_check` then passed 10 consecutive
+runs at 24 spinners on 18 cores with no `-icount` pin.
+**Evidence:** [`devlog/2026-08-20-b75-observed-vs-declared-trace-fields/`](../devlog/2026-08-20-b75-observed-vs-declared-trace-fields/index.md)
+
 ### B76 — `IpcError::PeerDead` is declared and status-mapped but never constructed, so three brokers carry unreachable death-detection arms
 
 **Status:** Resolved 2026-08-20. **Class:** Defect (a status the transport can
