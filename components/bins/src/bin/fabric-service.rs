@@ -2534,10 +2534,16 @@ fn supervision_slot_for(component: &'static [u8]) -> u32 {
 /// itself and needs no copy and no unsafe lifetime widening. Requiring `'static`
 /// at the signature is what makes that sound rather than asserted.
 ///
-/// Sized by the largest supervision table any seL4 plane declares (7, on the
-/// matrix graph) with headroom. Overflow degrades to re-resolving rather than
-/// failing: the memo is an optimization, and a graph past this bound should get
-/// slower, not refuse to boot.
+/// Sized above what this memo can ever hold, which is not the size of a plane's
+/// supervision table: entries are added only by `provision_edge` and by the
+/// `TIME_COMPONENT` clock read, so the ceiling is `MAX_PARTICIPANTS + 1` = 8,
+/// derived from the generation's own declared publisher and subscriber counts.
+/// (An earlier comment here justified 12 as headroom over "7, the largest
+/// supervision table"; that count was wrong -- `sel4-boot.zti` and
+/// `sel4-traffic.zti` each declare 13 -- and it was the wrong set to count.)
+/// Overflow degrades to re-resolving rather than failing: the memo is an
+/// optimization, and a graph past this bound should get slower, not refuse to
+/// boot.
 static mut SUPERVISION_MEMO: [(&[u8], u32); 12] = [(b"", u32::MAX); 12];
 static mut SUPERVISION_MEMO_LEN: usize = 0;
 

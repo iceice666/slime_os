@@ -182,6 +182,34 @@ these fields belong in a byte-identical comparison at all. That is a change to t
 meaning of every plane's determinism claim and wants its own decision entry rather
 than an edit here.
 
+**The shared-supervision-slot suspicion recorded against this item is refuted.**
+It was that `supervision_slot_for` memoizes per *component*
+(`fabric-service.rs:2523`) while `Publisher` is per *route* (constructed at
+`:890-901`, the slot assigned at `:901`), so a
+two-route publisher's entries share one slot. They do — `fabric-publisher-b` is on
+both routes of every stream plane (`sel4-stream.zti:118,152`) — but sharing is
+correct, not a defect: a supervision handle names a **task**, and one task on two
+routes has one termination. The root's read is pure and idempotent
+(`slime-root/src/supervision.rs:101`, `get` is `&self` and returns a copy), so two
+`Publisher`s polling one slot both observe the same answer without consuming it,
+exactly as they already share `control_slot`. The per-route state that must differ
+— `finished`, `died`, `terminated`, `drained` — is per `Publisher` and is not
+shared. Nothing re-provisions an entry (`provision_edge` has one call site,
+`:800`, and no publisher slot is ever cleared), so a memoized slot cannot go stale
+either. No code change; the suspicion is closed by observation.
+
+The audit did find one false comment, benign. `SUPERVISION_MEMO` is sized 12 and
+its comment (`fabric-service.rs:2537-2538`) justifies that as "the largest
+supervision table any seL4 plane declares (7, on the matrix graph) with headroom".
+The 7 is wrong as stated: `sel4-boot.zti` and `sel4-traffic.zti` each declare
+**13** `capabilityKind = "supervision"` capabilities, above the bound. The memo
+cannot actually overflow, but not for the reason given — it is filled only from
+`provision_edge` and `TIME_COMPONENT`, so it holds at most
+`MAX_PARTICIPANTS + 1 = 8` entries (`:175`, from declared ceilings of 3 publishers
+and 4 subscribers). The bound is safe; its stated derivation counts the wrong set.
+Filed as a comment correction rather than a defect, per the standing rule that a
+source comment is a claim, not an observation.
+
 The mutation-backed guard the exit condition also names remains
 unwritten, and is blocked rather than skipped: the broker is not host-testable —
 `components/bins/tests/` does not exist and the module is not exported from
