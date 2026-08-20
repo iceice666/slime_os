@@ -24,6 +24,41 @@ full and says why.
 
 ## Open
 
+### B76 — `IpcError::PeerDead` is declared and status-mapped but never constructed, so three brokers carry unreachable death-detection arms
+
+**Problem:** `slime-root/src/ipc.rs:91` declares `IpcError::PeerDead` and `:129`
+maps it to `ERR_PEER_DEAD`, but no site in `slime-root` ever constructs the
+variant — a repo-wide grep for `IpcError::PeerDead` returns only the declaration
+and the mapping arm. A native seL4 Endpoint has no closed-peer signal, so
+`slime_rt::recv` cannot answer `ERR_PEER_DEAD` on any path.
+
+Three broker receive paths nonetheless branch on it and treat it as authoritative
+evidence that a peer is gone: `call_broker.rs:1415-1417` and
+`operation_broker.rs:1236-1238` both set `time_closed = true` from that arm, and
+`fabric-service.rs:2287-2289` sets `time_dead` from it. All three are dead code.
+`fabric-service.rs:2268-2282` already carries a comment stating the correct
+rule — *"A native Endpoint has no `ERR_PEER_DEAD`: an exited clock is
+indistinguishable from a silent one"* — and its `ERR_WOULDBLOCK` arm consults the
+supervision handle instead, which is the path that actually fires. The two brokers
+in `components/bins/src/` have no such fallback in `pump_time`: `call_broker`
+closes its clock only through `observe_server_death` (`:1496-1512`), and
+`operation_broker`'s `pump_time` has no supervision consultation at all.
+
+This is latent rather than active — `call_broker`'s exit predicate waits on
+`time_closed` and reaches it via the supervision arm, and the planes pass — but it
+means a reader cannot tell which death-detection paths are real, and
+`operation_broker`'s clock retirement rests on a single unaudited path. It also
+makes the `ERR_PEER_DEAD` arms look like working redundancy when they are not, which
+is exactly the misreading that produced B75's shipped defect.
+
+**Exit condition:** either `IpcError::PeerDead` gains a real producer with a gate
+that observes it, or the variant and every unreachable arm branching on it are
+removed and the surviving supervision-based paths are commented as the sole
+detection mechanism. `operation_broker`'s clock retirement is audited either way.
+
+**Evidence:** [`devlog/2026-08-20-b75-stream-peer-death-race/`](../devlog/2026-08-20-b75-stream-peer-death-race/index.md)
+(found during that entry's `pump_time` audit; not yet its own entry)
+
 ### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
 
 Split out of B74, which closed on making the failure *reportable*; this is the
@@ -54,7 +89,30 @@ inventing a root-side discriminator.
 mutation-backed regression guard, and `just sel4_fabric_aggregate_check` passes
 10 consecutive runs at 24 spinners on 18 cores without an `-icount` pin.
 
-**Evidence:** [`devlog/2026-08-20-b74-aggregate-flake/`](../devlog/2026-08-20-b74-aggregate-flake/index.md)
+**Progress (2026-08-20, open):** two of the recorded mechanisms are closed. The
+call-broker wedge fell to `1bc21a6`, and the publisher-death race — where the broker
+concluded death from supervision alone and so raced the peer's own final write — fell
+to `da4e207`, which latches the termination and concludes death only from a drain
+that follows it. The stream, QoS, and fault planes now script a genuine peer death
+rather than depending on that race.
+
+A 10-run campaign at 24 spinners on 18 cores, no `-icount` pin, then measured
+**6/10** — so the exit condition above is **not met** and this item stays open. What
+it did establish is that the two halves of the exit condition have come apart: the
+*stall* did not recur once in ten runs (every run finished in 2-5s; each failure was
+the trace comparison returning 1, never a dispatcher-bound exhaustion), while the
+*divergence* persists in three signatures that are not the fixed race — a resource
+record's `high_water` peak sample, a peer-death record's `now=` timestamp, and a
+call-plane `correlation` at equal sequence. All three read values sampled from
+scheduling state rather than from control flow, which is a different class of defect
+from the ordering races already closed and likely wants its own item once
+root-caused. The mutation-backed guard the exit condition also names remains
+unwritten, and is blocked rather than skipped: the broker is not host-testable —
+`components/bins/tests/` does not exist and the module is not exported from
+`components/bins/src/lib.rs` — so a guard needs that seam built first.
+
+**Evidence:** [`devlog/2026-08-20-b74-aggregate-flake/`](../devlog/2026-08-20-b74-aggregate-flake/index.md),
+[`devlog/2026-08-20-b75-stream-peer-death-race/`](../devlog/2026-08-20-b75-stream-peer-death-race/index.md)
 
 ### B70 — component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser, blocking out-of-tree components
 

@@ -296,7 +296,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-18 | [CP2 — runtime-resolved component binding](2026-08-18-cp2-runtime-binding-query/index.md) | Change | Verified | CP2, B70 |
 | 2026-08-18 | [CP2 — capability-role query axis](2026-08-18-cp2-capability-role-axis/index.md) | Change | Verified | CP2, B70 |
 | 2026-08-18 | [B71 — boot-layout binary/Rust drift](2026-08-18-b71-boot-layout-binary-drift/index.md) | Defect | Verified | B70, B71 |
-| 2026-08-20 | [B75: three planes asserted a peer-death property that only a race produced](2026-08-20-b75-stream-peer-death-race/index.md) | Defect | Fixed | B75, B74, C8.5, C8.14, C8.15 |
+| 2026-08-20 | [B75: three planes asserted a peer-death property that only a race produced](2026-08-20-b75-stream-peer-death-race/index.md) | Defect | Monitoring | B75, B74, C8.5, C8.14, C8.15 |
 | 2026-08-20 | [B74: one flaky gate was two defects, and the silent one hid behind a deliberate suppression](2026-08-20-b74-aggregate-flake/index.md) | Defect | Fixed | B74, B75, C8.15 |
 | 2026-08-19 | [Retiring seventeen dead profile symbols, and the limits check that could not fail](2026-08-19-dead-profile-symbol-retirement/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-19 | [Retiring FABRIC_PARTICIPANTS, and the gate that outlived what it guarded](2026-08-19-fabric-participants-retirement/index.md) | Change | Verified | B70, CP2, B74 |

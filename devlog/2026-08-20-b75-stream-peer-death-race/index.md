@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-08-20 |
 | Kind | Defect |
-| Status | Fixed |
+| Status | Monitoring |
 | Scope | `components/bins/src/bin/fabric-service.rs` publisher supervision sweep, `components/bins/src/bin/fabric-publisher.rs`, `components/bins/build.rs`, `scripts/build/build-{sel4,generation}.py`, `scripts/check/check-sel4-{fabric-aggregate,fault-plane,qos-plane,stream-plane}.py` |
 | Roadmap | B75, B74, C8.5, C8.14, C8.15 |
 | Gates | `just sel4_fabric_aggregate_check`, `just sel4_fault_check`, `just sel4_stream_check`, `just sel4_qos_check` |
@@ -148,9 +148,83 @@ distinct structured event" — was never actually exercised by any of them.
 - Focused report: this entry; the measured record counts and the moved `now=` stamps
   are quoted inline above.
 - Raw transcript: the load campaign's per-run logs under `$HOME/.b75/M-b75-fix/`
-  are outside the repository and are not reproduced here.
+  are outside the repository and are not reproduced here. Its per-run verdicts and
+  the three divergence signatures it produced are quoted under `## Corrections`.
 - Serial/debugger/model output: the three post-fix fault-plane peer-death rows are
   quoted in the investigation log.
 - Related roadmap item: [B75](../../roadmap/00-backlog.md), and
   [`devlog/2026-08-20-b74-aggregate-flake/`](../2026-08-20-b74-aggregate-flake/index.md),
   which left this half open.
+
+## Corrections
+
+*Appended 2026-08-20, after the load campaign this entry's Verification section had
+not yet observed when its body was written.*
+
+This entry was first written with `Status | Fixed`. That was premature: B75's exit
+condition names `just sel4_fabric_aggregate_check` passing **ten consecutive runs**
+at 24 spinners on 18 cores without an `-icount` pin, and the campaign had not
+finished. It has now run, and the result is **6/10**. `Status` is corrected to
+`Monitoring` and B75 stays open.
+
+Observed, `$HOME/.b75/M-b75-fix/`, 24 spinners live throughout, 5-minute load average
+27.98 rising to 30.44:
+
+| Run | Result | Diverging record |
+|---|---|---|
+| 1 | Fail | stream `kind=resource` seq 4, `high_water=2` vs `1` |
+| 2 | Pass | — |
+| 3 | Fail | stream `kind=fault order=peer-death` seq 0, `now=100` vs `now=50` |
+| 4 | Fail | stream `kind=resource` seq 4, `high_water=2` vs `1` |
+| 5–9 | Pass | — |
+| 10 | Fail | call `kind=call order=ack` seq 9, `correlation=22` vs `4` |
+
+Three distinct signatures, and the honest reading is that **none of them is the
+peer-death race this entry fixed**:
+
+- Runs 1 and 4 diverge on a *resource* record's `high_water`, which samples the peak
+  frames held live at once. That is a scheduling-dependent occupancy sample, not a
+  termination ordering.
+- Run 3 diverges on the fault plane's peer-death record's **timestamp**, not on its
+  presence. The scripted death is now emitted on both boots — which is what this
+  entry's change was for, and it holds — but *when* it lands still moves between
+  boots.
+- Run 10 is B74's fourth signature, already recorded as untouched in the open-risks
+  list above: a call-plane correlation id differing at equal sequence.
+
+So the fix stands on what it claimed — the marker's presence no longer depends on
+which observation wins, and the fault plane's stream record count is stable at 140 —
+but it was not sufficient for B75's exit condition, and this entry should not have
+implied it was before the evidence existed. The remaining divergences are a separate
+class: values sampled from scheduling state (`high_water`, `now`, `correlation`)
+rather than from control flow. They need their own root-cause pass.
+
+The `## Verification` table above stays as written; it records gates that did pass,
+each observed directly. Nothing in it is withdrawn.
+
+### The `pump_time` audit, concluded
+
+The open-risks list left a `pump_time` audit unconcluded. Concluding it here, since
+its finding is adjacent to this entry's defect and was found the same way.
+
+`IpcError::PeerDead` is declared at `slime-root/src/ipc.rs:91` and mapped to
+`ERR_PEER_DEAD` at `:129`, but a repo-wide grep for `IpcError::PeerDead` returns
+**only those two lines** — nothing constructs it. A native seL4 Endpoint carries no
+closed-peer signal, so `slime_rt::recv` cannot return `ERR_PEER_DEAD` on any path,
+and every receive-side arm branching on it is unreachable. That includes
+`call_broker.rs:1415-1417` and `operation_broker.rs:1236-1238`, both of which set
+`time_closed = true` there, and `fabric-service.rs:2287-2289`.
+
+The clocks do still close: `call_broker` reaches `time_closed` through
+`observe_server_death` (`:1496-1512`), and `fabric-service`'s `receive_time`
+consults the supervision handle from its `ERR_WOULDBLOCK` arm — with a comment
+already stating the rule outright, *"A native Endpoint has no `ERR_PEER_DEAD`: an
+exited clock is indistinguishable from a silent one"*. So the planes pass, and this
+is latent, not active. `operation_broker`'s `pump_time` has no supervision
+consultation at all, which leaves its clock retirement resting on one unaudited
+path.
+
+Recorded as [B76](../../roadmap/00-backlog.md). Worth stating plainly why it belongs
+next to this entry: an unreachable arm that *looks* like working redundancy is the
+same misreading that produced the defect above — a source comment describing
+intended behaviour, taken for an observation of actual behaviour.
