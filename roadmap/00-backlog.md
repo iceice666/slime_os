@@ -104,6 +104,7 @@ allowed to stop silently.
 **Evidence:** [`devlog/2026-08-20-b75-stream-peer-death-race/`](../devlog/2026-08-20-b75-stream-peer-death-race/index.md)
 (found during that entry's `pump_time` audit, and corrected under that entry's
 `## Corrections`; not yet its own entry)
+
 ### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
 
 Split out of B74, which closed on making the failure *reportable*; this is the
@@ -120,7 +121,9 @@ under the same conditions and is likely the same underlying race. Two candidate
 mechanisms are recorded but unconfirmed: sink-shared `sequence`/`now_ns`
 stamping in `TraceLog::blank()` (`components/bins/src/fabric_trace_log.rs:233`),
 where `sequence` is a per-instant ordinal that encodes cross-kind arrival order,
-and a `retry_count` drain-vs-tick race in `fabric-service.rs:2296`.
+and a `retry_count` drain-vs-tick race — cited as `fabric-service.rs:2296`, which is `fail(b"time decode")`; `retry_count` is at `:2360-2385`. Both
+candidates have since been read and **neither explains the residual
+divergences** (see the progress note below).
 `send_qos_event`'s check-then-act blocking send is an unverified hypothesis for
 the stall.
 
@@ -151,7 +154,27 @@ record's `high_water` peak sample, a peer-death record's `now=` timestamp, and a
 call-plane `correlation` at equal sequence. All three read values sampled from
 scheduling state rather than from control flow, which is a different class of defect
 from the ordering races already closed and likely wants its own item once
-root-caused. The mutation-backed guard the exit condition also names remains
+root-caused.
+
+Those three have now been root-caused by reading the emitting code, and they are
+**two mechanisms, not one class, and neither is the trace log's stamping**. The
+`high_water` divergence is a poll-rate artefact: `peak_frames` maxes over
+`live_frames`, read once per dispatch-loop iteration at `fabric-service.rs:1190`
+after both pumps have run, so two publishers admitted within one iteration sample 2
+and the same two split across iterations sample 1 — both truthful readings of a real
+instant. The `now=` divergence is the same shape one level up: a record's stamp is
+`self.now_ns` (`fabric_trace_log.rs:234`), written only by `advance` (`:135`), and
+the peer-death conclusion is deliberately deferred to a post-termination drain
+(`fabric-service.rs:1116-1130`) whose completion instant is scheduling-dependent —
+the fix made the record's *presence* deterministic, never its instant. The call-plane
+`correlation` is B74's separate signature. Consequence: two of the three are not
+fixable by ordering, because the diverging value is a faithful observation of a
+genuinely varying quantity, and the open question is the gate-side one of whether
+these fields belong in a byte-identical comparison at all. That is a change to the
+meaning of every plane's determinism claim and wants its own decision entry rather
+than an edit here.
+
+The mutation-backed guard the exit condition also names remains
 unwritten, and is blocked rather than skipped: the broker is not host-testable —
 `components/bins/tests/` does not exist and the module is not exported from
 `components/bins/src/lib.rs` — so a guard needs that seam built first.

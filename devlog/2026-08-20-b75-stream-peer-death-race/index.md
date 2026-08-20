@@ -277,3 +277,53 @@ read `retire_server`'s and `observe_server_death`'s doc comments as descriptions
 what the code does. A source comment is a claim. The fixtures were the observation,
 and they were one grep away. [B76](../../roadmap/00-backlog.md) carries the
 corrected findings and exit condition.
+
+### The residual divergences, root-caused
+
+The three signatures left open above were treated as one class — "values sampled
+from scheduling state". Reading the code rather than the signatures, they are two
+mechanisms, and **neither is the trace log's stamping**.
+
+One of the two candidate mechanisms this entry recorded was cited wrongly:
+`fabric-service.rs:2296` is `fail(b"time decode")`, not a `retry_count` race.
+`retry_count` lives at `:2360-2385`. The other citation,
+`fabric_trace_log.rs:233`, is correct but is not the cause of any signature here.
+
+**`high_water=2` vs `1` (runs 1, 4) — a poll-rate sample, not a race.**
+`peak_frames` is a running maximum over a value read once per dispatch-loop
+iteration: `live_frames` at `fabric-service.rs:1190` counts frames with `refs > 0`
+*at that instant*, after both `pump_publisher` (`:1071-1079`) and `deliver`
+(`:1080-1086`) have run for every peer. The stream plane declares two publishers
+(`sel4-stream.zti:21,28`). If both publishers' samples are admitted within one
+iteration, the sample sees 2; if the loop turns between them and `release_frame`
+(`:2051`) drops the first to zero refs, it sees 1. Both are truthful readings of a
+real instant — the run's true concurrent peak genuinely differs between boots. This
+is not a defect in the sample; it is a counter whose value is a function of host
+scheduling being asserted as a fixed constant. The same shape applies to
+`peak_buffers`, `peak_queue`, `peak_history`, and `peak_retries` (`:1194-1225`) —
+runs 1 and 4 happened to land on `RESOURCE_FRAMES`.
+
+**`now=100` vs `now=50` (run 3) — the same mechanism, one level up.** A record's
+timestamp is `self.now_ns` (`fabric_trace_log.rs:234`), written only by `advance`
+(`:135`). So a record's stamp is the clock instant the loop had reached when the
+record was emitted, and the peer-death conclusion is deliberately deferred until an
+empty ring is observed after termination is latched (`fabric-service.rs:1116-1130`).
+That deferral is what makes the record's *presence* deterministic — the fix this
+entry made, which holds — but it explicitly does not fix *which instant* the drain
+completes in. Whether the empty read lands before or after the next `advance` is
+host-scheduling-dependent, so the stamp moves by one clock tick.
+
+**`correlation=22` vs `4` (run 10)** is B74's fourth signature on the call plane
+and is unrelated to either of the above; it stays where it is recorded.
+
+The consequence for B75's exit condition: two of the three are **not fixable by
+ordering** the way the peer-death race was, because the diverging value is a
+faithful observation of a genuinely varying quantity. The choice is between asserting
+these fields at all and asserting them as constants, and that is a gate-side decision
+about what the trace comparison treats as semantic, not a broker-side bug to fix.
+Recording it here rather than acting on it: changing what the comparison ignores is
+a change to the meaning of every plane's determinism claim, and it needs its own
+decision entry.
+
+No runtime tests were run for this pass; it is a reading of the code against
+divergence signatures already recorded above.
