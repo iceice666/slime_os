@@ -330,3 +330,60 @@ decision entry.
 
 No runtime tests were run for this pass; it is a reading of the code against
 divergence signatures already recorded above.
+
+### The shared-supervision-slot suspicion, refuted
+
+*Appended 2026-08-20. The open-risks checkbox above stays as written; it is wrong in
+three places and this records how.*
+
+That item reads: `supervision_slot_for` memoizes per component while `Publisher` is
+per route, so a component publishing on two routes shares one supervision slot —
+"not reached by any current fixture; latent." Both of its citations are wrong and its
+conclusion is wrong.
+
+The citations first. `fabric-service.rs:2469-2475` is a doc comment about blocking
+sends; `supervision_slot_for` is at `:2523`. And `:889` is `DIRECTION_PUBLISH => {`,
+the match-arm head — the `Publisher` is constructed at `:890-901`, with the slot
+assigned on `:901`.
+
+The mechanism is real and, contrary to the checkbox, **is** exercised:
+`fabric-publisher-b` appears as a participant on both routes of every stream plane
+(`sel4-stream.zti:118,152`; `ROUTE_NAMES` is `["telemetry", "diagnostics"]` at
+`fabric-service.rs:165`), so two `Publisher` values already hold the same
+`supervision_slot` on every run of `just sel4_stream_check`. It is not latent. It has
+been passing.
+
+It passes because sharing is correct. Three observations close it:
+
+- A supervision handle names a **task**, not a route. One component on two routes is
+  one task with one termination, so one slot is the accurate model — the alternative,
+  a slot per route, would claim two independent deaths for one process.
+- The root's read is pure. `slime-root/src/supervision.rs:101` is
+  `pub fn get(&self, task: TaskId) -> Option<Termination>`: it takes `&self`, returns
+  a copy, and consumes nothing. Two `Publisher`s polling one slot both observe the
+  same answer, as many times as they ask.
+- The state that must differ per route already does. `finished`, `died`,
+  `terminated`, and `drained` are `Publisher` fields, not slot state; the shared
+  `supervision_slot` sits beside an already-shared `control_slot` in the same struct.
+  `provision_edge` has one call site (`:800`) and no publisher or subscriber entry is
+  ever cleared, so no stale reuse arises either.
+
+No code change. The checkbox is closed by disproof.
+
+One real finding came out of the audit, and it is a comment, not a defect.
+`SUPERVISION_MEMO`'s doc comment justified its size of 12 as headroom over "the
+largest supervision table any seL4 plane declares (7, on the matrix graph)". Counting
+`capabilityKind = "supervision"` per fixture, `sel4-boot.zti` and `sel4-traffic.zti`
+each declare **13** — so 7 was not the largest, and two planes exceed the stated
+bound. The memo still cannot overflow, for a different reason than the one it gave:
+it is filled only by `provision_edge` and the `TIME_COMPONENT` clock read (`:2278`),
+so its ceiling is `MAX_PARTICIPANTS + 1` = 8 (`:175`, from the generation's declared
+publisher and subscriber counts). The bound was safe; its stated derivation counted
+the wrong set. The comment is corrected in place.
+
+Same lesson as the two corrections above, a third time: a source comment is a claim,
+and so is a line citation. Both were one `sed -n` away.
+
+No runtime tests were run for the reading itself; `just fmt_check_all`,
+`just lint_all`, and `just sel4_stream_check` were run for the comment change and
+passed, the last reporting "57 markers observed across 14 causal chains".
