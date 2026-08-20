@@ -108,8 +108,13 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (r"\[fabric\] QoS lifespan expired",),
     ),
     (
-        "a departed subscriber is retired through the peer-dead path",
+        "a departed publisher is retired through the peer-dead path",
         (
+            # The departing peer is the *publisher*: this marker's only emission
+            # site is the broker's publisher supervision sweep, and it fires when
+            # a publisher terminates without ending its route. The plane scripts
+            # that exit rather than depending on the peer's termination racing
+            # the broker's drain, which is what once produced it here.
             r"\[fabric\] QoS peer dead",
         ),
     ),

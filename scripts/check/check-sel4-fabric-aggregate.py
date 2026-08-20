@@ -17,8 +17,8 @@ milestone by asserting the two things no single-plane gate can:
    the parent exit condition is observed on one graph rather than assembled from
    separate profile boots. The fault variant shares `sel4-traffic.zti` with
    `generation` changed and nothing else; the fault variant differs only in that
-   its interposition hop is compiled to die. That is what makes the pair an
-   aggregate rather than two unrelated planes.
+   its interposition hop and its telemetry publisher are compiled to die. That
+   is what makes the pair an aggregate rather than two unrelated planes.
 
 Why this is a separate gate rather than an extension of either plane's own. Each
 plane gate boots once, because booting twice doubles the slowest step in the
@@ -66,8 +66,9 @@ BOOT_TIMEOUT_SECONDS = 240
 #
 # Both run the identical `drive_traffic_plane` composition over the identical
 # declared graph. The fault plane's image differs only in that its declared
-# interposition hop is compiled to exit rather than park, which is why the two
-# are an aggregate over one graph rather than two planes to be compared.
+# interposition hop is compiled to exit rather than park and its telemetry
+# publisher to exit without ending its stream, which is why the two are an
+# aggregate over one graph rather than two planes to be compared.
 PLANES: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "normal concurrent schedule",
@@ -96,11 +97,35 @@ PLANES: tuple[tuple[str, str, str, str, str], ...] = (
 # the plane gates check those as membership rather than as order.
 TRACE_LINE = re.compile(r"\[trace\] .*")
 
-# Every boot of either plane must emit exactly this many trace records. Pinned
-# rather than merely compared between the two boots of one plane: without it, a
+# Every boot of a plane must emit exactly this many trace records. Pinned rather
+# than merely compared between the two boots of one plane: without it, a
 # regression that silently stopped every worker from emitting would produce two
 # identical empty transcripts and pass the determinism comparison.
-EXPECTED_TRACE_RECORDS = 140
+#
+# Per plane rather than one shared number, because the two planes genuinely
+# differ by one record: the fault plane scripts its telemetry publisher to exit
+# without ending its stream, which the broker reports as a stream-family peer
+# death. The traffic plane's publisher ends its route normally and so emits no
+# such record. That difference used to be a race rather than a plane property --
+# the traffic plane's publisher also ended normally there, but whether the
+# broker observed the terminal sample or the exit first decided whether a
+# peer-death record appeared, so both planes intermittently emitted 140 and
+# intermittently 139. Splitting the constant states the difference these two
+# images are supposed to have; it does not paper over a variable one.
+EXPECTED_TRACE_RECORDS: dict[str, int] = {
+    "normal concurrent schedule": 139,
+    "fault schedule over the same graph": 140,
+}
+
+# The keys above are `PLANES` labels. Checked here rather than left to the
+# lookup, so renaming a plane fails at import with the reason rather than at the
+# assertion with a missing-count message that reads like a broker regression.
+if {plane[0] for plane in PLANES} != set(EXPECTED_TRACE_RECORDS):
+    raise SystemExit(
+        "seL4 fabric aggregate check: EXPECTED_TRACE_RECORDS keys do not match "
+        f"PLANES labels: {sorted(EXPECTED_TRACE_RECORDS)} vs "
+        f"{sorted(plane[0] for plane in PLANES)}"
+    )
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
@@ -294,18 +319,21 @@ def check_determinism(label: str, first: str, second: str) -> int:
     """
     left = trace_records(first)
     right = trace_records(second)
+    expected = EXPECTED_TRACE_RECORDS.get(label)
+    if expected is None:
+        fail(f"{label}: no pinned trace-record count declared for this plane")
     if not left:
         fail(f"{label}: the first boot emitted no trace records at all")
-    if len(left) != EXPECTED_TRACE_RECORDS:
+    if len(left) != expected:
         fail(
             f"{label}: the first boot emitted {len(left)} trace records, expected "
-            f"{EXPECTED_TRACE_RECORDS}; a plane that stopped emitting would otherwise "
+            f"{expected}; a plane that stopped emitting would otherwise "
             "compare equal to itself and pass"
         )
-    if len(right) != EXPECTED_TRACE_RECORDS:
+    if len(right) != expected:
         fail(
             f"{label}: the second boot emitted {len(right)} trace records, expected "
-            f"{EXPECTED_TRACE_RECORDS}"
+            f"{expected}"
         )
     left_by = records_by_participant(left)
     right_by = records_by_participant(right)

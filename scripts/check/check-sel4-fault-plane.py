@@ -482,10 +482,16 @@ EXPECTED_QOS_DEGRADATION: dict[str, tuple[tuple[int, int, str], ...]] = {
 # from both. `event=8` is EVENT_PEER_DEAD; the status is the negated protocol
 # peer-dead code for that plane.
 #
-# All three planes appear: the call and operation servers are scripted to exit
-# mid-exchange, and the stream broker observes its clock peer leave. A plane
-# missing from this transcript would mean a peer died and the broker did not
-# notice, which is the failure mode that wedges a route worker forever.
+# All three planes appear, and all three records are the *broker's* observation
+# of a peer that exited: the call and operation servers are scripted to exit
+# mid-exchange, and this plane's telemetry publisher is scripted to exit without
+# ending its stream. The stream record was previously produced by a race rather
+# than a scripted death -- the publisher ended its route normally, and whether
+# the broker saw the terminal sample or the exit first decided whether the
+# record appeared at all -- so it was present on some boots and absent on
+# others. A plane missing from this transcript would mean a peer died and the
+# broker did not notice, which is the failure mode that wedges a route worker
+# forever.
 EXPECTED_FAULTS: tuple[str, ...] = ("call", "operation", "stream")
 PEER_DEATH_EVENT = 8
 

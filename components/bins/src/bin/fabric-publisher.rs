@@ -69,6 +69,11 @@ const RING_BASE: u64 = 0x0000_0011_0000_0000;
 const RING_BYTES: usize = 4096;
 
 const ROUTE_NAME: &str = "telemetry";
+/// C8.14: when set, this publisher exits without publishing its terminal
+/// sample, so the fabric observes a genuine stream-family peer death rather
+/// than an orderly end. Compile-time, like the interposition hop's early exit,
+/// so no plane gains an ambient switch and the product image cannot carry it.
+const STREAM_EARLY_EXIT: bool = option_env!("SLIME_FABRIC_STREAM_EARLY_EXIT").is_some();
 
 /// Inline samples published before the terminal one. Two is enough to prove the
 /// fabric preserves sequence across the inline path without making the
@@ -245,11 +250,18 @@ fn main(_startup_arg: u32) {
         publish(&mut ring, &inline_payload(sequence), false);
     }
     slime_rt::debug_write(b"[fabric-publisher] stall-window samples published\n");
-    publish(
-        &mut ring,
-        &inline_payload(INLINE_SAMPLES + STALL_SAMPLES + 1),
-        true,
-    );
+    // C8.14: on the fault variant this route's publisher leaves without ending
+    // its stream, which is the one stream-family degradation no participant can
+    // otherwise ask for -- an orderly `FLAG_LAST` and a peer death are mutually
+    // exclusive, so the fault must be scripted the way the interposition hop's
+    // is. Every other plane publishes the terminal sample as before.
+    if !STREAM_EARLY_EXIT {
+        publish(
+            &mut ring,
+            &inline_payload(INLINE_SAMPLES + STALL_SAMPLES + 1),
+            true,
+        );
+    }
     // C8.13.2: gated to the traffic plane, so the standalone stream/QoS
     // fixtures — whose declared `traceDepth` is sized for the records C8.11
     // already emits — never receive these and never drop one.

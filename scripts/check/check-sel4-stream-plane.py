@@ -316,6 +316,13 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # Not inferred from a delivery failure or a timeout: C8.5 requires
             # loss, expiry, retry exhaustion, and peer death to stay
             # distinguishable, and this is the one this plane reaches.
+            #
+            # The death is scripted -- this plane's `fabric-publisher` is built
+            # to exit without publishing its terminal sample -- because an
+            # orderly `FLAG_LAST` and an observed mid-stream death are mutually
+            # exclusive. Before that, the marker came from the peer's exit
+            # racing the broker's drain, so this chain asserted a scheduling
+            # accident rather than the property it names.
             r"\[fabric\] QoS peer dead",
         ),
     ),

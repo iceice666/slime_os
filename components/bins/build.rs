@@ -30,10 +30,14 @@ fn main() {
         Err(_) => {}
     }
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_PROXY_EARLY_EXIT");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_EARLY_EXIT");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(value) = std::env::var("SLIME_FABRIC_PROXY_EARLY_EXIT") {
         println!("cargo:rustc-env=SLIME_FABRIC_PROXY_EARLY_EXIT={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_STREAM_EARLY_EXIT") {
+        println!("cargo:rustc-env=SLIME_FABRIC_STREAM_EARLY_EXIT={value}");
     }
     if let Ok(value) = std::env::var("SLIME_GENERATION_CANDIDATE") {
         println!("cargo:rustc-env=SLIME_GENERATION_CANDIDATE={value}");

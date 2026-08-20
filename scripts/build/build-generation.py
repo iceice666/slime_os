@@ -2243,6 +2243,10 @@ def build_rust_components(
         environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
     else:
         environment.pop("SLIME_FABRIC_PROXY_EARLY_EXIT", None)
+    if environment.get("SLIME_FABRIC_STREAM_EARLY_EXIT") == "1":
+        environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
+    else:
+        environment.pop("SLIME_FABRIC_STREAM_EARLY_EXIT", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:

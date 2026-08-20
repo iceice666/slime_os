@@ -1,0 +1,156 @@
+# B75: three planes asserted a peer-death property that only a race produced
+
+| Field | Value |
+|---|---|
+| Date | 2026-08-20 |
+| Kind | Defect |
+| Status | Fixed |
+| Scope | `components/bins/src/bin/fabric-service.rs` publisher supervision sweep, `components/bins/src/bin/fabric-publisher.rs`, `components/bins/build.rs`, `scripts/build/build-{sel4,generation}.py`, `scripts/check/check-sel4-{fabric-aggregate,fault-plane,qos-plane,stream-plane}.py` |
+| Roadmap | B75, B74, C8.5, C8.14, C8.15 |
+| Gates | `just sel4_fabric_aggregate_check`, `just sel4_fault_check`, `just sel4_stream_check`, `just sel4_qos_check` |
+| Trigger | B74's second signature: a byte-identical trace comparison diverging on the fault plane's stream route under host load |
+| Baseline | `1bc21a6` closed B75's call-broker wedge; the divergence half was left open by [`devlog/2026-08-20-b74-aggregate-flake/`](../2026-08-20-b74-aggregate-flake/index.md) |
+
+## Summary
+
+The fabric broker concluded a publisher's death from supervision alone, which
+races that publisher's own final write: a peer that publishes `FLAG_LAST` and
+returns is *already terminated* while its terminal sample is still queued in the
+ring. Whichever observation the sweep reached first decided whether the route
+ended orderly or was reported dead — so one composition, booted twice, could
+produce different traces. The sweep now latches the termination and concludes
+death only from a drain that ran after the latch, which makes the outcome
+independent of the race. Three planes turned out to depend on the losing side of
+it: the fault plane's stream `EXPECTED_FAULTS` entry, and the stream and QoS
+planes' `[fabric] QoS peer dead` markers, were satisfied *only* by the bug. Each
+now scripts a real publisher death instead. Two prose claims in gate and build
+sources were wrong and are corrected here, one of them attributing the marker to
+a subscriber path that has never existed.
+
+## Observable symptom
+
+- Command: `just sel4_fabric_aggregate_check`
+- Expected: two boots of one declared composition emit byte-identical semantic traces.
+- Observed, under 24 spinners on 18 cores: the fault schedule's stream route
+  differed between boots — one boot carried a `kind=fault order=peer-death` record
+  for the telemetry route, the other did not.
+- Exit/fault/serial evidence: no fault, no panic. The differing record is
+  `kind=fault order=peer-death now=50 route=fade05446b2c7013 … event=8`; the
+  boot without it ended the same route orderly instead.
+
+## Investigation log
+
+| Step | Observation | Consequence |
+|---|---|---|
+| 1 | The sweep at `fabric-service.rs:1133` concluded death from `supervision_status` alone, with no reference to ring state | Termination and drain are independent observations, and only one was consulted |
+| 2 | `fabric-publisher` publishes its terminal `FLAG_LAST` sample and returns immediately | The peer is terminated while its last sample is still queued: the two observations are simultaneous by construction, not merely adjacent |
+| 3 | `call_broker.rs` and `operation_broker.rs` already answer this exact race — `retire_server` and `receive_time` classify from an *empty input*, not from termination | The pattern was established in two sibling brokers; the stream sweep alone had not adopted it |
+| 4 | A plain `drained` flag is unsound: a ring can read `Empty` *before* the peer's final write | Emptiness must be invalidated by a later termination observation, so the flag has to be ordered against the latch rather than merely conjoined with it |
+| 5 | `subscriber.ended` is assigned at exactly one site, `announce_end` (`:1969`), driven by `route_finished` (`:1988`) over `finished` — which the death path still sets | Deferring the death conclusion cannot wedge the exit predicate. Checked before editing, since the fix delays a terminal transition |
+| 6 | After the fix the aggregate failed: traffic emitted 139 records against the shared `EXPECTED_TRACE_RECORDS = 140` | The old constant was satisfied on the traffic plane *only* by the race. Measured independently: traffic 139, fault 140 — the planes genuinely differ by one record |
+| 7 | The fault plane's stream record moved from `now=50` to `now=100` | It is now emitted after the drain rather than at the race, which is the intended ordering |
+| 8 | `just sel4_stream_check` and `just sel4_qos_check` then failed on `missing marker: [fabric] QoS peer dead` | Two more planes depended on the same race, and neither is covered by the aggregate — the passing aggregate had not exercised them |
+| 9 | The stream plane's own transcript shows it completing cleanly, both subscribers `done`, with no participant death at all | Its "peer death is a distinct structured event" chain was asserting a scheduling accident |
+| 10 | `grep -n "QoS peer dead" components/bins/src/bin/fabric-service.rs` returns exactly one line, `:1175`, inside the **publisher** sweep | The QoS gate's chain label, "a departed subscriber is retired through the peer-dead path", is misattributed: no subscriber path has ever emitted this marker |
+
+## Root cause
+
+The publisher supervision sweep classified a route's end from one observation
+(`supervision_status`) when the condition it was testing requires two. A
+publisher that ends its stream correctly and one that dies mid-stream are
+*both* terminated; what distinguishes them is whether a `FLAG_LAST` sample is
+still in the ring. Reading only termination made the classification a function
+of scheduling — under host load the sweep reached the terminated peer before
+the pump drained its ring, and the same route that ended orderly on one boot
+was reported dead on the next.
+
+The invariant violated is C8.15's: one declared composition produces one
+semantic trace. The secondary damage is that three planes had been *passing* on
+the wrong side of the race, so the property each named — "peer death is a
+distinct structured event" — was never actually exercised by any of them.
+
+## Changes
+
+| Area | Change | Restored invariant |
+|---|---|---|
+| `fabric-service.rs` `Publisher` | Added `terminated` and `drained`. Termination is latched, not acted on; the latch clears `drained`, discarding any emptiness seen before it | Death is concluded only from a drain that ran after the termination observation |
+| `fabric-service.rs` `pump_publisher` | Records whether the pass consumed the ring to `Empty`. Frame exhaustion breaks with samples queued and is deliberately not a drain | A deferred conclusion, never a lost or a false one |
+| `fabric-publisher.rs` | `STREAM_EARLY_EXIT`, an `option_env!` compile-time flag, skips the terminal publish alone — the occupancy report stays reachable so `PARTICIPANT_MAPPINGS["publisher"] = 1` still holds | A scripted death, on the interposition hop's own precedent, with no ambient switch and no product image carrying it |
+| `build.rs`, `build-generation.py`, `build-sel4.py` | Propagate the flag; `STREAM_DEATH_VARIANTS` sets it for the `stream`, `qos`, and `fault` variants | Every plane asserting peer death scripts one |
+| `check-sel4-fabric-aggregate.py` | `EXPECTED_TRACE_RECORDS` split per plane (traffic 139, fault 140), with an import-time guard that the keys are `PLANES` labels | A plane rename fails at import with its reason, not at the assertion looking like a broker regression |
+| `check-sel4-fault-plane.py` | `EXPECTED_FAULTS` docstring rewritten; it claimed the call and operation servers are scripted and the stream broker observes its clock peer leave — **both false** | The gate's stated rationale matches what the plane does |
+| `check-sel4-qos-plane.py` | Chain relabelled from "a departed subscriber" to "a departed publisher" | The chain names the participant that actually departs |
+
+## Regression guards
+
+| Risk | Guard | Failure signal |
+|---|---|---|
+| The sweep concludes death from termination alone again | `just sel4_fabric_aggregate_check` | A traffic-plane boot emits 140 records against the expected 139, or the two boots diverge on a `peer-death` row |
+| A plane asserts peer death without scripting one | `just sel4_stream_check`, `just sel4_qos_check`, `just sel4_fault_check` | `missing marker: [fabric] QoS peer dead` — which is exactly how this defect's remaining reach was found |
+| A plane rename silently drops its record count | `just sel4_fabric_aggregate_check` | Import-time `SystemExit` naming the mismatched key set |
+
+## Verification
+
+| Command/scenario | Result | Evidence class |
+|---|---|---|
+| `just sel4_fabric_aggregate_check` | Pass: "2 schedules over one declared composition each passed their own plane gate on two independent boots and produced 279 byte-identical semantic-trace records in total" (139 + 140 across four boots) | Direct |
+| `just sel4_fault_check` | Pass: "3 peer-death faults observed, with 8 isolation markers intact" | Direct |
+| `just sel4_stream_check` | Pass: 57 markers across 14 causal chains, with the death now scripted | Direct |
+| `just sel4_qos_check` | Pass: 14 markers across 9 causal chains, all six participants exited cleanly | Direct |
+| `just sel4_traffic_check` | Pass | Direct |
+| `just sel4_saturation_check` | Pass: 19 participants, ceilings met, no route worker deadlocked | Direct |
+| `just sel4_matrix_check`, `just sel4_visibility_check` | Pass | Direct |
+| `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos` | Clean | Direct |
+
+## Decisions
+
+- Decision: latch the termination, then conclude death only from a drain that follows it.
+- Rationale: it makes the outcome independent of which observation wins. A queued
+  `FLAG_LAST` is always consumed before the ring reads `Empty`, so an orderly exit
+  always sets `finished` first and is skipped, while a mid-stream death always drains
+  to `Empty` without ever setting it and is always reported.
+- Rejected alternative: a plain `drained` flag conjoined with termination. Unsound —
+  a ring can read `Empty` before the peer's final write, so an emptiness observed
+  earlier would authorise a death that never happened.
+- Decision: script a genuine publisher death on the stream, QoS, and fault planes.
+- Rationale: an orderly `FLAG_LAST` and an observed mid-stream death are mutually
+  exclusive, so a plane asserting peer death as a distinct structured event has to
+  script one. Leaving the marker to a race meant the assertion passed without the
+  property ever holding.
+- Rejected alternative: relaxing the stream and QoS chains to tolerate the marker's
+  absence. That would retire a C8.5 property rather than verify it, and would leave
+  both planes asserting something nothing on them exercises.
+- Decision: split `EXPECTED_TRACE_RECORDS` per plane rather than re-blessing one number.
+- Rationale: the planes emit different record counts, and measurement shows the shared
+  constant held on traffic only because of the defect.
+
+## Open risks and follow-ups
+
+- [ ] No mutation-backed regression guard for the sweep itself. The broker is not
+      host-testable: `components/bins/tests/` does not exist and the module is not in
+      `components/bins/src/lib.rs`. The gates above catch the behaviour end-to-end,
+      but nothing fails fast on the ordering in isolation.
+- [ ] B74's fourth signature is untouched by this fix: `G-gate-24/run1.log`'s
+      call-plane `kind=call order=data now=0 correlation=4 sequence=5` against
+      `sequence=4`. It is a different route family and a different mechanism.
+- [ ] `supervision_slot_for` memoizes per component (`fabric-service.rs:2469-2475`)
+      while `Publisher` is per route (`:889`), so a component publishing on two routes
+      shares one supervision slot. Not reached by any current fixture; latent.
+- [ ] `.died` remains vestigial beyond the `:1102` skip guard.
+- [ ] `pump_publisher` cannot set `drained` while zero frames are free, so a death
+      conclusion is deferred through frame exhaustion. Benign — `release_frame` runs as
+      subscribers drain and KEEP_LAST evicts a stalled one, and `just
+      sel4_saturation_check` exercises exactly that at tightened ceilings — but it is a
+      liveness dependency the sweep now has and did not have before.
+
+## Artifacts and provenance
+
+- Focused report: this entry; the measured record counts and the moved `now=` stamps
+  are quoted inline above.
+- Raw transcript: the load campaign's per-run logs under `$HOME/.b75/M-b75-fix/`
+  are outside the repository and are not reproduced here.
+- Serial/debugger/model output: the three post-fix fault-plane peer-death rows are
+  quoted in the investigation log.
+- Related roadmap item: [B75](../../roadmap/00-backlog.md), and
+  [`devlog/2026-08-20-b74-aggregate-flake/`](../2026-08-20-b74-aggregate-flake/index.md),
+  which left this half open.

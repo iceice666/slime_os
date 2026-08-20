@@ -255,6 +255,18 @@ struct Publisher {
     /// peer death to stay distinguishable from an orderly end, and a native
     /// Endpoint reports neither: the supervision handle is the only observer.
     died: bool,
+    /// Set once supervision has reported this publisher terminated. The
+    /// observation is latched rather than acted on, because it races the ring:
+    /// a peer that wrote its last sample and exited is terminated while that
+    /// sample is still queued, and concluding death there would both lose the
+    /// sample's orderly end and make the trace depend on which side won.
+    terminated: bool,
+    /// Set when the last pump consumed this publisher's ring to `Empty`, and
+    /// cleared when it stopped early on frame exhaustion or when `terminated`
+    /// latches. Death is concluded only from a drain that ran *after* the
+    /// termination observation, so an emptiness observed before the peer's
+    /// final write cannot authorise it.
+    drained: bool,
     qos: TransportQos,
     last_assertion_ns: u64,
     retained: StreamHistory,
@@ -889,6 +901,8 @@ fn provision_edge(
                 supervision_slot: supervision_slot_for(component),
                 finished: false,
                 died: false,
+                terminated: false,
+                drained: false,
                 qos,
                 last_assertion_ns: 0,
                 retained: StreamHistory::new(qos.retained_depth.max(1) as usize)
@@ -1098,16 +1112,47 @@ fn broker(
         // generation granted is the only thing that reports the difference, so
         // it is what C8.5's peer-death event is derived from -- observed once,
         // and kept distinct from the orderly `finished` end.
+        //
+        // Termination alone does not establish that end, though, because it
+        // races the ring. A publisher that writes its final `FLAG_LAST` sample
+        // and returns is *already terminated* while that sample is still
+        // queued, so a sweep that concluded death from supervision alone would
+        // report peer death or an orderly end depending on which observation
+        // won -- the same race `retire_server` and `receive_time` answer
+        // elsewhere, and the reason this route's fault record differed between
+        // two boots of one composition.
+        //
+        // So classify the way `receive_time` does: only from an empty input.
+        // The termination is latched here, the latch invalidates any emptiness
+        // seen before it, and the conclusion waits for a drain that runs after
+        // it. That ordering is what makes the outcome independent of the race:
+        // a queued `FLAG_LAST` is always consumed before the ring reads
+        // `Empty`, so an orderly exit always sets `finished` first and is
+        // skipped below, while a publisher that died mid-stream drains to
+        // `Empty` without ever setting it and is always reported.
         for publisher in publishers.iter_mut().flatten() {
             if publisher.finished || publisher.died {
                 continue;
             }
-            // `Ok(None)` is "still running"; a terminated peer reports its
-            // termination kind, which is the observation this needs.
-            if matches!(
-                slime_rt::supervision_status(publisher.supervision_slot),
-                Ok(None)
-            ) {
+            if !publisher.terminated {
+                // `Ok(None)` is "still running"; a terminated peer reports its
+                // termination kind, which is the observation this needs.
+                if matches!(
+                    slime_rt::supervision_status(publisher.supervision_slot),
+                    Ok(None)
+                ) {
+                    continue;
+                }
+                publisher.terminated = true;
+                // A drain observed before this instant says nothing about what
+                // the peer wrote on its way out, so it is discarded rather than
+                // counted: the next pump re-establishes it against the final
+                // ring contents.
+                publisher.drained = false;
+                progressed = true;
+                continue;
+            }
+            if !publisher.drained {
                 continue;
             }
             let route = publisher.route;
@@ -1368,6 +1413,11 @@ fn pump_publisher(
         .unwrap_or_else(|_| fail(b"publisher ring attach"));
     let mut progressed = false;
     let mut ring_progressed = false;
+    // Whether this pass consumed the ring to `Empty`. Frame exhaustion breaks
+    // out with samples still queued, which is not a drain and must not be
+    // reported as one: it defers the death conclusion to a later pass rather
+    // than losing it.
+    let mut drained = false;
     loop {
         if !frames.iter().any(|frame| frame.refs == 0) {
             break;
@@ -1375,7 +1425,10 @@ fn pump_publisher(
         let mut payload = [0u8; slime_proto::fabric_ring::MAX_INLINE_BYTES];
         let (length, last) = match ring.consume(&mut payload) {
             Ok(value) => value,
-            Err(RingError::Empty) => break,
+            Err(RingError::Empty) => {
+                drained = true;
+                break;
+            }
             Err(_) => fail(b"publisher ring consume"),
         };
         let free = frames
@@ -1406,6 +1459,7 @@ fn pump_publisher(
         progressed = true;
         ring_progressed = true;
     }
+    publishers[index].as_mut().expect("publisher").drained = drained;
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     let n = slime_rt::recv(control_slot, &mut message, &mut received);

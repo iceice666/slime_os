@@ -128,6 +128,12 @@ BOOT_VARIANT = "boot"
 TRAFFIC_VARIANT = "traffic"
 SATURATION_VARIANT = "saturation"
 FAULT_VARIANT = "fault"
+
+# Planes whose gates require a stream-family peer death as a distinct structured
+# event, and which therefore script one rather than depend on a publisher's exit
+# racing the broker's drain. The product variants are deliberately absent: the
+# switch is compile-time in `fabric-publisher`, so no shipped image can carry it.
+STREAM_DEATH_VARIANTS = (STREAM_VARIANT, QOS_VARIANT, FAULT_VARIANT)
 STORAGE_VARIANT = "storage"
 STORE_VARIANT = "store"
 ROLLBACK_VARIANT = "rollback"
@@ -861,12 +867,24 @@ def build_application(
             # C8.14: the one fault this plane must *inject* rather than script.
             # Every other degradation path -- rejection, malformed reply,
             # timeout, cancellation, retry exhaustion, duplicate, stale,
-            # expiry, and both scripted peer deaths -- is already driven by the
-            # traffic action's own participants. A declared interposition hop
-            # dying is the one condition no participant can ask for, because a
-            # proxy that relays correctly cannot also be absent.
+            # expiry, and the call and operation peer deaths -- is already
+            # driven by the traffic action's own participants. A declared
+            # interposition hop dying is the one condition no participant can
+            # ask for, because a proxy that relays correctly cannot also be
+            # absent.
             generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
+        if variant in STREAM_DEATH_VARIANTS:
+            # C8.5/C8.14: the stream family's own peer death, scripted for the
+            # same reason the interposition hop's is. A publisher cannot both
+            # end its route with `FLAG_LAST` and be observed dying mid-stream,
+            # so a plane that asserts peer death is a distinct structured event
+            # has to script one. Left to a race between the peer's exit and the
+            # broker's drain -- which is what these three planes relied on --
+            # the marker appeared or did not depending on which side won, and
+            # made the fault plane's stream record differ between two boots.
+            generation_environment = generation_environment or dict(os.environ)
+            generation_environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
         root_environment["SLIME_GENERATION"] = str(
             build_sel4_generation(manifest, environment=generation_environment).resolve()
         )
