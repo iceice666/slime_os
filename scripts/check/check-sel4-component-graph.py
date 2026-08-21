@@ -106,7 +106,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 COMPATIBILITY_SOURCE_ROOTS = (
     ROOT / "slime-root" / "src",
     ROOT / "components" / "runtime" / "src",
-    ROOT / "components" / "bins" / "src",
+    # CP3: component sources are now per-crate under `components/bins/<name>/`,
+    # with the shared helpers in `components/lib` and the build-time manifest
+    # parser in `components/build-support`. All three are globbed, so the guard
+    # still reaches every surviving component source rather than one crate's.
+    ROOT / "components" / "bins",
+    ROOT / "components" / "lib" / "src",
+    ROOT / "components" / "build-support" / "src",
 )
 # The files that actually *held* the deleted model symbols: the manifest and
 # wire schemas that named `endpointCreate` as a right, the builder that encoded
@@ -114,7 +120,6 @@ COMPATIBILITY_SOURCE_ROOTS = (
 # the Rust component tree alone could not fail on any of them, so the symbols
 # would have been unenforced exactly where they lived.
 COMPATIBILITY_SOURCE_FILES = (
-    ROOT / "components" / "bins" / "build.rs",
     ROOT / "scripts" / "build" / "build-generation.py",
     ROOT / "scripts" / "check" / "check-generation.py",
     ROOT / "contracts" / "generation" / "v1" / "schema.zt",

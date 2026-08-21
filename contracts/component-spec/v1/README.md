@@ -59,7 +59,7 @@ when any field's content does.
 `generation-list` and `storage-store-probe` are declared in
 `contracts/generation/v1/fixtures/valid.zti`, in every
 `contracts/boot-layout/v1/fixtures/*.layout`, and (for `generation-list`) in
-`components/bins/src/default_fabric_profile.rs`, but no `[[bin]]` target or
+`components/lib/src/default_fabric_profile.rs`, but no `[[bin]]` target or
 source file exists for either. Both were deleted as unreachable clients of
 retired syscalls — see
 [`devlog/2026-08-10-b44-policy-labels-deleted/`](../../../devlog/2026-08-10-b44-policy-labels-deleted/index.md)

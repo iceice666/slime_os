@@ -637,13 +637,15 @@ def check_no_participant_failed(transcript: str) -> None:
 
 # Every component this graph runs. All six, with no exceptions and no allowance
 # table -- which is the difference between this milestone and P5.5.1.
+# CP3: named by component rather than by source filename, since each is now its
+# own crate whose entry point is `components/bins/<name>/src/main.rs`.
 STREAM_COMPONENTS = (
-    "fabric-service.rs",
-    "fabric-publisher.rs",
-    "fabric-publisher-b.rs",
-    "fabric-subscriber.rs",
-    "fabric-subscriber-b.rs",
-    "fabric-intruder.rs",
+    "fabric-service",
+    "fabric-publisher",
+    "fabric-publisher-b",
+    "fabric-subscriber",
+    "fabric-subscriber-b",
+    "fabric-intruder",
 )
 
 
@@ -658,7 +660,7 @@ def check_components_are_unmodified() -> None:
     """
     forbidden = ("option_env!(\"SLIME_SEL4_", "cfg!(slime_")
     for name in STREAM_COMPONENTS:
-        source = ROOT / "components" / "bins" / "src" / "bin" / name
+        source = ROOT / "components" / "bins" / name / "src" / "main.rs"
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as error:
@@ -672,7 +674,7 @@ def check_components_are_unmodified() -> None:
                 )
     print(
         "components: "
-        + ", ".join(name.removesuffix(".rs") for name in STREAM_COMPONENTS)
+        + ", ".join(STREAM_COMPONENTS)
         + " use no private compile-time product selector",
         flush=True,
     )

@@ -11,9 +11,13 @@ doctest = false
 # Every component uses the native seL4 transport: operations become `seL4_Call`s
 # on the root service endpoint and `entry!` performs real seL4 task startup.
 #
-# `heap` registers a bump `#[global_allocator]`. It is enabled only for the
-# store-plane build, where `boot-contracts/gpt` brings `extern crate alloc` into
-# the dependency graph and every binary then needs the symbol.
+# `heap` registers a bump `#[global_allocator]`. CP3 scoped it: the six
+# store-plane components declare `slime-rt/heap` and `boot-contracts/gpt` in
+# their own crates, and the builder compiles them in a separate invocation from
+# every other component. That second part is load-bearing rather than tidy —
+# Cargo unifies features across all packages in one invocation, so a plain
+# component built alongside a store component links the allocator too.
+# `just component_crate_split_check` pins both halves.
 [features]
 default = []
 heap = []

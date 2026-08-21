@@ -9,7 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 NEUTRAL_ROOTS = (
     ROOT / "components" / "runtime" / "src",
-    ROOT / "components" / "bins" / "src",
+    # CP3: component sources are per-crate; the shared helpers moved to
+    # `components/lib`. Both roots are listed so the scan still reaches
+    # every component source rather than one crate's.
+    ROOT / "components" / "bins",
+    ROOT / "components" / "lib" / "src",
     ROOT / "slime-root" / "src",
 )
 FORBIDDEN = re.compile(

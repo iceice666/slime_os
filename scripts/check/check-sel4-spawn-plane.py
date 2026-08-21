@@ -456,7 +456,7 @@ def check_spawned_children_are_unmodified() -> None:
     data, which are the contracts this gate actually boots.
     """
     for name in UNMODIFIED_CHILDREN:
-        source = ROOT / "components" / "bins" / "src" / "bin" / f"{name}.rs"
+        source = ROOT / "components" / "bins" / name / "src" / "main.rs"
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as error:

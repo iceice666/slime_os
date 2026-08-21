@@ -19,7 +19,7 @@ IMAGE = ROOT / "build" / "slime-sel4-reclamation.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-reclamation.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
-INIT = ROOT / "components" / "bins" / "src" / "bin" / "init.rs"
+INIT = ROOT / "components" / "bins" / "init" / "src" / "main.rs"
 TIMEOUT = 180
 
 

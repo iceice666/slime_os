@@ -10,8 +10,8 @@ superblocks, records, content hashes — lives in
 `boot-contracts/src/object_store.rs`, and partition selection is bounded by GPT
 validation in `boot-contracts/src/gpt.rs`. Both are host-testable and
 Miri-checkable, and both run inside the components that serve the protocol
-(`components/bins/src/bin/sel4-store-probe.rs`,
-`components/bins/src/bin/sel4-filesystem-service.rs`).
+(`components/bins/sel4-store-probe/src/main.rs`,
+`components/bins/sel4-filesystem-service/src/main.rs`).
 
 Authority is the `Block` capability the generation grants that component:
 `RIGHT_BLOCK_READ` (bit 10) is required to read sectors and `RIGHT_BLOCK_WRITE`

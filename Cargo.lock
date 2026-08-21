@@ -707,6 +707,527 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 
 [[package]]
+name = "slime-build-support"
+version = "0.1.0"
+
+[[package]]
+name = "slime-component-console"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-crossing-peer"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-dango"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-directory-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-echo-agent"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-call-client"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-call-client-b"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-call-server"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-call-time"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-call-worker"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-intruder"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-observer"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-op-client"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-op-client-b"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-op-client-b-restart"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-op-server"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-op-time"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-op-worker"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-proxy"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-publisher"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-publisher-b"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-service"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-subscriber"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-fabric-subscriber-b"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-generation-inspect"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-generation-rollback"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-generation-select"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-generation-stage"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-init"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-powerbox-chooser"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-powerbox-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-reclamation-fault"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sample-lender"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sample-receiver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sample-worker"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-directory-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-filesystem-service"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-generation-client"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-generation-manager"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-input-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-recovery-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-rollback-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-storage-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-store-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sel4-transfer-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-spawn-service"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-storage-fault-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-storage-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-storage-writer"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-supervision-child"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-sysinfo"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-components"
 version = "0.1.0"
 dependencies = [

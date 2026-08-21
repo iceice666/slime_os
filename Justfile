@@ -421,11 +421,29 @@ fmt_check:
     cargo fmt --all --check
     cargo fmt --manifest-path slime-root/child/Cargo.toml --check
 
+# The runtime, the protocol library, the shared component library, the
+# build-support crate, and all 52 component crates.
+#
+# The package list is derived from `cargo metadata` rather than written out,
+# because neither shortcut works: there is no `components/Cargo.toml` — the
+# component crates are members of the *root* workspace through the
+# `components/bins/*` glob — so `cargo fmt --all` from here resolves the root
+# manifest and would also format `slime-root` and `stage0`, duplicating
+# `fmt_sel4_root`/`fmt_stage0` and making this recipe's name a lie. And unlike
+# `cargo build`/`clippy`, `cargo fmt` accepts neither a `-p` glob ("package
+# `slime-component-*` is not a member of the workspace") nor `--exclude`
+# ("unexpected argument"). Deriving the list keeps a new component crate from
+# having to edit this recipe.
+[private]
+_component_packages:
+    @cd components && cargo metadata --format-version 1 --no-deps \
+        | python3 -c 'import json,sys; print(" ".join("-p " + p["name"] for p in json.load(sys.stdin)["packages"] if p["name"].startswith("slime-component") or p["name"] in {"slime-rt","slime-proto","slime-components","slime-build-support"}))'
+
 fmt_components:
-    cd components && cargo fmt -p slime-rt -p slime-proto -p slime-components
+    cd components && cargo fmt $(just _component_packages)
 
 fmt_check_components:
-    cd components && cargo fmt -p slime-rt -p slime-proto -p slime-components -- --check
+    cd components && cargo fmt $(just _component_packages) --check
 
 fmt_stage0:
     cd stage0 && cargo fmt
@@ -641,6 +659,20 @@ system_spec_check: component_spec_check
     python3 scripts/check/check-system-spec.py
     python3 scripts/generate/generate-generation-from-spec.py --check
 
+# CP3's crate-per-component boundary: every component is its own workspace
+# package with one binary and no private manifest parser, the allocator is
+# scoped to the six crates that declare it and matches the builder's store
+# group, every package carries a release-profile stanza, and no shared source
+# remains in `components/bins`.
+#
+# The allocator arm is the one that needs a gate rather than review. Cargo
+# unifies features across every package named in one invocation, so building a
+# plain component beside a store component links a `#[global_allocator]` into
+# the plain one — measured directly, as 6 heap symbols appearing in the
+# `slime_rt` rlib a mixed invocation produced against 0 in a grouped one.
+component_crate_split_check: component_spec_check
+    python3 scripts/check/check-component-crate-split.py
+
 # CP2's runtime binding resolution: a component asks the root which of its own
 # slots holds a named binding instead of compiling the number in. An unprefixed
 # name is a manifest grant; `executable:`/`channel:` reach the boot layout's two
@@ -797,8 +829,16 @@ lint_sel4_root clippy_flags='-D warnings':
         --target "$targets/aarch64-sel4-minimal.json" \
         --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- {{clippy_flags}}
     cd components
+    # `-p 'slime-component-*'` selects all 52 component crates by glob, so a new
+    # component is linted without editing this recipe. `slime-build-support` is
+    # deliberately outside that namespace: it is a host-only build-script
+    # library that does not compile for the component target, and while it was
+    # named `slime-component-build` the glob swept it in and this pass died on a
+    # `std`-dependent transitive dependency. `just component_crate_split_check`
+    # pins that naming.
     SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt \
         cargo clippy -p slime-rt -p slime-proto -p slime-components \
+        -p 'slime-component-*' \
         --target "$targets/aarch64-sel4-minimal.json" \
         --target-dir ../build/sel4-cargo/lint-components "${build_std[@]}" -- {{clippy_flags}}
 
@@ -833,12 +873,21 @@ miri:
 # Host-side unit tests for the crates that need neither QEMU nor a built seL4
 # prefix. Use the actual host triple: hardcoding Linux makes the gate fail on
 # Darwin, while omitting `--target` makes components pick its bare-metal default.
+#
+# `slime-build-support` is a host crate, so its tests need no `--target`
+# override. They are here because CP3 is what made them runnable at all: while
+# the manifest parser lived in `components/bins/build.rs`, `cargo test` never
+# built it as a test target, so its two `#[test]`s were compiled and run by
+# nothing — and had rotted into asserting real slot numbers against a fixture
+# that parsed as a single block, so they could only have failed. A parser with
+# no test is how a wrong slot number reaches a component image.
 test_host:
     #!/usr/bin/env bash
     set -euo pipefail
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cargo test --manifest-path boot-contracts/Cargo.toml --all-features
     (cd components && cargo test --target "$host" -p slime-proto)
+    cargo test -p slime-build-support
 
 # B23: `slime-root`'s mechanism modules, run on the host.
 #

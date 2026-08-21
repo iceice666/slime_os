@@ -65,7 +65,8 @@ SystemNotificationBinding :: type {
 -- `sel4-channel.zti` already encodes, and it needs no pins at all. `valid.zti`
 -- does: 44 of its 76 bindings sit at hand-picked numbers because
 -- `contracts/boot-layout/v1/fixtures/*.layout` freeze them byte for byte, and
--- `components/bins/build.rs` reads several of them out of the manifest text.
+-- `components/build-support/src/lib.rs` reads several of them out of the
+-- manifest text.
 --
 -- Three of those 44 exist for a subtler reason worth stating, because a reviewer
 -- caught it and the gate did not: dropping the four bindings that name no grant

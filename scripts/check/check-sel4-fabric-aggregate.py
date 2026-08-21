@@ -159,14 +159,14 @@ SEMANTIC_FIELDS: tuple[str, ...] = (
 #
 # `sequence` is a per-instant *arrival* ordinal, not a declared position. It is
 # assigned onto a record from the live counter in `Trace::blank`
-# (`components/bins/src/fabric_trace_log.rs:233`) and advanced by `Trace::push`
+# (`components/lib/src/fabric_trace_log.rs:233`) and advanced by `Trace::push`
 # on every attempt including a refused one (`:255`), so where two independent
 # peers are live in one instant its value states only which of them arrived
 # first. That is the cross-activity arrival order B68's grouping was introduced
 # to quarantine, one level down: the call worker's two scripted clients settle
 # requests 4 and 22 independently
-# (`components/bins/src/bin/fabric-call-client.rs:54-58`,
-# `components/bins/src/fabric_call_scenario.rs:58-66`), both acks occur on every
+# (`components/bins/fabric-call-client/src/main.rs:54-58`,
+# `components/lib/src/fabric_call_scenario.rs:58-66`), both acks occur on every
 # boot, and only their arrival order moves.
 #
 # `high_water` is exempt *per counter* rather than outright -- see
@@ -217,18 +217,18 @@ COMPARED_COUNTERS: frozenset[int] = frozenset(
 #
 # Only the stream worker's peer death is deferred. It is concluded from a drain
 # that runs *after* the termination latch
-# (`components/bins/src/bin/fabric-service.rs:1136-1180`), and B75 made the
+# (`components/bins/fabric-service/src/main.rs:1136-1180`), and B75 made the
 # record's presence independent of that race without fixing which instant the
 # drain completes in -- a record's stamp is whatever `self.now_ns` had reached
-# when `Trace::blank` built it (`components/bins/src/fabric_trace_log.rs:234`).
+# when `Trace::blank` built it (`components/lib/src/fabric_trace_log.rs:234`).
 # Measured directly: the same scripted death stamped `now=50` on one boot and
 # `now=100` on the next.
 #
 # The call and operation workers' peer-death records are *not* deferred and stay
 # compared. Each is emitted by a `retire_server` whose only call site is an
 # `observe_server_death` that acts straight off the supervision read
-# (`components/bins/src/call_broker.rs:773` from `:1545-1559`,
-# `components/bins/src/operation_broker.rs:297` from `:1321-1335`), with no drain
+# (`components/lib/src/call_broker.rs:773` from `:1545-1559`,
+# `components/lib/src/operation_broker.rs:297` from `:1321-1335`), with no drain
 # between. Their stamps are fixed in every captured transcript.
 DEFERRED_INSTANT_RECORDS: frozenset[tuple[str, str]] = frozenset({("stream", "peer-death")})
 

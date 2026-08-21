@@ -39,12 +39,18 @@ CHECKER = CONTRACT_ROOT / "check.zt"
 SPEC_ROOT = CONTRACT_ROOT / "components"
 INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interfaces"
 JUSTFILE = ROOT / "Justfile"
-COMPONENT_MANIFEST = ROOT / "components" / "bins" / "Cargo.toml"
+COMPONENT_CRATE_ROOT = ROOT / "components" / "bins"
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 _CONTRACT_PATH = re.compile(r"^contracts/[a-z][a-z0-9-]*/v\d+$")
 _JUST_TARGET = re.compile(r"^([a-z][a-z0-9_]*)\s*(?::|\s)", re.MULTILINE)
+# CP3: a component is its own crate under `components/bins/<name>/`, declaring
+# exactly one `[[bin]]`. Discovery is therefore a directory walk plus a
+# per-manifest read, not a scan of one shared `[[bin]]` table. The regex still
+# matches a single entry rather than trusting the directory name, so a crate
+# whose bin name disagrees with its directory is a resolution failure instead of
+# an invisible rename.
 _BIN_ENTRY = re.compile(
     r"\[\[bin\]\]\s*\nname\s*=\s*\"([^\"]+)\"\s*\npath\s*=\s*\"([^\"]+)\""
 )
@@ -193,8 +199,40 @@ def just_targets() -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def workspace_binaries() -> tuple[tuple[str, str], ...]:
-    """The `[[bin]]` name-to-path pairs of `components/bins/Cargo.toml`."""
-    return tuple(_BIN_ENTRY.findall(COMPONENT_MANIFEST.read_text(encoding="utf-8")))
+    """Every component binary the workspace builds, as `(name, path)` pairs.
+
+    CP3: each component is its own crate under `components/bins/<name>/`, so
+    this walks those directories instead of scanning one shared `[[bin]]` table.
+    The pair's path is repository-relative. The single-crate table's was
+    crate-relative (`src/bin/console.rs`), so this is a deliberate change, not a
+    preserved shape: with 52 crates a bare `src/main.rs` would name 52 different
+    files. Neither current consumer reads the path — `check-component-spec.py`
+    and `check-component-crate-split.py` both take `dict(...)` keys — so the
+    change is inert today and stated here for the caller that starts using it.
+
+    A crate declaring anything other than exactly one `[[bin]]`, or whose bin
+    name does not match its directory, is a failure rather than a skip. Both
+    would otherwise make a component invisible here while still building: the
+    spec corpus would resolve `undeclared` for a component that ships, which is
+    the drift class B70 records.
+    """
+    found: list[tuple[str, str]] = []
+    for manifest in sorted(COMPONENT_CRATE_ROOT.glob("*/Cargo.toml")):
+        entries = _BIN_ENTRY.findall(manifest.read_text(encoding="utf-8"))
+        directory = manifest.parent.name
+        if len(entries) != 1:
+            raise SystemExit(
+                f"component crate {directory!r} declares {len(entries)} [[bin]] entries; "
+                "each component crate declares exactly one"
+            )
+        name, path = entries[0]
+        if name != directory:
+            raise SystemExit(
+                f"component crate {directory!r} declares [[bin]] {name!r}; "
+                "the crate directory and its binary must share one name"
+            )
+        found.append((name, str((manifest.parent / path).relative_to(ROOT))))
+    return tuple(found)
 
 
 @lru_cache(maxsize=None)

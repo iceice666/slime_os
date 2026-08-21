@@ -110,7 +110,7 @@ kinds; those kinds and their syscalls were deleted with that kernel. Their
 mechanisms live where they belong now: sectors behind a `Block` capability, and
 the object store, generation management, rollback, and recovery entirely in
 userspace components over that capability
-(`components/bins/src/bin/sel4-{store,generation-manager,rollback,recovery}-*.rs`,
+(`components/bins/sel4-{store,generation-manager,rollback,recovery}-*/src/main.rs`,
 `boot-contracts/src/object_store.rs`). Reassign the bits deliberately; do not
 assume they still mean what a pre-cutover document says.
 

@@ -374,6 +374,28 @@ SEL4_MANIFESTS = {
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
+# The components whose crates declare `boot-contracts/gpt` and `slime-rt/heap`,
+# and so link a `#[global_allocator]`. CP3 scoped that allocator to exactly
+# these six by moving the feature declaration into their own manifests; this set
+# is what keeps the *build* honest about it, because Cargo unifies features
+# across every package named in one invocation, so a plain component compiled
+# alongside one of these would silently gain the heap too.
+#
+# Declared here rather than read from the manifests because it must be the
+# builder's own statement of the split: `just component_crate_split_check`
+# compares it against what the crates actually declare, so a component gaining
+# an allocator without moving groups is a gate failure rather than a silent
+# regrouping.
+STORE_COMPONENTS = frozenset(
+    {
+        "sel4-filesystem-service",
+        "sel4-generation-manager",
+        "sel4-recovery-probe",
+        "sel4-rollback-probe",
+        "sel4-store-probe",
+        "sel4-transfer-probe",
+    }
+)
 PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
@@ -2269,58 +2291,57 @@ def build_rust_components(
         target_name = f"generation-{generation_number}"
     target_dir = component_target_dir(COMPONENTS_TARGET_DIR, target_profile, target_name)
     environment["CARGO_TARGET_DIR"] = str(target_dir)
-    command = [
+    base = [
         "cargo",
         "build",
         "--release",
         "--target",
         cargo_target_argument(target_profile),
-        "-p",
-        "slime-components",
     ]
+    # CP3: one package per component, so the build names packages rather than
+    # `--bin` targets of one crate. Each invocation is a *group* of packages
+    # sharing a feature set, not one call per component: 52 cargo startups per
+    # plane across 29 fixtures is a real cost, and grouping keeps it at today's.
+    invocations: list[list[str]] = []
     if is_json_target(target_profile):
-        features = ["sel4"]
         # The Dango command profile is generated from a manifest, and it must be
         # *this* generation's: the profile's executable slots are spawn-grant
         # positions, so a profile built from the oracle's manifest would name
         # slots this generation never grants.
         command_manifest = sel4_manifest or "sel4"
         environment["SLIME_COMMAND_PROFILE_MANIFEST"] = f"{command_manifest}.zti"
-        # GPT validation and the object store come from `boot-contracts/gpt`,
-        # which needs an allocator. `extern crate alloc` in a dependency makes
-        # every binary in the crate require a `#[global_allocator]`, so the
-        # feature is enabled only for the build whose components declare a heap.
-        if components is not None and any(
-            name in components
-            for name in (
-                "sel4-store-probe",
-                "sel4-rollback-probe",
-                "sel4-recovery-probe",
-                "sel4-generation-manager",
-                "sel4-filesystem-service",
-                "sel4-transfer-probe",
-            )
-        ):
-            features.append("store")
-        command += ["--no-default-features", "--features", ",".join(features)]
-        # Build exactly the binaries this generation declares, rather than every
-        # binary in the crate. The fabric components are compiled against a
+        # Build exactly the components this generation declares, rather than
+        # every component crate. The fabric components are compiled against a
         # generated C8 profile this target has no graph for, so building them
         # would fail on constants that describe routes the generation does not
-        # declare. Naming the binaries keeps the build's contents equal to the
+        # declare. Naming the packages keeps the build's contents equal to the
         # manifest's, which is the same property the boot layout already has.
         if components is None:
             fail("seL4 component builds must name the components to build")
-        for component in sorted(components):
-            command += ["--bin", component]
-        command += [
-            "-Z",
-            "json-target-spec",
-            "-Z",
-            "build-std=core,alloc,compiler_builtins",
-            "-Z",
-            "build-std-features=compiler-builtins-mem",
-        ]
+        # CP3: the allocator is scoped to the components that actually need it,
+        # by declaring `boot-contracts/gpt` and `slime-rt/heap` in those six
+        # crates' own manifests. Grouping the build by that split is what makes
+        # the scoping real: Cargo unifies features across every package in one
+        # invocation, so building a store component alongside a plain one would
+        # switch `#[global_allocator]` on for the plain one too — measured, not
+        # assumed. Two invocations keep the plain group's `slime-rt` heap-free.
+        store = sorted(name for name in components if name in STORE_COMPONENTS)
+        plain = sorted(name for name in components if name not in STORE_COMPONENTS)
+        for group in (plain, store):
+            if not group:
+                continue
+            command = list(base)
+            for component in group:
+                command += ["-p", f"slime-component-{component}"]
+            command += [
+                "-Z",
+                "json-target-spec",
+                "-Z",
+                "build-std=core,alloc,compiler_builtins",
+                "-Z",
+                "build-std-features=compiler-builtins-mem",
+            ]
+            invocations.append(command)
         # `components/.cargo/config.toml` keys `rustflags` by triple, so a JSON
         # target inherits none of them. Passing the determinism-relevant ones
         # explicitly keeps the link reproducible instead of silently dropping
@@ -2347,16 +2368,30 @@ def build_rust_components(
         # depends on. The JSON-target branch above can set `RUSTFLAGS` freely
         # because a JSON target inherits none of those to begin with.
         remap = f"--remap-path-prefix={ROOT}=."
+        # Guarded like the JSON branch above. Before CP3 `-p slime-components`
+        # sat in the shared prefix, so both branches were package-scoped
+        # unconditionally; building the `-p` list from `components` means an
+        # empty set would leave a bare `cargo build` that resolves the root
+        # workspace and builds every default member for a bare-metal target.
+        # Unreachable today — `build_sel4_generation` is the only caller — which
+        # is why it is a guard rather than a fix.
+        if not components:
+            fail("component builds must name the components to build")
+        command = list(base)
+        for component in sorted(components):
+            command += ["-p", f"slime-component-{component}"]
         command += [
             "--config",
             f'target.{target_profile.cargo_target}.rustflags=["{remap}"]',
         ]
-    subprocess.run(
-        command,
-        cwd=ROOT / "components",
-        env=environment,
-        check=True,
-    )
+        invocations.append(command)
+    for command in invocations:
+        subprocess.run(
+            command,
+            cwd=ROOT / "components",
+            env=environment,
+            check=True,
+        )
     return target_dir / cargo_target_directory_name(target_profile) / "release"
 
 

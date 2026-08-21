@@ -68,7 +68,7 @@ BOOT_TIMEOUT_SECONDS = 180
 MAX_TASKS_SOURCE = ROOT / "slime-root" / "src" / "task.rs"
 # B65: the supervision plane's launcher and its bound moved out of init.rs into
 # their own module, so this reads the module that now declares the constant.
-INIT_SOURCE = ROOT / "components" / "bins" / "src" / "supervision_plane.rs"
+INIT_SOURCE = ROOT / "components" / "lib" / "src" / "supervision_plane.rs"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
@@ -427,7 +427,7 @@ LOOP_CHILD = "supervision-child"
 
 
 def check_loop_child_is_channel_free() -> None:
-    source = ROOT / "components" / "bins" / "src" / "bin" / f"{LOOP_CHILD}.rs"
+    source = ROOT / "components" / "bins" / LOOP_CHILD / "src" / "main.rs"
     try:
         text = source.read_text(encoding="utf-8")
     except OSError as error:

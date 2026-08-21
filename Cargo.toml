@@ -2,7 +2,9 @@
 resolver = "3"
 members = [
     "boot-contracts",
-    "components/bins",
+    "components/bins/*",
+    "components/build-support",
+    "components/lib",
     "components/proto",
     "components/runtime",
     "slime-root",
@@ -25,6 +27,18 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
+# Size-first codegen for every component image and the libraries linked into
+# one. `codegen-units = 1` is load-bearing rather than cosmetic: `slime-root`
+# maps a component image whole, so fewer, larger units keep it smaller.
+#
+# Named one package at a time because Cargo offers no alternative. A
+# `[profile.release.package."*"]` wildcard is accepted but deliberately does
+# *not* apply to workspace members (verified: members still compiled at
+# `opt-level=3` under it), and a glob such as `"slime-component-*"` is rejected
+# outright as an invalid package name. A new component crate must therefore add
+# its stanza here, which `just component_crate_split_check` enforces rather than
+# leaving to review.
+
 [profile.release.package.slime-components]
 opt-level = "s"
 codegen-units = 1
@@ -36,6 +50,266 @@ codegen-units = 1
 debug = false
 
 [profile.release.package.slime-rt]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-console]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-crossing-peer]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-dango]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-directory-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-echo-agent]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-call-client]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-call-client-b]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-call-server]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-call-time]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-call-worker]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-intruder]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-observer]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-op-client]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-op-client-b]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-op-client-b-restart]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-op-server]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-op-time]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-op-worker]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-proxy]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-publisher]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-publisher-b]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-service]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-subscriber]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-fabric-subscriber-b]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-generation-inspect]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-generation-rollback]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-generation-select]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-generation-stage]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-init]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-powerbox-chooser]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-powerbox-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-reclamation-fault]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sample-lender]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sample-receiver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sample-worker]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-directory-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-filesystem-service]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-generation-client]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-generation-manager]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-input-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-recovery-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-rollback-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-storage-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-store-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sel4-transfer-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-spawn-service]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-storage-fault-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-storage-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-storage-writer]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-supervision-child]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-sysinfo]
 opt-level = "s"
 codegen-units = 1
 debug = false

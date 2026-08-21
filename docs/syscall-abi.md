@@ -81,6 +81,63 @@ Labels are the operation numbers. Operands are the fast message registers
 A label with no surviving mechanism is refused with `-4` and reported as
 `SLIME_GRAPH unsupported service`; the caller survives.
 
+## Compatibility and versioning
+
+This is the contract a component crate outside this repository builds against.
+CP3 makes that a real audience: a component is its own crate depending on
+`slime-rt` by pinned commit, so it can be compiled against one revision of this
+ABI and admitted into a generation built from another.
+
+Within `contracts/syscall-abi/v1` (`formatVersion = 1`):
+
+- **Labels are frozen.** A number, once assigned, keeps its operation, its
+  operand packing, and its result convention forever. `contracts/syscall-abi/v1/schema.zt`
+  declares each label explicitly rather than by position, so a reordering of the
+  list cannot renumber anything, and `components/proto/tests/syscall_abi.rs`
+  pins every number against renumbering.
+- **Growth is additive only**, into values no operation has used. New operations
+  take the next unused label; they never reuse one.
+- **Retired numbers stay reserved.** An operation whose mechanism is deleted
+  leaves its label unassigned rather than freeing it for reuse, and the root
+  refuses it with `-4` (`SLIME_GRAPH unsupported service`) while the caller
+  survives. That refusal is the compatibility mechanism: a component built
+  against a newer ABI that names an operation this generation does not implement
+  is denied one call, not mis-served a different one. The gap the
+  `routes-nowhere` control in `slime-root/src/ipc.rs` guards is the live
+  example, and it is guarded rather than merely documented: assigning a label
+  must remove it from that control, which is why label 40 left it when
+  `BOOT_ACTION` took the number.
+
+  The retired trap ABI's `SYS_*` 0–30 are *not* examples of this rule. Those
+  were `int 0x80` syscall numbers in a namespace that no longer exists, not
+  operation labels, and this table reuses several of those numbers for live
+  operations — `3` is `LIFECYCLE EXIT`, `4` is `SPAWN`, `9` is `UNHEALTHY`. The
+  reservation rule binds a number only once it has been assigned *as a label in
+  this namespace*; it says nothing about the deleted one.
+- **Statuses are frozen** in the same way as labels, since a caller branches on
+  them. `## Error model` below is the whole set.
+- **An incompatible change is a new major contract version** — a new
+  `contracts/syscall-abi/vN` directory — never a reinterpretation of a v1 label.
+  The superseded schema is retained as format history and type-checked, never
+  generated from, exactly as retired `contracts/generation/vN` schemas are.
+  Roadmap invariant 7 is why: a format bump is rollback-*safe by refusal*
+  rather than rollback-compatible by migration, so a v1 component meeting a v2
+  root must be refused rather than guessed at.
+
+What is *not* promised: the argument-passing mechanism below the label. Which
+registers carry an operand, whether a payload rides inline or through a transfer
+window, and the badge layout are implementation details of
+`components/runtime/src/syscall/sel4_transport.rs` and the root's dispatcher,
+versioned together with them. A component reaches them only through `slime-rt`,
+which is why the SDK pins a `slime-rt` commit rather than reimplementing the
+transport.
+
+`just contracts_check` enforces the documentation half of this: every label the
+contract declares is documented here, and every numeric row here is a declared
+label (`scripts/generate/generate-syscall-abi-bindings.py --check`). It compares
+label coverage, not prose, so the policy above is enforced by review and by the
+frozen-label test, not by that gate.
+
 ## Console service operations
 
 | Label | Operation | Operands | Result convention |

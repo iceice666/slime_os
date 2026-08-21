@@ -1,0 +1,23 @@
+[package]
+name = "slime-components"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+
+[lib]
+name = "slime_components"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+boot-contracts = { path = "../../boot-contracts" }
+slime-rt = { path = "../runtime", optional = true }
+slime-proto = { path = "../proto" }
+
+[features]
+default = ["component-runtime"]
+component-runtime = ["dep:slime-rt"]
+
+[lints]
+workspace = true

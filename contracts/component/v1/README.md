@@ -104,8 +104,11 @@ and rejection class against the generated wire bindings, under
 
 `scripts/build/build-generation.py` builds each component as:
 
-1. `cargo build --release -p slime-components` from `components/` uses the root
-   workspace while applying the component-specific Cargo target configuration.
+1. `cargo build --release -p slime-component-<name> ...` from `components/` uses
+   the root workspace while applying the component-specific Cargo target
+   configuration. CP3 made each component its own package, so the builder names
+   packages rather than `--bin` targets of one crate, in two invocations grouped
+   by whether the component declares an allocator.
    The Cargo target comes from the generation's target profile
    (`contracts/target-profile/v1`): the seL4 product profile builds for the
    `aarch64-sel4-minimal` JSON target with no linker script, while the
@@ -113,7 +116,7 @@ and rejection class against the generated wire bindings, under
    `aarch64-unknown-none` and link via `components/component.ld` or
    `components/component-aarch64.ld` at the fixed base VA (`--build-id=none`,
    `-z max-page-size=4096`, `relocation-model=static`; see
-   `components/.cargo/config.toml` and `components/bins/build.rs`) — this
+   `components/.cargo/config.toml` and `components/build-support/src/lib.rs`) — this
    step is the only language-specific one; step 2 onward accepts any static
    ELF built this way;
 2. for a segment-table profile the converter reads the ELF program headers with

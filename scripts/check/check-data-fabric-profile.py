@@ -523,7 +523,7 @@ subprocess.run(
 # The checked-in fallback is what a plain `cargo build` compiles against, so it
 # carries the product boot profile (B11) — the same profile
 # `default_boot_layout.rs` renders.
-fallback_profile = ROOT / "components/bins/src/default_fabric_profile.rs"
+fallback_profile = ROOT / "components/lib/src/default_fabric_profile.rs"
 product = builder.resolve_fabric_profile(copy.deepcopy(MANIFEST), INTERFACES, "default")
 if fallback_profile.read_text(encoding="utf-8") != builder.render_fabric_profile_rust(product):
     fail("checked-in product userspace profile is stale")

@@ -125,7 +125,9 @@ operations :: List Operation = {
   -- run (`== "traffic"`, `== "matrix"`). It is not graph data and not a
   -- binding: it is *which composition am I booted into*, a per-generation
   -- scalar. Until now the only way to know was a string compiled in from
-  -- `components/bins/build.rs`'s private per-plane profile, which is exactly
+  -- a per-plane profile private to `components/bins`'s single crate build
+  -- script (CP3 has since hoisted that parser into
+  -- `components/build-support`), which is exactly
   -- the coupling B70 names -- a component that cannot be built outside this
   -- crate because its behavior is selected at compile time by one manifest.
   --

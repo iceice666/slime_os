@@ -7,7 +7,7 @@ level and inside a record, so a fixture cannot explain itself.
 ## Why a sibling fixture, not a boot profile in `valid.zti`
 
 `valid.zti` describes the graph the retired custom kernel booted, and it remains
-the frozen regression manifest: `components/bins/build.rs` and
+the frozen regression manifest: `components/build-support/src/lib.rs` and
 `scripts/lib/interface_schema.py` still read it for build-time command and
 fabric profiles. Its `bootProfiles` mechanism resolves a component set by
 **subtraction** — `resolve_boot_profile` in `scripts/build/build-generation.py`

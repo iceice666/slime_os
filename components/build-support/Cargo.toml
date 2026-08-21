@@ -1,0 +1,20 @@
+[package]
+name = "slime-build-support"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+
+# Build-script support, so it compiles for the host rather than the component
+# target. Every component crate — in-tree or out-of-tree — depends on this from
+# `[build-dependencies]` and calls `slime_component_build::configure()` from its
+# own `build.rs`. Before CP3 this code was a private, unexported module inside
+# the single `slime-components` crate's build script, so a component outside
+# that crate had no way to reproduce it.
+[lib]
+name = "slime_build_support"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true

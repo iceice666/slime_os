@@ -596,7 +596,7 @@ def check_components_are_unmodified() -> None:
     transcript. This is the one claim the boot can never prove on its own.
     """
     for name in UNMODIFIED_COMPONENTS:
-        source = ROOT / "components" / "bins" / "src" / "bin" / f"{name}.rs"
+        source = ROOT / "components" / "bins" / name / "src" / "main.rs"
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as error:

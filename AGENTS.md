@@ -20,7 +20,7 @@ Route work by ownership before searching for a symbol. Read the named module roo
 
 1. `scripts/build/build-sel4.py` pins and builds seL4, the root task, its child fixture, and the loader image.
 2. `slime-root/src/main.rs` admits the embedded generation, creates the initial capability graph, launches components, supervises faults, and owns bounded kernel-object allocation.
-3. Components enter through `components/bins/src/bin/*.rs`; their syscall surface is `components/runtime/src/syscall.rs`, with the native transport in `components/runtime/src/syscall/sel4_transport.rs` and authoritative operations in `slime-root/src/ipc.rs` plus the owning mechanism module.
+3. Components enter through `components/bins/<component>/src/main.rs` — one crate per component (CP3) — with shared helpers in `components/lib` and build-time support in `components/build-support`; their syscall surface is `components/runtime/src/syscall.rs`, with the native transport in `components/runtime/src/syscall/sel4_transport.rs` and authoritative operations in `slime-root/src/ipc.rs` plus the owning mechanism module.
 
 ### Task-to-file index
 
@@ -34,23 +34,24 @@ Route work by ownership before searching for a symbol. Read the named module roo
 | Shared-buffer allocation, mapping, loan, accounting | `slime-root/src/shared_buffer.rs` | `slime-root/src/{buffer_adapter,transfer_window,ipc}.rs` |
 | Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, manifest fixtures below |
 | Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
-| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation/v1/fixtures/sel4-*.zti`, `components/bins/build.rs` |
+| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation/v1/fixtures/sel4-*.zti`, `components/build-support/src/lib.rs` |
 | Component image format/loading | `contracts/component/v1/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs` |
-| Userspace component behavior | `components/bins/src/bin/<component>.rs` | shared helpers in `components/bins/src/*.rs`; binary list in `components/bins/Cargo.toml` |
+| Userspace component behavior | `components/bins/<component>/src/main.rs` | shared helpers in `components/lib/src/*.rs`; the crate's own `components/bins/<component>/Cargo.toml` |
 | Userspace syscall ABI | `components/runtime/src/syscall.rs` | seL4 transport in `components/runtime/src/syscall/sel4_transport.rs`, root implementation in `slime-root/src/ipc.rs` |
 | IPC/service protocol semantics | `contracts/<protocol>/v1/schema.zt` | generated Rust in `components/proto/src/<protocol>.rs`; validators in `components/proto/src/lib.rs` |
 | Boot/persistence contract decoder | `boot-contracts/src/<contract>.rs` | generated constants/layouts in `boot-contracts/src/generated/` |
-| Fabric schemas, graph authority, stream framing | `contracts/interface-schema/v1/`, `contracts/fabric-graph/v1/`, `contracts/fabric-stream/v1/` | `boot-contracts/src/fabric_graph.rs`, `components/bins/src/bin/fabric-service.rs` |
-| Block/storage transport and services | `slime-root/src/{device,virtio_blk}.rs` | userspace services/probes in `components/bins/src/bin/sel4-*.rs` |
-| Generation management, rollback, recovery | `components/bins/src/bin/sel4-generation-manager.rs` | matching rollback/recovery/transfer components and root block mediation |
+| Fabric schemas, graph authority, stream framing | `contracts/interface-schema/v1/`, `contracts/fabric-graph/v1/`, `contracts/fabric-stream/v1/` | `boot-contracts/src/fabric_graph.rs`, `components/bins/fabric-service/src/main.rs` |
+| Block/storage transport and services | `slime-root/src/{device,virtio_blk}.rs` | userspace services/probes in `components/bins/sel4-*/src/main.rs` |
+| Generation management, rollback, recovery | `components/bins/sel4-generation-manager/src/main.rs` | matching rollback/recovery/transfer components and root block mediation |
 | Architecture, traps, interrupts, platform boot | `sel4/config/qemu-arm-virt.cmake` | `slime-root/src/{fault,platform_timer}.rs`, `scripts/build/build-sel4.py` |
 | Host build/check orchestration | `Justfile` target | implementation in `scripts/{build,check,generate,lib}/` |
 | Root behavioral regression | `slime-root/src/<module>.rs` tests | run `just test_sel4_root` and the matching `just sel4_*_check` |
 | Protocol validation regression | `components/proto/tests/<protocol>.rs` | generated protocol module and schema |
+| Adding a component | new `components/bins/<name>/` crate | `Cargo.toml` workspace member glob plus its `[profile.release.package]` stanza, a `contracts/component-spec/v1/components/` record, and a generation-manifest entry; `just component_crate_split_check` gates the shape |
 
 ### Generated-code rule
 
-Files beginning with `@generated` and files under `boot-contracts/src/generated/` are outputs, not sources. Change the matching `contracts/.../schema.zt` or `gen_rust.zt`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen`. `components/bins/build.rs` separately generates build-time command and fabric profiles from `contracts/generation/v1/fixtures/valid.zti` into `OUT_DIR`.
+Files beginning with `@generated` and files under `boot-contracts/src/generated/` are outputs, not sources. Change the matching `contracts/.../schema.zt` or `gen_rust.zt`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen`. `components/build-support` separately generates the build-time command tables from `contracts/generation/v1/fixtures/valid.zti` into each consuming crate's `OUT_DIR`, and copies the per-plane fabric profile the host builder renders.
 
 ### Navigation traps
 
