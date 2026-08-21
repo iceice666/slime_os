@@ -47,6 +47,20 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
     };
     match label {
         lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
+        // B70's boot action. Lifecycle rather than the capability table, though
+        // the label sits in that table's namespace, because the service is the
+        // *authority gate* and this operation needs the one every instance
+        // has. `declared_services` grants `SERVICE_CAPABILITY_TRANSFER` only to
+        // an instance with a spawn budget, an endpoint, or a transferable
+        // grant, which is not a proxy for "may know which composition it
+        // booted into": 30 of the 182 instances the seL4 fixtures declare hold
+        // no such grant and would be refused. Every caller here reads a refusal
+        // as "not this plane", so gating on an unrelated grant shape would pick
+        // a component's schedule by what it can delegate. `SERVICE_LIFECYCLE`
+        // is unconditional for every instance (`build-generation.py`'s
+        // `declared_services` seeds it, and 0 of 182 lack it), which states the
+        // unscoped policy the contract declares instead of approximating it.
+        capability_table_labels::BOOT_ACTION => Some(SERVICE_LIFECYCLE),
         spawn_labels::SPAWN => Some(SERVICE_SPAWN),
         supervision_labels::STATUS | supervision_labels::DERIVE => Some(SERVICE_SUPERVISION),
         capability_table_labels::DROP
@@ -1023,6 +1037,11 @@ mod tests {
                 capability_table_labels::RESOLVE_BINDING,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
+            // B70's boot action is in the capability-table label namespace but
+            // gated on lifecycle, the one service every instance declares. The
+            // pairing is the point of this assertion: the namespace a label
+            // sits in and the authority it needs are separate facts.
+            (capability_table_labels::BOOT_ACTION, SERVICE_LIFECYCLE),
             (
                 capability_transfer_labels::EXPORT,
                 SERVICE_CAPABILITY_TRANSFER,
@@ -1084,12 +1103,13 @@ mod tests {
             18,
             19,
             20,
-            // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, and 38
-            // until B70's `GRAPH_READ`. Moving one out of this list is the whole
+            // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, 38 until
+            // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, and 40 until
+            // B70's `BOOT_ACTION`. Moving one out of this list is the whole
             // change: a number this test asserts routes nowhere and a number the
             // contract declares are the same fact stated twice, so assigning a
-            // label must fail here first — as it did for 38 and 39.
-            40,
+            // label must fail here first — as it did for 38, 39 and 40.
+            41,
             64,
             sel4::Word::MAX,
         ] {

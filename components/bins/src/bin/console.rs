@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
 
+use boot_contracts::generation::BootAction;
+use slime_components::generation_composition;
 use slime_rt::{MAX_CAPS_PER_MSG, MAX_MSG};
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 
@@ -31,7 +32,7 @@ const CLOSE: &[u8] = b"SLIME.CONSOLE.CLOSE";
 fn main(_startup_arg: u32) {
     let mut buf = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    if GENERATION_BOOT_ACTION == "channel" {
+    if generation_composition::is(BootAction::Channel) {
         slime_rt::debug_write(b"[console] unrelated progress while sender blocked\n");
     }
     // CP2's runtime binding resolution, proved on the planes this component
@@ -103,7 +104,7 @@ fn main(_startup_arg: u32) {
                 // that declares the boot action but grants no factory is a
                 // contradiction worth failing on rather than probing slot 1 and
                 // hoping.
-                if GENERATION_BOOT_ACTION == "loan" {
+                if generation_composition::is(BootAction::Loan) {
                     let Some(factory) = shared_buffer_factory_slot() else {
                         slime_rt::debug_write(
                             b"[console] loan plane declares no shared-buffer factory binding\n",

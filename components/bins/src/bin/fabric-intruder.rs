@@ -32,8 +32,7 @@ use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
-use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+use boot_contracts::generation::{BootAction, RIGHT_RECV, RIGHT_SEND};
 
 slime_rt::entry!(main);
 
@@ -51,7 +50,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if GENERATION_BOOT_ACTION == "visibility" {
+    if slime_components::generation_composition::is(BootAction::Visibility) {
         visibility_main();
         return;
     }

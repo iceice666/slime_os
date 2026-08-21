@@ -29,15 +29,14 @@
 
 #![allow(dead_code)]
 
+use crate::generation_composition;
+use boot_contracts::generation::BootAction;
 use slime_proto::capability_transfer::{
     CAPABILITY_TRANSFER_MAGIC, FABRIC_REQUEST_MAGIC, FORMAT_VERSION,
     OBJECT_KIND_SHARED_BUFFER_LOAN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::valid_capability_transfer;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
-mod generation_profile {
-    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
-}
 
 /// Control endpoint to this participant's route worker. Init binds it to
 /// exactly one component at spawn, so it is also this participant's identity.
@@ -45,7 +44,7 @@ const CONTROL_SLOT: u32 = 0;
 
 /// Whether the authenticated generation declares the full-graph boot action.
 pub fn active() -> bool {
-    generation_profile::GENERATION_BOOT_ACTION == "boot"
+    generation_composition::is(BootAction::Boot)
 }
 
 /// Whether the authenticated generation declares either full-graph
@@ -59,7 +58,7 @@ pub fn active() -> bool {
 /// real behavior is C8.8's and C8.12's to exercise, under the `visibility`
 /// and `matrix` actions respectively, so both actions here still park them.
 pub fn full_graph_active() -> bool {
-    active() || generation_profile::GENERATION_BOOT_ACTION == "traffic"
+    active() || generation_composition::is(BootAction::Traffic)
 }
 
 fn fail(name: &[u8], reason: &[u8]) -> ! {

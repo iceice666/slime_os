@@ -1070,6 +1070,16 @@ pub fn graph_route_index(identity: &[u8; 32]) -> i64 {
     )
 }
 
+/// Ask the root which composition this generation declares (B70).
+///
+/// No operand and no transfer window: the answer is one scalar the root holds
+/// for the whole generation, so this is the cheapest shape in the ABI. The
+/// `BootAction` id crosses rather than the manifest's source spelling, which is
+/// the same encoding the bootstrap thread's startup argument already carries.
+pub fn boot_action() -> i64 {
+    result_of(capability_table_labels::BOOT_ACTION, &[0])
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

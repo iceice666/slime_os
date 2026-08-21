@@ -555,6 +555,30 @@ pub fn graph_route_index(identity: &[u8; 32]) -> Result<usize, i64> {
     }
 }
 
+/// Which composition the authenticated generation declares, as a `BootAction`
+/// id.
+///
+/// The id is `boot_contracts::generation::BootAction`'s frozen numeric ABI —
+/// the same number the root passes the bootstrap thread as its startup
+/// argument. This crate does not depend on `boot-contracts`, so the number is
+/// returned raw and the caller folds it back to the enum, exactly as
+/// [`graph_read`] returns rows the caller decodes with
+/// `boot_contracts::fabric_graph`.
+///
+/// Unscoped: a boot action is a property of the generation every caller already
+/// runs inside, so it names no route, component, slot, or capability and there
+/// is no per-caller answer. It exists because only the bootstrap instance is
+/// told which composition it booted, which forced every other participant to
+/// compile the answer in from a `build.rs`-private per-plane table (B70).
+pub fn boot_action() -> Result<u32, i64> {
+    let result = transport::boot_action();
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u32)
+    }
+}
+
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

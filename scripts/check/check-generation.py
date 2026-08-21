@@ -493,6 +493,12 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     for process_index, process in enumerate(process_rows):
         instance = instance_rows[process["instance"]]
         executable = executable_rows[instance[1]]
+        # B70's `BOOT_ACTION` (label 40) is gated on lifecycle precisely because
+        # this seed is unconditional, so every launched instance can ask which
+        # composition it booted into. That is load-bearing rather than
+        # incidental: each caller reads a refusal as "not this plane", so an
+        # instance denied the query would silently run another plane's schedule.
+        # The set equality below then proves lifecycle reached every process.
         required_services = {SERVICE_LIFECYCLE, SERVICE_CONSOLE}
         if executable[2] == 1 or executable[3] != 0:
             required_services.update(

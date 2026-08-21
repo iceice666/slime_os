@@ -27,9 +27,8 @@ use slime_proto::capability_transfer::{
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
-mod generation_profile {
-    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
-}
+use crate::generation_composition;
+use boot_contracts::generation::BootAction;
 
 /// Control endpoint to the matrix broker. Init binds it to exactly one
 /// component at spawn, so it is also this participant's identity.
@@ -37,7 +36,7 @@ pub const CONTROL_SLOT: u32 = 0;
 
 /// Whether the authenticated generation declares the matrix boot action.
 pub fn active() -> bool {
-    generation_profile::GENERATION_BOOT_ACTION == "matrix"
+    generation_composition::is(BootAction::Matrix)
 }
 
 /// What the broker answered.

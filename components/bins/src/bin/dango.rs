@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
+use boot_contracts::generation::BootAction;
 use slime_components::dango_runtime::{Launch, MAX_LINE_BYTES, parse};
+use slime_components::generation_composition;
 use slime_proto::{
     capability_transfer::OBJECT_KIND_DIRECTORY,
     spawn::{
@@ -46,8 +48,29 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 include!(concat!(env!("OUT_DIR"), "/dango_profile.rs"));
-mod generation_profile {
-    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+
+/// Whether this session is the scripted `dango` plane rather than an
+/// interactive console.
+///
+/// The plane drives input from a script and asserts on the echoed transcript,
+/// so it echoes whole lines at Enter while an interactive session echoes each
+/// keystroke. Read from the root (B70) rather than from a `build.rs`-private
+/// per-plane string, which is what let this component be built only inside this
+/// crate.
+///
+/// Fatal when the root cannot say, rather than defaulting. Three of the four
+/// call sites are `!scripted_plane()`, so this is the one migrated predicate
+/// where an unanswered query does not fall through to "not this plane" but
+/// actively selects the *other* echo mode. The two modes emit the same bytes in
+/// a different order, so the difference is invisible to a marker-based
+/// transcript assertion -- measured, not assumed: forcing the root to answer
+/// the wrong composition left `just sel4_dango_check` green. A mode this
+/// component cannot verify and no gate can observe must not be guessed.
+fn scripted_plane() -> bool {
+    match generation_composition::boot_action() {
+        Some(action) => action == BootAction::Dango,
+        None => fail(b"the root did not answer which composition this session is"),
+    }
 }
 
 slime_rt::entry!(main);
@@ -76,25 +99,25 @@ fn main(_startup_arg: u32) {
                 InputKey::Character(character) if character.is_ascii() && len < line.len() => {
                     line[len] = character as u8;
                     len += 1;
-                    if generation_profile::GENERATION_BOOT_ACTION != "dango" {
+                    if !scripted_plane() {
                         console(&[character as u8]);
                     }
                 }
                 InputKey::Space if len < line.len() => {
                     line[len] = b' ';
                     len += 1;
-                    if generation_profile::GENERATION_BOOT_ACTION != "dango" {
+                    if !scripted_plane() {
                         console(b" ");
                     }
                 }
                 InputKey::Backspace if len > 0 => {
                     len -= 1;
-                    if generation_profile::GENERATION_BOOT_ACTION != "dango" {
+                    if !scripted_plane() {
                         console(b"\x08 \x08");
                     }
                 }
                 InputKey::Enter => {
-                    if generation_profile::GENERATION_BOOT_ACTION == "dango" {
+                    if scripted_plane() {
                         console(&line[..len]);
                     }
                     console(b"\n");

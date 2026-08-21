@@ -118,6 +118,49 @@ operations :: List Operation = {
   -- the asker already holds, so the answer confirms a fold it computed itself
   -- and names no route it did not already name.
   operation "capabilityTable" "GRAPH_ROUTE_INDEX" 39;
+  -- B70's boot-action query: which composition the authenticated generation
+  -- declares, as `BootAction`'s frozen numeric ABI.
+  --
+  -- Every fabric component branches on this to pick which plane's schedule to
+  -- run (`== "traffic"`, `== "matrix"`). It is not graph data and not a
+  -- binding: it is *which composition am I booted into*, a per-generation
+  -- scalar. Until now the only way to know was a string compiled in from
+  -- `components/bins/build.rs`'s private per-plane profile, which is exactly
+  -- the coupling B70 names -- a component that cannot be built outside this
+  -- crate because its behavior is selected at compile time by one manifest.
+  --
+  -- The root already holds the answer and already delivers it, but only to
+  -- one instance: `main.rs` passes `boot_action.id()` as the bootstrap
+  -- thread's first C parameter and zero to every other task, so the eleven
+  -- participants that branch on it could not ask. This widens *who may ask*,
+  -- not what is disclosed.
+  --
+  -- Unscoped, and that is the whole authority argument. A boot action is a
+  -- property of the one generation every caller is already running inside, not
+  -- of any instance within it, so there is no per-caller answer to leak and no
+  -- identity to forge. It names no route, no component, no slot and no
+  -- capability, so unlike `GRAPH_READ` it discloses no graph shape: a caller
+  -- learns which composition it is part of, which its own declared behavior
+  -- already depends on.
+  --
+  -- Being unscoped is why it is gated on the *lifecycle* service rather than
+  -- the capability table this label's namespace names. The two are separate
+  -- facts: the namespace groups the generated constants, the service is the
+  -- authority the root demands before reading an argument. An operation
+  -- answerable to every instance needs the service every instance declares,
+  -- and `declared_services` gives an instance the capability-transfer service
+  -- only for a spawn budget, an endpoint, or a transferable grant -- which 30
+  -- of the 182 instances the seL4 fixtures declare do not hold. Every caller
+  -- reads a refusal as "not this plane", so gating there would let an
+  -- unrelated grant shape choose a component's schedule.
+  --
+  -- The *number* crosses, never the source spelling. `BootAction`'s ids are
+  -- already a frozen ABI the bootstrap argument carries
+  -- (`boot_action_numbering_is_frozen`), so answering with the same id keeps
+  -- one encoding for both delivery paths rather than adding a second. It also
+  -- keeps the answer in MR0 like every other scalar result, with no transfer
+  -- window and no bytes to bound.
+  operation "capabilityTable" "BOOT_ACTION" 40;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

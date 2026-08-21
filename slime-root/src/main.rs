@@ -2930,6 +2930,37 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // Which composition this generation declares (B70).
+            //
+            // Unscoped, joining `GRAPH_ROUTE_INDEX` above rather than the
+            // badge-scoped operations. The two are unscoped for different
+            // reasons and the difference is the argument: 39 answers a fold
+            // over bytes the caller supplied and so confirms something the
+            // asker already held, while this reads no operand at all and
+            // answers a property of the one generation the caller is already
+            // executing inside. There is no per-caller answer to leak and
+            // nothing a caller could learn about another; it names no route,
+            // component, slot or capability, so unlike `GRAPH_READ` it
+            // discloses no graph shape.
+            //
+            // Gated on lifecycle, not the capability table its label namespace
+            // belongs to. `ipc::service_for_root_label` records why: an
+            // operation every instance must be able to ask needs the one
+            // service every instance declares.
+            //
+            // No operand is read. The request carries none, and ignoring the
+            // word rather than validating it is what the two `OCCUPANCY`
+            // operations already do for the same reason: there is nothing for
+            // a caller to get wrong, so a length check would refuse requests
+            // that are correct.
+            //
+            // The frozen numeric id, never the source spelling. `main`'s
+            // bootstrap argument already carries exactly this number, so a
+            // component asking here and a component reading its startup
+            // argument decode one encoding rather than two.
+            capability_table_labels::BOOT_ACTION => {
+                ipc::reply(Response::success(generation.boot_action.id() as i64, 0));
+            }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(
                     generation, launched, allocator, tasks, id, &words,

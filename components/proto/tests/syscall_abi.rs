@@ -21,7 +21,7 @@ use slime_proto::syscall_abi::{
 
 #[test]
 fn operation_labels_are_frozen() {
-    let labels: [(&str, u64); 23] = [
+    let labels: [(&str, u64); 27] = [
         ("lifecycle::EXIT", lifecycle_labels::EXIT),
         ("lifecycle::UNHEALTHY", lifecycle_labels::UNHEALTHY),
         ("spawn::SPAWN", spawn_labels::SPAWN),
@@ -60,9 +60,31 @@ fn operation_labels_are_frozen() {
             "capabilityTransfer::EXPORT_FINALIZE",
             capability_transfer_labels::EXPORT_FINALIZE,
         ),
+        // CP2's binding query and B70's three graph/composition reads. These
+        // were unpinned until B70's boot action added the fourth: the list
+        // stopped at 36 while the contract had grown to 40, so any of them
+        // could have been renumbered with this test still green — the exact
+        // silent-drift class the file exists to refuse.
+        (
+            "capabilityTable::RESOLVE_BINDING",
+            capability_table_labels::RESOLVE_BINDING,
+        ),
+        (
+            "capabilityTable::GRAPH_READ",
+            capability_table_labels::GRAPH_READ,
+        ),
+        (
+            "capabilityTable::GRAPH_ROUTE_INDEX",
+            capability_table_labels::GRAPH_ROUTE_INDEX,
+        ),
+        (
+            "capabilityTable::BOOT_ACTION",
+            capability_table_labels::BOOT_ACTION,
+        ),
     ];
-    let expected: [u64; 23] = [
-        3, 9, 4, 5, 12, 32, 13, 31, 15, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36,
+    let expected: [u64; 27] = [
+        3, 9, 4, 5, 12, 32, 13, 31, 15, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37,
+        38, 39, 40,
     ];
     for ((name, actual), want) in labels.iter().zip(expected) {
         assert_eq!(*actual, want, "operation {name} was renumbered");
@@ -98,6 +120,10 @@ fn operation_labels_are_distinct() {
         capability_transfer_labels::IMPORT,
         capability_transfer_labels::EXPORT_CANCEL,
         capability_transfer_labels::EXPORT_FINALIZE,
+        capability_table_labels::RESOLVE_BINDING,
+        capability_table_labels::GRAPH_READ,
+        capability_table_labels::GRAPH_ROUTE_INDEX,
+        capability_table_labels::BOOT_ACTION,
     ];
     labels.sort_unstable();
     for pair in labels.windows(2) {

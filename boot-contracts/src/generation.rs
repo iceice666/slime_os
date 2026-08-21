@@ -189,6 +189,97 @@ impl BootAction {
         self as u32
     }
 
+    /// Every declared composition, in declaration order.
+    ///
+    /// Exported because a consumer that must map a wire id back to a variant
+    /// would otherwise restate this list. `slime-root` answers the id over
+    /// `BOOT_ACTION` (B70) and components fold it back, and a component-side
+    /// copy is a second vocabulary that goes stale silently: a variant added
+    /// here but missing there folds to `None` and reads at the call site as
+    /// "some older generation" rather than as the new composition.
+    ///
+    /// This *is* a hand-written array, so it cannot police itself. Two things
+    /// keep it from lagging the enum: [`Self::from_id`]'s exhaustive `match`
+    /// fails to compile when a variant is added without a case, and
+    /// `boot_action_ids_round_trip` fails when a variant reaches that `match`
+    /// and the frozen numbering table but not this list.
+    pub const ALL: &'static [Self] = &[
+        Self::Product,
+        Self::Boot,
+        Self::Call,
+        Self::Channel,
+        Self::Crossing,
+        Self::Dango,
+        Self::Directory,
+        Self::Filesystem,
+        Self::Generation,
+        Self::Input,
+        Self::Loan,
+        Self::Operation,
+        Self::Powerbox,
+        Self::Qos,
+        Self::Reclamation,
+        Self::Recovery,
+        Self::Rollback,
+        Self::Sample,
+        Self::Spawn,
+        Self::Storage,
+        Self::Store,
+        Self::Stream,
+        Self::Supervision,
+        Self::Transfer,
+        Self::Visibility,
+        Self::Stress,
+        Self::Matrix,
+        Self::Traffic,
+        Self::Demo,
+    ];
+
+    /// The composition a wire id names, or `None` for an id this build does not
+    /// declare.
+    ///
+    /// The inverse of [`Self::id`], and the reason [`Self::ALL`] cannot go
+    /// stale: the exhaustive `match` refuses to compile when a variant is added
+    /// without a case, and `boot_action_ids_round_trip` then fails unless the
+    /// same variant reaches `ALL`. Together they make "named" and "listed" one
+    /// step rather than two.
+    pub fn from_id(id: u32) -> Option<Self> {
+        Self::ALL.iter().copied().find(|action| {
+            let declared = match action {
+                Self::Product => Self::Product.id(),
+                Self::Boot => Self::Boot.id(),
+                Self::Call => Self::Call.id(),
+                Self::Channel => Self::Channel.id(),
+                Self::Crossing => Self::Crossing.id(),
+                Self::Dango => Self::Dango.id(),
+                Self::Directory => Self::Directory.id(),
+                Self::Filesystem => Self::Filesystem.id(),
+                Self::Generation => Self::Generation.id(),
+                Self::Input => Self::Input.id(),
+                Self::Loan => Self::Loan.id(),
+                Self::Operation => Self::Operation.id(),
+                Self::Powerbox => Self::Powerbox.id(),
+                Self::Qos => Self::Qos.id(),
+                Self::Reclamation => Self::Reclamation.id(),
+                Self::Recovery => Self::Recovery.id(),
+                Self::Rollback => Self::Rollback.id(),
+                Self::Sample => Self::Sample.id(),
+                Self::Spawn => Self::Spawn.id(),
+                Self::Storage => Self::Storage.id(),
+                Self::Store => Self::Store.id(),
+                Self::Stream => Self::Stream.id(),
+                Self::Supervision => Self::Supervision.id(),
+                Self::Transfer => Self::Transfer.id(),
+                Self::Visibility => Self::Visibility.id(),
+                Self::Stress => Self::Stress.id(),
+                Self::Matrix => Self::Matrix.id(),
+                Self::Traffic => Self::Traffic.id(),
+                Self::Demo => Self::Demo.id(),
+            };
+            declared == id
+        })
+    }
+
     fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "product" => Self::Product,
@@ -2600,45 +2691,100 @@ mod tests {
     }
 
     /// `BootAction`'s numeric values are an ABI: the root passes one in the
-    /// bootstrap thread's first C parameter, and `init` matches on the same
-    /// numbers from its own table. Renumbering a variant here would silently
-    /// select a different graph in an image built before the change, so the
-    /// mapping is pinned rather than left to declaration order.
+    /// bootstrap thread's first C parameter and answers the same number over
+    /// `BOOT_ACTION` (B70), and a component matches on it. Renumbering a
+    /// variant would silently select a different graph in an image built
+    /// before the change, so the mapping is pinned rather than left to
+    /// declaration order.
+    ///
+    /// Shared with `boot_action_ids_round_trip`, which uses it as the
+    /// independent second source proving `BootAction::ALL` is complete.
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 29] = [
+        (BootAction::Product, 1),
+        (BootAction::Boot, 2),
+        (BootAction::Call, 3),
+        (BootAction::Channel, 4),
+        (BootAction::Crossing, 5),
+        (BootAction::Dango, 6),
+        (BootAction::Directory, 7),
+        (BootAction::Filesystem, 8),
+        (BootAction::Generation, 9),
+        (BootAction::Input, 10),
+        (BootAction::Loan, 11),
+        (BootAction::Operation, 12),
+        (BootAction::Powerbox, 13),
+        (BootAction::Qos, 14),
+        (BootAction::Stress, 26),
+        (BootAction::Reclamation, 15),
+        (BootAction::Recovery, 16),
+        (BootAction::Rollback, 17),
+        (BootAction::Sample, 18),
+        (BootAction::Spawn, 19),
+        (BootAction::Storage, 20),
+        (BootAction::Store, 21),
+        (BootAction::Stream, 22),
+        (BootAction::Supervision, 23),
+        (BootAction::Transfer, 24),
+        (BootAction::Visibility, 25),
+        (BootAction::Matrix, 27),
+        (BootAction::Traffic, 28),
+        (BootAction::Demo, 29),
+    ];
+
     #[test]
     fn boot_action_numbering_is_frozen() {
-        for (action, id) in [
-            (BootAction::Product, 1),
-            (BootAction::Boot, 2),
-            (BootAction::Call, 3),
-            (BootAction::Channel, 4),
-            (BootAction::Crossing, 5),
-            (BootAction::Dango, 6),
-            (BootAction::Directory, 7),
-            (BootAction::Filesystem, 8),
-            (BootAction::Generation, 9),
-            (BootAction::Input, 10),
-            (BootAction::Loan, 11),
-            (BootAction::Operation, 12),
-            (BootAction::Powerbox, 13),
-            (BootAction::Qos, 14),
-            (BootAction::Stress, 26),
-            (BootAction::Reclamation, 15),
-            (BootAction::Recovery, 16),
-            (BootAction::Rollback, 17),
-            (BootAction::Sample, 18),
-            (BootAction::Spawn, 19),
-            (BootAction::Storage, 20),
-            (BootAction::Store, 21),
-            (BootAction::Stream, 22),
-            (BootAction::Supervision, 23),
-            (BootAction::Transfer, 24),
-            (BootAction::Visibility, 25),
-            (BootAction::Matrix, 27),
-            (BootAction::Traffic, 28),
-            (BootAction::Demo, 29),
-        ] {
+        for (action, id) in FROZEN_BOOT_ACTIONS {
             assert_eq!(action.id(), id, "{action:?} changed its ABI number");
         }
+    }
+
+    /// `ALL` is complete, and `from_id` inverts `id` over it.
+    ///
+    /// The completeness half needs a *second* source, because iterating `ALL`
+    /// cannot notice a variant `ALL` omits — the loop simply never visits it.
+    /// So the count is asserted against `boot_action_numbering_is_frozen`'s
+    /// table above, which is maintained for an unrelated reason (the frozen
+    /// wire numbering) and would have to be edited in the same change. Between
+    /// the two: `from_id`'s exhaustive `match` refuses to compile when a
+    /// variant is added without a case, and this fails when the variant is
+    /// named there but never reaches `ALL` — the gap that would otherwise let a
+    /// new composition fold to `None` and read at a component's call site as
+    /// "some older generation" rather than as the composition it is (B70).
+    #[test]
+    fn boot_action_ids_round_trip() {
+        for action in BootAction::ALL {
+            assert_eq!(
+                BootAction::from_id(action.id()),
+                Some(*action),
+                "{action:?} does not round-trip through its own id"
+            );
+        }
+        // The completeness check. `FROZEN_BOOT_ACTIONS` is the numbering table
+        // above; every entry must be reachable through `ALL`, and the two must
+        // agree on length, so a variant added to `from_id` and the frozen table
+        // but forgotten in `ALL` fails here.
+        for (action, id) in FROZEN_BOOT_ACTIONS {
+            assert!(
+                BootAction::ALL.contains(&action),
+                "{action:?} is frozen at {id} but missing from ALL"
+            );
+        }
+        assert_eq!(
+            BootAction::ALL.len(),
+            FROZEN_BOOT_ACTIONS.len(),
+            "ALL and the frozen numbering table declare different compositions"
+        );
+        // Ids are unique, so no two variants can answer one wire number.
+        for (index, action) in BootAction::ALL.iter().enumerate() {
+            for other in &BootAction::ALL[index + 1..] {
+                assert_ne!(action.id(), other.id(), "{action:?} and {other:?} collide");
+            }
+        }
+        // Zero is the startup argument every non-bootstrap task receives and
+        // the sentinel a component memo uses for "not yet asked", so it must
+        // name no composition. `u32::MAX` is the matching "asked and refused".
+        assert_eq!(BootAction::from_id(0), None);
+        assert_eq!(BootAction::from_id(u32::MAX), None);
     }
 
     /// Every spelling the source manifest may carry resolves, and nothing else
