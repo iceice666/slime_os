@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
 
-**Status:** CP0 and CP1 complete; CP2's mechanism landed with its migration partial; CP3–CP5 not started.
+**Status:** CP0, CP1, and CP3 complete; CP2's mechanism landed with its migration partial; CP4–CP5 not started.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -146,35 +146,17 @@ No component source file `include!`s a `build.rs`-private, manifest-derived cons
 
 ## CP3 — Crate-per-component SDK boundary
 
-**Status:** Not started.
+**Status:** Complete.
 
-**Depends on:** CP2.
+**Delivered:** `components/bins` is 52 independent workspace packages, one per component, each with its own `Cargo.toml`, `build.rs`, and `src/main.rs`; the shared helpers are the `slime-components` library at `components/lib`, and the generation-manifest parser that was private to the old crate's build script is the documented `slime-build-support` crate any component crate depends on from `[build-dependencies]`. `build_rust_components()` builds `-p slime-component-<name>` in two invocations grouped by feature set, which is what actually scopes the allocator: Cargo unifies features across every package in one invocation, so a plain component built beside a store component gained the heap too — measured as 6 heap symbols in the linked `slime-rt` rlib against 0 when grouped. `docs/syscall-abi.md` states the v1 compatibility policy (frozen labels and statuses, additive-only growth, retired numbers reserved, an incompatible change is a new major contract version).
 
-### Deliverables
+**Exit condition (observed):** all 33 `just sel4_*_check` plane gates and `just sel4_gate_control_check` pass with unchanged behavior; a new component was added as one directory, built to an ELF, and removed with no edit to any other crate; a plain component's shipped ELF carries 0 allocator symbols against a store component's 4; `just generation_check` is byte-identical across two isolated builds; `just component_crate_split_check` pins the split's six properties, each proven to fail under a one-line perturbation. The [B65 deferred follow-up](00-backlog.md) ("the 52-binary fixture population uncollapsed") is closed by this milestone.
 
-- replace `components/bins`'s single-crate, 52-entry `[[bin]]` population with one independent crate per component, each depending on `slime-rt`, `slime-proto`, and `boot-contracts` directly rather than sharing one crate's `Cargo.toml`/`build.rs`; this closes the [B65 deferred follow-up](00-backlog.md) ("the 52-binary fixture population uncollapsed");
-- extract `components/bins/build.rs`'s manifest-parsing helpers (already reduced in scope by CP2, since the `OUT_DIR` generators are gone) into a shared, documented build-support crate or module every component crate — in-tree or out-of-tree — can depend on, replacing the current private, unexported, ad hoc string-splitting parser;
-- scope the `store` feature's allocator requirement to only the crates that themselves depend on `boot-contracts/gpt` or `slime-rt/heap`, removing the crate-wide `#[global_allocator]` contagion `components/bins/Cargo.toml`'s existing comment documents (lines ~23–28);
-- update `scripts/build/build-generation.py`'s `build_rust_components()` to invoke one `cargo build` per component crate (or a single command naming each crate's package) instead of one batched `-p slime-components --bin A --bin B ...` invocation, preserving byte-identical output for every existing in-tree component;
-- state the syscall ABI's compatibility policy in `docs/syscall-abi.md` (for example: operation labels are additive-only within a format version; a breaking change is a new `contracts/syscall-abi/v1` major version) so a component crate outside this workspace has a documented contract to build against.
+**Amended deliverable:** the "preserving byte-identical output for every existing in-tree component" clause was unachievable and is recorded as amended rather than met. Cargo's `-C metadata` hash derives from the package name and appears in CGU symbol names inside the shipped `.symtab`, so renaming a package necessarily moves the ELF — measured as 15 differing bytes, all inside that string, with source, bin name, target, and target directory held fixed. No repository artifact pins those bytes. Determinism plus unchanged gate behavior is the property that replaced it, and both are observed above.
 
-### Required checks
+**Gates:** `just component_crate_split_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just generation_check`, the 33 `just sel4_*_check` planes, `just sel4_gate_control_check`.
 
-- every existing `just sel4_*_check` gate passes unchanged after the crate split;
-- a new component can be added by creating one new crate directory and one generation-manifest entry, without editing any other component's crate or its `Cargo.toml`;
-- the `store` feature no longer forces `#[global_allocator]` on a component crate that does not itself depend on `boot-contracts/gpt` or `slime-rt/heap`.
-
-### Planned verification target
-
-```sh
-just component_crate_split_check
-```
-
-(plus the existing full `just sel4_*_check` gate suite and `just sel4_gate_control_check`)
-
-### Exit condition
-
-`components/bins`'s hand-listed `[[bin]]` entries are replaced by independent crates sharing `slime-rt`, `slime-proto`, `boot-contracts`, and a documented build-support library; every existing seL4 gate observes unchanged behavior; the B65 deferred follow-up is closed; `docs/syscall-abi.md` states a compatibility policy.
+**Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## CP4 — External-artifact admission path
 

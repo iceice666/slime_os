@@ -911,10 +911,17 @@ successor closes it.
 
 - B61 left `serve_instance_graph` untestable pending a seL4 object-invocation seam.
 - B63 left marker expectations as Python literals rather than blessable fixtures.
-- B65 left the 52-binary fixture population uncollapsed; CP3 in the [Component platform track](10-component-platform.md) is the planned resolution.
 - B60 left two authority-derivation steps in Python rather than schema-declared.
 
-Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
+Evidence for all three: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
+
+**Closed 2026-08-21:** B65's remaining half — "the 52-binary fixture population
+uncollapsed" — is resolved by CP3 in the [Component platform
+track](10-component-platform.md). `components/bins` is now 52 independent
+workspace packages rather than one crate's hand-listed `[[bin]]` table, and
+`just component_crate_split_check` pins that shape: a crate declaring more than
+one binary, or one whose binary and directory names disagree, fails the gate.
+**Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
 ### B75 — the fabric graph intermittently stops draining under host load, and the root cannot tell that from success
