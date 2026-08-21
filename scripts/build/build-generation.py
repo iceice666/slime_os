@@ -3532,7 +3532,12 @@ def encode_bootstate(
     return bytes(slot)
 
 
-SELECTOR_GENERATION_BYTES = 8 * 1024 * 1024
+# Must equal `slime-root/src/boot_selector.rs`'s `SELECTOR_GENERATION_BYTES`.
+# Lowered from 8 MiB with that constant: the selector's buffer is `.bss`, so
+# every page of it costs a root CSlot before the root runs, and 8 MiB spent
+# ~2048 of the root CNode's 4096 — enough that the selector refused generations
+# every other image admits. See that constant for the measurement.
+SELECTOR_GENERATION_BYTES = 4 * 1024 * 1024
 
 
 def build_bootstore(generations: list[bytes]) -> bytes:

@@ -26,10 +26,33 @@ use boot_contracts::sha256::Sha256;
 const STATE_SLOT_A: u64 = 0;
 const STATE_SLOT_B: u64 = 1;
 const MAX_DIRECTORY_ENTRIES: usize = 64;
-// Store v1 reserves generations after 16 KiB, but the selector's loader image
-// must stay within the root CNode's frame-cap budget. Product generations are
-// bounded to 8 MiB by the single-object payload contract; reject larger blobs.
-const SELECTOR_GENERATION_BYTES: usize = 8 * 1024 * 1024;
+// The size of this buffer is a root CSlot budget decision, not a statement about
+// the store: store v1 places generations after 16 KiB and declares no ceiling on
+// how large one may be, so nothing but this constant bounds what the selector
+// can hold.
+//
+// This buffer is `.bss`, so the loader creates one root CSlot per page of it
+// before the root runs: at 8 MiB that is ~2048 of the root CNode's 4096 slots
+// (`CONFIG_ROOT_CNODE_SIZE_BITS = 12`) spent on a buffer that is almost
+// entirely zero. Measured directly — the selector root's `.bss` was 10.99 MB
+// against the ordinary root's 2.60 MB, an 8.39 MB delta that is exactly this
+// array — and the cost is observable as free root CSlots: 1188 on the selector
+// image against 3017 on the demo image built from the same sources.
+//
+// That is not merely wasteful, it is a *capacity* limit on what the selector
+// can boot. RP2's demo generation plans 1368 root CSlots and was refused with
+// `PlanExceedsRootSlots { required: 1368, available: 1188 }` — a generation
+// every non-selector image admits. 4 MiB restores ~1024 slots and still leaves
+// 2.6x headroom over the largest generation this repository builds
+// (`sel4-traffic`, 1.57 MB); the largest is what bounds this, since the
+// selector must hold whichever candidate the store names.
+//
+// `scripts/build/build-generation.py`'s `SELECTOR_GENERATION_BYTES` states the
+// same ceiling and refuses a larger blob at build time, so the two must move
+// together. `check-sel4-boot-selection.py`'s `assert_ceiling_agrees` pins that
+// agreement *and* measures the built generations against this value, so the
+// headroom above is a checked property rather than a claim in this comment.
+const SELECTOR_GENERATION_BYTES: usize = 4 * 1024 * 1024;
 
 #[repr(align(8))]
 struct GenerationBuffer([u8; SELECTOR_GENERATION_BYTES]);

@@ -102,6 +102,69 @@ def make_store(paths: list[Path], bundle: str, attempts: int) -> bytes:
         os.environ.clear()
         os.environ.update(saved)
 
+def assert_ceiling_agrees() -> int:
+    """Both statements of the selector's generation ceiling agree.
+
+    `slime-root/src/boot_selector.rs` sizes the buffer and
+    `build-generation.py` refuses a larger blob. If the builder's ceiling were
+    the higher of the two it would hand the selector a generation that overflows
+    a buffer whose size is a *root CSlot budget* decision.
+
+    Agreement is all this checks. The headroom that motivated lowering the
+    ceiling to 4 MiB is a separate property over real artifacts, checked by
+    [`assert_ceiling_holds_every_generation`] once this gate has built some.
+    """
+    source = (ROOT / "slime-root/src/boot_selector.rs").read_text(encoding="utf-8")
+    match = re.search(
+        r"const SELECTOR_GENERATION_BYTES: usize = (\d+) \* 1024 \* 1024;", source
+    )
+    if match is None:
+        fail("cannot read SELECTOR_GENERATION_BYTES from slime-root/src/boot_selector.rs")
+    rust_bytes = int(match.group(1)) * 1024 * 1024
+    spec = importlib.util.spec_from_file_location("slime_build_generation_ceiling", GENERATOR)
+    if spec is None or spec.loader is None:
+        fail("cannot import generation builder for the ceiling check")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if module.SELECTOR_GENERATION_BYTES != rust_bytes:
+        fail(
+            f"selector ceiling disagrees: builder {module.SELECTOR_GENERATION_BYTES} bytes, "
+            f"root task {rust_bytes} bytes"
+        )
+    return rust_bytes
+
+
+def assert_ceiling_holds_every_generation(ceiling: int, built: list[Path]) -> None:
+    """Every generation handed to the selector fits its buffer.
+
+    This is the property that motivated lowering the ceiling to 4 MiB, and it was
+    prose in a comment rather than a guard.
+
+    Scoped to the generations *this run* built and writes to the store, passed in
+    explicitly rather than globbed off the build tree. That scope is the right
+    one: the constraint is what the selector must hold, and only a generation the
+    store names ever reaches this buffer — `sel4-traffic` is the largest fixture
+    the repository builds but never passes through here. Globbing instead made
+    the check depend on what a previous run left behind, and failed outright on a
+    clean checkout, where `--boot-selection` builds an image but no generation.
+
+    An empty list is a programming error here, not a tolerated absence.
+    """
+    if not built:
+        fail("no generation was supplied to the selector ceiling check")
+    largest = max(built, key=lambda path: path.stat().st_size)
+    size = largest.stat().st_size
+    if size >= ceiling:
+        fail(
+            f"{largest.parent.name}'s generation is {size} bytes against a selector "
+            f"ceiling of {ceiling}; the selector cannot hold it"
+        )
+    print(
+        f"selector ceiling: {ceiling} bytes, largest of {len(built)} generations "
+        f"built here is {largest.parent.name} at {size}"
+    )
+
+
 def assert_oversize_rejected(bundle: str) -> None:
     spec = importlib.util.spec_from_file_location("slime_build_generation_oversize", GENERATOR)
     if spec is None or spec.loader is None:
@@ -258,12 +321,16 @@ def main() -> None:
         fail("run from repository root")
     run([sys.executable, str(BUILD), "--boot-selection"])
     bundle = str(json.loads(IDENTITY.read_text(encoding="utf-8"))["boot_bundle_identity"])
+    ceiling = assert_ceiling_agrees()
     assert_oversize_rejected(bundle)
     with tempfile.TemporaryDirectory(prefix="slime-b35-") as temporary:
         work = Path(temporary)
         known_good = build_generation(work / "a", 1, bundle)
         failing = build_generation(work / "bad", 99, bundle, failing=True)
         healthy = build_generation(work / "good", 2, bundle)
+        # Measured on the generations this run just built, so the check does not
+        # depend on what a previous run left in `build/`.
+        assert_ceiling_holds_every_generation(ceiling, [known_good, failing, healthy])
 
         rollback = work / "rollback.img"
         make_disk(rollback, make_store([known_good, failing], bundle, 2))
