@@ -680,6 +680,13 @@ component_crate_split_check: component_spec_check
 # bytes before a generation is signed.
 external_component_admission_check: generation_check
     python3 scripts/check/check-external-component-admission.py
+
+# CP5's out-of-tree development proof: materialize the versioned component SDK
+# as a pinned git repository, consume it from a distinct RP4 component checkout,
+# admit both content-bound ELFs into the demo generation, boot the exact signed
+# generation, then remove the checkout and prove the in-tree fallback still boots.
+component_sdk_out_of_tree_check: external_component_admission_check
+    python3 scripts/check/check-component-sdk-out-of-tree.py
 # CP2's runtime binding resolution: a component asks the root which of its own
 # slots holds a named binding instead of compiling the number in. An unprefixed
 # name is a manifest grant; `executable:`/`channel:` reach the boot layout's two

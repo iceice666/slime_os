@@ -509,7 +509,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     kernel_object_rows = []
     for index in range(kernel_objects):
         name_offset, kind, owner_process, size_bits, count, source_object, flags = GENERATION_KERNEL_OBJECT.unpack_from(data, kernel_object_offset + index * GENERATION_KERNEL_OBJECT.size)
-        require(owner_process < processes and 1 <= kind <= 6 and count > 0 and flags == 0, "BadKernelObject")
+        require(owner_process < processes and 1 <= kind <= 7 and count > 0 and flags == 0, "BadKernelObject")
         require(source_object == PLAN_NONE or source_object < objects, "BadKernelObject")
         kernel_object_rows.append({"kind": kind, "size_bits": size_bits})
     for process in process_rows:
@@ -526,6 +526,60 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         thread_rows.append({"process": process, "schedule": schedule, "fault_policy": fault_policy})
     for index, process in enumerate(process_rows):
         require(thread_rows[process["main_thread"]]["process"] == index, "BadProcess")
+    notification_grant_rows = []
+    previous_notification_name = None
+    for index in range(notification_grants):
+        name_offset, source, target_instance, object_index, flags = GENERATION_NOTIFICATION_GRANT.unpack_from(
+            data, notification_grant_offset + index * GENERATION_NOTIFICATION_GRANT.size
+        )
+        name = read_string(data, strings_offset, strings_len, name_offset)
+        require(
+            source < instances
+            and target_instance < instances
+            and source != target_instance
+            and object_index < kernel_objects
+            and kernel_object_rows[object_index]["kind"] == 7
+            and flags == 0,
+            "BadNotificationGrant",
+        )
+        require(
+            previous_notification_name is None or previous_notification_name < name,
+            "BadNotificationOrder",
+        )
+        previous_notification_name = name
+        notification_grant_rows.append(
+            {"source": source, "target": target_instance, "object": object_index}
+        )
+    notification_binding_rows = []
+    seen_notification_slots = set()
+    for index in range(notification_bindings):
+        grant, holder, slot, role, flags = GENERATION_NOTIFICATION_BINDING.unpack_from(
+            data, notification_binding_offset + index * GENERATION_NOTIFICATION_BINDING.size
+        )
+        require(
+            grant < notification_grants
+            and holder < instances
+            and slot < 31
+            and role in (1, 2)
+            and flags == 0,
+            "BadNotificationBinding",
+        )
+        require((holder, slot) not in seen_notification_slots, "BadNotificationBinding")
+        seen_notification_slots.add((holder, slot))
+        notification_binding_rows.append(
+            {"grant": grant, "holder": holder, "role": role}
+        )
+    for index, grant in enumerate(notification_grant_rows):
+        bindings = [binding for binding in notification_binding_rows if binding["grant"] == index]
+        signals = [binding for binding in bindings if binding["role"] == 1]
+        waits = [binding for binding in bindings if binding["role"] == 2]
+        require(
+            signals
+            and any(binding["holder"] == grant["source"] for binding in signals)
+            and len(waits) == 1
+            and waits[0]["holder"] == grant["target"],
+            "BadNotificationBinding",
+        )
     for index in range(mappings):
         process, obj, vaddr, page_count, rights, attributes, source_object, flags = GENERATION_MAPPING.unpack_from(data, mapping_offset + index * GENERATION_MAPPING.size)
         require(process < processes and obj < kernel_objects and page_count > 0 and rights and not rights & ~RIGHT_ALL and flags == 0, "BadMapping")

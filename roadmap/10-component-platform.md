@@ -197,7 +197,7 @@ just external_component_admission_check
 
 ## CP5 — Out-of-tree component development proof
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** CP3, CP4.
 
@@ -224,3 +224,11 @@ just component_sdk_out_of_tree_check
 ### Exit condition
 
 Two RP4 data-path components, authored and built entirely in a separate git checkout against a published or vendored Slime component SDK, are admitted into a demo-scoped generation through CP4's external-artifact path and observed exchanging the bounded C7/C8 sample under `aarch64-qemu-virt`, with zero edits to this repository's `components/` tree.
+
+**Delivered:** `just component_sdk_out_of_tree_check` materializes a versioned component SDK as a pinned git repository containing the public runtime/protocol/build crates, the pinned `rust-sel4` source, the AArch64 target specification, a generated `sel4-demo` fabric profile, and the exact toolchain recipe. A second git repository depends on that SDK commit, builds independent `fabric-publisher-b` and `fabric-subscriber` crates with no reference to this repository's `components/` tree, binds both ELFs by content hash through CP4, signs the mixed demo generation, embeds that exact generation, and boots it. The gate then deletes the external checkout and proves the ordinary in-tree demo still boots.
+
+**Exit condition (observed):** the external baseline boot exchanged RP4's bounded large sample and retained the existing route-denial and reclamation assertions while additionally observing publisher re-delegation refusal and quota exhaustion. Three content-distinct external generations then proved producer peer death, malformed descriptor rejection, and wrong-type rejection; each failure arm reclaimed the rejected loan, and the rejection arms continued with a fresh valid terminal sample so the unchanged demo graph reached healthy completion. Cargo metadata proved every exported SDK crate resolved through the exact git revision, and neither `slime-root/src/generation.rs` nor `slime-root/src/child_vspace.rs` changed.
+
+**Gates:** `just component_sdk_out_of_tree_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-22-cp5-out-of-tree-component-sdk/`](../devlog/2026-08-22-cp5-out-of-tree-component-sdk/index.md)
