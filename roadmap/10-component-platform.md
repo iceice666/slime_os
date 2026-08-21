@@ -51,7 +51,9 @@
 
 ## CP2 — Runtime-resolved component binding
 
-**Status:** Mechanism complete and gated, answering grant bindings, namespaced boot-layout roles, and unambiguous capability roles; the site-by-site migration is partial.
+**Status:** Mechanism complete and gated, answering grant bindings, namespaced boot-layout roles, unambiguous capability roles, the fabric-graph read, and the generation's boot action; the site-by-site migration is partial — 9 `include!` sites remain, all `fabric_profile` readers blocked on declared bounds that size fixed arrays rather than on any missing query.
+
+**Progress (2026-08-21, boot action):** `CAPABILITY BOOT ACTION` (label 40) answers `BootAction`'s frozen id, so a component reads which composition it was booted into instead of `include!`ing a `build.rs`-private per-plane string. Five sites migrated and six `include!`s deleted, taking the all-profile count from 15 to 9. Gated on the *lifecycle* service rather than the capability table its label namespace names: the query must be answerable to every launched instance, and 30 of the 182 instances the seL4 fixtures declare hold no capability-transfer service where 0 lack lifecycle. **Evidence:** [`devlog/2026-08-21-b70-boot-action-query/`](../devlog/2026-08-21-b70-boot-action-query/index.md)
 
 **Depends on:** Cleared or explicitly deferred backlog. Independent of CP0/CP1.
 

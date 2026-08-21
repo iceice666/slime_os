@@ -865,6 +865,42 @@ existed. Worth noting for the remaining `include!` sites, which may be leaning o
 the same reassurance.
 **Evidence:** [`devlog/2026-08-19-owned-minted-shape-selection/`](../devlog/2026-08-19-owned-minted-shape-selection/index.md)
 
+**Progress (2026-08-21, boot action closed; 15 sites to 9):** the deferral
+recorded above is lifted and the query is built. `GENERATION_BOOT_ACTION` was
+the binding constraint on five of the remaining sites, and the note deferring it
+named its own precondition — the label-40 scalar query left unassigned in
+`ipc.rs`'s routes-nowhere list, to be done "with the `fabric-graph` read". That
+read landed as labels 38/39, so the precondition was met rather than waived.
+
+`BOOT_ACTION` (label 40) answers `BootAction`'s frozen id, the same number
+`main.rs` already passes the bootstrap thread as its startup argument. That is
+the whole gap it closes: the root always knew, and always told exactly one
+instance, so the eleven participants that branch on the composition were the
+ones that could not ask. `console`, `fabric-intruder`, `fabric_boot` and
+`fabric_matrix` drop their `include!` outright and `dango` drops its fabric one,
+taking the all-profile count from 15 to **9**.
+
+**Gated on lifecycle, not the capability table its label namespace names**, and
+that distinction was measured rather than assumed: `declared_services` gives an
+instance the capability-transfer service only for a spawn budget, an endpoint,
+or a transferable grant, and 30 of the 182 instances the seL4 fixtures declare
+hold none of those, where 0 of 182 lack lifecycle. Every caller reads a refusal
+as "not this plane", so the incidental gate would have let an unrelated grant
+shape pick a component's schedule. The 84 migrated instances all qualify either
+way, so this was latent, not broken.
+
+Two results worth keeping. `dango` is the one migrated predicate that inverts
+(`!scripted_plane()` at three of four sites), so a refusal there does not fall
+through to "not this plane" but selects the *other* echo mode; it now fails
+closed. And no transcript assertion can cover it: the scripted and interactive
+modes emit the same bytes in a different order. A substring gate was written,
+observed to pass under a deliberately wrong answer, and reverted rather than
+shipped as coverage that does not exist.
+
+What remains is 9 sites over `fabric_profile`'s declared bounds, unchanged in
+character by this work: they size fixed arrays at compile time, so no query
+retires them and the ceiling-vs-budget rule above still governs.
+**Evidence:** [`devlog/2026-08-21-b70-boot-action-query/`](../devlog/2026-08-21-b70-boot-action-query/index.md)
 
 
 ## Deferred follow-ups
