@@ -69,6 +69,9 @@ BOOT_TIMEOUT_SECONDS = 180
 # and launches no component graph, so it has no init and emits no block.
 PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4", "--component-graph", "slime-sel4-graph.elf"),
+    # RP2's demo-scoped slice: the only generation declaring the product graph,
+    # the C7 data-path pair, and the C8 fabric six in one layout.
+    ("sel4-demo", "--demo-plane", "slime-sel4-demo.elf"),
     ("sel4-channel", "--channel-plane", "slime-sel4-channel.elf"),
     ("sel4-loan", "--loan-plane", "slime-sel4-loan.elf"),
     ("sel4-spawn", "--spawn-plane", "slime-sel4-spawn.elf"),

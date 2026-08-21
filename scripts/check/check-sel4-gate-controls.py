@@ -90,6 +90,18 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
+    # RP2. 29 markers over five causal chains: the generation's declared shape,
+    # the C7 exchange, the C8 provisioning, the product graph, and the drain.
+    # That is the slice arm only, and the count pins exactly it.
+    #
+    # The gate's other two arms are *uncovered by this control*, stated plainly
+    # rather than implied covered. Both expect a root fatal instead of the
+    # healthy terminal: the wrong-target arm matches its own
+    # `WRONG_TARGET_MARKERS` table, and the rollback arm declares no table at all
+    # — its assertions are an inline regex in `expect_selected` plus terminal
+    # strings passed to `boot`. Neither is a `CHAINS`-shaped surface, which is
+    # the only surface this control drives.
+    ("sel4_demo_plane", "check/check-sel4-demo-plane.py", 29),
     # C8.11. Six rather than seven: the peer-death chain dropped its trailing
     # "and then a clock advance" marker when the gate grew from one plane to all
     # three. That marker asserted a *scenario* shape -- on the call plane the

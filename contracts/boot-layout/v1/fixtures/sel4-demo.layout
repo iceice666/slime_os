@@ -1,0 +1,17 @@
+[layout] path=init slots=15 max=64
+[layout] 1 executable console 0x10008
+[layout] 5 executable spawn-service 0x10008
+[layout] 6 executable sysinfo 0x10008
+[layout] 7 executable echo-agent 0x10008
+[layout] 8 shared-buffer-factory - 0x1000000
+[layout] 14 executable sample-lender 0x10008
+[layout] 15 executable sample-receiver 0x10008
+[layout] 16 shared-buffer-factory - 0x1000000
+[layout] 17 executable fabric-service 0x10008
+[layout] 18 executable fabric-publisher 0x10008
+[layout] 19 executable fabric-publisher-b 0x10008
+[layout] 20 executable fabric-subscriber 0x10008
+[layout] 21 executable fabric-subscriber-b 0x10008
+[layout] 22 executable fabric-intruder 0x10008
+[layout] 23 shared-buffer-factory - 0x1000000
+[layout] end

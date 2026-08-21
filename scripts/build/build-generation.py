@@ -197,6 +197,9 @@ SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
 # generation-derived component tables while sharing the same target profile.
 SEL4_MANIFESTS = {
     "sel4": SEL4_SOURCE,
+    # RP2: the demo-scoped slice — one generation that both launches the
+    # product component graph and runs the bounded data path.
+    "sel4-demo": ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-demo.zti",
     "sel4-channel": ROOT
     / "contracts"
     / "generation"
@@ -3742,6 +3745,54 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             stack,
             target_profile,
         )
+
+    # RP2: qualify one named executable for a *different* admitted target, so a
+    # boot gate can observe the root refusing a wrong-target component image
+    # before mapping any of its bytes rather than only proving it host-side.
+    #
+    # Deliberately narrow. The name must be a declared executable and the
+    # profile must be an admitted one, so this cannot fabricate a target the
+    # contract does not define; only the qualification header changes, and the
+    # generation stays otherwise valid so the refusal cannot be an unrelated
+    # admission error wearing a wrong-target label. Validation-only, in the same
+    # family as `SLIME_BOOT_SELECTION_FAIL`.
+    injection = os.environ.get("SLIME_WRONG_TARGET_EXECUTABLE")
+    if injection:
+        name, _, profile_name = injection.partition("=")
+        if not name or not profile_name:
+            fail("SLIME_WRONG_TARGET_EXECUTABLE must be <executable>=<target-profile>")
+        wrong = TARGET_PROFILES_BY_NAME.get(profile_name)
+        if wrong is None:
+            fail(f"SLIME_WRONG_TARGET_EXECUTABLE: unknown target {profile_name!r}")
+        if wrong.name == target_profile.name:
+            fail("SLIME_WRONG_TARGET_EXECUTABLE: the injected target is this generation's own")
+        declared = {executable["name"]: executable for executable in manifest["executables"]}
+        if name not in declared:
+            fail(f"SLIME_WRONG_TARGET_EXECUTABLE: {name!r} is not a declared executable")
+        executable = declared[name]
+        stack = executable.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
+        # The body stays the AArch64 ELF this workspace built; only the
+        # qualification header names the other profile. That is exactly the
+        # artifact `TargetProfile::admit` must reject, and keeping the body valid
+        # means a passing refusal cannot come from a malformed ELF instead.
+        header = COMPONENT_IMAGE_HEADER.pack(
+            COMPONENT_IMAGE_ELF_MAGIC,
+            COMPONENT_IMAGE_ELF_VERSION,
+            COMPONENT_IMAGE_ELF_HEADER_LEN,
+            COMPONENT_IMAGE_KERNEL_ABI,
+            wrong.architecture,
+            wrong.abi,
+            wrong.page_profile,
+            0,
+            0,
+            0,
+            stack,
+            wrong.id,
+            wrong.required_features,
+        )
+        body = payloads[executable["object"]][COMPONENT_IMAGE_HEADER.size :]
+        payloads[executable["object"]] = header + body
+        print(f"Injected wrong-target qualification: {name} as {wrong.name}")
 
     generation = build_generation(manifest, payloads, None, manifest["generation"], target_profile)
     # Build the compatibility alias independently from the same resolved inputs.

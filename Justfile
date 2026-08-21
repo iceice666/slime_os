@@ -112,6 +112,21 @@ sel4_sample_check: sel4_pin_check
 sel4_stream_check: sel4_pin_check
     python3 scripts/check/check-sel4-stream-plane.py
 
+# RP2: build the demo-scoped generation — the only one that carries the C7
+# bounded data path, the C8 route graph, *and* the product component graph — boot
+# it, and require all three in one transcript under one admitted generation.
+# Then two further boots on the same profile: a failing pending demo generation
+# rolling back to a verified demo known-good root across fresh QEMU processes,
+# and a component image qualified for another admitted target being refused
+# before any of its bytes are mapped.
+#
+# The rollback and wrong-target arms are what RP2 still owed the demo: the
+# existing selection gate pairs two `sel4` product generations, and every
+# wrong-target assertion in this repository was host-side or a unit test, so the
+# root's own refusal had never been observed on a boot.
+sel4_demo_check: sel4_pin_check
+    python3 scripts/check/check-sel4-demo-plane.py
+
 # B16: build the supervision-plane image, boot it, and require that a graph
 # creating more tasks over its lifetime than `MAX_RECORDS` can hold at once
 # still answers `supervision_status` correctly for every live handle —
@@ -690,6 +705,12 @@ sample_plane_live_check: sel4_sample_check
 boot_layout_check: sel4_boot_layout_check
 
 spawn_service_check: sel4_spawn_check
+
+# RP2's roadmap identifier, an alias onto the plane gate it names, the same way
+# `data_fabric_matrix_check` aliases `sel4_matrix_check`. The roadmap's
+# "Planned verification target" spelled this name before the plane existed, so it
+# stays resolvable while the plane keeps the `sel4_<stem>_check` convention.
+rpi5_arm_slice_check: sel4_demo_check
 
 # Historical M5/M6 verification identifiers. The custom-kernel recipes are
 # retired; these names resolve to the seL4 gates that now own the contracts.

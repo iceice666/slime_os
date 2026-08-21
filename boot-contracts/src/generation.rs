@@ -178,6 +178,10 @@ pub enum BootAction {
     Matrix = 27,
     /// C8.13's concurrent cross-plane traffic and resource ceilings.
     Traffic = 28,
+    /// RP2's demo-scoped AArch64 vertical slice: one generation that launches
+    /// the component graph *and* runs the bounded data path, rather than
+    /// asserting the two across separate plane fixtures.
+    Demo = 29,
 }
 
 impl BootAction {
@@ -215,6 +219,7 @@ impl BootAction {
             "visibility" => Self::Visibility,
             "matrix" => Self::Matrix,
             "traffic" => Self::Traffic,
+            "demo" => Self::Demo,
             _ => return None,
         })
     }
@@ -2630,6 +2635,7 @@ mod tests {
             (BootAction::Visibility, 25),
             (BootAction::Matrix, 27),
             (BootAction::Traffic, 28),
+            (BootAction::Demo, 29),
         ] {
             assert_eq!(action.id(), id, "{action:?} changed its ABI number");
         }
@@ -2647,6 +2653,7 @@ mod tests {
             ("stress", BootAction::Stress),
             ("visibility", BootAction::Visibility),
             ("matrix", BootAction::Matrix),
+            ("demo", BootAction::Demo),
         ] {
             assert_eq!(BootAction::parse(spelling), Some(expected));
         }

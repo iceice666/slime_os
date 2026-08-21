@@ -58,6 +58,21 @@ fn spawn_service_caps() -> [SpawnGrant; 3] {
     // The two executables spawn-service may launch, and the factory it allocates
     // from. Ascending declared slot is the order the root matches against, so
     // this list's order is load-bearing while the numbers in it are not (CP2/B70).
+    //
+    // The factory is named rather than role-resolved. `kind:sharedBufferFactory`
+    // was unambiguous while `sel4.zti` was the only generation reaching `main`
+    // and granted init exactly one factory; RP2's demo generation binds init
+    // three — its own at slot 16, the fabric service's at 23, and this one at 8
+    // — so the role query refuses, correctly. Observed on the boot that found
+    // this: `SLIME_GRAPH binding unresolved task=0 ... len=37` followed by
+    // `init exit status=1`, after the data path had already succeeded. (The
+    // instance index in that line moved when the fixture gained the fabric
+    // records, so it is deliberately not quoted here.)
+    //
+    // A name is the right instrument here for the reason `resolve_own_buffer_factory`
+    // documents: which factory *this* service allocates from is a graph fact the
+    // manifest states, not a property of the capability. Both generations
+    // reaching this path — `sel4` and `sel4-demo` — declare this exact grant.
     [
         grant(
             resolve_executable(b"executable:sysinfo"),
@@ -67,7 +82,11 @@ fn spawn_service_caps() -> [SpawnGrant; 3] {
             resolve_executable(b"executable:echo-agent"),
             RIGHT_EXEC | RIGHT_SPAWN,
         ),
-        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
+        grant(
+            slime_rt::resolve_binding(b"spawn-service-shared-buffer-factory")
+                .unwrap_or_else(|_| slime_rt::exit(1)),
+            RIGHT_BUFFER_CREATE,
+        ),
     ]
 }
 
@@ -128,6 +147,8 @@ mod boot_action {
     pub const MATRIX: u32 = 27;
     /// C8.13's concurrent cross-plane traffic and resource ceilings.
     pub const TRAFFIC: u32 = 28;
+    /// RP2's demo-scoped AArch64 vertical slice.
+    pub const DEMO: u32 = 29;
 
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
@@ -163,6 +184,7 @@ mod boot_action {
     const _: () = assert!(STRESS == BootAction::Stress.id());
     const _: () = assert!(MATRIX == BootAction::Matrix.id());
     const _: () = assert!(TRAFFIC == BootAction::Traffic.id());
+    const _: () = assert!(DEMO == BootAction::Demo.id());
 }
 
 /// Compose the graph the generation selected.
@@ -172,8 +194,10 @@ mod boot_action {
 /// image is byte-identical across every manifest and only the admitted
 /// `bootAction` differs.
 ///
-/// Returns for `PRODUCT`, whose graph the caller launches; every other action
-/// runs its plane to completion and exits.
+/// Returns for `PRODUCT`, whose graph the caller launches, and for `DEMO`, which
+/// runs RP2's data path and then lets that same product graph launch over the
+/// one generation carrying both. Every other action runs its plane to
+/// completion and exits.
 fn compose_declared_graph(startup_arg: u32) {
     use boot_action as action;
     match startup_arg {
@@ -197,6 +221,16 @@ fn compose_declared_graph(startup_arg: u32) {
             drive_sample_plane();
             slime_rt::debug_write(b"[init] sample plane complete\n");
             slime_rt::exit(0)
+        }
+        // RP2: the one action that does *both* halves in a single generation.
+        // The bounded data path runs first and must complete, then this returns
+        // so `main` launches the ordinary component graph over the same
+        // admitted generation — which is the milestone's whole point. Every
+        // other plane asserts one half and exits; asserting them across two
+        // fixtures is exactly what RP2 says is not evidence for the demo.
+        action::DEMO => {
+            drive_demo_plane();
+            slime_rt::debug_write(b"[init] demo data path complete\n");
         }
         action::STREAM | action::QOS => {
             drive_stream_plane(startup_arg == boot_action::QOS);
@@ -349,7 +383,8 @@ fn main(startup_arg: u32) {
         slime_rt::unhealthy();
     }
     // The authenticated manifest action selects every non-product composition.
-    // `PRODUCT` returns so the ordinary component graph below can launch.
+    // `PRODUCT` and `DEMO` return so the ordinary component graph below can
+    // launch; every other action has already exited.
     compose_declared_graph(startup_arg);
     slime_rt::debug_write(b"[init] launching component graph\n");
 
@@ -360,11 +395,13 @@ fn main(startup_arg: u32) {
     // `InstanceBinding` records the root places from.
     //
     // The filesystem, storage, and generation-command branches that stood here
-    // were deleted with the constants they tested: `sel4.zti` is the only
-    // generation reaching this body, and it declares `console`, `spawn-service`,
-    // `sysinfo`, `echo-agent`, and `init` -- nothing else. Every branch was
-    // therefore dead on this kernel, and the seL4 planes that do exercise those
-    // components reach them through their own `bootAction` instead.
+    // were deleted with the constants they tested: the generations reaching this
+    // body are `sel4.zti` and — since RP2 — `sel4-demo.zti`, and between them
+    // they declare `console`, `spawn-service`, `sysinfo`, `echo-agent`, `init`,
+    // and the demo's own data-path and fabric components, none of which those
+    // branches named. Every branch was therefore dead on this kernel, and the
+    // seL4 planes that do exercise those components reach them through their own
+    // `bootAction` instead.
     let console_executable =
         slime_rt::resolve_binding(b"executable:console").unwrap_or_else(|_| slime_rt::exit(1));
     let component_console = slime_rt::spawn(console_executable, &CONSOLE_CAPS)
@@ -688,9 +725,9 @@ fn resolve_spawn_service_rpc() -> u32 {
 ///
 /// `kind:sharedBufferFactory+bufferCreate` asks by what the capability *is*, and
 /// the root refuses an ambiguous answer, so this is only usable where the
-/// generation grants init exactly one factory — every plane but the full-graph
-/// `boot` and `traffic` compositions, which hold two and use
-/// [`resolve_own_buffer_factory`].
+/// generation binds init exactly one factory. The compositions that bind more
+/// use [`resolve_own_buffer_factory`] or a grant name instead: the full-graph
+/// `boot` and `traffic` generations bind two, and RP2's `sel4-demo` binds three.
 ///
 /// Deliberately not "the factory granted to me": that spelling looked like the
 /// general rule and is not. Under the product graph init holds one factory whose
@@ -701,17 +738,18 @@ fn resolve_buffer_factory() -> u32 {
         .unwrap_or_else(|_| slime_rt::exit(1))
 }
 
-/// Init's *own* shared-buffer factory, for the two compositions that grant it
-/// two.
+/// Init's *own* shared-buffer factory, by grant name, for every composition
+/// where the role query above is ambiguous or answers the wrong question.
 ///
 /// The full-graph `boot` and `traffic` generations bind both
 /// `init-shared-buffer-factory` and `fabric-service-shared-buffer-factory` to
-/// init, so `resolve_buffer_factory`'s role query is ambiguous there and refuses.
-/// A grant name is unambiguous, and these two names are stable across every
-/// generation reaching this code: `traffic`, `fault`, and `saturation` share one
-/// manifest, differing only in generation number.
+/// init, and `sel4-demo` binds a third, so `resolve_buffer_factory`'s role query
+/// refuses there. A grant name is unambiguous, and this one is declared by every
+/// generation reaching the callers below: `sel4-stream`, `sel4-qos`,
+/// `sel4-visibility`, `sel4-boot`, `sel4-demo`, and the one manifest `traffic`,
+/// `fault`, and `saturation` share, differing only in generation number.
 ///
-/// Which of the two is delegated does not change what the receiver may do — a
+/// Which factory is delegated does not change what the receiver may do — a
 /// shared-buffer quota binds to the receiving task, not to the factory capability
 /// handed over, verified by delegating the other one and observing the boot plane
 /// stay green. So this names init's own for the same reason the source reads
@@ -1075,6 +1113,113 @@ fn drive_sample_plane() {
 
 fn fail_sample(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[init] sample plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
+/// Drive RP2's demo-scoped vertical slice: the bounded C7 sample exchange *and*
+/// the C8 route provisioning/data path RP4/RP6 need, run under the *same*
+/// generation that then launches the product component graph.
+///
+/// Both halves are deliberately the existing compositions rather than new ones.
+/// RP2 asks for the C7 exchange and the C8 route path "under one demo-scoped
+/// generation rather than across separate plane fixtures" — so what has to be
+/// new is the *generation*, not the scenarios. Reusing them means the demo's
+/// data path is the composition `just sel4_sample_check` and
+/// `just sel4_stream_check` already exercise, rather than a third scenario no
+/// gate has observed.
+///
+/// Not the identical *run*, and the difference is worth naming: those planes
+/// script a mid-stream publisher death through `SLIME_FABRIC_STREAM_EARLY_EXIT`,
+/// which `build-sel4.py` sets for `stream`, `qos`, and `fault` only. The demo
+/// plane runs the same graph to its ordinary `FLAG_LAST` completion, so it
+/// inherits the provisioning, denial, and loan evidence and makes no claim about
+/// the scripted-death arm.
+///
+/// The C7 half moves a payload larger than the control-message bound through
+/// real `SYS_SHARED_BUFFER_*` frames against generation-declared quotas, which
+/// is RP2's "two components exchange and return a payload larger than the
+/// control-message bound with the declared quota and reclamation semantics"
+/// required check. Reclamation is asserted per handle, the instant it is
+/// collected: a collected supervision handle must refuse a second status call.
+///
+/// Unlike every plane action, this one **returns**: the demo generation is a
+/// product generation too, so `main` goes on to launch `console` and
+/// `spawn-service` over the same admitted graph. That single-generation
+/// property is the milestone, and it is observable precisely because all three
+/// parts emit their markers in one transcript.
+fn drive_demo_plane() {
+    let receiver = slime_rt::spawn(resolve_executable(b"executable:sample-receiver"), &[])
+        .unwrap_or_else(|_| fail_demo(b"spawn receiver"));
+    // Positional against ascending declared slot, the same match
+    // `drive_sample_plane` makes: the lender's factory at 1, then the
+    // receiver's supervision handle at 2. The exchange channel is a declared
+    // endpoint the root installs on both sides, so it is not passed here.
+    let lender = slime_rt::spawn(
+        resolve_executable(b"executable:sample-lender"),
+        &[
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
+            grant(receiver.supervision_slot, RIGHT_SUPERVISE),
+        ],
+    )
+    .unwrap_or_else(|_| fail_demo(b"spawn lender"));
+    slime_rt::debug_write(b"[init] demo data path spawned\n");
+    // Collecting a termination *is* the reclamation: `serve_supervision_status`
+    // drops the caller's slot as it hands the outcome over, so an explicit
+    // `cap_drop` afterwards is a double free. Established by a real boot rather
+    // than by reading — the first revision dropped them and died on
+    // `init exit status=1` after the whole data path had succeeded.
+    //
+    // So the assertion is the inverse: a *second* status call on a collected
+    // handle must be refused, which is what proves the slot was released rather
+    // than merely reported. A leaked handle would answer again.
+    //
+    // It is made immediately, inside this loop, rather than in a second pass —
+    // and that placement is load-bearing, not tidiness. `free_slot_from(1)`
+    // returns the *lowest* free slot, so the next spawn reuses a number this
+    // loop just released; `launch_fabric_graph` below spawns six. A re-query
+    // after any of them would read some other task's live handle and pass for
+    // the wrong reason, which is a gate that cannot fail.
+    for handle in [receiver.supervision_slot, lender.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::yield_now(),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_demo(b"a demo data-path component did not exit cleanly"),
+            }
+        }
+        if slime_rt::supervision_status(handle).is_ok() {
+            fail_demo(b"a collected data-path handle answered twice");
+        }
+    }
+    slime_rt::debug_write(b"[init] demo sample exchange complete\n");
+    // The C8 half, in the *same* generation. RP2 asks for the C7 sample-plane
+    // exchange and "the C8 route provisioning/data path required by RP4/RP6
+    // under one demo-scoped generation rather than across separate plane
+    // fixtures", so both run here over one admitted manifest: the fabric graph
+    // this generation declares is the stream graph, two routes over two
+    // publishers and two subscribers.
+    //
+    // It interposes nothing: `sel4-demo` declares `interpositions = []` and no
+    // `fabric-intruder-supervision` minted binding, so `launch_fabric_graph`
+    // takes its `without_proxy` arm and `fabric-intruder` runs as the
+    // undeclared-edge denial control rather than as a hop. That mirrors
+    // `sel4-stream`, which is the composition this reuses; `sel4-visibility` is
+    // the plane that declares a real hop.
+    //
+    // `launch_fabric_graph` is reused rather than reimplemented for the reason
+    // the C7 half reuses the sample exchange: the composition is the evidence
+    // `just sel4_stream_check` already froze, and what RP2 makes new is the
+    // generation carrying both halves plus the product graph, not a third
+    // scenario. `fabric-service` reaches its stream composition because `demo`
+    // matches none of its named boot actions and falls through to exactly that
+    // path, so no fabric component needed a new branch.
+    launch_fabric_graph(b"demo fabric", b" service spawned\n");
+}
+
+fn fail_demo(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] demo plane fail: ");
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
@@ -1576,7 +1721,7 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
         .unwrap_or_else(|_| slime_rt::exit(1));
     let publisher_b = slime_rt::spawn(
         resolve_executable(b"executable:fabric-publisher-b"),
-        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
     let subscriber_b = slime_rt::spawn(resolve_executable(b"executable:fabric-subscriber-b"), &[])
@@ -1602,8 +1747,23 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
     // answers that directly. The generated count this replaced could only say
     // "six or five", which happens to discriminate here but is a summary of the
     // composition rather than a statement about it.
+    //
+    // The factory is resolved by grant name rather than by capability role.
+    // `resolve_buffer_factory`'s `kind:` query stood here, and it answered only
+    // because the three fixtures that reached *this* launcher —  `sel4-stream`,
+    // `sel4-qos`, `sel4-visibility` — bind init one factory each. The ambiguity
+    // itself is older than RP2: `sel4-boot` and `sel4-traffic` already bind two,
+    // which is why `resolve_own_buffer_factory` existed before this change.
+    // `sel4-demo` binds three and reaches here, so the query now refuses on this
+    // path too — correctly, since which factory a participant allocates from is
+    // a graph fact the manifest states, not a property of the capability.
+    //
+    // `init-shared-buffer-factory` is bound to init by every fixture that
+    // reaches *this* launcher, verified directly: `sel4-stream`, `sel4-qos`,
+    // `sel4-visibility`, and `sel4-demo`. The resolver has other callers across
+    // the boot and traffic planes; this note surveys only the ones on this path.
     let grants = [
-        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
+        grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
         grant(publisher.supervision_slot, RIGHT_SUPERVISE),
         grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
         grant(intruder.supervision_slot, RIGHT_SUPERVISE),

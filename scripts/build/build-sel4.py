@@ -93,6 +93,8 @@ TRANSFER_IMAGE = BUILD_ROOT / "slime-sel4-transfer.elf"
 TRANSFER_MANIFEST = BUILD_ROOT / "slime-sel4-transfer.identity.json"
 BOOT_SELECTION_IMAGE = BUILD_ROOT / "slime-sel4-boot-selection.elf"
 BOOT_SELECTION_MANIFEST = BUILD_ROOT / "slime-sel4-boot-selection.identity.json"
+DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
+DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -105,6 +107,8 @@ SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
 SUPERVISION_VARIANT = "supervision"
 RECLAMATION_VARIANT = "reclamation"
+# RP2's demo-scoped vertical slice.
+DEMO_VARIANT = "demo"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -148,6 +152,7 @@ TRANSFER_VARIANT = "transfer"
 BOOT_SELECTION_VARIANT = "boot-selection"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
+    DEMO_VARIANT: "sel4-demo",
     CHANNEL_VARIANT: "sel4-channel",
     LOAN_VARIANT: "sel4-loan",
     SPAWN_VARIANT: "sel4-spawn",
@@ -210,6 +215,7 @@ VARIANT_GENERATION_DELTAS = {
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
     GRAPH_VARIANT: "root-graph",
+    DEMO_VARIANT: "root-demo",
     CHANNEL_VARIANT: "root-channel",
     LOAN_VARIANT: "root-loan",
     SPAWN_VARIANT: "root-spawn",
@@ -245,6 +251,7 @@ VARIANT_TARGET_DIRS = {
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
     GRAPH_VARIANT: (GRAPH_IMAGE, GRAPH_MANIFEST),
+    DEMO_VARIANT: (DEMO_IMAGE, DEMO_MANIFEST),
     CHANNEL_VARIANT: (CHANNEL_IMAGE, CHANNEL_MANIFEST),
     LOAN_VARIANT: (LOAN_IMAGE, LOAN_MANIFEST),
     SPAWN_VARIANT: (SPAWN_IMAGE, SPAWN_MANIFEST),
@@ -1147,6 +1154,15 @@ def main() -> None:
         help="embed the stream-plane generation (P5.5.2), writing a separate image",
     )
     parser.add_argument(
+        "--demo-plane",
+        action="store_true",
+        help=(
+            "embed the RP2 demo-scoped generation, which both launches the "
+            "product component graph and runs the bounded data path, writing a "
+            "separate image"
+        ),
+    )
+    parser.add_argument(
         "--supervision-plane",
         action="store_true",
         help=(
@@ -1353,6 +1369,7 @@ def main() -> None:
         variant
         for variant, chosen in (
             (GRAPH_VARIANT, arguments.component_graph),
+            (DEMO_VARIANT, arguments.demo_plane),
             (CHANNEL_VARIANT, arguments.channel_plane),
             (LOAN_VARIANT, arguments.loan_plane),
             (SPAWN_VARIANT, arguments.spawn_plane),
