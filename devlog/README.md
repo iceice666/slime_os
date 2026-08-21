@@ -313,3 +313,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-20 | [B73: the matrix plane's graph-wide view is read, not just counted](2026-08-20-b73-matrix-graph-view/index.md) | Defect | Verified | B73 |
 | 2026-08-20 | [B76: `IpcError::PeerDead` had no producer, the call clock's death was inferred from the wrong task, and removing the endpoint arm exposed a real parking deadlock](2026-08-20-b76-peer-death-cleanup/index.md) | Defect | Fixed | B76 |
 | 2026-08-20 | [B75: what a determinism gate may compare — separating a trace's declared content from its observed sampling](2026-08-20-b75-observed-vs-declared-trace-fields/index.md) | Decision | Verified | B75, C8.15 |
+| 2026-08-20 | [RP2: one generation carrying the data path and the component graph, and the two arms that were never observed](2026-08-20-rp2-demo-scoped-arm-slice/index.md) | Change | Verified | RP2 |

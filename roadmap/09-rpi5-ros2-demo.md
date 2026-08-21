@@ -2,7 +2,7 @@
 
 **Purpose:** Drive the near-term project toward one observed robotics workload: Slime OS running on a Raspberry Pi 5 with two local ROS 2 nodes exchanging bounded topic data through a minimal bounded Zenoh profile with classic CDR payloads.
 
-**Status:** In progress — RP0 and RP1 complete. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md).
+**Status:** In progress — RP0, RP1, and RP2 complete. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`; RP3 is next and waits on P4's board qualification.
 
 **Acceptance target:** A reproducible Raspberry Pi 5 boot runs a declared publisher node and subscriber node. The publisher emits a bounded ROS 2 topic stream through the admitted transport profile, the subscriber observes the expected samples in order under the declared QoS/profile, and the run records image identity, board/firmware/media identity, generation/release identity, serial transcript, semantic/wire trace, and every device/storage/stream/network capability involved.
 
@@ -97,61 +97,48 @@ Every executable byte in the future demo generation is admitted for one exact AA
 
 ## RP2 — AArch64 QEMU product vertical slice
 
-**Status:** Largely satisfied by P5, pending an explicit demo-scoped replay. The
-product already boots `aarch64-sel4-qemu-virt`: seL4 owns exception vectors,
-context and address-space switching, translation tables, TLB maintenance,
-interrupt masking, idle/wake, GICv2/GICv3, the generic timer, and PL011 serial,
-and `just sel4_root_boot_check` observes EL0 components, fault isolation, timer
-delivery, and resource reclamation on that profile. What RP2 still owes the demo
-is the rollback arm and the wrong-target rejection arm on an AArch64 generation
-pair, neither of which any current gate exercises.
+**Status:** Complete.
+
+**Delivered:** A `demo` boot action and
+`contracts/generation/v1/fixtures/sel4-demo.zti` — the first generation that
+carries the C7 bounded data path, the C8 stream route graph, *and* the product
+component graph together, so "the component-launch and data path under one
+demo-scoped generation" is a property of one admitted manifest rather than an
+inference across `sel4-sample`, `sel4-stream`, and `sel4`. Both compositions are
+the existing ones (`drive_sample_plane`'s exchange and `launch_fabric_graph`'s
+graph): what RP2 makes new is the generation, so the slice reuses the
+compositions those gates exercise — the provisioning, denial, and loan paths,
+though not their scripted mid-stream death, which `build-sel4.py` arms for
+`stream`/`qos`/`fault` only — and `fabric-service` needed no new branch because
+`demo` falls through to its stream composition. Two build-time arms complete it:
+the rollback pair reuses the B35 selector image over two *demo* generations, and
+`SLIME_WRONG_TARGET_EXECUTABLE` re-qualifies one declared executable for another
+admitted profile so the root's own refusal is observable on a boot.
+
+**Exit condition (observed):** `just sel4_demo_check` boots one demo-scoped
+`aarch64-sel4-qemu-virt` generation (`executables=13 instances=13 grants=26`,
+`fabric graph=admitted schemas=2 routes=2 participants=6`) and observes, in one
+transcript and in order: the C7 pair moving an 8192-byte sealed loan mapped
+read-only and returned exactly once, the C8 sweep provisioning every declared
+stream edge and denying `fabric-intruder`'s undeclared edge, and `console` and
+`spawn-service` running and shutting down — terminating `SLIME_GRAPH HEALTHY
+generation=1 required=4 live=0 completed=4 failed=0` with `loans=0 mappings=0
+regions=0 orphans=0` and `tasks reclaimed live=0`. A failing pending demo
+generation (number 99) is selected twice, consumes both attempts, and rolls back
+to the verified demo known-good root (number 1) across fresh QEMU processes with
+only BootState sectors mutated. A `sample-lender` image qualified for
+`aarch64-rpi5` is counted `wrong_target=1`, excluded from the loadable set
+(`elf=12`, `loadable_executables=12`), and its spawn fails closed with no byte of
+it executed.
+
+**Gates:** `just sel4_demo_check`, `just sel4_boot_layout_check` (26 plane
+layouts), `just sel4_gate_control_check` (33 gates).
+
+**Evidence:** [`devlog/2026-08-20-rp2-demo-scoped-arm-slice/`](../devlog/2026-08-20-rp2-demo-scoped-arm-slice/index.md)
 
 **Depends on:** RP1 and P5. P2's custom-kernel bring-up deliverables are
 superseded: seL4 supplies that mechanism, so re-deriving it is explicitly out of
 scope.
-
-### Deliverables
-
-- confirm the verified-generation path on `aarch64-sel4-qemu-virt` as the demo's
-  architecture baseline, citing the existing product gates rather than
-  re-implementing privileged mechanism;
-- replay the C7 sample-plane exchange and the C8 route provisioning/data path
-  required by RP4/RP6 under one demo-scoped generation rather than across
-  separate plane fixtures;
-- prove rollback on an AArch64 generation pair: a failing pending AArch64
-  generation returns to a verified AArch64 known-good root;
-- prove target qualification rejects a wrong-architecture artifact from that
-  same admission path before any executable byte is mapped;
-- produce normalized semantic events comparable across runs without requiring
-  byte-identical register or physical-address traces.
-
-### Required checks
-
-- the product profile launches isolated EL0 components from a verified generation
-  (already observed by `just sel4_root_boot_check` and
-  `just sel4_component_graph_check`);
-- data abort, permission fault, malformed user pointer, and component crash
-  report or terminate the responsible component without corrupting another
-  component, the root, or the kernel;
-- endpoint wake, timer wake, and supervision wake do not busy-poll or lose
-  wakeups;
-- two components exchange and return a payload larger than the control-message
-  bound with the declared quota and reclamation semantics;
-- a failing pending AArch64 generation rolls back to a verified AArch64
-  known-good generation, while a wrong-target artifact is rejected before
-  mapping.
-
-### Planned verification target
-
-```sh
-just rpi5_arm_slice_check
-```
-
-### Exit condition
-
-One demo-scoped AArch64 generation runs the Slime component model and data path
-the demo needs, and its rollback and wrong-target rejection arms are observed on
-that same profile rather than inherited from retired x86 evidence.
 
 ## RP3 — Raspberry Pi 5 serial boot and minimum board services
 
