@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "echo-agent";
+    contentHash = "";
   };
   provides = [];
   requires = [];

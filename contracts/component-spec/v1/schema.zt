@@ -155,10 +155,10 @@ TestSpecification :: type {
 -- happens to find a file.
 --
 -- `provider` is closed: `workspace` (a `[[bin]]` in this repository's
--- `components/bins` crate), `external` (an artifact admitted by CP4's
--- host-side path), or `undeclared` (this repository declares the component but
--- ships no implementation for it). `undeclared` exists because two components
--- in `contracts/generation/v1/fixtures/valid.zti` are exactly that today:
+-- component workspace), `external` (an artifact admitted by CP4's host-side
+-- path), or `undeclared` (this repository declares the component but ships no
+-- implementation for it). `undeclared` exists because two components in
+-- `contracts/generation/v1/fixtures/valid.zti` are exactly that today:
 -- `generation-list` and `storage-store-probe` were deleted as unreachable
 -- clients of retired syscalls (see `devlog/2026-08-10-b44-policy-labels-deleted/`
 -- and `devlog/2026-08-10-b43-block-service-endpoint/`) while their manifest,
@@ -166,14 +166,19 @@ TestSpecification :: type {
 -- express that would have to invent a source file for them, which is the one
 -- outcome worse than recording the gap.
 --
--- `binary` is the `[[bin]]` target name, which is not always the component
--- name: the manifest's `generation-manager` and `filesystem-service` are built
--- by `sel4-generation-manager` and `sel4-filesystem-service`. Recording it
--- makes that mapping a declared fact instead of a convention a reader has to
--- rediscover. It is empty exactly when `provider` is `undeclared`.
+-- `binary` is the implementation artifact name. For `workspace` it is the
+-- `[[bin]]` target. For `external` it is the key the generation builder must
+-- resolve through an explicit name-to-ELF mapping. It is empty exactly when
+-- `provider` is `undeclared`.
+--
+-- `contentHash` is the lowercase SHA-256 of the bare ELF bytes for an external
+-- implementation. It binds the declaration to content rather than to the
+-- operator's local path. Workspace artifacts leave it empty because Cargo is
+-- the declared producer; undeclared implementations leave both fields empty.
 Implementation :: type {
   provider : Text;
   binary : Text;
+  contentHash : Text;
 };
 
 -- `componentType` rather than `type`: `type` is Zutai's type-declaration
@@ -237,6 +242,7 @@ maxNormalizedBytes :: Int = 65536;
 maxNameBytes :: Int = 64;
 maxPurposeBytes :: Int = 160;
 maxTextBytes :: Int = 256;
+maxContentHashBytes :: Int = 64;
 maxCapabilityKinds :: Int = 9;
 maxInterfaces :: Int = 16;
 maxQosPolicies :: Int = 16;
@@ -321,6 +327,7 @@ decodeComponentSpec :: Data -> Validation DecodeIssue ComponentSpec
   maxNameBytes =;
   maxPurposeBytes =;
   maxTextBytes =;
+  maxContentHashBytes =;
   maxCapabilityKinds =;
   maxInterfaces =;
   maxQosPolicies =;

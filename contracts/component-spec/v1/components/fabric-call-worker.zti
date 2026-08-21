@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "fabric-call-worker";
+    contentHash = "";
   };
   provides = [];
   requires = [

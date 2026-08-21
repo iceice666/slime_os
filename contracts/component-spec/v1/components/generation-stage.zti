@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "generation-stage";
+    contentHash = "";
   };
   provides = [
     "endpoint";

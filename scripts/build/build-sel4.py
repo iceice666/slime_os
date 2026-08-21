@@ -807,27 +807,39 @@ def build_sel4_generation(
     *,
     output_name: str | None = None,
     environment: dict[str, str] | None = None,
+    component_spec_root: Path | None = None,
+    external_components: list[str] | None = None,
+    prebuilt_generation: Path | None = None,
 ) -> Path:
     """Build one aarch64-sel4 generation and return its generation bytes.
 
     `environment` overrides the ambient one, which C8.14's fault plane uses to
     enable the proxy early-death injection for its variant alone.
     """
+    if prebuilt_generation is not None:
+        return require_file(prebuilt_generation.resolve(), "prebuilt seL4 generation")
     name = output_name or ("sel4-generation" if manifest == "sel4" else f"{manifest}-generation")
     output = BUILD_ROOT / name
     output.mkdir(parents=True, exist_ok=True)
     environment = dict(environment if environment is not None else os.environ)
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
     environment["SLIME_SEL4_MANIFEST"] = manifest
-    run(
-        [sys.executable, str(ROOT / "scripts" / "build" / "build-generation.py"), str(output)],
-        environment=environment,
-        description="build seL4 generation",
-    )
+    command = [sys.executable, str(ROOT / "scripts" / "build" / "build-generation.py")]
+    if component_spec_root is not None:
+        command += ["--component-spec-root", str(component_spec_root)]
+    for mapping in external_components or []:
+        command += ["--external-component", mapping]
+    command.append(str(output))
+    run(command, environment=environment, description="build seL4 generation")
     return require_file(output / "generation.bin", "seL4 generation")
 
 def build_application(
-    pins: dict[str, object], *, variant: str = FIXTURE_VARIANT
+    pins: dict[str, object],
+    *,
+    variant: str = FIXTURE_VARIANT,
+    component_spec_root: Path | None = None,
+    external_components: list[str] | None = None,
+    prebuilt_generation: Path | None = None,
 ) -> tuple[Path, Path]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
@@ -893,7 +905,13 @@ def build_application(
             generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
         root_environment["SLIME_GENERATION"] = str(
-            build_sel4_generation(manifest, environment=generation_environment).resolve()
+            build_sel4_generation(
+                manifest,
+                environment=generation_environment,
+                component_spec_root=component_spec_root,
+                external_components=external_components,
+                prebuilt_generation=prebuilt_generation,
+            ).resolve()
         )
         if variant == FIXTURE_VARIANT:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
@@ -1021,6 +1039,7 @@ def write_manifest(
     image: Path = IMAGE,
     manifest_path: Path = MANIFEST,
     variant: str = FIXTURE_VARIANT,
+    generation: Path | None = None,
 ) -> None:
     kernel = require_file(SEL4_PREFIX / "bin" / "kernel.elf", "installed seL4 kernel")
     kernel_config = require_file(
@@ -1097,6 +1116,15 @@ def write_manifest(
             "version": text(qemu, "qemu_version", "qemu_arm_virt"),
         },
     }
+    if generation is not None:
+        generation_bytes = require_file(generation, "embedded generation").read_bytes()
+        if len(generation_bytes) < 56:
+            fail("embedded generation is truncated")
+        manifest["generation"] = {
+            "bytes": len(generation_bytes),
+            "identity": generation_bytes[24:56].hex(),
+            "sha256": hashlib.sha256(generation_bytes).hexdigest(),
+        }
     if variant == BOOT_SELECTION_VARIANT:
         manifest["boot_bundle_identity"] = boot_bundle_identity()
     encoded = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -1364,6 +1392,23 @@ def main() -> None:
             "capability, writing a separate image"
         ),
     )
+    parser.add_argument(
+        "--component-spec-root",
+        type=Path,
+        help="load component specifications from this directory",
+    )
+    parser.add_argument(
+        "--external-component",
+        action="append",
+        default=[],
+        metavar="NAME=ELF",
+        help="forward one external component mapping to the generation builder",
+    )
+    parser.add_argument(
+        "--prebuilt-generation",
+        type=Path,
+        help="embed an already built generation instead of rebuilding it",
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -1416,6 +1461,15 @@ def main() -> None:
             [sys.executable, str(ROOT / "scripts" / "check" / "check-sel4-pins.py")],
             description="verify seL4 pins",
         )
+    if arguments.prebuilt_generation is not None and (
+        arguments.component_spec_root is not None or arguments.external_component
+    ):
+        fail(
+            "--prebuilt-generation cannot be combined with --component-spec-root "
+            "or --external-component"
+        )
+    if arguments.prebuilt_generation is not None and variant == BOOT_SELECTION_VARIANT:
+        fail("--prebuilt-generation cannot be combined with --boot-selection")
     BUILD_ROOT.mkdir(parents=True, exist_ok=True)
     configure_and_install_sel4()
     run(
@@ -1426,7 +1480,13 @@ def main() -> None:
         ],
         description="verify installed seL4 prefix",
     )
-    child_elf, root_elf = build_application(pins, variant=variant)
+    child_elf, root_elf = build_application(
+        pins,
+        variant=variant,
+        component_spec_root=arguments.component_spec_root,
+        external_components=arguments.external_component,
+        prebuilt_generation=arguments.prebuilt_generation,
+    )
     loader, payload_tool = build_loader(pins)
     image, manifest_path = VARIANT_IMAGES[variant]
     package_image(payload_tool, loader, root_elf, image)
@@ -1439,6 +1499,7 @@ def main() -> None:
         image=image,
         manifest_path=manifest_path,
         variant=variant,
+        generation=arguments.prebuilt_generation,
     )
     print(
         f"seL4 image build: wrote {image.relative_to(ROOT)} and "

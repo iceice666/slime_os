@@ -104,10 +104,10 @@ def check_component_image(blob: bytes, profile, name: str) -> None:
         architecture,
         image_abi,
         page_profile,
-        _entry,
-        _segments,
+        entry,
+        segments,
         reserved,
-        _stack,
+        stack,
         target_profile,
         required_features,
     ) = COMPONENT_IMAGE_HEADER.unpack_from(blob)
@@ -122,11 +122,91 @@ def check_component_image(blob: bytes, profile, name: str) -> None:
         f"BadComponentVersion:{name}",
     )
     require(reserved == 0, f"BadComponentHeader:{name}")
+    require(
+        stack > 0 and stack <= COMPONENT_MAX_STACK_BYTES and stack % profile.page_bytes == 0,
+        f"BadComponentStack:{name}",
+    )
     require(target_profile == profile.id, f"ComponentTargetProfileMismatch:{name}")
     require(architecture == profile.architecture, f"ComponentArchitectureMismatch:{name}")
     require(image_abi == profile.abi, f"ComponentAbiMismatch:{name}")
     require(page_profile == profile.page_profile, f"ComponentPageProfileMismatch:{name}")
     require(required_features == profile.required_features, f"ComponentFeatureMismatch:{name}")
+    if magic == COMPONENT_IMAGE_ELF_MAGIC:
+        require(entry == 0 and segments == 0, f"BadComponentHeader:{name}")
+        check_component_elf(blob[COMPONENT_IMAGE_HEADER.size :], profile, name)
+
+
+def check_component_elf(elf: bytes, profile, name: str) -> None:
+    require(len(elf) <= MAX_COMPONENT_IMAGE_BYTES, f"ComponentImageTooLarge:{name}")
+    require(
+        len(elf) >= 64
+        and elf[:4] == b"\x7fELF"
+        and elf[4] == 2
+        and elf[5] == 1
+        and elf[6] == 1,
+        f"BadComponentElfIdentity:{name}",
+    )
+    elf_type, machine = struct.unpack_from("<HH", elf, 16)
+    require(elf_type == 2 and machine == profile.elf_machine, f"BadComponentElfTarget:{name}")
+    elf_entry, phoff = struct.unpack_from("<QQ", elf, 24)
+    phentsize, phnum = struct.unpack_from("<HH", elf, 54)
+    require(phentsize == 56 and phnum > 0, f"BadComponentElfShape:{name}")
+    loadable: list[tuple[int, int, int]] = []
+    page_flags: dict[int, int] = {}
+    footprint_start: int | None = None
+    footprint_end = 0
+    mapped_bytes = 0
+    for index in range(phnum):
+        offset = phoff + index * phentsize
+        require(
+            offset >= phoff and offset <= len(elf) - 56,
+            f"BadComponentElfShape:{name}",
+        )
+        p_type, p_flags = struct.unpack_from("<II", elf, offset)
+        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from(
+            "<QQQQQ", elf, offset + 8
+        )
+        if p_type != 1 or p_memsz == 0:
+            continue
+        require(
+            p_filesz <= p_memsz
+            and p_offset <= len(elf)
+            and p_filesz <= len(elf) - p_offset,
+            f"BadComponentElfShape:{name}",
+        )
+        require(p_vaddr <= (1 << 64) - p_memsz, f"BadComponentElfShape:{name}")
+        segment_end = p_vaddr + p_memsz
+        segment_mapped = -(-p_memsz // profile.page_bytes) * profile.page_bytes
+        require(
+            mapped_bytes <= MAX_COMPONENT_IMAGE_BYTES - segment_mapped,
+            f"ComponentImageTooLarge:{name}",
+        )
+        mapped_bytes += segment_mapped
+        loadable.append((p_vaddr, segment_end, p_flags))
+        footprint_start = p_vaddr if footprint_start is None else min(footprint_start, p_vaddr)
+        footprint_end = max(footprint_end, segment_end)
+    require(loadable and footprint_start is not None, f"BadComponentElfShape:{name}")
+    require(
+        any(flags & 1 and start <= elf_entry < end for start, end, flags in loadable),
+        f"BadComponentElfEntry:{name}",
+    )
+    span_start = footprint_start - footprint_start % profile.page_bytes
+    span_end = -(-footprint_end // profile.page_bytes) * profile.page_bytes
+    require(
+        span_start != 0 and span_end + 2 * profile.page_bytes <= 1 << 40,
+        f"BadComponentElfFootprint:{name}",
+    )
+    require(
+        (span_end - span_start) // profile.page_bytes + 2 <= 512,
+        f"ComponentElfFootprintTooLarge:{name}",
+    )
+    for start, end, flags in loadable:
+        for page in range(start // profile.page_bytes, -(-end // profile.page_bytes)):
+            page_flags[page] = page_flags.get(page, 0) | flags
+    require(
+        not any(flags & 1 and flags & 2 for flags in page_flags.values()),
+        f"WritableExecutableComponentPage:{name}",
+    )
 
 
 

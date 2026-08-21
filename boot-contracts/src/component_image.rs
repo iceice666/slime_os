@@ -195,7 +195,7 @@ fn validate_elf(elf: &[u8], profile: &TargetProfile) -> Result<(), ComponentTarg
         .map_err(|_| ComponentTargetError::BadElfShape)?;
     let phentsize = usize::from(u16::from_le_bytes([header[54], header[55]]));
     let phnum = usize::from(u16::from_le_bytes([header[56], header[57]]));
-    if phentsize < 56 || phnum == 0 {
+    if phentsize != 56 || phnum == 0 {
         return Err(ComponentTargetError::BadElfShape);
     }
     let mut mapped = 0u64;
@@ -683,6 +683,17 @@ mod tests {
         assert_eq!(
             admit_elf(&elf_image(profile, &oversized), profile),
             Err(ComponentTargetError::ImageTooLarge),
+        );
+    }
+
+    #[test]
+    fn elf_program_header_size_matches_the_root_loader() {
+        let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let mut body = elf_body(profile, profile.page_bytes);
+        body[54..56].copy_from_slice(&64u16.to_le_bytes());
+        assert_eq!(
+            admit_elf(&elf_image(profile, &body), profile),
+            Err(ComponentTargetError::BadElfShape),
         );
     }
 

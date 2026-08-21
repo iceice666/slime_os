@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
 
-**Status:** CP0, CP1, and CP3 complete; CP2's mechanism landed with its migration partial; CP4–CP5 not started.
+**Status:** CP0, CP1, CP3, and CP4 complete; CP2's mechanism landed with its migration partial; CP5 not started.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -160,7 +160,7 @@ No component source file `include!`s a `build.rs`-private, manifest-derived cons
 
 ## CP4 — External-artifact admission path
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** CP0, CP2, CP3.
 
@@ -186,6 +186,14 @@ just external_component_admission_check
 ### Exit condition
 
 `scripts/build/build-generation.py` packages a generation containing at least one component whose ELF bytes were not produced by `cargo build` in this workspace, and that generation boots and passes its declared gates identically to an all-workspace build.
+
+**Delivered:** component specs now select `workspace`, `external`, or `undeclared` implementations and bind an external implementation to the SHA-256 of its bare ELF. `build-generation.py` accepts an explicit implementation-name-to-ELF mapping, builds only workspace implementations, verifies each external digest, applies the same bounded ELF/target/W^X checks the root loader requires before release signing, and reports every selected source. `build-sel4.py` can embed the exact checked generation in the component-graph image without rebuilding it. No per-component signature, provenance record, or new trust root was added.
+
+**Exit condition (observed):** `just external_component_admission_check` independently built `console` from a temporary crate outside this Cargo workspace, verified its ELF differed from the workspace artifact, mixed it with workspace components, signed and host-admitted the generation, embedded that exact generation in the seL4 component-graph image, and passed the existing QEMU graph gate. Hash-mismatched and five structurally invalid external ELFs were refused before either signed artifact existed. `slime-root/src/generation.rs` and `slime-root/src/child_vspace.rs` are unchanged.
+
+**Gates:** `just external_component_admission_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-21-cp4-external-artifact-admission/`](../devlog/2026-08-21-cp4-external-artifact-admission/index.md)
 
 ## CP5 — Out-of-tree component development proof
 

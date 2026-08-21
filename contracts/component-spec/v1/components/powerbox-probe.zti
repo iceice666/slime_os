@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "powerbox-probe";
+    contentHash = "";
   };
   provides = [
     "endpoint";

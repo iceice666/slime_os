@@ -37,6 +37,7 @@ render :: Text = t.join "" {
   line "MAX_NAME_BYTES" schema.maxNameBytes;
   line "MAX_PURPOSE_BYTES" schema.maxPurposeBytes;
   line "MAX_TEXT_BYTES" schema.maxTextBytes;
+  line "MAX_CONTENT_HASH_BYTES" schema.maxContentHashBytes;
   line "MAX_CAPABILITY_KINDS" schema.maxCapabilityKinds;
   line "MAX_INTERFACES" schema.maxInterfaces;
   line "MAX_QOS_POLICIES" schema.maxQosPolicies;

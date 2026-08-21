@@ -404,8 +404,9 @@ for name in EXPECTED_UNDECLARED:
             f"{name} is pinned as implementation-less but [[bin]] {present[0]!r} now exists; "
             "record its implementation and drop it from the pin"
         )
-# Every other component resolves to a distinct workspace binary: two specs
-# sharing one binary would make the manifest's component identity ambiguous.
+# Every implemented component resolves to a distinct implementation artifact:
+# two specs sharing one name would make the manifest's component identity
+# ambiguous regardless of whether Cargo or the external mapping supplies it.
 resolved = [
     entry.spec["implementation"]["binary"]
     for entry in CORPUS
@@ -582,10 +583,35 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         spec["formatVersion"] = CONTRACT.FORMAT_VERSION + 1
 
     def undeclared_with_binary(spec: dict) -> None:
-        spec["implementation"] = {"provider": CONTRACT.PROVIDER_UNDECLARED, "binary": "console"}
+        spec["implementation"] = {
+            "provider": CONTRACT.PROVIDER_UNDECLARED,
+            "binary": "console",
+            "contentHash": "",
+        }
 
     def workspace_without_binary(spec: dict) -> None:
-        spec["implementation"] = {"provider": CONTRACT.PROVIDER_WORKSPACE, "binary": ""}
+        spec["implementation"] = {
+            "provider": CONTRACT.PROVIDER_WORKSPACE,
+            "binary": "",
+            "contentHash": "",
+        }
+
+    def workspace_with_content_hash(spec: dict) -> None:
+        spec["implementation"]["contentHash"] = "0" * CONTRACT.MAX_CONTENT_HASH_BYTES
+
+    def external_without_content_hash(spec: dict) -> None:
+        spec["implementation"] = {
+            "provider": CONTRACT.PROVIDER_EXTERNAL,
+            "binary": "console-external",
+            "contentHash": "",
+        }
+
+    def external_with_malformed_content_hash(spec: dict) -> None:
+        spec["implementation"] = {
+            "provider": CONTRACT.PROVIDER_EXTERNAL,
+            "binary": "console-external",
+            "contentHash": "A" * CONTRACT.MAX_CONTENT_HASH_BYTES,
+        }
 
     SINGLE_SPEC_ARMS = (
         ("a spec missing an identity field", "console", drop_identity),
@@ -622,6 +648,13 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         ("an unsupported format version", "console", unsupported_format),
         ("an undeclared provider naming a binary", "console", undeclared_with_binary),
         ("a workspace provider naming no binary", "console", workspace_without_binary),
+        ("a workspace provider pinning external content", "console", workspace_with_content_hash),
+        ("an external provider naming no content hash", "console", external_without_content_hash),
+        (
+            "an external provider naming a non-canonical content hash",
+            "console",
+            external_with_malformed_content_hash,
+        ),
     )
     for label, name, apply in SINGLE_SPEC_ARMS:
         mutate(label, name, apply)
@@ -681,11 +714,27 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         left_spec["dependencies"] = [right_spec["name"]]
         right_spec["dependencies"] = [left_spec["name"]]
 
+    def duplicate_binary(left_spec: dict, right_spec: dict) -> None:
+        right_spec["implementation"] = copy.deepcopy(left_spec["implementation"])
+
+    def cross_domain_collision(left_spec: dict, right_spec: dict) -> None:
+        right_spec["implementation"] = {
+            "provider": CONTRACT.PROVIDER_EXTERNAL,
+            "binary": left_spec["name"],
+            "contentHash": "0" * CONTRACT.MAX_CONTENT_HASH_BYTES,
+        }
+
     corpus_rejected(
         "a dependency on an undeclared component", "undeclared-dep", undeclared_dependency
     )
     corpus_rejected("a dependency cycle", "cycle", dependency_cycle)
-    REFUSALS += 2
+    corpus_rejected("two specs naming one implementation binary", "duplicate-binary", duplicate_binary)
+    corpus_rejected(
+        "a component name colliding with another implementation binary",
+        "cross-domain-binary",
+        cross_domain_collision,
+    )
+    REFUSALS += 4
 
 # 7. Two independent runs over the same corpus agree, and the committed corpus
 #    is byte-stable under its own normalizer.

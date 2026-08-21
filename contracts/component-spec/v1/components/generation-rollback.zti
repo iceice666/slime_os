@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "generation-rollback";
+    contentHash = "";
   };
   provides = [
     "endpoint";

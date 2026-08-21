@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "powerbox-chooser";
+    contentHash = "";
   };
   provides = [];
   requires = [

@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "sample-lender";
+    contentHash = "";
   };
   provides = [
     "endpoint";

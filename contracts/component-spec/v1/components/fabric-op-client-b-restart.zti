@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "fabric-op-client-b-restart";
+    contentHash = "";
   };
   provides = [
     "endpoint";

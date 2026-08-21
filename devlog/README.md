@@ -316,3 +316,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-20 | [RP2: one generation carrying the data path and the component graph, and the two arms that were never observed](2026-08-20-rp2-demo-scoped-arm-slice/index.md) | Change | Verified | RP2 |
 | 2026-08-21 | [B70's boot-action query: which composition am I booted into](2026-08-21-b70-boot-action-query/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-21 | [CP3: one crate per component, and the three Cargo behaviors that shaped it](2026-08-21-cp3-crate-per-component/index.md) | Change | Verified | CP3, B70, B65 |
+| 2026-08-21 | [CP4: content-bound external artifacts enter an ordinary signed generation](2026-08-21-cp4-external-artifact-admission/index.md) | Change | Verified | CP4 |

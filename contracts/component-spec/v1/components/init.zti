@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "init";
+    contentHash = "";
   };
   provides = [
     "block";

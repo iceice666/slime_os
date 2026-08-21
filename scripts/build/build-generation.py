@@ -8,12 +8,12 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 # This script's own directory, for sibling modules when imported by host checks.
 _sys.path.insert(0, str(_Path(__file__).resolve().parent))
 
+import argparse
 import copy
 import json
 import os
 import struct
 import subprocess
-import sys
 from pathlib import Path
 
 from boot_contracts import (
@@ -692,6 +692,86 @@ class ResolvedFabricProfile:
 
 def fail(message: str) -> None:
     raise SystemExit(message)
+def parse_external_components(values: list[str]) -> dict[str, Path]:
+    """Parse the explicit external implementation-name to ELF-path mapping."""
+    mappings: dict[str, Path] = {}
+    for value in values:
+        name, separator, raw_path = value.partition("=")
+        if not separator or not name or not raw_path:
+            fail("--external-component must be <implementation-name>=<elf-path>")
+        if name in mappings:
+            fail(f"duplicate external component mapping for {name!r}")
+        path = Path(raw_path).expanduser().resolve()
+        if not path.is_file():
+            fail(f"external component {name!r}: no regular ELF file at {path}")
+        mappings[name] = path
+    return mappings
+
+
+def component_specs_for_manifest(
+    manifest: dict, component_spec_root: Path | None = None
+) -> dict[str, dict]:
+    """Resolve specs for executables the component-spec corpus declares.
+
+    Verification-only fixture binaries predate CP0 and are intentionally not
+    component-platform declarations. They stay on the workspace path; a spec,
+    when present, is authoritative and may select the external path.
+    """
+    from component_spec import ComponentSpecError, admit_specs, spec_paths
+
+    try:
+        paths = spec_paths(component_spec_root) if component_spec_root is not None else None
+        admitted = admit_specs(paths)
+    except ComponentSpecError as error:
+        fail(f"component specification corpus refused: {error}")
+    specs: dict[str, dict] = {}
+    for executable in manifest["executables"]:
+        name = executable["name"]
+        matches = [
+            entry.spec
+            for entry in admitted
+            if entry.name == name
+            or (
+                entry.spec["implementation"]["provider"] != "undeclared"
+                and entry.spec["implementation"]["binary"] == name
+            )
+        ]
+        if len(matches) > 1:
+            fail(f"executable {name!r}: component specification identity is ambiguous")
+        if matches:
+            specs[name] = matches[0]
+    return specs
+
+
+def resolve_component_sources(
+    manifest: dict,
+    external_components: dict[str, Path],
+    component_spec_root: Path | None = None,
+) -> tuple[dict[str, dict], set[str]]:
+    import component_spec_contract
+    specs = component_specs_for_manifest(manifest, component_spec_root)
+
+    manifest_names = {executable["name"] for executable in manifest["executables"]}
+    workspace = manifest_names - set(specs)
+    expected_external: set[str] = set()
+    for executable_name, spec in specs.items():
+        implementation = spec["implementation"]
+        provider = implementation["provider"]
+        binary_name = implementation["binary"]
+        if provider == component_spec_contract.PROVIDER_WORKSPACE:
+            workspace.add(binary_name)
+        elif provider == component_spec_contract.PROVIDER_EXTERNAL:
+            expected_external.add(binary_name)
+        else:
+            fail(f"executable {executable_name!r}: implementation is undeclared")
+    supplied = set(external_components)
+    missing = sorted(expected_external - supplied)
+    if missing:
+        fail(f"missing external component ELF mapping(s): {missing}")
+    unused = sorted(supplied - expected_external)
+    if unused:
+        fail(f"external component mapping(s) not declared external: {unused}")
+    return specs, workspace
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -2395,26 +2475,84 @@ def build_rust_components(
     return target_dir / cargo_target_directory_name(target_profile) / "release"
 
 
-def elf_component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
-    """Wrap a native ELF in the target-qualification header (P5.2).
-
-    The seL4 profile carries the executable whole rather than re-basing it onto
-    a fixed component load base: `slime-root` loads it with a real ELF loader at
-    the addresses it links to. The header is byte-identical in layout to the
-    segment-carrying revision, so `boot_contracts::component_image::admit`
-    qualifies both by the same offsets and stage-0-style wrong-target rejection
-    still applies before any byte is mapped. `segment_count` is zero because the
-    body has no Slime segment table, and `entry_offset` is likewise zero: the
-    entry point lives in the ELF header, where the loader reads it.
-    """
-    data = elf.read_bytes()
-    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+def _elf64_load_segments(
+    name: str, data: bytes, profile: TargetProfile
+) -> tuple[int, list[tuple[int, int, int, int, int]]]:
+    """Validate the ELF shape shared by the component wrappers."""
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1 or data[6] != 1:
         fail(f"{name}: not a 64-bit little-endian ELF")
     elf_type, machine = struct.unpack_from("<HH", data, 16)
     if elf_type != 2 or machine != profile.elf_machine:
         fail(f"{name}: not a static executable for target {profile.name}")
+    entry, phoff = struct.unpack_from("<QQ", data, 24)
+    phentsize, phnum = struct.unpack_from("<HH", data, 54)
+    if phentsize != 56 or phnum == 0:
+        fail(f"{name}: invalid program header table")
+    segments: list[tuple[int, int, int, int, int]] = []
+    for index in range(phnum):
+        header = phoff + index * phentsize
+        if header < phoff or header > len(data) - 56:
+            fail(f"{name}: truncated program header")
+        p_type, p_flags = struct.unpack_from("<II", data, header)
+        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from(
+            "<QQQQQ", data, header + 8
+        )
+        if p_type == 1 and p_memsz:
+            if (
+                p_filesz > p_memsz
+                or p_offset > len(data)
+                or p_filesz > len(data) - p_offset
+            ):
+                fail(f"{name}: malformed load segment")
+            segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
+    if not segments:
+        fail(f"{name}: no loadable segment")
+    return entry, segments
+
+
+def _admit_sel4_elf(
+    name: str, data: bytes, stack_bytes: int, profile: TargetProfile
+) -> bytes:
+    """Apply the canonical component and root-loader checks before signing."""
     if len(data) > MAX_COMPONENT_IMAGE_BYTES:
         fail(f"{name}: image exceeds the component image bound")
+    entry, segments = _elf64_load_segments(name, data, profile)
+    page_flags: dict[int, int] = {}
+    start: int | None = None
+    end = 0
+    entry_ok = False
+    mapped_bytes = 0
+    for vaddr, _offset, _filesz, memsz, elf_flags in segments:
+        if vaddr > (1 << 64) - memsz:
+            fail(f"{name}: malformed load segment")
+        segment_end = vaddr + memsz
+        segment_pages = -(-memsz // profile.page_bytes)
+        segment_mapped = segment_pages * profile.page_bytes
+        if mapped_bytes > MAX_COMPONENT_IMAGE_BYTES - segment_mapped:
+            fail(f"{name}: mapped component image exceeds the component image bound")
+        mapped_bytes += segment_mapped
+        start = vaddr if start is None else min(start, vaddr)
+        end = max(end, segment_end)
+        entry_ok |= bool(elf_flags & 1 and vaddr <= entry < segment_end)
+    if not entry_ok:
+        fail(f"{name}: entry point is not executable")
+    if start is None:
+        fail(f"{name}: no loadable segment")
+    footprint_start = start - start % profile.page_bytes
+    footprint_end = -(-end // profile.page_bytes) * profile.page_bytes
+    pages = (footprint_end - footprint_start) // profile.page_bytes + 2
+    if footprint_start == 0 or footprint_end + 2 * profile.page_bytes > 1 << 40:
+        fail(f"{name}: component image footprint is out of range")
+    if pages > 512:
+        fail(f"{name}: component image footprint exceeds 512 pages")
+    for vaddr, _offset, _filesz, memsz, elf_flags in segments:
+        segment_end = vaddr + memsz
+        first_page = vaddr // profile.page_bytes
+        last_page = -(-segment_end // profile.page_bytes)
+        for page in range(first_page, last_page):
+            page_flags[page] = page_flags.get(page, 0) | elf_flags
+    if any(flags & 2 and flags & 1 for flags in page_flags.values()):
+        fail(f"{name}: writable executable page")
     header = COMPONENT_IMAGE_HEADER.pack(
         COMPONENT_IMAGE_ELF_MAGIC,
         COMPONENT_IMAGE_ELF_VERSION,
@@ -2433,26 +2571,22 @@ def elf_component_image(name: str, elf: Path, stack_bytes: int, profile: TargetP
     return header + data
 
 
-def component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
+def elf_component_image(
+    name: str, elf: Path | bytes, stack_bytes: int, profile: TargetProfile
+) -> bytes:
+    """Wrap one immutable native ELF after host/root-equivalent admission."""
+    data = elf if isinstance(elf, bytes) else elf.read_bytes()
+    return _admit_sel4_elf(name, data, stack_bytes, profile)
+
+
+def component_image(
+    name: str, elf: Path | bytes, stack_bytes: int, profile: TargetProfile
+) -> bytes:
     if is_json_target(profile):
         return elf_component_image(name, elf, stack_bytes, profile)
-    data = elf.read_bytes()
-    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
-        fail(f"{name}: not a 64-bit little-endian ELF")
-    elf_type, machine = struct.unpack_from("<HH", data, 16)
-    if elf_type != 2 or machine != profile.elf_machine:
-        fail(f"{name}: not a static executable for target {profile.name}")
-    entry, phoff = struct.unpack_from("<QQ", data, 24)
-    _, phentsize, phnum = struct.unpack_from("<HHH", data, 52)
-    segments: list[tuple[int, int, int, int, int]] = []
-    for index in range(phnum):
-        header = phoff + index * phentsize
-        if header + phentsize > len(data):
-            fail(f"{name}: truncated program header")
-        p_type, p_flags = struct.unpack_from("<II", data, header)
-        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from("<QQQQQ", data, header + 8)
-        if p_type == 1 and p_memsz:
-            segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
+    data = elf if isinstance(elf, bytes) else elf.read_bytes()
+    entry, segments = _elf64_load_segments(name, data, profile)
+    segments = [segment for segment in segments if segment[3]]
     segments.sort()
     if not 1 <= len(segments) <= COMPONENT_IMAGE_MAX_SEGMENTS or segments[0][0] != profile.component_base or entry < profile.component_base:
         fail(f"{name}: invalid component load layout")
@@ -3699,7 +3833,13 @@ def bootstrap_binding_projection(manifest: dict) -> tuple[dict[str, int], dict[s
     return binding_slots, role_bindings
 
 
-def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetProfile) -> None:
+def build_sel4_generation(
+    output: Path,
+    manifest: dict,
+    target_profile: TargetProfile,
+    external_components: dict[str, Path] | None = None,
+    component_spec_root: Path | None = None,
+) -> None:
     """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
 
     This is the product generation path. seL4 is the kernel, so the generation
@@ -3735,13 +3875,18 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             f"pub const GENERATION_BOOT_ACTION: &str = {json.dumps(manifest['bootAction'], ensure_ascii=True)};\n",
             encoding="utf-8",
         )
-    executable_names = {executable["name"] for executable in manifest["executables"]}
+    import component_spec_contract
+
+    external_components = external_components or {}
+    component_specs, workspace_binaries = resolve_component_sources(
+        manifest, external_components, component_spec_root
+    )
     built = build_rust_components(
         manifest["generation"],
         profile_path,
         target_profile,
         candidate_identity=None,
-        components=executable_names,
+        components=workspace_binaries,
     )
     payloads: dict[str, bytes] = {}
     object_ids = {object_["id"] for object_ in manifest["objects"]}
@@ -3772,13 +3917,41 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             or stack > COMPONENT_MAX_STACK_BYTES
         ):
             fail(f"executable {executable['name']}: invalid stack")
-        if executable["object"] not in object_ids:
-            fail(f"executable {executable['name']}: missing object")
+        specification = component_specs.get(executable["name"])
+        if specification is None:
+            binary_name = executable["name"]
+            provider = "workspace-fixture"
+            elf = component_executable(built, binary_name, target_profile)
+        else:
+            implementation = specification["implementation"]
+            binary_name = implementation["binary"]
+            provider = implementation["provider"]
+            if provider == component_spec_contract.PROVIDER_WORKSPACE:
+                elf = component_executable(built, binary_name, target_profile)
+            else:
+                elf = external_components[binary_name]
+                source_path = elf
+                try:
+                    data = elf.read_bytes()
+                except OSError as error:
+                    fail(f"external component {binary_name!r}: cannot read {elf}: {error}")
+                actual = sha256(data).hex()
+                expected = implementation["contentHash"]
+                if actual != expected:
+                    fail(
+                        f"external component {binary_name!r}: SHA-256 {actual} "
+                        f"does not match declared {expected}"
+                    )
+                elf = data
+                display_path = source_path
+        if provider != component_spec_contract.PROVIDER_EXTERNAL:
+            display_path = elf
+        print(
+            f"Component source: executable={executable['name']} "
+            f"implementation={binary_name} provider={provider} path={display_path}"
+        )
         payloads[executable["object"]] = component_image(
-            executable["name"],
-            component_executable(built, executable["name"], target_profile),
-            stack,
-            target_profile,
+            executable["name"], elf, stack, target_profile
         )
 
     # RP2: qualify one named executable for a *different* admitted target, so a
@@ -3845,9 +4018,28 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        fail("usage: build-generation.py <output-dir>")
-    output = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--external-component",
+        action="append",
+        default=[],
+        metavar="NAME=ELF",
+        help="supply one externally built component ELF by implementation name",
+    )
+    parser.add_argument(
+        "--component-spec-root",
+        type=Path,
+        help="load component specifications from this directory",
+    )
+    parser.add_argument("output_dir")
+    arguments = parser.parse_args()
+    output = Path(arguments.output_dir).resolve()
+    external_components = parse_external_components(arguments.external_component)
+    component_spec_root = (
+        arguments.component_spec_root.resolve()
+        if arguments.component_spec_root is not None
+        else None
+    )
     manifest = load_manifest()
     # The manifest names the profile a generation is built for. The optional
     # override rewrites that declaration before the closed profile lookup, so
@@ -3934,7 +4126,13 @@ def main() -> None:
     if target_profile.name != SEL4_TARGET_PROFILE:
         fail("custom-kernel generation builds were retired with P5; select a seL4 manifest")
     output.mkdir(parents=True, exist_ok=True)
-    build_sel4_generation(output, manifest, target_profile)
+    build_sel4_generation(
+        output,
+        manifest,
+        target_profile,
+        external_components,
+        component_spec_root,
+    )
 
 
 if __name__ == "__main__":

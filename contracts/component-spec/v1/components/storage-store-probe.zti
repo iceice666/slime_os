@@ -8,6 +8,7 @@
   implementation = {
     provider = "undeclared";
     binary = "";
+    contentHash = "";
   };
   provides = [];
   requires = [];

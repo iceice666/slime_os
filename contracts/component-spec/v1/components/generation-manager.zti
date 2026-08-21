@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "sel4-generation-manager";
+    contentHash = "";
   };
   provides = [];
   requires = [

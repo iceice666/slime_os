@@ -673,6 +673,13 @@ system_spec_check: component_spec_check
 component_crate_split_check: component_spec_check
     python3 scripts/check/check-component-crate-split.py
 
+
+# CP4's external-artifact path: the generation builder resolves one component
+# through an explicit content-hash-bound ELF mapping, reports the source, signs
+# and admits the mixed generation, and refuses hash-mismatched or malformed ELF
+# bytes before a generation is signed.
+external_component_admission_check: generation_check
+    python3 scripts/check/check-external-component-admission.py
 # CP2's runtime binding resolution: a component asks the root which of its own
 # slots holds a named binding instead of compiling the number in. An unprefixed
 # name is a manifest grant; `executable:`/`channel:` reach the boot layout's two

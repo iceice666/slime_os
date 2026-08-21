@@ -43,6 +43,7 @@ COMPONENT_CRATE_ROOT = ROOT / "components" / "bins"
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONTRACT_PATH = re.compile(r"^contracts/[a-z][a-z0-9-]*/v\d+$")
 _JUST_TARGET = re.compile(r"^([a-z][a-z0-9_]*)\s*(?::|\s)", re.MULTILINE)
 # CP3: a component is its own crate under `components/bins/<name>/`, declaring
@@ -434,15 +435,23 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
     if not purpose:
         _fail("purpose: must be declared")
 
-    implementation = _exact_record(raw["implementation"], {"provider", "binary"}, "implementation")
+    implementation = _exact_record(
+        raw["implementation"], {"provider", "binary", "contentHash"}, "implementation"
+    )
     provider = _member(implementation["provider"], contract.PROVIDERS, "implementation.provider")
     binary_name = _text(
         implementation["binary"], "implementation.binary", contract, limit=contract.MAX_NAME_BYTES
     )
+    content_hash = _text(
+        implementation["contentHash"],
+        "implementation.contentHash",
+        contract,
+        limit=contract.MAX_CONTENT_HASH_BYTES,
+    )
     binaries = dict(workspace_binaries())
     if provider == contract.PROVIDER_UNDECLARED:
-        if binary_name:
-            _fail("implementation: an undeclared provider names no binary")
+        if binary_name or content_hash:
+            _fail("implementation: an undeclared provider names no binary or content hash")
         # An undeclared provider is a recorded gap, so it must be a real one: a
         # component whose binary does exist must not claim to be missing.
         for candidate in (name, f"sel4-{name}"):
@@ -453,10 +462,13 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
                 )
     elif not binary_name:
         _fail(f"implementation: provider {provider!r} must name its binary")
-    elif provider == contract.PROVIDER_WORKSPACE and binary_name not in binaries:
-        # `external` names an artifact CP4 admits from outside this repository,
-        # so only `workspace` can be resolved against this crate's bin table.
-        _fail(f"implementation.binary: {binary_name!r} is no [[bin]] target")
+    elif provider == contract.PROVIDER_WORKSPACE:
+        if binary_name not in binaries:
+            _fail(f"implementation.binary: {binary_name!r} is no [[bin]] target")
+        if content_hash:
+            _fail("implementation: a workspace provider must not pin external content")
+    elif not _SHA256.fullmatch(content_hash):
+        _fail("implementation.contentHash: external providers require lowercase SHA-256")
 
     provides = _sorted_unique(
         [
@@ -729,7 +741,11 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         "version": spec_version,
         "owner": owner,
         "purpose": purpose,
-        "implementation": {"provider": provider, "binary": binary_name},
+        "implementation": {
+            "provider": provider,
+            "binary": binary_name,
+            "contentHash": content_hash,
+        },
         "provides": provides,
         "requires": requires,
         "interfaces": interfaces,
@@ -832,6 +848,20 @@ def admit_specs(
     identities = {entry.identity for entry in compiled}
     if len(identities) != len(compiled):
         _fail("two component specs computed the same identity")
+    implemented = [
+        entry.spec["implementation"]["binary"]
+        for entry in compiled
+        if entry.spec["implementation"]["provider"] != contract.PROVIDER_UNDECLARED
+    ]
+    if len(set(implemented)) != len(implemented):
+        _fail("two component specs resolve to the same implementation binary")
+    cross_domain = sorted(set(names) & set(implemented))
+    for value in cross_domain:
+        owner = next(entry.name for entry in compiled if entry.spec["implementation"]["binary"] == value)
+        if owner != value:
+            _fail(
+                f"component spec name {value!r} collides with {owner!r}'s implementation binary"
+            )
     declared = set(names)
     for entry in compiled:
         unknown = [value for value in entry.spec["dependencies"] if value not in declared]

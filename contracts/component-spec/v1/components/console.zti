@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "console";
+    contentHash = "";
   };
   provides = [
     "endpoint";

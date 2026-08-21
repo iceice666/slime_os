@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "storage-writer";
+    contentHash = "";
   };
   provides = [];
   requires = [

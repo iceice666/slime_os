@@ -8,6 +8,7 @@
   implementation = {
     provider = "workspace";
     binary = "fabric-publisher-b";
+    contentHash = "";
   };
   provides = [
     "endpoint";

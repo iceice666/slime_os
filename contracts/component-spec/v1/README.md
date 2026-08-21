@@ -43,6 +43,11 @@ Three choices are worth stating outright:
   depth; `manual` liveliness needs a lease). Two vocabularies could only be
   compared by translation, and a translation table is where they would diverge.
 - **`implementation.provider` is closed and includes `undeclared`.** See below.
+- **External implementations are content-bound, not path-bound.**
+  `implementation.contentHash` is empty for `workspace` and `undeclared`, and
+  exactly one lowercase SHA-256 for `external`. The generation builder receives
+  the operator-local ELF path separately, verifies the bare bytes against this
+  digest, and only then admits and signs the ordinary generation.
 
 ## Identity
 
@@ -127,7 +132,7 @@ a record can neither omit a role the graph gives it nor invent one it does not. 
 spec free to disagree with the generation that composes it would be
 documentation, not a contract, and CP1 could not derive one from the other.
 
-37 named malformations are refused, each paired with an admitted baseline of the
+42 named malformations are refused, each paired with an admitted baseline of the
 same shape so no arm can pass by tripping an unrelated guard — the discipline
 [B67](../../../roadmap/00-backlog.md) established after two negative controls
 were found to be structurally incapable of failing.
