@@ -318,3 +318,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-21 | [CP3: one crate per component, and the three Cargo behaviors that shaped it](2026-08-21-cp3-crate-per-component/index.md) | Change | Verified | CP3, B70, B65 |
 | 2026-08-21 | [CP4: content-bound external artifacts enter an ordinary signed generation](2026-08-21-cp4-external-artifact-admission/index.md) | Change | Verified | CP4 |
 | 2026-08-22 | [CP5: two out-of-tree data-path components boot through a pinned SDK](2026-08-22-cp5-out-of-tree-component-sdk/index.md) | Change | Verified | CP5 |
+| 2026-08-22 | [B70 closes: the last nine `include!` sites, and the stack the ceilings overflowed](2026-08-22-b70-profile-include-closure/index.md) | Change | Verified | B70, CP2 |
