@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
 
-**Status:** CP0, CP1, CP3, and CP4 complete; CP2's mechanism landed with its migration partial; CP5 not started.
+**Status:** CP0–CP5 complete. The track closed 2026-08-22 with B70's last nine `include!` sites.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -51,9 +51,11 @@
 
 ## CP2 — Runtime-resolved component binding
 
-**Status:** Mechanism complete and gated, answering grant bindings, namespaced boot-layout roles, unambiguous capability roles, the fabric-graph read, and the generation's boot action; the site-by-site migration is partial — 9 `include!` sites remain, all `fabric_profile` readers blocked on declared bounds that size fixed arrays rather than on any missing query.
+**Status:** Complete. The query surface answers grant bindings, namespaced boot-layout roles, unambiguous capability roles, the fabric-graph read, and the generation's boot action, and the site-by-site migration finished on 2026-08-22: no component source `include!`s a `build.rs`-private, manifest-derived constant table. The nine `fabric_profile` sites that no query could retire — their symbols size fixed arrays at compile time — split into authenticated `fabric-graph` header fields (`trace_depth`, `trace_overflow`, query ids 24/25), existing `RuntimeLimits` ceilings, and published `contracts/fabric-graph/v1` storage constants. `render_fabric_profile_rust`, the `SLIME_DATA_FABRIC_PROFILE` handoff, both command-table generators, and `components/build-support`'s manifest parser are deleted.
 
 **Progress (2026-08-21, boot action):** `CAPABILITY BOOT ACTION` (label 40) answers `BootAction`'s frozen id, so a component reads which composition it was booted into instead of `include!`ing a `build.rs`-private per-plane string. Five sites migrated and six `include!`s deleted, taking the all-profile count from 15 to 9. Gated on the *lifecycle* service rather than the capability table its label namespace names: the query must be answerable to every launched instance, and 30 of the 182 instances the seL4 fixtures declare hold no capability-transfer service where 0 lack lifecycle. **Evidence:** [`devlog/2026-08-21-b70-boot-action-query/`](../devlog/2026-08-21-b70-boot-action-query/index.md)
+
+**Closure (2026-08-22):** [`devlog/2026-08-22-b70-profile-include-closure/`](../devlog/2026-08-22-b70-profile-include-closure/index.md)
 
 **Depends on:** Cleared or explicitly deferred backlog. Independent of CP0/CP1.
 
