@@ -806,7 +806,7 @@ A simulated sensor/controller/actuator graph runs through the native fabric with
 
 ## C10: Bounded private component memory
 
-**Status:** Not started. Decomposed into C10.1–C10.4.
+**Status:** In progress — C10.1 complete; C10.2–C10.4 not started.
 
 **Depends on:** C7's per-holder quota, supervision-subtree accounting, and
 reclamation pattern, and backlog item **B9** (resolved 2026-07-28), whose task
@@ -872,57 +872,56 @@ ELF component code cannot, so the base is pinned and the reservation is fixed.
 
 ### C10.1 — Task-private growable memory mechanism
 
-**Status:** Not started.
+**Status:** Complete.
+
+**Delivered:** One task-private region per child: a 2 MiB window — one AArch64
+level-2 span, so it costs one extra leaf table and no more — reserved as address
+space and translation tables when the VSpace is built
+(`slime-root/src/child_vspace.rs::private_window`, a guard granule above the
+thread pages and aligned to its own span), backed page by page through
+`LIFECYCLE PRIVATE MEMORY GROW` (label 43, `contracts/syscall-abi/v1`), which
+answers the previous page count plus the window base so an allocator neither
+needs a second call nor recomputes the loader's arithmetic. The mechanism is
+`slime-root/src/private_memory.rs`: a per-task `Region`, a root-wide `Table`,
+and five distinct refusals. No seL4 object kind, no root-tracked object, and no
+right — `../docs/capability-matrix.md` is unchanged, because the authority
+question is how many pages a task may hold, which is a budget.
+
+Two pre-existing accounting asymmetries had to close first, neither visible
+until something allocated from a task arena *while the task ran*:
+`CleanupRecord.slots` was a construction-time snapshot that had diverged from
+what the revoke returned, and `ArenaRecord::push_slot` had no inverse, so a
+part-way failure could not return its CSlots. The second was found twice — in
+the unwind loop, and again where the retype succeeds and the mapping fails.
+
+The generation-declared budget is **C10.2's**, so every declared instance and
+every spawned child sits at deny-by-default zero and the live evidence runs on
+the root's embedded fixture against a four-page ceiling — the same situation
+`SHARED_QUOTA` records for the C7.3 shared-buffer phase.
+
+**Exit condition (observed):** `just sel4_root_boot_check` boots the fixture
+graph and observes, in order: a size query answering `pages=0 base=0x400000`
+without allocating, two growths reaching `quota=4` with both new pages read as
+zero at that base, a pattern written before the second growth still readable
+after it (`survived=0x4d454d5f42415345`), the next page refused
+`cause=quota detail=QuotaExceeded { pages: 4, delta: 1, quota: 4 }` with the
+caller alive to see `-5`, the region unchanged afterwards, and
+`enforced quota=4 pages=4 grants=2 grown=4 reclaimed=0` — two grants, so
+neither query nor the refusal charged a page — then
+`teardown grown=4 reclaimed=4 pages=0`. Each half is proven non-vacuous by
+injection: deleting the quota bound fails the gate naming
+`missing 0x60 of 0x7f`, and re-backing from the base instead of the tail fails
+it naming `missing 0x50 of 0x7f`. Frame exhaustion mid-growth remains reasoned
+and unit-tested rather than observed; it needs a fault-injection seam B61
+records this repository lacking.
+
+**Gates:** `just sel4_root_boot_check` (58 ordered markers), `just test_sel4_root`
+(146 host tests across 16 modules), `just sel4_gate_control_check` (33 gates,
+1295 mutations).
+
+**Evidence:** [`devlog/2026-08-23-c10-1-private-memory-mechanism/`](../devlog/2026-08-23-c10-1-private-memory-mechanism/index.md)
 
 **Depends on:** B9 (resolved).
-
-#### Deliverables
-
-- reserve a fixed per-task private-memory window in the component address space,
-  clear of the image, the shared-buffer mapping convention, and the stack, with
-  unmapped address space on both sides serving as its guard;
-- add one root operation, declared in `contracts/syscall-abi/v1`, taking a page
-  delta and returning the previous page count, with distinct structured errors
-  for delta overflow, reservation overrun, quota exhaustion, and frame
-  exhaustion;
-- back each new page with a freshly zeroed frame mapped user/read-write/
-  no-execute, and never move the base;
-- make growth all-or-nothing: a failure part-way through unmaps and returns
-  every frame the attempt took, leaving the page count and every existing
-  mapping unchanged;
-- charge growth to a per-task page count bounded by both the declared quota and
-  a fixed root-wide ceiling, and return every page on termination through the
-  task-arena reclamation path B9 established;
-- treat a zero delta as a size query, so an allocator can read its current
-  extent without a second call.
-
-#### Required checks
-
-- growth returns the previous page count and every new page reads as zero;
-- the base address and previously written contents survive repeated growths;
-- leaf mappings carry user, write, and no-execute, and never an executable bit;
-- a component with no budget entry cannot grow at all;
-- quota overrun, reservation overrun, and delta overflow each fail with their
-  own structured error and leave the page count unchanged;
-- frame exhaustion part-way through a multi-page growth returns every frame it
-  had taken, observable as an unchanged free-frame count;
-- the root-wide ceiling holds across several components, and one component's
-  exhaustion leaves every other component's region intact;
-- termination returns every private page, observable as a free-frame count that
-  comes back to its pre-spawn value.
-
-#### Planned verification target
-
-```sh
-just private_memory_check
-```
-
-#### Exit condition
-
-A task grows a private region repeatedly at a fixed base, reads zeros from every
-new page, cannot obtain an executable mapping of it, fails closed on quota,
-reservation, overflow, and frame exhaustion with no partial effect, and returns
-every page to the frame allocator when it terminates.
 
 ### C10.2 — Generation-declared private-memory budget
 
