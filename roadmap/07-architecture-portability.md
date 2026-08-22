@@ -12,8 +12,8 @@ Slime targets 64-bit little-endian systems with an MMU and user/supervisor isola
 
 | Profile | Role | Initial machine | Required baseline |
 | --- | --- | --- | --- |
-| `x86_64-qemu-virtio` | Existing regression oracle | QEMU q35/UEFI | x86-64, 4 KiB pages, ring 0/ring 3, APIC, virtio |
-| `aarch64-qemu-virt` | First non-x86 architecture gate | QEMU `virt`/UEFI or pinned firmware path | AArch64, 4 KiB translation granule, EL1/EL0, GICv3, generic timer, PL011, virtio |
+| `x86_64-qemu-virtio` | Retired with P5; historical regression oracle only | QEMU q35/UEFI | x86-64, 4 KiB pages, ring 0/ring 3, APIC, virtio |
+| `aarch64-sel4-qemu-virt` | Current product path | QEMU `virt` with upstream seL4 | AArch64, 4 KiB translation granule, EL1/EL0, GICv3, generic timer, PL011, virtio |
 | `aarch64-rpi5` | Near-term physical product target | Raspberry Pi 5, exact board/firmware/media profile selected by RP0/RP3 | AArch64, 4 KiB translation granule, EL1/EL0 or documented firmware entry state, GIC, generic timer, device tree, serial console, reproducible removable media |
 | `riscv64-qemu-virt` | Deferred second architecture profile | Pinned QEMU `virt` machine and firmware | RV64 little-endian, S/U mode, Sv39, atomic operations, pinned interrupt/timer/UART devices, virtio |
 
@@ -186,21 +186,21 @@ The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated
 
 ## P3: RV64 QEMU vertical slice
 
-**Status:** Deferred until after the Raspberry Pi 5 ROS 2 demo stabilizes.
+**Status:** Deferred until after the Raspberry Pi 5 ROS 2 demo stabilizes. Rescoped by P5: this is no longer a custom-kernel port. seL4 supports RV64 upstream, so the S-mode kernel, Sv39 translation tables, trap decoding, `ecall` entry, context switching, interrupt controller, and timer are all upstream mechanism to configure and pin, not Slime code to write. What remains Slime's is the target profile, the stage-0/loader route, and replaying the semantic corpus.
 
-**Depends on:** P2.
+**Depends on:** P5, and P4 for the precedent of qualifying a second seL4 platform.
 
 ### Deliverables
 
-- pin one QEMU `virt` machine version, firmware/stage-0 route, RV64 ISA baseline, interrupt controller, timer, UART, and virtio device set;
-- implement S-mode kernel and U-mode component execution with Sv39, 4 KiB pages, bounded page-table construction, TLB invalidation, and explicit unsupported-feature rejection;
-- implement trap decoding, `ecall` syscalls, saved user context, address-space switching, interrupt masking, idle/wake behavior, timer preemption, diagnostics, and QEMU exit behind `arch/riscv64`;
-- replay the same isolation, B2, C7, generation, and rollback acceptance corpus used by P2.
+- pin one QEMU `virt` machine version, firmware/loader route, RV64 ISA baseline, interrupt controller, timer, UART, and virtio device set, and add the matching upstream seL4 kernel configuration and pinned artifact hashes alongside the existing `sel4/config/qemu-arm-virt.cmake`;
+- add the RV64 target profile to P0's architecture/ABI/page-profile contract and its `ecall` calling-convention document, so a generation names it and stage-0 rejects AArch64 and retained x86 artifacts before mapping executable bytes;
+- build `slime-root` and the component images for the RV64 seL4 target, confirming the root's mechanism modules carry no AArch64 assumption outside the admitted boundary;
+- replay the same isolation, B2 wait/wake, C7 sample-plane, generation, and rollback acceptance corpus the AArch64 seL4 gates run.
 
 ### Required checks
 
-- the pinned RV64 QEMU profile boots a verified target generation and rejects x86/AArch64 artifacts before executable mapping;
-- S/U isolation, faults, syscalls, timer preemption, blocked waits, shared samples, quota exhaustion, peer death, and rollback preserve the same structured semantics as the other architectures;
+- the pinned RV64 seL4 QEMU profile boots the kernel and `slime-root`, admits a verified target generation, and rejects AArch64 and retained x86 artifacts before executable mapping;
+- isolation, faults, root operations, timer preemption, blocked waits, shared samples, quota exhaustion, peer death, and rollback preserve the same structured semantics as the AArch64 planes;
 - unsupported ISA extensions, page modes, firmware handoffs, interrupt profiles, ELF flags, and relocations fail explicitly rather than being guessed from the running machine;
 - no AArch64 register, GIC, firmware, translation-table, or device assumption appears in shared or RV64-specific paths.
 
@@ -218,11 +218,13 @@ The pinned RV64 QEMU profile passes the same architecture-neutral isolation, wai
 
 **Status:** Not started.
 
-**Depends on:** P2 for the first AArch64 board.
+**Depends on:** P5, which supplies the kernel this board runs. P2's custom-kernel AArch64 slice is superseded and is not a prerequisite.
 
 ### Deliverables
 
 - select one exact Raspberry Pi 5 board revision or accepted revision set, firmware version, boot path, removable storage medium, interrupt topology, timer, serial path, and minimum device set;
+- build the `bcm2712` upstream seL4 kernel and loader image from the existing pins and platform configuration, alongside the current `sel4/config/qemu-arm-virt.cmake`, and pin its artifact hashes the same way;
+- source the board's memory map, UART, GIC, and timer facts from seL4's BootInfo and its platform configuration rather than from any Slime-side board table;
 - record reproducible removable-media images, generation/release identities, firmware and board identities, normalized device tree/topology, serial evidence, storage-integrity boundaries, and every granted device capability;
 - qualify DMA, storage writes, networking, sensors, and actuators only through their owning demo or hardware milestones; a CPU boot does not promote an untested peripheral;
 - replay the AArch64 QEMU semantic corpus on the board where physically meaningful, labeling hardware-only differences instead of hiding them;

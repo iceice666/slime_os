@@ -13,7 +13,7 @@
 ## Boundaries
 
 - **Zutai remains the only schema language.** Every project/build/admission/update message or persistent format is a versioned Zutai schema under `contracts/` with generated bindings. The new language may import generated protocol bindings; it does not define a second wire, manifest, build-request, or persistence schema language.
-- **There is one native executable format.** A compiler may emit the P0-admitted revision of `SLIMECMP` directly instead of producing ELF, but direct output receives no alternate loader, relaxed validation, or language-specific kernel path.
+- **There is one native executable format.** A compiler may emit the P0-admitted `SLIMECME` component-image revision — the ELF-carrying revision `boot-contracts/src/component_image.rs` validates — directly instead of going through the workspace build, but direct output receives no alternate loader, relaxed validation, or language-specific admission path. The retired `SLIMECMP` (component/v1) revision is refused, not a target.
 - **Images contain mapping, not authority.** Source annotations and compiler output cannot declare capabilities, grants, command-profile membership, release authorization, resource accounts, or activation policy. Those remain generation/admission inputs enforced outside the image.
 - **Writing bytes never grants execution.** A file or object that decodes as a component image is still data until an explicitly authorized admission service creates an `Executable` capability. Spawn continues to require `EXEC | SPAWN` and narrow-only grants.
 - **Build, test, install, and switch are separate transitions.** An unsigned local artifact may be admitted only to a bounded ephemeral development session. A persistent boot or live-generation activation still requires the existing release authorization and generation closure checks.
@@ -29,12 +29,12 @@ The language project owns:
 
 - grammar, parser, type/effect system, compiler implementation, language package rules, and standard-library source;
 - deterministic lowering from a normalized source/toolchain closure to one exact P0 target profile;
-- direct emission of the admitted `SLIMECMP` revision, plus detached diagnostics/debug data when requested;
+- direct emission of the admitted `SLIMECME` revision, plus detached diagnostics/debug data when requested;
 - a pinned compiler/toolchain identity consumable by host and Slime build services.
 
 Slime OS owns:
 
-- `SLIMECMP`, syscall, target-profile, capability, and generated IPC binding contracts;
+- the `SLIMECME` component-image, root-operation, target-profile, capability, and generated IPC binding contracts;
 - validation, content identity, storage, executable admission, spawn, supervision, and resource accounting;
 - generation construction, authority diff/classification, release authorization, live/boot activation, health, and rollback;
 - conformance fixtures proving that a producer cannot bypass target, ABI, W^X, bounds, or authority rules.
@@ -46,7 +46,7 @@ normalized source closure
 + exact compiler/toolchain identity
 + exact target/profile and build parameters
     -> compiler
-    -> SLIMECMP bytes + diagnostics/debug objects
+    -> SLIMECME bytes + diagnostics/debug objects
     -> Slime structural validation and content identity
     -> ephemeral admission OR generation construction
 ```
@@ -99,10 +99,10 @@ Inside QEMU, a user creates a project, edits and commits source, reopens the ide
 
 ### Deliverables
 
-- make P0's component-image conformance producer-neutral: the existing static-ELF converter and a direct image emitter both target the same versioned `SLIMECMP` schema and identical kernel validator;
+- make P0's component-image conformance producer-neutral: the existing workspace ELF build path and a direct image emitter both target the same versioned `SLIMECME` schema and the identical `boot-contracts` validator;
 - pin the new language compiler, standard library, generated Slime syscall/IPC bindings, optimization profile, and backend parameters as one content-addressed toolchain closure;
 - implement a deterministic backend that emits the exact target-qualified component image directly, including entry, stack requirement, bounded segments, zero-fill, and per-segment R/W/X flags, with no relocation, dynamic-link, authority, signature, or ambient-runtime metadata;
-- keep source maps, symbols, compiler diagnostics, and build provenance in detached bounded objects unread by the kernel loader; changing or omitting them cannot change executable semantics accidentally;
+- keep source maps, symbols, compiler diagnostics, and build provenance in detached bounded objects unread by the loader in `slime-root/src/child_vspace.rs`; changing or omitting them cannot change executable semantics accidentally;
 - publish language-owned conformance fixtures for a returning component, a typed-IPC client/server pair, a faulting component, and malformed output classes; Slime owns the acceptance oracle and target mismatch corpus;
 - keep every cross-component protocol in Zutai-generated bindings. Language-native data layouts are in-memory only unless backed by a versioned Zutai contract.
 
@@ -112,7 +112,7 @@ Inside QEMU, a user creates a project, edits and commits source, reopens the ide
 - changing source, compiler identity, target, ABI, page profile, or normalized parameter changes the build key and cannot reuse a stale image;
 - unknown image revisions, target/ABI mismatch, invalid entry/stack/segments, overlap, overflow, W+X, and over-bound output are rejected by the same corpus regardless of producer;
 - a direct-emitted component boots in an ordinary generation and performs typed IPC under only its declared grants; it receives no authority from source annotations or image contents;
-- no ELF parser, language runtime, type metadata, or compiler-specific policy enters the kernel.
+- no ELF-beyond-the-admitted-revision parsing, language runtime, type metadata, or compiler-specific policy enters `slime-root`, and none enters seL4;
 
 ### Planned verification target
 
@@ -122,7 +122,7 @@ just language_image_check
 
 ### Exit condition
 
-A pinned compiler for the new language directly emits a byte-deterministic target-qualified `SLIMECMP` component that runs in the ordinary QEMU graph through generated Zutai IPC bindings, while every malformed, mismatched, widened-authority, and nondeterministic fixture fails at its owning boundary.
+A pinned compiler for the new language directly emits a byte-deterministic target-qualified `SLIMECME` component that runs in the ordinary QEMU graph through generated Zutai IPC bindings, while every malformed, mismatched, widened-authority, and nondeterministic fixture fails at its owning boundary.
 
 ## D3 — Hermetic on-device build service and provenance
 
@@ -167,9 +167,9 @@ A native build service inside QEMU consumes one content-addressed source/toolcha
 
 ### Deliverables
 
-- define a versioned Zutai executable-admission protocol and add a distinct `ExecutableFactory`/`EXECUTABLE_ADMIT` authority; update the capability matrix in the same change as its syscall/service gate;
-- admit only a sealed content-identified component object through bounded transfer, recompute identity, re-run the P0/component decoder, and create an immutable kernel-backed `Executable` object only after all checks pass;
-- impose fixed kernel-wide and per-supervision-subtree limits for admitted image bytes, executable objects, mappings, tasks, and lifetime; admission policy, not source/image data, supplies the child's spawn budget and resource account, defaulting to no children and no external grants;
+- define a versioned Zutai executable-admission protocol and add a distinct `ExecutableFactory`/`EXECUTABLE_ADMIT` authority; update the capability matrix in the same change as the root operation and service gate that serve it;
+- admit only a sealed content-identified component object through bounded transfer, recompute identity, re-run the P0/component decoder, and create an immutable root-tracked `Executable` record only after all checks pass;
+- impose fixed root-wide and per-supervision-subtree limits for admitted image bytes, executable objects, mappings, tasks, and lifetime; admission policy, not source/image data, supplies the child's spawn budget and resource account, defaulting to no children and no external grants;
 - return the admitted executable only to a development-run service. It spawns the child with an explicit user-selected grant set, fresh endpoints/mappings, separate stdout/stderr/diagnostics, and a supervision handle;
 - permit unsigned local images only on this ephemeral path. They cannot enter a command profile, BootState, known-good/pending roots, or persistent generation without D6's release-authorized transition;
 - terminate and reclaim the entire development session on completion, cancellation, timeout, compiler/run-service fault, or explicit lifecycle action; stale executable handles and backing bytes become unusable;

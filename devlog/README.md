@@ -319,3 +319,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-21 | [CP4: content-bound external artifacts enter an ordinary signed generation](2026-08-21-cp4-external-artifact-admission/index.md) | Change | Verified | CP4 |
 | 2026-08-22 | [CP5: two out-of-tree data-path components boot through a pinned SDK](2026-08-22-cp5-out-of-tree-component-sdk/index.md) | Change | Verified | CP5 |
 | 2026-08-22 | [B70 closes: the last nine `include!` sites, and the stack the ceilings overflowed](2026-08-22-b70-profile-include-closure/index.md) | Change | Verified | B70, CP2 |
+| 2026-08-22 | [The open milestones still specified against the kernel P5 deleted](2026-08-22-roadmap-retired-kernel-audit/index.md) | Audit | Verified | C9, C10, C10.1, C10.2, C10.3, P3, P4, D2, D4, M1, M2, RP2, CP2, CP5, B70 |

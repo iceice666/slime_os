@@ -17,7 +17,7 @@
 
 ## M1 — Kernel foundation
 
-**Status:** Complete; the QEMU tests pass.
+**Status:** Complete on the retired custom-kernel path; the mechanism below is now supplied by upstream seL4 (see [P5](07-architecture-portability.md#p5-sel4-microkernel-substitution)). The `Delivered` text is historical record of the x86 custom kernel and must not be cited as current proof.
 
 **Depends on:** None.
 
@@ -29,7 +29,7 @@
 
 ## M2 — Isolation and IPC
 
-**Status:** Complete; the core QEMU exit passes.
+**Status:** Complete on the retired custom-kernel path; the mechanism below is now supplied by upstream seL4 (see [P5](07-architecture-portability.md#p5-sel4-microkernel-substitution)), with root-owned channels replaced by native seL4 Endpoints under B46. The `Delivered` text is historical record.
 
 **Depends on:** M1.
 

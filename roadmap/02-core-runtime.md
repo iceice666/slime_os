@@ -25,7 +25,7 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 3. C9 consumes C8 plus the scheduler and time mechanisms from M1/M2, after P1 has made their architecture boundary explicit.
 4. C10 consumes C7's per-holder quota and accounting pattern only. It does not consume C8 or C9 and may proceed in parallel with the remaining fabric slices.
 5. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
-6. ROS R1 consumes C8 and H6 networking; it does not block C9 and its initial wire-conformance gate does not require a non-x86 boot.
+6. ROS R1 consumes C8 and H6 networking; it does not block C9, and its initial wire-conformance gate does not require a physical-board boot.
 
 ## C7: Bounded resource and shared-sample plane
 
@@ -236,9 +236,10 @@ check that could not pass.
 **Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](../devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md)
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
-`Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
-local-first and may proceed on `x86_64-qemu-virtio` while architecture
-portability work continues.
+`Blocked` state and its wait mechanism). Both are complete. C8 is local-first
+and was closed on the `aarch64-sel4-qemu-virt` product path; B46 replaced the
+root-owned channel and wait-set mechanism it was first built on with native
+seL4 Endpoints and Notifications.
 
 ### Architecture decisions
 
@@ -249,10 +250,10 @@ portability work continues.
   and becomes a generation-local type tag derived from the full identity;
   generation admission rejects tag collisions between distinct admitted
   schemas, and route matching never treats the tag alone as authority;
-- the kernel remains unaware of schemas, graph names, route kinds, QoS, and
-  correlation policy. Its only new C8 mechanism is a generic bounded
-  narrow-on-transfer operation so a userspace service can move a capability
-  with an exact non-widening rights mask;
+- seL4 and `slime-root` remain unaware of schemas, graph names, route kinds,
+  QoS, and correlation policy. The root's only new C8 mechanism is a generic
+  bounded narrow-on-transfer operation so a userspace service can move a
+  capability with an exact non-widening rights mask;
 - the fabric brokers large samples through C7's receiver-bound loans. It maps a
   publisher loan read-only, makes one bounded copy into a fabric-owned sealed
   buffer, and creates one receiver-bound downstream loan per subscriber. C8
@@ -261,11 +262,11 @@ portability work continues.
   C8 corpus drives it with deterministic simulated time; C9 later supplies the
   standard component-facing monotonic and simulated-time services without
   changing C8 QoS state-machine meanings;
-- the initial fabric graph admits at most the existing `SYS_WAIT` bound of
-  eight live ingress sources per fabric instance. Admission rejects a graph
-  whose endpoint and control topology cannot block without polling; expanding
-  the generic wait-set or introducing bounded route workers requires a later
-  observed profile need;
+- the initial fabric graph admits at most `MAX_INGRESS_SOURCES` live ingress
+  sources per fabric instance, declared in `contracts/fabric-graph/v1` and
+  currently 9. Admission rejects a graph whose endpoint and control topology
+  cannot block without polling; expanding the multi-source wait or introducing
+  bounded route workers requires a later observed profile need;
 - `Operation<Goal, Feedback, Result>` owns bounded transport, correlation,
   feedback, result, cancellation, and peer-loss semantics. Application goal
   policy and the ROS action state machine remain outside the fabric.
@@ -767,21 +768,21 @@ by `sel4_fault_check`.
 
 This slice supplies the timing, execution, lifecycle, and observation contracts needed by robot and mixed interactive workloads. It does not promise hard real-time behavior from QEMU; deterministic state-machine checks precede measured latency evidence on a named physical target.
 
-**Depends on:** C8 and architecture-portability milestone P1. C9 defines architecture-neutral timer, wait-set, scheduling-class, lifecycle, and observation semantics; each admitted ISA supplies the privileged timer, interrupt, context-switch, and idle mechanisms behind P1's boundary.
+**Depends on:** C8 and architecture-portability milestone P5, which supplies the privileged timer, interrupt, context-switch, and idle mechanisms from upstream seL4. C9 defines architecture-neutral timer, wait-set, scheduling-class, lifecycle, and observation semantics above them; `slime-root` owns the bounded mechanism that brokers them (`slime-root/src/{platform_timer,notification,supervision}.rs`).
 
 R2's ROS 2 managed-node and parameter-service compatibility is expected to be implemented as a profile over C9's lifecycle-transition and parameter-state schemas rather than a separate ROS-specific state machine; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md).
 
 ### Deliverables
 
 - expose monotonic time, optional wall time, timers, and simulated time as distinct explicit service capabilities; a component with no clock grant cannot observe time implicitly;
-- implement userspace wait sets/executors over stream, call, operation, timer, supervision, and QoS-event endpoints with bounded ready queues and deterministic tie rules;
+- implement userspace wait sets/executors over stream, call, operation, timer, supervision, and QoS-event endpoints with bounded ready queues and deterministic tie rules, built on the native seL4 Endpoint/Notification wait mechanism B46 established rather than a root-owned wait set;
 - add manifest-declared `SchedulingClass` per component or supervision subtree, initially foreground, normal, and best-effort, plus conserved CPU resource accounts;
-- keep scheduling mechanism in the kernel while class assignment, dynamic promotion, and workload policy remain generation/userspace decisions; a component cannot widen its own class;
+- keep scheduling mechanism in seL4 — TCB priorities and, where its proof permits, MCS scheduling contexts — while class assignment, dynamic promotion, and workload policy remain generation/userspace decisions; a component cannot widen its own class. B48 established per-thread declared priority and deferred AArch64 MCS until its proof is complete, so a C9 class contract must state which of the two it rests on;
 - preserve class and resource-account bounds across supervised restart while issuing fresh endpoint, mapping, and device authority;
-- define component lifecycle transitions, health dependencies, bounded restart/backoff policy, and parameter state as versioned userspace schemas rather than kernel policy;
+- define component lifecycle transitions, health dependencies, bounded restart/backoff policy, and parameter state as versioned userspace schemas rather than root or seL4 policy;
 - add typed recording and replay for declared fabric routes; clock, entropy, device input, and other nondeterminism must be either capability-recorded or explicitly excluded from a deterministic claim;
-- build a simulated sensor → controller → actuator workload that exercises timer, stream, call, lifecycle, restart, and contention paths without special kernel treatment.
-- keep timer delivery, interrupt acknowledgement, context switching, CPU idle, and preemption behind the admitted architecture mechanism; no APIC vector, x86 register frame, CR3 operation, GIC identifier, or RISC-V trap field appears in the C9 userspace contracts;
+- build a simulated sensor → controller → actuator workload that exercises timer, stream, call, lifecycle, restart, and contention paths with no privileged special-casing;
+- keep timer delivery, interrupt acknowledgement, context switching, CPU idle, and preemption behind seL4 and the admitted architecture profile; no GIC identifier, AArch64 register frame, or RISC-V trap field appears in the C9 userspace contracts.
 
 ### Required checks
 
@@ -791,7 +792,7 @@ R2's ROS 2 managed-node and parameter-service compatibility is expected to be im
 - supervised restart preserves declared class and graph shape but cannot reuse stale buffers, endpoints, timers, or device mappings;
 - identical recorded typed inputs, clock events, and lifecycle transitions produce identical replayed component outputs for a manifest-declared deterministic component;
 - deadline misses, timer expiry, liveliness loss, process fault, peer loss, cancellation, and scheduling-budget exhaustion remain distinct at the userspace boundary.
-- the C9 semantic corpus can be replayed on later AArch64 and RV64 profiles without changing syscall meanings, event kinds, scheduling classes, bounds, or generated schemas; raw register and physical-address traces are not cross-architecture equality inputs;
+- the C9 semantic corpus can be replayed on later AArch64 board and RV64 profiles without changing operation meanings, event kinds, scheduling classes, bounds, or generated schemas; raw register and physical-address traces are not cross-architecture equality inputs;
 
 ### Planned verification target
 
@@ -808,82 +809,90 @@ A simulated sensor/controller/actuator graph runs through the native fabric with
 **Status:** Not started. Decomposed into C10.1–C10.4.
 
 **Depends on:** C7's per-holder quota, supervision-subtree accounting, and
-reclamation pattern; and backlog item **B9**, which must land first because
-C10.1 extends the same task-teardown path B9 repairs. C10 does not consume C8
-or C9 and may proceed in parallel with the remaining fabric slices on
-`x86_64-qemu-virtio`.
+reclamation pattern, and backlog item **B9** (resolved 2026-07-28), whose task
+teardown/reclamation path C10.1 extends. C10 does not consume C8 or C9 and may
+proceed in parallel on the `aarch64-sel4-qemu-virt` product path.
 
 **Motivation:** A component's working memory is fixed at build time. Its stack
-comes from the `SLIMECMP` header and its `.data`/`.bss` from the linked image;
-`components/runtime` installs no `GlobalAlloc`, and no syscall yields a page, so
-`Vec`, `Box`, and `String` are unavailable to a native component. Every buffer
-is therefore sized for its worst case in every generation that carries that
-component. A build service, a filesystem index, and a bounded introspection
-reply all need memory proportional to their input, and none can be written under
-that constraint.
+size comes from the `SLIMECME` image header's `stack_bytes` field — bounded by
+`MAX_STACK_BYTES` and validated in `boot-contracts/src/component_image.rs` —
+and its `.data`/`.bss` from the linked ELF; `slime-rt` (`components/runtime`)
+installs no `GlobalAlloc`, and no root operation yields a page, so `Vec`, `Box`,
+and `String` are unavailable to a native component. Every buffer is therefore
+sized for its worst case in every generation that carries that component. A
+build service, a filesystem index, and a bounded introspection reply all need
+memory proportional to their input, and none can be written under that
+constraint. B70's closure is the standing evidence that this is not theoretical:
+sizing three brokers' fixed arrays from contract ceilings overflowed the 64 KiB
+component stack, and because `.data` sits directly below the stack it presented
+as a corrupted `static` and a wild jump rather than as a stack overflow.
 
 The shared-buffer plane is not that mechanism and must not become it. It exists
 to move samples *between* components: every region is a nameable, transferable,
-loanable kernel object drawn from the contiguous frame allocator under a
-256-page kernel-wide ceiling. Working memory is private, never transferred,
-never sealed, and needs no physical contiguity. Overloading one onto the other
-would attach transfer and loan semantics to a heap and force fragmentation-prone
-contiguous runs on every allocation.
+loanable object that `slime-root` retypes from one untyped region and tracks
+under a 256-page root-wide ceiling
+(`slime-root/src/shared_buffer.rs::MAX_TOTAL_PAGES`). Working memory is private,
+never transferred, never sealed, and need not come from a single retype.
+Overloading one onto the other would attach transfer and loan semantics to a
+heap and force whole-region retypes on every allocation.
 
 ### Architecture decisions
 
 - component working memory is **one task-private region at a fixed base**, grown
-  only at its tail. `SLIMECMP` images link at a fixed VA and hold real machine
-  pointers, so a growth that relocated the base would invalidate every live
-  pointer; growth past the reserved window fails instead of moving;
-- the region is **reserved as address space at spawn and backed page by page on
-  demand**. Frames are drawn individually and need not be contiguous;
+  only at its tail. Native ELF component images link at a fixed VA and hold real
+  machine pointers, so a growth that relocated the base would invalidate every
+  live pointer; growth past the reserved window fails instead of moving;
+- the region is **reserved as address space in the child VSpace at spawn
+  (`slime-root/src/child_vspace.rs`) and backed page by page on demand**. Each
+  page is a 4 KiB frame the root retypes individually; they need not be
+  contiguous and need not come from one untyped region;
 - growth is **authorized by a generation-declared page quota, not a capability**.
   The region is not nameable, transferable, loanable, sealable, or shareable, so
   there is no object for a capability to designate; the authority question is
   how many pages a component may hold, which is a budget. This mirrors the
   stack, which is generation-sized and needs no capability, and it leaves
-  `../docs/capability-matrix.md` unchanged: C10 adds no kernel object and no
-  right;
+  `../docs/capability-matrix.md` unchanged: C10 adds no seL4 object kind, no
+  root-tracked object, and no right;
 - the quota is **deny-by-default**. A component absent from the budget resource
   grows nothing, exactly as an absent shared-buffer holder allocates nothing;
 - pages are **always user/read-write/no-execute**, preserving W^X. No growth,
   admission, or compilation path may derive an executable mapping from them;
-- the kernel exposes **growth only** — no `malloc`, `free`, arbitrary `mmap`,
+- the root exposes **growth only** — no `malloc`, `free`, arbitrary `mmap`,
   file-backed or executable mappings, and no second region. `free` is a
-  userspace free-list operation; the pages return to the kernel when the task
-  dies;
-- allocation policy lives **entirely in `slime-rt`**. The kernel tracks a page
+  userspace free-list operation; the frames return to the root's allocator when
+  the task dies, through the same task-arena revocation B9 established;
+- allocation policy lives **entirely in `slime-rt`**. The root tracks a page
   count and never an allocation.
 
 This is the WebAssembly linear-memory split — a runtime that grows bounded,
 zero-filled pages under a host-enforced limit, and a language runtime that
 allocates inside them — with one deliberate divergence. WebAssembly programs
 address memory by offset, so a runtime may relocate the base on growth; native
-`SLIMECMP` code cannot, so the base is pinned and the reservation is fixed.
+ELF component code cannot, so the base is pinned and the reservation is fixed.
 
 ### C10.1 — Task-private growable memory mechanism
 
 **Status:** Not started.
 
-**Depends on:** B9.
+**Depends on:** B9 (resolved).
 
 #### Deliverables
 
 - reserve a fixed per-task private-memory window in the component address space,
   clear of the image, the shared-buffer mapping convention, and the stack, with
   unmapped address space on both sides serving as its guard;
-- add one growth syscall taking a page delta and returning the previous page
-  count, with distinct structured errors for delta overflow, reservation
-  overrun, quota exhaustion, and frame exhaustion;
+- add one root operation, declared in `contracts/syscall-abi/v1`, taking a page
+  delta and returning the previous page count, with distinct structured errors
+  for delta overflow, reservation overrun, quota exhaustion, and frame
+  exhaustion;
 - back each new page with a freshly zeroed frame mapped user/read-write/
   no-execute, and never move the base;
 - make growth all-or-nothing: a failure part-way through unmaps and returns
   every frame the attempt took, leaving the page count and every existing
   mapping unchanged;
 - charge growth to a per-task page count bounded by both the declared quota and
-  a fixed kernel-wide ceiling, and return every page on termination through the
-  reclamation path B9 establishes;
+  a fixed root-wide ceiling, and return every page on termination through the
+  task-arena reclamation path B9 established;
 - treat a zero delta as a size query, so an allocator can read its current
   extent without a second call.
 
@@ -897,7 +906,7 @@ address memory by offset, so a runtime may relocate the base on growth; native
   own structured error and leave the page count unchanged;
 - frame exhaustion part-way through a multi-page growth returns every frame it
   had taken, observable as an unchanged free-frame count;
-- the kernel-wide ceiling holds across several components, and one component's
+- the root-wide ceiling holds across several components, and one component's
   exhaustion leaves every other component's region intact;
 - termination returns every private page, observable as a free-frame count that
   comes back to its pre-spawn value.
@@ -932,11 +941,11 @@ every page to the frame allocator when it terminates.
   unsorted, duplicated, or globally impossible budget fails the whole generation
   closed before any component launches;
 - reject aggregate over-commitment as B8 requires: the summed holder quotas must
-  fit the kernel-wide ceiling, so a budget that validates is one the kernel can
+  fit the root-wide ceiling, so a budget that validates is one the root can
   honour with every holder at its ceiling at once;
 - install each component's quota at spawn and leave a holder absent from the
   resource at its deny-by-default zero;
-- mirror the encoding and bound rules host-side, so builder/kernel drift fails
+- mirror the encoding and bound rules host-side, so builder/root drift fails
   in `just generation_check` instead of at boot.
 
 #### Required checks
@@ -973,19 +982,19 @@ first-come-first-served.
 
 #### Deliverables
 
-- add a `GlobalAlloc` to `components/runtime` backed by the private region: a
-  first-fit free list ordered by address with boundary coalescing on free,
-  matching the audited kernel heap, extended so a growth appends to the tail of
-  the list and merges with the trailing free block;
-- request growth in batches rather than per allocation, keeping the syscall ABI
-  in target pages while the batching policy stays in userspace, so a later page
-  profile changes no contract;
+- add a `GlobalAlloc` to `slime-rt` (`components/runtime`) backed by the private
+  region: a first-fit free list ordered by address with boundary coalescing on
+  free, extended so a growth appends to the tail of the list and merges with the
+  trailing free block;
+- request growth in batches rather than per allocation, keeping the declared
+  operation's ABI in target pages while the batching policy stays in userspace,
+  so a later page profile changes no contract;
 - surface exhaustion as a structured allocation failure that a component can
   observe, never a fault, silent truncation, or hang;
 - add a startup self-check component proving the declared quota is live on the
   real boot path, in the same shape as the C7 shared-buffer probe, so the
-  syscall is exercised by a real component and not only by kernel tests
-  (backlog B5's lesson);
+  operation is exercised by a real component and not only by `slime-root`'s host
+  unit tests (backlog B5's lesson);
 - leave components that declare no quota untouched: no growth call, no allocator
   use, and no change to their image or behavior.
 
@@ -998,7 +1007,7 @@ first-come-first-served.
 - an allocation beyond the declared quota fails structurally and the component
   stays alive to observe it;
 - the startup probe fails the boot when the generation granted a quota the
-  kernel does not honour;
+  root does not honour;
 - a zero-quota component that never allocates is byte-identical in behavior to
   its pre-C10 build.
 
@@ -1074,4 +1083,4 @@ just fmt_check_components
 just lint_components
 ```
 
-No core-runtime result by itself claims ROS wire interoperability, a non-x86 boot, or physical real-time performance. Architecture-qualified releases additionally satisfy the corresponding P1, P2, or P3 gate.
+No core-runtime result by itself claims ROS wire interoperability, a physical-board boot, or physical real-time performance. Architecture-qualified releases additionally satisfy the corresponding P4 or P5 gate.

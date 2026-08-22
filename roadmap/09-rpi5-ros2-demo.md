@@ -23,7 +23,7 @@ This track intentionally does **not** claim full ROS 2 compatibility, arbitrary 
 
 1. RP0 freezes the demo acceptance contract so every later milestone has a stable target, including the transport profile.
 2. RP1 consumes P0/P1 target and architecture-boundary work so every executable is admitted for one exact profile.
-3. RP2 proves the architecture-neutral kernel and component semantics under `aarch64-qemu-virt`.
+3. RP2 proves the architecture-neutral capability, component, and generation semantics on `aarch64-sel4-qemu-virt`, where upstream seL4 supplies the privileged mechanism.
 4. RP3 promotes the minimum physical Raspberry Pi 5 boot path: firmware handoff, serial, memory map, timer, interrupt controller, and device tree.
 5. RP4 replays the two-component C7/C8 data path on Arm and then on the board.
 6. RP5 adds the minimum node runtime plus stream/network envelope needed to host the ROS 2 node route.
