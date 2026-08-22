@@ -12,10 +12,10 @@
 
 use slime_rt::CapabilityDisposition;
 
-// Init's slot numbers arrive by `include!` of the generated boot layout into
-// `init.rs`'s own scope, so they are reached through `super` rather than
-// imported: the layout is per-generation and there is no path that names it
-// independently of the binary it was generated for.
+// Init resolves its slot numbers through the root, and the helpers that do so
+// live in `init.rs`, so they are reached through `super` rather than imported.
+// The generated boot-layout table this used to describe is gone (B70): a slot
+// is now asked for by declared name at run time rather than compiled in.
 use super::{RIGHT_TRANSFER, console_send_slot, resolve_buffer_factory, resolve_executable};
 
 /// Drive the P5.3.2 loan plane, as the lender.

@@ -555,6 +555,21 @@ pub fn graph_route_index(identity: &[u8; 32]) -> Result<usize, i64> {
     }
 }
 
+/// Read one schema-declared scalar from this generation's fabric graph.
+///
+/// `field` is a generated `boot_contracts::fabric_graph::QUERY_*` id. Graph
+/// shape is holder-only; the generated `RuntimeLimits` subset is also served to
+/// participants with visible rows. This runtime crate keeps the id opaque and
+/// leaves that vocabulary and policy to the shared contract and root.
+pub fn graph_query(field: u32) -> Result<u32, i64> {
+    let result = transport::graph_query(field);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u32)
+    }
+}
+
 /// Which composition the authenticated generation declares, as a `BootAction`
 /// id.
 ///
@@ -576,6 +591,27 @@ pub fn boot_action() -> Result<u32, i64> {
         Err(result)
     } else {
         Ok(result as u32)
+    }
+}
+
+/// The live-child budget this generation declares for the caller's own
+/// executable.
+///
+/// Self-scoped: the executable read is the authenticated caller's, so this
+/// names no instance and reports nothing about a peer. `spawn-service` admits
+/// one client request per live child against this number and refuses a request
+/// whose stated budget disagrees; both ends used to compile it in from a
+/// `build.rs`-private manifest parse, which tied each image to one generation
+/// (B70).
+///
+/// A refusal means the generation grants this instance no spawn authority, so
+/// the question does not apply to it. A declared budget of zero is a real
+/// answer and returns `Ok(0)`.
+pub fn spawn_budget() -> Result<u16, i64> {
+    let result = transport::spawn_budget();
+    match u16::try_from(result) {
+        Ok(budget) => Ok(budget),
+        Err(_) => Err(if result < 0 { result } else { ERR_INVALID_ARG }),
     }
 }
 

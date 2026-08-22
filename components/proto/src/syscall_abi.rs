@@ -34,6 +34,8 @@ pub mod capability_table_labels {
     pub const GRAPH_READ: u64 = 38;
     pub const GRAPH_ROUTE_INDEX: u64 = 39;
     pub const BOOT_ACTION: u64 = 40;
+    pub const GRAPH_QUERY: u64 = 41;
+    pub const SPAWN_BUDGET: u64 = 42;
 }
 
 pub mod directory_labels {

@@ -85,15 +85,13 @@ for crate in crates:
     if "slime-build-support" not in data.get("build-dependencies", {}):
         fail(f"{name}: build script must depend on slime-build-support")
 
-# 2. No component crate parses a manifest itself. The whole point of extracting
-#    the parser is that this file is the same three lines everywhere, so any
-#    other content is a private derivation growing back.
-ALLOWED_BUILD_CALLS = {
-    "configure",
-    "emit_command_profile",
-    "emit_dango_profile",
-    "emit_fabric_profile",
-}
+# 2. No component crate parses a manifest or compiles in per-plane data. The
+#    whole point of extracting the parser is that this file is the same three
+#    lines everywhere, so any other content is a private derivation growing
+#    back. B70 deleted the last manifest-derived generators and the fabric
+#    profile copier, so naming any of them here would re-admit helpers that no
+#    longer exist.
+ALLOWED_BUILD_CALLS = {"configure"}
 for crate in crates:
     script = crate / "build.rs"
     if not script.exists():

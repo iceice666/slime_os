@@ -26,7 +26,6 @@ BUILDER = ROOT / "scripts" / "build" / "build-generation.py"
 SEL4_PIN_CHECK = ROOT / "scripts" / "check" / "check-sel4-pins.py"
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 DEMO = load_script("component_sdk_demo_check", "check/check-sel4-demo-plane.py")
-BUILDER_API = load_script("component_sdk_generation_builder", "build/build-generation.py")
 CHECK = load_script("component_sdk_generation_check", "check/check-generation.py")
 EXTERNAL_COMPONENTS = ("fabric-publisher-b", "fabric-subscriber")
 EXTERNAL_MARKERS = ("[cp5-external-producer] done", "[cp5-external-consumer] done")
@@ -141,7 +140,7 @@ debug = false
 """
 
 
-def sdk_readme(pins: dict[str, object], target_digest: str, profile_digest: str) -> str:
+def sdk_readme(pins: dict[str, object], target_digest: str) -> str:
     rust = pins["rust_sel4"]
     return f"""# Slime component SDK v1
 
@@ -157,9 +156,11 @@ below with `git = <SDK repository>` and `rev = <SDK commit>` plus the named
 - `slime-build-support` for the CP3 `build.rs` convention
 
 The bundle vendors rust-sel4 commit `{rust["commit"]}` from
-`{rust["repository"]}`, carries `targets/aarch64-sel4-minimal.json` at SHA-256
-`{target_digest}`, and carries the demo composition profile at
-`profiles/sel4-demo-fabric-profile.rs` at SHA-256 `{profile_digest}`.
+`{rust["repository"]}` and carries `targets/aarch64-sel4-minimal.json` at
+SHA-256 `{target_digest}`. It ships no manifest-derived composition table: a
+component resolves every generation fact it needs — its boot action, its own
+graph rows, and the declared resource ceilings — from the authenticated root at
+runtime (B70), so nothing an SDK consumer compiles is bound to one manifest.
 
 Build recipe:
 
@@ -168,7 +169,6 @@ export RUSTUP_TOOLCHAIN={rust["toolchain"]}
 export SEL4_PREFIX=/path/to/the/qemu-arm-virt-seL4-prefix
 export LIBCLANG_PATH=/path/to/libclang/lib
 export SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt
-export SLIME_DATA_FABRIC_PROFILE=/path/to/sdk/profiles/sel4-demo-fabric-profile.rs
 cargo build --release \\
   --target /path/to/sdk/targets/aarch64-sel4-minimal.json \\
   -Z json-target-spec \\
@@ -179,8 +179,8 @@ cargo build --release \\
 `SEL4_PREFIX` is the installed prefix produced from seL4 16.0.0 commit
 `{pins["sel4"]["commit"]}` with the repository's `qemu-arm-virt` config.
 `sel4-sys` runs bindgen against that prefix, so `LIBCLANG_PATH` is required.
-The target, target profile, and composition profile are one versioned SDK set;
-do not substitute a root-task target or an uncommitted build output.
+The target and the target profile are one versioned SDK set; do not substitute
+a root-task target or an uncommitted build output.
 """
 
 
@@ -200,36 +200,8 @@ def create_sdk(root: Path) -> tuple[Path, str]:
     target = sdk / "targets/aarch64-sel4-minimal.json"
     copy_path(target_source, target)
     target_digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    previous_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
-    previous_profile = os.environ.get("SLIME_TARGET_PROFILE")
-    os.environ["SLIME_SEL4_MANIFEST"] = "sel4-demo"
-    os.environ["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
-    try:
-        manifest = BUILDER_API.load_manifest()
-    finally:
-        if previous_manifest is None:
-            os.environ.pop("SLIME_SEL4_MANIFEST", None)
-        else:
-            os.environ["SLIME_SEL4_MANIFEST"] = previous_manifest
-        if previous_profile is None:
-            os.environ.pop("SLIME_TARGET_PROFILE", None)
-        else:
-            os.environ["SLIME_TARGET_PROFILE"] = previous_profile
-    interfaces = BUILDER_API.validate_interface_schemas(manifest["interfaceSchemas"])
-    resolved = BUILDER_API.resolve_fabric_profile(
-        manifest, interfaces, manifest["fabricGraph"]["profiles"][0]["name"]
-    )
-    profile = sdk / "profiles" / "sel4-demo-fabric-profile.rs"
-    profile.parent.mkdir()
-    profile.write_text(
-        BUILDER_API.render_fabric_profile_rust(resolved, manifest["bootAction"]),
-        encoding="utf-8",
-    )
-    profile_digest = hashlib.sha256(profile.read_bytes()).hexdigest()
     (sdk / "Cargo.toml").write_text(sdk_manifest(), encoding="utf-8")
-    (sdk / "README.md").write_text(
-        sdk_readme(pins, target_digest, profile_digest), encoding="utf-8"
-    )
+    (sdk / "README.md").write_text(sdk_readme(pins, target_digest), encoding="utf-8")
     git(["init", "-q"], cwd=sdk, description="initialize SDK repository")
     git(["config", "user.email", "cp5@example.invalid"], cwd=sdk, description="configure SDK git email")
     git(["config", "user.name", "CP5 gate"], cwd=sdk, description="configure SDK git name")
@@ -301,14 +273,14 @@ def instrument_external_source(text: str, name: str) -> str:
     if name == "fabric-publisher-b":
         text = replace_once(
             text,
-            "use boot_contracts::generation::RIGHT_SEND;",
-            "use boot_contracts::generation::{RIGHT_BUFFER_MAP, RIGHT_SEND};",
+            "use boot_contracts::generation::{BootAction, RIGHT_SEND};",
+            "use boot_contracts::generation::{BootAction, RIGHT_BUFFER_MAP, RIGHT_SEND};",
             label="publisher authority imports",
         )
         text = replace_once(
             text,
-            'include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));\n',
-            'include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));\n\n'
+            "slime_rt::entry!(main);\n",
+            "slime_rt::entry!(main);\n\n"
             'const CP5_MODE: &str = match option_env!("CP5_MODE") { Some(mode) => mode, None => "baseline" };\n',
             label="publisher scenario selector",
         )
@@ -480,7 +452,7 @@ def strip_external_trace_helpers(text: str, name: str) -> str:
     )
     label = "publisher-b" if name == "fabric-publisher-b" else "subscriber"
     text = re.sub(
-        rf'    // C8\.13\.2: gated to the traffic plane.*?occupancy_trace::report\(b"{label}", FABRIC_TRACE_DEPTH\);\n    \}}\n',
+        rf'    // C8\.13\.2: gated to the traffic plane.*?occupancy_trace::report\(b"{label}"\).*?\n    \}}\n',
         "",
         text,
         count=1,
@@ -499,7 +471,7 @@ def create_external_checkout(root: Path, sdk: Path, revision: str) -> Path:
         (crate / "src").mkdir(parents=True)
         (crate / "Cargo.toml").write_text(component_manifest(name), encoding="utf-8")
         (crate / "build.rs").write_text(
-            "fn main() {\n    slime_build_support::configure();\n    slime_build_support::emit_fabric_profile();\n}\n",
+            "fn main() {\n    slime_build_support::configure();\n}\n",
             encoding="utf-8",
         )
         source = ROOT / "components" / "bins" / name / "src" / "main.rs"
@@ -592,10 +564,6 @@ def build_external_components(
             f"--remap-path-prefix={sdk}=./slime-sdk-v1",
         )
     )
-    profile = sdk / "profiles" / "sel4-demo-fabric-profile.rs"
-    if not profile.is_file():
-        fail("SDK omitted its versioned sel4-demo fabric profile")
-    environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile)
     run(
         [
             "cargo",

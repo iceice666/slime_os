@@ -52,6 +52,7 @@ from boot_contracts import (
     FABRIC_DURABILITY_VOLATILE,
     FABRIC_GRANT_DOMAIN,
     FABRIC_GRAPH_CONTROL_MESSAGE_BYTES,
+    FABRIC_GRAPH_FRAME_CAPACITY,
     FABRIC_GRAPH_HEADER,
     FABRIC_GRAPH_HEADER_BYTES,
     FABRIC_GRAPH_INTERPOSITION_ENTRY,
@@ -69,6 +70,9 @@ from boot_contracts import (
     FABRIC_GRAPH_LIMIT_RETAINED_SAMPLES,
     FABRIC_GRAPH_LIMIT_RETRIES,
     FABRIC_GRAPH_LIMIT_SAMPLE_BYTES,
+    FABRIC_GRAPH_LIMIT_TRACE_DEPTH,
+    FABRIC_GRAPH_TRACE_OVERFLOW_SATURATE,
+    FABRIC_GRAPH_TRACE_TERMINAL_RESERVE,
     FABRIC_GRAPH_MAGIC,
     FABRIC_GRAPH_CHANNEL_QUEUE_DEPTH,
     FABRIC_GRAPH_PARTICIPANT_ENTRY,
@@ -85,6 +89,7 @@ from boot_contracts import (
     MAX_FABRIC_GRAPH_INGRESS_SOURCES,
     MAX_FABRIC_GRAPH_INTERPOSITION_HOPS,
     MAX_FABRIC_GRAPH_PARTICIPANTS,
+    MAX_FABRIC_GRAPH_ROLE_PARTICIPANTS,
     MAX_FABRIC_GRAPH_ROUTES,
     MAX_FABRIC_GRAPH_SCHEMAS,
     COMPONENT_DEFAULT_STACK_BYTES,
@@ -570,7 +575,10 @@ UNIFIED_FABRIC_PROFILE = "unified"
 MATRIX_FABRIC_PROFILE = "matrix"
 FABRIC_FIRST_CONTROL_SLOT = 2
 FABRIC_COPY_PAGES = 2
-FABRIC_FRAME_CAPACITY = 32
+# The broker sizes its frame array from the same declaration (B70): the
+# contract owns the number, this builder only enforces it against a graph's
+# summed subscriber history.
+FABRIC_FRAME_CAPACITY = FABRIC_GRAPH_FRAME_CAPACITY
 FABRIC_STREAM_CONTROL_GRANTS = (
     "fabric-publisher-control",
     "fabric-subscriber-control",
@@ -1013,11 +1021,19 @@ FABRIC_LIMIT_KEYS = (
 # contract and asserted against the kernel at compile time, so the builder can
 # reject an over-declared budget here instead of emitting a graph the kernel
 # refuses at boot.
+#
+# `publishers` and `subscribers` are bounded by `maxRoleParticipants`, not by
+# the participant *table* bound: the stream broker holds one record with a full
+# history per edge of each direction, so those two arrays are sized from the
+# smaller ceiling and a graph declaring more than it can hold is refused here
+# (B70). `clients` and `servers` keep the table bound -- a request/response
+# broker's storage scales with in-flight calls, not with the declared client
+# count.
 FABRIC_LIMIT_CEILINGS = {
     "routes": MAX_FABRIC_GRAPH_ROUTES,
     "ingressSources": MAX_FABRIC_GRAPH_INGRESS_SOURCES,
-    "publishers": MAX_FABRIC_GRAPH_PARTICIPANTS,
-    "subscribers": MAX_FABRIC_GRAPH_PARTICIPANTS,
+    "publishers": MAX_FABRIC_GRAPH_ROLE_PARTICIPANTS,
+    "subscribers": MAX_FABRIC_GRAPH_ROLE_PARTICIPANTS,
     "clients": MAX_FABRIC_GRAPH_PARTICIPANTS,
     "servers": MAX_FABRIC_GRAPH_PARTICIPANTS,
     "sampleBytes": FABRIC_GRAPH_LIMIT_SAMPLE_BYTES,
@@ -1040,6 +1056,18 @@ FABRIC_LIMIT_CEILINGS = {
 FABRIC_TRACE_OVERFLOW = {
     "saturate": FABRIC_TRACE_OVERFLOW_SATURATE,
 }
+
+# The graph header now carries the declared depth and discipline, so
+# `contracts/fabric-graph/v1` restates the trace contract's bounds to refuse a
+# graph no sink could honour. Two contracts stating one number is exactly the
+# drift this build asserts away rather than trusts: a divergence fails here
+# instead of at a boot whose worker cannot hold its own declared sink.
+if (
+    FABRIC_GRAPH_LIMIT_TRACE_DEPTH != FABRIC_TRACE_MAX_DEPTH
+    or FABRIC_GRAPH_TRACE_TERMINAL_RESERVE != FABRIC_TRACE_TERMINAL_RESERVE
+    or FABRIC_GRAPH_TRACE_OVERFLOW_SATURATE != FABRIC_TRACE_OVERFLOW_SATURATE
+):
+    fail("fabric graph and fabric trace contracts disagree about the sink bounds")
 
 
 def validate_fabric_trace_sink(graph: dict) -> None:
@@ -1832,144 +1860,22 @@ def _zti_value(value: object, indent: int = 0) -> str:
     fail(f"unsupported canonical profile value {type(value).__name__}")
 
 
-def render_fabric_profile_rust(
-    resolved: ResolvedFabricProfile, boot_action: str = "product"
-) -> str:
-    artifact = resolved.artifact
-    limits = {entry["name"]: entry["value"] for entry in artifact["limits"]}
-    participants = artifact["participants"]
-    rust_string = lambda value: json.dumps(value, ensure_ascii=True)
-    qos_rows = "".join(
-        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['deadlineNs']}, {row['lifespanNs']}, {row['leaseNs']}, {row['historyDepth']}, {row['retainedDepth']}, {row['reliability']}, {row['durability']}, {row['liveliness']}),\n"
-        for row in participants
-    )
-    notification_grants = {grant["name"]: grant for grant in resolved.manifest.get("notificationGrants", [])}
-    notification_bindings = resolved.manifest.get("notificationBindings", [])
-    notification_by_holder = {
-        (binding["holder"], binding["grant"]): binding
-        for binding in notification_bindings
-    }
-    notification_rows_data = []
-    for participant in participants:
-        component = participant["component"]
-        route = participant["route"]
-        if participant["direction"] not in (FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE):
-            continue
-        ready_name = f"{component}-{route}-ready"
-        credit_name = f"{component}-{route}-credit"
-        ready_grant = notification_grants.get(ready_name)
-        credit_grant = notification_grants.get(credit_name)
-        if ready_grant is None and credit_grant is None:
-            # A full-graph profile may provision stream roles over its control
-            # endpoints without driving samples. Such a profile declares no
-            # ready/credit Notifications, so it emits no notification row.
-            continue
-        if ready_grant is None or credit_grant is None:
-            fail(f"fabric notification bindings incomplete for {component}/{route}")
-        fabric_component = artifact["fabricComponent"]
-        ready = notification_by_holder.get((fabric_component, ready_name))
-        credit = notification_by_holder.get((fabric_component, credit_name))
-        participant_ready = notification_by_holder.get((component, ready_name))
-        participant_credit = notification_by_holder.get((component, credit_name))
-        if None in (ready, credit, participant_ready, participant_credit):
-            fail(f"fabric notification bindings missing for {component}/{route}")
-        notification_rows_data.append((component, route, participant["direction"], ready["slot"], credit["slot"]))
-    notification_rows = "".join(
-        f"    (b{rust_string(component)}, {rust_string(route)}, {direction}, {ready}, {credit}),\n"
-        for component, route, direction, ready, credit in notification_rows_data
-    )
-    # The per-slot notification constants this profile used to emit are gone
-    # (CP2/B70). Every component resolves its notification slots through the
-    # root by the grant name the generation declares, which is one name per
-    # route rather than one constant per holder -- see
-    # `slime-root/src/ipc.rs`'s `notification:` axis. `FABRIC_NOTIFICATION_BINDINGS`
-    # stays: it is the graph's own table of who binds what, which the fabric
-    # validates its wiring against rather than reading a slot out of.
-    # `FABRIC_INTERPOSITIONS` is gone (B70). Its only consumer was an
-    # `assert_declared_chain` in each fabric broker that compared this table
-    # against a proxy name compiled into the same crate -- both operands
-    # regenerated from this manifest together, so the check could only confirm
-    # the table agreed with itself, and substituting another component on the
-    # chain left both plane gates green. The root now resolves each declared
-    # hop's identity back to a generation instance name and states it as
-    # `SLIME_ROOT fabric interposition hop=<name>`, which the plane gates
-    # assert on. See `slime-root/src/generation.rs`'s `interposition_hop_names`.
-    planes = {plane["name"]: plane["controls"] for plane in artifact["planes"]}
-    controls = lambda name: "".join(
-        f"    b{rust_string(row['component'])},\n" for row in planes[name]
-    )
-    schema_rows = "".join(
-        f"    ({rust_string(row['name'])}, {rust_string(row['identity'])}, 0x{row['typeTag']}, {row['contractKind']}, {row['maxEncodedBytes']}),\n"
-        for row in artifact["schemas"]
-    )
-    deadline_absent = (1 << 64) - 1
+def write_resolved_profile(output: Path, resolved: ResolvedFabricProfile) -> tuple[Path, Path]:
+    """Write the canonical resolved profile and its normalized schema corpus.
 
-    def deadline(route: str) -> int:
-        """The tightest deadline any request/response participant declares.
-
-        `u64::MAX`, not zero, denotes a graph with no such route.
-        Zero remains available as a real immediate deadline and cannot be
-        conflated with absence by generated consumers.
-        """
-        deadlines = [
-            row["deadlineNs"]
-            for row in participants
-            if row["route"] == route
-            and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
-        ]
-        return min(deadlines, default=deadline_absent)
-    return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
-#[allow(dead_code)]
-mod generated_fabric_profile {{
-#[allow(dead_code)]
-pub const GENERATION_BOOT_ACTION: &str = {rust_string(boot_action)};
-#[allow(dead_code)]
-pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
-pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
-pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
-{notification_rows}];
-pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
-pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
-pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
-pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
-pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
-pub const FABRIC_MAX_PUBLISHERS: usize = {limits['publishers']};
-pub const FABRIC_MAX_SUBSCRIBERS: usize = {limits['subscribers']};
-pub const FABRIC_MAX_SAMPLE_BYTES: usize = {limits['sampleBytes']};
-pub const FABRIC_MAX_EVENT_DEPTH: usize = {limits['eventDepth']};
-pub const FABRIC_MAX_RETAINED_SAMPLES: usize = {limits['retainedSamples']};
-pub const FABRIC_MAX_RETRIES: u8 = {limits['retries']};
-pub const FABRIC_MAX_IN_FLIGHT_CALLS: usize = {limits['inFlightCalls']};
-pub const FABRIC_MAX_IN_FLIGHT_OPERATIONS: usize = {limits['inFlightOperations']};
-pub const FABRIC_MAX_BUFFER_PAGES: usize = {limits['bufferPages']};
-pub const FABRIC_MAX_BUFFERS: usize = {limits['buffers']};
-pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = {limits['capabilitySlots']};
-pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = {artifact['requiredCapabilitySlots']};
-pub const FABRIC_FRAME_CAPACITY: usize = {artifact['frameCapacity']};
-pub const FABRIC_COPY_PAGES: usize = {artifact['copyPages']};
-/// C8.11: the declared depth of one worker's bounded semantic-trace sink, and
-/// the overflow code it applies when that depth is reached. A worker sizes its
-/// sink array from this constant, so the generation and the array cannot drift.
-pub const FABRIC_TRACE_DEPTH: usize = {artifact['traceDepth']};
-pub const FABRIC_TRACE_OVERFLOW: u32 = {artifact['traceOverflow']};
-/// No request/response route of this class exists in the resolved graph.
-pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
-pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {deadline('navigation')};
-pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {artifact['firstControlSlot']};
-}}
-#[allow(unused_imports)]
-pub use generated_fabric_profile::*;
-'''
-
-
-def write_resolved_profile(output: Path, resolved: ResolvedFabricProfile) -> tuple[Path, Path, Path]:
+    The third output this used to write -- a Rust constant table every fabric
+    component `include!`d -- is gone with B70's last consumer. Everything it
+    carried is now either a field of the authenticated `fabric-graph` resource
+    the component queries at runtime, a name it resolves through the root, or a
+    ceiling published by `contracts/fabric-graph/v1`. The `.zti` artifact
+    remains because it is the canonical record this builder's own gate compares
+    and the Zutai contract validates; nothing compiles against it.
+    """
     profile_path = output / "data-fabric-profile.zti"
-    rust_path = output / "data-fabric-profile.rs"
     schemas_path = output / "normalized-interface-schemas.bin"
     profile_path.write_text(_zti_value(resolved.artifact) + "\n", encoding="utf-8")
-    rust_path.write_text(render_fabric_profile_rust(resolved), encoding="utf-8")
     schemas_path.write_bytes(build_normalized_schema_artifact(resolved.schemas))
-    return profile_path, rust_path, schemas_path
+    return profile_path, schemas_path
 
 
 
@@ -2231,6 +2137,13 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
         0,
         fabric_component_identity(fabric),
         *limit_values,
+        # C8.11's sink shape travels in the header rather than in a generated
+        # per-plane constant table, so a worker built out of tree reads the
+        # depth it must honour from the same authenticated resource that
+        # declares its routes (B70). `validate_fabric_trace_sink` has already
+        # bounded both against the trace contract.
+        graph["traceDepth"],
+        FABRIC_TRACE_OVERFLOW[graph["traceOverflow"]],
     )
     return header + schema_records + route_records + participant_records + hop_records
 
@@ -2318,7 +2231,6 @@ def sel4_component_environment(environment: dict[str, str]) -> dict[str, str]:
 
 def build_rust_components(
     generation_number: int,
-    profile_path: Path,
     target_profile: TargetProfile,
     recovery: bool = False,
     candidate_identity: bytes | None = None,
@@ -2337,10 +2249,6 @@ def build_rust_components(
         environment["SLIME_BOOT_SELECTION_FAIL"] = "1"
     else:
         environment.pop("SLIME_BOOT_SELECTION_FAIL", None)
-    environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile_path)
-    # Components are compiled before the generation is assembled, so hand
-    # build.rs the manifest-derived Rust tables they need. Per-generation data
-    # selects behavior; inherited product flags must not change the image.
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
     # Product graph selectors are deliberately absent: generated manifest data
     # selects component behavior. Validation-only injection controls remain.
@@ -2384,12 +2292,10 @@ def build_rust_components(
     # plane across 29 fixtures is a real cost, and grouping keeps it at today's.
     invocations: list[list[str]] = []
     if is_json_target(target_profile):
-        # The Dango command profile is generated from a manifest, and it must be
-        # *this* generation's: the profile's executable slots are spawn-grant
-        # positions, so a profile built from the oracle's manifest would name
-        # slots this generation never grants.
-        command_manifest = sel4_manifest or "sel4"
-        environment["SLIME_COMMAND_PROFILE_MANIFEST"] = f"{command_manifest}.zti"
+        # No command-profile manifest is exported: `spawn-service` and `dango`
+        # resolve their commands, launch contexts, request endpoint, and spawn
+        # budget from the authenticated generation at runtime (B70), so nothing
+        # in a component build reads a fixture any more.
         # Build exactly the components this generation declares, rather than
         # every component crate. The fabric components are compiled against a
         # generated C8 profile this target has no graph for, so building them
@@ -3854,26 +3760,16 @@ def build_sel4_generation(
     # P5.5.2: a manifest that declares a fabric graph resolves it through the
     # same function every x86 profile uses, so a seL4 route identity, QoS row,
     # and control-slot base are folded from the same schemas and the same
-    # validation rather than from a second implementation. A manifest that
-    # declares none gets the empty profile the four earlier seL4 graphs get.
+    # validation rather than from a second implementation.
+    #
+    # The resolution produces the authenticated resource bytes below and
+    # nothing a component compiles against: B70's per-plane Rust profile is
+    # gone, so no image is parameterized by which plane built it.
     resolved_profile = None
-    profile_path = output / "sel4-fabric-profile.rs"
     if manifest.get("fabricGraph"):
         interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
         resolved_profile = resolve_fabric_profile(
             manifest, interfaces, manifest["fabricGraph"]["profiles"][0]["name"]
-        )
-        profile_path.write_text(
-            render_fabric_profile_rust(resolved_profile, manifest["bootAction"]),
-            encoding="utf-8",
-        )
-    else:
-        # A graph with no fabric still needs its boot action, which selects which
-        # plane `init` drives. Nothing else in this profile is read without a
-        # fabric, so this is the whole file.
-        profile_path.write_text(
-            f"pub const GENERATION_BOOT_ACTION: &str = {json.dumps(manifest['bootAction'], ensure_ascii=True)};\n",
-            encoding="utf-8",
         )
     import component_spec_contract
 
@@ -3883,7 +3779,6 @@ def build_sel4_generation(
     )
     built = build_rust_components(
         manifest["generation"],
-        profile_path,
         target_profile,
         candidate_identity=None,
         components=workspace_binaries,

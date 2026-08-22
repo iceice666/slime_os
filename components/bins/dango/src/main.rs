@@ -22,7 +22,6 @@ use slime_rt::{
 const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
 const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
 
-const SPAWN_SLOT: u32 = 0;
 const CONSOLE_SLOT: u32 = 1;
 const INPUT_SLOT: u32 = 2;
 const CWD_ROOT_SLOT: u32 = 3;
@@ -47,7 +46,54 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-include!(concat!(env!("OUT_DIR"), "/dango_profile.rs"));
+/// Everything about this session that the generation declares rather than the
+/// source states: the spawn service's endpoint and the budget both ends admit
+/// against.
+///
+/// Resolved once before the first keystroke and carried, so the request path
+/// makes no syscall a positional constant used to make for free, and so a
+/// generation that declares neither fact fails at startup rather than on the
+/// first command.
+#[derive(Clone, Copy)]
+struct Session {
+    spawn_slot: u32,
+    budget: u8,
+}
+
+impl Session {
+    /// Ask the root for both facts.
+    ///
+    /// The endpoint is named: `SPAWN_SLOT` was a positional constant beside a
+    /// `build.rs`-generated table, and the name asks the root for this
+    /// instance's own binding instead, so the image carries no generation's
+    /// numbering (CP2/B70). The role query cannot answer it -- this session also
+    /// holds a console endpoint and a stdin sender of the same kind and rights.
+    ///
+    /// The budget replaces `CLIENT_BUDGET`, parsed out of one generation
+    /// manifest by this crate's build script. Every request states the budget it
+    /// believes in and the service refuses a disagreement, so both ends must
+    /// read one authenticated source; the generation declares the same
+    /// `spawnBudget` for the shell and the service, so each asking for its own
+    /// asks one question.
+    ///
+    /// Fatal when the root will not say, on the rule [`scripted_plane`]
+    /// follows: a guessed budget would be carried by every request and refused
+    /// by the service, presenting as an unexplained denial rather than a missing
+    /// declaration. Narrowed to the wire field's width here, so an over-wide
+    /// declaration fails at its source rather than truncating into a different
+    /// number.
+    fn resolve() -> Self {
+        let spawn_slot = slime_rt::resolve_binding(b"spawn-service-rpc")
+            .unwrap_or_else(|_| fail(b"the generation declares no spawn-service endpoint here"));
+        let budget = match slime_rt::spawn_budget() {
+            Ok(budget) => {
+                u8::try_from(budget).unwrap_or_else(|_| fail(b"declared budget exceeds the wire"))
+            }
+            Err(_) => fail(b"the root did not answer this session's spawn budget"),
+        };
+        Self { spawn_slot, budget }
+    }
+}
 
 /// Whether this session is the scripted `dango` plane rather than an
 /// interactive console.
@@ -87,6 +133,7 @@ fn main(_startup_arg: u32) {
     ) {
         fail(b"shared-buffer quota probe");
     }
+    let session = Session::resolve();
     let mut line = [0u8; MAX_LINE_BYTES];
     let mut len = 0;
     console(b"dango> ");
@@ -122,7 +169,7 @@ fn main(_startup_arg: u32) {
                     }
                     console(b"\n");
                     if len != 0 {
-                        evaluate(&line[..len]);
+                        evaluate(session, &line[..len]);
                     }
                     len = 0;
                     console(b"dango> ");
@@ -133,7 +180,7 @@ fn main(_startup_arg: u32) {
                     // Endpoint reports no peer death, so neither service can
                     // infer the shell is gone — each blocks in `recv` forever
                     // and holds the graph open (B53).
-                    shutdown_service();
+                    shutdown_service(session);
                     close_console();
                     return;
                 }
@@ -143,7 +190,7 @@ fn main(_startup_arg: u32) {
     }
 }
 
-fn evaluate(line: &[u8]) {
+fn evaluate(session: Session, line: &[u8]) {
     let launch = match parse(line) {
         Ok(launch) => launch,
         Err(_) => {
@@ -151,16 +198,29 @@ fn evaluate(line: &[u8]) {
             return;
         }
     };
-    if !COMMAND_NAMES.contains(&launch.command) {
+    // The spawn service is the only authority on which commands exist, so the
+    // request is sent and its answer reported. This shell used to hold its own
+    // `COMMAND_NAMES` copy of the profile, generated into this crate's `OUT_DIR`
+    // from one manifest, and refused locally before asking (B70). That copy was
+    // never the decision -- the service re-checked every name against its own
+    // table -- so removing it drops a duplicated policy rather than a check, and
+    // the denial is now reported by the party that owns it.
+    let Some(reply) = spawn(session, &launch) else {
+        console(b"spawn-error\n");
+        return;
+    };
+    if reply.status == slime_rt::ERR_BAD_CAP as i32 {
         console(b"resolve-denied\n");
         return;
     }
-    console(b"resolved:profile\n");
-    let reply = spawn(&launch);
     if reply.status != 0 {
         console(b"spawn-error\n");
         return;
     }
+    // Resolution is reported before the acceptance it implies: the service
+    // resolves the command's declared executable and launch context before it
+    // spawns anything, so an accepted reply is evidence of both, in that order.
+    console(b"resolved:profile\n");
     console(b"spawn-request:accepted\n");
     match wait(reply.supervision_slot) {
         Termination::Exit(0) => console(b"result:exit:0\n"),
@@ -172,7 +232,16 @@ fn evaluate(line: &[u8]) {
     }
 }
 
-fn spawn(launch: &Launch<'_>) -> WireSpawnReply {
+/// One request's outcome, distinguishing a local failure from the service's own
+/// answer.
+///
+/// `None` is this session failing before the service was consulted -- a working
+/// directory it could not derive, or a stdin payload it could not deliver.
+/// `Some` is the reply the service sent, whose status is the service's decision
+/// and is reported as such. The two used to be collapsed into one synthetic
+/// reply carrying `ERR_BAD_CAP`, which is now the service's denial code and so
+/// can no longer double as a local error.
+fn spawn(session: Session, launch: &Launch<'_>) -> Option<WireSpawnReply> {
     let mut command = [0u8; 16];
     command[..launch.command.len()].copy_from_slice(launch.command);
     let mut roles = 0;
@@ -180,14 +249,9 @@ fn spawn(launch: &Launch<'_>) -> WireSpawnReply {
     let mut cap_count = 0;
 
     if let Some(cwd) = launch.cwd {
-        let derived = match slime_rt::directory_derive(
-            CWD_ROOT_SLOT,
-            cwd,
-            RIGHT_DIRECTORY_READ | RIGHT_TRANSFER,
-        ) {
-            Ok(slot) => slot,
-            Err(_) => return error_reply(slime_rt::ERR_BAD_CAP as i32),
-        };
+        let derived =
+            slime_rt::directory_derive(CWD_ROOT_SLOT, cwd, RIGHT_DIRECTORY_READ | RIGHT_TRANSFER)
+                .ok()?;
         roles |= CAPABILITY_ROLE_WORKING_DIRECTORY;
         caps[cap_count] = derived;
         cap_count += 1;
@@ -204,21 +268,21 @@ fn spawn(launch: &Launch<'_>) -> WireSpawnReply {
         argument_count: launch.arguments.count,
         environment_count: launch.environment.count,
         capability_roles: roles,
-        client_budget: CLIENT_BUDGET,
+        client_budget: session.budget,
         command,
         arguments: launch.arguments.bytes,
         environment: launch.environment.bytes,
         grant_rights: 0,
         reserved: [0; 6],
     };
-    let reply = send_request(request, &caps[..cap_count]);
+    let reply = send_request(session, request, &caps[..cap_count]);
     if reply.status == 0
         && let Some(stdin) = launch.stdin
         && send_all(STDIN_SEND_SLOT, stdin) < 0
     {
-        return error_reply(slime_rt::ERR_BAD_CAP as i32);
+        return None;
     }
-    reply
+    Some(reply)
 }
 
 fn send_all(slot: u32, payload: &[u8]) -> i64 {
@@ -230,24 +294,13 @@ fn send_all(slot: u32, payload: &[u8]) -> i64 {
     }
 }
 
-const fn error_reply(status: i32) -> WireSpawnReply {
-    WireSpawnReply {
-        magic: slime_proto::spawn::SPAWN_MAGIC,
-        version: slime_proto::spawn::FORMAT_VERSION,
-        status,
-        termination_kind: 0,
-        supervision_slot: 0,
-        detail: 0,
-    }
-}
-
-fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
+fn send_request(session: Session, request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
     let encoded = request.encode();
     loop {
         let result = match caps {
-            [] => slime_rt::send(SPAWN_SLOT, &encoded, &[]),
+            [] => slime_rt::send(session.spawn_slot, &encoded, &[]),
             [capability] => slime_rt::capability_delegate(
-                SPAWN_SLOT,
+                session.spawn_slot,
                 *capability,
                 CapabilityDisposition::Move,
                 OBJECT_KIND_DIRECTORY,
@@ -262,14 +315,14 @@ fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
             _ => break,
         }
     }
-    receive_reply()
+    receive_reply(session)
 }
 
-fn receive_reply() -> WireSpawnReply {
+fn receive_reply(session: Session) -> WireSpawnReply {
     let mut reply = [0u8; MAX_MSG];
     let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(SPAWN_SLOT, &mut reply, &mut received_caps) {
+        match slime_rt::recv(session.spawn_slot, &mut reply, &mut received_caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"spawn reply recv"),
             n => {
@@ -329,7 +382,7 @@ fn console(payload: &[u8]) {
 /// service blocked in `recv` for the rest of the boot. A native Endpoint reports
 /// no peer death, so the shell that owns the edge is the only party that can say
 /// the session is over.
-fn shutdown_service() {
+fn shutdown_service(session: Session) {
     let request = WireSpawnRequest {
         magic: slime_proto::spawn::SPAWN_MAGIC,
         version: slime_proto::spawn::FORMAT_VERSION,
@@ -338,7 +391,7 @@ fn shutdown_service() {
         argument_count: 0,
         environment_count: 0,
         capability_roles: 0,
-        client_budget: CLIENT_BUDGET,
+        client_budget: session.budget,
         command: [0; 16],
         arguments: [0; 8],
         environment: [0; 8],
@@ -347,7 +400,7 @@ fn shutdown_service() {
     };
     let encoded = request.encode();
     loop {
-        match slime_rt::send(SPAWN_SLOT, &encoded, &[]) {
+        match slime_rt::send(session.spawn_slot, &encoded, &[]) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(b"shutdown send"),
             _ => return,

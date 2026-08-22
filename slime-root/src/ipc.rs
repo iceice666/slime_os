@@ -62,12 +62,22 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         // unscoped policy the contract declares instead of approximating it.
         capability_table_labels::BOOT_ACTION => Some(SERVICE_LIFECYCLE),
         spawn_labels::SPAWN => Some(SERVICE_SPAWN),
+        // B70's declared spawn budget. The spawn service rather than the
+        // capability table its label namespace sits in, for the same reason
+        // `BOOT_ACTION` above is gated on lifecycle: the namespace groups the
+        // generated constants, the service is the authority the root demands.
+        // An instance the generation grants no spawn authority has no budget to
+        // report, and `declared_services` gives `SERVICE_SPAWN` to exactly the
+        // instances that hold one -- a nonzero `spawnBudget` or an executable
+        // grant -- so the gate and the answer are the same fact.
+        capability_table_labels::SPAWN_BUDGET => Some(SERVICE_SPAWN),
         supervision_labels::STATUS | supervision_labels::DERIVE => Some(SERVICE_SUPERVISION),
         capability_table_labels::DROP
         | capability_table_labels::OCCUPANCY
         | capability_table_labels::RESOLVE_BINDING
         | capability_table_labels::GRAPH_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
+        | capability_table_labels::GRAPH_QUERY
         | capability_transfer_labels::EXPORT
         | capability_transfer_labels::IMPORT
         | capability_transfer_labels::EXPORT_CANCEL
@@ -466,21 +476,21 @@ pub fn resolve_binding_slot(
     // caller's own bindings by what the capability is rather than by what the
     // generation happened to call it.
     //
-    // This axis exists because grant names are not stable across generations and
-    // therefore cannot be written in a component. `spawn-service` binds
-    // `spawn-service-echo` under `valid.zti` and `spawn-service-echo-agent` under
-    // `sel4-dango.zti`, and its RPC endpoint is `spawn-service-rpc` in one and
-    // `dango-e-spawn-service-rpc` in the other. A component naming either string
-    // would be coupled to one manifest, which is the coupling B70 exists to
-    // remove, so name lookup alone cannot migrate these sites.
+    // This axis exists because grant names are not always stable across
+    // generations, and a name written into a component that a later manifest
+    // spells differently is exactly the coupling B70 exists to remove. Where a
+    // name *is* uniform across every generation declaring the component -- as
+    // `spawn-service-rpc` and the `spawn-service-<command>` pair are, since B70
+    // normalized them -- the unprefixed lookup above answers and this axis is
+    // not needed. Where the capability is identified by what it is rather than
+    // by what it is called, this one is.
     //
-    // `components/bins/build.rs` already demonstrates the right axis: it resolves
-    // these same slots by capability kind and rights (`binding_with_right_slot`
-    // asks for `bufferCreate`, `related_binding_slot` for `send`+`recv`) and never
-    // by grant name. Those are properties of the capability the component needs,
-    // so they are answerable from any manifest that grants it. This moves that
-    // question from a build script parsing a manifest to the root reading the
-    // activation record it already holds.
+    // `components/bins/build.rs` already demonstrated the right axis: it
+    // resolved these same slots by capability kind and rights and never by grant
+    // name. Those are properties of the capability the component needs, so they
+    // are answerable from any manifest that grants it. This moves that question
+    // from a build script parsing a manifest to the root reading the activation
+    // record it already holds.
     //
     // The match is exact on kind and a superset on rights: a component asking for
     // `send`+`recv` accepts a grant carrying those and more, which is the same
@@ -939,6 +949,62 @@ pub fn route_index_for(
     })
 }
 
+/// One schema-declared scalar from this generation's authenticated fabric graph.
+///
+/// Table cardinalities remain holder-only: they expose hidden graph shape.
+/// Declared resource ceilings are available to every graph participant, because
+/// workers must admit traffic against the same authenticated limits without
+/// compiling a per-generation profile. A caller with no visible participant row
+/// still sees the same refusal as a graph-less generation or an unknown field.
+pub fn graph_query(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    field: u32,
+) -> Option<u32> {
+    let Some(Ok(graph)) = crate::generation::fabric_graph_object(generation) else {
+        return None;
+    };
+    let is_limit = boot_contracts::fabric_graph::RuntimeLimits::field_is_limit(field);
+    if !is_declared_fabric_holder(generation, instance)
+        && (!is_limit
+            || !(0..graph.participant_count()).any(|index| {
+                graph.participant(index).is_some_and(|participant| {
+                    may_read_row(generation, instance, &participant.component_identity)
+                })
+            }))
+    {
+        return None;
+    }
+    graph.query(field)
+}
+
+/// The live-child budget this generation declares for `instance`'s executable.
+///
+/// CP2/B70's last manifest-derived component table. `spawn-service` sized its
+/// live-child array and validated every request's `client_budget` against a
+/// `CLIENT_BUDGET` its build script parsed out of one generation manifest, and
+/// `dango` stated the same number from its own copy; neither component could
+/// then be built against another generation. The root already reads exactly
+/// this record to bound `serve_spawn`, so this discloses no new fact -- it tells
+/// a caller the ceiling it is about to be admitted against.
+///
+/// `instance` is the caller's own index from the authenticated badge, as in
+/// `resolve_binding_slot`: the request names no instance, so there is nothing to
+/// forge and no other executable's budget is reachable.
+///
+/// `None` where the instance or its executable does not decode. A declared
+/// budget of zero is answered as zero rather than refused: it is a real
+/// declaration, and the authority gate on this operation (`SERVICE_SPAWN`) is
+/// what separates "declared none" from "may not ask".
+pub fn spawn_budget(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+) -> Option<u16> {
+    let instance = generation.instance(instance).ok()?;
+    let executable = generation.executable(instance.executable).ok()?;
+    Some(executable.spawn_budget)
+}
+
 /// Copy participant rows `cursor..` into `out`, returning how many were written.
 ///
 /// **What the caller sees depends on who it is, and only on that.** The graph's
@@ -1037,11 +1103,19 @@ mod tests {
                 capability_table_labels::RESOLVE_BINDING,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
+            (
+                capability_table_labels::GRAPH_QUERY,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
             // B70's boot action is in the capability-table label namespace but
             // gated on lifecycle, the one service every instance declares. The
             // pairing is the point of this assertion: the namespace a label
             // sits in and the authority it needs are separate facts.
             (capability_table_labels::BOOT_ACTION, SERVICE_LIFECYCLE),
+            // B70's spawn budget, in that same namespace and gated on the spawn
+            // service: an instance the generation grants no spawn authority has
+            // no declared budget to report.
+            (capability_table_labels::SPAWN_BUDGET, SERVICE_SPAWN),
             (
                 capability_transfer_labels::EXPORT,
                 SERVICE_CAPABILITY_TRANSFER,
@@ -1104,12 +1178,13 @@ mod tests {
             19,
             20,
             // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, 38 until
-            // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, and 40 until
-            // B70's `BOOT_ACTION`. Moving one out of this list is the whole
-            // change: a number this test asserts routes nowhere and a number the
-            // contract declares are the same fact stated twice, so assigning a
-            // label must fail here first — as it did for 38, 39 and 40.
-            41,
+            // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, 40 until
+            // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, and 42 until
+            // `SPAWN_BUDGET`. Moving one out of this list is the whole change: a
+            // number this test asserts routes nowhere and a number the contract
+            // declares are the same fact stated twice, so assigning a label must
+            // fail here first.
+            43,
             64,
             sel4::Word::MAX,
         ] {
@@ -1243,8 +1318,9 @@ mod tests {
     /// a rejected name. `sel4-dango.zti` grants `spawn-service` three
     /// `send`+`recv` endpoints — the RPC channel plus one context endpoint per
     /// command — which is exactly this case, and it was observed: resolving that
-    /// role hung the dango plane at `dango> $(sysinfo)` until the query was left
-    /// refusing it and `RPC_SLOT` restored.
+    /// role hung the dango plane at `dango> $(sysinfo)`. B70 named that endpoint
+    /// `spawn-service-rpc` in every generation declaring the service, so the
+    /// component asks by name and this role stays refused rather than widened.
     #[test]
     fn an_ambiguous_role_is_well_formed_yet_unanswerable() {
         use boot_contracts::generation::{CapabilityKind, right_named};

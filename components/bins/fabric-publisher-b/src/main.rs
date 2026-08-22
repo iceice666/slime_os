@@ -46,7 +46,7 @@ use slime_rt::{CapabilityDisposition, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
-use boot_contracts::generation::RIGHT_SEND;
+use boot_contracts::generation::{BootAction, RIGHT_SEND};
 
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Included
 // here rather than through `slime_components` because a file may be a module
@@ -58,8 +58,6 @@ mod trace_log;
 mod occupancy_trace;
 
 slime_rt::entry!(main);
-
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 /// Control endpoint to the fabric — this component's only route authority path.
 const CONTROL_SLOT: u32 = 0;
@@ -162,7 +160,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if GENERATION_BOOT_ACTION == "visibility" {
+    if slime_components::generation_composition::is(BootAction::Visibility) {
         visibility_main();
         return;
     }
@@ -261,7 +259,9 @@ fn main(_startup_arg: u32) {
 
     publish_large(CONTROL_SLOT, CONTROL_SLOT);
     slime_rt::debug_write(b"[fabric-publisher-b] large sample published\n");
-    if GENERATION_BOOT_ACTION == "qos" || GENERATION_BOOT_ACTION == "traffic" {
+    if slime_components::generation_composition::is(BootAction::Qos)
+        || slime_components::generation_composition::is(BootAction::Traffic)
+    {
         for now_ns in [50u64, 100, 200, 300, 400, 500, 600] {
             advance_time(now_ns);
             await_time_credit(now_ns);
@@ -286,14 +286,13 @@ fn main(_startup_arg: u32) {
     // `just fabric_qos_check`, whose subscriber waits for the terminal event
     // the early flag produces.
     //
-    // C8.13.2: gated to the traffic plane, so the standalone fixtures' fixed
-    // `traceDepth` never has to carry these records. Two rings here, one per
-    // declared route. The third mapping this role transiently holds -- for the
-    // copy it creates, seals, and lends -- is unmapped and released inside
-    // `publish_large` before this point, so what it reports is its two
-    // provisioned rings.
-    if GENERATION_BOOT_ACTION == "traffic" {
-        occupancy_trace::report(b"publisher-b", FABRIC_TRACE_DEPTH);
+    // C8.13.2: gated to the traffic plane, so standalone compositions do not
+    // receive occupancy records they did not request. Two rings remain mapped,
+    // one per declared route. The third mapping this role transiently holds --
+    // for the copy it creates, seals, and lends -- is released inside
+    // `publish_large` before this point.
+    if slime_components::generation_composition::is(BootAction::Traffic) {
+        occupancy_trace::report(b"publisher-b").unwrap_or_else(|_| fail(b"runtime trace depth"));
     }
     slime_rt::debug_write(b"[fabric-publisher-b] done\n");
 }

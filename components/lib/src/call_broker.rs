@@ -1,4 +1,4 @@
-use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER, RuntimeLimits};
 use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::{
     CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REPLY_ACK,
@@ -11,33 +11,43 @@ use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 
-#[allow(dead_code)]
-mod fabric_profile {
-    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
-}
-
 // The trace emitter is included once per *binary*, by the binary, because
 // `fabric-service` includes both brokers and a file may be a module only once
 // in a crate. `use super::trace_log` reaches whichever include its host
 // provided; each worker binary is its own task, so each gets its own sink --
 // which is what the format wants: one bounded trace per worker.
 use super::trace_log;
-use fabric_profile::*;
 use slime_rt::{
     CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
     MAX_MSG,
 };
 
 const SESSION: u64 = 0x000e_0000_0000_0001;
-const MAX_CALLS: usize = FABRIC_MAX_IN_FLIGHT_CALLS;
-const RETRY_LIMIT: u8 = FABRIC_MAX_RETRIES;
-const DEADLINE_NS: u64 = FABRIC_CALL_DEADLINE_NS;
-const RETRY_INTERVAL_NS: u64 = DEADLINE_NS / (RETRY_LIMIT as u64 + 1);
+/// In-flight calls are stored at the schema's structural ceiling; each
+/// generation's smaller authenticated `inFlightCalls` bounds the active prefix
+/// (B70/CP2). The deadline and retry ceiling are read from the graph at
+/// runtime rather than compiled in, so they are methods rather than constants.
+const MAX_CALLS: usize = boot_contracts::fabric_graph::LIMIT_IN_FLIGHT as usize;
 const PAGE: u64 = 4096;
 const LOAN_BASE: u64 = 0x7200_0000;
 const BUFFER_BASE: u64 = LOAN_BASE + PAGE;
-const MAX_PENDING_TERMINALS_PER_CLIENT: usize = MAX_CALLS * 2;
-const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * 2;
+/// Terminals one client may hold unclaimed, as a function of the in-flight
+/// ceiling the caller is bounding against.
+///
+/// One function rather than a constant and a matching runtime expression: the
+/// table below is sized from the contract's structural ceiling so one image
+/// serves every graph, while `can_receive_client` admits against the *declared*
+/// ceiling — two different inputs to one rule. Stating the rule twice is how a
+/// queue starts admitting more terminals than it can hold, so both call this.
+///
+/// Two per call: a terminal is re-offered until its client takes it, and a
+/// client may be holding one while the next call's already exists.
+const fn pending_terminals_per_client(in_flight: usize) -> usize {
+    in_flight * 2
+}
+
+const MAX_PENDING_TERMINALS_PER_CLIENT: usize = pending_terminals_per_client(MAX_CALLS);
+const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * CLIENTS;
 /// Client slots this broker serves. The generation declares two clients on the
 /// call route, and a client replaced at runtime reuses its slot, so this bounds
 /// the park set rather than the number of components that ever hold a role.
@@ -151,13 +161,71 @@ impl Call {
     };
 }
 
+/// The call plane's two fixed tables, in `.bss` rather than inside the
+/// `Broker` value the constructor returns.
+///
+/// Same reason as the operation plane's (see `operation_broker.rs`): B70
+/// replaced the per-plane generated constants these were sized from with the
+/// fabric-graph contract's own ceilings, so `MAX_CALLS` became
+/// `LIMIT_IN_FLIGHT` = 32 against a widest declared `inFlightCalls` of 4, and
+/// `MAX_PENDING_TERMINALS` grew with it to 128. `[Call; 32]` is 4,352 bytes and
+/// `[Option<Call>; 128]` is 17,408, which put a `Broker` at ~26 KiB -- returned
+/// *by value*, so LLVM sinks it into the caller's frame and
+/// `fabric-call-worker::main` reserved 48,032 bytes of a 64 KiB stack before
+/// the plane ran a statement.
+///
+/// That is under the stack today and this worker has not faulted, which is
+/// exactly why it moves too: the margin was 16 KiB against callees that reach
+/// 4 KiB on their own, and the fix that already exists for the identical shape
+/// two files over should not be applied only where the symptom happened to
+/// appear first.
+///
+/// Neither the declared stack nor any authority check moves for this: runtime
+/// admission still bounds the active prefix by the authenticated
+/// `RuntimeLimits`.
+static mut CALLS: [Call; MAX_CALLS] = [Call::EMPTY; MAX_CALLS];
+static mut PENDING_TERMINALS: [Option<Call>; MAX_PENDING_TERMINALS] = [None; MAX_PENDING_TERMINALS];
+/// Set by the one successful [`claim_call_tables`] call.
+static mut CALL_TABLES_CLAIMED: bool = false;
+
+/// Exclusive references to the two tables above.
+///
+/// The single-owner discipline is what keeps `static mut` sound here: exactly
+/// one caller ever receives these, the plane the resulting broker runs is the
+/// task's whole remaining work, and a second claim fails rather than aliasing.
+/// [`Broker::new`] claims once and stores ordinary `&'static mut` borrows, so
+/// every method below is unchanged and none of them can reach the statics
+/// directly.
+struct CallTables {
+    calls: &'static mut [Call; MAX_CALLS],
+    pending_terminals: &'static mut [Option<Call>; MAX_PENDING_TERMINALS],
+}
+
+fn claim_call_tables() -> CallTables {
+    // SAFETY: a component is single-threaded, the flag makes this the only
+    // call that ever hands out these references, and nothing else in this
+    // module names the two statics.
+    unsafe {
+        if *core::ptr::addr_of!(CALL_TABLES_CLAIMED) {
+            fail(b"call tables claimed twice");
+        }
+        *core::ptr::addr_of_mut!(CALL_TABLES_CLAIMED) = true;
+        CallTables {
+            calls: &mut *core::ptr::addr_of_mut!(CALLS),
+            pending_terminals: &mut *core::ptr::addr_of_mut!(PENDING_TERMINALS),
+        }
+    }
+}
+
 pub struct Broker {
     buffer_factory_slot: u32,
     clients: [Option<u32>; CLIENTS],
     server_slot: Option<u32>,
     time_control: u32,
     supervision: [u32; SUPERVISION_HANDLES],
-    calls: [Call; MAX_CALLS],
+    /// The two tables [`claim_call_tables`] hands out, borrowed rather than
+    /// owned so this value stays small enough to be returned by value.
+    calls: &'static mut [Call; MAX_CALLS],
     high_water: [u64; 2],
     /// The most calls this broker has ever held live at once.
     ///
@@ -179,7 +247,7 @@ pub struct Broker {
     peak_retries: u32,
     next_server_request_id: u64,
     now_ns: u64,
-    pending_terminals: [Option<Call>; MAX_PENDING_TERMINALS],
+    pending_terminals: &'static mut [Option<Call>; MAX_PENDING_TERMINALS],
     /// No further time advance can arrive, so the exit predicate may proceed.
     ///
     /// Set only by [`Self::pump_time`], and only from a drain that follows a
@@ -232,40 +300,123 @@ pub struct Broker {
     /// name the edge by this identity rather than by a slot or a component
     /// name, so the artifact is comparable across boots.
     route: u64,
+    /// The tightest deadline the graph declares for a client on this route,
+    /// resolved once by [`Self::verify_graph`].
+    ///
+    /// Resolved once rather than per use, and that is a correctness rule
+    /// rather than a cost argument. Reading it needs a whole-graph read plus a
+    /// route-index query, and both stage through this task's *single* transfer
+    /// window -- the same window `receive`/`export` use to move a call's
+    /// capability. Admitting a call and arming a retry are exactly the paths
+    /// that already hold a staged descriptor, so asking the root there would
+    /// interleave two stagings in one window. `fabric-service::provision`
+    /// records the same rule from the other side, having left declared edges
+    /// unprovisioned when a graph read shared the window with a role transfer.
+    ///
+    /// Zero until `verify_graph` runs, which `run` calls before any traffic; a
+    /// broker that never ran admits nothing, so no path reads an unset value.
+    declared_deadline_ns: u64,
+    /// This generation's authenticated ceilings. Every admission bound below
+    /// reads from here rather than from a constant a build script rendered, so
+    /// one image serves every graph that declares this plane (B70/CP2).
+    limits: RuntimeLimits,
 }
 
 impl Broker {
-    pub const fn new(
+    /// Build the call plane against this generation's authenticated ceilings.
+    ///
+    /// No longer `const`: the declared limits are read from the root at run
+    /// time, and the two storage tables come from [`claim_call_tables`] rather
+    /// than being materialized inline.
+    pub fn new(
         buffer_factory_slot: u32,
         clients: [u32; CLIENTS],
         server_slot: u32,
         time_control: u32,
         supervision: [u32; SUPERVISION_HANDLES],
+        limits: RuntimeLimits,
     ) -> Self {
+        let max_calls = usize::try_from(limits.max_in_flight_calls)
+            .unwrap_or_else(|_| fail(b"call limit does not fit usize"));
+        // A retry count is not a table index, so it is bounded by what the
+        // field holds rather than by the call table's length: `Call::retries`
+        // is a `u8`, and a declared ceiling above `u8::MAX` would silently wrap
+        // into a smaller ceiling. The earlier form compared it against
+        // `MAX_CALLS`, two unrelated quantities that agreed only because both
+        // contract ceilings are small.
+        if u8::try_from(limits.max_retries).is_err() {
+            fail(b"call retry ceiling does not fit the retry counter");
+        }
+        if max_calls > MAX_CALLS {
+            fail(b"call graph in-flight ceiling exceeds broker storage");
+        }
+        // The sink depth travels with every other declared ceiling rather than
+        // as its own argument: it is one field of the same authenticated
+        // header, and a second parameter would let a caller pass a depth this
+        // graph never declared.
+        if !limits.trace_overflow_is_saturate() {
+            fail(b"graph declares an overflow discipline no worker implements");
+        }
+        let trace_depth = limits
+            .trace_sink_depth()
+            .unwrap_or_else(|| fail(b"graph declares a trace depth outside the contract"));
+        let tables = claim_call_tables();
         Self {
             buffer_factory_slot,
             clients: [Some(clients[0]), Some(clients[1])],
             server_slot: Some(server_slot),
             time_control,
             supervision,
-            calls: [Call::EMPTY; MAX_CALLS],
+            calls: tables.calls,
             high_water: [0; 2],
             peak_calls: 0,
             peak_buffers: 0,
             peak_retries: 0,
             next_server_request_id: 1,
             now_ns: 0,
-            pending_terminals: [None; MAX_PENDING_TERMINALS],
+            pending_terminals: tables.pending_terminals,
             time_closed: false,
             time_terminated: false,
             server_death_reported: false,
             server_call: None,
-            trace: trace_log::Trace::new(FABRIC_TRACE_DEPTH),
+            trace: trace_log::Trace::new(trace_depth),
             // Folded in `run` rather than here: `route_identity` hashes, which
             // is not a const operation, and zero is not a valid route identity
             // so an unfolded broker cannot emit an edge record by accident.
             route: 0,
+            // Resolved by `verify_graph`, for the transfer-window reason its
+            // field documents.
+            declared_deadline_ns: 0,
+            limits,
         }
+    }
+
+    /// The prefix of `calls` this generation's declared `inFlightCalls`
+    /// admits. Every scan reads through here rather than the whole table, so a
+    /// graph declaring four in-flight calls never sees a fifth slot even
+    /// though the storage exists.
+    fn active_calls(&self) -> &[Call] {
+        &self.calls[..self.limits.max_in_flight_calls as usize]
+    }
+
+    fn active_call_count(&self) -> usize {
+        self.limits.max_in_flight_calls as usize
+    }
+
+    /// The tightest deadline this generation declares for a client on this
+    /// route, as [`Self::verify_graph`] resolved it from the graph rather than
+    /// from a build-time constant (B70/CP2).
+    fn call_deadline_ns(&self) -> u64 {
+        self.declared_deadline_ns
+    }
+
+    fn retry_limit(&self) -> u8 {
+        u8::try_from(self.limits.max_retries)
+            .unwrap_or_else(|_| fail(b"call retry limit does not fit u8"))
+    }
+
+    fn retry_interval_ns(&self) -> u64 {
+        self.call_deadline_ns() / (u64::from(self.retry_limit()) + 1)
     }
 
     /// Record the live-call, live-buffer, and retry-ceiling occupancy if this
@@ -276,7 +427,7 @@ impl Broker {
     /// live at once, which is only observable between sweeps.
     fn sample_peak(&mut self) {
         let live = self
-            .calls
+            .active_calls()
             .iter()
             .filter(|call| call.phase != Phase::Free)
             .count() as u32;
@@ -284,7 +435,7 @@ impl Broker {
             self.peak_calls = live;
         }
         let buffers = self
-            .calls
+            .active_calls()
             .iter()
             .filter(|call| call.phase != Phase::Free && call.payload.buffer_slot().is_some())
             .count() as u32;
@@ -292,7 +443,7 @@ impl Broker {
             self.peak_buffers = buffers;
         }
         let retries = self
-            .calls
+            .active_calls()
             .iter()
             .filter(|call| call.phase != Phase::Free)
             .map(|call| call.retries as u32)
@@ -340,7 +491,10 @@ impl Broker {
             progressed |= self.pump_time();
             progressed |= self.reclaim_dead_clients();
             self.sample_peak();
-            if self.calls.iter().all(|call| call.phase == Phase::Free)
+            if self
+                .active_calls()
+                .iter()
+                .all(|call| call.phase == Phase::Free)
                 && self.pending_terminals.iter().all(Option::is_none)
                 && self.server_slot.is_none()
                 && self.time_closed
@@ -406,7 +560,7 @@ impl Broker {
             // reply it is holding is the very thing that would let the client
             // run again.
             let owed =
-                self.calls.iter().any(|call| {
+                self.active_calls().iter().any(|call| {
                     matches!(call.phase, Phase::PendingTerminal | Phase::ForwardingReply)
                 }) || self.pending_terminals.iter().any(Option::is_some);
             // A call at the server is also a reason not to park. The server
@@ -445,23 +599,37 @@ impl Broker {
         }
     }
 
+    /// Whether this client may still be read from.
+    ///
+    /// Bounded by the generation's declared `inFlightCalls` share rather than
+    /// the contract's structural ceiling: the table is sized at the ceiling so
+    /// one image serves every graph, but what a graph promised to buffer is
+    /// what admission is against. Derived through
+    /// [`pending_terminals_per_client`] so this bound and the table's own
+    /// sizing stay one statement -- stated twice, a change to either would
+    /// leave the queue admitting more than it can hold or less than it must.
     fn can_receive_client(&self, client: usize) -> bool {
         self.pending_terminals
             .iter()
             .flatten()
             .filter(|call| call.client_index as usize == client)
             .count()
-            < MAX_PENDING_TERMINALS_PER_CLIENT
+            < pending_terminals_per_client(self.limits.max_in_flight_calls as usize)
     }
 
     /// Every edge this broker requires, read from the generation graph resource
-    /// rather than a build-time table (B70/CP2).
+    /// rather than a build-time table (B70/CP2), plus the deadline every later
+    /// admission arms against.
     ///
-    /// Called once from `run`, so the read is not in the pump loop. The
-    /// interface is folded into the route identity rather than compared as a
-    /// name: a `parameters` route carrying a different contract resolves to no
-    /// index at all instead of matching by string.
-    fn verify_graph(&self) {
+    /// Called once from `run`, before any traffic, and it is the *only* site
+    /// that reads the graph: both the row read and the route-index query stage
+    /// through this task's single transfer window, which the call path also
+    /// uses to move capabilities. See `declared_deadline_ns`.
+    ///
+    /// The interface is folded into the route identity rather than compared as
+    /// a name: a `parameters` route carrying a different contract resolves to
+    /// no index at all instead of matching by string.
+    fn verify_graph(&mut self) {
         let mut graph_rows = slime_components::fabric_self_view::EMPTY_ROWS;
         let Ok(row_count) = slime_components::fabric_self_view::rows(&mut graph_rows) else {
             fail(b"call graph read did not complete");
@@ -497,6 +665,18 @@ impl Broker {
         if declared(b"fabric-call-server", DIRECTION_SERVER) != 1 {
             fail(b"call server graph declaration");
         }
+        // The deadline every admission and retry arms against, resolved from
+        // the same rows this walk already holds. `min` rather than any single
+        // client's: the transport arms one timer per call and the tightest
+        // declared deadline is the only one that honours every client's.
+        self.declared_deadline_ns = rows
+            .iter()
+            .filter(|row| {
+                row.route_index == route_index as u32 && row.direction == DIRECTION_CLIENT
+            })
+            .map(|row| row.qos.deadline_ns)
+            .min()
+            .unwrap_or_else(|| fail(b"call route declares no client deadline"));
     }
 
     fn pump_client(&mut self, client: usize) -> bool {
@@ -705,7 +885,11 @@ impl Broker {
             slime_rt::debug_write(b"[fabric] duplicate call rejected\n");
             return;
         }
-        let Some(index) = self.calls.iter().position(|call| call.phase == Phase::Free) else {
+        let Some(index) = self
+            .active_calls()
+            .iter()
+            .position(|call| call.phase == Phase::Free)
+        else {
             settle_payload(payload);
             self.reject_terminal(client, slot, session, request_id, STATUS_RETRY_EXHAUSTED);
             self.trace_denial(STATUS_RETRY_EXHAUSTED);
@@ -726,7 +910,7 @@ impl Broker {
             client_slot: slot,
             client_index: client as u8,
             retries: 0,
-            deadline_ns: self.now_ns.saturating_add(DEADLINE_NS),
+            deadline_ns: self.now_ns.saturating_add(self.call_deadline_ns()),
             next_retry_ns: self.now_ns,
             terminal_status: 0,
             offered: false,
@@ -807,7 +991,7 @@ impl Broker {
             client_slot: slot,
             client_index: client as u8,
             retries: 0,
-            deadline_ns: self.now_ns.saturating_add(DEADLINE_NS),
+            deadline_ns: self.now_ns.saturating_add(self.call_deadline_ns()),
             next_retry_ns: 0,
             terminal_status: status,
             offered: false,
@@ -816,7 +1000,11 @@ impl Broker {
         // Queue rather than hand over from inside the receive path: this
         // client is typically blocked in `send` on its next request, so a
         // delivery attempt here would wait on a peer waiting on us.
-        if let Some(index) = self.calls.iter().position(|call| call.phase == Phase::Free) {
+        if let Some(index) = self
+            .active_calls()
+            .iter()
+            .position(|call| call.phase == Phase::Free)
+        {
             self.calls[index] = pending;
             slime_rt::debug_write(b"[fabric] terminal delivery queued\n");
             return;
@@ -873,7 +1061,7 @@ impl Broker {
     /// finished again -- and leaving one behind blocks the client's queue
     /// forever, since it will never ack an id it has already passed.
     fn retire_terminal(&mut self, client: usize, request_id: u64) {
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             if self.calls[index].phase == Phase::PendingTerminal
                 && self.calls[index].client_index as usize == client
                 && self.calls[index].request_id == request_id
@@ -881,7 +1069,7 @@ impl Broker {
                 self.calls[index] = Call::EMPTY;
             }
         }
-        for pending in &mut self.pending_terminals {
+        for pending in self.pending_terminals.iter_mut() {
             if pending.is_some_and(|call| {
                 call.client_index as usize == client && call.request_id == request_id
             }) {
@@ -896,7 +1084,7 @@ impl Broker {
     /// an ack settles the record it names, never a batch, so a client
     /// acknowledging twice cannot drop a reply it has not seen.
     fn retire_reply(&mut self, client: usize, request_id: u64) {
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             if self.calls[index].phase == Phase::ForwardingReply
                 && self.calls[index].client_index as usize == client
                 && self.calls[index].request_id == request_id
@@ -1044,8 +1232,9 @@ impl Broker {
             }
             ERR_WOULDBLOCK => {
                 self.calls[index].retries = self.calls[index].retries.saturating_add(1);
-                self.calls[index].next_retry_ns = self.now_ns.saturating_add(RETRY_INTERVAL_NS);
-                if self.calls[index].retries >= RETRY_LIMIT {
+                self.calls[index].next_retry_ns =
+                    self.now_ns.saturating_add(self.retry_interval_ns());
+                if self.calls[index].retries >= self.retry_limit() {
                     let status = if self.calls[index].phase == Phase::Cancelling {
                         STATUS_CANCELLED
                     } else {
@@ -1065,7 +1254,7 @@ impl Broker {
     }
 
     fn cancel(&mut self, client: usize, client_slot: u32, message: WireCallEnvelope) {
-        let Some(index) = self.calls.iter().position(|call| {
+        let Some(index) = self.active_calls().iter().position(|call| {
             call.phase != Phase::Free
                 && call.request_id == message.request_id
                 && call.client_session == message.session
@@ -1137,7 +1326,7 @@ impl Broker {
                 // seen it, so the cancellation gets its own deadline: the
                 // client is told once the server has actually settled it, and
                 // the timeout still bounds a server that never does.
-                self.calls[index].deadline_ns = self.now_ns.saturating_add(DEADLINE_NS);
+                self.calls[index].deadline_ns = self.now_ns.saturating_add(self.call_deadline_ns());
             }
             return;
         }
@@ -1361,7 +1550,7 @@ impl Broker {
 
     fn pump_replies(&mut self) -> bool {
         let mut progressed = false;
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             if self.calls[index].phase != Phase::ForwardingReply {
                 continue;
             }
@@ -1476,7 +1665,7 @@ impl Broker {
         // instant it ends, and the expiries below belong to the new one.
         let _ = self.trace.advance(value.now_ns);
         self.now_ns = value.now_ns;
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             if self.calls[index].phase == Phase::Free {
                 continue;
             }
@@ -1559,7 +1748,7 @@ impl Broker {
     }
 
     fn find_call(&self, server_request_id: u64) -> Option<usize> {
-        self.calls.iter().position(|call| {
+        self.active_calls().iter().position(|call| {
             matches!(call.phase, Phase::AwaitingReply | Phase::Cancelling)
                 && call.server_request_id == server_request_id
         })
@@ -1598,7 +1787,7 @@ impl Broker {
                 lowest[client] = Some(request_id);
             }
         };
-        for call in self.calls.iter() {
+        for call in self.active_calls().iter() {
             if call.phase == Phase::PendingTerminal {
                 note(call.client_index as usize, call.request_id);
             }
@@ -1621,7 +1810,7 @@ impl Broker {
             let Some(target) = target else {
                 continue;
             };
-            let next = self.calls.iter().position(|call| {
+            let next = self.active_calls().iter().position(|call| {
                 call.phase == Phase::PendingTerminal
                     && call.client_index as usize == client
                     && call.request_id == target
@@ -1636,7 +1825,7 @@ impl Broker {
         // that is waiting on us. `settle_outstanding_request` clears the
         // payload when the reply lands, so a `Cancelling` call still holding a
         // staged message is one whose server has not answered yet.
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             if self.calls[index].phase != Phase::Cancelling || self.server_call.is_some() {
                 continue;
             }
@@ -1685,7 +1874,7 @@ impl Broker {
         // what makes the server reachable again, so this resumes exactly then.
         if self.server_call.is_none()
             && let Some(index) = self
-                .calls
+                .active_calls()
                 .iter()
                 .position(|call| call.phase == Phase::Forwarding)
         {
@@ -1696,7 +1885,7 @@ impl Broker {
     }
 
     fn reclaim_client(&mut self, slot: u32) {
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             if self.calls[index].phase != Phase::Free && self.calls[index].client_slot == slot {
                 settle_payload(self.calls[index].payload);
                 self.calls[index] = Call::EMPTY;
@@ -1720,7 +1909,7 @@ impl Broker {
             ) {
                 continue;
             }
-            for index in 0..self.calls.len() {
+            for index in 0..self.active_call_count() {
                 if matches!(
                     self.calls[index].phase,
                     Phase::PendingTerminal | Phase::ForwardingReply
@@ -1745,7 +1934,7 @@ impl Broker {
     }
 
     fn reclaim_all(&mut self, status: i32) {
-        for index in 0..self.calls.len() {
+        for index in 0..self.active_call_count() {
             self.finish(index, status);
         }
     }
@@ -1878,19 +2067,27 @@ const _: () = assert!(slime_proto::fabric_call::CALL_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_call::CALL_TIME_LEN == MAX_MSG);
 const _: () = assert!(FLAG_NON_IDEMPOTENT == 1);
 
-/// The one overflow discipline implemented. Asserted rather than branched on: a
-/// generation declaring anything else names behaviour no worker has, and
-/// discovering that at boot would be worse than not compiling.
-const _: () = assert!(FABRIC_TRACE_OVERFLOW == slime_proto::fabric_trace::OVERFLOW_SATURATE);
-/// And the declared depth must fit the sink the contract sizes.
-///
-/// `const _: ()` rather than relying on `TraceSink::with_const_capacity`'s own
-/// assert: that constructor is a `const fn` reached from `fn main`, and a
-/// `const fn` called at runtime evaluates at runtime -- so its assert would be a
-/// boot panic inside a `no_std` component rather than the build failure it
-/// claims to be. These items are evaluated at compile time unconditionally.
-const _: () = assert!(FABRIC_TRACE_DEPTH <= slime_proto::fabric_trace::MAX_TRACE_DEPTH);
-const _: () = assert!(FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TERMINAL_RESERVE);
+// The two facts these asserted about a build-time constant are now runtime
+// answers checked in `Broker::new`: `trace_overflow_is_saturate` refuses a
+// discipline no worker implements, and `trace_sink_depth` refuses a depth
+// outside the contract. What stays a compile-time claim is that the two
+// contracts agree on the bounds those runtime checks compare against -- a
+// divergence there would make one accept what the other refuses, and the
+// refusal would surface as a `TraceSink` assert firing as a boot panic inside
+// a `no_std` component. These items are evaluated at compile time
+// unconditionally.
+const _: () = assert!(
+    boot_contracts::fabric_graph::LIMIT_TRACE_DEPTH as usize
+        <= slime_proto::fabric_trace::MAX_TRACE_DEPTH
+);
+const _: () = assert!(
+    boot_contracts::fabric_graph::TRACE_TERMINAL_RESERVE as usize
+        == slime_proto::fabric_trace::TERMINAL_RESERVE
+);
+const _: () = assert!(
+    boot_contracts::fabric_graph::TRACE_OVERFLOW_SATURATE
+        == slime_proto::fabric_trace::OVERFLOW_SATURATE
+);
 
 /// A refusal status, as a failure code the trace's denial family admits.
 ///

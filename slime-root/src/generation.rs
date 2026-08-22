@@ -919,7 +919,7 @@ mod tests {
     /// make it minimal: `validate_against` reads only the limits block, so an
     /// empty graph isolates the ceiling comparison from everything else the
     /// decoder checks.
-    fn graph_with(limits: [u32; 19]) -> alloc::vec::Vec<u8> {
+    fn graph_with(limits: [u32; 21]) -> alloc::vec::Vec<u8> {
         use boot_contracts::fabric_graph::{FORMAT_VERSION, HEADER_BYTES, MAGIC};
         let mut bytes = alloc::vec![0u8; HEADER_BYTES];
         bytes[..8].copy_from_slice(&MAGIC);
@@ -1083,8 +1083,30 @@ mod tests {
     /// routes, ingress_sources, publishers, subscribers, clients, servers,
     /// sample_bytes, queue_depth, history_depth, event_depth, retained_samples,
     /// retries, in_flight_calls, in_flight_operations, buffer_pages, buffers,
-    /// mappings, loans, capability_slots.
-    const SATISFIABLE: [u32; 19] = [1, 4, 1, 1, 0, 0, 64, 8, 4, 4, 2, 2, 0, 0, 8, 2, 4, 4, 16];
+    /// mappings, loans, capability_slots, trace_depth, trace_overflow.
+    const SATISFIABLE: [u32; 21] = [
+        1,
+        4,
+        1,
+        1,
+        0,
+        0,
+        64,
+        8,
+        4,
+        4,
+        2,
+        2,
+        0,
+        0,
+        8,
+        2,
+        4,
+        4,
+        16,
+        16,
+        boot_contracts::fabric_graph::TRACE_OVERFLOW_SATURATE,
+    ];
 
     /// [`qos_graph`] with one interposition hop naming `hop`, appended.
     ///
@@ -1311,12 +1333,16 @@ mod tests {
     /// ceiling: the fabric brokers one loan and one mapping per matched
     /// subscriber, so promising more subscribers than either cannot be
     /// delivered however small the numbers are.
+    ///
+    /// The subscriber count stays at the contract's own per-role ceiling: a
+    /// count above it is refused at *decode*, which would prove nothing about
+    /// this root's satisfiability arm.
     #[test]
     fn a_self_contradicting_graph_is_refused_within_every_ceiling() {
         let mut limits = SATISFIABLE;
-        limits[3] = 8; // subscribers
-        limits[16] = 4; // mappings
-        limits[17] = 4; // loans
+        limits[3] = boot_contracts::fabric_graph::MAX_ROLE_PARTICIPANTS as u32; // subscribers
+        limits[16] = 2; // mappings
+        limits[17] = 2; // loans
         let bytes = graph_with(limits);
         let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
         assert_eq!(

@@ -47,7 +47,7 @@ use slime_proto::{valid_fabric_request, valid_visibility_request};
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::trace_log::{self, Trace};
-use super::{FABRIC_TRACE_DEPTH, control_clients, fail, release_received};
+use super::{control_clients, declared_trace_depth, fail, load_runtime_limits, release_received};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
@@ -76,21 +76,25 @@ pub(super) fn run() {
     let routes = route_identities();
     let graph = GraphView::read(&routes);
     assert_declared_composition(&graph);
-    let mut trace = Trace::new(FABRIC_TRACE_DEPTH);
+    let limits = load_runtime_limits();
+    let mut trace = Trace::new(declared_trace_depth(&limits));
 
     // Schema admission first, before any edge exists to name. The records are
     // the generation's own closure, so they precede every route record in the
     // artifact for the same reason the schemas precede the routes in the graph.
     //
-    // One per row of the generated table, not a hardcoded count: a generation
-    // admitting a third interface must emit a third record, and a count stated
-    // here would undercount it silently — neither the validator nor the gate
-    // knows how many schemas the graph declared.
-    for _schema in super::FABRIC_SCHEMAS {
+    // One per interface the *graph* admitted, asked of the root rather than
+    // counted off a generated table (B70/CP2): a generation admitting a third
+    // interface must emit a third record, and a count compiled in here would
+    // undercount it silently. `QUERY_SCHEMA_COUNT` is holder-scoped, which this
+    // component is wherever this plane runs.
+    let schemas = slime_rt::graph_query(boot_contracts::fabric_graph::QUERY_SCHEMA_COUNT)
+        .unwrap_or_else(|_| fail(b"matrix schema count query"));
+    for _schema in 0..schemas {
         let _ = trace.edge(KIND_SCHEMA, ORDER_DATA, 0, 0, 0, 0);
     }
     slime_rt::debug_write(b"[fabric] matrix admitted ");
-    write_count(super::FABRIC_SCHEMAS.len());
+    write_count(schemas as usize);
     slime_rt::debug_write(b" interface schemas\n");
 
     // The two telemetry routes carry the same interface under different names.
@@ -151,7 +155,11 @@ pub(super) fn run() {
     let mut granted = 0u32;
     loop {
         let mut progressed = false;
-        for client in clients.iter_mut().filter(|client| !client.answered) {
+        for client in clients
+            .iter_mut()
+            .flatten()
+            .filter(|client| !client.answered)
+        {
             match serve(
                 client.control_slot,
                 client.component,
@@ -201,7 +209,7 @@ pub(super) fn run() {
             }
         }
         progressed |= advance_relay(&mut relay, proxy_replied, &routes, &mut trace);
-        if clients.iter().all(|client| client.answered) && relay == Relay::Done {
+        if clients.iter().flatten().all(|client| client.answered) && relay == Relay::Done {
             break;
         }
         if !progressed {
@@ -440,10 +448,9 @@ fn assert_declared_composition(graph: &GraphView) {
     // this whole plane exists to draw.
 }
 
-/// How many capabilities the generation declares for `component`, across every
-/// class this profile can bind: the stream control endpoint, a call- or
-/// operation-plane control endpoint, one per declared route edge, and one per
-/// notification binding.
+/// How many capability edges the generation declares between *this broker* and
+/// `component`, across every class it can bind: the control endpoint, one per
+/// declared route edge, and one per notification pair.
 ///
 /// Every class, because this count is the load-bearing half of the claim that
 /// an absent capability is an absent operation — asserted once here rather
@@ -451,15 +458,29 @@ fn assert_declared_composition(graph: &GraphView) {
 /// only read stream-route edges would agree with a broader graph today by
 /// coincidence and disagree the day a fixture bound one more class to the
 /// probe.
+///
+/// Read from the root and the graph rather than from three generated tables
+/// (B70/CP2). The tables listed which components each plane's profile bound,
+/// which is a statement *about the manifest*; this asks the root which of those
+/// edges it actually installed for this instance, and the graph which
+/// participant rows it declared. Both ends of a control edge and both ends of a
+/// notification pair come from one declaration, so this broker holding neither
+/// is exactly the probe holding neither.
+///
+/// It says nothing about capabilities the probe might hold toward some third
+/// component, and neither did the tables: every class they enumerated was one
+/// of this broker's own edges.
 fn declared_capabilities(graph: &GraphView, component: &[u8]) -> usize {
-    let control = usize::from(super::FABRIC_CLIENTS.contains(&component));
-    let call = usize::from(super::FABRIC_CALL_CLIENTS.contains(&component));
-    let operation = usize::from(super::FABRIC_OPERATION_CLIENTS.contains(&component));
-    let notifications = super::FABRIC_NOTIFICATION_BINDINGS
-        .iter()
-        .filter(|(holder, _, _, _, _)| *holder == component)
-        .count();
-    control + call + operation + notifications + graph.declared_edges(component)
+    let control = usize::from(super::control_slot_of(component).is_some());
+    let mut notifications = 0;
+    for route in ROUTE_NAMES {
+        for suffix in [b"-ready".as_slice(), b"-credit".as_slice()] {
+            if super::notification_slot(component, route, suffix).is_some() {
+                notifications += 1;
+            }
+        }
+    }
+    control + notifications + graph.declared_edges(component)
 }
 
 /// One decimal count on the current line.

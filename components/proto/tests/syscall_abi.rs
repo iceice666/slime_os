@@ -21,7 +21,7 @@ use slime_proto::syscall_abi::{
 
 #[test]
 fn operation_labels_are_frozen() {
-    let labels: [(&str, u64); 27] = [
+    let labels: [(&str, u64); 29] = [
         ("lifecycle::EXIT", lifecycle_labels::EXIT),
         ("lifecycle::UNHEALTHY", lifecycle_labels::UNHEALTHY),
         ("spawn::SPAWN", spawn_labels::SPAWN),
@@ -60,11 +60,11 @@ fn operation_labels_are_frozen() {
             "capabilityTransfer::EXPORT_FINALIZE",
             capability_transfer_labels::EXPORT_FINALIZE,
         ),
-        // CP2's binding query and B70's three graph/composition reads. These
-        // were unpinned until B70's boot action added the fourth: the list
-        // stopped at 36 while the contract had grown to 40, so any of them
-        // could have been renumbered with this test still green — the exact
-        // silent-drift class the file exists to refuse.
+        // CP2's binding query and B70's graph/composition reads. These were
+        // unpinned until B70's boot action exposed the gap: the list stopped at
+        // 36 while the contract had grown further, so any of them could have
+        // been renumbered with this test still green — the exact silent-drift
+        // class the file exists to refuse.
         (
             "capabilityTable::RESOLVE_BINDING",
             capability_table_labels::RESOLVE_BINDING,
@@ -81,10 +81,18 @@ fn operation_labels_are_frozen() {
             "capabilityTable::BOOT_ACTION",
             capability_table_labels::BOOT_ACTION,
         ),
+        (
+            "capabilityTable::GRAPH_QUERY",
+            capability_table_labels::GRAPH_QUERY,
+        ),
+        (
+            "capabilityTable::SPAWN_BUDGET",
+            capability_table_labels::SPAWN_BUDGET,
+        ),
     ];
-    let expected: [u64; 27] = [
+    let expected: [u64; 29] = [
         3, 9, 4, 5, 12, 32, 13, 31, 15, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37,
-        38, 39, 40,
+        38, 39, 40, 41, 42,
     ];
     for ((name, actual), want) in labels.iter().zip(expected) {
         assert_eq!(*actual, want, "operation {name} was renumbered");
@@ -124,6 +132,8 @@ fn operation_labels_are_distinct() {
         capability_table_labels::GRAPH_READ,
         capability_table_labels::GRAPH_ROUTE_INDEX,
         capability_table_labels::BOOT_ACTION,
+        capability_table_labels::GRAPH_QUERY,
+        capability_table_labels::SPAWN_BUDGET,
     ];
     labels.sort_unstable();
     for pair in labels.windows(2) {

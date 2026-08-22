@@ -41,7 +41,7 @@ use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
-use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
+use boot_contracts::generation::{BootAction, RIGHT_RECV, RIGHT_SEND};
 
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Included
 // here rather than through `slime_components` because a file may be a module
@@ -53,8 +53,6 @@ mod trace_log;
 mod occupancy_trace;
 
 slime_rt::entry!(main);
-
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 const CONTROL_SLOT: u32 = 0;
 
@@ -140,7 +138,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if GENERATION_BOOT_ACTION == "visibility" {
+    if slime_components::generation_composition::is(BootAction::Visibility) {
         visibility_main();
         return;
     }
@@ -244,17 +242,17 @@ fn main(_startup_arg: u32) {
 
     slime_rt::debug_write(b"[fabric-subscriber-b] stalling on telemetry\n");
     let early = receive_large_sample();
-    if GENERATION_BOOT_ACTION == "qos" {
+    if slime_components::generation_composition::is(BootAction::Qos) {
         consume_diagnostics(&mut diagnostics_ring);
     } else {
         consume_diagnostics_stream(&mut diagnostics_ring);
     }
     consume_telemetry(&mut telemetry_ring, early);
-    // C8.13.2: gated to the traffic plane, so the standalone fixtures' fixed
-    // `traceDepth` never has to carry these records. Two rings here, one per
-    // declared route.
-    if GENERATION_BOOT_ACTION == "traffic" {
-        occupancy_trace::report(b"subscriber-b", FABRIC_TRACE_DEPTH);
+    // C8.13.2: gated to the traffic plane, so standalone compositions do not
+    // receive occupancy records they did not request. Two rings remain mapped,
+    // one per declared route.
+    if slime_components::generation_composition::is(BootAction::Traffic) {
+        occupancy_trace::report(b"subscriber-b").unwrap_or_else(|_| fail(b"runtime trace depth"));
     }
     slime_rt::debug_write(b"[fabric-subscriber-b] done\n");
 }

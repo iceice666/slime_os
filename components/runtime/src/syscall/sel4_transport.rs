@@ -1070,6 +1070,11 @@ pub fn graph_route_index(identity: &[u8; 32]) -> i64 {
     )
 }
 
+/// Read one scalar from the authenticated fabric-graph header.
+pub fn graph_query(field: u32) -> i64 {
+    result_of(capability_table_labels::GRAPH_QUERY, &[field as Word])
+}
+
 /// Ask the root which composition this generation declares (B70).
 ///
 /// No operand and no transfer window: the answer is one scalar the root holds
@@ -1078,6 +1083,15 @@ pub fn graph_route_index(identity: &[u8; 32]) -> i64 {
 /// the same encoding the bootstrap thread's startup argument already carries.
 pub fn boot_action() -> i64 {
     result_of(capability_table_labels::BOOT_ACTION, &[0])
+}
+
+/// Ask the root for this instance's declared live-child budget (B70).
+///
+/// No operand and no transfer window, the same shape as [`boot_action`]: the
+/// answer is a scalar the root reads off the caller's own executable record,
+/// and the badge is the only identity involved.
+pub fn spawn_budget() -> i64 {
+    result_of(capability_table_labels::SPAWN_BUDGET, &[0])
 }
 
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

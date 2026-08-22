@@ -29,9 +29,7 @@ use slime_proto::{
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
-use super::{
-    FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail, release_received, supervision_slot_for,
-};
+use super::{ROUTE_NAMES, control_clients, fail, release_received, supervision_slot_for};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
@@ -115,10 +113,11 @@ pub(super) fn run() {
     let mut clients = control_clients();
     let mut roles = Roles::default();
 
-    // Process authenticated controls in manifest order. Each request remains
+    // Process authenticated controls in the roster's fixed order, skipping any
+    // this generation declares no control edge for. Each request remains
     // cursor-paged and blocking, so this fixes the transcript order without a
     // poll loop or a graph-sized response queue.
-    for client in &mut clients {
+    for client in clients.iter_mut().flatten() {
         while !client.answered {
             let mut message = [0u8; MAX_MSG];
             let mut received = [0u64; MAX_CAPS_PER_MSG];
@@ -797,4 +796,3 @@ fn write_record(prefix: &[u8], bytes: &[u8; RECORD_LEN]) {
 }
 
 const _: () = assert!(RECORD_LEN == MAX_MSG);
-const _: () = assert!(FIRST_CONTROL_SLOT == 2);

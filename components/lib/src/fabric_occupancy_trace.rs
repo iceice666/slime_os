@@ -62,18 +62,31 @@
 #![allow(dead_code)]
 
 use super::trace_log::Trace;
-use slime_proto::fabric_trace::RESOURCE_MAPPING;
+use boot_contracts::fabric_graph::{LIMIT_TRACE_DEPTH, QUERY_TRACE_DEPTH, TRACE_TERMINAL_RESERVE};
+use slime_proto::fabric_trace::{MAX_TRACE_DEPTH, RESOURCE_MAPPING, TERMINAL_RESERVE};
 
-/// The declared depth is inside the contract, checked at build time.
+/// The sink's fixed storage is the contract ceiling, so the two statements of
+/// that ceiling must agree at build time rather than at the boot where a sink
+/// is constructed: `TraceSink`'s own bound check is a runtime assert reached
+/// from `fn main`. `slime_proto` sizes the array; `boot_contracts` is what the
+/// graph is admitted against, and this module validates a queried depth with
+/// the latter.
+const _: () = assert!(LIMIT_TRACE_DEPTH as usize == MAX_TRACE_DEPTH);
+const _: () = assert!(TRACE_TERMINAL_RESERVE as usize == TERMINAL_RESERVE);
+
+/// Read the authenticated generation's declared trace depth.
 ///
-/// `TraceSink::with_const_capacity` asserts the same bound, but it is reached
-/// from `fn main`, so its assert evaluates at runtime and an over-declared
-/// depth would be a boot panic instead of a failed build. Every trace host
-/// carries this pair for that reason (`call_broker.rs`, `fabric-service.rs`);
-/// hosting it here covers all four participants that include this module,
-/// since each supplies the same generation constant.
-const _: () = assert!(super::FABRIC_TRACE_DEPTH <= slime_proto::fabric_trace::MAX_TRACE_DEPTH);
-const _: () = assert!(super::FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TERMINAL_RESERVE);
+/// Storage is fixed at the published ceiling; this value is the per-generation
+/// admission bound, and a depth above the ceiling or at/below the terminal
+/// reservation is refused rather than clamped — a clamp would silently emit a
+/// trace at a depth the generation never declared.
+fn trace_depth() -> Result<usize, i64> {
+    let depth = slime_rt::graph_query(QUERY_TRACE_DEPTH)?;
+    if depth > LIMIT_TRACE_DEPTH || depth <= TRACE_TERMINAL_RESERVE {
+        return Err(slime_rt::ERR_INVALID_ARG);
+    }
+    Ok(depth as usize)
+}
 
 /// Emit one participant's occupancy evidence and close its trace.
 ///
@@ -86,23 +99,19 @@ const _: () = assert!(super::FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TER
 /// named components rather than roles would not compare across graphs that
 /// bind the same role to a different component.
 ///
-/// `depth` is the generation's declared `traceDepth`, taken as an argument
-/// because `Trace::new` takes one. That signature exists so `fabric_trace_log`
-/// stays generation-independent for binaries a fabric-less manifest still
-/// builds; this module is not one of those — its `const _: ()` guards above
-/// read `FABRIC_TRACE_DEPTH` directly, so it compiles only where a fabric is
-/// declared, exactly as the brokers do.
+/// The depth comes from the authenticated fabric-graph query, and is validated
+/// against the published [`LIMIT_TRACE_DEPTH`] ceiling. That ceiling sizes the
+/// sink's fixed storage only; it never widens what this generation declared.
 ///
-/// Emits nothing when the query is refused. Under the traffic action every
-/// caller is a declared `sharedBufferBudget` holder, so the root's only refusal
-/// path — an undeclared holder's deny-by-default quota — is unreachable here: a
-/// refusal would mean the query, the badge-to-holder mapping, or the budget
-/// regressed. Reporting nothing rather than a fabricated zero is what makes
-/// that visible, since the gate then fails on this family's empty record set
-/// instead of accepting a zero it cannot distinguish from a measurement.
-pub fn report(family: &[u8], depth: usize) {
+/// A refused occupancy query still emits nothing: under the traffic action each
+/// caller is a declared `sharedBufferBudget` holder, so refusal exposes a broken
+/// holder grant without fabricating a zero measurement. A refused or invalid
+/// trace-depth query is returned to the caller because constructing a sink at a
+/// guessed capacity would erase the generation's admission policy.
+pub fn report(family: &[u8]) -> Result<(), i64> {
+    let depth = trace_depth()?;
     let Ok(occupancy) = slime_rt::shared_buffer_occupancy() else {
-        return;
+        return Ok(());
     };
     let mut trace = Trace::new(depth);
     // The same observation twice, deliberately, and the consequence is stated
@@ -118,4 +127,5 @@ pub fn report(family: &[u8], depth: usize) {
     let _ = trace.resource(RESOURCE_MAPPING, occupancy.mappings);
     let _ = trace.terminal();
     trace.flush(family);
+    Ok(())
 }

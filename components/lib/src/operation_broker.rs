@@ -28,12 +28,12 @@
 //! non-cross-correlatable rather than merely unlikely to collide.
 //!
 //! **Everything is bounded before admission.** Active operations, feedback
-//! depth, retained results, and retries all come from the authenticated
-//! generation graph via the build-time profile, so no table here grows with
-//! traffic. Application goal policy and the ROS action state machine stay
+//! depth, retained results, retries, and trace depth all come from the
+//! authenticated generation graph, so no table here grows with traffic.
+//! Application goal policy and the ROS action state machine stay
 //! outside: `status` names transport outcomes only.
 
-use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER, RuntimeLimits};
 use slime_proto::fabric_operation::{
     FORMAT_VERSION, KIND_ACCEPTED, KIND_CANCEL, KIND_FEEDBACK, KIND_GOAL, KIND_RESULT,
     KIND_RESULT_REQUEST, KIND_SERVER_IDLE, KIND_TERMINAL, OPERATION_MAGIC, STATUS_ACTIVE,
@@ -44,14 +44,9 @@ use slime_proto::fabric_operation::{
 use slime_proto::fabric_time::WireTimeAdvance;
 use slime_proto::interface_schema::navigation_operation;
 
-#[allow(dead_code)]
-mod fabric_profile {
-    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
-}
 // Included once per binary by the binary itself, because `fabric-service`
 // includes both brokers and a file may be a module only once in a crate.
 use super::trace_log;
-use fabric_profile::*;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 const ROUTE_NAME: &str = "navigation";
@@ -61,23 +56,24 @@ const BACKUP_ROUTE_NAME: &str = "nav-backup";
 /// transport itself.
 const SERVER_SESSION: u64 = 0x000f_0000_0000_0001;
 const CLIENTS: usize = 2;
-/// Active operations, bounded by the graph's declared `inFlightOperations`.
-const MAX_OPERATIONS: usize = FABRIC_MAX_IN_FLIGHT_OPERATIONS;
-/// Retained terminal results, bounded by the graph's `retainedSamples`.
-const MAX_RETAINED: usize = FABRIC_MAX_RETAINED_SAMPLES;
-/// Pending mandatory records are bounded from authenticated graph ceilings.
-/// Each client can contribute at most the request-event share while reads are
-/// enabled, plus accepted/result/terminal records for every admitted active
-/// operation. Feedback remains lossy at its declared history bound.
-const MAX_PENDING_REQUEST_DELIVERIES_PER_CLIENT: usize = FABRIC_MAX_EVENT_DEPTH / CLIENTS;
+/// Active operations are stored at the schema's structural ceiling; each
+/// generation's smaller authenticated `inFlightOperations` bounds the active
+/// prefix (B70/CP2).
+const MAX_OPERATIONS: usize = boot_contracts::fabric_graph::LIMIT_IN_FLIGHT as usize;
+/// Retained terminal results are stored at the schema's structural ceiling;
+/// each generation's smaller authenticated `retainedSamples` bounds the active
+/// prefix.
+const MAX_RETAINED: usize = boot_contracts::fabric_graph::LIMIT_RETAINED_SAMPLES as usize;
+/// Pending mandatory records are bounded by the contract's `eventDepth`
+/// ceiling; runtime admission uses the generation's smaller declared event and
+/// operation limits. Each client can contribute at most the request-event
+/// share while reads are enabled, plus accepted/result/terminal records for
+/// every admitted active operation. Feedback remains lossy at its declared
+/// history bound.
+const MAX_PENDING_REQUEST_DELIVERIES_PER_CLIENT: usize =
+    boot_contracts::fabric_graph::LIMIT_EVENT_DEPTH as usize / CLIENTS;
 const MAX_PENDING_DELIVERIES: usize =
     CLIENTS * (MAX_PENDING_REQUEST_DELIVERIES_PER_CLIENT + MAX_OPERATIONS * 3);
-const RETRY_LIMIT: u8 = FABRIC_MAX_RETRIES;
-const DEADLINE_NS: u64 = FABRIC_OPERATION_DEADLINE_NS;
-/// How long a terminal result stays retrievable after it lands. A retained
-/// result is storage the client has not claimed, so it expires rather than
-/// living for the boot.
-const RETENTION_NS: u64 = DEADLINE_NS;
 
 /// Where one operation stands, from the transport's point of view only.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -175,6 +171,69 @@ struct PendingDelivery {
     record: WireOperationEnvelope,
 }
 
+/// The operation plane's three fixed tables, in `.bss` rather than inside the
+/// `Broker` value the constructor returns.
+///
+/// B70 replaced the per-plane generated constants these were sized from with
+/// the fabric-graph contract's own ceilings, so `MAX_OPERATIONS`,
+/// `MAX_RETAINED`, and `MAX_PENDING_DELIVERIES` stopped tracking what any one
+/// generation declares (the widest fixture declares 4 in-flight operations, 4
+/// retained samples, and an event depth of 8) and became the contract's worst
+/// case: 1.5 KiB, 4 KiB, and 22 KiB. A `Broker` carrying all three came to
+/// ~35 KiB, and `Broker::new` returns it *by value* — LLVM sinks that
+/// temporary into the caller's frame, so `fabric-op-worker::main` reserved
+/// 62,960 bytes of a 64 KiB stack before the plane ran a statement and the
+/// first `graph_query` wrote through the bottom of it. The observed symptom
+/// was the same class `fabric-service` already hit: a `VirtualMemory` fault
+/// with `access: Execute` rather than a diagnosable overflow.
+///
+/// Sizing them from the contract's published ceilings rather than one plane's
+/// declared counts is what made the footprint fixed rather than incidental,
+/// and a fixed footprint that large belongs in `.bss`: the storage is the same
+/// bytes either way, but there it is reserved by the linker and accounted in
+/// the image rather than competing with every frame the dispatch loop pushes.
+///
+/// Neither the declared stack nor any authority check moves for this: runtime
+/// admission still bounds the *active prefix* of each table by the
+/// authenticated `RuntimeLimits`, exactly as before.
+static mut OPERATIONS: [Operation; MAX_OPERATIONS] = [Operation::EMPTY; MAX_OPERATIONS];
+static mut RETAINED: [Retained; MAX_RETAINED] = [Retained::EMPTY; MAX_RETAINED];
+static mut PENDING_DELIVERIES: [Option<PendingDelivery>; MAX_PENDING_DELIVERIES] =
+    [None; MAX_PENDING_DELIVERIES];
+/// Set by the one successful [`claim_operation_tables`] call.
+static mut OPERATION_TABLES_CLAIMED: bool = false;
+
+/// Exclusive references to the three tables above.
+///
+/// The single-owner discipline is what keeps `static mut` sound here: exactly
+/// one caller ever receives these, the plane the resulting broker runs is the
+/// task's whole remaining work, and a second claim fails rather than aliasing.
+/// [`Broker::new`] claims once and stores ordinary `&'static mut` borrows, so
+/// every method below is unchanged and none of them can reach the statics
+/// directly.
+struct OperationTables {
+    operations: &'static mut [Operation; MAX_OPERATIONS],
+    retained: &'static mut [Retained; MAX_RETAINED],
+    pending_deliveries: &'static mut [Option<PendingDelivery>; MAX_PENDING_DELIVERIES],
+}
+
+fn claim_operation_tables() -> OperationTables {
+    // SAFETY: a component is single-threaded, the flag makes this the only
+    // call that ever hands out these references, and nothing else in this
+    // module names the three statics.
+    unsafe {
+        if *core::ptr::addr_of!(OPERATION_TABLES_CLAIMED) {
+            fail(b"operation tables claimed twice");
+        }
+        *core::ptr::addr_of_mut!(OPERATION_TABLES_CLAIMED) = true;
+        OperationTables {
+            operations: &mut *core::ptr::addr_of_mut!(OPERATIONS),
+            retained: &mut *core::ptr::addr_of_mut!(RETAINED),
+            pending_deliveries: &mut *core::ptr::addr_of_mut!(PENDING_DELIVERIES),
+        }
+    }
+}
+
 pub struct Broker {
     replacement_control: u32,
     replacement_start: Option<u32>,
@@ -194,9 +253,11 @@ pub struct Broker {
     server_slot: Option<u32>,
     replacement_control_closed: bool,
     backup_route_slot: Option<u32>,
-    operations: [Operation; MAX_OPERATIONS],
-    retained: [Retained; MAX_RETAINED],
-    pending_deliveries: [Option<PendingDelivery>; MAX_PENDING_DELIVERIES],
+    /// The three tables [`claim_operation_tables`] hands out, borrowed rather
+    /// than owned so this value stays small enough to be returned by value.
+    operations: &'static mut [Operation; MAX_OPERATIONS],
+    retained: &'static mut [Retained; MAX_RETAINED],
+    pending_deliveries: &'static mut [Option<PendingDelivery>; MAX_PENDING_DELIVERIES],
     /// One server-bound request per client taken while the server owes replies.
     deferred_requests: [Option<WireOperationEnvelope>; CLIENTS],
     high_water: [u64; CLIENTS],
@@ -221,8 +282,8 @@ pub struct Broker {
     /// three route workers are separate tasks, and a shared sink would need an
     /// IPC round trip per record.
     trace: trace_log::Trace,
-    /// The `navigation` route identity, folded in `run` because the fold hashes
-    /// and the constructor is `const`.
+    /// The `navigation` route identity, folded in `run` rather than here
+    /// because the fold hashes.
     route: u64,
     /// Every graph row this worker may read, read once in `run`.
     ///
@@ -231,33 +292,83 @@ pub struct Broker {
     graph_rows: [slime_components::fabric_self_view::Row;
         slime_components::fabric_self_view::MAX_GRAPH_ROWS],
     graph_row_count: usize,
+    /// This generation's authenticated ceilings. Every admission bound below
+    /// reads from here rather than from a constant a build script rendered, so
+    /// one image serves every graph that declares this plane (B70/CP2).
+    limits: RuntimeLimits,
+}
+
+/// Every capability slot one operation plane wires this broker with.
+///
+/// A record rather than eight positional parameters: the endpoints are one
+/// authenticated wiring decision the caller makes in a single place, and the
+/// two hosts -- `fabric-service`'s operation arm and the standalone
+/// `fabric-op-worker` -- resolve them differently. Grouping also keeps the
+/// declared ceilings (`RuntimeLimits`) the only other thing `new` takes, which
+/// is the split that matters: slots are graph wiring, limits are graph policy.
+pub struct Wiring {
+    pub clients: [u32; CLIENTS],
+    pub server: u32,
+    pub time_control: u32,
+    pub replacement_control: u32,
+    /// `None` on a plane whose replacement never reaches the release barrier.
+    pub replacement_start: Option<u32>,
+    pub backup_route: u32,
+    pub supervision: [u32; CLIENTS + 1],
+    pub replacement_supervision: u32,
 }
 
 impl Broker {
-    pub const fn new(
-        clients: [u32; CLIENTS],
-        server_slot: u32,
-        time_control: u32,
-        replacement_control: u32,
-        replacement_start: Option<u32>,
-        backup_route_slot: u32,
-        supervision: [u32; CLIENTS + 1],
-        replacement_supervision: u32,
-    ) -> Self {
+    /// Build the operation plane against this generation's authenticated
+    /// ceilings.
+    ///
+    /// No longer `const`: the declared limits are read from the root at run
+    /// time, and the three storage tables come from [`claim_operation_tables`]
+    /// rather than being materialized inline. Both are what B70 asks for --
+    /// nothing here is a build-time fact any more.
+    pub fn new(wiring: Wiring, limits: RuntimeLimits) -> Self {
+        let operation_count = usize::try_from(limits.max_in_flight_operations)
+            .unwrap_or_else(|_| fail(b"operation limit does not fit usize"));
+        let retained_count = usize::try_from(limits.max_retained_samples)
+            .unwrap_or_else(|_| fail(b"retained limit does not fit usize"));
+        let event_count = usize::try_from(limits.max_event_depth)
+            .unwrap_or_else(|_| fail(b"event limit does not fit usize"));
+        // The tables are sized at the contract's structural ceiling, so a
+        // generation declaring more than one holds describes storage this
+        // worker does not have. Refused here rather than clamped: a silently
+        // narrowed ceiling would admit traffic the graph promised to carry and
+        // then drop it.
+        if operation_count > MAX_OPERATIONS
+            || retained_count > MAX_RETAINED
+            || event_count > boot_contracts::fabric_graph::LIMIT_EVENT_DEPTH as usize
+        {
+            fail(b"operation graph limits exceed broker storage");
+        }
+        // The sink depth travels with every other declared ceiling rather than
+        // as its own argument: it is one field of the same authenticated
+        // header, and a second parameter would let a caller pass a depth this
+        // graph never declared.
+        if !limits.trace_overflow_is_saturate() {
+            fail(b"graph declares an overflow discipline no worker implements");
+        }
+        let trace_depth = limits
+            .trace_sink_depth()
+            .unwrap_or_else(|| fail(b"graph declares a trace depth outside the contract"));
+        let tables = claim_operation_tables();
         Self {
-            replacement_control,
-            replacement_start,
-            replacement_supervision,
+            replacement_control: wiring.replacement_control,
+            replacement_start: wiring.replacement_start,
+            replacement_supervision: wiring.replacement_supervision,
             server_request: None,
-            time_control,
-            supervision,
-            clients: [Some(clients[0]), Some(clients[1])],
+            time_control: wiring.time_control,
+            supervision: wiring.supervision,
+            clients: [Some(wiring.clients[0]), Some(wiring.clients[1])],
             replacement_control_closed: false,
-            server_slot: Some(server_slot),
-            operations: [Operation::EMPTY; MAX_OPERATIONS],
-            backup_route_slot: Some(backup_route_slot),
-            retained: [Retained::EMPTY; MAX_RETAINED],
-            pending_deliveries: [None; MAX_PENDING_DELIVERIES],
+            server_slot: Some(wiring.server),
+            operations: tables.operations,
+            backup_route_slot: Some(wiring.backup_route),
+            retained: tables.retained,
+            pending_deliveries: tables.pending_deliveries,
             deferred_requests: [None; CLIENTS],
             high_water: [0; CLIENTS],
             peak_operations: 0,
@@ -268,11 +379,64 @@ impl Broker {
             next_pending_order: 1,
             now_ns: 0,
             server_settled: false,
-            trace: trace_log::Trace::new(FABRIC_TRACE_DEPTH),
+            trace: trace_log::Trace::new(trace_depth),
             route: 0,
             graph_rows: slime_components::fabric_self_view::EMPTY_ROWS,
             graph_row_count: 0,
+            limits,
         }
+    }
+
+    /// The prefix of `operations` this generation's declared
+    /// `inFlightOperations` admits. Every scan reads through here rather than
+    /// the whole table, so a graph declaring four active operations never sees
+    /// a fifth slot even though the storage exists.
+    fn active_operations(&self) -> &[Operation] {
+        &self.operations[..self.limits.max_in_flight_operations as usize]
+    }
+
+    fn active_operation_count(&self) -> usize {
+        self.limits.max_in_flight_operations as usize
+    }
+
+    /// The prefix of `retained` this generation's declared `retainedSamples`
+    /// admits, on the same discipline as [`Self::active_operations`].
+    fn active_retained(&self) -> &[Retained] {
+        &self.retained[..self.limits.max_retained_samples as usize]
+    }
+
+    fn active_retained_count(&self) -> usize {
+        self.limits.max_retained_samples as usize
+    }
+
+    fn retry_limit(&self) -> u32 {
+        self.limits.max_retries
+    }
+
+    /// The tightest deadline this generation declares on the operation route,
+    /// read from the graph rows rather than a build-time constant (B70/CP2).
+    fn operation_deadline_ns(&self) -> u64 {
+        let route_index =
+            slime_rt::graph_route_index(&boot_contracts::fabric_graph::route_identity(
+                ROUTE_NAME,
+                &navigation_operation::INTERFACE_IDENTITY,
+                boot_contracts::fabric_graph::CONTRACT_KIND_OPERATION,
+            ))
+            .unwrap_or_else(|_| fail(b"operation route query")) as u32;
+        self.graph_rows[..self.graph_row_count]
+            .iter()
+            .filter(|row| row.route_index == route_index && row.direction == DIRECTION_CLIENT)
+            .map(|row| row.qos.deadline_ns)
+            .min()
+            .unwrap_or_else(|| fail(b"operation deadline missing"))
+    }
+
+    /// How long a terminal result stays retrievable after it lands. A retained
+    /// result is storage the client has not claimed, so it expires rather than
+    /// living for the boot -- at the same declared deadline the operation
+    /// itself was admitted against.
+    fn retention_ns(&self) -> u64 {
+        self.operation_deadline_ns()
     }
 
     /// Retire the server: record its death once, on whichever path observes it.
@@ -323,14 +487,18 @@ impl Broker {
     /// were live at once.
     fn sample_peak(&mut self) {
         let live = self
-            .operations
+            .active_operations()
             .iter()
             .filter(|operation| operation.phase != Phase::Free)
             .count() as u32;
         if live > self.peak_operations {
             self.peak_operations = live;
         }
-        let retained = self.retained.iter().filter(|entry| entry.live).count() as u32;
+        let retained = self
+            .active_retained()
+            .iter()
+            .filter(|entry| entry.live)
+            .count() as u32;
         if retained > self.peak_retained {
             self.peak_retained = retained;
         }
@@ -423,7 +591,11 @@ impl Broker {
                     slime_proto::fabric_trace::RESOURCE_RETAINED,
                     self.peak_retained,
                 );
-                let live_retained = self.retained.iter().filter(|entry| entry.live).count() as u32;
+                let live_retained = self
+                    .active_retained()
+                    .iter()
+                    .filter(|entry| entry.live)
+                    .count() as u32;
                 let _ = self
                     .trace
                     .resource(slime_proto::fabric_trace::RESOURCE_RETAINED, live_retained);
@@ -439,13 +611,19 @@ impl Broker {
         }
     }
 
+    /// Whether this client may still be read from.
+    ///
+    /// Bounded by the generation's declared `eventDepth` share rather than the
+    /// contract's structural ceiling: the table is sized at the ceiling so one
+    /// image serves every graph, but what a graph promised to buffer is what
+    /// admission is against.
     fn can_receive_client(&self, client: usize) -> bool {
         self.pending_deliveries
             .iter()
             .flatten()
             .filter(|pending| pending.client_index as usize == client)
             .count()
-            < MAX_PENDING_REQUEST_DELIVERIES_PER_CLIENT
+            < self.limits.max_event_depth as usize / CLIENTS
     }
 
     fn has_pending_delivery(&self, slot: u32) -> bool {
@@ -464,7 +642,7 @@ impl Broker {
     /// never be ready — a hang, not patience. The server must also be settled, so
     /// no in-flight work is abandoned silently.
     fn finished(&self) -> bool {
-        self.operations
+        self.active_operations()
             .iter()
             .all(|operation| operation.phase == Phase::Free)
             && self.pending_deliveries.iter().all(Option::is_none)
@@ -748,7 +926,7 @@ impl Broker {
             client_index: client as u8,
             feedback_sequence: 0,
             feedback_samples: 0,
-            deadline_ns: self.now_ns.saturating_add(DEADLINE_NS),
+            deadline_ns: self.now_ns.saturating_add(self.operation_deadline_ns()),
         };
         slime_rt::debug_write(b"[fabric] operation goal forwarded\n");
     }
@@ -793,7 +971,7 @@ impl Broker {
                 slime_rt::debug_write(b"[fabric] operation cancel requested\n");
             }
             ERR_WOULDBLOCK => {
-                let status = if RETRY_LIMIT == 0 {
+                let status = if self.retry_limit() == 0 {
                     STATUS_REJECTED
                 } else {
                     STATUS_RETRY_EXHAUSTED
@@ -813,7 +991,7 @@ impl Broker {
     /// naming an identity that never existed — the denial leaks nothing about
     /// which of the two it was.
     fn retrieve(&mut self, client: usize, slot: u32, record: WireOperationEnvelope) {
-        let found = self.retained.iter().position(|entry| {
+        let found = self.active_retained().iter().position(|entry| {
             (entry.live || entry.expired)
                 && entry.operation_id == record.operation_id
                 && entry.client_index as usize == client
@@ -1047,11 +1225,15 @@ impl Broker {
             status,
             payload,
             payload_len,
-            expires_ns: self.now_ns.saturating_add(RETENTION_NS),
+            expires_ns: self.now_ns.saturating_add(self.retention_ns()),
             age,
         };
+        // Both scans are over the declared prefix, not the whole table: a slot
+        // past the generation's `retainedSamples` is storage this graph never
+        // promised, so filling one would carry a result the graph's own bound
+        // says cannot exist.
         if let Some(free) = self
-            .retained
+            .active_retained()
             .iter()
             .position(|slot| !slot.live && !slot.expired)
         {
@@ -1059,7 +1241,7 @@ impl Broker {
             return;
         }
         let oldest = self
-            .retained
+            .active_retained()
             .iter()
             .enumerate()
             .min_by_key(|(_, slot)| (slot.expires_ns, slot.age))
@@ -1236,7 +1418,7 @@ impl Broker {
         // instant, and every deadline below belongs to the new one.
         let _ = self.trace.advance(value.now_ns);
         self.now_ns = value.now_ns;
-        for index in 0..self.operations.len() {
+        for index in 0..self.active_operation_count() {
             if self.operations[index].phase == Phase::Free {
                 continue;
             }
@@ -1263,7 +1445,7 @@ impl Broker {
                 }
             }
         }
-        for index in 0..self.retained.len() {
+        for index in 0..self.active_retained_count() {
             if self.retained[index].live && self.now_ns >= self.retained[index].expires_ns {
                 self.retained[index].live = false;
                 self.retained[index].expired = true;
@@ -1337,7 +1519,7 @@ impl Broker {
     /// Locate an operation by the identity its own client named, which is what
     /// binds observation and cancellation to the endpoint that started it.
     fn find_client_operation(&self, client: usize, operation_id: u64) -> Option<usize> {
-        self.operations.iter().position(|operation| {
+        self.active_operations().iter().position(|operation| {
             operation.phase != Phase::Free
                 && operation.client_index as usize == client
                 && operation.client_operation_id == operation_id
@@ -1345,7 +1527,7 @@ impl Broker {
     }
 
     fn find_server_operation(&self, server_operation_id: u64) -> Option<usize> {
-        self.operations.iter().position(|operation| {
+        self.active_operations().iter().position(|operation| {
             operation.phase != Phase::Free && operation.server_operation_id == server_operation_id
         })
     }
@@ -1355,14 +1537,14 @@ impl Broker {
     /// results stay keyed to the authenticated client index so the replacement
     /// can retrieve them through its fresh role.
     fn reclaim_client(&mut self, client: usize, slot: u32) {
-        for index in 0..self.operations.len() {
+        for index in 0..self.active_operation_count() {
             if self.operations[index].phase != Phase::Free
                 && self.operations[index].client_slot == slot
             {
                 self.operations[index] = Operation::EMPTY;
             }
         }
-        for pending in &mut self.pending_deliveries {
+        for pending in self.pending_deliveries.iter_mut() {
             if pending.is_some_and(|pending| pending.slot == slot) {
                 *pending = None;
             }
@@ -1375,7 +1557,7 @@ impl Broker {
     /// the operation route, so a server fault here cannot disturb a stream or
     /// call route the same fabric carries in another profile.
     fn settle_all(&mut self, status: i32) {
-        for index in 0..self.operations.len() {
+        for index in 0..self.active_operation_count() {
             self.settle(index, status);
         }
         self.server_settled = true;
@@ -1489,19 +1671,27 @@ fn fail(reason: &[u8]) -> ! {
 const _: () = assert!(slime_proto::fabric_operation::OPERATION_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_time::TIME_ADVANCE_LEN == MAX_MSG);
 
-/// The one overflow discipline implemented. Asserted rather than branched on: a
-/// generation declaring anything else names behaviour no worker has, and
-/// discovering that at boot would be worse than not compiling.
-const _: () = assert!(FABRIC_TRACE_OVERFLOW == slime_proto::fabric_trace::OVERFLOW_SATURATE);
-/// And the declared depth must fit the sink the contract sizes.
-///
-/// `const _: ()` rather than relying on `TraceSink::with_const_capacity`'s own
-/// assert: that constructor is a `const fn` reached from `fn main`, and a
-/// `const fn` called at runtime evaluates at runtime -- so its assert would be a
-/// boot panic inside a `no_std` component rather than the build failure it
-/// claims to be. These items are evaluated at compile time unconditionally.
-const _: () = assert!(FABRIC_TRACE_DEPTH <= slime_proto::fabric_trace::MAX_TRACE_DEPTH);
-const _: () = assert!(FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TERMINAL_RESERVE);
+// The two facts these asserted about a build-time constant are now runtime
+// answers checked in `Broker::new`: `trace_overflow_is_saturate` refuses a
+// discipline no worker implements, and `trace_sink_depth` refuses a depth
+// outside the contract. What stays a compile-time claim is that the two
+// contracts agree on the bounds those runtime checks compare against -- a
+// divergence there would make one accept what the other refuses, and the
+// refusal would surface as a `TraceSink` assert firing as a boot panic inside
+// a `no_std` component. These items are evaluated at compile time
+// unconditionally.
+const _: () = assert!(
+    boot_contracts::fabric_graph::LIMIT_TRACE_DEPTH as usize
+        <= slime_proto::fabric_trace::MAX_TRACE_DEPTH
+);
+const _: () = assert!(
+    boot_contracts::fabric_graph::TRACE_TERMINAL_RESERVE as usize
+        == slime_proto::fabric_trace::TERMINAL_RESERVE
+);
+const _: () = assert!(
+    boot_contracts::fabric_graph::TRACE_OVERFLOW_SATURATE
+        == slime_proto::fabric_trace::OVERFLOW_SATURATE
+);
 
 /// A refusal status, as a failure code the trace's denial family admits.
 ///

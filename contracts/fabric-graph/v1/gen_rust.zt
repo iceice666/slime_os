@@ -8,6 +8,33 @@ w ::= import wire.python;
 r ::= import wire.rust;
 t ::= import stdlib.text;
 
+QueryField :: type { rust : Text; field : Text; id : Int; };
+
+pythonQuery :: QueryField -> Text = field => w.join {
+  "FABRIC_GRAPH_QUERY_"; field.rust; " = "; n.toText field.id; "\n";
+};
+
+rustQuery :: QueryField -> Text = field => w.join {
+  "pub const QUERY_"; field.rust; ": u32 = "; n.toText field.id; ";\n";
+};
+
+rustLimitField :: QueryField -> Text = field => w.join {
+  "    pub "; field.field; ": u32,\n";
+};
+
+rustLimitLoad :: QueryField -> Text = field => w.join {
+  "            "; field.field; ": graph_query(QUERY_"; field.rust; ")?,\n";
+};
+
+-- A leading `|` on every arm, so the rendered pattern is uniform per field and
+-- needs no separator special-case for the first one. Rust admits a leading
+-- vertical bar in a top-level or-pattern, and `matches!` takes a pattern, so
+-- this renders the form clippy's `match_like_matches_macro` asks for rather
+-- than a `=> true` ladder it rejects.
+rustLimitMatch :: QueryField -> Text = field => w.join {
+  "                | QUERY_"; field.rust; "\n";
+};
+
 Format :: type {
   formatVersion : Int;
   headerBytes : Int;
@@ -29,6 +56,11 @@ Format :: type {
   limitInFlight : Int;
   limitBuffers : Int;
   limitCapabilitySlots : Int;
+  limitTraceDepth : Int;
+  traceTerminalReserve : Int;
+  traceOverflowSaturate : Int;
+  frameCapacity : Int;
+  maxRoleParticipants : Int;
   controlMessageBytes : Int;
   channelQueueDepth : Int;
   kernelTotalPages : Int;
@@ -54,6 +86,9 @@ Format :: type {
   routeDomain : Text;
   grantDomain : Text;
   componentDomain : Text;
+  queryFields : List QueryField;
+  limitQueryFields : List QueryField;
+
   headerFields : List refl.SchemaField;
   schemaEntryFields : List refl.SchemaField;
   routeEntryFields : List refl.SchemaField;
@@ -98,7 +133,12 @@ pythonBindings :: Format -> Text = format => w.join {
   "FABRIC_GRAPH_LIMIT_IN_FLIGHT = "; n.toText format.limitInFlight; "\n";
   "FABRIC_GRAPH_LIMIT_BUFFERS = "; n.toText format.limitBuffers; "\n";
   "FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS = "; n.toText format.limitCapabilitySlots; "\n";
+  "FABRIC_GRAPH_LIMIT_TRACE_DEPTH = "; n.toText format.limitTraceDepth; "\n";
+  "FABRIC_GRAPH_TRACE_TERMINAL_RESERVE = "; n.toText format.traceTerminalReserve; "\n";
+  "FABRIC_GRAPH_TRACE_OVERFLOW_SATURATE = "; n.toText format.traceOverflowSaturate; "\n";
+  "FABRIC_GRAPH_FRAME_CAPACITY = "; n.toText format.frameCapacity; "\n";
   "FABRIC_GRAPH_CONTROL_MESSAGE_BYTES = "; n.toText format.controlMessageBytes; "\n";
+  "MAX_FABRIC_GRAPH_ROLE_PARTICIPANTS = "; n.toText format.maxRoleParticipants; "\n";
   "FABRIC_GRAPH_CHANNEL_QUEUE_DEPTH = "; n.toText format.channelQueueDepth; "\n";
   "FABRIC_GRAPH_KERNEL_TOTAL_PAGES = "; n.toText format.kernelTotalPages; "\n";
   "FABRIC_GRAPH_KERNEL_SHARED_BUFFERS = "; n.toText format.kernelSharedBuffers; "\n";
@@ -123,6 +163,7 @@ pythonBindings :: Format -> Text = format => w.join {
   "FABRIC_ROUTE_DOMAIN = "; t.show format.routeDomain; ".encode(\"utf-8\")\n";
   "FABRIC_GRANT_DOMAIN = "; t.show format.grantDomain; ".encode(\"utf-8\")\n";
   "FABRIC_COMPONENT_DOMAIN = "; t.show format.componentDomain; ".encode(\"utf-8\")\n";
+  w.join (map pythonQuery format.queryFields);
   w.renderRecords (records format);
 };
 
@@ -152,7 +193,12 @@ rustBindings :: Format -> Text = format => r.join {
   r.u32Const "LIMIT_IN_FLIGHT" format.limitInFlight;
   r.u32Const "LIMIT_BUFFERS" format.limitBuffers;
   r.u32Const "LIMIT_CAPABILITY_SLOTS" format.limitCapabilitySlots;
+  r.u32Const "LIMIT_TRACE_DEPTH" format.limitTraceDepth;
+  r.u32Const "TRACE_TERMINAL_RESERVE" format.traceTerminalReserve;
+  r.u32Const "TRACE_OVERFLOW_SATURATE" format.traceOverflowSaturate;
+  r.usizeConst "FRAME_CAPACITY" format.frameCapacity;
   r.u32Const "CONTROL_MESSAGE_BYTES" format.controlMessageBytes;
+  r.usizeConst "MAX_ROLE_PARTICIPANTS" format.maxRoleParticipants;
   r.u32Const "CHANNEL_QUEUE_DEPTH" format.channelQueueDepth;
   r.u32Const "KERNEL_TOTAL_PAGES" format.kernelTotalPages;
   r.u32Const "KERNEL_SHARED_BUFFERS" format.kernelSharedBuffers;
@@ -178,6 +224,30 @@ rustBindings :: Format -> Text = format => r.join {
   "pub const ROUTE_DOMAIN: &[u8] = b"; t.show format.routeDomain; ";\n";
   "pub const GRANT_DOMAIN: &[u8] = b"; t.show format.grantDomain; ";\n";
   "pub const COMPONENT_DOMAIN: &[u8] = b"; t.show format.componentDomain; ";\n";
+  w.join (map rustQuery format.queryFields);
+  "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n";
+  "pub struct RuntimeLimits {\n";
+  w.join (map rustLimitField format.limitQueryFields);
+  "}\n\n";
+  "impl RuntimeLimits {\n";
+  "    /// Load this generation's authenticated fabric resource ceilings.\n";
+  "    ///\n";
+  "    /// `graph_query` must be the caller's root-service query function. Any\n";
+  "    /// refused or absent field fails the whole load; defaults would recreate\n";
+  "    /// the compile-time configuration split this type exists to remove.\n";
+  "    pub fn load<E>(mut graph_query: impl FnMut(u32) -> Result<u32, E>) -> Result<Self, E> {\n";
+  "        Ok(Self {\n";
+  w.join (map rustLimitLoad format.limitQueryFields);
+  "        })\n";
+  "    }\n\n";
+  "    /// Whether `field` names a declared resource ceiling rather than graph shape.\n";
+  "    pub const fn field_is_limit(field: u32) -> bool {\n";
+  "        matches!(\n";
+  "            field,\n";
+  w.join (map rustLimitMatch format.limitQueryFields);
+  "        )\n";
+  "    }\n";
+  "}\n";
 };
 
 render :: Format -> { python : Text; rust : Text; }

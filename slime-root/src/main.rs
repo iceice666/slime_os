@@ -2498,13 +2498,26 @@ fn serve_instance_graph(
             continue;
         }
         if arrival == Arrival::Fault {
+            let decoded_fault = fault::decode_fault(&info);
             if let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
                 && let Ok(instance) = generation.instance(instance_index)
                 && instance.health == InstanceHealth::Required
             {
-                fatal!("SLIME_GRAPH FAIL required instance {} fault", instance.name)
+                match decoded_fault {
+                    Ok(detail) => fatal!(
+                        "SLIME_GRAPH FAIL required instance {} fault kind={:?} instruction={:?} address={:?}",
+                        instance.name,
+                        detail.kind,
+                        detail.instruction,
+                        detail.address,
+                    ),
+                    Err(error) => fatal!(
+                        "SLIME_GRAPH FAIL required instance {} fault error={error:?}",
+                        instance.name,
+                    ),
+                }
             }
-            let reason = match fault::decode_fault(&info) {
+            let reason = match decoded_fault {
                 Ok(detail) => {
                     sel4::debug_println!(
                         "SLIME_GRAPH component fault task={} kind={:?} address={:?}",
@@ -2653,9 +2666,8 @@ fn serve_instance_graph(
             // narrowed to rights the parent already holds, installed at slots
             // `0..n` in the order the parent declared them. That numbering is
             // the whole distribution mechanism: a component addresses its first
-            // spawn grant as slot 0, which is why `console.rs`,
-            // `spawn-service.rs::RPC_SLOT`, and `launch_context::CONTEXT_SLOT`
-            // all read 0.
+            // spawn grant as slot 0, which is why `console.rs` and
+            // `launch_context::CONTEXT_SLOT` read 0.
             spawn_labels::SPAWN => {
                 let response = serve_spawn(
                     generation,
@@ -2930,6 +2942,26 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // One scalar from the authenticated fabric-graph header (B70).
+            //
+            // Table cardinalities stay holder-only. Schema-declared runtime
+            // limits are also available to participants with a visible graph
+            // row, so independently built workers can admit against the same
+            // generation bounds. Every other field/caller is refused.
+            capability_table_labels::GRAPH_QUERY => {
+                let response = match words
+                    .first()
+                    .copied()
+                    .and_then(|field| u32::try_from(field).ok())
+                {
+                    Some(field) => match ipc::graph_query(generation, instance, field) {
+                        Some(value) => Response::success(value as i64, 0),
+                        None => Response::error(IpcError::InvalidOperation),
+                    },
+                    None => Response::error(IpcError::InvalidOperation),
+                };
+                ipc::reply(response);
+            }
             // Which composition this generation declares (B70).
             //
             // Unscoped, joining `GRAPH_ROUTE_INDEX` above rather than the
@@ -2960,6 +2992,32 @@ fn serve_instance_graph(
             // argument decode one encoding rather than two.
             capability_table_labels::BOOT_ACTION => {
                 ipc::reply(Response::success(generation.boot_action.id() as i64, 0));
+            }
+            // The live-child budget this generation declares for the caller's
+            // own executable (B70).
+            //
+            // Self-scoped by badge, like the two `OCCUPANCY` operations: the
+            // executable read is the authenticated instance's, so the request
+            // carries no operand and names nobody. `spawn-service` sized its
+            // live-child table and checked every request's `client_budget`
+            // against a constant its build script parsed out of one manifest,
+            // and `dango` stated the same number from its own copy of that
+            // parse; this is the number both now ask for, so neither image is
+            // tied to a generation.
+            //
+            // Nothing new is disclosed: `spawner_budget` already reads this
+            // record to bound `serve_spawn`, so a caller learns the ceiling it
+            // is about to be admitted against.
+            //
+            // No operand is read, for the reason `BOOT_ACTION` above records:
+            // there is nothing for a caller to get wrong, so validating the
+            // word would refuse correct requests.
+            capability_table_labels::SPAWN_BUDGET => {
+                let response = match ipc::spawn_budget(generation, instance) {
+                    Some(budget) => Response::success(i64::from(budget), 0),
+                    None => Response::error(IpcError::InvalidOperation),
+                };
+                ipc::reply(response);
             }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(

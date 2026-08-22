@@ -33,7 +33,7 @@ use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
-use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
+use boot_contracts::generation::{BootAction, RIGHT_RECV, RIGHT_SEND};
 
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Both files
 // are included here rather than reached through `slime_components` because a
@@ -46,8 +46,6 @@ mod trace_log;
 mod occupancy_trace;
 
 slime_rt::entry!(main);
-
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 /// Control endpoint to the fabric. The only authority this component starts
 /// with: it holds no factory, no route, and no peer endpoint.
@@ -157,7 +155,7 @@ fn fail(reason: &[u8]) -> ! {
 
 fn main(_startup_arg: u32) {
     prove_graph_self_view();
-    if GENERATION_BOOT_ACTION == "visibility" {
+    if slime_components::generation_composition::is(BootAction::Visibility) {
         visibility_main();
         return;
     }
@@ -262,11 +260,10 @@ fn main(_startup_arg: u32) {
             true,
         );
     }
-    // C8.13.2: gated to the traffic plane, so the standalone stream/QoS
-    // fixtures — whose declared `traceDepth` is sized for the records C8.11
-    // already emits — never receive these and never drop one.
-    if GENERATION_BOOT_ACTION == "traffic" {
-        occupancy_trace::report(b"publisher", FABRIC_TRACE_DEPTH);
+    // C8.13.2: gated to the traffic plane, so standalone stream/QoS
+    // compositions do not receive occupancy records they did not request.
+    if slime_components::generation_composition::is(BootAction::Traffic) {
+        occupancy_trace::report(b"publisher").unwrap_or_else(|_| fail(b"runtime trace depth"));
     }
     slime_rt::debug_write(b"[fabric-publisher] done\n");
 }

@@ -163,6 +163,47 @@ operations :: List Operation = {
   -- keeps the answer in MR0 like every other scalar result, with no transfer
   -- window and no bytes to bound.
   operation "capabilityTable" "BOOT_ACTION" 40;
+  -- B70's final fabric-profile cutover. The authenticated fabric-graph
+  -- resource already carries its table cardinalities and every declared
+  -- resource ceiling; this scalar query exposes those header facts without
+  -- compiling the resource into a component. `field` is a generated
+  -- `boot_contracts::fabric_graph::QUERY_*` id, so neither side carries a
+  -- hand-written numbering table.
+  --
+  -- Graph shape remains holder-only. The generated `RuntimeLimits` subset is
+  -- also available to a participant that can read at least one row through
+  -- `GRAPH_READ`, because call/operation workers must admit traffic against
+  -- the same authenticated limits while remaining independently buildable.
+  -- A caller with no visible row, an unknown field id, and a graph-less
+  -- generation are refused identically; identities, routes, grants, and slots
+  -- remain behind `GRAPH_READ`, `GRAPH_ROUTE_INDEX`, and `RESOLVE_BINDING`.
+  -- The capability-transfer service is the transport gate: every participant
+  -- with a declared endpoint already receives it.
+  operation "capabilityTable" "GRAPH_QUERY" 41;
+  -- B70's command-profile cutover: the live-child budget this generation
+  -- declares for the caller's own executable, as `spawnBudget`.
+  --
+  -- `spawn-service` admits one client request per live child and refuses a
+  -- request whose `client_budget` field disagrees, and `dango` states that
+  -- same number in every request it sends. Both read it from a table their
+  -- build script parsed out of one generation manifest, so neither could be
+  -- built against another -- the coupling B70 removes. It is not a binding and
+  -- not graph data: it is a scalar the executable record already carries and
+  -- the root already reads to bound `serve_spawn`, so the caller learns the
+  -- ceiling it is about to be admitted against rather than anything new.
+  --
+  -- Self-scoped by badge, like the two `OCCUPANCY` operations: the request
+  -- carries no operand, so there is no instance to name and nothing to forge.
+  -- A caller cannot ask about another executable's budget, which is why this
+  -- is a scalar query rather than a lookup by name -- a peer's budget is a
+  -- property of the graph's shape, and `dango` needs only its own because the
+  -- generation declares one budget for both ends of this protocol.
+  --
+  -- Gated on `spawn`, the service the root already demands before honouring a
+  -- spawn at all. An instance the generation gives no spawn authority has no
+  -- budget to report, and answering zero would be a number it could act on;
+  -- the refusal says the question does not apply to it.
+  operation "capabilityTable" "SPAWN_BUDGET" 42;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

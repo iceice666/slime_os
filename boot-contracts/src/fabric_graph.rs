@@ -184,6 +184,15 @@ pub struct GraphLimits {
     pub mappings: u32,
     pub loans: u32,
     pub capability_slots: u32,
+    /// The bounded semantic-trace sink depth every worker in this graph sizes
+    /// its sink to, and the discipline it applies when that depth is reached.
+    ///
+    /// Graph facts rather than component choices: the deterministic evidence
+    /// stream is only comparable across boots when every worker agrees, and a
+    /// worker that compiled its own depth in could not be built out of tree
+    /// (B70).
+    pub trace_depth: u32,
+    pub trace_overflow: u32,
 }
 
 /// A decoded, structurally validated fabric graph. Schema, route, and
@@ -270,6 +279,8 @@ impl<'a> FabricGraph<'a> {
             mappings: u32_at(bytes, 144)?,
             loans: u32_at(bytes, 148)?,
             capability_slots: u32_at(bytes, 152)?,
+            trace_depth: u32_at(bytes, 156)?,
+            trace_overflow: u32_at(bytes, 160)?,
         };
 
         let graph = Self {
@@ -342,8 +353,15 @@ impl<'a> FabricGraph<'a> {
         let limits = &self.limits;
         if limits.routes as usize > MAX_ROUTES
             || limits.ingress_sources as usize > MAX_INGRESS_SOURCES
-            || limits.publishers as usize > MAX_PARTICIPANTS
-            || limits.subscribers as usize > MAX_PARTICIPANTS
+            // Stream directions are bounded by the ceiling a broker sizes its
+            // per-role storage from, not by the participant table's own bound:
+            // one publisher or subscriber record carries a full
+            // `LIMIT_HISTORY_DEPTH` history, so a graph promising 32 of each
+            // describes storage no component has (B70). `clients` and
+            // `servers` keep the table bound, because a request/response
+            // broker's storage scales with in-flight calls instead.
+            || limits.publishers as usize > MAX_ROLE_PARTICIPANTS
+            || limits.subscribers as usize > MAX_ROLE_PARTICIPANTS
             || limits.clients as usize > MAX_PARTICIPANTS
             || limits.servers as usize > MAX_PARTICIPANTS
             || limits.sample_bytes > LIMIT_SAMPLE_BYTES
@@ -356,6 +374,9 @@ impl<'a> FabricGraph<'a> {
             || limits.in_flight_operations > LIMIT_IN_FLIGHT
             || limits.buffers > LIMIT_BUFFERS
             || limits.capability_slots > LIMIT_CAPABILITY_SLOTS
+            || limits.trace_depth > LIMIT_TRACE_DEPTH
+            || limits.trace_depth <= TRACE_TERMINAL_RESERVE
+            || limits.trace_overflow != TRACE_OVERFLOW_SATURATE
         {
             return Err(DecodeError::Impossible);
         }
@@ -552,6 +573,43 @@ impl<'a> FabricGraph<'a> {
 
     pub fn limits(&self) -> GraphLimits {
         self.limits
+    }
+
+    /// Answer one schema-declared runtime query over this authenticated graph.
+    ///
+    /// The numeric vocabulary is generated beside the wire layout. Keeping the
+    /// match here means root dispatch never restates header offsets or couples a
+    /// query id to a similarly named field by hand.
+    pub fn query(&self, field: u32) -> Option<u32> {
+        let limits = self.limits;
+        match field {
+            QUERY_SCHEMA_COUNT => u32::try_from(self.schema_count).ok(),
+            QUERY_ROUTE_COUNT => u32::try_from(self.route_count).ok(),
+            QUERY_PARTICIPANT_COUNT => u32::try_from(self.participant_count).ok(),
+            QUERY_INTERPOSITION_COUNT => u32::try_from(self.interposition_count).ok(),
+            QUERY_MAX_ROUTES => Some(limits.routes),
+            QUERY_MAX_INGRESS_SOURCES => Some(limits.ingress_sources),
+            QUERY_MAX_PUBLISHERS => Some(limits.publishers),
+            QUERY_MAX_SUBSCRIBERS => Some(limits.subscribers),
+            QUERY_MAX_CLIENTS => Some(limits.clients),
+            QUERY_MAX_SERVERS => Some(limits.servers),
+            QUERY_MAX_SAMPLE_BYTES => Some(limits.sample_bytes),
+            QUERY_MAX_QUEUE_DEPTH => Some(limits.queue_depth),
+            QUERY_MAX_HISTORY_DEPTH => Some(limits.history_depth),
+            QUERY_MAX_EVENT_DEPTH => Some(limits.event_depth),
+            QUERY_MAX_RETAINED_SAMPLES => Some(limits.retained_samples),
+            QUERY_MAX_RETRIES => Some(limits.retries),
+            QUERY_MAX_IN_FLIGHT_CALLS => Some(limits.in_flight_calls),
+            QUERY_MAX_IN_FLIGHT_OPERATIONS => Some(limits.in_flight_operations),
+            QUERY_MAX_BUFFER_PAGES => Some(limits.buffer_pages),
+            QUERY_MAX_BUFFERS => Some(limits.buffers),
+            QUERY_MAX_MAPPINGS => Some(limits.mappings),
+            QUERY_MAX_LOANS => Some(limits.loans),
+            QUERY_MAX_CAPABILITY_SLOTS => Some(limits.capability_slots),
+            QUERY_TRACE_DEPTH => Some(limits.trace_depth),
+            QUERY_TRACE_OVERFLOW => Some(limits.trace_overflow),
+            _ => None,
+        }
     }
 
     pub fn schema(&self, index: usize) -> Option<SchemaEntry> {
@@ -780,6 +838,31 @@ impl<'a> FabricGraph<'a> {
     }
 }
 
+impl RuntimeLimits {
+    /// This generation's trace-sink depth as a sink capacity, or `None` when
+    /// the answer is outside what a sink can be built at.
+    ///
+    /// The decoder already refuses such a graph
+    /// ([`FabricGraph::validate_declared_limits`]), so a caller reaching the
+    /// `None` arm is looking at a root that answered a value no admitted graph
+    /// declares. Checked again here rather than trusted because the alternative
+    /// is a `TraceSink::with_const_capacity` assert firing as a boot panic
+    /// inside a `no_std` worker, and because every worker would otherwise
+    /// restate the same two comparisons against the same two constants.
+    pub const fn trace_sink_depth(&self) -> Option<usize> {
+        if self.trace_depth > LIMIT_TRACE_DEPTH || self.trace_depth <= TRACE_TERMINAL_RESERVE {
+            return None;
+        }
+        Some(self.trace_depth as usize)
+    }
+
+    /// Whether this generation declares the one overflow discipline the workers
+    /// implement. A graph naming another selects a code path no worker has.
+    pub const fn trace_overflow_is_saturate(&self) -> bool {
+        self.trace_overflow == TRACE_OVERFLOW_SATURATE
+    }
+}
+
 /// A route's authority identity: the fold of its name, the full C8.1 interface
 /// identity, and the contract kind. Alternate names over one interface and
 /// conflicting interfaces under one name are therefore distinct routes.
@@ -952,6 +1035,8 @@ mod tests {
             mappings: 8,
             loans: 8,
             capability_slots: 16,
+            trace_depth: 16,
+            trace_overflow: TRACE_OVERFLOW_SATURATE,
         }
     }
 
@@ -1079,6 +1164,8 @@ mod tests {
                 self.limits.mappings,
                 self.limits.loans,
                 self.limits.capability_slots,
+                self.limits.trace_depth,
+                self.limits.trace_overflow,
             ];
             for (index, value) in limits.iter().enumerate() {
                 let offset = 80 + index * 4;
@@ -1518,47 +1605,81 @@ mod tests {
         check(&graph).expect("satisfiable");
     }
 
+    /// Live ingress is counted across every direction that delivers *into* the
+    /// fabric, so it is exercised with publishers and clients together rather
+    /// than with ten publishers: `MAX_ROLE_PARTICIPANTS` bounds the stream
+    /// directions at four, which is a decode refusal rather than the aggregate
+    /// one under test.
     #[test]
     fn more_than_nine_live_ingress_sources_fails_closed() {
-        // Ten publishers, each a live wake source the fabric must register.
-        let mut builder = Builder::new();
-        builder.limits.publishers = 16;
-        builder.limits.ingress_sources = MAX_INGRESS_SOURCES as u32;
-        let schema = builder.schema([0x11; 32], 0xAAAA, CONTRACT_KIND_STREAM);
-        let route = builder.route("telemetry", schema);
-        for index in 0..10 {
-            let name = match index {
-                0 => "p0",
-                1 => "p1",
-                2 => "p2",
-                3 => "p3",
-                4 => "p4",
-                5 => "p5",
-                6 => "p6",
-                7 => "p7",
-                8 => "p8",
-                _ => "p9",
-            };
-            builder.participant(route, name, DIRECTION_PUBLISH, volatile_qos());
+        fn ingress_graph(clients: usize) -> Builder {
+            const NAMES: [&str; 10] = ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"];
+            let publishers = MAX_ROLE_PARTICIPANTS;
+            let mut builder = Builder::new();
+            builder.limits.publishers = publishers as u32;
+            builder.limits.clients = clients as u32;
+            builder.limits.servers = 1;
+            builder.limits.ingress_sources = MAX_INGRESS_SOURCES as u32;
+            let stream = builder.schema([0x11; 32], 0xAAAA, CONTRACT_KIND_STREAM);
+            let call = builder.schema([0x22; 32], 0xBBBB, CONTRACT_KIND_CALL);
+            let telemetry = builder.route("telemetry", stream);
+            let parameters = builder.route("parameters", call);
+            for name in NAMES.iter().take(publishers) {
+                builder.participant(telemetry, name, DIRECTION_PUBLISH, volatile_qos());
+            }
+            for name in NAMES.iter().skip(publishers).take(clients) {
+                builder.participant(parameters, name, DIRECTION_CLIENT, volatile_qos());
+            }
+            builder.participant(parameters, "server", DIRECTION_SERVER, volatile_qos());
+            builder
         }
-        let bytes = builder.encode();
-        // Structurally admissible; the aggregate arm counts ten live sources
-        // against the nine the graph declared and the kernel can register.
+
+        // Four publishers and six clients: ten sources the fabric must register
+        // at once, against the nine it declared.
+        let bytes = ingress_graph(6).encode();
+        // Structurally admissible; the aggregate arm counts the live sources.
         let graph = FabricGraph::decode(&bytes).expect("decodes");
         assert!(matches!(check(&graph), Err(DecodeError::Impossible)));
 
         // Nine is the boundary and passes.
-        let mut builder = Builder::new();
-        builder.limits.publishers = 16;
-        builder.limits.ingress_sources = MAX_INGRESS_SOURCES as u32;
-        let schema = builder.schema([0x11; 32], 0xAAAA, CONTRACT_KIND_STREAM);
-        let route = builder.route("telemetry", schema);
-        for name in ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"] {
-            builder.participant(route, name, DIRECTION_PUBLISH, volatile_qos());
-        }
-        let bytes = builder.encode();
+        let bytes = ingress_graph(5).encode();
         let graph = FabricGraph::decode(&bytes).expect("decodes");
         check(&graph).expect("nine sources is admissible");
+    }
+
+    /// A graph promising more stream participants of one direction than a
+    /// broker sizes its per-role storage for is refused at decode; the
+    /// request/response directions are bounded by the table instead, because
+    /// their broker holds no per-client history.
+    #[test]
+    fn declared_role_counts_above_the_broker_ceiling_fail_closed() {
+        for mutate in [
+            (|limits: &mut GraphLimits| limits.publishers = MAX_ROLE_PARTICIPANTS as u32 + 1)
+                as fn(&mut GraphLimits),
+            |limits: &mut GraphLimits| limits.subscribers = MAX_ROLE_PARTICIPANTS as u32 + 1,
+            |limits: &mut GraphLimits| limits.clients = MAX_PARTICIPANTS as u32 + 1,
+            |limits: &mut GraphLimits| limits.servers = MAX_PARTICIPANTS as u32 + 1,
+        ] {
+            let mut builder = stream_graph();
+            mutate(&mut builder.limits);
+            let bytes = builder.encode();
+            assert!(matches!(
+                FabricGraph::decode(&bytes),
+                Err(DecodeError::Impossible)
+            ));
+        }
+
+        // Each ceiling itself is admissible, so the arms above reject the
+        // excess rather than the field -- and the two request/response
+        // directions admit counts the stream ceiling would refuse, which is the
+        // distinction under test.
+        let mut builder = stream_graph();
+        builder.limits.publishers = MAX_ROLE_PARTICIPANTS as u32;
+        builder.limits.subscribers = MAX_ROLE_PARTICIPANTS as u32;
+        builder.limits.clients = MAX_ROLE_PARTICIPANTS as u32 + 1;
+        builder.limits.servers = MAX_ROLE_PARTICIPANTS as u32 + 1;
+        let bytes = builder.encode();
+        FabricGraph::decode(&bytes).expect("the declared ceilings are admissible");
     }
 
     #[test]
@@ -1571,6 +1692,45 @@ mod tests {
             FabricGraph::decode(&bytes),
             Err(DecodeError::Impossible)
         ));
+    }
+
+    /// A graph naming a sink no worker could build is refused at decode, not
+    /// discovered by the worker that tried to size one.
+    ///
+    /// Every arm is a value the format admits structurally — a `u32` in the
+    /// header — so nothing else in the decoder rejects it. The reservation arm
+    /// is the interesting one: a depth of exactly `TRACE_TERMINAL_RESERVE`
+    /// leaves no ordinary record slot at all, so such a sink could hold the
+    /// terminal marker and nothing to mark the end of.
+    #[test]
+    fn declared_trace_sink_outside_the_contract_fails_closed() {
+        for mutate in [
+            (|limits: &mut GraphLimits| limits.trace_depth = LIMIT_TRACE_DEPTH + 1)
+                as fn(&mut GraphLimits),
+            |limits: &mut GraphLimits| limits.trace_depth = TRACE_TERMINAL_RESERVE,
+            |limits: &mut GraphLimits| limits.trace_depth = 0,
+            |limits: &mut GraphLimits| limits.trace_overflow = TRACE_OVERFLOW_SATURATE + 1,
+            |limits: &mut GraphLimits| limits.trace_overflow = 0,
+        ] {
+            let mut builder = stream_graph();
+            mutate(&mut builder.limits);
+            let bytes = builder.encode();
+            assert!(matches!(
+                FabricGraph::decode(&bytes),
+                Err(DecodeError::Impossible)
+            ));
+        }
+
+        // The boundary above the reservation is admissible, so the arms above
+        // reject the declaration rather than the whole field.
+        let mut builder = stream_graph();
+        builder.limits.trace_depth = TRACE_TERMINAL_RESERVE + 1;
+        let bytes = builder.encode();
+        let graph = FabricGraph::decode(&bytes).expect("decodes");
+        assert_eq!(
+            graph.query(QUERY_TRACE_DEPTH),
+            Some(TRACE_TERMINAL_RESERVE + 1)
+        );
     }
 
     #[test]
@@ -1642,6 +1802,145 @@ mod tests {
         let bytes = builder.encode();
         let graph = FabricGraph::decode(&bytes).expect("decodes");
         assert!(matches!(check(&graph), Err(DecodeError::Impossible)));
+    }
+
+    #[test]
+    fn runtime_query_ids_are_frozen() {
+        for (actual, expected) in [
+            (QUERY_SCHEMA_COUNT, 1),
+            (QUERY_ROUTE_COUNT, 2),
+            (QUERY_PARTICIPANT_COUNT, 3),
+            (QUERY_INTERPOSITION_COUNT, 4),
+            (QUERY_MAX_ROUTES, 5),
+            (QUERY_MAX_INGRESS_SOURCES, 6),
+            (QUERY_MAX_PUBLISHERS, 7),
+            (QUERY_MAX_SUBSCRIBERS, 8),
+            (QUERY_MAX_CLIENTS, 9),
+            (QUERY_MAX_SERVERS, 10),
+            (QUERY_MAX_SAMPLE_BYTES, 11),
+            (QUERY_MAX_QUEUE_DEPTH, 12),
+            (QUERY_MAX_HISTORY_DEPTH, 13),
+            (QUERY_MAX_EVENT_DEPTH, 14),
+            (QUERY_MAX_RETAINED_SAMPLES, 15),
+            (QUERY_MAX_RETRIES, 16),
+            (QUERY_MAX_IN_FLIGHT_CALLS, 17),
+            (QUERY_MAX_IN_FLIGHT_OPERATIONS, 18),
+            (QUERY_MAX_BUFFER_PAGES, 19),
+            (QUERY_MAX_BUFFERS, 20),
+            (QUERY_MAX_MAPPINGS, 21),
+            (QUERY_MAX_LOANS, 22),
+            (QUERY_MAX_CAPABILITY_SLOTS, 23),
+            (QUERY_TRACE_DEPTH, 24),
+            (QUERY_TRACE_OVERFLOW, 25),
+        ] {
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn runtime_limit_loader_uses_schema_declared_queries() {
+        let bytes = stream_graph().encode();
+        let graph = FabricGraph::decode(&bytes).expect("decodes");
+        let limits = RuntimeLimits::load(|field| graph.query(field).ok_or(field))
+            .expect("all runtime limit queries are present");
+        assert_eq!(
+            limits,
+            RuntimeLimits {
+                max_publishers: graph.limits().publishers,
+                max_subscribers: graph.limits().subscribers,
+                max_sample_bytes: graph.limits().sample_bytes,
+                max_event_depth: graph.limits().event_depth,
+                max_retained_samples: graph.limits().retained_samples,
+                max_retries: graph.limits().retries,
+                max_in_flight_calls: graph.limits().in_flight_calls,
+                max_in_flight_operations: graph.limits().in_flight_operations,
+                max_buffer_pages: graph.limits().buffer_pages,
+                max_buffers: graph.limits().buffers,
+                max_capability_slots: graph.limits().capability_slots,
+                trace_depth: graph.limits().trace_depth,
+                trace_overflow: graph.limits().trace_overflow,
+            }
+        );
+
+        assert_eq!(
+            RuntimeLimits::load(|field| Err(field)),
+            Err(QUERY_MAX_PUBLISHERS)
+        );
+    }
+
+    #[test]
+    fn runtime_limit_classifier_excludes_graph_shape() {
+        for field in [
+            QUERY_MAX_PUBLISHERS,
+            QUERY_MAX_SUBSCRIBERS,
+            QUERY_MAX_SAMPLE_BYTES,
+            QUERY_MAX_EVENT_DEPTH,
+            QUERY_MAX_RETAINED_SAMPLES,
+            QUERY_MAX_RETRIES,
+            QUERY_MAX_IN_FLIGHT_CALLS,
+            QUERY_MAX_IN_FLIGHT_OPERATIONS,
+            QUERY_MAX_BUFFER_PAGES,
+            QUERY_MAX_BUFFERS,
+            QUERY_MAX_CAPABILITY_SLOTS,
+            QUERY_TRACE_DEPTH,
+            QUERY_TRACE_OVERFLOW,
+        ] {
+            assert!(RuntimeLimits::field_is_limit(field), "query {field}");
+        }
+        for field in [
+            QUERY_SCHEMA_COUNT,
+            QUERY_ROUTE_COUNT,
+            QUERY_PARTICIPANT_COUNT,
+            QUERY_INTERPOSITION_COUNT,
+            QUERY_MAX_ROUTES,
+            QUERY_MAX_CLIENTS,
+            QUERY_MAX_MAPPINGS,
+            0,
+            u32::MAX,
+        ] {
+            assert!(!RuntimeLimits::field_is_limit(field), "query {field}");
+        }
+    }
+
+    #[test]
+    fn runtime_queries_return_decoded_header_values() {
+        let bytes = stream_graph().encode();
+        let graph = FabricGraph::decode(&bytes).expect("decodes");
+        let limits = base_limits();
+        for (field, expected) in [
+            (QUERY_SCHEMA_COUNT, graph.schema_count() as u32),
+            (QUERY_ROUTE_COUNT, graph.route_count() as u32),
+            (QUERY_PARTICIPANT_COUNT, graph.participant_count() as u32),
+            (
+                QUERY_INTERPOSITION_COUNT,
+                graph.interposition_count() as u32,
+            ),
+            (QUERY_MAX_ROUTES, limits.routes),
+            (QUERY_MAX_INGRESS_SOURCES, limits.ingress_sources),
+            (QUERY_MAX_PUBLISHERS, limits.publishers),
+            (QUERY_MAX_SUBSCRIBERS, limits.subscribers),
+            (QUERY_MAX_CLIENTS, limits.clients),
+            (QUERY_MAX_SERVERS, limits.servers),
+            (QUERY_MAX_SAMPLE_BYTES, limits.sample_bytes),
+            (QUERY_MAX_QUEUE_DEPTH, limits.queue_depth),
+            (QUERY_MAX_HISTORY_DEPTH, limits.history_depth),
+            (QUERY_MAX_EVENT_DEPTH, limits.event_depth),
+            (QUERY_MAX_RETAINED_SAMPLES, limits.retained_samples),
+            (QUERY_MAX_RETRIES, limits.retries),
+            (QUERY_MAX_IN_FLIGHT_CALLS, limits.in_flight_calls),
+            (QUERY_MAX_IN_FLIGHT_OPERATIONS, limits.in_flight_operations),
+            (QUERY_MAX_BUFFER_PAGES, limits.buffer_pages),
+            (QUERY_MAX_BUFFERS, limits.buffers),
+            (QUERY_MAX_MAPPINGS, limits.mappings),
+            (QUERY_MAX_LOANS, limits.loans),
+            (QUERY_MAX_CAPABILITY_SLOTS, limits.capability_slots),
+            (QUERY_TRACE_DEPTH, limits.trace_depth),
+            (QUERY_TRACE_OVERFLOW, limits.trace_overflow),
+        ] {
+            assert_eq!(graph.query(field), Some(expected), "query {field}");
+        }
+        assert_eq!(graph.query(0), None);
+        assert_eq!(graph.query(u32::MAX), None);
     }
 
     #[test]

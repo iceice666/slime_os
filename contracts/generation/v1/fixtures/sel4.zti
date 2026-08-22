@@ -89,7 +89,7 @@
       transferable = true;
     };
     {
-      name = "init-spawn-service-sysinfo";
+      name = "spawn-service-sysinfo";
       capabilityKind = "executable";
       rights = [
         "exec";
@@ -100,7 +100,7 @@
       transferable = false;
     };
     {
-      name = "init-spawn-service-echo";
+      name = "spawn-service-echo";
       capabilityKind = "executable";
       rights = [
         "exec";
@@ -146,11 +146,11 @@
           slot = 5;
         };
         {
-          grant = "init-spawn-service-sysinfo";
+          grant = "spawn-service-sysinfo";
           slot = 6;
         };
         {
-          grant = "init-spawn-service-echo";
+          grant = "spawn-service-echo";
           slot = 7;
         };
         {
@@ -192,11 +192,11 @@
           slot = 0;
         };
         {
-          grant = "init-spawn-service-sysinfo";
+          grant = "spawn-service-sysinfo";
           slot = 1;
         };
         {
-          grant = "init-spawn-service-echo";
+          grant = "spawn-service-echo";
           slot = 2;
         };
         {

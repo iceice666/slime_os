@@ -112,7 +112,8 @@ header = FABRIC_GRAPH_HEADER.unpack_from(first, 0)
     reserved,
     fabric_identity,
 ) = header[:11]
-limits = header[11:]
+limits = header[11:-2]
+trace_depth, trace_overflow = header[-2:]
 
 if magic != FABRIC_GRAPH_MAGIC or version != FABRIC_GRAPH_VERSION:
     fail("built graph does not carry the contract magic/version")
@@ -136,6 +137,13 @@ if list(limits) != declared:
     fail("built graph limits do not match the manifest")
 if limits[1] > MAX_FABRIC_GRAPH_INGRESS_SOURCES:
     fail("built graph declares more ingress sources than the ceiling admits")
+# The sink shape is a header field rather than a generated per-plane constant
+# (B70), so the encoder's copy is checked against the manifest here for the
+# same reason every limit above is.
+if trace_depth != GRAPH["traceDepth"]:
+    fail("built graph does not carry the manifest's declared trace depth")
+if trace_overflow != builder.FABRIC_TRACE_OVERFLOW[GRAPH["traceOverflow"]]:
+    fail("built graph does not carry the manifest's declared trace overflow discipline")
 
 # --- tables ------------------------------------------------------------------
 

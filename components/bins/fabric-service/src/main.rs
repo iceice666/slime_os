@@ -69,7 +69,8 @@ mod trace_log;
 
 use boot_contracts::fabric_graph::{
     CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
-    RELIABILITY_RELIABLE, TransportQos, route_identity,
+    FRAME_CAPACITY, MAX_ROLE_PARTICIPANTS, RELIABILITY_RELIABLE, RuntimeLimits, TransportQos,
+    route_identity,
 };
 use boot_contracts::stream_history::{HistoryEntry, StreamHistory};
 use slime_proto::capability_transfer::{
@@ -100,16 +101,84 @@ use slime_rt::{
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
-use boot_contracts::generation::{RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE};
+use boot_contracts::generation::{BootAction, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE};
 
 slime_rt::entry!(main);
 
-include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+/// This generation's authenticated fabric ceilings (B70/CP2).
+///
+/// Every number this worker admits traffic against comes from here rather than
+/// from a per-plane table a build script rendered into `OUT_DIR`: the ceilings
+/// are a property of the graph the root authenticated, so a component built
+/// outside this repository resolves them the same way.
+fn load_runtime_limits() -> RuntimeLimits {
+    RuntimeLimits::load(slime_rt::graph_query).unwrap_or_else(|_| fail(b"fabric graph limit query"))
+}
+
+/// The sink capacity this generation declares, refused rather than clamped when
+/// it falls outside the contract.
+///
+/// `RuntimeLimits::trace_sink_depth` owns both comparisons, so this worker does
+/// not restate the bounds the contract already fixes. Reaching `None` means the
+/// root answered a depth no admitted graph declares, which is a refusal: a
+/// depth past the sink's storage does not fit, and one at or below the terminal
+/// reservation leaves no slot for ordinary evidence.
+fn declared_trace_depth(limits: &RuntimeLimits) -> usize {
+    if !limits.trace_overflow_is_saturate() {
+        fail(b"generation declares an unimplemented trace overflow");
+    }
+    limits
+        .trace_sink_depth()
+        .unwrap_or_else(|| fail(b"declared trace depth is outside the contract"))
+}
+
+/// Pages in one fabric-owned copy buffer, derived from the generation's own
+/// declared `sampleBytes` ceiling instead of a builder constant compiled in.
+///
+/// It sizes no array -- the two scratch windows below are mapped at whatever
+/// length the admitted descriptor names -- so nothing here needs it before the
+/// graph has been read, and it stays a runtime number rather than a published
+/// one.
+fn copy_pages(limits: &RuntimeLimits) -> u64 {
+    let pages = u64::from(limits.max_sample_bytes).div_ceil(PAGE);
+    if pages == 0 || pages > u64::from(limits.max_buffer_pages) {
+        fail(b"declared sample ceiling does not fit the declared page budget");
+    }
+    pages
+}
 
 /// `SharedBufferFactory`, granted by the generation. Every declared stream edge
 /// gets one page-backed v2 ring; the participant receives a narrowed copy over
 /// its already-installed direct control endpoint.
-const BUFFER_FACTORY_SLOT: u32 = 1;
+///
+/// Resolved by *what the capability is* rather than by the number one manifest
+/// binds it at, over both declaration tables the manifests actually use. The
+/// `sel4-*` planes and `valid.zti` declare it as an ordinary grant under two
+/// different names -- `fabric-service-shared-buffer-factory` and
+/// `fabric-shared-buffer-factory` -- which is why the `kind:` axis rather than
+/// a name answers that half. `sel4-qos`, `sel4-call`, and `sel4-operation`
+/// declare it as a *minted* binding instead, a separate table the `kind:` axis
+/// does not search, and there the name is fixed by the `<holder>-<role>`
+/// convention `minted:<component>-supervision` already relies on. Asking only
+/// one way resolves nothing on the other planes.
+///
+/// Cached like `time_slot`: every ring provisioned and every large sample
+/// allocates through it.
+static mut BUFFER_FACTORY_CACHE: u32 = u32::MAX;
+
+fn buffer_factory_slot() -> u32 {
+    // SAFETY: single-threaded, and every reader is on the one dispatch loop.
+    let cached = unsafe { *core::ptr::addr_of!(BUFFER_FACTORY_CACHE) };
+    if cached != u32::MAX {
+        return cached;
+    }
+    let slot = slime_rt::resolve_binding(b"kind:sharedBufferFactory+bufferCreate")
+        .or_else(|_| slime_rt::resolve_binding(b"minted:fabric-service-shared-buffer-factory"))
+        .unwrap_or_else(|_| fail(b"shared-buffer factory grant"));
+    // SAFETY: as above.
+    unsafe { *core::ptr::addr_of_mut!(BUFFER_FACTORY_CACHE) = slot };
+    slot
+}
 /// The simulated clock's control endpoint, resolved from the root by the name
 /// the generation gives that edge.
 ///
@@ -145,10 +214,17 @@ fn time_slot() -> u32 {
 /// numbered because its supervision handle is what reports the clock's exit:
 /// no `ERR_PEER_DEAD` reaches a native Endpoint.
 const TIME_COMPONENT: &[u8] = b"fabric-publisher-b";
-const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
 /// Operation-plane endpoint that releases the supervised replacement only
 /// after the broker has installed its fresh route and supervision identity.
-const OPERATION_REPLACEMENT_START_SLOT: u32 = 12;
+///
+/// Asked for by the name the generation gives that edge rather than written as
+/// a literal 12, which was the builder's own slot numbering restated inside a
+/// component. Only `sel4-operation` and `sel4-traffic` reach this arm and both
+/// declare the grant outright.
+fn operation_replacement_start_slot() -> u32 {
+    slime_rt::resolve_binding(b"fabric-op-restart-start")
+        .unwrap_or_else(|_| fail(b"operation replacement release endpoint"))
+}
 
 const PAGE: u64 = 4096;
 /// `notification_slots` returns this on both sides when the graph declares no
@@ -170,9 +246,17 @@ const ROUTE_COUNT: usize = ROUTE_NAMES.len();
 const STATUS_NOT_GRANTED: i32 = -1;
 const STATUS_BAD_REQUEST: i32 = -2;
 
-/// Fixed brokering capacity. Every table below is sized from the generation's
-/// own declared ceilings, so nothing here grows with traffic.
-const MAX_PARTICIPANTS: usize = FABRIC_MAX_PUBLISHERS + FABRIC_MAX_SUBSCRIBERS;
+/// Fixed brokering capacity. Every table below is sized from the contract's own
+/// published ceilings, so nothing here grows with traffic and nothing is read
+/// out of a per-plane generated profile.
+///
+/// `MAX_ROLE_PARTICIPANTS` is the ceiling `validate_declared_limits` admits a
+/// graph's `publishers` and `subscribers` against, and it exists precisely
+/// because one record of either role carries a full `LIMIT_HISTORY_DEPTH`
+/// history: a graph promising more than this describes storage no component
+/// has. Summing the two role ceilings is therefore the tightest bound both
+/// tables can be sized from without reading a manifest.
+const MAX_PARTICIPANTS: usize = 2 * MAX_ROLE_PARTICIPANTS;
 /// Fabric-owned sample frames. Each holds one inline payload or names one
 /// fabric-owned buffer; a frame is freed when its last reference is delivered
 /// or evicted.
@@ -184,11 +268,7 @@ const MAX_PARTICIPANTS: usize = FABRIC_MAX_PUBLISHERS + FABRIC_MAX_SUBSCRIBERS;
 /// and the publishers blocked, nothing would ever wake the fabric again. That
 /// is a deadlock, not backpressure, so the table is sized to make it
 /// unreachable rather than detected.
-const MAX_FRAMES: usize = FABRIC_FRAME_CAPACITY;
-/// Pages in one fabric-owned copy buffer. Bounds the largest brokered sample at
-/// two pages, matching the C7 sample plane's payload and the fabric's declared
-/// `bytePages` quota.
-const COPY_PAGES: usize = FABRIC_COPY_PAGES;
+const MAX_FRAMES: usize = FRAME_CAPACITY;
 /// Scratch window where the fabric maps an upstream loan and its own copy
 /// buffer. Two disjoint ranges, both unmapped before the next sample.
 const UPSTREAM_BASE: u64 = 0x0000_000B_0000_0000;
@@ -226,7 +306,8 @@ fn write_i64(value: i64) {
 }
 
 fn qos_check() -> bool {
-    GENERATION_BOOT_ACTION == "qos" || GENERATION_BOOT_ACTION == "traffic"
+    slime_components::generation_composition::is(BootAction::Qos)
+        || slime_components::generation_composition::is(BootAction::Traffic)
 }
 
 /// One client's control binding: the slot init gave the fabric for it, and the
@@ -337,6 +418,65 @@ impl Frame {
     };
 }
 
+/// The stream plane's role and frame tables, in `.bss` rather than on a stack
+/// frame.
+///
+/// These three are by far the largest objects the plane holds, and they were
+/// locals of `main`/`traffic_graph`: one `Publisher` or `Subscriber` carries a
+/// whole `StreamHistory` -- `LIMIT_HISTORY_DEPTH` entries, about 1.5 KiB -- so
+/// two `MAX_PARTICIPANTS`-wide role arrays plus `[Frame; FRAME_CAPACITY]` came
+/// to roughly 30 KiB of a component's 64 KiB stack, held for the entire life of
+/// the plane while `provision`, `broker`, and their callees each layered their
+/// own frames on top. That overflowed into the `.data` immediately below the
+/// stack, and the first symptom was not a fault but silent corruption:
+/// `BUFFER_FACTORY_CACHE` read back as garbage, so `shared_buffer_create` was
+/// refused `ungranted` and provisioning failed with a message that named the
+/// wrong cause.
+///
+/// Sizing them from the graph's published ceilings rather than one plane's
+/// declared counts is what made the footprint fixed rather than incidental, and
+/// a fixed footprint that large belongs in `.bss`: the storage is the same
+/// bytes either way, but there it is reserved by the linker and accounted in
+/// the image rather than competing with every frame the dispatch loop pushes.
+///
+/// Neither the declared stack nor any authority check moves for this.
+static mut PUBLISHERS: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
+static mut SUBSCRIBERS: [Option<Subscriber>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
+static mut FRAMES: [Frame; MAX_FRAMES] = [Frame::EMPTY; MAX_FRAMES];
+/// Set by the one successful [`claim_stream_tables`] call.
+static mut STREAM_TABLES_CLAIMED: bool = false;
+
+/// Exclusive references to the three tables above.
+///
+/// The single-owner discipline is what keeps `static mut` sound here: exactly
+/// one caller ever receives these, the plane it runs is the task's whole
+/// remaining work, and a second claim fails rather than aliasing. Each plane
+/// entry point claims once and then passes ordinary `&mut` borrows down, so
+/// every function below is unchanged and none of them can reach the statics
+/// directly.
+struct StreamTables {
+    publishers: &'static mut [Option<Publisher>; MAX_PARTICIPANTS],
+    subscribers: &'static mut [Option<Subscriber>; MAX_PARTICIPANTS],
+    frames: &'static mut [Frame; MAX_FRAMES],
+}
+
+fn claim_stream_tables() -> StreamTables {
+    // SAFETY: a component is single-threaded, the flag makes this the only
+    // call that ever hands out these references, and nothing else in this
+    // binary names the three statics.
+    unsafe {
+        if *core::ptr::addr_of!(STREAM_TABLES_CLAIMED) {
+            fail(b"stream tables claimed twice");
+        }
+        *core::ptr::addr_of_mut!(STREAM_TABLES_CLAIMED) = true;
+        StreamTables {
+            publishers: &mut *core::ptr::addr_of_mut!(PUBLISHERS),
+            subscribers: &mut *core::ptr::addr_of_mut!(SUBSCRIBERS),
+            frames: &mut *core::ptr::addr_of_mut!(FRAMES),
+        }
+    }
+}
+
 /// Prove the root answers this component the *whole* graph (B70/CP2).
 ///
 /// Compared against `FABRIC_PARTICIPANTS` while both statements of the graph
@@ -375,54 +515,31 @@ fn prove_graph_read() {
 
 fn main(_startup_arg: u32) {
     prove_graph_read();
-    if GENERATION_BOOT_ACTION == "boot" {
+    if slime_components::generation_composition::is(BootAction::Boot) {
         boot_graph();
         return;
     }
-    if GENERATION_BOOT_ACTION == "traffic" {
+    if slime_components::generation_composition::is(BootAction::Traffic) {
         traffic_graph();
         return;
     }
-    if GENERATION_BOOT_ACTION == "visibility" {
+    if slime_components::generation_composition::is(BootAction::Visibility) {
         visibility_broker::run();
         return;
     }
-    if GENERATION_BOOT_ACTION == "matrix" {
+    if slime_components::generation_composition::is(BootAction::Matrix) {
         matrix_broker::run();
         return;
     }
-    if GENERATION_BOOT_ACTION == "call" {
-        let controls = request_response_controls(FABRIC_CALL_CLIENTS);
-        call_broker::Broker::new(
-            BUFFER_FACTORY_SLOT,
-            controls.clients,
-            controls.server,
-            controls.time,
-            // Client A, client B, server, then the clock's own handle: a
-            // separately declared instance whose exit the server's handle does
-            // not report (B76).
-            [6, 7, 8, 9],
-        )
-        .run();
-        slime_rt::debug_write(b"[fabric] call plane complete\n");
+    if slime_components::generation_composition::is(BootAction::Call) {
+        run_call_plane();
         return;
     }
-    if GENERATION_BOOT_ACTION == "operation" {
-        let controls = request_response_controls(FABRIC_OPERATION_CLIENTS);
-        operation_broker::Broker::new(
-            controls.clients,
-            controls.server,
-            controls.time,
-            6,
-            Some(OPERATION_REPLACEMENT_START_SLOT),
-            7,
-            [8, 9, 10],
-            11,
-        )
-        .run();
-        slime_rt::debug_write(b"[fabric] operation plane complete\n");
+    if slime_components::generation_composition::is(BootAction::Operation) {
+        run_operation_plane();
         return;
     }
+    let limits = load_runtime_limits();
     let routes: [[u8; 32]; ROUTE_COUNT] = [
         route_identity(
             ROUTE_NAMES[0],
@@ -438,15 +555,16 @@ fn main(_startup_arg: u32) {
     let type_tags: [u64; ROUTE_COUNT] = [telemetry_stream::TYPE_TAG, diagnostics_stream::TYPE_TAG];
 
     let mut clients = control_clients();
-    let mut publishers: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
-    let mut subscribers: [Option<Subscriber>; MAX_PARTICIPANTS] =
-        [const { None }; MAX_PARTICIPANTS];
-    let mut frames = [Frame::EMPTY; MAX_FRAMES];
+    let StreamTables {
+        publishers,
+        subscribers,
+        frames,
+    } = claim_stream_tables();
 
-    provision(&mut clients, &routes, &mut publishers, &mut subscribers);
+    provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] every declared stream edge provisioned\n");
 
-    broker(&type_tags, &mut publishers, &mut subscribers, &mut frames);
+    broker(&type_tags, publishers, subscribers, frames, &limits);
     // Outlive every participant holding one of this component's rings. Exiting
     // first reclaims the fabric's shared-buffer charges, and a loan mapping
     // torn out from under a task still executing against it faults that task —
@@ -454,8 +572,75 @@ fn main(_startup_arg: u32) {
     // after `holder reclaimed`. The supervision handles the generation granted
     // for loan addressing answer "is that task gone", so they order the
     // teardown too.
-    await_participants(&publishers, &subscribers);
+    await_participants(publishers, subscribers);
     slime_rt::debug_write(b"[fabric] stream plane complete\n");
+}
+
+/// C8.6's bounded call plane, in its own frame.
+///
+/// `#[inline(never)]` is load-bearing rather than stylistic. `Broker::new`
+/// returns a `Broker` by value — a table of `LIMIT_IN_FLIGHT` `Call` records —
+/// and LLVM sinks that temporary into the *caller's* frame. Inlined into
+/// `main`, the call and operation brokers' two temporaries were allocated in
+/// `main`'s prologue and held for the whole run, on every plane: `main` claimed
+/// ~57 KiB of a 64 KiB stack before executing a single statement, and the
+/// stream arm — which constructs neither broker — paid for both. That left
+/// roughly a kilobyte of headroom, so `provision` wrote its frame straight
+/// through the bottom of the stack and into `.bss`, corrupting the tables
+/// below it.
+///
+/// Splitting each arm into its own function makes the allocation live only
+/// while that plane runs, which is the plane that actually needs it.
+#[inline(never)]
+fn run_call_plane() {
+    let controls = request_response_controls(CALL_PLANE);
+    call_broker::Broker::new(
+        buffer_factory_slot(),
+        controls.clients,
+        controls.server,
+        controls.time,
+        // Client A, client B, server, then the clock's own handle: a separately
+        // declared instance whose exit the server's handle does not report
+        // (B76).
+        [
+            supervision_slot_for(b"fabric-call-client"),
+            supervision_slot_for(b"fabric-call-client-b"),
+            supervision_slot_for(b"fabric-call-server"),
+            supervision_slot_for(b"fabric-call-time"),
+        ],
+        load_runtime_limits(),
+    )
+    .run();
+    slime_rt::debug_write(b"[fabric] call plane complete\n");
+}
+
+/// C8.7's bounded operation plane, in its own frame. See [`run_call_plane`] for
+/// why this is a separate `#[inline(never)]` function rather than an arm of
+/// `main`.
+#[inline(never)]
+fn run_operation_plane() {
+    let controls = request_response_controls(OPERATION_PLANE);
+    operation_broker::Broker::new(
+        operation_broker::Wiring {
+            clients: controls.clients,
+            server: controls.server,
+            time_control: controls.time,
+            replacement_control: control_slot_of(b"fabric-op-client-b-restart")
+                .unwrap_or_else(|| fail(b"operation replacement control endpoint")),
+            replacement_start: Some(operation_replacement_start_slot()),
+            backup_route: slime_rt::resolve_binding(b"fabric-op-client-backup")
+                .unwrap_or_else(|_| fail(b"operation backup route endpoint")),
+            supervision: [
+                supervision_slot_for(b"fabric-op-client"),
+                supervision_slot_for(b"fabric-op-client-b"),
+                supervision_slot_for(b"fabric-op-server"),
+            ],
+            replacement_supervision: supervision_slot_for(b"fabric-op-client-b-restart"),
+        },
+        load_runtime_limits(),
+    )
+    .run();
+    slime_rt::debug_write(b"[fabric] operation plane complete\n");
 }
 
 /// Block until every participant this service provisioned a ring for has ended.
@@ -551,13 +736,16 @@ fn boot_graph() {
     // own.
     if let Some(proxy) = clients
         .iter_mut()
+        .flatten()
         .find(|client| client.component == b"fabric-proxy")
     {
         proxy.answered = true;
     }
-    let mut publishers: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
-    let mut subscribers: [Option<Subscriber>; MAX_PARTICIPANTS] =
-        [const { None }; MAX_PARTICIPANTS];
+    let StreamTables {
+        publishers,
+        subscribers,
+        frames: _frames,
+    } = claim_stream_tables();
     // `provision` answers each control endpoint and returns once every one has
     // been answered or died. The unauthorized probe holds a real control
     // endpoint and asks for an ungranted route, so its denial is what answers
@@ -567,7 +755,7 @@ fn boot_graph() {
     //
     // Each edge is announced as it is provisioned, so the transcript shows the
     // whole graph.
-    provision(&mut clients, &routes, &mut publishers, &mut subscribers);
+    provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] idle: parked on control endpoints\n");
     // The gate's exit condition: every declared edge already minted, nothing
     // left to answer, so the worker just holds its control set idle.
@@ -618,27 +806,29 @@ fn traffic_graph() {
     // cannot request its declared subscription here the way `boot_graph`'s
     // parked copy safely does), so both are pre-marked the same way
     // `boot_graph` pre-marks the proxy alone.
-    for client in clients.iter_mut().filter(|client| {
+    for client in clients.iter_mut().flatten().filter(|client| {
         client.component == b"fabric-proxy" || client.component == b"fabric-observer"
     }) {
         client.answered = true;
     }
-    let mut publishers: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
-    let mut subscribers: [Option<Subscriber>; MAX_PARTICIPANTS] =
-        [const { None }; MAX_PARTICIPANTS];
-    let mut frames = [Frame::EMPTY; MAX_FRAMES];
+    let limits = load_runtime_limits();
+    let StreamTables {
+        publishers,
+        subscribers,
+        frames,
+    } = claim_stream_tables();
 
-    provision(&mut clients, &routes, &mut publishers, &mut subscribers);
+    provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] traffic: every declared stream edge provisioned\n");
 
-    broker(&type_tags, &mut publishers, &mut subscribers, &mut frames);
+    broker(&type_tags, publishers, subscribers, frames, &limits);
     // Neither the proxy nor the observer ever contacts this broker under
     // `"traffic"` (both parked above without requesting a role), so neither
     // dies either; waiting on either here would hang forever on a task the
     // milestone requires to stay parked. They are absent from the provisioned
     // arrays for exactly that reason, so `await_participants` skips them
     // structurally — this used to name both as literals.
-    await_participants(&publishers, &subscribers);
+    await_participants(publishers, subscribers);
     slime_rt::debug_write(b"[fabric] traffic stream plane complete\n");
 }
 
@@ -648,59 +838,109 @@ struct RequestResponseControls {
     time: u32,
 }
 
-/// Resolve one request/response plane's authenticated control slots from the
-/// manifest-derived table. The table is authoritative for ordering; the role
-/// assertions make a reordered or misclassified grant a build-time-visible
-/// failure instead of a broker reading the wrong capability slot.
-fn request_response_controls(table: &[&[u8]]) -> RequestResponseControls {
-    assert!(
-        table.len() == 4,
-        "request/response plane must declare four controls"
-    );
+/// The four participants one request/response plane declares, in the role order
+/// its broker takes them: client A, client B, server, clock.
+///
+/// A role list rather than a slot list. The table this replaced was the
+/// builder's own control ordering, and the broker recovered each slot as
+/// `FABRIC_FIRST_CONTROL_SLOT + position` -- a component restating the layout
+/// rule that produced the numbers, so a reordered grant moved every slot under
+/// it silently. Each control edge is a declared grant named
+/// `<component>-control` by every manifest that declares the plane, so the name
+/// answers it outright and the order here is only which role the broker binds
+/// each to.
+const CALL_PLANE: [&[u8]; 4] = [
+    b"fabric-call-client",
+    b"fabric-call-client-b",
+    b"fabric-call-server",
+    b"fabric-call-time",
+];
+const OPERATION_PLANE: [&[u8]; 4] = [
+    b"fabric-op-client",
+    b"fabric-op-client-b",
+    b"fabric-op-server",
+    b"fabric-op-time",
+];
+
+/// Resolve one request/response plane's authenticated control slots by grant
+/// name. A plane this generation does not declare cannot be reached here --
+/// `main` dispatches on the authenticated boot action -- so an unresolved name
+/// is a composition defect rather than a plane that is simply absent.
+fn request_response_controls(plane: [&[u8]; 4]) -> RequestResponseControls {
     let slot = |component: &[u8]| {
-        table
-            .iter()
-            .position(|entry| *entry == component)
-            .map(|index| FABRIC_FIRST_CONTROL_SLOT + index as u32)
-            .unwrap_or_else(|| fail(b"request/response control missing"))
-    };
-    let (client_a, client_b, server, time) = if table[0].starts_with(b"fabric-call-") {
-        (
-            b"fabric-call-client".as_slice(),
-            b"fabric-call-client-b".as_slice(),
-            b"fabric-call-server".as_slice(),
-            b"fabric-call-time".as_slice(),
-        )
-    } else {
-        (
-            b"fabric-op-client".as_slice(),
-            b"fabric-op-client-b".as_slice(),
-            b"fabric-op-server".as_slice(),
-            b"fabric-op-time".as_slice(),
-        )
+        control_slot_of(component).unwrap_or_else(|| fail(b"request/response control missing"))
     };
     RequestResponseControls {
-        clients: [slot(client_a), slot(client_b)],
-        server: slot(server),
-        time: slot(time),
+        clients: [slot(plane[0]), slot(plane[1])],
+        server: slot(plane[2]),
+        time: slot(plane[3]),
     }
 }
 
-/// The control-endpoint table, in the fixed order init granted the slots. Built
-/// from the same generated participant table the graph resource was encoded
-/// from, so a component the manifest does not declare cannot appear here.
-fn control_clients() -> [Client; FABRIC_CLIENTS.len()] {
-    let mut index = 0;
-    [(); FABRIC_CLIENTS.len()].map(|()| {
-        let component = FABRIC_CLIENTS[index];
-        let client = Client {
-            control_slot: FIRST_CONTROL_SLOT + index as u32,
+/// The slot this component's own control endpoint to `component` occupies, or
+/// `None` when this generation declares no such edge.
+///
+/// `<component>-control` is the name every manifest gives a participant's
+/// control edge, the same convention `supervision_slot_for` relies on for
+/// `<component>-supervision`. Scoped by the root to this instance's own
+/// bindings, so a name that resolves is an edge this broker really holds.
+pub(crate) fn control_slot_of(component: &[u8]) -> Option<u32> {
+    const SUFFIX: &[u8] = b"-control";
+    let mut name = [0u8; 64];
+    let end = component.len() + SUFFIX.len();
+    if end > name.len() {
+        fail(b"control name exceeds bound");
+    }
+    name[..component.len()].copy_from_slice(component);
+    name[component.len()..end].copy_from_slice(SUFFIX);
+    slime_rt::resolve_binding(&name[..end]).ok()
+}
+
+/// Every participant this broker can carry a stream control edge for.
+///
+/// A roster of component *roles*, not of slots: which of these a generation
+/// declares varies by plane -- five under the standalone stream, QoS, and
+/// visibility fixtures, seven under the full-graph boot, the traffic plane, and
+/// the matrix -- and each entry is registered only if the root resolves its
+/// control grant for this instance. Absence is therefore an ordinary answer
+/// rather than a hole in a table, which is what lets one binary serve every
+/// composition that names a subset.
+///
+/// This replaces `FABRIC_CLIENTS`, whose *position* carried the slot number.
+/// Nothing positional survives: each entry resolves its own slot, so a
+/// composition that adds, drops, or reorders a control edge needs no change
+/// here and cannot shift another participant's authority.
+const STREAM_CONTROL_ROSTER: [&[u8]; 8] = [
+    b"fabric-publisher",
+    b"fabric-subscriber",
+    b"fabric-intruder",
+    b"fabric-publisher-b",
+    b"fabric-subscriber-b",
+    b"fabric-observer",
+    b"fabric-probe",
+    b"fabric-proxy",
+];
+pub(crate) const MAX_STREAM_CONTROLS: usize = STREAM_CONTROL_ROSTER.len();
+
+/// The control endpoints this generation actually granted this broker, each
+/// paired with the component identity that endpoint authenticates.
+///
+/// A component the generation does not declare an edge for is absent rather
+/// than present-and-unreachable, so `provision`'s completion condition still
+/// means "every declared control endpoint has been answered".
+pub(crate) fn control_clients() -> [Option<Client>; MAX_STREAM_CONTROLS] {
+    let mut clients = [const { None }; MAX_STREAM_CONTROLS];
+    for (entry, component) in clients.iter_mut().zip(STREAM_CONTROL_ROSTER) {
+        let Some(control_slot) = control_slot_of(component) else {
+            continue;
+        };
+        *entry = Some(Client {
+            control_slot,
             component,
             answered: false,
-        };
-        index += 1;
-        client
-    })
+        });
+    }
+    clients
 }
 
 /// C8.3 provisioning round: mint both halves of every declared edge and move
@@ -711,7 +951,7 @@ fn control_clients() -> [Client; FABRIC_CLIENTS.len()] {
 /// answered until every control endpoint has been answered or died, so the
 /// service never proceeds to brokering with an unclaimed declared edge.
 fn provision(
-    clients: &mut [Client],
+    clients: &mut [Option<Client>],
     routes: &[[u8; 32]; ROUTE_COUNT],
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
@@ -727,12 +967,20 @@ fn provision(
     let Ok(row_count) = slime_components::fabric_self_view::rows(&mut graph_rows) else {
         fail(b"fabric graph read did not complete");
     };
-    while clients.iter().any(|client| !client.answered) {
+    // Before a single edge is handed out: a graph whose declared histories
+    // cannot all be held at once must be refused, not discovered when the last
+    // free frame is gone and every publisher is blocked.
+    admit_declared_frames(&graph_rows[..row_count]);
+    while clients.iter().flatten().any(|client| !client.answered) {
         // Sweep every unanswered control endpoint through its non-blocking ABI
         // first. Only when all of them would block is parking correct: probing
         // before parking is what closes the lost-wakeup window.
         let mut progressed = false;
-        for client in clients.iter_mut().filter(|client| !client.answered) {
+        for client in clients
+            .iter_mut()
+            .flatten()
+            .filter(|client| !client.answered)
+        {
             let mut message = [0u8; MAX_MSG];
             let mut received = [0u64; MAX_CAPS_PER_MSG];
             let control_slot = client.control_slot;
@@ -805,7 +1053,7 @@ fn provision(
                     control_slot,
                     &routes[route],
                     route,
-                    row.direction,
+                    row,
                     publishers,
                     subscribers,
                 );
@@ -825,23 +1073,31 @@ fn provision_edge(
     control_slot: u32,
     route: &[u8; 32],
     route_index: usize,
-    direction: u32,
+    row: &slime_components::fabric_self_view::Row,
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
 ) {
-    let qos = declared_qos(component, ROUTE_NAMES[route_index]);
+    // Direction, QoS, and KEEP_LAST depth all come off the one graph row this
+    // edge was selected by (B70/CP2). They were three lookups into two
+    // generated tables joined by (component, route name) plus a second graph
+    // read, which could disagree about which participant they described; here
+    // they are three fields of one record and cannot.
+    let direction = row.direction;
+    let qos = row.qos;
+    // `Row::history_depth` and `qos.history_depth` are the same declared
+    // number, so both directions read the depth the generation gave *this*
+    // participant rather than one direction reading a table and the other the
+    // graph.
     let ring_slots = match direction {
-        DIRECTION_PUBLISH => qos.history_depth as usize,
-        DIRECTION_SUBSCRIBE => declared_history_depth(component, route),
+        DIRECTION_PUBLISH | DIRECTION_SUBSCRIBE => row.history_depth,
         _ => fail(b"stream route declares a non-stream direction"),
     };
-    let (ready_slot, credit_slot) =
-        notification_slots(component, ROUTE_NAMES[route_index], direction);
+    let (ready_slot, credit_slot) = notification_slots(component, ROUTE_NAMES[route_index]);
     let ring_slots = ring_slots.max(slime_proto::fabric_ring::MIN_RING_SLOTS);
     let ordinal = publishers.iter().filter(|entry| entry.is_some()).count()
         + subscribers.iter().filter(|entry| entry.is_some()).count();
     let ring_base = RING_BASE + ordinal as u64 * PAGE;
-    let buffer = slime_rt::shared_buffer_create(BUFFER_FACTORY_SLOT, 1, true)
+    let buffer = slime_rt::shared_buffer_create(buffer_factory_slot(), 1, true)
         .unwrap_or_else(|_| fail(b"stream ring create"));
     if slime_rt::shared_buffer_map(buffer.slot, ring_base, 0, PAGE, true) != ERR_SUCCESS {
         fail(b"stream ring map");
@@ -965,6 +1221,7 @@ fn broker(
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
+    limits: &RuntimeLimits,
 ) {
     let mut now_ns = 0u64;
     let mut pending_time = None;
@@ -974,7 +1231,11 @@ fn broker(
     // C8.11: this worker's bounded semantic trace. Accumulated and flushed once
     // at the end, so the serial order is the declared order rather than however
     // the three workers happened to interleave.
-    let mut trace = trace_log::Trace::new(FABRIC_TRACE_DEPTH);
+    let mut trace = trace_log::Trace::new(declared_trace_depth(limits));
+    // Whether this run carries C8.13's concurrent-traffic evidence. Resolved
+    // once: the composition cannot change under a running graph, and every
+    // reader below sits on the dispatch loop.
+    let traffic_plane = slime_components::generation_composition::is(BootAction::Traffic);
     // The most frames and buffer-backed frames this run ever held. Sampled per
     // sweep, because the count that matters is an occupancy: reading it after
     // `release_retained` has drained every frame reports the residue of
@@ -1039,14 +1300,14 @@ fn broker(
     // and each snapshot costs the root a probe per CNode slot on the same
     // single-threaded dispatch loop that serves every other task's spawn,
     // fault, and buffer traffic. One query, at drain, answers both records.
-    let slots_available = GENERATION_BOOT_ACTION == "traffic";
+    let slots_available = traffic_plane;
     // Stops querying after the first refusal. A holder the generation's
     // `sharedBufferBudget` does not declare is denied every sweep, and the
     // root names each refusal on serial -- so retrying would flood the
     // transcript the gates read with one line per sweep. One attempt is
     // enough to learn the answer, and it cannot change mid-run: the quota is
     // generation-declared, not acquired.
-    let mut occupancy_available = GENERATION_BOOT_ACTION == "traffic";
+    let mut occupancy_available = traffic_plane;
     let route_words = [
         trace_log::route_word(&route_identity(
             ROUTE_NAMES[0],
@@ -1075,7 +1336,15 @@ fn broker(
             if publishers[index]
                 .as_ref()
                 .is_some_and(|publisher| !publisher.finished)
-                && pump_publisher(index, now_ns, type_tags, publishers, subscribers, frames)
+                && pump_publisher(
+                    index,
+                    now_ns,
+                    type_tags,
+                    publishers,
+                    subscribers,
+                    frames,
+                    limits,
+                )
             {
                 progressed = true;
             }
@@ -1300,7 +1569,7 @@ fn broker(
             // emits, so adding this unconditionally would silently drop
             // records on every one of them rather than on the one plane that
             // asks for this evidence.
-            if GENERATION_BOOT_ACTION == "traffic" {
+            if traffic_plane {
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_BUFFERS, peak_buffers);
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_QUEUE, peak_queue);
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_HISTORY, peak_history);
@@ -1326,7 +1595,7 @@ fn broker(
             }
             let baseline_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
             let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, baseline_frames);
-            if GENERATION_BOOT_ACTION == "traffic" {
+            if traffic_plane {
                 let baseline_buffers = frames
                     .iter()
                     .filter(|frame| frame.refs > 0 && frame.buffer_slot.is_some())
@@ -1397,6 +1666,7 @@ fn pump_publisher(
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
+    limits: &RuntimeLimits,
 ) -> bool {
     let (control_slot, ring_base, ring_slots, route, ready_slot, credit_slot, publisher_qos) = {
         let publisher = publishers[index].as_ref().expect("live publisher");
@@ -1496,7 +1766,9 @@ fn pump_publisher(
         // capability: only a native Endpoint travels in the message itself, so
         // `received[0]` is empty here and the authority is claimed instead.
         let loan_slot = slime_rt::capability_import().ok();
-        if let Some(frame) = admit_shared(&message, type_tags[admit_route], loan_slot, frames) {
+        if let Some(frame) =
+            admit_shared(&message, type_tags[admit_route], loan_slot, frames, limits)
+        {
             frames[frame].admitted_ns = now_ns;
             publishers[admit_index]
                 .as_mut()
@@ -1555,6 +1827,7 @@ fn admit_shared(
     expected_type: u64,
     loan_slot: Option<u32>,
     frames: &mut [Frame; MAX_FRAMES],
+    limits: &RuntimeLimits,
 ) -> Option<usize> {
     let Some(descriptor) = WireSampleDescriptor::decode(message) else {
         slime_rt::debug_write(b"[fabric] reject: descriptor decode\n");
@@ -1580,7 +1853,7 @@ fn admit_shared(
     // id from its own earlier `shared_buffer_loan`; a broker never does.
     if !valid_sample_descriptor(&descriptor, descriptor.loan_id, expected_type, PAGE)
         || descriptor.capability_kind != CAPABILITY_KIND_LOAN
-        || descriptor.length > COPY_PAGES as u64 * PAGE
+        || descriptor.length > copy_pages(limits) * PAGE
     {
         slime_rt::debug_write(b"[fabric] reject: descriptor validation\n");
         let _ = slime_rt::shared_buffer_return(loan_slot);
@@ -1595,7 +1868,10 @@ fn admit_shared(
         return None;
     };
 
-    let copy = match slime_rt::shared_buffer_create(BUFFER_FACTORY_SLOT, COPY_PAGES, true) {
+    let Ok(copy_pages) = usize::try_from(copy_pages(limits)) else {
+        fail(b"declared copy page count does not fit usize");
+    };
+    let copy = match slime_rt::shared_buffer_create(buffer_factory_slot(), copy_pages, true) {
         Ok(buffer) => buffer,
         Err(_) => {
             slime_rt::debug_write(b"[fabric] reject: copy buffer create\n");
@@ -2078,30 +2354,52 @@ fn release_received(received: &[u64]) {
 }
 
 /// The (ready, credit) notification slot pair the generation declares for one
-/// (component, route, direction) edge, or `NOTIFICATION_ABSENT` on both sides
-/// when it declares none.
+/// (component, route) edge, or `NOTIFICATION_ABSENT` on both sides when it
+/// declares none.
+///
+/// Resolved through the root by the grant names the generation gives the pair —
+/// `<component>-<route>-ready` and `-credit` — rather than read out of a
+/// per-plane table (B70/CP2). One notification grant binds a slot in *both*
+/// peers, and the root answers per holder, so asking by the grant name returns
+/// this broker's own slot: the participant asking for the same name gets its
+/// own. That is why the direction argument is gone. It selected a row in the
+/// generated table; here the holder scope is what distinguishes the two ends,
+/// and a direction would only restate which end this component is.
 ///
 /// Declaring no pair is a legitimate graph shape, not a defect: a full-graph
 /// boot profile can provision a stream role over its control endpoint without
-/// ever driving samples through it (`render_fabric_profile_rust` skips the row
-/// for exactly this reason), and `boot_graph`'s participants never reach the
-/// broker loop that would read these slots. The two callers that do read them
-/// — `pump_publisher` and delivery — only run for a participant whose graph
-/// declared the pair, so the sentinel is never dereferenced there.
-fn notification_slots(component: &[u8], route: &str, direction: u32) -> (u32, u32) {
-    FABRIC_NOTIFICATION_BINDINGS
-        .iter()
-        .find(
-            |(declared_component, declared_route, declared_direction, _, _)| {
-                *declared_component == component
-                    && *declared_route == route
-                    && *declared_direction == direction
-            },
-        )
-        .map_or(
-            (NOTIFICATION_ABSENT, NOTIFICATION_ABSENT),
-            |(_, _, _, ready_slot, credit_slot)| (*ready_slot, *credit_slot),
-        )
+/// ever driving samples through it, and `boot_graph`'s participants never reach
+/// the broker loop that would read these slots. The two callers that do read
+/// them — `pump_publisher` and delivery — only run for a participant whose
+/// graph declared the pair, so the sentinel is never dereferenced there.
+fn notification_slots(component: &[u8], route: &str) -> (u32, u32) {
+    let ready = notification_slot(component, route, b"-ready");
+    let credit = notification_slot(component, route, b"-credit");
+    // Half a pair is not a usable edge: a ring that can signal readiness but
+    // never take credit stalls its peer instead of failing. Both or neither.
+    match (ready, credit) {
+        (Some(ready), Some(credit)) => (ready, credit),
+        (None, None) => (NOTIFICATION_ABSENT, NOTIFICATION_ABSENT),
+        _ => fail(b"generation declares half a notification pair"),
+    }
+}
+
+/// One `notification:<component>-<route><suffix>` slot, or `None` where this
+/// generation declares the grant no binding for this holder.
+pub(crate) fn notification_slot(component: &[u8], route: &str, suffix: &[u8]) -> Option<u32> {
+    const PREFIX: &[u8] = b"notification:";
+    let route = route.as_bytes();
+    let mut name = [0u8; 64];
+    let end = PREFIX.len() + component.len() + 1 + route.len() + suffix.len();
+    if end > name.len() {
+        fail(b"notification name exceeds bound");
+    }
+    let mut cursor = 0;
+    for part in [PREFIX, component, b"-", route, suffix] {
+        name[cursor..cursor + part.len()].copy_from_slice(part);
+        cursor += part.len();
+    }
+    slime_rt::resolve_binding(&name[..end]).ok()
 }
 
 /// How many edges on a route *this service carries* the generation declares for
@@ -2147,39 +2445,34 @@ fn graph_route_index_of(local: usize) -> Option<u32> {
         .map(|i| i as u32)
 }
 
-/// The KEEP_LAST depth the generation declared for one participant on one
-/// route, read from the graph rather than from a generated table (B70/CP2).
+/// Refuse a graph whose declared subscriber histories cannot all be held at
+/// once (B70/CP2).
 ///
-/// This asks about *another* component -- the fabric provisions each
-/// participant's ring -- which only the graph's declared holder may do, and this
-/// component is that holder wherever this runs. The graph validated the depth
-/// against the per-graph history ceiling before launch, so a missing row is a
-/// composition inconsistency rather than a runtime condition.
-fn declared_history_depth(component: &[u8], route_identity: &[u8; 32]) -> usize {
-    let index = slime_rt::graph_route_index(route_identity)
-        .unwrap_or_else(|_| fail(b"route is not declared by this graph"));
-    let identity = boot_contracts::fabric_graph::component_identity(
-        core::str::from_utf8(component).unwrap_or_else(|_| fail(b"component name is not utf-8")),
-    );
-    slime_components::fabric_self_view::history_depth_of(&identity, index as u32)
-        .unwrap_or_else(|| fail(b"participant declares no history depth"))
-}
-
-fn declared_qos(component: &[u8], route: &str) -> TransportQos {
-    FABRIC_QOS
+/// The builder checks this for every manifest it renders, but a component built
+/// against a generation this repository did not produce has no such guarantee —
+/// and the failure it protects against is a deadlock, which is the one class
+/// worth spending a boot-time check on. Read from the same rows provisioning
+/// reads, so no second statement of the graph is involved.
+///
+/// Sums the *declared* `historyDepth`, which is exactly what
+/// `resolve_fabric_profile`'s `ring_capacity` sums, and deliberately not the
+/// `MIN_RING_SLOTS`-floored depth `provision_edge` allocates a ring at. The two
+/// differ for any participant declaring a shallower history than the ring's
+/// structural minimum, and using the floored figure here would refuse graphs
+/// the builder accepts — a component rejecting a generation the toolchain
+/// certified. The floor costs ring *slots*, which the fabric does not own; a
+/// frame is referenced once per queued sample, so the declared depth is what
+/// bounds this table.
+fn admit_declared_frames(rows: &[slime_components::fabric_self_view::Row]) {
+    let required: usize = rows
         .iter()
-        .find(|entry| entry.0 == component && entry.1 == route)
-        .map(|entry| TransportQos {
-            deadline_ns: entry.2,
-            lifespan_ns: entry.3,
-            lease_ns: entry.4,
-            history_depth: entry.5,
-            retained_depth: entry.6,
-            reliability: entry.7,
-            durability: entry.8,
-            liveliness: entry.9,
-        })
-        .unwrap_or_else(|| fail(b"participant declares no QoS"))
+        .filter(|row| row.direction == DIRECTION_SUBSCRIBE)
+        .filter(|row| local_route_index(row.route_index).is_some())
+        .map(|row| row.history_depth)
+        .sum();
+    if required > MAX_FRAMES {
+        fail(b"declared subscriber history exceeds the frame table");
+    }
 }
 
 fn refresh_matches(
@@ -2629,43 +2922,31 @@ fn deny(control_slot: u32, route: &[u8; 32], status: i32) {
 const _: () = assert!(REQUEST_LEN == MAX_MSG);
 const _: () = assert!(TRANSFER_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_stream::EVENT_LEN == MAX_MSG);
-const _: () = assert!(FABRIC_MAX_SAMPLE_BYTES <= COPY_PAGES * PAGE as usize);
-const _: () = assert!(FABRIC_MAX_BUFFER_PAGES <= FABRIC_MAX_BUFFERS * COPY_PAGES);
-const _: () = assert!(FABRIC_REQUIRED_CAPABILITY_SLOTS <= FABRIC_MAX_CAPABILITY_SLOTS);
-
 // The frame table must cover every reference the declared rings can hold at
 // once, or a full set of rings would leave the fabric with no free frame while
-// its publishers block. Admission (C8.2) bounds each subscriber's declared
-// `history_depth` by the graph's own `historyDepth` limit, which the contract
-// caps at `LIMIT_HISTORY_DEPTH`, so the absolute worst case a generation could
-// declare is larger than this table.
+// its publishers block. That is a deadlock rather than backpressure, so the
+// table is sized to make it unreachable.
 //
-// That ceiling is a real limit rather than an oversight: it is why `admit_*`
-// refuses a sample when no frame is free and settles the publisher's loan
-// instead of blocking. Refusing is bounded and reported; deadlocking is not.
-// This assertion pins the property the table does guarantee — every ring the
-// *declared* graph asks for fits at once — so a manifest that outgrows it fails
-// the build rather than a boot.
-// The frame table must hold every ring the declared graph asks for at once.
+// `FRAME_CAPACITY` is the contract's own published number
+// (`contracts/fabric-graph/v1`), which is also what `build-generation.py`
+// admits a manifest against: it sums `historyDepth` over every
+// `DIRECTION_SUBSCRIBE` participant and refuses a graph exceeding it. This file
+// read that number out of a per-plane generated profile, so the builder's
+// admission bound and the array it protected were two copies. They are now one
+// declaration, and `admit_declared_frames` above re-checks the same sum at boot
+// against the same constant -- which is what an out-of-tree component gets,
+// since it cannot rely on this repository's builder having run.
 //
-// That property is checked, but by `build-generation.py`'s
-// `resolve_fabric_profile`, which sums `historyDepth` over every
-// `DIRECTION_SUBSCRIBE` participant and refuses a graph exceeding
-// `FABRIC_FRAME_CAPACITY` -- the same sum against the same constant this file
-// used to recompute in a `const` block from `FABRIC_PARTICIPANTS` and
-// `FABRIC_HISTORY_DEPTHS`. The builder's copy runs for every manifest declaring
-// a graph, so the duplicate here only pinned the same fact one generation later,
-// at the cost of two graph tables reaching into const context where nothing else
-// in this file needs them.
-//
-// Verified non-vacuous before the duplicate was removed: raising this plane's
-// declared history depths so their sum passes 32 fails the build with
-// `fabric graph: subscriber history exceeds the frame table`.
-//
-// Worth knowing for CP3/CP4: this was the last place a component stated a
-// capacity requirement *about itself*. An out-of-tree component cannot rely on
-// this builder, so the declared-capacity contract owes it a way to say the same
-// thing -- this is a requirement to reintroduce, not dead weight.
+// The contract's absolute worst case, `MAX_PARTICIPANTS * LIMIT_HISTORY_DEPTH`,
+// is far larger than this table. That ceiling is deliberately not the array
+// size: it is why `admit_*` refuses a sample when no frame is free and settles
+// the publisher's loan instead of blocking, and why a graph declaring more than
+// this table holds is refused at boot rather than deadlocked at run time.
+const _: () = assert!(
+    MAX_FRAMES
+        <= boot_contracts::fabric_graph::MAX_PARTICIPANTS
+            * boot_contracts::fabric_graph::LIMIT_HISTORY_DEPTH as usize
+);
 
 #[cfg(test)]
 mod tests {
@@ -2691,16 +2972,21 @@ mod tests {
     }
 }
 
-/// The one overflow discipline implemented. Asserted rather than branched on: a
-/// generation declaring anything else names behaviour no worker has, and
-/// discovering that at boot would be worse than not compiling.
-const _: () = assert!(FABRIC_TRACE_OVERFLOW == slime_proto::fabric_trace::OVERFLOW_SATURATE);
-/// And the declared depth must fit the sink the contract sizes.
-///
-/// `const _: ()` rather than relying on `TraceSink::with_const_capacity`'s own
-/// assert: that constructor is a `const fn` reached from `fn main`, and a
-/// `const fn` called at runtime evaluates at runtime -- so its assert would be a
-/// boot panic inside a `no_std` component rather than the build failure it
-/// claims to be. These items are evaluated at compile time unconditionally.
-const _: () = assert!(FABRIC_TRACE_DEPTH <= slime_proto::fabric_trace::MAX_TRACE_DEPTH);
-const _: () = assert!(FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TERMINAL_RESERVE);
+// The graph contract and the trace contract state the same three facts, and
+// `declared_trace_depth` checks the graph's spelling while the storage it
+// protects is sized by the trace's. Pinned here so a divergence fails this
+// build rather than a boot: a depth admitted by one and refused by the other
+// would be a `TraceSink` assert firing as a boot panic inside a `no_std`
+// component. These items are evaluated at compile time unconditionally.
+const _: () = assert!(
+    boot_contracts::fabric_graph::LIMIT_TRACE_DEPTH as usize
+        == slime_proto::fabric_trace::MAX_TRACE_DEPTH
+);
+const _: () = assert!(
+    boot_contracts::fabric_graph::TRACE_TERMINAL_RESERVE as usize
+        == slime_proto::fabric_trace::TERMINAL_RESERVE
+);
+const _: () = assert!(
+    boot_contracts::fabric_graph::TRACE_OVERFLOW_SATURATE
+        == slime_proto::fabric_trace::OVERFLOW_SATURATE
+);

@@ -22,8 +22,8 @@ fs ::= import stdlib.fs;
 gen ::= import "gen_rust.zt";
 t ::= import stdlib.text;
 
-formatVersion :: Int = 2;
-headerBytes :: Int = 156;
+formatVersion :: Int = 3;
+headerBytes :: Int = 164;
 schemaEntryBytes :: Int = 48;
 routeEntryBytes :: Int = 48;
 participantEntryBytes :: Int = 128;
@@ -58,6 +58,44 @@ limitRetries :: Int = 16;
 limitInFlight :: Int = 32;
 limitCapabilitySlots :: Int = 64;
 limitBuffers :: Int = 32;
+
+-- Trace-sink bounds, pinned to `contracts/fabric-trace/v1`'s `maxTraceDepth`,
+-- `terminalReserve`, and `overflowSaturate`. The trace sink's own contract owns
+-- those numbers; a graph header carries a per-generation `trace_depth` and
+-- `trace_overflow`, so this format needs the ceiling to refuse a graph no sink
+-- could honour. `scripts/build/build-generation.py` asserts the two contracts
+-- agree, so a divergence fails the build rather than a boot.
+limitTraceDepth :: Int = 64;
+traceTerminalReserve :: Int = 2;
+traceOverflowSaturate :: Int = 1;
+
+-- Fabric-owned sample frames, the one capacity a broker must size statically.
+--
+-- Not a per-generation limit: a frame table sized to `maxParticipants *
+-- limitHistoryDepth` would be two orders of magnitude larger than any declared
+-- graph needs, on a component stack that cannot hold it. Declared here rather
+-- than in the builder so the broker's array and the builder's
+-- "subscriber history exceeds the frame table" refusal read one number, and so
+-- a broker built out of tree can size itself without that builder (B70).
+frameCapacity :: Int = 32;
+
+-- Stream participants of one direction a broker sizes storage for.
+--
+-- Distinct from `maxParticipants`, which bounds the resource's participant
+-- *table* across every route and contract kind. A stream broker holds one ring
+-- record per publisher and per subscriber, each carrying a `limitHistoryDepth`
+-- history of about 1.5 KiB, so two arrays at the table bound would need half a
+-- megabyte on a 16 KiB component stack. This is the per-direction ceiling those
+-- two arrays are sized from, and the builder checks each graph's `publishers`
+-- and `subscribers` against it, so a broker's fixed arrays and the graphs it
+-- may be handed agree by construction rather than by a number a build script
+-- rendered per plane (B70).
+--
+-- `clients` and `servers` are deliberately *not* bounded by this: a
+-- request/response broker keeps one small record per in-flight call, not a
+-- history per client, so its storage does not scale with the declared client
+-- count and `sel4-matrix.zti` legitimately declares seven.
+maxRoleParticipants :: Int = 4;
 
 -- The inline control-message bound. Pinned to `slime-root/src/ipc.rs`'s
 -- `MAX_MESSAGE_BYTES` and to `contracts/sample-descriptor/v1` `descriptorLen`; a
@@ -106,6 +144,60 @@ routeDomain :: Text = "slime-fabric-route-v1:";
 grantDomain :: Text = "slime-fabric-grant-v1:";
 componentDomain :: Text = "slime-fabric-component-v1:";
 
+-- Runtime header-query ids. Frozen individually: component images pass one of
+-- these numbers to `CAPABILITY GRAPH QUERY`, so declaration order must never
+-- silently re-mean an existing id.
+QueryField :: type { rust : Text; field : Text; id : Int; };
+
+query :: Text -> Text -> Int -> QueryField = rust field id => { rust = rust; field = field; id = id; };
+
+queryFields :: List QueryField = {
+  query "SCHEMA_COUNT" "schema_count" 1;
+  query "ROUTE_COUNT" "route_count" 2;
+  query "PARTICIPANT_COUNT" "participant_count" 3;
+  query "INTERPOSITION_COUNT" "interposition_count" 4;
+  query "MAX_ROUTES" "max_routes" 5;
+  query "MAX_INGRESS_SOURCES" "max_ingress_sources" 6;
+  query "MAX_PUBLISHERS" "max_publishers" 7;
+  query "MAX_SUBSCRIBERS" "max_subscribers" 8;
+  query "MAX_CLIENTS" "max_clients" 9;
+  query "MAX_SERVERS" "max_servers" 10;
+  query "MAX_SAMPLE_BYTES" "max_sample_bytes" 11;
+  query "MAX_QUEUE_DEPTH" "max_queue_depth" 12;
+  query "MAX_HISTORY_DEPTH" "max_history_depth" 13;
+  query "MAX_EVENT_DEPTH" "max_event_depth" 14;
+  query "MAX_RETAINED_SAMPLES" "max_retained_samples" 15;
+  query "MAX_RETRIES" "max_retries" 16;
+  query "MAX_IN_FLIGHT_CALLS" "max_in_flight_calls" 17;
+  query "MAX_IN_FLIGHT_OPERATIONS" "max_in_flight_operations" 18;
+  query "MAX_BUFFER_PAGES" "max_buffer_pages" 19;
+  query "MAX_BUFFERS" "max_buffers" 20;
+  query "MAX_MAPPINGS" "max_mappings" 21;
+  query "MAX_LOANS" "max_loans" 22;
+  query "MAX_CAPABILITY_SLOTS" "max_capability_slots" 23;
+  query "TRACE_DEPTH" "trace_depth" 24;
+  query "TRACE_OVERFLOW" "trace_overflow" 25;
+};
+
+-- Graph-limit query ids. These are a strict subset of `queryFields`: only
+-- declared resource ceilings belong here. Runtime consumers use the generated
+-- `RuntimeLimits` loader rather than compiling a second copy of these values.
+limitQueryFields :: List QueryField = {
+  query "MAX_PUBLISHERS" "max_publishers" 7;
+  query "MAX_SUBSCRIBERS" "max_subscribers" 8;
+  query "MAX_SAMPLE_BYTES" "max_sample_bytes" 11;
+  query "MAX_EVENT_DEPTH" "max_event_depth" 14;
+  query "MAX_RETAINED_SAMPLES" "max_retained_samples" 15;
+  query "MAX_RETRIES" "max_retries" 16;
+  query "MAX_IN_FLIGHT_CALLS" "max_in_flight_calls" 17;
+  query "MAX_IN_FLIGHT_OPERATIONS" "max_in_flight_operations" 18;
+  query "MAX_BUFFER_PAGES" "max_buffer_pages" 19;
+  query "MAX_BUFFERS" "max_buffers" 20;
+  query "MAX_CAPABILITY_SLOTS" "max_capability_slots" 23;
+  query "TRACE_DEPTH" "trace_depth" 24;
+  query "TRACE_OVERFLOW" "trace_overflow" 25;
+};
+
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
 GraphHeader :: type {
@@ -139,6 +231,8 @@ GraphHeader :: type {
   max_mappings : Int;
   max_loans : Int;
   max_capability_slots : Int;
+  trace_depth : Int;
+  trace_overflow : Int;
 };
 
 SchemaEntry :: type {
@@ -217,6 +311,8 @@ headerLayout :: List WireField = {
   { name = "max_mappings"; width = 4; signed = false; byteArray = false; };
   { name = "max_loans"; width = 4; signed = false; byteArray = false; };
   { name = "max_capability_slots"; width = 4; signed = false; byteArray = false; };
+  { name = "trace_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "trace_overflow"; width = 4; signed = false; byteArray = false; };
 };
 
 schemaEntryLayout :: List WireField = {
@@ -279,6 +375,11 @@ format ::= {
   limitInFlight =;
   limitBuffers =;
   limitCapabilitySlots =;
+  limitTraceDepth =;
+  traceTerminalReserve =;
+  traceOverflowSaturate =;
+  frameCapacity =;
+  maxRoleParticipants =;
   controlMessageBytes =;
   channelQueueDepth =;
   kernelTotalPages =;
@@ -304,6 +405,8 @@ format ::= {
   routeDomain =;
   grantDomain =;
   componentDomain =;
+  queryFields =;
+  limitQueryFields =;
   headerFields = headerSchema.fields ?? {;};
   schemaEntryFields = schemaEntrySchema.fields ?? {;};
   routeEntryFields = routeEntrySchema.fields ?? {;};

@@ -96,7 +96,7 @@
       transferable = false;
     };
     {
-      name = "spawn-service-echo-agent";
+      name = "spawn-service-echo";
       capabilityKind = "executable";
       rights = [
         "exec";
@@ -171,7 +171,7 @@
       transferable = false;
     };
     {
-      name = "dango-e-spawn-service-rpc";
+      name = "spawn-service-rpc";
       capabilityKind = "endpoint";
       rights = [
         "send";
@@ -254,7 +254,7 @@
           slot = 6;
         };
         {
-          grant = "spawn-service-echo-agent";
+          grant = "spawn-service-echo";
           slot = 7;
         };
       ];
@@ -272,11 +272,11 @@
           slot = 4;
         };
         {
-          grant = "spawn-service-echo-agent";
+          grant = "spawn-service-echo";
           slot = 5;
         };
         {
-          grant = "dango-e-spawn-service-rpc";
+          grant = "spawn-service-rpc";
           slot = 2;
         };
         {
@@ -304,7 +304,7 @@
       autostart = true;
       bindings = [
         {
-          grant = "dango-e-spawn-service-rpc";
+          grant = "spawn-service-rpc";
           slot = 0;
         };
         {

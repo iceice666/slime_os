@@ -11,13 +11,16 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import copy
 import os
-import re
 import struct
 import subprocess
 import tempfile
 
 from boot_contracts import (
     FABRIC_GRAPH_CHANNEL_QUEUE_DEPTH,
+    FABRIC_GRAPH_HEADER_TRACE_DEPTH_END,
+    FABRIC_GRAPH_HEADER_TRACE_DEPTH_OFFSET,
+    FABRIC_GRAPH_HEADER_TRACE_OVERFLOW_END,
+    FABRIC_GRAPH_HEADER_TRACE_OVERFLOW_OFFSET,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -50,9 +53,11 @@ def fail(message: str) -> None:
 def rejected(label: str, mutate, *, profile: str = SCAFFOLDING_PROFILE) -> None:
     manifest = copy.deepcopy(MANIFEST)
     # A mutator may alter builder module state rather than the manifest — the
-    # fixed-shape worker bound lives there, not in the graph. Snapshot and restore
-    # it so one negative case cannot leak into the next.
+    # fixed-shape worker bound and the per-limit ceilings both live there, not
+    # in the graph. Snapshot and restore them so one negative case cannot leak
+    # into the next.
     shapes = copy.deepcopy(builder.FABRIC_WORKER_WAIT_SHAPES)
+    ceilings = copy.deepcopy(builder.FABRIC_LIMIT_CEILINGS)
     # The outer `finally` covers mutation as well as resolution, so a mutator that
     # edits module state and then raises cannot leak into the next case. Only the
     # resolve is allowed to answer "rejected": a `SystemExit` out of `mutate` is a
@@ -68,6 +73,8 @@ def rejected(label: str, mutate, *, profile: str = SCAFFOLDING_PROFILE) -> None:
     finally:
         builder.FABRIC_WORKER_WAIT_SHAPES.clear()
         builder.FABRIC_WORKER_WAIT_SHAPES.update(shapes)
+        builder.FABRIC_LIMIT_CEILINGS.clear()
+        builder.FABRIC_LIMIT_CEILINGS.update(ceilings)
     fail(f"{label} was accepted")
 
 
@@ -109,75 +116,33 @@ with tempfile.TemporaryDirectory(prefix="slime-data-fabric-profile-") as tempora
         if left_path.read_bytes() != right_path.read_bytes():
             fail(f"{left_path.name} is not byte deterministic")
     zti_check(left_paths[0])
-    rust = left_paths[1].read_text(encoding="utf-8")
-    # The participant *table* retired with B70/CP2 -- a component reads the graph
-    # for what it used to compile in. What this still has to catch is the failure
-    # the table check caught: rendered Rust silently disagreeing with the canonical
-    # profile. `FABRIC_QOS` is rendered one row per participant from the declared
-    # list, so it must carry every declared participant and carry exactly as many
-    # rows as there are participants.
-    #
-    # Both halves are load-bearing, and each was observed failing without the other.
-    # Searching the whole file for a `(b"component", "route", ` prefix proves
-    # nothing, because `FABRIC_NOTIFICATION_BINDINGS` renders that same prefix and
-    # keeps the substring alive after `FABRIC_QOS` has lost the row -- so the search
-    # is scoped to one table body. Membership alone is likewise not enough: a
-    # duplicated participant covers for a dropped one, which the row count catches
-    # and the substring search does not.
-    def table_body(name):
-        opening = f"pub const {name}"
-        start = rust.find(opening)
-        if start < 0:
-            fail(f"rendered Rust omitted the {name} table")
-        start = rust.find("&[", rust.find("= ", start))
-        end = rust.find("];", start)
-        if start < 0 or end < 0:
-            fail(f"rendered Rust {name} table is not delimited as expected")
-        return rust[start + 2 : end]
+    # The rendered Rust profile retired with B70: no component compiles against
+    # a per-plane constant table any more, so there is no second statement of
+    # the graph to compare the canonical one against. What replaces those arms
+    # is a check on the canonical artifact itself -- it must carry one QoS row
+    # per declared participant, with the participant's own component and route,
+    # because everything downstream (the resource bytes, and the rows the root
+    # serves from them) is derived from this list.
+    participants = first.artifact["participants"]
+    if len({(row["component"], row["route"], row["direction"]) for row in participants}) != len(
+        participants
+    ):
+        fail("canonical profile declares the same participant edge twice")
+    for row in participants:
+        for field in ("deadlineNs", "historyDepth", "reliability", "durability", "liveliness"):
+            if field not in row:
+                fail(f"canonical participant {row['component']}/{row['route']} lost {field}")
 
-    body = table_body("FABRIC_QOS")
-    rows = [line for line in body.splitlines() if line.strip()]
-    if len(rows) != len(first.artifact["participants"]):
-        fail(
-            f"rendered Rust FABRIC_QOS has {len(rows)} rows for "
-            f"{len(first.artifact['participants'])} declared participants"
-        )
-    for row in first.artifact["participants"]:
-        expected = f'(b"{row["component"]}", "{row["route"]}", '
-        if expected not in body:
-            fail("rendered Rust FABRIC_QOS diverges from the canonical profile participants")
+    # Limits are checked by name against the graph the resource is built from,
+    # which is what the components now query at runtime.
+    declared = {entry["name"]: entry["value"] for entry in first.artifact["limits"]}
+    if set(declared) != set(builder.FABRIC_LIMIT_KEYS):
+        fail("canonical profile does not declare exactly the contract's limit keys")
+    for key, value in declared.items():
+        if MANIFEST["fabricGraph"]["limits"][key] != value:
+            fail(f"canonical profile limit {key} diverges from the manifest")
 
-    # Limits are checked by *name*, not by value-anywhere-in-the-file. The older
-    # `f" = {value};" not in rust` search could not fail for most limits: `routes`,
-    # `queueDepth`, `historyDepth`, and `eventDepth` all declare 8, and `buffers`,
-    # `mappings`, and `loans` all declare 14, so one surviving constant satisfied
-    # the search for every other limit sharing its value.
-    #
-    # The property that actually holds is bidirectional and survives the profile
-    # choosing to render fewer constants than the graph declares: every rendered
-    # `FABRIC_MAX_*` must name a declared limit and carry that limit's exact value,
-    # and the profile must still render some. A renamed, dropped, or drifted
-    # constant fails; a deliberate emission change does not.
-    def limit_const(key):
-        return "FABRIC_MAX_" + re.sub(r"(?<!^)(?=[A-Z])", "_", key).upper()
-
-    declared = {limit_const(e["name"]): (e["name"], e["value"]) for e in first.artifact["limits"]}
-    rendered = dict(
-        re.findall(r"^pub const (FABRIC_MAX_[A-Z0-9_]+): \w+ = (\d+);", rust, re.MULTILINE)
-    )
-    if not rendered:
-        fail("rendered Rust declared no limit constants at all")
-    for name, value in rendered.items():
-        if name not in declared:
-            fail(f"rendered Rust declares {name}, which is not a limit of the canonical profile")
-        key, expected_value = declared[name]
-        if int(value) != expected_value:
-            fail(
-                f"rendered Rust {name} is {value}, but the canonical profile "
-                f"declares {key} = {expected_value}"
-            )
-
-    schema_bytes = left_paths[2].read_bytes()
+    schema_bytes = left_paths[1].read_bytes()
     header = NORMALIZED_SCHEMAS_HEADER.unpack_from(schema_bytes)
     magic, version, header_size, required_flags, count, total_len = header
     if (
@@ -280,8 +245,9 @@ def worker_above_wait_bound(manifest: dict) -> None:
 
     * a participant naming an undeclared component is refused by graph encoding,
       so each addition needs a matching `components` entry;
-    * `subscribers` is already exactly at its declared budget, so the mutator has
-      to raise the very limit it is not testing;
+    * `subscribers` is already exactly at its declared budget *and* at the
+      contract's per-role ceiling, so the mutator has to raise both of the
+      limits it is not testing;
     * the summed subscriber history is checked against the frame table, so the
       additions carry the shallowest history that still declares an edge.
 
@@ -325,6 +291,12 @@ def worker_above_wait_bound(manifest: dict) -> None:
         extra["retainedDepth"] = 0
         telemetry["participants"].append(extra)
     graph["limits"]["subscribers"] += crowd
+    # The per-role ceiling is one of those unrelated guards: it bounds what a
+    # stream broker sizes its arrays from, and it sits below the crowd this
+    # needs. Raised here rather than in the neutralization loop below, so that
+    # loop still neutralizes the wait bound alone and the case still fails for
+    # exactly one reason.
+    builder.FABRIC_LIMIT_CEILINGS["subscribers"] = graph["limits"]["subscribers"]
 
 
 def worker_shape_above_wait_bound(manifest: dict) -> None:
@@ -405,6 +377,7 @@ for label, mutate in (
 ):
     ceiling = builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES
     shapes = copy.deepcopy(builder.FABRIC_WORKER_WAIT_SHAPES)
+    ceilings = copy.deepcopy(builder.FABRIC_LIMIT_CEILINGS)
     probe = copy.deepcopy(MANIFEST)
     mutate(probe)
     builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES = 1 << 30
@@ -416,6 +389,8 @@ for label, mutate in (
         builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES = ceiling
         builder.FABRIC_WORKER_WAIT_SHAPES.clear()
         builder.FABRIC_WORKER_WAIT_SHAPES.update(shapes)
+        builder.FABRIC_LIMIT_CEILINGS.clear()
+        builder.FABRIC_LIMIT_CEILINGS.update(ceilings)
 
 # Same discipline for the trace-sink ceiling: neutralizing it must make the very
 # manifest that was refused resolve cleanly. Without this, a depth mutator that
@@ -439,24 +414,29 @@ for label, mutate in (
         builder.FABRIC_TRACE_MAX_DEPTH = ceiling
         builder.FABRIC_TRACE_TERMINAL_RESERVE = reserve
 
-# The resolved profile must actually carry the sink the graph declared, and the
-# Rust a component compiles must state the same two numbers. A bound validated at
-# build time but absent from the artifact would leave every worker sizing its sink
-# from a default nothing checked.
+# The resolved profile must carry the sink the graph declared, and so must the
+# authenticated resource the components query -- a bound validated at build time
+# but absent from both would leave every worker sizing its sink from a default
+# nothing checked. The resource is the operand that matters now: B70 retired the
+# Rust table a worker used to compile the depth in from.
 if first.artifact["traceDepth"] != MANIFEST["fabricGraph"]["traceDepth"]:
     fail("resolved profile dropped the declared trace-sink depth")
 if first.artifact["traceOverflow"] != FABRIC_TRACE_OVERFLOW_SATURATE:
     fail("resolved profile did not map the declared overflow discipline")
-profile_rust = builder.render_fabric_profile_rust(first)
-# The whole declaration, not the name and the value independently: `= 1;` occurs
-# for several unrelated slot constants, so checking the two substrings separately
-# would pass even if the overflow constant rendered a different number entirely.
-for name, kind, value in (
-    ("FABRIC_TRACE_DEPTH", "usize", first.artifact["traceDepth"]),
-    ("FABRIC_TRACE_OVERFLOW", "u32", first.artifact["traceOverflow"]),
-):
-    if f"pub const {name}: {kind} = {value};" not in profile_rust:
-        fail(f"Rust profile does not declare {name} as {value}")
+encoded_depth = int.from_bytes(
+    first.graph_bytes[FABRIC_GRAPH_HEADER_TRACE_DEPTH_OFFSET:FABRIC_GRAPH_HEADER_TRACE_DEPTH_END],
+    "little",
+)
+encoded_overflow = int.from_bytes(
+    first.graph_bytes[
+        FABRIC_GRAPH_HEADER_TRACE_OVERFLOW_OFFSET:FABRIC_GRAPH_HEADER_TRACE_OVERFLOW_END
+    ],
+    "little",
+)
+if encoded_depth != first.artifact["traceDepth"]:
+    fail("authenticated graph does not carry the declared trace depth")
+if encoded_overflow != first.artifact["traceOverflow"]:
+    fail("authenticated graph does not carry the declared overflow discipline")
 
 rejected("unknown profile", lambda _manifest: None, profile="missing")
 
@@ -520,12 +500,5 @@ subprocess.run(
     check=True,
 )
 
-# The checked-in fallback is what a plain `cargo build` compiles against, so it
-# carries the product boot profile (B11) — the same profile
-# `default_boot_layout.rs` renders.
-fallback_profile = ROOT / "components/lib/src/default_fabric_profile.rs"
-product = builder.resolve_fabric_profile(copy.deepcopy(MANIFEST), INTERFACES, "default")
-if fallback_profile.read_text(encoding="utf-8") != builder.render_fabric_profile_rust(product):
-    fail("checked-in product userspace profile is stale")
 
 print("typed fabric profile, resources, and deterministic schema corpus: ok")

@@ -4,9 +4,10 @@
 //! binary meant every plane's edit shared a file with every other plane's.
 //! Holds this plane and the helpers only it uses.
 //!
-//! Init's slot numbers arrive by `include!` of the generated per-generation
-//! boot layout into `init.rs`'s scope, so anything from it is reached through
-//! `super` — there is no path naming that layout independently of its binary.
+//! Init resolves its slot numbers through the root, and the helpers that do so
+//! live in `init.rs`, so anything from them is reached through `super`. The
+//! generated boot-layout table this used to describe is gone (B70): a slot is
+//! now asked for by declared name at run time rather than compiled in.
 
 use super::{resolve_executable, wait_clean};
 

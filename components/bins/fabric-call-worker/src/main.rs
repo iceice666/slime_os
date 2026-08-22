@@ -47,6 +47,12 @@ const SERVER_SUPERVISION_SLOT: u32 = 8;
 const TIME_SUPERVISION_SLOT: u32 = 9;
 
 fn main(_startup_arg: u32) {
+    // The ceilings this worker admits traffic against come from the graph the
+    // root authenticated, not from a per-plane table a build script rendered
+    // into `OUT_DIR` (B70/CP2). An unanswerable query is a composition this
+    // binary cannot serve, so it exits rather than assuming a default.
+    let limits = boot_contracts::fabric_graph::RuntimeLimits::load(slime_rt::graph_query)
+        .unwrap_or_else(|_| slime_rt::exit(1));
     call_broker::Broker::new(
         BUFFER_FACTORY_SLOT,
         [CLIENT_A_SLOT, CLIENT_B_SLOT],
@@ -58,6 +64,7 @@ fn main(_startup_arg: u32) {
             SERVER_SUPERVISION_SLOT,
             TIME_SUPERVISION_SLOT,
         ],
+        limits,
     )
     .run();
     slime_rt::debug_write(b"[fabric-call-worker] call plane complete\n");
