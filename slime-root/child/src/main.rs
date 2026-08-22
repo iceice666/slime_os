@@ -40,6 +40,8 @@ const OP_FIXTURE_DIRECTIVE: sel4::Word = 5;
 const OP_EXIT: sel4::Word = 3;
 /// Shared-buffer map label, reused as this fixture's shared-buffer report.
 const OP_SHARED_BUFFER_REPORT: sel4::Word = 23;
+/// Private-memory growth. `contracts/syscall-abi/v1` label 43 (C10.1).
+const OP_PRIVATE_MEMORY_GROW: sel4::Word = 43;
 
 /// Fixture request tag, `b"SLIMEREQ"` big-endian, so the root can tell this
 /// fixture's request from any other traffic on its endpoint.
@@ -90,6 +92,40 @@ const SHARED_RO_INTRUSION: u64 = 0xdead_beef_dead_beef;
 const REPORT_RW_READBACK_OK: sel4::Word = 1 << 0;
 const REPORT_RO_WRITE_REFUSED: sel4::Word = 1 << 1;
 
+// ---- private-memory phase contract (C10.1) ----
+//
+// As above, every constant here is duplicated in `slime-root/src/main.rs` under
+// the same name. The *base* deliberately is not: the root answers it in the
+// growth reply, because the root is what chose it, and a fixture that
+// recomputed the loader's window arithmetic would be asserting its own copy of
+// that arithmetic rather than what the root actually mapped.
+
+/// seL4 granule, the unit the growth operation counts in.
+const PAGE_BYTES: usize = 4096;
+
+/// The value this fixture writes into the first private page and re-reads after
+/// a further growth. `slime-root/src/main.rs::MEM_PATTERN`.
+const MEM_PATTERN: u64 = 0x4d454d5f42415345;
+
+/// Marks the report in MR1 as the private-memory phase's rather than the
+/// shared-buffer phase's; both use the same label.
+/// `slime-root/src/main.rs::MEM_REPORT_TAG`.
+const MEM_REPORT_TAG: sel4::Word = 0x4d454d5f52505449;
+
+/// Report flags for the private-memory phase.
+/// `slime-root/src/main.rs::REPORT_MEM_*`.
+///
+/// The root owns the "every flag is set" constant, not this fixture: a phase
+/// that judged its own completeness could pass by reporting fewer observations
+/// than it was supposed to make.
+const REPORT_MEM_QUERY_OK: sel4::Word = 1 << 0;
+const REPORT_MEM_FIRST_GROWTH_OK: sel4::Word = 1 << 1;
+const REPORT_MEM_ZEROED: sel4::Word = 1 << 2;
+const REPORT_MEM_SECOND_GROWTH_OK: sel4::Word = 1 << 3;
+const REPORT_MEM_BASE_STABLE: sel4::Word = 1 << 4;
+const REPORT_MEM_QUOTA_REFUSED: sel4::Word = 1 << 5;
+const REPORT_MEM_REFUSAL_HAD_NO_EFFECT: sel4::Word = 1 << 6;
+
 pub(crate) fn main() -> ! {
     let service = sel4::cap::Endpoint::from_bits(SLOT_SERVICE);
 
@@ -118,10 +154,11 @@ pub(crate) fn main() -> ! {
             sel4::debug_println!("SLIME_CHILD fault escaped");
         }
         DIRECTIVE_EXIT => {
-            // The shared-buffer phase runs before the exit send, so the root
-            // observes the report and both supervised probes while this task is
-            // still live and attributable.
+            // Both phases run before the exit send, so the root observes every
+            // report and every supervised probe while this task is still live
+            // and attributable.
             shared_buffer_phase(service);
+            private_memory_phase(service);
             sel4::debug_println!("SLIME_CHILD clean exit status=0");
             // The root answers `Exit` by suspending this thread, so this send
             // is the last thing the fixture does on its service endpoint.
@@ -253,6 +290,169 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
         "SLIME_CHILD shared report flags={flags:#x} result={}",
         reply.msg[0] as i64
     );
+}
+
+/// Exercise the task-private growable region the root reserved (C10.1).
+///
+/// Every claim the mechanism makes is checked from inside the task, where it is
+/// observable, and the root adjudicates the accounting from its own records:
+///
+/// 1. a size query (`delta = 0`) answers the current extent without allocating;
+/// 2. the first growth answers the previous count and every new page reads as
+///    zero;
+/// 3. a written pattern survives a *second* growth, which is the base-stability
+///    property native pointers depend on;
+/// 4. the growth that would pass the declared quota is refused, and the region
+///    is intact afterwards — the query still answers the same extent and the
+///    pattern is still readable.
+///
+/// No `.bss` array stands in for the region: every access below is through the
+/// base the root reports, so a mapping the root did not install would fault
+/// rather than silently read this image's own memory.
+fn private_memory_phase(service: sel4::cap::Endpoint) {
+    let mut flags: sel4::Word = 0;
+
+    // A size query allocates nothing, so a region that has never grown must
+    // answer zero pages — and it still answers the base, which is how an
+    // allocator finds its region without a growth.
+    let (initial, base) = grow(service, 0);
+    if initial == 0 && base != 0 {
+        flags |= REPORT_MEM_QUERY_OK;
+    }
+    sel4::debug_println!("SLIME_CHILD mem query pages={initial} base={base:#x}");
+
+    // Two pages, so a partial mapping would be visible: a growth that mapped
+    // the first and not the second would fail the zero read or the readback
+    // below rather than passing quietly.
+    let (first, first_base) = grow(service, 2);
+    if first == 0 && first_base == base {
+        flags |= REPORT_MEM_FIRST_GROWTH_OK;
+    }
+    sel4::debug_println!("SLIME_CHILD mem grew previous={first} delta=2 base={first_base:#x}");
+    let base = base as usize;
+
+    // Every new page must read as zero. Frames arrive zeroed from
+    // `untyped_retype`, so this is checking that the root mapped fresh frames
+    // rather than recycling something with contents.
+    //
+    // The span actually dereferenced is printed, not just the verdict: without
+    // it the transcript records a base the root *reported* and a flag saying
+    // reads succeeded, but nothing tying the two together — a root that
+    // answered one address and mapped another would look identical. The gate
+    // folds this address into the same single-base set as every other record.
+    let mut zeros = true;
+    for page in 0..2usize {
+        for offset in [0usize, 8, PAGE_BYTES - 8] {
+            let addr = base + page * PAGE_BYTES + offset;
+            // SAFETY: the root mapped `delta` read-write granules starting at
+            // `base` before answering the growth above, `addr` is inside that
+            // range, and it is 8-byte aligned. No Rust reference aliases it.
+            let observed = unsafe { (addr as *const u64).read_volatile() };
+            if observed != 0 {
+                zeros = false;
+                sel4::debug_println!("SLIME_CHILD mem nonzero addr={addr:#x} value={observed:#x}");
+            }
+        }
+    }
+    if zeros {
+        flags |= REPORT_MEM_ZEROED;
+    }
+    sel4::debug_println!(
+        "SLIME_CHILD mem read base={base:#x} pages=2 bytes={} zeroed={}",
+        2 * PAGE_BYTES,
+        u8::from(zeros),
+    );
+
+    // Write into the first page, then grow again. The base must not move, so
+    // the pattern must still be there afterwards — the property that makes the
+    // region usable by native code holding real pointers.
+    //
+    // SAFETY: as above; the mapping is read-write, so this store is permitted.
+    unsafe {
+        (base as *mut u64).write_volatile(MEM_PATTERN);
+    }
+    let (second, second_base) = grow(service, 2);
+    if second == 2 && second_base as usize == base {
+        flags |= REPORT_MEM_SECOND_GROWTH_OK;
+    }
+    // SAFETY: as above. The address is in the first page, which the second
+    // growth must not have moved, remapped, or zeroed.
+    let survived = unsafe { (base as *const u64).read_volatile() };
+    if survived == MEM_PATTERN {
+        flags |= REPORT_MEM_BASE_STABLE;
+    }
+    sel4::debug_println!(
+        "SLIME_CHILD mem grew previous={second} delta=2 base={second_base:#x} survived={survived:#x} expected={MEM_PATTERN:#x}"
+    );
+    // The address the pattern was written to and read back from, for the same
+    // reason the read span above is printed: it is what makes "the base did not
+    // move" an assertion about a dereferenced address rather than about a
+    // reported number.
+    sel4::debug_println!("SLIME_CHILD mem pattern base={base:#x} offset=0");
+
+    // The region is now at its declared ceiling, so one more page must be
+    // refused. A refusal is a negative result rather than a fault: the caller
+    // stays alive to observe it, which is what lets an allocator report
+    // exhaustion instead of dying.
+    let (refused, _) = call_grow(service, 1);
+    if refused < 0 {
+        flags |= REPORT_MEM_QUOTA_REFUSED;
+    }
+    sel4::debug_println!("SLIME_CHILD mem quota probe delta=1 result={refused}");
+
+    // And the refusal left everything as it was: the same extent, and the same
+    // bytes. A partial growth would show up here as a larger count or a lost
+    // pattern.
+    let (after, _) = grow(service, 0);
+    // SAFETY: as above.
+    let intact = unsafe { (base as *const u64).read_volatile() };
+    if after == 4 && intact == MEM_PATTERN {
+        flags |= REPORT_MEM_REFUSAL_HAD_NO_EFFECT;
+    }
+    sel4::debug_println!(
+        "SLIME_CHILD mem intact pages={after} pattern={intact:#x} expected={MEM_PATTERN:#x}"
+    );
+
+    // Hand every observation to the root in one bounded message. The root
+    // decides whether the phase passed, from these flags and its own page
+    // accounting.
+    let reply = service.call_with_mrs(
+        sel4::MessageInfoBuilder::default()
+            .label(OP_SHARED_BUFFER_REPORT)
+            .length(4)
+            .build(),
+        [REQUEST_TAG, MEM_REPORT_TAG, flags, 0],
+    );
+    sel4::debug_println!(
+        "SLIME_CHILD mem report flags={flags:#x} result={}",
+        reply.msg[0] as i64
+    );
+}
+
+/// Grow the private region by `delta` pages, reporting a refusal on serial.
+///
+/// Answers the pair the operation returns: the page count before the growth,
+/// and the window base. The probes that *expect* a refusal call [`call_grow`]
+/// directly and inspect the status themselves.
+fn grow(service: sel4::cap::Endpoint, delta: sel4::Word) -> (i64, sel4::Word) {
+    let (result, base) = call_grow(service, delta);
+    if result < 0 {
+        sel4::debug_println!("SLIME_CHILD mem grow refused delta={delta} result={result}");
+    }
+    (result, base)
+}
+
+/// The raw operation: primary is the previous page count or a negative status,
+/// auxiliary is the window base.
+fn call_grow(service: sel4::cap::Endpoint, delta: sel4::Word) -> (i64, sel4::Word) {
+    let reply = service.call_with_mrs(
+        sel4::MessageInfoBuilder::default()
+            .label(OP_PRIVATE_MEMORY_GROW)
+            .length(1)
+            .build(),
+        [delta, 0],
+    );
+    (reply.msg[0] as i64, reply.msg[1])
 }
 
 /// Branch into `addr`, a page the root mapped as non-executable data.

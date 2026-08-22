@@ -27,7 +27,16 @@ pub const MAX_ROOT_CSLOTS: usize = 262_144;
 /// Maximum simultaneously provisioned task-arena parents.
 pub const MAX_TASK_ARENAS: usize = 48;
 /// Root capabilities a single accepted task image can consume.
-pub const MAX_TASK_SLOTS: usize = crate::child_vspace::MAX_CHILD_IMAGE_PAGES + 16;
+///
+/// Image pages, a fixed overhead for the VSpace, tables, CNode, TCBs and the
+/// per-thread page trio, and — since C10.1 — every leaf frame a task's private
+/// memory quota authorizes. The private term is the *reservation* rather than
+/// any one generation's declared quota, because a slot table sized to a
+/// particular manifest would refuse a later one at its first growth with
+/// `ArenaSlotTableFull`, which reads as an allocator defect rather than as the
+/// bound it is.
+pub const MAX_TASK_SLOTS: usize =
+    crate::child_vspace::MAX_CHILD_IMAGE_PAGES + crate::private_memory::MAX_REGION_PAGES + 16;
 
 const SLOT_WORD_BITS: usize = usize::BITS as usize;
 const SLOT_WORDS: usize = MAX_ROOT_CSLOTS.div_ceil(SLOT_WORD_BITS);
@@ -335,6 +344,40 @@ impl ArenaRecord {
         };
         *dst = slot;
         self.slot_len += 1;
+        Ok(())
+    }
+
+    /// Inverse of [`Self::push_slot`] for the most recent entry only: forget
+    /// `slot` and rewind this arena's watermark and tallies by `size`.
+    ///
+    /// Refuses unless `slot` is the arena's top recorded entry. An arena is a
+    /// bump allocator, so only the object at the watermark can be rewound;
+    /// releasing from the middle would either strand the bytes or later hand
+    /// out an overlapping region. Making that a refusal rather than a
+    /// precondition is what keeps a caller unwinding in the wrong order from
+    /// silently mis-accounting the arena.
+    ///
+    /// Pure bookkeeping: the caller is responsible for having emptied the slot
+    /// and for returning the pool index, which this cannot reach.
+    fn release_last(&mut self, slot: usize, size: usize) -> Result<(), AllocError> {
+        let last = self
+            .slot_len
+            .checked_sub(1)
+            .ok_or(AllocError::ArenaSlotTableFull {
+                limit: MAX_TASK_SLOTS,
+            })?;
+        let entry = self
+            .slots
+            .get_mut(last)
+            .filter(|recorded| **recorded == slot)
+            .ok_or(AllocError::ArenaSlotTableFull {
+                limit: MAX_TASK_SLOTS,
+            })?;
+        *entry = Self::EMPTY_SLOT;
+        self.slot_len = last;
+        self.watermark = self.watermark.saturating_sub(size);
+        self.objects = self.objects.saturating_sub(1);
+        self.bytes = self.bytes.saturating_sub(size);
         Ok(())
     }
 }
@@ -721,6 +764,65 @@ impl ObjectAllocator {
             .ok_or(AllocError::UnknownArena(id))
     }
 
+    /// Undo the most recent [`Self::allocate_in`] on `arena`: forget the object,
+    /// return its CSlot to the pool, and rewind the arena's watermark.
+    ///
+    /// The caller must already have emptied the slot — deleted the capability
+    /// and, for a frame, unmapped it — on exactly the terms
+    /// [`Self::release_slot`] states: the pool tracks availability, not
+    /// occupancy, so returning an index that still holds a capability makes the
+    /// next allocation there fail `DeleteFirst`.
+    ///
+    /// **Last-allocated only, and checked.** An arena is a bump allocator, so a
+    /// watermark can only be rewound over the object at its top; releasing from
+    /// the middle would either strand the bytes or hand out an overlapping
+    /// region. Passing anything but the arena's last recorded slot is refused
+    /// rather than silently mis-accounted, which makes the precondition a
+    /// property the allocator enforces instead of one the caller must remember.
+    /// An unwinding caller therefore returns its objects in reverse order.
+    ///
+    /// **The rewind is conservative by construction.** [`plan_allocation`]
+    /// aligns each object's start *up* to its own size before adding it, so the
+    /// watermark it produced is `aligned_start + size` and subtracting `size`
+    /// yields exactly `aligned_start` — which is at or above the watermark the
+    /// allocation began from. Any alignment padding therefore stays consumed
+    /// rather than being handed out again, so the error can only ever be
+    /// stranded bytes and never an overlapping region. For a run of same-sized
+    /// objects, which is what a growth allocates, there is no padding and the
+    /// rewind is exact.
+    ///
+    /// `slot` naming a foreign arena, not naming its top slot, and a
+    /// `size_bits` that does not fit a `usize` all answer
+    /// [`AllocError::UnknownArena`]. They are collapsed deliberately: each
+    /// means the caller does not hold the allocation it claims to be returning,
+    /// which is one bug with one correct response — leave the arena untouched.
+    ///
+    /// This exists because `release_task_arena` — the only other path that
+    /// returns arena slots — runs at task death. Without it, a caller that
+    /// allocates from an arena *while the task runs* and then fails part way
+    /// has no way to give the slots back, and every retry leaks one `slot_len`
+    /// against `MAX_TASK_SLOTS` for every allocation kind the arena serves
+    /// (C10.1's growth unwind is the first such caller).
+    pub fn release_last_in(
+        &mut self,
+        id: TaskArenaId,
+        slot: usize,
+        size_bits: usize,
+    ) -> Result<(), AllocError> {
+        let size = 1usize
+            .checked_shl(u32::try_from(size_bits).map_err(|_| AllocError::UnknownArena(id))?)
+            .ok_or(AllocError::UnknownArena(id))?;
+        // The arena's own bookkeeping first, because it is the half that can
+        // refuse: if `slot` is not its top entry nothing has been touched, so
+        // returning early leaves the pool index alone rather than freeing an
+        // index the arena still records.
+        self.arena_mut(id)?.release_last(slot, size)?;
+        self.slots.release(slot);
+        self.live_objects = self.live_objects.saturating_sub(1);
+        self.live_bytes = self.live_bytes.saturating_sub(size);
+        Ok(())
+    }
+
     /// Revoke the retained arena cap, empty every recorded CSlot, and only then
     /// return those indices to the bitmap. If revoke fails, the arena remains
     /// live and no slot is reused.
@@ -839,7 +941,86 @@ impl ObjectAllocator {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArenaPlan, SlotPool, plan_allocation};
+    use super::{AllocError, ArenaPlan, ArenaRecord, MAX_TASK_SLOTS, SlotPool, plan_allocation};
+
+    /// `release_last` is the inverse `push_slot` lacked, and it shrinks the
+    /// table only from its top: the released entry is cleared, the watermark and
+    /// tallies rewind by exactly the object's size, and the freed position is
+    /// reusable.
+    ///
+    /// Driven through the real function rather than by inlining its mutations,
+    /// because the assertion that matters is the *guard*: a caller unwinding in
+    /// the wrong order must be refused, not silently mis-accounted. The pool and
+    /// kernel halves (`slots.release`, deleting the capability) need a live
+    /// allocator and stay the seL4 gates' job.
+    #[test]
+    fn an_arena_slot_table_shrinks_only_from_its_top() {
+        const PAGE: usize = 4096;
+        let mut arena = ArenaRecord::new(1, sel4::cap::Untyped::from_bits(0), 20);
+        assert_eq!(arena.push_slot(40), Ok(()));
+        assert_eq!(arena.push_slot(41), Ok(()));
+        arena.watermark = 2 * PAGE;
+        arena.objects = 2;
+        arena.bytes = 2 * PAGE;
+
+        // Not the top entry: refused, with nothing touched. This is what stops
+        // an out-of-order unwind from rewinding a watermark over an object that
+        // is still live.
+        assert_eq!(
+            arena.release_last(40, PAGE),
+            Err(AllocError::ArenaSlotTableFull {
+                limit: MAX_TASK_SLOTS
+            })
+        );
+        assert_eq!(arena.slot_len, 2);
+        assert_eq!(arena.watermark, 2 * PAGE);
+        assert_eq!(arena.objects, 2);
+        assert_eq!(arena.bytes, 2 * PAGE);
+
+        // The top entry: accepted, and every tally rewinds by exactly one page.
+        assert_eq!(arena.release_last(41, PAGE), Ok(()));
+        assert_eq!(arena.slot_len, 1);
+        assert_eq!(arena.slots[1], ArenaRecord::EMPTY_SLOT);
+        assert_eq!(arena.watermark, PAGE);
+        assert_eq!(arena.objects, 1);
+        assert_eq!(arena.bytes, PAGE);
+
+        // And the freed position is genuinely reusable, so a retried growth does
+        // not walk the table forward past its own returned slots — which is the
+        // leak this inverse exists to prevent.
+        assert_eq!(arena.push_slot(42), Ok(()));
+        assert_eq!(arena.slot_len, 2);
+        assert_eq!(arena.slots[1], 42);
+
+        // An empty table has no top entry to name.
+        assert_eq!(arena.release_last(42, PAGE), Ok(()));
+        assert_eq!(arena.release_last(40, PAGE), Ok(()));
+        assert_eq!(arena.slot_len, 0);
+        assert_eq!(
+            arena.release_last(40, PAGE),
+            Err(AllocError::ArenaSlotTableFull {
+                limit: MAX_TASK_SLOTS
+            })
+        );
+    }
+
+    /// Without an inverse for `push_slot`, a caller that allocates from a live
+    /// arena and fails part way exhausts the table by retrying. This pins that
+    /// the ceiling is reached at exactly `MAX_TASK_SLOTS` pushes, which is the
+    /// bound the growth unwind must not walk into.
+    #[test]
+    fn an_arena_slot_table_refuses_past_its_declared_bound() {
+        let mut arena = ArenaRecord::new(1, sel4::cap::Untyped::from_bits(0), 20);
+        for slot in 0..super::MAX_TASK_SLOTS {
+            assert_eq!(arena.push_slot(slot), Ok(()), "slot {slot}");
+        }
+        assert_eq!(
+            arena.push_slot(super::MAX_TASK_SLOTS),
+            Err(AllocError::ArenaSlotTableFull {
+                limit: super::MAX_TASK_SLOTS
+            })
+        );
+    }
 
     #[test]
     fn allocation_is_aligned_to_object_size() {

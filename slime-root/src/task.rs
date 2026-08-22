@@ -291,6 +291,10 @@ pub enum TaskError {
     UnknownTask(TaskId),
     /// Revoking or deleting the task arena failed. No slot is reused on error.
     Cleanup(AllocError),
+    /// A private-memory growth was refused (C10.1). Carries the specific bound
+    /// the request hit, so the root's own marker can name it; the status the
+    /// caller receives stays the coarse class the ABI declares.
+    PrivateMemory(crate::private_memory::GrowError),
 }
 
 impl From<AllocError> for TaskError {
@@ -416,6 +420,14 @@ pub struct Task {
     pub executable: Option<usize>,
     /// Root instance index, absent for dynamically spawned tasks and fixtures.
     pub instance: Option<usize>,
+    /// This task's private working-memory region (C10.1).
+    ///
+    /// Deny-by-default: a task the generation declares no quota for holds
+    /// [`crate::private_memory::Region::DENIED`] and grows nothing. Stored on
+    /// the task rather than in a second table indexed by task id, for the same
+    /// reason `capabilities` is: it is then reclaimed atomically with the task
+    /// record and there is no parallel database to keep in step.
+    pub private_memory: crate::private_memory::Region,
 }
 
 impl Task {
@@ -480,6 +492,13 @@ pub struct TaskTable<const CAPACITY: usize = MAX_TASKS> {
     next_id: u32,
     activated: usize,
     reclaimed_slots: usize,
+    /// Root-wide private-memory accounting (C10.1).
+    ///
+    /// Held here rather than passed in, because the regions it sums live on the
+    /// tasks this table owns: a growth and a reclamation are both operations on
+    /// a task record, so the total has exactly one writer and no caller can
+    /// hold a stale copy of it.
+    private: crate::private_memory::Table,
 }
 
 impl<const CAPACITY: usize> TaskTable<CAPACITY> {
@@ -490,6 +509,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             next_id: 0,
             activated: 0,
             reclaimed_slots: 0,
+            private: crate::private_memory::Table::new(),
         }
     }
 
@@ -615,6 +635,14 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // is unused -- the main thread takes `priority` above -- and the rest
         // come from the plan's per-thread schedule records (B48).
         worker_priorities: [sel4::Word; MAX_CHILD_THREADS],
+        // Pages of task-private working memory this task may grow into
+        // (C10.1). Zero for every task the generation declares no quota for,
+        // and for the fixture paths, which is deny-by-default: a task with no
+        // quota grows nothing. The frames are charged to the arena here even
+        // though they are handed out on demand, because an arena is fixed at
+        // `begin_task_arena` and a quota whose frames it cannot hold would be a
+        // ceiling the task could never reach.
+        private_memory_pages: usize,
     ) -> Result<TaskId, TaskError> {
         admit_priority(priority)?;
         admit_thread_count(threads)?;
@@ -640,6 +668,15 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     remaining: 0,
                 }))?;
         }
+        // Every leaf frame the private-memory quota authorizes (C10.1). The
+        // window's translation tables are already in `vspace_arena_plan`, which
+        // spans it; these are the pages a growth hands out.
+        crate::private_memory::arena_reservation(&mut plan, private_memory_pages).ok_or(
+            TaskError::Alloc(AllocError::UntypedExhausted {
+                size_bits: usize::BITS as usize,
+                remaining: 0,
+            }),
+        )?;
         let arena_bits =
             plan.required_size_bits()
                 .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
@@ -928,6 +965,15 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             spawner,
             executable,
             instance,
+            // Reserved at the base the VSpace construction chose, authorized
+            // for exactly the declared quota. A zero quota yields `DENIED`, so
+            // a task the generation does not name carries no window at all
+            // rather than a window it may not use.
+            private_memory: if private_memory_pages == 0 {
+                crate::private_memory::Region::DENIED
+            } else {
+                crate::private_memory::Region::reserved(vspace.private_base, private_memory_pages)
+            },
         });
         self.len += 1;
         self.next_id += 1;
@@ -974,6 +1020,21 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     }
 
     /// Suspend a task, revoke everything derived from its objects, and drop it.
+    ///
+    /// Private-memory pages are returned to the table's own accounting here.
+    /// The *frames* are destroyed by the arena revoke below — they were retyped
+    /// from that arena's untyped, and seL4 unmaps a frame when its capability
+    /// dies — so what this returns is the page *charge*, which no revoke can
+    /// see.
+    ///
+    /// The charge is returned **after** the revoke succeeds, not before. A
+    /// failed revoke deliberately leaves the task in the table as retryable, so
+    /// returning the charge first would decrement the root-wide ceiling while
+    /// the frames were still mapped in a still-live VSpace — and because the
+    /// record survives, the same task could then grow a second full quota
+    /// against a ceiling that had forgotten the first. The region is a `Copy`
+    /// value already snapshotted into `task`, so nothing about attribution
+    /// requires doing it early.
     pub fn reclaim(
         &mut self,
         allocator: &mut ObjectAllocator,
@@ -984,20 +1045,74 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             .iter()
             .position(|task| task.as_ref().is_some_and(|task| task.id == id))
             .ok_or(TaskError::UnknownTask(id))?;
-        let task = self.tasks[index]
+        let mut task = self.tasks[index]
             .as_ref()
             .copied()
             .ok_or(TaskError::UnknownTask(id))?;
         // Failed arena cleanup stays owned by the table and is retryable.
         let _ = task.suspend();
         let reclaimed = task.cleanup.revoke(allocator)?;
+        // Past the fallible step: the frames are gone, so the charge they held
+        // is genuinely free. Taken from the local snapshot, which is why the
+        // table entry can be cleared either side of this.
+        self.private.reclaim(&mut task.private_memory);
         self.tasks[index] = None;
         self.len -= 1;
         if task.activated {
             self.activated -= 1;
         }
         self.reclaimed_slots += reclaimed;
-        Ok(task.cleanup)
+        // The count the arena actually returned, not the construction-time
+        // snapshot in `cleanup.slots`.
+        //
+        // The two agreed for as long as a task allocated nothing after it was
+        // built. C10.1 broke that: a private-memory growth charges root CSlots
+        // to the arena while the task runs, so the snapshot is short by however
+        // many pages the task grew, and the per-task and aggregate markers
+        // stopped stating the same fact — `just sel4_root_boot_check`'s
+        // conservation arm is what caught it. Reporting the revoke's own answer
+        // makes the record what was reclaimed rather than what was predicted.
+        Ok(CleanupRecord {
+            slots: reclaimed,
+            ..task.cleanup
+        })
+    }
+
+    /// Grow one task's private memory by `delta` pages, answering the page
+    /// count before the growth (C10.1).
+    ///
+    /// The task is named by the caller's own badge, never by an argument, which
+    /// is what makes the operation self-scoped: there is no task parameter a
+    /// component could forge. The region and the VSpace it maps into both come
+    /// from the task record, so a growth cannot land in another task's window
+    /// even if the accounting were wrong.
+    pub fn grow_private_memory(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+        id: TaskId,
+        delta: usize,
+    ) -> Result<usize, TaskError> {
+        let Some(index) = self
+            .tasks
+            .iter()
+            .position(|task| task.as_ref().is_some_and(|task| task.id == id))
+        else {
+            return Err(TaskError::UnknownTask(id));
+        };
+        let Some(task) = self.tasks[index].as_mut() else {
+            return Err(TaskError::UnknownTask(id));
+        };
+        let arena = task.cleanup.arena;
+        let vspace = task.vspace.vspace;
+        self.private
+            .grow(allocator, arena, vspace, &mut task.private_memory, delta)
+            .map_err(TaskError::PrivateMemory)
+    }
+
+    /// This table's private-memory accounting, for the root's own markers
+    /// (C10.1).
+    pub const fn private_memory(&self) -> &crate::private_memory::Table {
+        &self.private
     }
 }
 

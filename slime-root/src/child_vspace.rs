@@ -276,6 +276,13 @@ pub struct ChildVSpace {
     /// how many are live; the rest are zeroed.
     pub pages: [ThreadPages; MAX_CHILD_THREADS],
     pub threads: usize,
+    /// Base of the task-private memory window this VSpace reserves (C10.1).
+    ///
+    /// Address space only: its translation tables are mapped here, its leaf
+    /// frames are allocated on demand by `crate::private_memory`. Carried on
+    /// the VSpace rather than recomputed by the grow path, so exactly one
+    /// arithmetic decides where the window is.
+    pub private_base: usize,
     pub frames_mapped: usize,
     pub tables_mapped: usize,
 }
@@ -428,6 +435,12 @@ pub fn create_child_vspace(
         vspace,
         pages: thread_pages,
         threads,
+        // The window's tables were mapped above, inside `mapped`: the span
+        // `thread_mapped_span` returned already covers it, so a growth
+        // allocates leaf frames only and can never need a table.
+        private_base: private_window(&footprint, threads)
+            .map_err(VSpaceError::Image)?
+            .start,
         frames_mapped: page_count + 2 * threads,
         tables_mapped,
     })
@@ -699,14 +712,62 @@ pub(crate) fn admit_thread_count(threads: usize) -> Result<(), VSpaceError> {
     }
 }
 
-fn thread_mapped_span(span: &Range<usize>, threads: usize) -> Result<Range<usize>, ImageError> {
+/// Bytes of address space one child's private-memory window reserves (C10.1).
+pub const PRIVATE_WINDOW_BYTES: usize = crate::private_memory::MAX_REGION_PAGES * GRANULE_SIZE;
+
+/// Where a child's private-memory window sits, above its image and thread
+/// pages (C10.1).
+///
+/// Two properties are load-bearing and neither is incidental:
+///
+/// * **A guard granule below.** One granule of unmapped address space separates
+///   the window from the last thread page, so a write running off the end of
+///   either faults rather than landing in the other. Above the window nothing
+///   is ever mapped, which is the upper guard.
+/// * **Aligned to its own span.** The base is rounded to a whole
+///   [`PRIVATE_WINDOW_BYTES`], which on this profile is exactly one leaf
+///   translation-table span, so the reservation costs one table rather than
+///   straddling two.
+///
+/// The window is address space only: its tables are mapped when the VSpace is
+/// built (it is inside the range [`thread_mapped_span`] returns, so
+/// [`map_intermediate_tables`] and [`ChildImage::vspace_arena_plan`] both cover
+/// it already), while its leaf frames are allocated on demand by
+/// [`crate::private_memory`]. Planning frames here would charge every component
+/// for memory it may never ask for.
+pub(crate) fn private_window(
+    span: &Range<usize>,
+    threads: usize,
+) -> Result<Range<usize>, ImageError> {
+    let base = thread_pages_end(span, threads)?
+        .checked_add(GRANULE_SIZE)
+        .and_then(|addr| addr.checked_next_multiple_of(PRIVATE_WINDOW_BYTES))
+        .ok_or(ImageError::FootprintOutOfRange)?;
+    let end = base
+        .checked_add(PRIVATE_WINDOW_BYTES)
+        .ok_or(ImageError::FootprintOutOfRange)?;
+    Ok(base..end)
+}
+
+/// Where the per-thread IPC-buffer and transfer-window pairs end.
+fn thread_pages_end(span: &Range<usize>, threads: usize) -> Result<usize, ImageError> {
     let thread_bytes = threads
         .checked_mul(2 * GRANULE_SIZE)
         .ok_or(ImageError::FootprintOutOfRange)?;
-    let mapped_end = span
-        .end
+    span.end
         .checked_add(thread_bytes)
-        .ok_or(ImageError::FootprintOutOfRange)?;
+        .ok_or(ImageError::FootprintOutOfRange)
+}
+
+/// The whole address range this root maps into a child: image, thread pages,
+/// and the private-memory window's reservation.
+///
+/// One range rather than three, because the arena planner and the table mapper
+/// must agree exactly — planning a narrower span than is mapped makes
+/// construction depend on power-of-two arena slack, and mapping a narrower span
+/// than is planned leaves a growth needing a table nothing allocated.
+fn thread_mapped_span(span: &Range<usize>, threads: usize) -> Result<Range<usize>, ImageError> {
+    let mapped_end = private_window(span, threads)?.end;
     if mapped_end > CHILD_ADDRESS_CEILING || span.start == 0 {
         Err(ImageError::FootprintOutOfRange)
     } else {
@@ -781,8 +842,8 @@ mod tests {
 
     use super::{
         CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError,
-        MAX_CHILD_IMAGE_PAGES, coarsen, reject_writable_executable, round_down, thread_mapped_span,
-        validate_footprint_span,
+        MAX_CHILD_IMAGE_PAGES, PRIVATE_WINDOW_BYTES, coarsen, private_window,
+        reject_writable_executable, round_down, thread_mapped_span, validate_footprint_span,
     };
 
     #[test]
@@ -815,38 +876,75 @@ mod tests {
     }
 
     #[test]
-    fn loader_headroom_reserves_two_granules_below_ceiling() {
-        let highest_valid = 0x1000..CHILD_ADDRESS_CEILING - 2 * GRANULE_SIZE;
+    fn loader_headroom_reserves_the_thread_pair_and_the_private_window() {
+        // The mapped span is image + thread pages + a guard granule + the
+        // private-memory window, aligned up to the window's own span (C10.1),
+        // so the headroom below the ceiling is that whole tail rather than the
+        // two granules it was before. An image ending inside the last window
+        // span has nowhere to put the window and is refused.
+        let highest_valid = 0x1000..CHILD_ADDRESS_CEILING - 2 * PRIVATE_WINDOW_BYTES;
         assert_eq!(validate_footprint_span(&highest_valid), Ok(()));
 
-        let one_page_short = 0x1000..CHILD_ADDRESS_CEILING - GRANULE_SIZE;
+        let no_room_for_the_window = 0x1000..CHILD_ADDRESS_CEILING - GRANULE_SIZE;
         assert_eq!(
-            validate_footprint_span(&one_page_short),
+            validate_footprint_span(&no_room_for_the_window),
             Err(ImageError::FootprintOutOfRange)
         );
     }
 
     #[test]
     fn loader_headroom_covers_every_thread_pair() {
-        let two_thread_end = CHILD_ADDRESS_CEILING - 4 * GRANULE_SIZE;
-        assert!(thread_mapped_span(&(0x1000..two_thread_end), 2).is_ok());
+        let two_threads_fit = 0x1000..CHILD_ADDRESS_CEILING - 2 * PRIVATE_WINDOW_BYTES;
+        assert!(thread_mapped_span(&two_threads_fit, 2).is_ok());
 
-        let one_pair_short = CHILD_ADDRESS_CEILING - 3 * GRANULE_SIZE;
+        // One granule short of a whole window span: the second thread's pair
+        // pushes the guard past the alignment boundary, so the window would
+        // start in the final span and end past the ceiling.
+        let one_pair_short = 0x1000..CHILD_ADDRESS_CEILING - PRIVATE_WINDOW_BYTES;
         assert_eq!(
-            thread_mapped_span(&(0x1000..one_pair_short), 2),
+            thread_mapped_span(&one_pair_short, 2),
             Err(ImageError::FootprintOutOfRange)
         );
     }
 
     #[test]
-    fn worker_pair_expands_translation_table_plan() {
+    fn the_private_window_clears_the_thread_pages_by_at_least_one_guard_granule() {
         let footprint = 0x1000..0x1fe000;
+        for threads in 1..=super::MAX_CHILD_THREADS {
+            let window = private_window(&footprint, threads).unwrap();
+            let thread_pages_end = footprint.end + threads * 2 * GRANULE_SIZE;
+            assert!(
+                window.start >= thread_pages_end + GRANULE_SIZE,
+                "threads={threads}: the window must not abut the last thread page"
+            );
+            // Span-aligned, so the reservation costs one leaf table rather
+            // than straddling two.
+            assert_eq!(window.start % PRIVATE_WINDOW_BYTES, 0);
+            assert_eq!(window.end - window.start, PRIVATE_WINDOW_BYTES);
+            // And the mapped span covers it, which is what makes a growth
+            // need leaf frames only.
+            assert_eq!(
+                thread_mapped_span(&footprint, threads).unwrap().end,
+                window.end
+            );
+        }
+    }
+
+    #[test]
+    fn worker_pair_expands_translation_table_plan() {
+        // Chosen so the second thread's pair is what crosses the boundary: with
+        // one thread the guarded window base lands exactly on a span, with two
+        // it is pushed into the next one. A footprint whose two counts happened
+        // to align identically would assert nothing (C10.1 made that possible,
+        // because the window is itself a whole span wide).
+        let footprint = 0x1000..0x1fd000;
         let table_span = 2 * 1024 * 1024;
+        assert_eq!(PRIVATE_WINDOW_BYTES, table_span);
         let one_thread = thread_mapped_span(&footprint, 1).unwrap();
         let two_threads = thread_mapped_span(&footprint, 2).unwrap();
 
-        assert_eq!(coarsen(&one_thread, table_span), 0..table_span);
-        assert_eq!(coarsen(&two_threads, table_span), 0..2 * table_span);
+        assert_eq!(coarsen(&one_thread, table_span), 0..2 * table_span);
+        assert_eq!(coarsen(&two_threads, table_span), 0..3 * table_span);
     }
 
     #[test]

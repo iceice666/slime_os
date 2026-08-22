@@ -84,7 +84,15 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
-    ("sel4_root_boot", "check/check-sel4-root-boot.py", 43),
+    # C10.1: 43 -> 58. Fifteen private-memory markers, each a root record paired
+    # with the child observation it cannot itself make: the size query, both
+    # growths, the zeroed pages read at the reported base, the surviving pattern
+    # and the address it was read back from, the quota refusal and its named
+    # cause, the refusal having had no effect, the child's full report, the
+    # root's adjudication against its own page accounting, and the teardown
+    # returning every page. Raised deliberately: the count going *up* is the
+    # milestone's evidence, and the pin is what makes a later reduction visible.
+    ("sel4_root_boot", "check/check-sel4-root-boot.py", 58),
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),

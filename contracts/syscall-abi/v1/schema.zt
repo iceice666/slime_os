@@ -204,6 +204,37 @@ operations :: List Operation = {
   -- budget to report, and answering zero would be a number it could act on;
   -- the refusal says the question does not apply to it.
   operation "capabilityTable" "SPAWN_BUDGET" 42;
+  -- C10.1's task-private memory growth. One operation, taking a signed page
+  -- delta and answering the caller's *previous* page count, so an allocator
+  -- learns where its region ended without a second call and a zero delta is a
+  -- pure size query.
+  --
+  -- Not a capability operation, and that is the whole authority argument. The
+  -- region this grows is one task-private window the root reserved in the
+  -- caller's own VSpace at spawn: it is not nameable, transferable, loanable,
+  -- sealable, or mappable by anyone else, so there is no object for a
+  -- capability to designate and no identity to forge. What is bounded is how
+  -- many pages a task may hold, which is a budget -- exactly as the stack is
+  -- generation-sized and needs no capability. `docs/capability-matrix.md` is
+  -- therefore unchanged: no seL4 object kind, no root-tracked object, and no
+  -- right is added.
+  --
+  -- Self-scoped by badge, like the two `OCCUPANCY` operations and
+  -- `SPAWN_BUDGET`: the request carries a delta and no task argument, so a
+  -- caller can only grow its own region. Growth is all-or-nothing -- a failure
+  -- part way through returns every frame the attempt took -- and the four
+  -- refusals a caller must tell apart (delta overflow, reservation overrun,
+  -- quota exhaustion, frame exhaustion) are distinguished by the root's own
+  -- markers; the wire status stays the coarse class this contract already
+  -- declares, so a component cannot map the root's internal predicates.
+  --
+  -- Gated on `lifecycle`, the one service every launched instance holds. A
+  -- private heap is a property of being a task rather than of any grant, so
+  -- gating it on a capability service would make a component's ability to
+  -- allocate depend on an unrelated grant shape -- the same argument
+  -- `BOOT_ACTION` records. A task the generation gives no quota is refused by
+  -- its zero ceiling, which is a budget answer rather than an authority one.
+  operation "lifecycle" "PRIVATE_MEMORY_GROW" 43;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

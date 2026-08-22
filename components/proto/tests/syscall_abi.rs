@@ -21,7 +21,7 @@ use slime_proto::syscall_abi::{
 
 #[test]
 fn operation_labels_are_frozen() {
-    let labels: [(&str, u64); 29] = [
+    let labels: [(&str, u64); 30] = [
         ("lifecycle::EXIT", lifecycle_labels::EXIT),
         ("lifecycle::UNHEALTHY", lifecycle_labels::UNHEALTHY),
         ("spawn::SPAWN", spawn_labels::SPAWN),
@@ -89,10 +89,18 @@ fn operation_labels_are_frozen() {
             "capabilityTable::SPAWN_BUDGET",
             capability_table_labels::SPAWN_BUDGET,
         ),
+        // C10.1's private-memory growth. In the `lifecycle` namespace rather
+        // than `capabilityTable`, because the service is the authority gate and
+        // a private heap is a property of being a task; see
+        // `contracts/syscall-abi/v1/schema.zt`.
+        (
+            "lifecycle::PRIVATE_MEMORY_GROW",
+            lifecycle_labels::PRIVATE_MEMORY_GROW,
+        ),
     ];
-    let expected: [u64; 29] = [
+    let expected: [u64; 30] = [
         3, 9, 4, 5, 12, 32, 13, 31, 15, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37,
-        38, 39, 40, 41, 42,
+        38, 39, 40, 41, 42, 43,
     ];
     for ((name, actual), want) in labels.iter().zip(expected) {
         assert_eq!(*actual, want, "operation {name} was renumbered");
@@ -134,6 +142,7 @@ fn operation_labels_are_distinct() {
         capability_table_labels::BOOT_ACTION,
         capability_table_labels::GRAPH_QUERY,
         capability_table_labels::SPAWN_BUDGET,
+        lifecycle_labels::PRIVATE_MEMORY_GROW,
     ];
     labels.sort_unstable();
     for pair in labels.windows(2) {

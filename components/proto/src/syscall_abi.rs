@@ -16,6 +16,7 @@ pub mod fixture_labels {
 pub mod lifecycle_labels {
     pub const EXIT: u64 = 3;
     pub const UNHEALTHY: u64 = 9;
+    pub const PRIVATE_MEMORY_GROW: u64 = 43;
 }
 
 pub mod spawn_labels {

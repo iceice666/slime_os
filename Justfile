@@ -939,7 +939,17 @@ test_sel4_root:
     # rather than the holder's. It pins the dispatch property the two arms
     # depend on -- neither prefix is a prefix of the other -- so an owner's
     # question cannot be answered against a holder's instance index.
-    expected=131
+    #
+    # C10.1: 131 -> 146. The new `private_memory` module contributes twelve
+    # tests over the growth admission ordering, the deny-by-default region, the
+    # quota clamp, the root-wide ceiling, reclamation idempotence, and the
+    # arena frame plan; `child_vspace` goes from eight to nine for the reserved
+    # window's guard and alignment; and `object_allocator` gains two for the
+    # arena slot table's release invariant, which had no inverse before the
+    # growth unwind needed one. Two of `child_vspace`'s existing headroom tests
+    # were rewritten rather than added to, because the mapped span a child
+    # receives now includes that window.
+    expected=146
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
@@ -974,7 +984,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 15 modules"
+    echo "slime-root host tests: $actual/$expected across 16 modules"
 
 # Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 ruff:

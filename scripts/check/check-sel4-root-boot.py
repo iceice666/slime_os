@@ -170,6 +170,100 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "child reported the shared-buffer phase",
         r"SLIME_BUF child reported task=0 observed=0x534255465f525721 flags=0x3",
     ),
+    # C10.1's private-memory phase. It runs after the shared-buffer report and
+    # before the clean exit, so the fixture is still live and attributable for
+    # every growth. Each pair below is deliberate: the root's own record of what
+    # it mapped, then the child's observation from inside its own address space.
+    # Neither alone is sufficient — the root cannot read the child's memory, and
+    # the child cannot see the page accounting.
+    #
+    # The base is matched loosely (`0x[0-9a-f]+`) rather than pinned: it is
+    # derived from the fixture image's own footprint, so pinning it would make
+    # every recompilation of the child a gate edit. That the base is the *same*
+    # value in every record — the property that actually matters — is checked by
+    # `check_private_memory_base` below, because a backreference cannot span two
+    # separately compiled patterns.
+    (
+        "a size query answers zero pages and the window base, allocating nothing",
+        r"SLIME_MEM grown task=0 delta=0 previous=0 pages=0 base=0x[0-9a-f]+ "
+        r"quota=4 total=0",
+    ),
+    (
+        "the child read a base from the size query",
+        r"SLIME_CHILD mem query pages=0 base=0x[0-9a-f]+",
+    ),
+    (
+        "the first growth backs two pages and answers the previous count",
+        r"SLIME_MEM grown task=0 delta=2 previous=0 pages=2 base=0x[0-9a-f]+ "
+        r"quota=4 total=2",
+    ),
+    (
+        "the child observed the first growth",
+        r"SLIME_CHILD mem grew previous=0 delta=2 base=0x[0-9a-f]+",
+    ),
+    # The zero read, over an address the child actually dereferenced rather than
+    # merely a flag saying it succeeded. `zeroed=1` over both freshly backed
+    # pages is the "every new page reads as zero" requirement; the base makes it
+    # an assertion about where those reads landed, which
+    # `check_private_memory_base` folds into the single-base set.
+    (
+        "both new pages read as zero at the base the root reported",
+        r"SLIME_CHILD mem read base=0x[0-9a-f]+ pages=2 bytes=8192 zeroed=1",
+    ),
+    (
+        "the second growth reaches the declared ceiling",
+        r"SLIME_MEM grown task=0 delta=2 previous=2 pages=4 base=0x[0-9a-f]+ "
+        r"quota=4 total=4",
+    ),
+    # The load-bearing base-stability assertion: the pattern the child wrote
+    # into the first page before the second growth is still there afterwards.
+    # Native component images hold real machine pointers, so a growth that
+    # relocated the base would invalidate every one of them; this is what proves
+    # it does not.
+    (
+        "a pattern written before the growth survived it",
+        r"SLIME_CHILD mem grew previous=2 delta=2 base=0x[0-9a-f]+ "
+        r"survived=0x4d454d5f42415345 expected=0x4d454d5f42415345",
+    ),
+    (
+        "the surviving pattern was read back from the same base",
+        r"SLIME_CHILD mem pattern base=0x[0-9a-f]+ offset=0",
+    ),
+    # The refusal names its own cause. `quota` rather than `reservation`,
+    # `root-ceiling`, `frames`, or `delta-overflow`: the region is at its
+    # declared ceiling and nowhere near the structural one, so a mechanism that
+    # reported the wrong bound would be telling an allocator to wait for
+    # capacity that was never coming.
+    (
+        "growth past the declared quota is refused, naming the quota",
+        r"SLIME_MEM refused task=0 delta=1 cause=quota "
+        r"detail=QuotaExceeded \{ pages: 4, delta: 1, quota: 4 \}",
+    ),
+    (
+        "the caller survived the refusal and observed it as a structured error",
+        r"SLIME_CHILD mem quota probe delta=1 result=-5",
+    ),
+    # All-or-nothing: the refused growth left the page count and the contents
+    # exactly as they were. A partial growth would show up as five pages or a
+    # lost pattern.
+    (
+        "the refusal changed nothing: the same page count",
+        r"SLIME_MEM grown task=0 delta=0 previous=4 pages=4 base=0x[0-9a-f]+ "
+        r"quota=4 total=4",
+    ),
+    (
+        "the region is intact after the refusal",
+        r"SLIME_CHILD mem intact pages=4 pattern=0x4d454d5f42415345 "
+        r"expected=0x4d454d5f42415345",
+    ),
+    # 0x7f is every flag the phase must set, pinned exactly rather than as a
+    # mask test: the query, the two growths, the zero read, the surviving base,
+    # the refusal, and the refusal having no effect. A phase reporting fewer
+    # observations than it was supposed to make would otherwise pass.
+    (
+        "the child reported every private-memory observation",
+        r"SLIME_MEM child reported task=0 flags=0x7f",
+    ),
     ("child exited cleanly", r"SLIME_CHILD clean exit status=0"),
     (
         "root observed the clean exit",
@@ -200,6 +294,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "both mapping protections were enforced and supervised",
         r"SLIME_BUF rights enforced ro_write=refused wx_execute=refused probes=2 supervised=1",
+    ),
+    # The root's own private-memory verdict, adjudicated in the same pass as the
+    # shared-buffer one: after both fixtures have finished, from the root's page
+    # accounting rather than the child's self-report. `grants=2` is the
+    # assertion a page total cannot make — the two size queries and the refusal
+    # each charged nothing, so four pages were handed out by exactly two
+    # operations, and a mechanism charging a query would reach the same total by
+    # a wrong route.
+    (
+        "the root adjudicated the private-memory phase against its own accounting",
+        r"SLIME_MEM enforced quota=4 pages=4 grants=2 grown=4 reclaimed=0 flags=0x7f",
     ),
     (
         "teardown reclaimed every frame and mapping with quotas back at zero",
@@ -241,6 +346,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the faulted task's arena-owned slots are accounted for",
         r"SLIME_ROOT task reclaimed task=1 source=generation slots=(\d+) arena=\d+",
+    ),
+    # C10.1's reclamation half: every private page returned when its task died.
+    # `grown=4 reclaimed=4 pages=0` pinned exactly, because the property is
+    # conservation rather than a low number — a mechanism that returned three of
+    # four pages would still print a small `pages=` if the comparison were an
+    # inequality. The frames themselves go with the arena revoke above; this is
+    # the page charge, which is the half a revoke cannot see and therefore the
+    # half a leak would hide in.
+    (
+        "every private-memory page was returned on task death",
+        r"SLIME_MEM teardown grown=4 reclaimed=4 pages=0",
     ),
     ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=(\d+) live=0"),
     (
@@ -289,6 +405,11 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # family explicitly keeps the failure legible in the transcript.
     r"SLIME_BUF FAIL .*",
     r"SLIME_FOUNDATION FAIL .*",
+    # The private-memory phase fails closed on the same terms: a growth that
+    # was not bounded by the declared quota, a page count the child and the root
+    # disagree about, a report missing an observation the phase must make, or a
+    # teardown that left a page charged (C10.1).
+    r"SLIME_MEM FAIL .*",
 )
 
 
@@ -463,6 +584,54 @@ def check_transcript(transcript: str) -> None:
     total = int(clean.group(1)) + int(faulted.group(1))
     if total != int(cleanup.group(1)) or total != int(ready.group(1)):
         fail(f"task reclaim totals disagree: tasks={total} cleanup={cleanup.group(1)} ready={ready.group(1)}")
+    check_private_memory_base(transcript)
+
+
+def check_private_memory_base(transcript: str) -> None:
+    """Every private-memory record names the same window base (C10.1).
+
+    The base itself is not pinned — it derives from the fixture image's own
+    footprint, so pinning it would make every child recompilation a gate edit.
+    What must hold is that it never moves: native component images link at fixed
+    virtual addresses and hold real machine pointers, so a growth that relocated
+    the base would invalidate every one of them.
+
+    Checked here rather than by a backreference in `REQUIRED_MARKERS`, because
+    each of those patterns is compiled separately and a group in one cannot be
+    referenced from another.
+
+    Three sets are collected, and the third is what makes this more than a
+    consistency check on printed numbers: the root's record of what it mapped,
+    the base the child was *answered*, and the base the child actually
+    *dereferenced* for its zero read and its pattern readback. Without the
+    third, a root that answered one address while mapping another would produce
+    a transcript indistinguishable from a correct one.
+    """
+    root_bases = re.findall(r"SLIME_MEM grown task=0 .*? base=(0x[0-9a-f]+)", transcript)
+    child_bases = re.findall(r"SLIME_CHILD mem (?:query|grew) .*? base=(0x[0-9a-f]+)", transcript)
+    dereferenced = re.findall(
+        r"SLIME_CHILD mem (?:read|pattern) base=(0x[0-9a-f]+)", transcript
+    )
+    # Four `grown` records from the phase's five operations: two size queries
+    # and two growths each answer a base, while the refused one reports
+    # `SLIME_MEM refused` and no base at all. Counted rather than merely
+    # collected, so a phase that silently stopped issuing an operation cannot
+    # pass this by leaving a consistent smaller set.
+    if len(root_bases) != 4:
+        fail(f"expected 4 private-memory growth records, found {len(root_bases)}")
+    if len(child_bases) != 3:
+        fail(f"expected 3 child private-memory base records, found {len(child_bases)}")
+    if len(dereferenced) != 2:
+        fail(
+            "expected 2 child records naming a dereferenced private-memory address, "
+            f"found {len(dereferenced)}"
+        )
+    observed = set(root_bases) | set(child_bases) | set(dereferenced)
+    if len(observed) != 1:
+        fail(f"the private-memory window base moved across records: {sorted(observed)}")
+    base = int(observed.pop(), 16)
+    if base == 0:
+        fail("the private-memory window base is zero, which is never a mapped child address")
 
 
 def main() -> None:

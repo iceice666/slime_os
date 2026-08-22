@@ -33,7 +33,7 @@ use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, child_vspace, console, cspace, device, directory, event, fault, generation,
     graph, ipc, launched, notification, object_allocator, peer_endpoint, platform_timer,
-    shared_buffer, supervision, task, timer, transfer_window, virtio_blk,
+    private_memory, shared_buffer, supervision, task, timer, transfer_window, virtio_blk,
 };
 
 use core::ptr;
@@ -200,9 +200,12 @@ const FIXTURE_TASKS: usize = 2;
 
 /// Service-loop iterations per fixture. A fixture contributes one request plus
 /// one terminal message; the clean-exit fixture additionally contributes its
-/// shared-buffer report and two supervised protection faults. The surplus
-/// bounds unexpected traffic so the loop cannot spin forever.
-const MAX_SERVICE_ITERATIONS: usize = 8;
+/// shared-buffer report, two supervised protection faults, and — since C10.1 —
+/// its private-memory phase: five growth operations (two size queries, two
+/// growths, one refused) plus that phase's own report. Eleven for the clean-exit
+/// fixture, so sixteen leaves the same surplus the earlier eight did, bounding
+/// unexpected traffic so the loop cannot spin forever.
+const MAX_SERVICE_ITERATIONS: usize = 16;
 
 /// The timer phase schedules a deadline this fraction of a second out — short
 /// enough that a working IRQ path fires almost immediately, generous enough
@@ -382,6 +385,70 @@ const SHARED_QUOTA: HolderQuota = HolderQuota {
     mapping_count: 2,
     loan_count: 0,
 };
+
+/// Ceiling for the C10.1 fixture phase's private-memory region, in pages.
+///
+/// Four, which is the smallest number that exercises every property the
+/// mechanism claims: two growths (so the base is proven stable across more than
+/// one), a batch larger than one page (so a partial mapping would be visible),
+/// and a refusal at the ceiling with the region still intact.
+///
+/// This phase alone, on exactly the grounds [`SHARED_QUOTA`] records: the
+/// fixture is an embedded ELF rather than a declared component, so no
+/// generation resource names it. Every declared instance sits at
+/// deny-by-default zero until C10.2 adds the budget resource that would name
+/// one.
+const PRIVATE_QUOTA_PAGES: usize = 4;
+
+/// Growth operations the private-memory phase must actually charge a page to.
+///
+/// The phase issues five: two size queries, two growths, one refused. Only the
+/// two growths are grants, which is the distinction a page total cannot make on
+/// its own.
+const MEM_EXPECTED_GRANTS: usize = 2;
+
+/// The value the clean-exit fixture writes into its first private page and
+/// re-reads after a further growth. `slime-root/child/src/main.rs::MEM_PATTERN`.
+const MEM_PATTERN: u64 = 0x4d454d5f42415345;
+
+/// Marks a report as the private-memory phase's rather than the shared-buffer
+/// phase's; both arrive on the same label.
+/// `slime-root/child/src/main.rs::MEM_REPORT_TAG`.
+const MEM_REPORT_TAG: sel4::Word = 0x4d454d5f52505449;
+
+/// Report flags the private-memory phase sets.
+/// `slime-root/child/src/main.rs::REPORT_MEM_*`.
+const REPORT_MEM_QUERY_OK: sel4::Word = 1 << 0;
+const REPORT_MEM_FIRST_GROWTH_OK: sel4::Word = 1 << 1;
+const REPORT_MEM_ZEROED: sel4::Word = 1 << 2;
+const REPORT_MEM_SECOND_GROWTH_OK: sel4::Word = 1 << 3;
+const REPORT_MEM_BASE_STABLE: sel4::Word = 1 << 4;
+const REPORT_MEM_QUOTA_REFUSED: sel4::Word = 1 << 5;
+const REPORT_MEM_REFUSAL_HAD_NO_EFFECT: sel4::Word = 1 << 6;
+
+/// Every flag the phase must set.
+///
+/// The root owns this rather than the fixture, for the same reason the
+/// execute-never verdict is the root's: a phase that judged its own
+/// completeness could pass by making fewer observations than it was supposed
+/// to. Compared as an exact mask rather than a count, so a missing observation
+/// names itself in the report marker.
+const MEM_REPORT_ALL: sel4::Word = REPORT_MEM_QUERY_OK
+    | REPORT_MEM_FIRST_GROWTH_OK
+    | REPORT_MEM_ZEROED
+    | REPORT_MEM_SECOND_GROWTH_OK
+    | REPORT_MEM_BASE_STABLE
+    | REPORT_MEM_QUOTA_REFUSED
+    | REPORT_MEM_REFUSAL_HAD_NO_EFFECT;
+
+/// What the root observed of the clean-exit fixture's private-memory phase.
+#[derive(Clone, Copy, Default)]
+struct MemoryPhase {
+    /// Flags the fixture reported.
+    flags: sel4::Word,
+    /// Whether the report arrived at all.
+    reported: bool,
+}
 static mut OBJECT_ALLOCATOR: core::mem::MaybeUninit<ObjectAllocator> =
     core::mem::MaybeUninit::uninit();
 
@@ -803,6 +870,21 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             1,
             // No workers, so no worker priorities.
             [task::CHILD_PRIORITY; child_vspace::MAX_CHILD_THREADS],
+            // The C10.1 private-memory quota, granted only to the clean-exit
+            // fixture, which is the one that runs the growth phase.
+            //
+            // A compiled-in ceiling *for this phase alone*, on exactly the
+            // grounds `SHARED_QUOTA` above records: the fixture is an ELF this
+            // root embeds at compile time, not a declared component, so no
+            // generation resource names it and there is no budget to read. Every
+            // declared instance sits at zero until C10.2 supplies that
+            // resource. The deliberate-fault fixture gets nothing, which is what
+            // makes the deny-by-default arm observable on the same boot.
+            if role == Role::CleanExit {
+                PRIVATE_QUOTA_PAGES
+            } else {
+                0
+            },
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -865,6 +947,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     }
 
     let mut buffer_phase = BufferPhase::default();
+    let mut memory_phase = MemoryPhase::default();
     let (rw_handle, rw_frame, ro_handle) = {
         let mut adapter = BufferAdapter::new(allocator);
         let (rw, rw_frame) = match setup_shared_region(
@@ -946,9 +1029,11 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             service_endpoint,
             index,
             &mut tasks,
+            allocator,
             &mut supervision,
             &mut fixtures,
             &mut buffer_phase,
+            &mut memory_phase,
         );
     }
 
@@ -981,6 +1066,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         )
     }
     report_buffer_phase(&buffer_phase, rw_frame, &scratch);
+    report_memory_phase(&memory_phase, &tasks);
 
     // Teardown: reclaim every frame and mapping the phase created, then confirm
     // the accounting is genuinely back at zero rather than merely unreferenced.
@@ -1053,6 +1139,26 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             }
             Err(error) => fatal!("task reclamation failed: {error:?}"),
         }
+    }
+    // Every private page returned when its task died (C10.1). The frames go
+    // with the arena revoke above; this is the charge, which is the half a
+    // revoke cannot see — so a page count that stayed nonzero here is a leak
+    // the frame allocator would not report.
+    {
+        let table = tasks.private_memory();
+        if table.total_pages() != 0 || table.reclaimed_pages() != table.grown_pages() {
+            fatal!(
+                "SLIME_MEM FAIL teardown left pages={} grown={} reclaimed={}",
+                table.total_pages(),
+                table.grown_pages(),
+                table.reclaimed_pages(),
+            )
+        }
+        sel4::debug_println!(
+            "SLIME_MEM teardown grown={} reclaimed={} pages=0",
+            table.grown_pages(),
+            table.reclaimed_pages(),
+        );
     }
     sel4::debug_println!(
         "SLIME_ROOT cleanup tasks={reclaimed_tasks} slots={reclaimed_slots} live={}",
@@ -1984,6 +2090,14 @@ fn launch_instance_graph(
             declared_priority,
             declared_threads,
             declared_worker_priorities,
+            // No private-memory quota (C10.1). The mechanism is live, but the
+            // authority to use it is a generation-declared budget resource and
+            // C10.2 is what adds one, so every declared instance sits at its
+            // deny-by-default zero — exactly as an absent `sharedBufferBudget`
+            // holder allocates nothing. Answering a nonzero default here would
+            // be ambient authority: a component would hold pages no manifest
+            // named.
+            0,
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -3019,6 +3133,74 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // C10.1's task-private memory growth.
+            //
+            // Self-scoped by badge: the region grown and the VSpace it maps
+            // into both come from the caller's own task record, so the request
+            // carries a delta and no task argument and there is nothing to
+            // forge. Gated on lifecycle rather than a capability service,
+            // because a private heap is a property of being a task — a task
+            // with no declared quota is refused by its zero ceiling, which is
+            // a budget answer rather than an authority one.
+            //
+            // The answer is the page count *before* the growth, so an
+            // allocator learns where its region ended without a second call,
+            // and `delta = 0` is a pure size query that allocates nothing.
+            lifecycle_labels::PRIVATE_MEMORY_GROW => {
+                let delta = words[0] as usize;
+                let response = match tasks.grow_private_memory(allocator, id, delta) {
+                    Ok(previous) => {
+                        // The growth's own record: what the task had, what it
+                        // asked for, where the pages landed, and the root-wide
+                        // total afterwards. A gate reads the base and the
+                        // counts from here rather than from the component's
+                        // self-report, because only the root knows what it
+                        // actually mapped.
+                        let region = tasks
+                            .get(id)
+                            .map(|task| task.private_memory)
+                            .unwrap_or(private_memory::Region::DENIED);
+                        sel4::debug_println!(
+                            "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={}",
+                            id.0,
+                            region.pages(),
+                            region.base(),
+                            region.quota(),
+                            tasks.private_memory().total_pages(),
+                        );
+                        // Primary is the previous page count; auxiliary is the
+                        // window base. The base is answered rather than left
+                        // for the caller to derive: it is the root that chose
+                        // it, and a component recomputing the loader's
+                        // arithmetic is the compile-time coupling B70 removed
+                        // everywhere else. Zero pages means no region, and a
+                        // denied region answers base zero, which is not a
+                        // usable address on any child (`child_vspace` refuses a
+                        // footprint starting at zero).
+                        Response::success(previous as i64, region.base() as sel4::Word)
+                    }
+                    Err(task::TaskError::PrivateMemory(error)) => {
+                        // The four causes are distinguished here, in the root's
+                        // own record, and collapsed to one coarse status on the
+                        // wire: a component learns that it cannot grow, not
+                        // which of the root's predicates refused it.
+                        sel4::debug_println!(
+                            "SLIME_MEM refused task={} delta={delta} cause={} detail={error:?}",
+                            id.0,
+                            private_memory_cause(&error),
+                        );
+                        Response::error(IpcError::TransferFailed)
+                    }
+                    Err(error) => {
+                        sel4::debug_println!(
+                            "SLIME_MEM rejected task={} delta={delta} error={error:?}",
+                            id.0
+                        );
+                        Response::error(IpcError::InvalidOperation)
+                    }
+                };
+                ipc::reply(response);
+            }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(
                     generation, launched, allocator, tasks, id, &words,
@@ -3927,6 +4109,10 @@ fn construct_child(
                 }
                 priorities
             },
+            // Deny-by-default, as on the boot path: a spawned child's quota is
+            // generation-declared budget data C10.2 adds, not something this
+            // path may invent (C10.1).
+            0,
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 
@@ -4496,6 +4682,23 @@ fn reclaim_task_objects(
             "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",
             id.0
         ),
+    }
+}
+
+/// Stable name for a private-memory refusal, for the root's own marker (C10.1).
+///
+/// A short token rather than the `Debug` rendering, because a gate asserts on
+/// it: the fields inside each variant are diagnostic detail that varies with
+/// the request, while the *cause* is the thing a check must be able to pin.
+/// Both are emitted — this as `cause=`, the full variant as `detail=` — so the
+/// marker names the class without hiding the numbers.
+fn private_memory_cause(error: &private_memory::GrowError) -> &'static str {
+    match error {
+        private_memory::GrowError::DeltaOverflow { .. } => "delta-overflow",
+        private_memory::GrowError::ReservationExceeded { .. } => "reservation",
+        private_memory::GrowError::QuotaExceeded { .. } => "quota",
+        private_memory::GrowError::TotalExceeded { .. } => "root-ceiling",
+        private_memory::GrowError::Frames { .. } => "frames",
     }
 }
 
@@ -5498,13 +5701,16 @@ const fn buffer_operation_name(operation: BufferLifecycleRequest) -> &'static st
 /// Requests and faults arrive on the same endpoint object under different
 /// badges, because the non-MCS kernel resolves a thread's fault handler in that
 /// thread's own CSpace; see `task.rs`.
+#[allow(clippy::too_many_arguments)]
 fn serve(
     endpoint: sel4::cap::Endpoint,
     index: usize,
     tasks: &mut TaskTable<MAX_TASKS>,
+    allocator: &mut ObjectAllocator,
     supervision: &mut SupervisionTable<MAX_TASKS>,
     fixtures: &mut [Option<Fixture>; FIXTURE_TASKS],
     buffer_phase: &mut BufferPhase,
+    memory_phase: &mut MemoryPhase,
 ) {
     for _ in 0..MAX_SERVICE_ITERATIONS {
         if fixtures[index].is_none_or(|fixture| fixture.terminated) {
@@ -5541,9 +5747,11 @@ fn serve(
                     id,
                     position,
                     tasks,
+                    allocator,
                     supervision,
                     fixtures,
                     buffer_phase,
+                    memory_phase,
                 );
             }
             Arrival::Fault => serve_fault(
@@ -5570,9 +5778,11 @@ fn serve_request(
     id: TaskId,
     position: usize,
     tasks: &mut TaskTable<MAX_TASKS>,
+    allocator: &mut ObjectAllocator,
     supervision: &mut SupervisionTable<MAX_TASKS>,
     fixtures: &mut [Option<Fixture>; FIXTURE_TASKS],
     buffer_phase: &mut BufferPhase,
+    memory_phase: &mut MemoryPhase,
 ) {
     let Some(role) = fixtures[position].map(|fixture| fixture.role) else {
         ipc::reply(Response::error(IpcError::InvalidOperation));
@@ -5612,7 +5822,12 @@ fn serve_request(
             }
             ipc::reply(Response::success(0, role.directive()));
         }
-        // The clean-exit fixture's shared-buffer report. The root records what
+        // The clean-exit fixture's phase reports. Both arrive on this label and
+        // are told apart by the tag in MR1: the shared-buffer phase sends its
+        // observed pattern word, the private-memory phase sends
+        // `MEM_REPORT_TAG`. The root records what the child claims and answers
+        // immediately; adjudication happens once, after the fixture has
+        // finished, in `report_buffer_phase` and `report_memory_phase`.
         shared_buffer_labels::MAP => {
             if info.length() < 3 || words[0] != REQUEST_TAG {
                 sel4::debug_println!(
@@ -5622,6 +5837,17 @@ fn serve_request(
                     words[0]
                 );
                 ipc::reply(Response::error(IpcError::InvalidLength));
+                return;
+            }
+            if words[1] == MEM_REPORT_TAG {
+                memory_phase.flags |= words[2] & MEM_REPORT_ALL;
+                memory_phase.reported = true;
+                sel4::debug_println!(
+                    "SLIME_MEM child reported task={} flags={:#x}",
+                    id.0,
+                    words[2],
+                );
+                ipc::reply(Response::success(0, 0));
                 return;
             }
             buffer_phase.observed = words[1];
@@ -5636,6 +5862,45 @@ fn serve_request(
                 words[2],
             );
             ipc::reply(Response::success(0, 0));
+        }
+        // C10.1's growth, served on the fixture path too. The mechanism is the
+        // same `TaskTable` operation the component graph's dispatcher calls;
+        // what differs is only which loop received the request.
+        lifecycle_labels::PRIVATE_MEMORY_GROW => {
+            let delta = words[0] as usize;
+            let response = match tasks.grow_private_memory(allocator, id, delta) {
+                Ok(previous) => {
+                    let region = tasks
+                        .get(id)
+                        .map(|task| task.private_memory)
+                        .unwrap_or(private_memory::Region::DENIED);
+                    sel4::debug_println!(
+                        "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={}",
+                        id.0,
+                        region.pages(),
+                        region.base(),
+                        region.quota(),
+                        tasks.private_memory().total_pages(),
+                    );
+                    Response::success(previous as i64, region.base() as sel4::Word)
+                }
+                Err(task::TaskError::PrivateMemory(error)) => {
+                    sel4::debug_println!(
+                        "SLIME_MEM refused task={} delta={delta} cause={} detail={error:?}",
+                        id.0,
+                        private_memory_cause(&error),
+                    );
+                    Response::error(IpcError::TransferFailed)
+                }
+                Err(error) => {
+                    sel4::debug_println!(
+                        "SLIME_MEM rejected task={} delta={delta} error={error:?}",
+                        id.0
+                    );
+                    Response::error(IpcError::InvalidOperation)
+                }
+            };
+            ipc::reply(response);
         }
         // A clean exit is a send, not a call: the task is suspended rather than
         // replied to.
@@ -6024,5 +6289,54 @@ fn report_buffer_phase(
     sel4::debug_println!(
         "SLIME_BUF rights enforced ro_write=refused wx_execute=refused probes={} supervised=1",
         phase.probes,
+    );
+}
+
+/// Adjudicate the private-memory phase from what the root observed, and print
+/// the ordered markers that record it (C10.1).
+///
+/// Every verdict is the root's. The child reports what it saw from inside its
+/// own address space — zeros, a surviving pattern, a refusal — and the root
+/// checks those against its own page accounting, which the child cannot see and
+/// cannot forge. A shortfall is fatal rather than a missing marker, so a
+/// mechanism that silently stopped bounding growth fails the gate loudly.
+fn report_memory_phase(phase: &MemoryPhase, tasks: &TaskTable<MAX_TASKS>) {
+    if !phase.reported {
+        fatal!("SLIME_MEM FAIL child never reported the private-memory phase")
+    }
+    let missing = MEM_REPORT_ALL & !phase.flags;
+    if missing != 0 {
+        fatal!(
+            "SLIME_MEM FAIL child reported {:#x}, missing {missing:#x} of {MEM_REPORT_ALL:#x}",
+            phase.flags
+        )
+    }
+    // The root's own half: the clean-exit fixture grew to exactly its declared
+    // ceiling and nothing else grew at all. The child can attest that its
+    // pattern survived; only the root can say how many pages it handed out.
+    let table = tasks.private_memory();
+    if table.total_pages() != PRIVATE_QUOTA_PAGES {
+        fatal!(
+            "SLIME_MEM FAIL {} live page(s), expected exactly {PRIVATE_QUOTA_PAGES}",
+            table.total_pages()
+        )
+    }
+    // Exactly two grants, which is the property a total alone cannot state: the
+    // two size queries and the refusal must each take no page, so a mechanism
+    // that charged a query, or charged twice per growth, would reach the same
+    // four-page total by a different and wrong route.
+    if table.grants() != MEM_EXPECTED_GRANTS {
+        fatal!(
+            "SLIME_MEM FAIL {} growth grant(s), expected exactly {MEM_EXPECTED_GRANTS}",
+            table.grants()
+        )
+    }
+    sel4::debug_println!(
+        "SLIME_MEM enforced quota={PRIVATE_QUOTA_PAGES} pages={} grants={} grown={} reclaimed={} flags={:#x}",
+        table.total_pages(),
+        table.grants(),
+        table.grown_pages(),
+        table.reclaimed_pages(),
+        phase.flags,
     );
 }

@@ -47,6 +47,16 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
     };
     match label {
         lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
+        // C10.1's private-memory growth. Lifecycle for the same reason
+        // `BOOT_ACTION` below is: the service is the *authority gate*, and a
+        // private heap is a property of being a task rather than of any grant.
+        // Gating it on a capability service would make whether a component can
+        // allocate depend on an unrelated grant shape, and `SERVICE_LIFECYCLE`
+        // is the one every launched instance declares. What bounds the
+        // operation is the caller's own page quota, which is a budget rather
+        // than an authority: a task the generation names no quota for is
+        // refused by its zero ceiling.
+        lifecycle_labels::PRIVATE_MEMORY_GROW => Some(SERVICE_LIFECYCLE),
         // B70's boot action. Lifecycle rather than the capability table, though
         // the label sits in that table's namespace, because the service is the
         // *authority gate* and this operation needs the one every instance
@@ -1091,6 +1101,10 @@ mod tests {
         for (label, service) in [
             (lifecycle_labels::EXIT, SERVICE_LIFECYCLE),
             (lifecycle_labels::UNHEALTHY, SERVICE_LIFECYCLE),
+            // C10.1: gated on the one service every launched instance declares,
+            // because a private heap is a property of being a task rather than
+            // of any grant.
+            (lifecycle_labels::PRIVATE_MEMORY_GROW, SERVICE_LIFECYCLE),
             (spawn_labels::SPAWN, SERVICE_SPAWN),
             (supervision_labels::STATUS, SERVICE_SUPERVISION),
             (supervision_labels::DERIVE, SERVICE_SUPERVISION),
@@ -1179,12 +1193,12 @@ mod tests {
             20,
             // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, 38 until
             // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, 40 until
-            // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, and 42 until
-            // `SPAWN_BUDGET`. Moving one out of this list is the whole change: a
-            // number this test asserts routes nowhere and a number the contract
-            // declares are the same fact stated twice, so assigning a label must
-            // fail here first.
-            43,
+            // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, 42 until `SPAWN_BUDGET`,
+            // and 43 until C10.1's `PRIVATE_MEMORY_GROW`. Moving one out of
+            // this list is the whole change: a number this test asserts routes
+            // nowhere and a number the contract declares are the same fact
+            // stated twice, so assigning a label must fail here first.
+            44,
             64,
             sel4::Word::MAX,
         ] {
