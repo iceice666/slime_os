@@ -321,3 +321,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-22 | [B70 closes: the last nine `include!` sites, and the stack the ceilings overflowed](2026-08-22-b70-profile-include-closure/index.md) | Change | Verified | B70, CP2 |
 | 2026-08-22 | [The open milestones still specified against the kernel P5 deleted](2026-08-22-roadmap-retired-kernel-audit/index.md) | Audit | Verified | C9, C10, C10.1, C10.2, C10.3, P3, P4, D2, D4, M1, M2, RP2, CP2, CP5, B70 |
 | 2026-08-23 | [C10.1: a task-private growable region, and the two accounting inverses it needed](2026-08-23-c10-1-private-memory-mechanism/index.md) | Change | Verified | C10.1, C10, C10.2, C7.3, B9, B23 |
+| 2026-08-23 | [C10.2: a second budget rather than a fifth column, and the gate that was mutating its own prose](2026-08-23-c10-2-private-memory-budget/index.md) | Change | Verified | C10.2, C10, C10.1, C10.3, C7.3, B5, B8, B55, B63, B68 |

@@ -806,7 +806,7 @@ A simulated sensor/controller/actuator graph runs through the native fabric with
 
 ## C10: Bounded private component memory
 
-**Status:** In progress — C10.1 complete; C10.2–C10.4 not started.
+**Status:** In progress — C10.1 and C10.2 complete; C10.3–C10.4 not started.
 
 **Depends on:** C7's per-holder quota, supervision-subtree accounting, and
 reclamation pattern, and backlog item **B9** (resolved 2026-07-28), whose task
@@ -925,53 +925,69 @@ records this repository lacking.
 
 ### C10.2 — Generation-declared private-memory budget
 
-**Status:** Not started.
+**Status:** Complete.
+
+**Delivered:** `contracts/private-memory-budget/v1` — a sibling of
+`shared-buffer-budget/v1` rather than a fifth column on it, since the two bound
+unrelated mechanisms and most components use one and not the other. Same shape:
+32-byte header, sorted-unique 36-byte entries, 32-holder bound, carried as a
+`KIND_RESOURCE` object authenticated by the generation's existing digest table.
+Its holder identity has its own domain tag (`slime-private-memory-holder-v1`),
+so an identity computed for one budget can never be replayed in the other, and a
+host test asserts the two never collide on the same name. The schema also
+publishes the root's `regionPages`/`totalPages` ceilings, which
+`slime-root/src/private_memory.rs` pins against its own constants with
+`const _: () = assert!` — a drift between builder and root is a build failure
+rather than a boot-time refusal.
+
+Validation is eager and closes the whole generation:
+`generation::private_memory_budget_admission` runs inside `Admission::admit`,
+before any component launches, and refuses both a quota above the per-task
+reservation and B8's aggregate case where holders each fit but cannot all peak
+at once. A *malformed* budget fails the generation too, which is deliberately
+asymmetric with the C7.3 path that treats one as absent: deny-by-default makes an
+undecodable shared-buffer budget harmless, but a private-memory budget that
+silently read as absent would be indistinguishable from a quota a component was
+promised and never got, and the boot would look healthy.
+
+Both launch paths install the declared ceiling — resolved *before*
+`TaskTable::create`, not after it, because `create` feeds the quota into the
+arena plan and an arena is fixed at construction. `build-generation.py` mirrors
+every rule host-side and refuses a manifest declaring holders without the
+resource object, or the object without holders.
+
+**Exit condition (observed):** `just private_memory_check` boots
+`sel4-private-memory.zti`, which declares one executable twice — as a granted
+holder and an omitted one. The gate reads the declared quota out of the fixture
+rather than restating it, and the probe discovers its own ceiling by growing one
+page at a time until refused, so the assertion is a measurement against the
+generation rather than two copies of a constant. Observed: `init` and the omitted
+holder at `declared=0 installed=0 base=0x0` (no window at all, not merely a zero
+quota), the granted holder at `declared=3 installed=3 base=0x400000`, a size
+query answering without allocating, three growths, every fresh page read as zero,
+a pattern written before the second growth still readable after the third,
+`cause=quota detail=QuotaExceeded { pages: 3, delta: 1, quota: 3 }`, the region
+unchanged after the refusal, and the omitted holder refused its first page by
+`cause=reservation`. Every page charged is attributed to a holder by resolving
+each growth's task id through the root's own quota records, so the right total
+charged to the wrong holder fails.
+
+"A generation declaring no budget at all boots with every component denied" is
+asserted on `just sel4_component_graph_check`, which boots one: the root reports
+`SLIME_MEM budget holders=0 declared=0`, and two failure markers reject any
+installed ceiling or served growth on that plane. Three injections proved the
+evidence non-vacuous: lowering the fixture's `pageQuota` 3 → 2 moved the measured
+ceiling to 2; making the root ignore the budget failed the gate with `declared=2
+installed=2` on `init` and on the omitted holder; and a hand-built transcript
+charging the omitted holder the granted holder's pages is refused by name.
+
+**Gates:** `just private_memory_check` (11 markers across 4 causal chains),
+`just sel4_component_graph_check` (31 markers), `just test_sel4_root` (149 host
+tests), `just test_host` (10 new decoder tests), `just contracts_check`,
+`just generation_check`, `just sel4_gate_control_check` (34 gates, 1318
+mutations).
 
 **Depends on:** C10.1.
-
-#### Deliverables
-
-- define a versioned Zutai private-memory budget resource under `../contracts/`,
-  carried as a generation `KIND_RESOURCE` object and authenticated by the
-  existing object digest table, reusing the domain-separated holder identity,
-  sorted unique entries, and bounded holder count of `shared-buffer-budget/v1`
-  rather than widening that contract;
-- validate the resource eagerly while decoding the generation, so a malformed,
-  unsorted, duplicated, or globally impossible budget fails the whole generation
-  closed before any component launches;
-- reject aggregate over-commitment as B8 requires: the summed holder quotas must
-  fit the root-wide ceiling, so a budget that validates is one the root can
-  honour with every holder at its ceiling at once;
-- install each component's quota at spawn and leave a holder absent from the
-  resource at its deny-by-default zero;
-- mirror the encoding and bound rules host-side, so builder/root drift fails
-  in `just generation_check` instead of at boot.
-
-#### Required checks
-
-- malformed, unsorted, duplicated, over-bound, and aggregate-over-committed
-  budgets each fail generation decode;
-- two builds from identical normalized input emit byte-identical resource bytes
-  and object identities;
-- a component named in the budget boots with exactly its declared ceiling, and
-  one omitted from it grows nothing;
-- lowering one holder's declared quota lowers exactly that holder's ceiling and
-  leaves every other holder unchanged;
-- a generation declaring no budget at all boots with every component denied.
-
-#### Planned verification target
-
-```sh
-just private_memory_check
-```
-
-#### Exit condition
-
-One authenticated generation resource fixes every component's private-memory
-ceiling; the declared quota is the live ceiling on the running system, an
-undeclared component allocates nothing, and every malformed or over-committed
-budget fails the generation closed rather than degrading into
-first-come-first-served.
 
 ### C10.3 — Userspace allocator and live quota evidence
 
