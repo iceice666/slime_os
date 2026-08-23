@@ -114,19 +114,37 @@ for crate in crates:
 # 3. The allocator is scoped to the components that declare it, and the builder's
 #    grouping matches. Read from the crates rather than restated here, so the two
 #    cannot drift: the builder's set is the operand under test.
+#
+#    C10.3 makes this two independent groups, because there are now two
+#    allocators and they are mutually exclusive: `slime-rt/heap` is the store
+#    plane's fixed `.bss` bump allocator, `slime-rt/private-heap` is the free
+#    list over the generation-declared private region, and `slime-rt/lib.rs`
+#    refuses both in one link. So a crate declaring both is a compile error
+#    waiting to happen, and the builder needs a third invocation rather than a
+#    wider second one.
 declared_store = set()
+declared_private_heap = set()
 for crate in crates:
     data = manifest(crate / "Cargo.toml")
     deps = data.get("dependencies", {})
+    runtime_features = (deps.get("slime-rt") or {}).get("features", [])
     gpt = "gpt" in (deps.get("boot-contracts") or {}).get("features", [])
-    heap = "heap" in (deps.get("slime-rt") or {}).get("features", [])
+    heap = "heap" in runtime_features
+    private_heap = "private-heap" in runtime_features
     if gpt != heap:
         fail(
             f"{crate.name}: declares only one of boot-contracts/gpt and slime-rt/heap; "
             "the object store and the allocator that backs it go together"
         )
+    if heap and private_heap:
+        fail(
+            f"{crate.name}: declares both slime-rt/heap and slime-rt/private-heap; "
+            "#[global_allocator] is one symbol per link, so a component picks one"
+        )
     if gpt and heap:
         declared_store.add(crate.name)
+    if private_heap:
+        declared_private_heap.add(crate.name)
 if declared_store != set(BUILDER.STORE_COMPONENTS):
     fail(
         "the crates declaring an allocator "
@@ -134,6 +152,19 @@ if declared_store != set(BUILDER.STORE_COMPONENTS):
         f"({sorted(BUILDER.STORE_COMPONENTS)}); a component gaining an allocator "
         "must move groups in the same change, or a plain component in its "
         "invocation silently links a #[global_allocator]"
+    )
+if declared_private_heap != set(BUILDER.PRIVATE_HEAP_COMPONENTS):
+    fail(
+        "the crates declaring the private-region allocator "
+        f"({sorted(declared_private_heap)}) are not the builder's private-heap group "
+        f"({sorted(BUILDER.PRIVATE_HEAP_COMPONENTS)}); the two allocators cannot "
+        "coexist in one cargo invocation, so this mismatch fails the component "
+        "build rather than mis-linking it"
+    )
+if declared_store & declared_private_heap:
+    fail(
+        "a crate is in both allocator groups: "
+        f"{sorted(declared_store & declared_private_heap)}"
     )
 # And the allocator must not reach the shared libraries, which every component
 # links: a `heap`/`gpt` feature there would put it back in all 52.
@@ -213,7 +244,8 @@ if failures:
 
 print(
     f"component crate split check: {len(crates)} component crates, each one workspace package with "
-    f"one binary and no private manifest parser; {len(declared_store)} declare the allocator and "
-    "match the builder's store group; every package carries a release-profile stanza; no shared "
-    "source remains in components/bins"
+    f"one binary and no private manifest parser; {len(declared_store)} declare the store allocator "
+    f"and {len(declared_private_heap)} the private-region allocator, each matching the builder's "
+    "own build group; every package carries a release-profile stanza; no shared source remains in "
+    "components/bins"
 )

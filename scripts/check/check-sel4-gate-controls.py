@@ -108,7 +108,17 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # refusal and named cause, its measured ceiling with the zeroed reads and
     # surviving pattern, the omitted holder's reservation refusal, and the
     # unchanged region afterwards.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 11),
+    #
+    # C10.3: 11 -> 19. The same plane gains a second pair of instances, this one
+    # allocating through `Vec`/`Box`/`String` over the declared region rather
+    # than growing raw pages: both instances' installed ceilings, the granted
+    # holder's reuse-phase boundary and its self-check reporting nothing leaked,
+    # its refusal past the ceiling with the cause named, its post-refusal report
+    # proving it survived, and the omitted holder's two lines showing an
+    # allocator that found no region at all. The boundary line is pinned here as
+    # well as consumed by the gate's reuse window, so a probe that stopped
+    # emitting it fails rather than leaving that window empty.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 19),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

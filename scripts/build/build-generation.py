@@ -418,6 +418,13 @@ STORE_COMPONENTS = frozenset(
         "sel4-transfer-probe",
     }
 )
+# C10.3's private-region allocator, scoped the same way and for the same
+# reason: `slime-rt/private-heap` registers a *different*
+# `#[global_allocator]`, mutually exclusive with the store plane's, so its
+# consumers need a third build group rather than joining either of the other
+# two. `just component_crate_split_check` compares this against what the crates
+# declare.
+PRIVATE_HEAP_COMPONENTS = frozenset({"private-heap-probe"})
 PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
@@ -2414,10 +2421,23 @@ def build_rust_components(
         # the scoping real: Cargo unifies features across every package in one
         # invocation, so building a store component alongside a plain one would
         # switch `#[global_allocator]` on for the plain one too — measured, not
-        # assumed. Two invocations keep the plain group's `slime-rt` heap-free.
+        # assumed. Separate invocations keep the plain group's `slime-rt`
+        # heap-free.
+        #
+        # C10.3 adds a third group rather than widening either: its
+        # `private-heap` allocator is mutually exclusive with the store plane's
+        # (`slime-rt/lib.rs` refuses both with a `compile_error!`, since
+        # `#[global_allocator]` is one symbol per link), so unifying the two
+        # feature sets in one invocation would fail to compile rather than
+        # silently over-link.
         store = sorted(name for name in components if name in STORE_COMPONENTS)
-        plain = sorted(name for name in components if name not in STORE_COMPONENTS)
-        for group in (plain, store):
+        private_heap = sorted(name for name in components if name in PRIVATE_HEAP_COMPONENTS)
+        plain = sorted(
+            name
+            for name in components
+            if name not in STORE_COMPONENTS and name not in PRIVATE_HEAP_COMPONENTS
+        )
+        for group in (plain, store, private_heap):
             if not group:
                 continue
             command = list(base)

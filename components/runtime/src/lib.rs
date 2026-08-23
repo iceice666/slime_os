@@ -1,7 +1,25 @@
 #![no_std]
 
+// Two allocators, never both: `#[global_allocator]` is one symbol per link, and
+// the choice is a property of the component rather than of an allocation.
+// `heap` is CP3's fixed `.bss` bump allocator for the store plane; C10.3's
+// `private-heap` is a free list over the generation-declared private region.
+#[cfg(all(feature = "heap", feature = "private-heap"))]
+compile_error!(
+    "slime-rt: `heap` and `private-heap` both register a #[global_allocator]; \
+     a component declares exactly one"
+);
+
 #[cfg(feature = "heap")]
 mod heap;
+#[cfg(feature = "private-heap")]
+mod private_heap;
+/// C10.3's startup self-check over the private-region allocator. A module
+/// rather than flat re-exports, mirroring
+/// `slime_components::shared_buffer_probe`: `probe` and `ProbeOutcome` are only
+/// meaningful under the name of the thing they probe.
+#[cfg(feature = "private-heap")]
+pub mod private_heap_probe;
 mod sha256;
 mod syscall;
 
@@ -9,6 +27,8 @@ mod runtime;
 
 #[cfg(feature = "heap")]
 pub use heap::{BumpHeap, HEAP_BYTES, heap_used};
+#[cfg(feature = "private-heap")]
+pub use private_heap::{GROWTH_PAGES, PrivateHeap, PrivateHeapStats, private_heap_stats};
 pub use sha256::sha256;
 pub use syscall::{
     BufferLoan, BufferOccupancy, CapabilityDisposition, DIRECTORY_ROOT_BYTES, ERR_BAD_CAP,

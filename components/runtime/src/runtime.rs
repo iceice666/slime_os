@@ -34,7 +34,7 @@ pub const MAX_THREADS: usize = 2;
 
 /// Granule size for this configuration, used to place the two runtime pages the
 /// root maps above the image.
-const GRANULE: usize = sel4::cap_type::Granule::FRAME_OBJECT_TYPE.bytes();
+pub(crate) const GRANULE: usize = sel4::cap_type::Granule::FRAME_OBJECT_TYPE.bytes();
 
 sel4::sel4_cfg_if! {
     if #[sel4_cfg(PRINTING)] {

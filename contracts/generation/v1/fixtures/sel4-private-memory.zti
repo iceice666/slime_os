@@ -16,6 +16,13 @@
       role = "application";
       spawnBudget = 0;
     };
+    {
+      commandProfile = [];
+      name = "private-heap-probe";
+      object = "sha256:private-heap-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
   ];
   formatVersion = 1;
   generation = 40;
@@ -54,6 +61,24 @@
       name = "private-memory-denied";
       owner = "root";
     };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "private-heap-probe";
+      health = "optional";
+      name = "private-heap-granted";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "private-heap-probe";
+      health = "optional";
+      name = "private-heap-denied";
+      owner = "root";
+    };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
@@ -65,6 +90,11 @@
     };
     {
       id = "sha256:private-memory-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-heap-probe";
       kind = "component";
       size = 65536;
     };
@@ -83,6 +113,10 @@
     {
       holder = "private-memory-granted";
       pageQuota = 3;
+    };
+    {
+      holder = "private-heap-granted";
+      pageQuota = 24;
     };
   ];
   sharedBufferBudget = [];

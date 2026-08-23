@@ -85,11 +85,22 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         # The root resolves the budget once and installs every declared
         # instance's ceiling before any of them run, so these are genuinely
-        # sequential and in construction order.
+        # sequential and in construction order — a single loop in the root, not
+        # a scheduling order.
+        #
+        # Every instance, including both zero-quota ones. Without a marker per
+        # instance, a root that installed no ceiling at all for a denied holder
+        # would emit no record, and `check_declared_is_installed` — which
+        # iterates whatever records exist — would pass on the deny-by-default
+        # half by finding nothing to check.
         "the budget was admitted and every declared ceiling installed",
         (
             r"SLIME_MEM budget holders=(\d+) declared=1",
             r"SLIME_MEM quota task=\d+ instance=init declared=0 installed=0 base=0x0",
+            r"SLIME_MEM quota task=\d+ instance=private-heap-denied "
+            r"declared=0 installed=0 base=0x0",
+            r"SLIME_MEM quota task=\d+ instance=private-heap-granted "
+            r"declared=(\d+) installed=(\d+) base=0x[0-9a-f]+",
             r"SLIME_MEM quota task=\d+ instance=private-memory-denied "
             r"declared=0 installed=0 base=0x0",
             r"SLIME_MEM quota task=\d+ instance=private-memory-granted "
@@ -117,6 +128,37 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        # C10.3's granted holder: the self-check enters its reuse phase, reports,
+        # then the deliberate over-allocation is refused and the component
+        # survives to report again. Causal within the chain — the refusal cannot
+        # precede the check that established the heap works.
+        #
+        # The reuse boundary is a required marker as well as the window
+        # `check_growth_was_batched_and_reused` measures growth in, so a probe
+        # that stopped emitting it fails here rather than silently making that
+        # window empty and its assertion vacuous.
+        "the granted holder allocated through ordinary collections, then hit its ceiling",
+        (
+            r"\[private-heap-probe\] private-heap reuse phase begins",
+            r"\[private-heap-probe\] private-heap quota live pages=(\d+) "
+            r"growths=(\d+) reuse_growths=0 leaked=0",
+            r"SLIME_MEM refused task=\d+ delta=[1-9]\d* cause=quota "
+            r"detail=QuotaExceeded \{ pages: (\d+), delta: \d+, quota: (\d+) \}",
+            r"\[private-heap-probe\] granted pages=(\d+) growths=(\d+) refused=1 reused=1",
+        ),
+    ),
+    (
+        # The omitted holder's own sequence. Its allocator finds no region, so
+        # it never reaches the root at all — which is why the assertion is the
+        # component's own two lines rather than a root record.
+        "the omitted holder could not allocate at all",
+        (
+            r"\[private-heap-probe\] private-heap denied pages=0 growths=0 "
+            r"reuse_growths=0 leaked=0",
+            r"\[private-heap-probe\] denied pages=0 growths=0 refused=1",
+        ),
+    ),
+    (
         "the plane ran to completion with no declared instance failing",
         (
             r"\[init\] private memory plane complete",
@@ -137,11 +179,18 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_MEM FAIL",
     r"\[private-memory-probe\] FAIL",
+    r"\[private-heap-probe\] FAIL",
     r"\[init\] private memory plane fail",
     # A growth the root served for a holder the budget does not name would be
     # the whole milestone failing silently, so it is a failure marker rather
     # than an absent-marker check.
     r"SLIME_MEM grown task=\d+ delta=[1-9]\d* previous=\d+ pages=\d+ base=0x0 ",
+    # C10.3: exhaustion must be a structural error the component observes. A
+    # component that faulted or was terminated instead would leave the chain's
+    # report missing, but naming the outcomes explicitly says *which* failure
+    # happened rather than only that a marker is absent.
+    r"\[private-heap-probe\] private-heap exhausted",
+    r"\[private-heap-probe\] private-heap failed",
 )
 
 
@@ -240,7 +289,7 @@ def boot(profile: dict[str, object]) -> str:
     lines: list[str] = []
     terminal = re.compile(
         r"SLIME_GRAPH HEALTHY|SLIME_ROOT FATAL|private memory plane fail"
-        r"|\[private-memory-probe\] FAIL"
+        r"|\[private-memory-probe\] FAIL|\[private-heap-probe\] FAIL"
     )
     try:
         assert process.stdout is not None
@@ -360,7 +409,7 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
 
 
 def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, int]) -> None:
-    """Every page charged went to the holder that declared it.
+    """Every page charged went to the holder that declared it, within its ceiling.
 
     Per *instance*, not per task: the `SLIME_MEM grown` record carries only a
     task id, so summing by that id alone would prove the right total was charged
@@ -369,10 +418,19 @@ def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, 
     resolved to an instance name through the root's own `SLIME_MEM quota`
     records, which name both, so the attribution is checked rather than assumed.
 
-    Queries (`delta=0`) and refusals must charge nothing, so the sum of served
-    deltas per holder is exactly what that holder's declared quota authorized. A
-    mechanism that charged a page for a query would reach the right final page
-    count by a different and wrong route.
+    Queries (`delta=0`) and refusals must charge nothing, so a holder's summed
+    served deltas are exactly what its declared quota authorized. A mechanism
+    that charged a page for a query would reach the right final page count by a
+    different and wrong route.
+
+    Bounded rather than equal, on C10.3: the C10.2 probes grow one page at a time
+    until refused, so they necessarily land on their exact ceiling, but a
+    component allocating through the C10.3 allocator takes only the pages its
+    collections need — 22 of 24 on this plane. Requiring equality there would
+    make the gate fail whenever the allocator's batching policy changed, which is
+    the one thing C10.3 deliberately left in userspace. So: never above the
+    ceiling, and never zero for a holder that declared one, because a holder
+    charged nothing at all is the milestone silently not working.
     """
     names = dict(
         re.findall(
@@ -400,11 +458,119 @@ def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, 
             )
     for instance, pages in sorted(charged.items()):
         expected = declared.get(instance, 0)
-        if pages != expected:
+        if pages > expected:
             fail(
                 f"{instance}: the root charged {pages} page(s) against a declared "
                 f"quota of {expected}"
             )
+        if expected > 0 and pages == 0:
+            fail(
+                f"{instance}: declares {expected} page(s) but was charged none, so "
+                "nothing proves the quota is reachable"
+            )
+
+
+def check_growth_was_batched_and_reused(transcript: str, declared: dict[str, int]) -> None:
+    """C10.3: the allocator asked in batches and reused what it freed.
+
+    Both halves are read from the *root's* `SLIME_MEM grown` records rather than
+    from the probe's report, because the probe's own numbers come from the
+    allocator it is testing: one that lost its freed spans and grew again while
+    under-counting itself would report a self-consistent lie. The component's
+    part is only to bracket the phases, which it cannot fake — the root's
+    records fall inside or outside a window, whatever the component claims about
+    them.
+
+    Batching: no growth as small as a single page. An allocator asking per
+    allocation would make a syscall of every `Vec` push that outgrew its
+    capacity — the shape the milestone's second deliverable exists to avoid —
+    and its first request is one page for the first small allocation.
+
+    Reuse: no growth between the probe's reuse-phase boundary line and its
+    report. That phase frees everything and asks for a comparable amount again,
+    so a growth served inside the window is the free list failing to hand the
+    memory back, and a component bound by a small declared ceiling that cannot
+    reuse memory cannot run past its first burst of allocations.
+    """
+    holder = "private-heap-granted"
+    if holder not in declared:
+        fail(f"the fixture declares no quota for {holder}, so C10.3 asserts nothing")
+    task = None
+    for candidate, instance in re.findall(
+        r"SLIME_MEM quota task=(\d+) instance=(\S+) declared=\d+ installed=\d+ ",
+        transcript,
+    ):
+        if instance == holder:
+            task = candidate
+    if task is None:
+        fail(f"the root reported no installed ceiling for {holder}")
+    served = [
+        int(delta)
+        for delta in re.findall(
+            rf"SLIME_MEM grown task={task} delta=([1-9]\d*) ",
+            transcript,
+        )
+    ]
+    if not served:
+        fail(f"{holder}: the allocator never grew its region")
+    # The *minimum*, not the maximum. A purely demand-driven allocator asking
+    # one page per allocation would still show a large growth for the probe's
+    # biggest single reallocation, so `max(served)` passes without asserting
+    # anything. Its *first* growth, though, is one page for the first tiny
+    # `Vec` element, and a batching policy has no growth smaller than its batch
+    # floor. Testing the minimum discriminates, and does so independently of
+    # whatever `GROWTH_PAGES` happens to be.
+    if min(served) < 2:
+        fail(
+            f"{holder}: a growth of one page ({served}), so the allocator is "
+            "asking per allocation rather than in batches"
+        )
+    boundary = re.search(
+        r"\[private-heap-probe\] private-heap reuse phase begins",
+        transcript,
+    )
+    if boundary is None:
+        fail(f"{holder}: the self-check never entered its reuse phase")
+    report = re.search(
+        r"\[private-heap-probe\] private-heap quota live pages=(\d+) growths=(\d+) ",
+        transcript,
+    )
+    if report is None:
+        fail(f"{holder}: the startup self-check did not report")
+    if len(served) != int(report.group(2)):
+        fail(
+            f"{holder}: the root served {len(served)} growth(s) but the component "
+            f"counted {report.group(2)}; the two accounts must agree"
+        )
+    # Reuse, asserted against the root's own records rather than the component's
+    # `reuse_growths` field: that field is produced by the allocator under test,
+    # so one that lost the freed spans and grew again could under-count itself
+    # into agreement. The probe frees everything and reallocates a comparable
+    # amount between these two lines, so a growth served in that window is the
+    # free list failing to give the memory back.
+    reuse_window = transcript[boundary.end() : report.start()]
+    during = re.findall(rf"SLIME_MEM grown task={task} delta=([1-9]\d*) ", reuse_window)
+    if during:
+        fail(
+            f"{holder}: the root served {during} more page(s) during the reuse "
+            "phase, so freed memory was not handed out again"
+        )
+    # Past the report is the deliberate over-ceiling request, which must be
+    # refused rather than served.
+    late = re.findall(
+        rf"SLIME_MEM grown task={task} delta=([1-9]\d*) ",
+        transcript[report.end() :],
+    )
+    if late:
+        fail(
+            f"{holder}: the root served {late} more page(s) after the self-check, "
+            "so the over-ceiling request was satisfied rather than refused"
+        )
+    if sum(served) != int(report.group(1)):
+        fail(
+            f"{holder}: the root served {sum(served)} page(s) but the component "
+            f"reports {report.group(1)} backed"
+        )
 
 
 def main() -> None:
@@ -420,11 +586,13 @@ def main() -> None:
     check_declared_is_installed(transcript, declared)
     check_measured_ceiling(transcript, declared)
     check_only_declared_pages_were_charged(transcript, declared)
+    check_growth_was_batched_and_reused(transcript, declared)
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "
         f"{len(CHAINS)} causal chains; the declared quota "
-        f"({declared['private-memory-granted']} page(s)) is the measured ceiling "
+        f"({declared['private-memory-granted']} page(s)) is the measured ceiling, "
+        f"{declared['private-heap-granted']} page(s) is the allocator's ceiling, "
         "and an omitted holder grows nothing"
     )
 

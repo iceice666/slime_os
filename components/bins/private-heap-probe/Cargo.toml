@@ -1,0 +1,27 @@
+[package]
+name = "slime-component-private-heap-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+build = "build.rs"
+
+[[bin]]
+name = "private-heap-probe"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+# C10.3's allocator over the generation-declared private region. Mutually
+# exclusive with `heap`, and like it, the feature lives in the consuming crate's
+# manifest so the builder can group this component into its own cargo
+# invocation — Cargo unifies features across every package in one invocation, so
+# a plain component compiled alongside this one would link the allocator too.
+# `just component_crate_split_check` pins the grouping.
+slime-rt = { path = "../../runtime", features = ["private-heap"] }
+
+[build-dependencies]
+slime-build-support = { path = "../../build-support" }
+
+[lints]
+workspace = true

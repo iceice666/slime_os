@@ -18,9 +18,15 @@ doctest = false
 # Cargo unifies features across all packages in one invocation, so a plain
 # component built alongside a store component links the allocator too.
 # `just component_crate_split_check` pins both halves.
+#
+# `private-heap` (C10.3) registers a different one: a free list over the task's
+# generation-declared private region. It is mutually exclusive with `heap` —
+# `lib.rs` refuses both with a `compile_error!` — and gets its own build group
+# for exactly the same feature-unification reason.
 [features]
 default = []
 heap = []
+private-heap = []
 
 [dependencies]
 sel4 = { path = "../../deps/rust-sel4/crates/sel4" }

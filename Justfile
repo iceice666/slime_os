@@ -148,6 +148,14 @@ sel4_reclamation_check: sel4_pin_check
 # nothing. The quota is read from the fixture rather than restated in the gate,
 # and the probe discovers its ceiling by growing until refused, so the assertion
 # is a measurement against the generation rather than two copies of a constant.
+#
+# C10.3 adds a second pair of instances on the same plane, allocating through
+# `Vec`/`Box`/`String` over that declared region instead of growing raw pages:
+# the granted one crosses a growth batch, reuses freed memory without asking the
+# root for more, then observes exhaustion as a structural error and stays alive
+# to report it; the omitted one finds no region at all. One plane rather than
+# two, because both milestones assert properties of the same declared budget and
+# a second image would boot the same root twice to check adjacent halves of it.
 private_memory_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py
 
@@ -852,18 +860,57 @@ lint_sel4_root clippy_flags='-D warnings':
         --target "$targets/aarch64-sel4-minimal.json" \
         --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- {{clippy_flags}}
     cd components
-    # `-p 'slime-component-*'` selects all 52 component crates by glob, so a new
-    # component is linted without editing this recipe. `slime-build-support` is
-    # deliberately outside that namespace: it is a host-only build-script
-    # library that does not compile for the component target, and while it was
-    # named `slime-component-build` the glob swept it in and this pass died on a
-    # `std`-dependent transitive dependency. `just component_crate_split_check`
-    # pins that naming.
-    SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt \
-        cargo clippy -p slime-rt -p slime-proto -p slime-components \
-        -p 'slime-component-*' \
-        --target "$targets/aarch64-sel4-minimal.json" \
-        --target-dir ../build/sel4-cargo/lint-components "${build_std[@]}" -- {{clippy_flags}}
+    # Three invocations, not one, for the same reason the *builder* uses three:
+    # Cargo unifies features across every package named in one invocation, and
+    # `slime-rt`'s two allocators are mutually exclusive — `heap` and
+    # `private-heap` each register a `#[global_allocator]`, and one link holds
+    # one. A single `-p 'slime-component-*'` pass therefore enables both and dies
+    # on "cannot define a new global allocator" rather than reporting lints.
+    #
+    # The groups are derived from `cargo metadata`, not listed here: a component
+    # declaring an allocator moves group by editing its own manifest, and
+    # `just component_crate_split_check` pins that the builder's grouping agrees
+    # with what the crates declare.
+    groups="$(cargo metadata --format-version 1 --no-deps | python3 -c '
+    import json, sys
+    packages = json.load(sys.stdin)["packages"]
+    groups = {"plain": [], "heap": [], "private-heap": []}
+    for package in packages:
+        if not package["name"].startswith("slime-component-"):
+            continue
+        features = set()
+        for dependency in package["dependencies"]:
+            if dependency["name"] == "slime-rt":
+                features.update(dependency.get("features") or [])
+        key = "heap" if "heap" in features else "private-heap" if "private-heap" in features else "plain"
+        groups[key].append(package["name"])
+    for key, names in groups.items():
+        if names:
+            print(key + " " + " ".join("-p " + name for name in sorted(names)))
+    ')"
+    if ! grep -q '[^[:space:]]' <<< "$groups"; then
+        echo "lint_sel4_root: cargo metadata named no slime-component-* package" >&2
+        exit 1
+    fi
+    while read -r group packages; do
+        [ -n "$group" ] || continue
+        # `slime-rt` is named in *every* group, deliberately. Its two allocator
+        # modules are behind the features this grouping exists to separate, so
+        # naming it only in the plain group would cfg both of them out of every
+        # lint pass — including the new unsafe pointer arithmetic in
+        # `private_heap.rs`, which is the code in this tree that most needs
+        # `just lint_pedantic`'s `undocumented_unsafe_blocks`. A path dependency
+        # cargo merely checks is not linted. `slime-proto`/`slime-components`
+        # declare no allocator feature, so they stay with the plain group alone.
+        shared="-p slime-rt"
+        if [ "$group" = plain ]; then
+            shared="$shared -p slime-proto -p slime-components"
+        fi
+        SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt \
+            cargo clippy $shared $packages \
+            --target "$targets/aarch64-sel4-minimal.json" \
+            --target-dir "../build/sel4-cargo/lint-components-$group" "${build_std[@]}" -- {{clippy_flags}}
+    done <<< "$groups"
 
 # Every surviving workspace crate plus the seL4 product crates.
 lint_all: lint_stage0 lint_boot_contracts lint_components_host lint_sel4_root
