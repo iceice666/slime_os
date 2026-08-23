@@ -48,6 +48,11 @@ GENERATORS = (
         "shared_buffer_budget.rs",
     ),
     (
+        ROOT / "contracts" / "private-memory-budget" / "v1" / "schema.zt",
+        "private_memory_budget.py",
+        "private_memory_budget.rs",
+    ),
+    (
         ROOT / "contracts" / "fabric-graph" / "v1" / "schema.zt",
         "fabric_graph.py",
         "fabric_graph.rs",

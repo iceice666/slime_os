@@ -167,6 +167,15 @@ from boot_contracts import (
     SHARED_BUFFER_BUDGET_MAGIC,
     SHARED_BUFFER_BUDGET_VERSION,
     MAX_SHARED_BUFFER_BUDGET_HOLDERS,
+    PRIVATE_MEMORY_BUDGET_ENTRY,
+    PRIVATE_MEMORY_BUDGET_HEADER,
+    PRIVATE_MEMORY_BUDGET_HEADER_BYTES,
+    PRIVATE_MEMORY_BUDGET_ENTRY_BYTES,
+    PRIVATE_MEMORY_BUDGET_MAGIC,
+    PRIVATE_MEMORY_BUDGET_VERSION,
+    MAX_PRIVATE_MEMORY_BUDGET_HOLDERS,
+    PRIVATE_MEMORY_ROOT_REGION_PAGES,
+    PRIVATE_MEMORY_ROOT_TOTAL_PAGES,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -247,6 +256,14 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-reclamation.zti",
+    # C10.2: one executable declared twice, as a granted holder and an omitted
+    # one, against a generation-declared private-memory budget.
+    "sel4-private-memory": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-private-memory.zti",
     "sel4-crossing": ROOT
     / "contracts"
     / "generation"
@@ -959,6 +976,86 @@ def validated_shared_buffer_quotas(holders: list[dict]) -> dict[str, dict]:
     return by_name
 
 
+def private_memory_holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching `boot_contracts::private_memory_budget`.
+
+    Its domain tag is this contract's own, not `holder_identity`'s: an identity
+    computed for one budget must never be replayable as a valid identity in the
+    other, since the two bound unrelated mechanisms.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-private-memory-holder-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def build_private_memory_budget(holders: list[dict]) -> bytes:
+    """Encode the C10.2 private-memory budget resource object.
+
+    Entries are sorted by holder identity and must be unique: the decoder
+    rejects an unsorted or duplicated table, so the sort here is part of the
+    format rather than a convenience. A component absent from the table gets no
+    quota at all (deny by default), so omission is meaningful, not a default.
+    """
+    if len(holders) > MAX_PRIVATE_MEMORY_BUDGET_HOLDERS:
+        fail("private-memory budget exceeds holder bound")
+    entries = []
+    for holder in holders:
+        identity = private_memory_holder_identity(holder["holder"])
+        quota = holder["pageQuota"]
+        if not isinstance(quota, int) or isinstance(quota, bool) or not 0 <= quota <= 0xFFFFFFFF:
+            fail(f"private-memory budget: invalid pageQuota for {holder['holder']}")
+        entries.append((identity, quota))
+    entries.sort(key=lambda entry: entry[0])
+    identities = {entry[0] for entry in entries}
+    if len(identities) != len(entries):
+        fail("private-memory budget: duplicate holder")
+    total_len = (
+        PRIVATE_MEMORY_BUDGET_HEADER_BYTES + len(entries) * PRIVATE_MEMORY_BUDGET_ENTRY_BYTES
+    )
+    header = PRIVATE_MEMORY_BUDGET_HEADER.pack(
+        PRIVATE_MEMORY_BUDGET_MAGIC,
+        PRIVATE_MEMORY_BUDGET_VERSION,
+        PRIVATE_MEMORY_BUDGET_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
+    return header + b"".join(PRIVATE_MEMORY_BUDGET_ENTRY.pack(*entry) for entry in entries)
+
+
+def validated_private_memory_quotas(holders: list[dict]) -> dict[str, dict]:
+    """Mirror `PrivateMemoryBudget::validate_against` on the build side.
+
+    Both arms, so a manifest error fails the build rather than producing a
+    generation that only fails at boot: the per-holder reservation bound, and
+    B8's aggregate rule that every declared holder must be able to sit at its
+    ceiling simultaneously. The ceilings come from the contract's published
+    `regionPages`/`totalPages`, which `slime-root/src/private_memory.rs` pins
+    against its own constants, so there is one source for both readers.
+    """
+    if len(holders) > MAX_PRIVATE_MEMORY_BUDGET_HOLDERS:
+        fail("private-memory budget exceeds holder bound")
+    by_name: dict[str, dict] = {}
+    total = 0
+    for holder in holders:
+        name = holder["holder"]
+        if name in by_name:
+            fail(f"private-memory budget: duplicate holder {name}")
+        quota = holder["pageQuota"]
+        if (
+            not isinstance(quota, int)
+            or isinstance(quota, bool)
+            or not 0 <= quota <= PRIVATE_MEMORY_ROOT_REGION_PAGES
+        ):
+            fail(f"private-memory budget: invalid pageQuota for {name}")
+        total += quota
+        by_name[name] = holder
+    if total > PRIVATE_MEMORY_ROOT_TOTAL_PAGES:
+        fail("private-memory budget: aggregate pageQuota exceeds the root ceiling")
+    return by_name
+
+
 FABRIC_CONTRACT_KIND = {
     "stream": FABRIC_CONTRACT_KIND_STREAM,
     "call": FABRIC_CONTRACT_KIND_CALL,
@@ -1200,6 +1297,13 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
     resolved["sharedBufferBudget"] = [
         entry for entry in manifest["sharedBufferBudget"] if entry["holder"] in kept
     ]
+    # Same rule as the shared-buffer budget above: a profile that does not
+    # declare an instance carries no quota for it, so the resource a boot
+    # profile emits names only holders that profile actually launches.
+    if manifest.get("privateMemoryBudget") is not None:
+        resolved["privateMemoryBudget"] = [
+            entry for entry in manifest["privateMemoryBudget"] if entry["holder"] in kept
+        ]
     required = profile["requiredInstances"] or manifest["health"]["requiredInstances"]
     missing = sorted(set(required) - kept)
     if missing:
@@ -3803,6 +3907,22 @@ def build_sel4_generation(
         payloads["shared-buffer-budget"] = build_shared_buffer_budget(
             manifest.get("sharedBufferBudget", [])
         )
+    # C10.2's private-memory budget. Validated here rather than only encoded:
+    # the root refuses an over-declared or over-committed budget at admission,
+    # so checking the same two rules on the build side is what makes builder/root
+    # drift a build failure instead of a boot failure.
+    declared_private_memory = manifest.get("privateMemoryBudget") or []
+    if "private-memory-budget" in object_ids:
+        validated_private_memory_quotas(declared_private_memory)
+        payloads["private-memory-budget"] = build_private_memory_budget(
+            declared_private_memory
+        )
+    elif declared_private_memory:
+        # A quota nothing carries is a promise the generation cannot keep: the
+        # root reads the ceiling from the resource object, so a manifest
+        # declaring holders without the object would boot with every one of
+        # them denied and no indication why.
+        fail("privateMemoryBudget declared without a private-memory-budget resource object")
     for executable in manifest["executables"]:
         stack = executable.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
         if (

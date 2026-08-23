@@ -149,6 +149,8 @@ mod boot_action {
     pub const TRAFFIC: u32 = 28;
     /// RP2's demo-scoped AArch64 vertical slice.
     pub const DEMO: u32 = 29;
+    /// C10.2's generation-declared private-memory budget.
+    pub const PRIVATE_MEMORY: u32 = 30;
 
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
@@ -185,6 +187,7 @@ mod boot_action {
     const _: () = assert!(MATRIX == BootAction::Matrix.id());
     const _: () = assert!(TRAFFIC == BootAction::Traffic.id());
     const _: () = assert!(DEMO == BootAction::Demo.id());
+    const _: () = assert!(PRIVATE_MEMORY == BootAction::PrivateMemory.id());
 }
 
 /// Compose the graph the generation selected.
@@ -245,6 +248,11 @@ fn compose_declared_graph(startup_arg: u32) {
         action::RECLAMATION => {
             drive_reclamation_plane();
             slime_rt::debug_write(b"[init] reclamation plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::PRIVATE_MEMORY => {
+            drive_private_memory_plane();
+            slime_rt::debug_write(b"[init] private memory plane complete\n");
             slime_rt::exit(0)
         }
         action::CROSSING => {
@@ -1679,6 +1687,25 @@ fn fail_reclamation(reason: &[u8]) -> ! {
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
+}
+
+/// C10.2's plane needs nothing from init.
+///
+/// Both probes are declared **root-autostart** instances, so the root launches
+/// them from the generation directly and installs each one's declared quota at
+/// construction. That is deliberate rather than incidental: C10.2's subject is
+/// whether a quota declared in a generation reaches the component the
+/// generation names, and routing the launch through an `init` spawn would add a
+/// parent whose own authority could be mistaken for the mechanism under test.
+/// It also keeps the plane clear of the boot capability layout, which is at its
+/// 64-entry ceiling — an init-spawned probe needs an `executable` row per
+/// instance, and this needs none.
+///
+/// Init itself is the third case: it declares no quota, so a plane that granted
+/// authority to its own launcher would show up as a nonzero ceiling on `init`
+/// in the root's markers.
+fn drive_private_memory_plane() {
+    slime_rt::debug_write(b"[init] private memory plane is root-launched\n");
 }
 
 /// Launch the C8.3/C8.4 fabric plane: one service that owns every route

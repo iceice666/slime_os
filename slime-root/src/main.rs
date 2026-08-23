@@ -42,6 +42,7 @@ use boot_contracts::generation::{
     CapabilityKind, Generation, Grant, GrantEndpoint, Instance, InstanceHealth, InstanceOwner,
     KIND_RESOURCE, MintedBinding,
 };
+use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
 use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
 
@@ -1916,6 +1917,23 @@ fn launch_instance_graph(
     let mut launched_instances = LaunchedInstances::new();
     let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
     let mut launched = 0;
+    // C10.2's declared private-memory budget, resolved once. `Admission::admit`
+    // has already refused a malformed or over-committed one, so anything
+    // reaching here is a budget this root can honour in full.
+    let private_budget = match crate::generation::private_memory_budget_object(generation) {
+        Some(Ok(budget)) => Some(budget),
+        Some(Err(error)) => {
+            fatal!("SLIME_MEM FAIL admitted budget will not decode: {error:?}")
+        }
+        None => None,
+    };
+    sel4::debug_println!(
+        "SLIME_MEM budget holders={} declared={}",
+        private_budget
+            .as_ref()
+            .map_or(0, PrivateMemoryBudget::holder_count),
+        private_budget.is_some() as u8,
+    );
 
     for instance_index in 0..generation.instance_count() {
         let instance = match generation.instance(instance_index) {
@@ -2090,14 +2108,18 @@ fn launch_instance_graph(
             declared_priority,
             declared_threads,
             declared_worker_priorities,
-            // No private-memory quota (C10.1). The mechanism is live, but the
-            // authority to use it is a generation-declared budget resource and
-            // C10.2 is what adds one, so every declared instance sits at its
-            // deny-by-default zero — exactly as an absent `sharedBufferBudget`
-            // holder allocates nothing. Answering a nonzero default here would
-            // be ambient authority: a component would hold pages no manifest
-            // named.
-            0,
+            // The quota this generation declares for this component (C10.2).
+            // Zero for a component the budget does not name, which is the same
+            // deny-by-default answer an absent `sharedBufferBudget` holder
+            // gets: authority is never ambient, so omission means "grows
+            // nothing" rather than "gets a small default".
+            //
+            // Resolved before `create` rather than installed after it, unlike
+            // the shared-buffer quota: `create` feeds this into the arena plan,
+            // because an arena is fixed at construction and never grows, so a
+            // ceiling whose frames the arena has no room for would be one the
+            // task could never reach.
+            declared_private_memory_pages(private_budget.as_ref(), instance.name),
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -2400,6 +2422,24 @@ fn launch_instance_graph(
             quota.mapping_count,
             quota.loan_count,
         );
+        // The private-memory ceiling actually installed on the task, read back
+        // from the task record rather than from the budget (C10.2). Reading it
+        // back is the point: the declared number and the live one are two
+        // different facts, and a gate comparing the generation's declaration
+        // against this line is what proves the declared quota *is* the ceiling
+        // rather than something the root recomputed on its own.
+        sel4::debug_println!(
+            "SLIME_MEM quota task={} instance={} declared={} installed={} base={:#x}",
+            launched_instance.task.0,
+            instance.name,
+            declared_private_memory_pages(private_budget.as_ref(), instance.name),
+            tasks
+                .get(launched_instance.task)
+                .map_or(0, |task| task.private_memory.quota()),
+            tasks
+                .get(launched_instance.task)
+                .map_or(0, |task| task.private_memory.base()),
+        );
     }
     sel4::debug_println!(
         "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",
@@ -2492,6 +2532,32 @@ fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> H
         },
         None => HolderQuota::DENY,
     }
+}
+
+/// The private-memory page ceiling this generation declares for `component`
+/// (C10.2).
+///
+/// Zero when the generation declares no budget or the component is absent from
+/// it: authority is never ambient, so a component the budget does not name
+/// grows nothing rather than something small. That is the same rule
+/// [`declared_quota`] applies to shared buffers, and it is what makes omission
+/// meaningful instead of a default.
+///
+/// A malformed budget cannot reach here — `Admission::admit` fails the whole
+/// generation closed on one (C10.2's exit condition), which is the asymmetry
+/// with the C7.3 path: a shared-buffer budget that will not decode denies every
+/// holder and boots, whereas an undecodable private-memory budget is
+/// indistinguishable from a quota a component was promised and never got.
+fn declared_private_memory_pages(
+    budget: Option<&PrivateMemoryBudget<'_>>,
+    component: &str,
+) -> usize {
+    let Some(budget) = budget else {
+        return 0;
+    };
+    budget
+        .quota_for(&private_memory_budget::holder_identity(component))
+        .map_or(0, |quota| quota.page_quota as usize)
 }
 
 /// Iterations the graph service loop will run before declaring the graph wedged.
@@ -4109,10 +4175,21 @@ fn construct_child(
                 }
                 priorities
             },
-            // Deny-by-default, as on the boot path: a spawned child's quota is
-            // generation-declared budget data C10.2 adds, not something this
-            // path may invent (C10.1).
-            0,
+            // As the boot path: the ceiling the generation declares for this
+            // component, keyed by its declared instance name (C10.2). A
+            // spawned child is a declared instance too, so it reads the same
+            // budget rather than inheriting its parent's quota — a parent
+            // cannot widen what the generation granted its child.
+            //
+            // A malformed budget cannot reach here: admission failed the whole
+            // generation before anything launched. A budget that will not decode
+            // *at this point* would therefore be a root defect, so it resolves
+            // to zero (deny) rather than being papered over.
+            match crate::generation::private_memory_budget_object(generation) {
+                Some(Ok(budget)) => declared_private_memory_pages(Some(&budget), instance.name),
+                Some(Err(_)) => return Err(IpcError::BadCapability),
+                None => 0,
+            },
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 
@@ -4159,6 +4236,20 @@ fn construct_child(
         quota.buffer_count,
         quota.mapping_count,
         quota.loan_count,
+    );
+    // As on the boot path, read back from the task record rather than from the
+    // budget: the declared number and the live ceiling are two facts, and only
+    // comparing them proves the declaration is what bounds the child (C10.2).
+    sel4::debug_println!(
+        "SLIME_MEM quota task={} instance={} declared={} installed={} base={:#x}",
+        id.0,
+        instance.name,
+        match crate::generation::private_memory_budget_object(generation) {
+            Some(Ok(budget)) => declared_private_memory_pages(Some(&budget), instance.name),
+            _ => 0,
+        },
+        tasks.get(id).map_or(0, |task| task.private_memory.quota()),
+        tasks.get(id).map_or(0, |task| task.private_memory.base()),
     );
     for granted in plan.granted.iter().take(plan.count) {
         let Some((_, destination, capability, _minted)) = granted else {

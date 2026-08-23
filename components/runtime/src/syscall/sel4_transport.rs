@@ -1094,6 +1094,17 @@ pub fn spawn_budget() -> i64 {
     result_of(capability_table_labels::SPAWN_BUDGET, &[0])
 }
 
+/// Grow this task's private memory by `delta` pages (C10.1/C10.2).
+///
+/// The same badge-scoped shape as [`spawn_budget`]: the region belongs to the
+/// caller, so there is no slot or identity to name and no transfer window to
+/// stage. The primary result is the page count *before* the growth and the
+/// auxiliary is the window base, so a caller learns where its memory is
+/// without a second call. `delta = 0` is a size query that allocates nothing.
+pub fn private_memory_grow(delta: usize) -> (i64, u64) {
+    pair_of(lifecycle_labels::PRIVATE_MEMORY_GROW, &[delta as Word])
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

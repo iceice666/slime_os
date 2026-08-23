@@ -1044,6 +1044,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-private-memory-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-reclamation-fault"
 version = "0.1.0"
 dependencies = [

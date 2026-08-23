@@ -52,6 +52,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=5 instances=5 grants=\d+ "),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
     ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=5 instances=5 slimecm=0 elf=5 unrecognized=0"),
+    # C10.2: this generation declares no `privateMemoryBudget` at all, which is
+    # the case 31 of the 32 fixtures are in and which the private-memory plane
+    # cannot state — that plane exists precisely to carry a budget. `declared=0`
+    # is the root reporting that it found no budget resource, printed once
+    # before any instance is constructed; the paired failure markers below are
+    # what make "and therefore every component is denied" an assertion rather
+    # than an inference.
+    (
+        "the generation declares no private-memory budget",
+        r"SLIME_MEM budget holders=0 declared=0",
+    ),
     ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=7 bindings=7 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
     ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=5 slimecm=0 wrong_target=0 unrecognized=0"),
     (
@@ -153,6 +164,13 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"panicked at ",
     r"aborted at ",
     r"\(aborted\)",
+    # C10.2: with no budget declared, no component may hold a private-memory
+    # ceiling and none may grow a page. Two markers rather than one, because
+    # they fail on different defects: a nonzero `installed=` means a quota was
+    # installed with nothing declaring it, and a served growth means the
+    # mechanism handed a page to a holder no generation named.
+    r"SLIME_MEM quota task=\d+ instance=\S+ declared=0 installed=[1-9]\d*",
+    r"SLIME_MEM grown task=\d+ delta=[1-9]\d*",
 )
 
 

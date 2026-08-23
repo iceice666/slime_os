@@ -1,0 +1,109 @@
+-- Slime OS private-memory budget, version 1 (C10.2).
+--
+-- A generation resource object that declares per-holder private-memory quotas:
+-- how many pages of task-private working memory a named component may hold.
+-- Embedded as a KIND_RESOURCE object in a generation and authenticated by the
+-- generation's existing object digest table; it adds no ad-hoc record fields to
+-- the generation header.
+--
+-- A sibling of shared-buffer-budget/v1 rather than a widening of it. The two
+-- bound unrelated mechanisms: a shared buffer is a nameable, transferable
+-- object the root retypes under a root-wide page ceiling, while private memory
+-- is one task's own window that no other component can ever see. Adding a fifth
+-- column to that contract would make every existing holder entry restate a
+-- quota for a mechanism it does not use, and would tie the two formats'
+-- versions together so a private-memory change rewrote every shared-buffer
+-- budget on disk.
+--
+-- Its holder identity uses its own domain tag for the same reason: an identity
+-- computed for one budget must never be replayable as a valid identity in the
+-- other.
+--
+-- Logical records and concrete packed little-endian layouts live together.
+-- The renderer reflects every record, checks field order against its layout,
+-- derives struct.Struct format strings and offsets, and writes the Python and
+-- Rust binding fragments consumed by the boot binding assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+headerBytes :: Int = 32;
+entryBytes :: Int = 36;
+maxHolders :: Int = 32;
+
+-- Root private-memory ceilings, published so the builder can reject an
+-- over-declared or over-committed budget instead of emitting a generation the
+-- root refuses at boot. They mirror `slime-root/src/private_memory.rs`'s
+-- `MAX_REGION_PAGES` and `MAX_TOTAL_PAGES`, which
+-- `slime_root::generation::private_memory_budget_is_satisfiable` passes to
+-- `PrivateMemoryBudget::validate_against`, and which that module pins against
+-- these values with a compile-time assert — so a drift between the two sides is
+-- a build failure rather than a boot-time refusal.
+--
+-- `regionPages` is the per-task reservation: the window's address space and
+-- translation tables are sized for it when the child VSpace is built, so it is
+-- a structural bound no growth can pass. `totalPages` is what every live region
+-- may hold together.
+regionPages :: Int = 512;
+totalPages :: Int = 2048;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+BudgetHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  holder_count : Int;
+  total_len : Int;
+};
+
+BudgetEntry :: type {
+  holder_identity : Int;
+  page_quota : Int;
+};
+
+headerSchema ::= schema BudgetHeader;
+entrySchema ::= schema BudgetEntry;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "holder_count"; width = 4; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+};
+
+entryLayout :: List WireField = {
+  { name = "holder_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "page_quota"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =;
+  headerBytes =;
+  entryBytes =;
+  maxHolders =;
+  regionPages =;
+  totalPages =;
+  headerFields = headerSchema.fields ?? {;};
+  entryFields = entrySchema.fields ?? {;};
+  headerLayout =;
+  entryLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/private_memory_budget.py"; };
+    rustPath := t.join "" { root; "/private_memory_budget.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

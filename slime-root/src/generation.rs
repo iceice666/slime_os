@@ -11,6 +11,7 @@ use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
+use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
 use boot_contracts::target_profile::TargetProfile;
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -71,6 +72,14 @@ pub enum GenerationError {
     /// to a component that will never exist, so the promise cannot be kept by
     /// any mechanism.
     UndeclaredFabricParticipant,
+    /// The generation carries a private-memory budget this root cannot honour,
+    /// or one that will not decode (C10.2).
+    ///
+    /// Distinct from [`Self::Decode`] for the well-formed case: the bytes say
+    /// what they need and the answer is no. The whole generation fails closed,
+    /// before any component launches — a quota the root cannot honour must not
+    /// become a runtime refusal against a ceiling the generation promised.
+    UnsatisfiablePrivateMemoryBudget,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -469,6 +478,85 @@ pub(crate) fn fabric_graph_object<'a>(
     None
 }
 
+/// Locate the private-memory budget resource object, if the generation
+/// declares one (C10.2).
+///
+/// The same shape as [`fabric_graph_object`] and the shared-buffer budget's
+/// locator: a `KIND_RESOURCE` object whose payload carries the budget magic,
+/// first match wins. A malformed first match is `Some(Err(..))` rather than a
+/// reason to keep looking — a generation carrying one bad budget and one good
+/// one must not resolve the good one, because "the generation declares a
+/// budget" then means whichever the scan happened to reach.
+///
+/// Public so the launch paths resolve every quota from the object admission
+/// validated, rather than locating the resource a second way. A second lookup
+/// is how the boot-layout resource drifted from the bindings it described
+/// (B71).
+pub fn private_memory_budget_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<PrivateMemoryBudget<'a>, private_memory_budget::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= private_memory_budget::MAGIC.len()
+            && object.bytes[..private_memory_budget::MAGIC.len()] == private_memory_budget::MAGIC
+        {
+            return Some(PrivateMemoryBudget::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Whether this root can honour a declared private-memory budget (C10.2).
+///
+/// Separated from the generation walk for the same reason
+/// [`fabric_graph_is_satisfiable`] is: the interesting content is *which
+/// ceilings* are passed, and those are this root's own. The predicate itself is
+/// `boot_contracts`, shared with the builder, so the two can disagree only
+/// where their mechanisms genuinely differ.
+///
+/// Both arms matter and they are independent. A quota above the per-task
+/// reservation could never be reached, because the window's address space is
+/// sized for the reservation and the base cannot move. A budget whose quotas
+/// sum past the root-wide ceiling is *individually* satisfiable and still
+/// impossible to honour in full, which is B8's defect shape: without this the
+/// declaration degrades into first-come-first-served and a late-growing
+/// component is refused a quota the generation promised it.
+pub fn private_memory_budget_is_satisfiable(
+    budget: &PrivateMemoryBudget<'_>,
+) -> Result<(), GenerationError> {
+    budget
+        .validate_against(
+            crate::private_memory::MAX_REGION_PAGES as u32,
+            crate::private_memory::MAX_TOTAL_PAGES as u32,
+        )
+        .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)
+}
+
+/// Validate a declared private-memory budget against this root's ceilings,
+/// reporting how many holders it names.
+///
+/// A generation declaring no budget is not an error: it declares that no
+/// component may grow a page, and every holder resolves to zero. A *malformed*
+/// one is, and that is the difference from the C7.3 path, which treats a
+/// malformed budget as absent. The two are asymmetric on purpose. Deny-by-default
+/// makes an undecodable shared-buffer budget harmless — every holder is refused,
+/// which is the conservative answer. But C10.2's exit condition requires that
+/// every malformed budget fail the generation closed, because a budget that
+/// silently reads as absent is indistinguishable from one a component was
+/// promised and never got: the component simply cannot allocate, and the boot
+/// looks healthy. Failing here names the real fault before anything launches.
+fn private_memory_budget_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<usize>, GenerationError> {
+    let Some(budget) = private_memory_budget_object(generation) else {
+        return Ok(None);
+    };
+    let budget = budget.map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
+    private_memory_budget_is_satisfiable(&budget)?;
+    Ok(Some(budget.holder_count()))
+}
+
 /// The result of admitting a v5 generation graph.
 pub struct Admission {
     executable_plans: [Option<ExecutablePlan>; MAX_ADMITTED_EXECUTABLES],
@@ -497,6 +585,14 @@ pub struct Admission {
     /// above — so `crate::cspace::breaches_ceiling` treats both cases alike
     /// rather than distinguishing an absent graph from a permissive one.
     pub fabric_capability_slots: u32,
+    /// Holders the generation's private-memory budget names, or `None` when it
+    /// declares no budget at all (C10.2).
+    ///
+    /// `None` and `Some(0)` are distinguished because a boot marker must be
+    /// able to say "nothing to honour" apart from "a budget that names nobody":
+    /// both deny every component, but only the second means the generation
+    /// carries a budget resource whose contents a gate can check.
+    pub private_memory_holders: Option<usize>,
 }
 
 impl Admission {
@@ -536,6 +632,11 @@ impl Admission {
             admit_resource_quota(&generation.resource_quota(index)?)?;
         }
         let fabric = fabric_graph_admission(generation)?;
+        // C10.2: every declared private-memory quota is one this root can
+        // honour, checked here so an over-declared or over-committed budget
+        // fails the whole generation rather than becoming a refusal against a
+        // ceiling the generation promised a component it had.
+        let private_memory_holders = private_memory_budget_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
@@ -606,6 +707,7 @@ impl Admission {
             fabric_participants: fabric.map_or(0, |shape| shape.participants),
             fabric_interpositions: fabric.map_or(0, |shape| shape.interpositions),
             fabric_capability_slots: fabric.map_or(0, |shape| shape.capability_slots),
+            private_memory_holders,
         })
     }
 
@@ -767,8 +869,9 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
 #[cfg(test)]
 mod tests {
     use super::{
-        Authority, FabricGraph, GenerationError, PayloadFormat, RIGHT_RECV, RIGHT_SEND,
-        fabric_graph_is_satisfiable, participants_are_declared, resolve_interposition_hops,
+        Authority, FabricGraph, GenerationError, PayloadFormat, PrivateMemoryBudget, RIGHT_RECV,
+        RIGHT_SEND, fabric_graph_is_satisfiable, participants_are_declared,
+        private_memory_budget_is_satisfiable, resolve_interposition_hops,
     };
     use boot_contracts::component_image::wire;
     use boot_contracts::generation::{RIGHT_TRANSFER, ResourceQuota};
@@ -1262,6 +1365,82 @@ mod tests {
         let bytes = graph_with(SATISFIABLE);
         let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
         assert_eq!(fabric_graph_is_satisfiable(&graph), Ok(()));
+    }
+
+    /// A private-memory budget, hand-built for the same reason `graph_with` is:
+    /// `boot_contracts`'s encoder is `#[cfg(test)]` and not reachable here.
+    fn budget_with(quotas: &[(u8, u32)]) -> alloc::vec::Vec<u8> {
+        use boot_contracts::private_memory_budget::{
+            ENTRY_BYTES, FORMAT_VERSION, HEADER_BYTES, MAGIC,
+        };
+        let total = HEADER_BYTES + quotas.len() * ENTRY_BYTES;
+        let mut bytes = alloc::vec::Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&(quotas.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(total as u32).to_le_bytes());
+        for (identity, pages) in quotas {
+            bytes.extend_from_slice(&[*identity; 32]);
+            bytes.extend_from_slice(&pages.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// C10.2's exit condition on this side: a budget every ceiling can hold is
+    /// admitted, so the check is not refusing everything. Exactly the per-task
+    /// reservation, which is the boundary case a strict comparison would drop.
+    #[test]
+    fn a_satisfiable_private_memory_budget_is_admitted() {
+        let bytes = budget_with(&[(0x11, crate::private_memory::MAX_REGION_PAGES as u32)]);
+        let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
+        assert_eq!(private_memory_budget_is_satisfiable(&budget), Ok(()));
+    }
+
+    /// A quota above the per-task reservation is refused: the window's address
+    /// space is sized for the reservation and the base cannot move, so the
+    /// ceiling could never be reached. Refused here rather than clamped at
+    /// growth, which is the difference between a declaration the root honours
+    /// and one it quietly reinterprets.
+    #[test]
+    fn a_quota_above_the_task_reservation_is_refused() {
+        let bytes = budget_with(&[(0x11, crate::private_memory::MAX_REGION_PAGES as u32 + 1)]);
+        let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
+        assert_eq!(
+            private_memory_budget_is_satisfiable(&budget),
+            Err(GenerationError::UnsatisfiablePrivateMemoryBudget)
+        );
+    }
+
+    /// B8's rule on this mechanism: holders that each fit but cannot all peak
+    /// at once are refused. Without this the declaration degrades into
+    /// first-come-first-served and a late-growing component is refused a quota
+    /// the generation promised it.
+    #[test]
+    fn an_over_committed_private_memory_budget_is_refused() {
+        let per_task = crate::private_memory::MAX_REGION_PAGES as u32;
+        let fits = crate::private_memory::MAX_TOTAL_PAGES / crate::private_memory::MAX_REGION_PAGES;
+        // Exactly the root-wide ceiling: every holder at its own maximum, which
+        // must pass, or the aggregate arm would be refusing what it should
+        // admit.
+        let holders: alloc::vec::Vec<(u8, u32)> = (1..=fits as u8)
+            .map(|identity| (identity, per_task))
+            .collect();
+        let bytes = budget_with(&holders);
+        let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
+        assert_eq!(private_memory_budget_is_satisfiable(&budget), Ok(()));
+        // One more holder at the same ceiling passes every per-holder bound and
+        // still cannot be honoured in full.
+        let holders: alloc::vec::Vec<(u8, u32)> = (1..=fits as u8 + 1)
+            .map(|identity| (identity, per_task))
+            .collect();
+        let bytes = budget_with(&holders);
+        let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
+        assert_eq!(
+            private_memory_budget_is_satisfiable(&budget),
+            Err(GenerationError::UnsatisfiablePrivateMemoryBudget)
+        );
     }
 
     /// A matched pair whose offer satisfies the request is admitted, so the

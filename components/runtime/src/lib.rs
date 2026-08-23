@@ -13,16 +13,16 @@ pub use sha256::sha256;
 pub use syscall::{
     BufferLoan, BufferOccupancy, CapabilityDisposition, DIRECTORY_ROOT_BYTES, ERR_BAD_CAP,
     ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, InputEvent,
-    InputKey, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, Rights, SharedBuffer, SlotOccupancy,
-    SpawnGrant, Termination, block_transact, block_transact_sector, block_transact_write,
-    boot_action, call, cap_drop, capability_delegate, capability_import, capability_slot_occupancy,
-    debug_write, directory_commit, directory_derive, directory_inspect, exit, graph_query,
-    graph_read, graph_route_index, input_read, notification_poll, notification_signal,
-    notification_wait, recv, recv_blocking, reply, resolve_binding, send, shared_buffer_create,
-    shared_buffer_loan, shared_buffer_loan_map, shared_buffer_map, shared_buffer_occupancy,
-    shared_buffer_release, shared_buffer_return, shared_buffer_revoke, shared_buffer_seal,
-    shared_buffer_unmap, spawn, spawn_budget, supervision_derive, supervision_status, try_send,
-    unhealthy, yield_now,
+    InputKey, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, PrivateMemory, Rights, SharedBuffer,
+    SlotOccupancy, SpawnGrant, Termination, block_transact, block_transact_sector,
+    block_transact_write, boot_action, call, cap_drop, capability_delegate, capability_import,
+    capability_slot_occupancy, debug_write, directory_commit, directory_derive, directory_inspect,
+    exit, graph_query, graph_read, graph_route_index, input_read, notification_poll,
+    notification_signal, notification_wait, private_memory_grow, recv, recv_blocking, reply,
+    resolve_binding, send, shared_buffer_create, shared_buffer_loan, shared_buffer_loan_map,
+    shared_buffer_map, shared_buffer_occupancy, shared_buffer_release, shared_buffer_return,
+    shared_buffer_revoke, shared_buffer_seal, shared_buffer_unmap, spawn, spawn_budget,
+    supervision_derive, supervision_status, try_send, unhealthy, yield_now,
 };
 
 /// The CSpace slot holding this component's root service endpoint — its only

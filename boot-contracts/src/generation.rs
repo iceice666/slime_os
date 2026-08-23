@@ -182,6 +182,9 @@ pub enum BootAction {
     /// the component graph *and* runs the bounded data path, rather than
     /// asserting the two across separate plane fixtures.
     Demo = 29,
+    /// C10.2's generation-declared private-memory budget: one executable
+    /// declared twice, as a granted holder and an omitted one.
+    PrivateMemory = 30,
 }
 
 impl BootAction {
@@ -233,6 +236,7 @@ impl BootAction {
         Self::Matrix,
         Self::Traffic,
         Self::Demo,
+        Self::PrivateMemory,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -275,6 +279,7 @@ impl BootAction {
                 Self::Matrix => Self::Matrix.id(),
                 Self::Traffic => Self::Traffic.id(),
                 Self::Demo => Self::Demo.id(),
+                Self::PrivateMemory => Self::PrivateMemory.id(),
             };
             declared == id
         })
@@ -311,6 +316,7 @@ impl BootAction {
             "matrix" => Self::Matrix,
             "traffic" => Self::Traffic,
             "demo" => Self::Demo,
+            "private-memory" => Self::PrivateMemory,
             _ => return None,
         })
     }
@@ -2699,7 +2705,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 29] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 30] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2729,6 +2735,7 @@ mod tests {
         (BootAction::Matrix, 27),
         (BootAction::Traffic, 28),
         (BootAction::Demo, 29),
+        (BootAction::PrivateMemory, 30),
     ];
 
     #[test]

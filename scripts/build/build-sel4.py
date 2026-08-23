@@ -45,6 +45,8 @@ SUPERVISION_IMAGE = BUILD_ROOT / "slime-sel4-supervision.elf"
 SUPERVISION_MANIFEST = BUILD_ROOT / "slime-sel4-supervision.identity.json"
 RECLAMATION_IMAGE = BUILD_ROOT / "slime-sel4-reclamation.elf"
 RECLAMATION_MANIFEST = BUILD_ROOT / "slime-sel4-reclamation.identity.json"
+PRIVATE_MEMORY_IMAGE = BUILD_ROOT / "slime-sel4-private-memory.elf"
+PRIVATE_MEMORY_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory.identity.json"
 CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
 CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
@@ -107,6 +109,8 @@ SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
 SUPERVISION_VARIANT = "supervision"
 RECLAMATION_VARIANT = "reclamation"
+# C10.2's generation-declared private-memory budget.
+PRIVATE_MEMORY_VARIANT = "private-memory"
 # RP2's demo-scoped vertical slice.
 DEMO_VARIANT = "demo"
 
@@ -160,6 +164,7 @@ VARIANT_MANIFESTS = {
     STREAM_VARIANT: "sel4-stream",
     SUPERVISION_VARIANT: "sel4-supervision",
     RECLAMATION_VARIANT: "sel4-reclamation",
+    PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
     QOS_VARIANT: "sel4-qos",
@@ -223,6 +228,7 @@ VARIANT_TARGET_DIRS = {
     STREAM_VARIANT: "root-stream",
     SUPERVISION_VARIANT: "root-supervision",
     RECLAMATION_VARIANT: "root-reclamation",
+    PRIVATE_MEMORY_VARIANT: "root-private-memory",
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
     QOS_VARIANT: "root-qos",
@@ -259,6 +265,7 @@ VARIANT_IMAGES = {
     STREAM_VARIANT: (STREAM_IMAGE, STREAM_MANIFEST),
     SUPERVISION_VARIANT: (SUPERVISION_IMAGE, SUPERVISION_MANIFEST),
     RECLAMATION_VARIANT: (RECLAMATION_IMAGE, RECLAMATION_MANIFEST),
+    PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
     QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
@@ -1203,6 +1210,13 @@ def main() -> None:
         help="embed the B38 task-reclamation generation, writing a separate image",
     )
     parser.add_argument(
+        "--private-memory-plane",
+        action="store_true",
+        help=(
+            "embed the C10.2 private-memory-budget generation, writing a separate image"
+        ),
+    )
+    parser.add_argument(
         "--crossing-plane",
         action="store_true",
         help=(
@@ -1422,6 +1436,7 @@ def main() -> None:
             (STREAM_VARIANT, arguments.stream_plane),
             (SUPERVISION_VARIANT, arguments.supervision_plane),
             (RECLAMATION_VARIANT, arguments.reclamation_plane),
+            (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),

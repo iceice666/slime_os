@@ -78,6 +78,21 @@ pub const MAX_REGION_PAGES: usize = 512;
 /// that passes this ceiling and still cannot retype fails on frames instead.
 pub const MAX_TOTAL_PAGES: usize = 2048;
 
+// The contract publishes both ceilings so `build-generation.py` can refuse an
+// over-declared or over-committed budget on the build side (C10.2). Pinned
+// here rather than trusted: if the two ever drift, the builder would reject
+// budgets this root would honour, or admit ones it would not — and the
+// disagreement would surface as a runtime refusal against a quota the
+// generation promised. A compile-time assert makes it a build failure instead.
+const _: () = assert!(
+    MAX_REGION_PAGES == boot_contracts::private_memory_budget::ROOT_REGION_PAGES,
+    "private-memory reservation drifted from contracts/private-memory-budget/v1"
+);
+const _: () = assert!(
+    MAX_TOTAL_PAGES == boot_contracts::private_memory_budget::ROOT_TOTAL_PAGES,
+    "private-memory root ceiling drifted from contracts/private-memory-budget/v1"
+);
+
 /// Why a growth was refused.
 ///
 /// Four distinct causes, because a caller must be able to tell "I asked for

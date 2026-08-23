@@ -147,6 +147,20 @@ SharedBufferBudgetEntry :: type {
   loanCount : Int;
 };
 
+-- Per-holder C10.2 private-memory quota carried by the authenticated
+-- generation: the absolute page ceiling a component's task-private region may
+-- ever be grown to. Omission is deny-by-default, exactly as for
+-- `sharedBufferBudget` — a component absent from this list grows nothing.
+--
+-- A separate list rather than a fifth column on `SharedBufferBudgetEntry`: the
+-- two bound unrelated mechanisms, and most components use one and not the
+-- other, so a merged record would make every holder restate a quota for a
+-- mechanism it does not touch.
+PrivateMemoryBudgetEntry :: type {
+  holder : Text;
+  pageQuota : Int;
+};
+
 -- One named full-graph profile override. Profiles may replace only an exact
 -- participant's interposition chain; every other authority and policy field
 -- remains fixed by the base graph.
@@ -265,6 +279,12 @@ GenerationManifest :: type {
   bootstrapInstance : Text;
   interfaceSchemas : List Text;
   sharedBufferBudget : List SharedBufferBudgetEntry;
+  -- Optional C10.2 private-memory budget. Absent means the generation declares
+  -- no private-memory quota at all, and every component is denied — the same
+  -- answer an empty list gives. Optional rather than required so a composition
+  -- that grants nobody working memory says so by omission instead of carrying
+  -- an empty list it never reads.
+  privateMemoryBudget? : List PrivateMemoryBudgetEntry;
   objects : List Object;
   executables : List Executable;
   instances : List Instance;
@@ -293,6 +313,7 @@ FromData @MintedBinding :: derive
 FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
 FromData @SharedBufferBudgetEntry :: derive
+FromData @PrivateMemoryBudgetEntry :: derive
 FromData @FabricProfileInterposition :: derive
 FromData @FabricProfile :: derive
 FromData @FabricParticipant :: derive
@@ -313,6 +334,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   NotificationBinding =;
   Instance =;
   SharedBufferBudgetEntry =;
+  PrivateMemoryBudgetEntry =;
   FabricProfileInterposition =;
   FabricProfile =;
   CapabilityGrant =;

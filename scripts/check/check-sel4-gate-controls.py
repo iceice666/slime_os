@@ -80,7 +80,13 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # one is: the channel plane now also guards that a component cannot resolve a
     # binding its instance was never granted.
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 30),
+    # C10.2: 30 -> 31. This generation declares no `privateMemoryBudget`, which
+    # is the case 31 of the 32 fixtures are in and the private-memory plane
+    # cannot state — it exists to carry a budget. The new marker is the root
+    # reporting it found none, paired with two failure markers that make "and
+    # therefore every component is denied" an assertion rather than an
+    # inference.
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 31),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
@@ -96,6 +102,13 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
+    # C10.2: eleven markers, pairing what the root enforced with what the two
+    # probes observed — the admitted budget, all three installed ceilings
+    # (including init's zero), the granted holder's size query, its quota
+    # refusal and named cause, its measured ceiling with the zeroed reads and
+    # surviving pattern, the omitted holder's reservation refusal, and the
+    # unchanged region afterwards.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 11),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

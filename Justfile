@@ -142,6 +142,15 @@ sel4_supervision_check: sel4_pin_check
 sel4_reclamation_check: sel4_pin_check
     python3 scripts/check/check-sel4-reclamation-plane.py
 
+# C10.2: boot a generation declaring one executable twice — as a private-memory
+# holder and as an omitted one — and require that the declared page quota is the
+# ceiling the granted instance actually measures, while the omitted one grows
+# nothing. The quota is read from the fixture rather than restated in the gate,
+# and the probe discovers its ceiling by growing until refused, so the assertion
+# is a measurement against the generation rather than two copies of a constant.
+private_memory_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across
@@ -949,7 +958,13 @@ test_sel4_root:
     # growth unwind needed one. Two of `child_vspace`'s existing headroom tests
     # were rewritten rather than added to, because the mapped span a child
     # receives now includes that window.
-    expected=146
+    #
+    # C10.2: 146 -> 149. `generation` gains three, covering the private-memory
+    # budget's admission against this root's own ceilings: a satisfiable budget
+    # at exactly the per-task reservation is admitted, a quota above that
+    # reservation is refused rather than clamped at growth, and B8's aggregate
+    # arm refuses holders that each fit but cannot all peak at once.
+    expected=149
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

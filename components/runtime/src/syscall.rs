@@ -615,6 +615,42 @@ pub fn spawn_budget() -> Result<u16, i64> {
     }
 }
 
+/// This task's private memory region: where it starts and how many pages of it
+/// are currently backed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateMemory {
+    /// The fixed window base. It never moves, so a pointer into the region
+    /// stays valid across every later growth.
+    pub base: usize,
+    /// Pages currently backed by a frame.
+    pub pages: usize,
+}
+
+/// Grow this task's private memory by `delta` pages, returning the region as it
+/// was *before* the growth (C10.1/C10.2).
+///
+/// Self-scoped, like [`spawn_budget`]: the region belongs to the authenticated
+/// caller, so this names no instance and can reach no peer's memory. `delta = 0`
+/// is a size query that allocates nothing.
+///
+/// Growth is all-or-nothing and every new page arrives zeroed, mapped
+/// read-write and execute-never; the base never moves. A refusal — the
+/// generation-declared quota, the reserved window, or the machine being out of
+/// frames — leaves the region exactly as it was, so a caller may keep using
+/// what it already had. A component the generation names no quota for is
+/// refused at zero pages, which is the deny-by-default answer rather than an
+/// error in the request.
+pub fn private_memory_grow(delta: usize) -> Result<PrivateMemory, i64> {
+    let (result, base) = transport::private_memory_grow(delta);
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(PrivateMemory {
+        base: base as usize,
+        pages: result as usize,
+    })
+}
+
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
