@@ -806,7 +806,7 @@ A simulated sensor/controller/actuator graph runs through the native fabric with
 
 ## C10: Bounded private component memory
 
-**Status:** In progress — C10.1, C10.2, and C10.3 complete; C10.4 not started.
+**Status:** Complete — C10.1 through C10.4.
 
 **Depends on:** C7's per-holder quota, supervision-subtree accounting, and
 reclamation pattern, and backlog item **B9** (resolved 2026-07-28), whose task
@@ -1053,40 +1053,66 @@ builder's), `just sel4_gate_control_check` (34 gates, 1331 mutations),
 
 ### C10.4 — Adoption, reclamation, and leak evidence
 
-**Status:** Not started.
+**Status:** Complete.
+
+**Delivered:** `fabric-service` — the graph's own broker, in ten shipped
+fixtures — now sizes its role and frame tables from the participant rows the
+generation declared instead of from the contract's ceilings. Static footprint
+falls 29960 bytes, `.bss` plus `.data` 145912 → 115952 on `sel4-boot`, and the
+largest declared graph takes 4 of its 16 declared pages.
+
+The first *product* component on the private region, which is the point: C10.3
+proved the mechanism with a probe, and a mechanism only becomes load-bearing
+when something that ships depends on it. B70 is why this component was the
+right one — sizing three brokers' fixed arrays from contract ceilings overflowed
+the 64 KiB stack and presented as a corrupted `static`, so `.bss` was where
+those tables went. `.bss` fixed the corruption but not the cause: the
+reservation was still the contract's worst case in every generation, and not one
+of the ten declares it.
+
+**What the conversion cost, and what it bought.** Removing a fixed array
+removes a bound the compiler was enforcing, and two demands the old
+`[Frame; 32]` had silently absorbed had to become explicit. A `retained`
+publisher pins its own `retainedDepth` frames *concurrently* with every
+subscriber's queue, and `provision_edge` floors each subscriber's history at
+`MIN_RING_SLOTS`. Both were found in review; each would have presented as the
+deadlock the frame bound exists to make unreachable rather than as a refusal.
+Admission and storage are now separate figures — the unfloored declared sum is
+what the ceiling admits, so no toolchain-certified graph is refused, and the
+floored sum is what is allocated. The builder's `ring_capacity` sums the same
+two terms, because a builder admitting a wider set than the component is a
+generation the toolchain approves and the graph's own holder then kills.
+
+**Exit condition (observed):** `just dango_check` drives five scripted lines
+through Dango's profile — three launches, one denied at resolution, one parse
+error — the third launch repeating the first. `SLIME_ROOT reclaim
+census` publishes the allocator's own watermarks at each reclamation, and the
+repeat's census equals the previous cycle's exactly — `slots=2799
+bytes=527489392 live_objects=302` — with `arena_reuses` advanced, which is what
+proves the repeat took the released arena rather than a fresh one that cost the
+same. Read from watermarks rather than from the counts the root tracks, because
+B9's thirteen-frame-per-spawn leak was invisible to every counter the root
+printed and they all agreed with each other throughout.
+
+`just private_memory_check` adds a holder the generation names in *both*
+budgets. It exhausts each plane and uses the other, and is refused a shared
+buffer mapped at its own private window's base — `SLIME_MEM mapping refused
+task=1 base=0x400000 end=0x401000 window=0x400000..0x600000` — while the same
+buffer maps, reads back, seals, unmaps, releases, and has its allowance reused
+outside it. The address space was the two planes' last shared resource; the
+window is reserved space whose frames arrive on demand, so an address the
+allocator has not yet grown into was simply unmapped and a buffer landing there
+would have been indistinguishable from heap.
+
+**Gates:** `just private_memory_check` (22 markers, 7 chains), `just
+dango_check` (16 markers), `just sel4_stream_check` / `sel4_qos_check` /
+`sel4_traffic_check` / `sel4_visibility_check` / `sel4_matrix_check` /
+`sel4_call_check` / `sel4_operation_check` (the converted component under real
+traffic on every plane that carries it), `just system_spec_check` (20
+mutations), `just component_spec_check` (43), `just sel4_gate_control_check`
+(34 gates, 1338 mutations), `just test_sel4_root` (152).
 
 **Depends on:** C10.3.
-
-#### Deliverables
-
-- convert at least one existing worst-case-sized static buffer in a real
-  component to input-proportional allocation, removing the reserved `.bss` from
-  every generation that carries it;
-- drive a repeated spawn/exit workload through Dango's command path, where the
-  B9 leak and any C10 reclamation defect both manifest, and record the
-  free-frame count across the cycle;
-- confirm the private region is absent from every capability path: it cannot be
-  named, transferred, loaned, sealed, mapped by another component, or made
-  executable;
-- confirm shared-buffer and private-memory accounting stay independent, so
-  exhausting one leaves the other's declared ceilings intact.
-
-#### Required checks
-
-- a repeated spawn/exit cycle returns the free-frame count to its starting value
-  and does not drift across iterations;
-- a component holding a private region and a shared buffer at once charges each
-  to its own account, and exhausting either leaves the other usable;
-- no syscall, transfer descriptor, or spawn grant can name another component's
-  private region;
-- the converted component behaves identically to its static-buffer predecessor
-  on the same inputs while its image declares less `.bss`.
-
-#### Planned verification target
-
-```sh
-just private_memory_check
-```
 
 ### Exit condition
 
