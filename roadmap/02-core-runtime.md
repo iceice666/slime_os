@@ -806,7 +806,7 @@ A simulated sensor/controller/actuator graph runs through the native fabric with
 
 ## C10: Bounded private component memory
 
-**Status:** In progress — C10.1 and C10.2 complete; C10.3–C10.4 not started.
+**Status:** In progress — C10.1, C10.2, and C10.3 complete; C10.4 not started.
 
 **Depends on:** C7's per-holder quota, supervision-subtree accounting, and
 reclamation pattern, and backlog item **B9** (resolved 2026-07-28), whose task
@@ -991,53 +991,65 @@ mutations).
 
 ### C10.3 — Userspace allocator and live quota evidence
 
-**Status:** Not started.
+**Status:** Complete.
+
+**Delivered:** `components/runtime/src/private_heap.rs` — a `GlobalAlloc` over
+the task-private region: a first-fit free list in address order, coalescing on
+both boundaries when a block returns, with a growth appended at the tail so
+`release` merges it into the trailing free block rather than fragmenting it.
+
+A second allocator rather than a configurable one. `#[global_allocator]` is a
+single symbol per link and the choice belongs to the component, so `slime-rt`
+now carries two mutually exclusive features and `lib.rs` refuses both with a
+`compile_error!`. CP3's store-plane bump allocator stays exactly as it was: its
+premise is that nothing outlives the component, which makes a free list pure
+cost. A component bound by a *declared ceiling* is the opposite case — its bound
+is a small policy number a generation chose, and reuse is the only way to keep
+running under it. Both the builder and `lint_sel4_root` gained a third group for
+the same reason they already had a second: Cargo unifies features across every
+package in one invocation, and here that unification does not merely over-link,
+it fails to compile.
+
+Batching is userspace policy over a per-page ABI. `GROWTH_PAGES` is four
+granules, and `grow` retries at the exact size when a batch is refused — a
+component with three pages left must not be denied an allocation its ceiling can
+still serve, so batching stays an optimization rather than a lowered ceiling.
+The declared operation still counts single pages, so changing the policy changes
+no contract and no fixture.
+
+**Exit condition (observed):** `just private_memory_check` now boots four
+application instances over one budget: C10.2's pair growing raw pages, and
+C10.3's `private-heap-probe` twice — once named in the budget at 24 pages, once
+omitted. The granted instance ran `Vec`, `Box`, and `String` across
+reallocations, took 22 of its 24 pages in four batched growths (`4+4+5+9`), read
+back every element after the reallocations that crossed a growth, then freed
+everything and reallocated a comparable amount with the root serving *no*
+further page; it was then refused a deliberate over-ceiling request
+(`cause=quota detail=QuotaExceeded { pages: 22, delta: 257, quota: 24 }`),
+stayed alive, reallocated after the refusal to prove the heap was not poisoned,
+and reported. The omitted instance found no region at all: `denied pages=0
+growths=0 refused=1`.
+
+Reuse and batching are asserted from the *root's* `SLIME_MEM grown` records, not
+from the component's own counters — a first draft asserted reuse from the probe's
+`reuse_growths` field, which an allocator that lost its freed spans and
+under-counted itself would satisfy. The probe now brackets its reuse phase with a
+console line and the gate requires zero growth inside that window. Five
+injections proved the new evidence non-vacuous: a growth served inside the reuse
+window, a first growth of one page, a removed boundary line, and either new
+instance's missing ceiling record are each refused by name.
+
+"A zero-quota component is byte-identical to its pre-C10 build" holds
+structurally rather than by measurement: `private-heap` is opt-in per crate, and
+the one crate that declares it is new, so no pre-existing component's image
+changes at all.
+
+**Gates:** `just private_memory_check` (19 markers across 6 causal chains),
+`just component_crate_split_check` (two allocator groups, each matching the
+builder's), `just sel4_gate_control_check` (34 gates, 1331 mutations),
+`just lint_all`, `just test_sel4_root` (149 host tests).
 
 **Depends on:** C10.2.
-
-#### Deliverables
-
-- add a `GlobalAlloc` to `slime-rt` (`components/runtime`) backed by the private
-  region: a first-fit free list ordered by address with boundary coalescing on
-  free, extended so a growth appends to the tail of the list and merges with the
-  trailing free block;
-- request growth in batches rather than per allocation, keeping the declared
-  operation's ABI in target pages while the batching policy stays in userspace,
-  so a later page profile changes no contract;
-- surface exhaustion as a structured allocation failure that a component can
-  observe, never a fault, silent truncation, or hang;
-- add a startup self-check component proving the declared quota is live on the
-  real boot path, in the same shape as the C7 shared-buffer probe, so the
-  operation is exercised by a real component and not only by `slime-root`'s host
-  unit tests (backlog B5's lesson);
-- leave components that declare no quota untouched: no growth call, no allocator
-  use, and no change to their image or behavior.
-
-#### Required checks
-
-- `Vec`, `Box`, and `String` work in a component across reallocation, including
-  growth that crosses a batch boundary;
-- the allocator requests growth only when its free list cannot serve a request,
-  and freed memory is reused without further growth;
-- an allocation beyond the declared quota fails structurally and the component
-  stays alive to observe it;
-- the startup probe fails the boot when the generation granted a quota the
-  root does not honour;
-- a zero-quota component that never allocates is byte-identical in behavior to
-  its pre-C10 build.
-
-#### Planned verification target
-
-```sh
-just private_memory_check
-```
-
-#### Exit condition
-
-A real component allocates and frees dynamically sized data through ordinary
-Rust collections under its generation-declared ceiling, reuses freed memory
-without growing, observes exhaustion as a structured error rather than a fault,
-and proves its quota live at startup on the ordinary boot path.
 
 ### C10.4 — Adoption, reclamation, and leak evidence
 
