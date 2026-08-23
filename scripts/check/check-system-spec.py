@@ -66,7 +66,27 @@ SORTED_SECTIONS = {
     "state": lambda entry: entry["name"],
     "grants": lambda entry: (entry["name"], entry["source"], entry["target"]),
     "sharedBufferBudget": lambda entry: entry["holder"],
+    "privateMemoryBudget": lambda entry: entry["holder"],
 }
+
+# Sections the frozen baseline predates.
+#
+# The baseline is the pre-CP1 hand-authored `valid.zti`, and it is never
+# regenerated and never edited — that is what makes it evidence rather than the
+# generator's own output. So a section the repository adds *after* it was frozen
+# cannot appear there, and the derivation legitimately produces one the baseline
+# has no opinion about. C10.4's `privateMemoryBudget`, and the
+# `private-memory-budget` resource object that carries it, are the first such
+# section.
+#
+# Excused for the baseline comparison, never unchecked. `check_post_baseline`
+# below asserts the derived content equals what the component specs declare,
+# independently of the baseline, so the excusal is "the baseline cannot speak to
+# this" rather than "this is unverified". A blanket ignore here would let any
+# future divergence hide inside these names, which is exactly the failure
+# `KNOWN_DEAD_BINDINGS` is written to avoid on its own axis.
+POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
+POST_BASELINE_OBJECTS = ("private-memory-budget",)
 
 # Bindings the committed `valid.zti` declares that name no grant at all. They are
 # dead text: `resolve_boot_profile` drops any binding whose grant is absent, so
@@ -157,6 +177,58 @@ def strip_dead_bindings(manifest: dict) -> dict:
     return value
 
 
+def split_post_baseline(manifest: dict) -> tuple[dict, dict]:
+    """Separate the sections the frozen baseline predates from the rest.
+
+    Returns `(comparable, added)`. `comparable` is what the baseline can be
+    compared against; `added` is what `check_post_baseline` asserts on its own
+    terms.
+    """
+    value = copy.deepcopy(manifest)
+    added = {section: value.pop(section) for section in POST_BASELINE_SECTIONS if section in value}
+    if "objects" in value:
+        kept, removed = [], []
+        for entry in value["objects"]:
+            (removed if entry["id"] in POST_BASELINE_OBJECTS else kept).append(entry)
+        value["objects"] = kept
+        added["objects"] = removed
+    return value, added
+
+
+def check_post_baseline(name: str, derived: dict, system) -> None:
+    """The post-baseline sections say exactly what the component specs declare.
+
+    The baseline predates these, so it cannot check them — and an excusal with
+    nothing behind it would let a wrong budget through under a name the
+    comparison skips. This is the replacement assertion, and it is stricter than
+    the baseline's would have been: it compares the derived budget against the
+    specs the system composes rather than against a frozen copy of one answer.
+    """
+    expected = {
+        component: COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
+        for component in system.spec["components"]
+        if COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
+    }
+    budget = {entry["holder"]: entry["pageQuota"] for entry in derived.get("privateMemoryBudget", [])}
+    if budget != expected:
+        fail(
+            f"{name}: derived privateMemoryBudget {sorted(budget.items())} does not match "
+            f"the declared privatePageQuota of the components it composes "
+            f"{sorted(expected.items())}"
+        )
+    # And the resource object is present exactly when the section has holders:
+    # the builder refuses a budget without the object and encodes nothing from an
+    # object with no holders, so either half alone is a generation that boots
+    # with every declared quota silently denied.
+    objects = {entry["id"] for entry in derived["objects"]}
+    carried = "private-memory-budget" in objects
+    if carried != bool(budget):
+        fail(
+            f"{name}: privateMemoryBudget has {len(budget)} holder(s) but the "
+            f"private-memory-budget resource object is {'present' if carried else 'absent'}"
+        )
+
+
 def first_difference(left: object, right: object, label: str) -> str:
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
@@ -204,11 +276,16 @@ for name, system in sorted(systems.items()):
     fixture = load_baseline(DERIVED_FIXTURES[name])
     derived = normalized(derive_manifest(system))
     committed = normalized(strip_dead_bindings(fixture))
+    # Sections the baseline predates are lifted out and asserted separately: it
+    # was frozen before they existed, so it has no opinion to compare against.
+    derived, _added = split_post_baseline(derived)
+    committed, _ = split_post_baseline(committed)
     if derived != committed:
         fail(
             f"{name}: derived manifest diverges from {DERIVED_FIXTURES[name]}: "
             f"{first_difference(derived, committed, 'manifest')}"
         )
+    check_post_baseline(name, normalized(derive_manifest(system)), system)
     # And the removal above must be exactly the dead bindings, never a live one:
     # comparing against the unmodified fixture must fail for that reason alone.
     untouched = normalized(fixture)

@@ -424,7 +424,26 @@ STORE_COMPONENTS = frozenset(
 # consumers need a third build group rather than joining either of the other
 # two. `just component_crate_split_check` compares this against what the crates
 # declare.
-PRIVATE_HEAP_COMPONENTS = frozenset({"private-heap-probe"})
+#
+# C10.4 adds `fabric-service`: its role and frame tables are now sized from the
+# graph a generation declared rather than from the contract's ceilings, so they
+# come from the task-private region. It is the first *product* component here
+# rather than a probe, which is the point — the mechanism is only load-bearing
+# once something that ships uses it.
+PRIVATE_HEAP_COMPONENTS = frozenset({"fabric-service", "private-heap-probe"})
+# Of those, the ones that cannot provision at all without a quota (C10.4).
+#
+# A subset rather than the same set: linking the allocator and *requiring* a
+# quota are different facts. `private-heap-probe` links it precisely so it can be
+# run both ways — the private-memory plane declares one instance with a quota and
+# one without, and the omitted instance proving it is denied is that plane's
+# whole point. `fabric-service` has no such mode: its role and frame tables are
+# the first thing it allocates and it fails provisioning without them, so a
+# generation carrying it and omitting its quota is one that cannot boot.
+#
+# Checked against `privateMemoryBudget` where the budget is encoded, so the
+# refusal is a build failure rather than a named component failure at boot.
+PRIVATE_HEAP_REQUIRED = frozenset({"fabric-service"})
 PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
@@ -1935,13 +1954,39 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     sample_pages = (limits["sampleBytes"] + PAGE_SIZE - 1) // PAGE_SIZE
     if sample_pages > FABRIC_COPY_PAGES:
         fail("fabric graph: sampleBytes exceeds the generated copy layout")
+    # Everything that pins a fabric-owned frame, not just subscriber queues
+    # (C10.4). A `retained` publisher holds its last `retainedDepth` samples for
+    # late joiners, and those references are live *concurrently* with every
+    # subscriber's queue rather than instead of it — `retain_for_late_joiners`
+    # takes one per entry and only `release_retained` drops them.
+    #
+    # This must match `fabric-service`'s own `declared_capacity` exactly. The
+    # component sizes its frame table from the same two terms and refuses a graph
+    # whose sum passes the same ceiling, so a builder summing fewer terms would
+    # certify manifests the component then refuses at boot — a generation the
+    # toolchain approved and the graph's own holder rejects. `max(1)` mirrors
+    # `provision_edge`'s `StreamHistory::new(qos.retained_depth.max(1))`.
+    #
+    # Both filters compare against the *encoded* constants and index directly,
+    # because `participants` stores every enum already mapped through
+    # `FABRIC_DURABILITY`/`FABRIC_DIRECTION`. A first version of this compared
+    # `durability` to the string `"retained"`, which no record ever holds: the
+    # term silently evaluated to zero and the guard did nothing while every gate
+    # stayed green. `.get(..., default)` on keys these records always set masked
+    # it, so both are direct lookups now — a renamed key raises instead of
+    # defaulting to a value that disables the check.
     ring_capacity = sum(
         participant["historyDepth"]
         for participant in participants
         if participant["direction"] == FABRIC_DIRECTION_SUBSCRIBE
+    ) + sum(
+        max(participant["retainedDepth"], 1)
+        for participant in participants
+        if participant["direction"] == FABRIC_DIRECTION_PUBLISH
+        and participant["durability"] == FABRIC_DURABILITY_RETAINED
     )
     if ring_capacity > FABRIC_FRAME_CAPACITY:
-        fail("fabric graph: subscriber history exceeds the frame table")
+        fail("fabric graph: declared frame demand exceeds the frame table")
     if limits["eventDepth"] % 2 != 0 or limits["eventDepth"] < 2:
         fail("fabric graph: operation event depth is not evenly allocatable")
     if required_capability_slots > limits["capabilitySlots"]:
@@ -3943,6 +3988,38 @@ def build_sel4_generation(
         # declaring holders without the object would boot with every one of
         # them denied and no indication why.
         fail("privateMemoryBudget declared without a private-memory-budget resource object")
+    # C10.4: a component that cannot run without a private heap must be given
+    # one, so the builder refuses the omission rather than shipping a generation
+    # that boots into a dead service.
+    #
+    # `slime-rt/private-heap` makes the task-private region the component's only
+    # heap. An instance the budget does not name has no region at all, so its
+    # allocator's first request fails and every `try_reserve` after it fails too
+    # — for `fabric-service` that is `claim_stream_tables` failing during
+    # provisioning, which presents as a named component failure with a correct
+    # message and a completely silent build behind it.
+    #
+    # Keyed on a separate set rather than on `PRIVATE_HEAP_COMPONENTS`, because
+    # linking the allocator and *requiring* a quota are different facts. The
+    # C10.2/C10.3 probes link it precisely so they can be run both ways: the
+    # private-memory plane declares one instance with a quota and one without,
+    # and the omitted one proving it is denied is that plane's whole point. A
+    # rule keyed on the allocator would make the deny-by-default half
+    # unexpressible.
+    #
+    # The shared-buffer plane has the same guard on its own axis:
+    # `resolve_fabric_profile` refuses a graph whose declared fabric holder has
+    # no `sharedBufferBudget` entry.
+    quota_holders = {entry["holder"] for entry in declared_private_memory}
+    for instance in manifest["instances"]:
+        if instance["executable"] not in PRIVATE_HEAP_REQUIRED:
+            continue
+        if instance["name"] not in quota_holders:
+            fail(
+                f"instance {instance['name']} runs {instance['executable']}, which cannot "
+                "provision without a private heap, but privateMemoryBudget declares no quota "
+                "for it"
+            )
     for executable in manifest["executables"]:
         stack = executable.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
         if (

@@ -206,6 +206,35 @@ impl Region {
         self.base..self.base + self.reservation * GRANULE_SIZE
     }
 
+    /// Whether `range` runs into this window.
+    ///
+    /// The one question every *other* mapping path has to ask (C10.4). The
+    /// window is reserved address space whose leaf frames arrive on demand, so
+    /// before the allocator has grown into a page there is nothing mapped there
+    /// and an unrelated `frame_map` at that address simply succeeds. What lands
+    /// is then indistinguishable from private memory to the component holding
+    /// it: its allocator hands the range out as heap and writes structured
+    /// allocations over storage another component can reach, while a later
+    /// growth maps a frame at an address the other table believes it owns.
+    /// Neither table is wrong on its own terms, which is exactly why neither
+    /// would report it.
+    ///
+    /// Tested against the whole reservation rather than the backed prefix,
+    /// deliberately. Bounding it by the live page count would make the answer
+    /// depend on how far this component's allocator happened to have grown, so
+    /// the same generation would admit or refuse the same mapping depending on
+    /// timing. The reservation is a fixed property of the VSpace, and refusing
+    /// against it makes the two planes disjoint by construction rather than by
+    /// schedule.
+    ///
+    /// A [`Self::DENIED`] region overlaps nothing: it carries no window, which
+    /// is why a task with no quota is not a task with a hole in its address
+    /// space that nothing may use.
+    pub const fn overlaps(self, range: &core::ops::Range<usize>) -> bool {
+        let window = self.window();
+        window.start < window.end && range.start < window.end && window.start < range.end
+    }
+
     /// Where the next grown page lands.
     const fn next_vaddr(self) -> usize {
         self.base + self.pages * GRANULE_SIZE
@@ -577,6 +606,50 @@ mod tests {
             0x1000_0000 + MAX_REGION_PAGES * GRANULE_SIZE
         );
         assert_eq!(region.next_vaddr(), 0x1000_0000);
+    }
+
+    #[test]
+    fn a_mapping_anywhere_in_the_reservation_overlaps_even_where_no_page_is_backed() {
+        let region = region();
+        let window = region.window();
+        // Nothing is backed here at all: `pages()` is zero. The whole point is
+        // that an unbacked address inside the window is still not available to
+        // another mapping, because whether a page has been grown into is a
+        // property of when the check runs rather than of the address space.
+        assert_eq!(region.pages(), 0);
+        assert!(region.overlaps(&(window.start..window.start + GRANULE_SIZE)));
+        assert!(region.overlaps(&(window.end - GRANULE_SIZE..window.end)));
+        // A range straddling either boundary overlaps: the first byte inside is
+        // enough, and a mapping is refused whole rather than clipped.
+        assert!(region.overlaps(&(window.start - GRANULE_SIZE..window.start + GRANULE_SIZE)));
+        assert!(region.overlaps(&(window.end - GRANULE_SIZE..window.end + GRANULE_SIZE)));
+        // And one spanning it entirely, which a naive containment test misses.
+        assert!(region.overlaps(&(window.start - GRANULE_SIZE..window.end + GRANULE_SIZE)));
+    }
+
+    #[test]
+    fn a_mapping_touching_either_boundary_from_outside_does_not_overlap() {
+        let region = region();
+        let window = region.window();
+        // Half-open on both ends: the page ending exactly at the base and the
+        // one starting exactly at the end are both legal. Off-by-one here would
+        // refuse a component the page immediately below its own window, which
+        // `child_vspace` deliberately leaves as the guard granule.
+        assert!(!region.overlaps(&(window.start - GRANULE_SIZE..window.start)));
+        assert!(!region.overlaps(&(window.end..window.end + GRANULE_SIZE)));
+        // An empty range at the base names no byte and so takes nothing.
+        assert!(!region.overlaps(&(window.start..window.start)));
+    }
+
+    #[test]
+    fn a_denied_region_overlaps_nothing_it_has_no_window_to_defend() {
+        // A task with no quota carries no reservation, so there is no hole in
+        // its address space and no address another mapping may not use. Were
+        // this to answer `true` for the zero range, every mapping by every
+        // component with no declared quota would be refused.
+        let denied = Region::DENIED;
+        assert!(!denied.overlaps(&(0..GRANULE_SIZE)));
+        assert!(!denied.overlaps(&(0..usize::MAX)));
     }
 
     #[test]

@@ -35,6 +35,7 @@ from component_spec import (
     interface_catalogue,
     workspace_binaries,
 )
+from boot_contracts import PRIVATE_MEMORY_ROOT_REGION_PAGES
 from harness import ROOT, load_script
 from zutai_cli import STDLIB, binary
 
@@ -152,6 +153,9 @@ if extra:
 executables = {entry["name"]: entry for entry in MANIFEST["executables"]}
 instances = {entry["name"]: entry for entry in MANIFEST["instances"]}
 budgets = {entry["holder"]: entry for entry in MANIFEST["sharedBufferBudget"]}
+private_budgets = {
+    entry["holder"]: entry for entry in MANIFEST.get("privateMemoryBudget") or []
+}
 for name, entry in sorted(BY_NAME.items()):
     spec = entry.spec
     executable = executables[name]
@@ -185,6 +189,17 @@ for name, entry in sorted(BY_NAME.items()):
     )
     if actual != expected:
         fail(f"{name}: spec shared-buffer resource {actual} != manifest budget {expected}")
+    # C10.4's private-memory ceiling, on exactly the shared-buffer rule above:
+    # absence of a budget entry means zero, because deny-by-default is what an
+    # unnamed holder gets. Without this the field would be the one
+    # `runtime.resource` number a spec could state and the generation contradict.
+    private_budget = private_budgets.get(name)
+    declared_pages = private_budget["pageQuota"] if private_budget else 0
+    if resource["privatePageQuota"] != declared_pages:
+        fail(
+            f"{name}: spec privatePageQuota {resource['privatePageQuota']} != manifest "
+            f"privateMemoryBudget {declared_pages}"
+        )
     if spec["runtime"]["executionEnvironment"] != MANIFEST["target"]:
         fail(f"{name}: spec execution environment != manifest target")
 
@@ -573,6 +588,12 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         spec["runtime"]["resource"]["bufferCount"] = 2
         spec["runtime"]["resource"]["bufferBytePages"] = 0
 
+    def overlarge_private_quota(spec: dict) -> None:
+        # One page past the root's per-task reservation. The window's address
+        # space is sized for that reservation when the child VSpace is built, so
+        # a spec declaring more describes a region no root will grant.
+        spec["runtime"]["resource"]["privatePageQuota"] = PRIVATE_MEMORY_ROOT_REGION_PAGES + 1
+
     def undeclared_device(spec: dict) -> None:
         spec["runtime"]["devices"] = ["block"]
 
@@ -643,6 +664,7 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         ("a stack that is not a whole number of pages", "console", unpaged_stack),
         ("a spawn budget above the platform ceiling", "console", overbudget_spawn),
         ("buffers declared with no page allowance", "console", buffers_without_pages),
+        ("a private-memory quota above the root's reservation", "console", overlarge_private_quota),
         ("a device requirement in neither capability set", "console", undeclared_device),
         ("a malformed version", "console", bad_version),
         ("an unsupported format version", "console", unsupported_format),

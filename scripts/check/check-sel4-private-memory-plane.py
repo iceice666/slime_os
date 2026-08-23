@@ -97,6 +97,8 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             r"SLIME_MEM budget holders=(\d+) declared=1",
             r"SLIME_MEM quota task=\d+ instance=init declared=0 installed=0 base=0x0",
+            r"SLIME_MEM quota task=\d+ instance=private-heap-both "
+            r"declared=(\d+) installed=(\d+) base=0x[0-9a-f]+",
             r"SLIME_MEM quota task=\d+ instance=private-heap-denied "
             r"declared=0 installed=0 base=0x0",
             r"SLIME_MEM quota task=\d+ instance=private-heap-granted "
@@ -139,12 +141,12 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # window empty and its assertion vacuous.
         "the granted holder allocated through ordinary collections, then hit its ceiling",
         (
-            r"\[private-heap-probe\] private-heap reuse phase begins",
-            r"\[private-heap-probe\] private-heap quota live pages=(\d+) "
+            r"\[private-heap-probe:granted\] private-heap reuse phase begins",
+            r"\[private-heap-probe:granted\] private-heap quota live pages=(\d+) "
             r"growths=(\d+) reuse_growths=0 leaked=0",
             r"SLIME_MEM refused task=\d+ delta=[1-9]\d* cause=quota "
             r"detail=QuotaExceeded \{ pages: (\d+), delta: \d+, quota: (\d+) \}",
-            r"\[private-heap-probe\] granted pages=(\d+) growths=(\d+) refused=1 reused=1",
+            r"\[private-heap-probe:granted\] granted pages=(\d+) growths=(\d+) refused=1 reused=1",
         ),
     ),
     (
@@ -153,9 +155,30 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # component's own two lines rather than a root record.
         "the omitted holder could not allocate at all",
         (
-            r"\[private-heap-probe\] private-heap denied pages=0 growths=0 "
+            r"\[private-heap-probe:denied\] private-heap denied pages=0 growths=0 "
             r"reuse_growths=0 leaked=0",
-            r"\[private-heap-probe\] denied pages=0 growths=0 refused=1",
+            r"\[private-heap-probe:denied\] denied pages=0 growths=0 refused=1",
+        ),
+    ),
+    (
+        # C10.4: the one holder the generation gave *both* a private region and a
+        # shared-buffer factory. The two planes are separately accounted, so
+        # exhausting either must leave the other's declared ceiling intact —
+        # and the buffer must not be mappable into the private window, which is
+        # the only address space the two share.
+        #
+        # Causal within the chain and load-bearing in this order: the refusal is
+        # the root's own record naming the window it defended, and the report
+        # cannot precede it because the component makes the request before it
+        # reports. The base in the refusal is the window's own start, which is
+        # the page the allocator's first growth already took — so a root that
+        # admitted this would be handing out storage in use as heap.
+        "the holder of both planes was refused a buffer in its private window",
+        (
+            r"SLIME_MEM mapping refused task=\d+ base=0x([0-9a-f]+) "
+            r"end=0x([0-9a-f]+) window=0x([0-9a-f]+)\.\.0x([0-9a-f]+)",
+            r"\[private-heap-probe:both\] both pages=(\d+) growths=(\d+) buffers=1 "
+            r"window_map_refused=1 outside_map=1 released=1 reused=1",
         ),
     ),
     (
@@ -179,7 +202,13 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_MEM FAIL",
     r"\[private-memory-probe\] FAIL",
-    r"\[private-heap-probe\] FAIL",
+    # Every role, named explicitly. C10.4 gave this image three instances and
+    # labelled all of their output per role, so a pattern naming one role would
+    # go quiet for the other two — and one matching any suffix would be a
+    # pattern the gate-control harness cannot instantiate. Listing the three is
+    # what keeps both true, and adding a fourth instance is then a deliberate
+    # edit here rather than a silent widening.
+    r"\[private-heap-probe:(?:granted|denied|both)\] FAIL",
     r"\[init\] private memory plane fail",
     # A growth the root served for a holder the budget does not name would be
     # the whole milestone failing silently, so it is a failure marker rather
@@ -189,8 +218,8 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # component that faulted or was terminated instead would leave the chain's
     # report missing, but naming the outcomes explicitly says *which* failure
     # happened rather than only that a marker is absent.
-    r"\[private-heap-probe\] private-heap exhausted",
-    r"\[private-heap-probe\] private-heap failed",
+    r"\[private-heap-probe:(?:granted|denied|both)\] private-heap exhausted",
+    r"\[private-heap-probe:(?:granted|denied|both)\] private-heap failed",
 )
 
 
@@ -289,7 +318,7 @@ def boot(profile: dict[str, object]) -> str:
     lines: list[str] = []
     terminal = re.compile(
         r"SLIME_GRAPH HEALTHY|SLIME_ROOT FATAL|private memory plane fail"
-        r"|\[private-memory-probe\] FAIL|\[private-heap-probe\] FAIL"
+        r"|\[private-memory-probe\] FAIL|\[private-heap-probe:(?:granted|denied|both)\] FAIL"
     )
     try:
         assert process.stdout is not None
@@ -526,13 +555,13 @@ def check_growth_was_batched_and_reused(transcript: str, declared: dict[str, int
             "asking per allocation rather than in batches"
         )
     boundary = re.search(
-        r"\[private-heap-probe\] private-heap reuse phase begins",
+        r"\[private-heap-probe:granted\] private-heap reuse phase begins",
         transcript,
     )
     if boundary is None:
         fail(f"{holder}: the self-check never entered its reuse phase")
     report = re.search(
-        r"\[private-heap-probe\] private-heap quota live pages=(\d+) growths=(\d+) ",
+        r"\[private-heap-probe:granted\] private-heap quota live pages=(\d+) growths=(\d+) ",
         transcript,
     )
     if report is None:
@@ -573,6 +602,90 @@ def check_growth_was_batched_and_reused(transcript: str, declared: dict[str, int
         )
 
 
+def check_the_two_planes_are_independent(transcript: str, declared: dict[str, int]) -> None:
+    """C10.4: exhausting one memory plane leaves the other's ceiling intact.
+
+    The holder the fixture names in *both* budgets is the only instance that can
+    state this. It runs each plane to its declared limit and then uses the other,
+    so a shared account would be drained by whichever went first and the second
+    use would be refused. The probe's own FAIL lines name that outcome
+    specifically, and `FAILURE_MARKERS` catches them; this asserts the positive
+    half from the root's records.
+
+    Two properties, both read from the root rather than from the component:
+
+    * the mapping refusal names a destination *inside* the window the same
+      record reports, so the root refused it for the stated reason rather than
+      for an unrelated one that happened to produce a refusal;
+    * the pages charged to this holder stayed within its private quota while its
+      buffer pages were charged separately — the two numbers come from two
+      different root subsystems, and neither may have paid for the other.
+    """
+    holder = "private-heap-both"
+    if holder not in declared:
+        fail(f"the fixture declares no private quota for {holder}, so C10.4 asserts nothing")
+    refusal = re.search(
+        r"SLIME_MEM mapping refused task=(?P<task>\d+) base=0x(?P<base>[0-9a-f]+) "
+        r"end=0x(?P<end>[0-9a-f]+) window=0x(?P<start>[0-9a-f]+)\.\.0x(?P<stop>[0-9a-f]+)",
+        transcript,
+    )
+    if refusal is None:
+        fail(f"{holder}: the root never refused a mapping into a private window")
+    base = int(refusal.group("base"), 16)
+    end = int(refusal.group("end"), 16)
+    start = int(refusal.group("start"), 16)
+    stop = int(refusal.group("stop"), 16)
+    # The refusal must actually be about the window. A root that refused every
+    # mapping, or refused this one for an unrelated reason while printing the
+    # marker anyway, would satisfy the chain's presence check but not this.
+    if not (base < stop and start < end):
+        fail(
+            f"{holder}: the root refused a mapping at {base:#x}..{end:#x} as "
+            f"overlapping {start:#x}..{stop:#x}, which it does not"
+        )
+    if start != base:
+        fail(
+            f"{holder}: the refused mapping was at {base:#x} rather than the "
+            f"window's own base {start:#x}, so it does not prove the page the "
+            "allocator already holds is defended"
+        )
+    # And the same buffer mapped somewhere else, which is what makes the refusal
+    # about the destination rather than about the buffer or this holder's rights.
+    report = re.search(
+        r"\[private-heap-probe:both\] both pages=(?P<pages>\d+) growths=(?P<growths>\d+) "
+        r"buffers=1 window_map_refused=1 outside_map=1 released=1 reused=1",
+        transcript,
+    )
+    if report is None:
+        fail(f"{holder}: the holder of both planes did not report")
+    pages = int(report.group("pages"))
+    if pages > declared[holder]:
+        fail(
+            f"{holder}: holds {pages} private page(s) against a declared quota "
+            f"of {declared[holder]}"
+        )
+    if pages == 0:
+        fail(
+            f"{holder}: declares {declared[holder]} private page(s) but holds "
+            "none, so nothing proves the two planes were both in use at once"
+        )
+    # The buffer plane's own charge, from the root's separate record. Both
+    # numbers nonzero at once is the whole claim: one component, two accounts,
+    # neither paying for the other.
+    buffer_charge = re.search(
+        rf"SLIME_GRAPH quota task=\d+ instance={re.escape(holder)} executable=\S+ "
+        r"pages=(?P<pages>\d+) buffers=(?P<buffers>\d+) mappings=\d+ loans=\d+",
+        transcript,
+    )
+    if buffer_charge is None:
+        fail(f"{holder}: the root reported no shared-buffer ceiling for this holder")
+    if int(buffer_charge.group("buffers")) == 0:
+        fail(
+            f"{holder}: the root installed no buffer allowance, so the plane "
+            "cannot show the two accounts are separate"
+        )
+
+
 def main() -> None:
     declared = declared_quotas()
     build_image()
@@ -587,6 +700,7 @@ def main() -> None:
     check_measured_ceiling(transcript, declared)
     check_only_declared_pages_were_charged(transcript, declared)
     check_growth_was_batched_and_reused(transcript, declared)
+    check_the_two_planes_are_independent(transcript, declared)
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "

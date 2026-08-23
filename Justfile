@@ -362,11 +362,15 @@ sel4_input_check: sel4_pin_check
 sel4_powerbox_check: sel4_pin_check
     python3 scripts/check/check-sel4-powerbox-plane.py
 
-# P5.4.3 and M6.4: boot the dango image and require a scripted console session
-# to resolve two commands through the generation's profile and launch both
-# through the spawn service — the second carrying a derived working directory
-# and a stdin endpoint — while an undeclared command is denied at resolution
-# and a malformed line is a parse error. Every component is the oracle's.
+# P5.4.3, M6.4, and C10.4: boot the dango image and require a scripted console
+# session to resolve three commands through the generation's profile and launch
+# all three through the spawn service — the second carrying a derived working
+# directory and a stdin endpoint, the third repeating the first — while an
+# undeclared command is denied at resolution and a malformed line is a parse
+# error. The repeat is what makes the free-frame census a conservation claim:
+# the root's own allocator watermarks must return to where they stood after the
+# previous cycle, with the released arena reused rather than replaced. Every
+# component is the oracle's.
 sel4_dango_check: sel4_pin_check
     python3 scripts/check/check-sel4-dango-plane.py
 
@@ -1011,7 +1015,16 @@ test_sel4_root:
     # at exactly the per-task reservation is admitted, a quota above that
     # reservation is refused rather than clamped at growth, and B8's aggregate
     # arm refuses holders that each fit but cannot all peak at once.
-    expected=149
+    #
+    # C10.4: 149 -> 152. `private_memory` gains three, covering the one shared
+    # resource the two memory planes still have — the child's address space.
+    # A mapping anywhere in the reservation overlaps even where no page is
+    # backed yet (so the answer cannot depend on how far an allocator has
+    # grown), a mapping touching either boundary from outside does not (so the
+    # guard granule below the window stays usable), and a denied region
+    # overlaps nothing (so a component with no declared quota is not a
+    # component that may not map).
+    expected=152
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

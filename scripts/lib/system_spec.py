@@ -632,6 +632,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
     objects = []
     instances = []
     budget = []
+    private_budget = []
     for name in spec["components"]:
         component = components[name]
         resource = component["runtime"]["resource"]
@@ -695,6 +696,19 @@ def derive_manifest(system: CompiledSystem) -> dict:
                     "mappingCount": resource["mappingCount"],
                 }
             )
+        # C10.4: the same derivation, from the same record, for the other memory
+        # plane. A separate list rather than a column of the shared-buffer one
+        # because the two are separately accounted — a component may hold either,
+        # both, or neither — and because a holder with no quota must be *absent*
+        # rather than present with a zero, which is what deny-by-default means
+        # here.
+        if resource["privatePageQuota"]:
+            private_budget.append(
+                {
+                    "holder": name,
+                    "pageQuota": resource["privatePageQuota"],
+                }
+            )
 
     # `fabric-graph`'s presence is strictly derived: the builder refuses a graph
     # without the object and an object without the graph, so there is nothing to
@@ -707,6 +721,12 @@ def derive_manifest(system: CompiledSystem) -> dict:
     if spec.get("fabricGraph") is not None:
         objects.append({"id": "fabric-graph", "kind": "resource", "size": 4096})
     objects.append({"id": "boot-layout", "kind": "resource", "size": 4096})
+    # C10.4: strictly derived, unlike `shared-buffer-budget` above. The builder
+    # refuses a `privateMemoryBudget` without this object and encodes nothing
+    # from an object with no holders, so there is nothing for a spec to choose:
+    # the object is present exactly when some component declared a quota.
+    if private_budget:
+        objects.append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
 
     # Canonical order throughout. `build-generation.py` sorts `objects`,
     # `executables`, `instances`, `grants`, and `state` before encoding
@@ -719,6 +739,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
     executables.sort(key=lambda entry: entry["name"])
     instances.sort(key=lambda entry: entry["name"])
     budget.sort(key=lambda entry: entry["holder"])
+    private_budget.sort(key=lambda entry: entry["holder"])
 
     manifest = {
         "bootAction": spec["bootAction"],
@@ -750,6 +771,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
         "mintedBindings": [],
         "interfaceSchemas": spec["interfaceSchemas"],
         "objects": objects,
+        "privateMemoryBudget": private_budget,
         "sharedBufferBudget": budget,
         "state": sorted(spec["state"], key=lambda entry: entry["name"]),
         "target": spec["targetRequirement"],

@@ -118,7 +118,11 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # allocator that found no region at all. The boundary line is pinned here as
     # well as consumed by the gate's reuse window, so a probe that stopped
     # emitting it fails rather than leaving that window empty.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 19),
+    # C10.4: 19 -> 22. One ceiling record for the new both-planes instance in
+    # chain 1 (6 -> 7 markers), plus that instance's own two-marker chain, which
+    # asserts that exhausting either memory plane leaves the other's declared
+    # ceiling intact and that a shared buffer cannot land in the private window.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 22),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,
@@ -189,7 +193,11 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 11),
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
-    ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 13),
+    # C10.4: 13 -> 16. The scripted session repeats its first command, and the
+    # three markers tracing that repeat are what make the free-frame census a
+    # conservation claim over one executable rather than an observation across
+    # four different ones.
+    ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 16),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 11),
 )
 

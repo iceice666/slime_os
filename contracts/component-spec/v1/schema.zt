@@ -107,6 +107,15 @@ ResourceRequirement :: type {
   bufferCount : Int;
   mappingCount : Int;
   loanCount : Int;
+  -- Pages of task-private working memory this component may hold at once
+  -- (C10.4). Zero denies it a private region entirely, which is what every
+  -- component whose working set is fixed at build time declares.
+  --
+  -- A sibling of the shared-buffer ceilings rather than a share of them: the
+  -- two planes are separately accounted, so a component exhausting one must
+  -- leave the other's ceiling intact, and one number covering both would make
+  -- that impossible to state.
+  privatePageQuota : Int;
 };
 
 RuntimeRequirement :: type {

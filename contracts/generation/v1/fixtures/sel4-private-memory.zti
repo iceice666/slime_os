@@ -26,7 +26,18 @@
   ];
   formatVersion = 1;
   generation = 40;
-  grants = [];
+  grants = [
+    {
+      name = "both-planes-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "private-heap-both";
+      transferable = false;
+    };
+  ];
   health = {
     bootAttempts = 3;
     requiredInstances = [
@@ -79,6 +90,20 @@
       name = "private-heap-denied";
       owner = "root";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "both-planes-shared-buffer-factory";
+          slot = 1;
+        };
+      ];
+      dependencies = [];
+      executable = "private-heap-probe";
+      health = "optional";
+      name = "private-heap-both";
+      owner = "root";
+    };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
@@ -108,6 +133,11 @@
       kind = "resource";
       size = 4096;
     };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
   ];
   privateMemoryBudget = [
     {
@@ -118,8 +148,20 @@
       holder = "private-heap-granted";
       pageQuota = 24;
     };
+    {
+      holder = "private-heap-both";
+      pageQuota = 24;
+    };
   ];
-  sharedBufferBudget = [];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 1;
+      holder = "private-heap-both";
+      loanCount = 0;
+      mappingCount = 1;
+    };
+  ];
   state = [];
   target = "aarch64-sel4-qemu-virt";
 }

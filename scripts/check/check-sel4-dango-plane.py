@@ -108,6 +108,23 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"parse-error",
     ),
     (
+        # C10.4: the repeat of the *first* command, scripted before the escape.
+        # Same executable, so the released arena's retained parent is reused
+        # rather than a new one provisioned, which is what makes the census
+        # assertion a conservation claim rather than an observation of which
+        # binaries ran.
+        "the repeated command resolved through the profile",
+        r"resolved:profile",
+    ),
+    (
+        "the repeated request was accepted",
+        r"spawn-request:accepted",
+    ),
+    (
+        "the repeated command reported a structured exit",
+        r"result:exit:0",
+    ),
+    (
         "the session closed on the scripted escape",
         r"\[dango\] interactive session closed",
     ),
@@ -261,17 +278,17 @@ def check_transcript(transcript: str) -> None:
             report_transcript(transcript)
             fail(f"missing marker: {label} ({pattern})")
     # Every launch is traced to a resolution and a request, and there are
-    # exactly two of each. A third would mean a denied or malformed line
+    # exactly three of each. A fourth would mean a denied or malformed line
     # reached the spawn service, which is the property `resolve-denied` and
     # `parse-error` assert from the shell's side and this asserts from the
     # service's.
     resolutions = transcript.count("resolved:profile")
     accepted = transcript.count("spawn-request:accepted")
-    if resolutions != 2 or accepted != 2:
+    if resolutions != 3 or accepted != 3:
         report_transcript(transcript)
         fail(
             f"{resolutions} profile resolutions and {accepted} accepted requests, "
-            "expected exactly 2 of each"
+            "expected exactly 3 of each"
         )
     # The spawn service launched both executables its profile names, and each
     # child saw the context the shell gave it rather than an ambient one.
@@ -279,13 +296,110 @@ def check_transcript(transcript: str) -> None:
         fail("sysinfo did not report the command it was launched with")
     if "echo-agent{tool=echo" not in transcript:
         fail("echo-agent did not report its arguments")
+    reuses = check_spawn_exit_returned_every_frame(transcript)
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; {resolutions} "
         f"commands resolved through the profile and {accepted} launched through "
-        "the spawn service, an undeclared command was denied at resolution, and "
-        "a malformed line was a parse error",
+        "the spawn service, an undeclared command was denied at resolution, "
+        "a malformed line was a parse error, and a repeated spawn/exit cycle "
+        f"returned every frame with {reuses} arena reuse(s)",
         flush=True,
     )
+
+
+def check_spawn_exit_returned_every_frame(transcript: str) -> int:
+    """C10.4: a repeated spawn/exit cycle returns the free-frame count.
+
+    Read from `SLIME_ROOT reclaim census`, which the root prints from its
+    allocator's own watermarks at the point a task has just returned everything
+    it held. Deliberately not from the counts the root *tracks* — reclaimed
+    CSlots, live tasks, released buffers — because those are produced by the same
+    bookkeeping that would be wrong if reclamation were broken. B9 is the
+    standing evidence: terminated tasks were marked terminated and their buffers
+    reclaimed while thirteen frames per spawn were never returned, and every
+    counter the root printed agreed with every other one throughout.
+
+    The claim is about the *repeat*. `begin_task_arena` retains a released
+    arena's parent untyped for reuse by the next task of the same size, so a
+    cycle launching a new executable legitimately provisions a new parent and
+    the free count legitimately falls. The script therefore repeats its first
+    command, and the assertion is that the census after the repeat equals the
+    census after that first command exactly — with the reuse counter having
+    advanced, which is what proves the repeat took the retained arena rather
+    than getting a fresh one that happened to cost the same.
+    """
+    # Bound to the spawned commands rather than taken positionally. The shell's
+    # own graph tears down at the end of the plane and emits census records too,
+    # and init and the spawn service die in an order the scheduler picks — so
+    # "the first three records" is only the three spawned commands if nothing
+    # else ever dies first.
+    #
+    # Each command's census is the last one *before* its `result:exit`, not the
+    # first one after. The order is a property of the mechanism rather than of
+    # this boot: a dead task is reclaimed by `reclaim_task_objects` inside the
+    # root's own service-loop sweep, and the shell only learns the outcome when
+    # the spawn service's reply reaches it afterwards. Both reclamation call
+    # sites are in that one loop — the console dispatcher (B41's second root
+    # thread) never reclaims — so the two lines cannot interleave the other way.
+    # Slicing forward instead collected the *next* command's record, and for the
+    # third command it collected the shell's own teardown, which is what made
+    # the first version of this fail against a correct boot.
+    exits = [m.start() for m in re.finditer(r"result:exit:0", transcript)]
+    if len(exits) != 3:
+        report_transcript(transcript)
+        fail(f"{len(exits)} structured command exits, expected exactly 3")
+    pattern = re.compile(
+        r"SLIME_ROOT reclaim census task=\d+ slots=(?P<slots>\d+) "
+        r"bytes=(?P<bytes>\d+) live_objects=(?P<objects>\d+) "
+        r"arena_reuses=(?P<reuses>\d+)"
+    )
+    census = []
+    start = 0
+    for index, exit_at in enumerate(exits):
+        records = list(pattern.finditer(transcript, start, exit_at))
+        if not records:
+            report_transcript(transcript)
+            fail(
+                f"command {index + 1} reported a structured exit but the root printed "
+                "no reclaim census for it, so its frames were never accounted"
+            )
+        match = records[-1]
+        census.append(
+            (
+                int(match["slots"]),
+                int(match["bytes"]),
+                int(match["objects"]),
+                int(match["reuses"]),
+            )
+        )
+        start = exit_at
+    first, second, repeat = census
+    if repeat[3] == 0:
+        report_transcript(transcript)
+        fail(
+            "the repeated spawn/exit cycle provisioned a new arena rather than "
+            f"reusing the released one (arena_reuses={repeat[3]}), so the frame "
+            "count below is not a conservation claim"
+        )
+    if repeat[:3] != second[:3]:
+        report_transcript(transcript)
+        fail(
+            "a repeated spawn/exit cycle did not return every frame: after the "
+            f"second command the allocator had slots={second[0]} "
+            f"bytes={second[1]} live_objects={second[2]}, and after repeating "
+            f"the first it had slots={repeat[0]} bytes={repeat[1]} "
+            f"live_objects={repeat[2]}"
+        )
+    # And the drift across the two *distinct* executables is bounded rather than
+    # unexamined: each new executable takes one arena parent, so the count may
+    # fall once per new size class and no further.
+    if second[0] > first[0]:
+        report_transcript(transcript)
+        fail(
+            f"the allocator gained slots across a spawn/exit cycle "
+            f"({first[0]} then {second[0]}), which no reclamation path can do"
+        )
+    return repeat[3]
 
 
 def main() -> None:
@@ -312,11 +426,12 @@ def main() -> None:
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
-        "seL4 dango plane check: a scripted console session resolved two "
-        "commands through the generation's profile and launched both through "
+        "seL4 dango plane check: a scripted console session resolved three "
+        "commands through the generation's profile and launched all three through "
         "the spawn service with explicit environment, working directory, and "
-        "stdin; an undeclared command was denied at resolution and a malformed "
-        "line was a parse error"
+        "stdin; an undeclared command was denied at resolution, a malformed "
+        "line was a parse error, and repeating the first command returned every "
+        "frame the cycle had taken"
     )
 
 

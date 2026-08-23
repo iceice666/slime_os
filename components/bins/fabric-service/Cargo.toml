@@ -15,7 +15,12 @@ test = false
 boot-contracts = { path = "../../../boot-contracts" }
 slime-components = { path = "../../lib" }
 slime-proto = { path = "../../proto" }
-slime-rt = { path = "../../runtime" }
+# C10.4: the stream plane's role and frame tables are sized from the graph this
+# generation declared rather than from the contract's ceilings, so they are
+# allocated from the task-private region. `private-heap` rather than `heap`
+# because the tables live for the whole plane and a bump allocator that never
+# reuses would make the declared quota a one-shot budget.
+slime-rt = { path = "../../runtime", features = ["private-heap"] }
 
 [build-dependencies]
 slime-build-support = { path = "../../build-support" }

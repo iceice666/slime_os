@@ -67,6 +67,7 @@
       bufferCount = 0;
       mappingCount = 0;
       loanCount = 0;
+      privatePageQuota = 0;
     };
     devices = [];
   };

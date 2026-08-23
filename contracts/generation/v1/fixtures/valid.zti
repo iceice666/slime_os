@@ -1613,6 +1613,11 @@
       size = 4096;
     };
     {
+      id = "private-memory-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
       id = "sha256:console";
       kind = "component";
       size = 65536;
@@ -1826,6 +1831,12 @@
       id = "shared-buffer-budget";
       kind = "resource";
       size = 4096;
+    };
+  ];
+  privateMemoryBudget = [
+    {
+      holder = "fabric-service";
+      pageQuota = 16;
     };
   ];
   sharedBufferBudget = [

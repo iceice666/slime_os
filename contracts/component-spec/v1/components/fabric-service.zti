@@ -106,6 +106,7 @@
       bufferCount = 14;
       mappingCount = 14;
       loanCount = 14;
+      privatePageQuota = 16;
     };
     devices = [];
   };

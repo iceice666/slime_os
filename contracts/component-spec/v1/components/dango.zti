@@ -52,6 +52,7 @@
       bufferCount = 2;
       mappingCount = 4;
       loanCount = 2;
+      privatePageQuota = 0;
     };
     devices = [
       "input";

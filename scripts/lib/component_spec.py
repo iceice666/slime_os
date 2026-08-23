@@ -30,7 +30,7 @@ from pathlib import Path
 from types import ModuleType
 
 import component_spec_contract as default_contract
-from boot_contracts import COMPONENT_MAX_STACK_BYTES
+from boot_contracts import COMPONENT_MAX_STACK_BYTES, PRIVATE_MEMORY_ROOT_REGION_PAGES
 from harness import CHECK_SCRIPTS, ROOT, load_script
 from zutai_cli import STDLIB, binary
 
@@ -584,6 +584,7 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         "bufferCount",
         "mappingCount",
         "loanCount",
+        "privatePageQuota",
     }
     resource_raw = _exact_record(runtime["resource"], resource_keys, "runtime.resource")
     resource = {
@@ -609,6 +610,12 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         _fail("runtime.resource: buffers declared with no page allowance")
     if resource["bufferBytePages"] > _MAX_TOTAL_PAGES:
         _fail(f"runtime.resource.bufferBytePages: exceeds {_MAX_TOTAL_PAGES}")
+    # C10.4: the private-memory ceiling is bounded by the root's own per-task
+    # reservation, which is a published contract constant rather than this
+    # spec's opinion. A spec declaring more describes a region no root will
+    # grant, and the refusal belongs here rather than at boot.
+    if resource["privatePageQuota"] > _MAX_PRIVATE_REGION_PAGES:
+        _fail(f"runtime.resource.privatePageQuota: exceeds {_MAX_PRIVATE_REGION_PAGES}")
     # A parameter is only a parameter of something. Every name a spec declares
     # must be a `runtime.resource` field, and its default must be the value that
     # field actually holds — otherwise `configuration` is decoration: a record
@@ -800,6 +807,14 @@ _MAX_EXTRA_THREADS = 1
 # is the manifest's own `sharedBufferBudget`, which the gate compares against
 # field by field.
 _MAX_TOTAL_PAGES = 256
+# C10.4's per-task private-memory reservation, published by
+# `contracts/private-memory-budget/v1` and pinned against `slime-root`'s own
+# `MAX_REGION_PAGES` by a compile-time assert there. The *per-holder* ceiling is
+# the manifest's `privateMemoryBudget`; this is the structural bound no holder's
+# declaration may exceed, because the window's address space is sized for it
+# when the child VSpace is built and a growth past it is refused rather than
+# relocated.
+_MAX_PRIVATE_REGION_PAGES = PRIVATE_MEMORY_ROOT_REGION_PAGES
 # The QoS value sets, read from the builder's `FABRIC_RELIABILITY`,
 # `FABRIC_DURABILITY`, and `FABRIC_LIVELINESS` maps. Those are the tables a
 # manifest's `FabricParticipant` is admitted against, so consuming them is what

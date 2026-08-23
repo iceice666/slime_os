@@ -67,6 +67,8 @@ mod visibility_broker;
 #[path = "../../../lib/src/fabric_trace_log.rs"]
 mod trace_log;
 
+extern crate alloc;
+
 use boot_contracts::fabric_graph::{
     CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
     FRAME_CAPACITY, MAX_ROLE_PARTICIPANTS, RELIABILITY_RELIABLE, RuntimeLimits, TransportQos,
@@ -246,28 +248,30 @@ const ROUTE_COUNT: usize = ROUTE_NAMES.len();
 const STATUS_NOT_GRANTED: i32 = -1;
 const STATUS_BAD_REQUEST: i32 = -2;
 
-/// Fixed brokering capacity. Every table below is sized from the contract's own
-/// published ceilings, so nothing here grows with traffic and nothing is read
-/// out of a per-plane generated profile.
+/// Brokering capacity *ceilings*. These bound what a graph may declare; the
+/// tables themselves are sized from what a graph actually declares (C10.4).
+///
+/// Before C10.4 there was a third constant here, `MAX_PARTICIPANTS`, summing
+/// the two role ceilings because one array had to hold both roles' worst case
+/// at once. The tables are now per-role and sized from the declared counts, so
+/// each role is admitted against its own ceiling and the sum has no referent.
 ///
 /// `MAX_ROLE_PARTICIPANTS` is the ceiling `validate_declared_limits` admits a
 /// graph's `publishers` and `subscribers` against, and it exists precisely
 /// because one record of either role carries a full `LIMIT_HISTORY_DEPTH`
 /// history: a graph promising more than this describes storage no component
-/// has. Summing the two role ceilings is therefore the tightest bound both
-/// tables can be sized from without reading a manifest.
-const MAX_PARTICIPANTS: usize = 2 * MAX_ROLE_PARTICIPANTS;
-/// Fabric-owned sample frames. Each holds one inline payload or names one
-/// fabric-owned buffer; a frame is freed when its last reference is delivered
-/// or evicted.
+/// has.
 ///
-/// Sized to the graph's `historyDepth` ceiling times the subscriber ceiling it
-/// can face at once. A frame is referenced by every subscriber ring holding it,
-/// so a table smaller than the summed declared depths would let the rings fill
-/// while no frame is free — and with the stalled subscriber holding its ring
-/// and the publishers blocked, nothing would ever wake the fabric again. That
-/// is a deadlock, not backpressure, so the table is sized to make it
-/// unreachable rather than detected.
+/// `MAX_FRAMES` bounds the fabric-owned sample frames, each holding one inline
+/// payload or naming one fabric-owned buffer; a frame is freed when its last
+/// reference is delivered or evicted. It is the graph's `historyDepth` ceiling
+/// times the subscriber ceiling it can face at once. A frame is referenced by
+/// every subscriber ring holding it, so a table smaller than the summed
+/// declared depths would let the rings fill while no frame is free — and with
+/// the stalled subscriber holding its ring and the publishers blocked, nothing
+/// would ever wake the fabric again. That is a deadlock, not backpressure, so
+/// `declared_capacity` refuses a graph whose summed depths pass this rather
+/// than discovering it later.
 const MAX_FRAMES: usize = FRAME_CAPACITY;
 /// Scratch window where the fabric maps an upstream loan and its own copy
 /// buffer. Two disjoint ranges, both unmapped before the next sample.
@@ -418,10 +422,10 @@ impl Frame {
     };
 }
 
-/// The stream plane's role and frame tables, in `.bss` rather than on a stack
-/// frame.
+/// The stream plane's role and frame tables, sized from the graph this
+/// generation declared rather than from the contract's ceilings (C10.4).
 ///
-/// These three are by far the largest objects the plane holds, and they were
+/// These three are by far the largest objects the plane holds. They began as
 /// locals of `main`/`traffic_graph`: one `Publisher` or `Subscriber` carries a
 /// whole `StreamHistory` -- `LIMIT_HISTORY_DEPTH` entries, about 1.5 KiB -- so
 /// two `MAX_PARTICIPANTS`-wide role arrays plus `[Frame; FRAME_CAPACITY]` came
@@ -431,49 +435,224 @@ impl Frame {
 /// stack, and the first symptom was not a fault but silent corruption:
 /// `BUFFER_FACTORY_CACHE` read back as garbage, so `shared_buffer_create` was
 /// refused `ungranted` and provisioning failed with a message that named the
-/// wrong cause.
+/// wrong cause. B70 moved them to `.bss`, which fixed that: the storage is the
+/// same bytes either way, but there the linker reserves it and the image
+/// accounts for it rather than it competing with every frame the dispatch loop
+/// pushes.
 ///
-/// Sizing them from the graph's published ceilings rather than one plane's
-/// declared counts is what made the footprint fixed rather than incidental, and
-/// a fixed footprint that large belongs in `.bss`: the storage is the same
-/// bytes either way, but there it is reserved by the linker and accounted in
-/// the image rather than competing with every frame the dispatch loop pushes.
+/// What `.bss` could not fix is that the reservation was for the contract's
+/// worst case in *every* generation carrying this component. Ten fixtures ship
+/// fabric-service and not one declares the role ceilings: the largest,
+/// `sel4-boot.zti`, declares three publishers and four subscribers with a
+/// summed frame demand of 22 against a 32-frame table. So the bytes were
+/// reserved against a graph no generation had, and every one of them paid the
+/// reservation at build time — measured as 29960 bytes of `.bss` plus `.data`,
+/// 145912 down to 115952 on `sel4-boot`.
+///
+/// They are now allocated from the task-private region, sized from the same
+/// participant rows `provision` reads. Three properties are preserved exactly:
+///
+/// * **Still claimed once, and now checked by the compiler.** Each plane entry
+///   point takes the tables by value and passes ordinary `&mut` borrows down, so
+///   nothing below can reach the storage twice — that part is the borrow
+///   checker's, where before it rested on a `static mut` and a hand-written
+///   soundness argument. The latch survives as a *liveness* check rather than a
+///   soundness one: a second claim would allocate a second set of tables and
+///   silently provision into whichever the caller happened to hold, so it fails
+///   instead. This component is single-threaded on every plane it runs — no
+///   fixture gives it `extraThreads` — so there is no second thread for either
+///   the latch or the borrows to race with.
+/// * **Still bounded before anything is provisioned.** The declared counts are
+///   admitted against the contract ceilings *before* a table is allocated, so a
+///   graph promising more than this component can hold is refused rather than
+///   discovered when the table is full — and refused identically to how it was
+///   when the ceilings were the array sizes.
+/// * **Still fixed for the life of the plane.** Nothing here grows with
+///   traffic. The tables are sized once from the graph and never resized, so
+///   a sample cannot cause an allocation.
 ///
 /// Neither the declared stack nor any authority check moves for this.
-static mut PUBLISHERS: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
-static mut SUBSCRIBERS: [Option<Subscriber>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
-static mut FRAMES: [Frame; MAX_FRAMES] = [Frame::EMPTY; MAX_FRAMES];
+struct StreamTables {
+    publishers: alloc::boxed::Box<[Option<Publisher>]>,
+    subscribers: alloc::boxed::Box<[Option<Subscriber>]>,
+    frames: alloc::boxed::Box<[Frame]>,
+}
+
 /// Set by the one successful [`claim_stream_tables`] call.
 static mut STREAM_TABLES_CLAIMED: bool = false;
 
-/// Exclusive references to the three tables above.
+/// How large each table must be for the graph this generation declared.
 ///
-/// The single-owner discipline is what keeps `static mut` sound here: exactly
-/// one caller ever receives these, the plane it runs is the task's whole
-/// remaining work, and a second claim fails rather than aliasing. Each plane
-/// entry point claims once and then passes ordinary `&mut` borrows down, so
-/// every function below is unchanged and none of them can reach the statics
-/// directly.
-struct StreamTables {
-    publishers: &'static mut [Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &'static mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &'static mut [Frame; MAX_FRAMES],
+/// One pass over the participant rows, counting only the routes this service
+/// carries — the same `local_route_index` filter `provision` applies, so a
+/// component on a call or operation route contributes no stream storage.
+struct DeclaredCapacity {
+    publishers: usize,
+    subscribers: usize,
+    frames: usize,
 }
 
+/// Measure the declared graph, and refuse one this component cannot hold
+/// (B70/CP2).
+///
+/// The refusals are the ceilings that used to be the array sizes, so a graph
+/// admitted before C10.4 is admitted now and one refused before is refused now
+/// — and strictly earlier than before, since a graph this component cannot hold
+/// is now refused before its storage exists rather than before an edge is
+/// handed out. The role bounds are `MAX_ROLE_PARTICIPANTS`, which is what
+/// `validate_declared_limits` admits a graph against on the builder's side.
+///
+/// The builder checks all three for every manifest it renders, but a component
+/// built against a generation this repository did not produce has no such
+/// guarantee — and the failure the frame bound protects against is a deadlock,
+/// which is the one class worth spending a boot-time check on: a table smaller
+/// than the summed declared depths lets the rings fill while no frame is free,
+/// and with the stalled subscriber holding its ring and the publishers blocked
+/// nothing would ever wake the fabric again.
+///
+/// Sums the *declared* `historyDepth`, which is exactly what
+/// `resolve_fabric_profile`'s `ring_capacity` sums, and deliberately not the
+/// `MIN_RING_SLOTS`-floored depth `provision_edge` allocates a ring at. The two
+/// differ for any participant declaring a shallower history than the ring's
+/// structural minimum, and using the floored figure here would refuse graphs
+/// the builder accepts — a component rejecting a generation the toolchain
+/// certified. The floor costs ring *slots*, which the fabric does not own; a
+/// frame is referenced once per queued sample, so the declared depth is what
+/// bounds this table.
+///
+/// A subscriber history is not the only thing that pins a frame, and this is the
+/// part the old fixed table hid. A `retained` publisher holds its last
+/// `retainedDepth` samples for late joiners — `retain_for_late_joiners` takes a
+/// reference per entry and `release_retained` drops them at teardown — so those
+/// frames are live *concurrently* with every subscriber's queue rather than
+/// instead of it. `FRAME_CAPACITY` covered both because it was one number large
+/// enough for the contract's worst case; a table sized only from subscriber
+/// depths would be short by exactly the retained total, and would present as
+/// admission refusing a sample with no free frame — the deadlock the bound
+/// exists to make unreachable. Every shipped fixture declares retained
+/// publishers, so this is the live case rather than a hypothetical one.
+///
+/// `retained_depth.max(1)` mirrors `provision_edge`'s own
+/// `StreamHistory::new(qos.retained_depth.max(1))`: a retained publisher
+/// declaring zero depth still gets a one-entry ring there, so sizing must
+/// charge it one.
+fn declared_capacity(rows: &[slime_components::fabric_self_view::Row]) -> DeclaredCapacity {
+    let mut capacity = DeclaredCapacity {
+        publishers: 0,
+        subscribers: 0,
+        frames: 0,
+    };
+    // Admission is on the *declared* sum; storage is on what `provision_edge`
+    // will actually allocate. The two differ by the ring floor and must not be
+    // conflated in either direction — see the note below.
+    let mut declared_frames = 0usize;
+    for row in rows
+        .iter()
+        .filter(|row| local_route_index(row.route_index).is_some())
+    {
+        match row.direction {
+            DIRECTION_PUBLISH => {
+                capacity.publishers += 1;
+                if row.qos.durability as u32 == DURABILITY_RETAINED {
+                    let retained = row.qos.retained_depth.max(1) as usize;
+                    capacity.frames += retained;
+                    declared_frames += retained;
+                }
+            }
+            DIRECTION_SUBSCRIBE => {
+                capacity.subscribers += 1;
+                declared_frames += row.history_depth;
+                // Sized to the history `provision_edge` builds, which is
+                // `StreamHistory::new(ring_slots)` after `ring_slots` has been
+                // floored at `MIN_RING_SLOTS`. A subscriber declaring a
+                // shallower history than that floor still gets a ring that deep,
+                // and `fan_out` takes a frame reference per queued entry — so
+                // charging the declared depth would leave the table short by the
+                // floor's slack, and short exactly where it deadlocks rather
+                // than where it reports.
+                capacity.frames += row
+                    .history_depth
+                    .max(slime_proto::fabric_ring::MIN_RING_SLOTS);
+            }
+            // A call or operation route declared in the same graph. Not this
+            // service's to provision, and not its storage to size.
+            _ => {}
+        }
+    }
+    if capacity.publishers > MAX_ROLE_PARTICIPANTS {
+        fail(b"declared publishers exceed the role ceiling");
+    }
+    if capacity.subscribers > MAX_ROLE_PARTICIPANTS {
+        fail(b"declared subscribers exceed the role ceiling");
+    }
+    // Against the *declared* sum, deliberately, which is what the builder
+    // admits a graph on. Refusing on the floored figure would reject graphs the
+    // toolchain certified — a component second-guessing the generation that
+    // composed it — while the table is heap-allocated and so is bounded by the
+    // declared private-memory quota rather than by this constant.
+    if declared_frames > MAX_FRAMES {
+        fail(b"declared frame demand exceeds the frame table");
+    }
+    capacity
+}
+
+/// Allocate the plane's tables for the graph this generation declared.
+///
+/// Reads the participant rows itself rather than taking them, because the two
+/// callers that need the tables read the graph at different points and a table
+/// sized from a *different* read than the one `provision` uses would be sized
+/// from a graph that had changed underneath it. The root answers the same rows
+/// every time, so this is one extra read rather than a second statement of the
+/// graph.
 fn claim_stream_tables() -> StreamTables {
-    // SAFETY: a component is single-threaded, the flag makes this the only
-    // call that ever hands out these references, and nothing else in this
-    // binary names the three statics.
+    // SAFETY: a component is single-threaded and this is the only reference
+    // taken to the latch.
     unsafe {
         if *core::ptr::addr_of!(STREAM_TABLES_CLAIMED) {
             fail(b"stream tables claimed twice");
         }
         *core::ptr::addr_of_mut!(STREAM_TABLES_CLAIMED) = true;
-        StreamTables {
-            publishers: &mut *core::ptr::addr_of_mut!(PUBLISHERS),
-            subscribers: &mut *core::ptr::addr_of_mut!(SUBSCRIBERS),
-            frames: &mut *core::ptr::addr_of_mut!(FRAMES),
-        }
+    }
+    let mut rows = slime_components::fabric_self_view::EMPTY_ROWS;
+    let Ok(count) = slime_components::fabric_self_view::rows(&mut rows) else {
+        fail(b"fabric graph read did not complete");
+    };
+    let capacity = declared_capacity(&rows[..count]);
+    // `try_reserve` then fill, rather than `vec![...]`: an allocation this
+    // component's declared quota cannot serve must be a named refusal on the
+    // console, not `handle_alloc_error`'s abort. The plane cannot run without
+    // its tables, so the outcome is still fatal — but a fatal this component
+    // reports is diagnosable, and one the allocator aborts on is not.
+    let mut publishers = alloc::vec::Vec::new();
+    if publishers.try_reserve_exact(capacity.publishers).is_err() {
+        fail(b"publisher table exceeds the declared private-memory quota");
+    }
+    publishers.resize_with(capacity.publishers, || None);
+    let mut subscribers = alloc::vec::Vec::new();
+    if subscribers.try_reserve_exact(capacity.subscribers).is_err() {
+        fail(b"subscriber table exceeds the declared private-memory quota");
+    }
+    subscribers.resize_with(capacity.subscribers, || None);
+    let mut frames = alloc::vec::Vec::new();
+    if frames.try_reserve_exact(capacity.frames).is_err() {
+        fail(b"frame table exceeds the declared private-memory quota");
+    }
+    frames.resize(capacity.frames, Frame::EMPTY);
+    slime_rt::debug_write(b"[fabric] tables sized from the declared graph publishers=");
+    write_u32(capacity.publishers as u32);
+    slime_rt::debug_write(b" subscribers=");
+    write_u32(capacity.subscribers as u32);
+    slime_rt::debug_write(b" frames=");
+    write_u32(capacity.frames as u32);
+    slime_rt::debug_write(b" ceilings=");
+    write_u32(MAX_ROLE_PARTICIPANTS as u32);
+    slime_rt::debug_write(b"/");
+    write_u32(MAX_FRAMES as u32);
+    slime_rt::debug_write(b"\n");
+    StreamTables {
+        publishers: publishers.into_boxed_slice(),
+        subscribers: subscribers.into_boxed_slice(),
+        frames: frames.into_boxed_slice(),
     }
 }
 
@@ -555,11 +734,10 @@ fn main(_startup_arg: u32) {
     let type_tags: [u64; ROUTE_COUNT] = [telemetry_stream::TYPE_TAG, diagnostics_stream::TYPE_TAG];
 
     let mut clients = control_clients();
-    let StreamTables {
-        publishers,
-        subscribers,
-        frames,
-    } = claim_stream_tables();
+    let mut tables = claim_stream_tables();
+    let publishers = &mut *tables.publishers;
+    let subscribers = &mut *tables.subscribers;
+    let frames = &mut *tables.frames;
 
     provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] every declared stream edge provisioned\n");
@@ -667,10 +845,7 @@ fn run_operation_plane() {
 /// resolves nothing: a native Endpoint reports no peer death, and the handle is
 /// the only observation that distinguishes an exited participant from a quiet
 /// one.
-fn await_participants(
-    publishers: &[Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &[Option<Subscriber>; MAX_PARTICIPANTS],
-) {
+fn await_participants(publishers: &[Option<Publisher>], subscribers: &[Option<Subscriber>]) {
     let slots = publishers
         .iter()
         .filter_map(|entry| entry.as_ref().map(|publisher| publisher.supervision_slot))
@@ -741,11 +916,9 @@ fn boot_graph() {
     {
         proxy.answered = true;
     }
-    let StreamTables {
-        publishers,
-        subscribers,
-        frames: _frames,
-    } = claim_stream_tables();
+    let mut tables = claim_stream_tables();
+    let publishers = &mut *tables.publishers;
+    let subscribers = &mut *tables.subscribers;
     // `provision` answers each control endpoint and returns once every one has
     // been answered or died. The unauthorized probe holds a real control
     // endpoint and asks for an ungranted route, so its denial is what answers
@@ -812,11 +985,10 @@ fn traffic_graph() {
         client.answered = true;
     }
     let limits = load_runtime_limits();
-    let StreamTables {
-        publishers,
-        subscribers,
-        frames,
-    } = claim_stream_tables();
+    let mut tables = claim_stream_tables();
+    let publishers = &mut *tables.publishers;
+    let subscribers = &mut *tables.subscribers;
+    let frames = &mut *tables.frames;
 
     provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] traffic: every declared stream edge provisioned\n");
@@ -953,8 +1125,8 @@ pub(crate) fn control_clients() -> [Option<Client>; MAX_STREAM_CONTROLS] {
 fn provision(
     clients: &mut [Option<Client>],
     routes: &[[u8; 32]; ROUTE_COUNT],
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
 ) {
     // Read once, before any client is answered.
     //
@@ -967,10 +1139,10 @@ fn provision(
     let Ok(row_count) = slime_components::fabric_self_view::rows(&mut graph_rows) else {
         fail(b"fabric graph read did not complete");
     };
-    // Before a single edge is handed out: a graph whose declared histories
-    // cannot all be held at once must be refused, not discovered when the last
-    // free frame is gone and every publisher is blocked.
-    admit_declared_frames(&graph_rows[..row_count]);
+    // The declared histories were admitted against the frame table before it
+    // was allocated (`declared_capacity`), which is strictly earlier than this
+    // point: a graph this component cannot hold is refused before it has
+    // storage, let alone before an edge is handed out.
     while clients.iter().flatten().any(|client| !client.answered) {
         // Sweep every unanswered control endpoint through its non-blocking ABI
         // first. Only when all of them would block is parking correct: probing
@@ -1074,8 +1246,8 @@ fn provision_edge(
     route: &[u8; 32],
     route_index: usize,
     row: &slime_components::fabric_self_view::Row,
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
 ) {
     // Direction, QoS, and KEEP_LAST depth all come off the one graph row this
     // edge was selected by (B70/CP2). They were three lookups into two
@@ -1218,9 +1390,9 @@ fn provision_edge(
 /// endpoint is ever left in the wait set to spin on.
 fn broker(
     type_tags: &[u64; ROUTE_COUNT],
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
     limits: &RuntimeLimits,
 ) {
     let mut now_ns = 0u64;
@@ -1663,9 +1835,9 @@ fn pump_publisher(
     index: usize,
     now_ns: u64,
     type_tags: &[u64; ROUTE_COUNT],
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
     limits: &RuntimeLimits,
 ) -> bool {
     let (control_slot, ring_base, ring_slots, route, ready_slot, credit_slot, publisher_qos) = {
@@ -1826,7 +1998,7 @@ fn admit_shared(
     message: &[u8; MAX_MSG],
     expected_type: u64,
     loan_slot: Option<u32>,
-    frames: &mut [Frame; MAX_FRAMES],
+    frames: &mut [Frame],
     limits: &RuntimeLimits,
 ) -> Option<usize> {
     let Some(descriptor) = WireSampleDescriptor::decode(message) else {
@@ -1956,8 +2128,8 @@ fn admit_shared(
 fn retain_sample(
     publisher_index: usize,
     frame: usize,
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    publishers: &mut [Option<Publisher>],
+    frames: &mut [Frame],
 ) {
     let publisher = publishers[publisher_index]
         .as_mut()
@@ -1987,8 +2159,8 @@ fn fan_out(
     route: usize,
     publisher_index: usize,
     publisher_qos: &TransportQos,
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
 ) {
     // Read the frame's identity once: the loop below borrows `frames` mutably
     // to release an eviction, so it cannot hold a reference to this frame.
@@ -2045,8 +2217,8 @@ fn late_subscriber_qos(publisher: &Publisher) -> TransportQos {
 /// Provision a real late subscriber and copy only the retained publisher's
 /// declared live window into its bounded delivery history.
 fn create_late_subscriber(
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    publishers: &mut [Option<Publisher>],
+    frames: &mut [Frame],
 ) -> LateSubscriber {
     let publisher = publishers
         .iter()
@@ -2077,7 +2249,7 @@ fn create_late_subscriber(
 fn pump_late_subscriber(
     late: &mut Option<LateSubscriber>,
     now_ns: u64,
-    frames: &mut [Frame; MAX_FRAMES],
+    frames: &mut [Frame],
 ) -> bool {
     let Some(subscriber) = late.as_mut() else {
         return false;
@@ -2108,8 +2280,8 @@ fn deliver(
     index: usize,
     now_ns: u64,
     type_tags: &[u64; ROUTE_COUNT],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
 ) -> bool {
     let Some(subscriber) = subscribers[index].as_mut() else {
         return false;
@@ -2235,8 +2407,8 @@ fn deliver(
 fn drain_acks(
     index: usize,
     _type_tags: &[u64; ROUTE_COUNT],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    _frames: &mut [Frame; MAX_FRAMES],
+    subscribers: &mut [Option<Subscriber>],
+    _frames: &mut [Frame],
 ) -> bool {
     let Some(subscriber) = subscribers[index].as_mut() else {
         return false;
@@ -2260,7 +2432,7 @@ fn announce_end(
     index: usize,
     route: usize,
     type_tags: &[u64; ROUTE_COUNT],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
+    subscribers: &mut [Option<Subscriber>],
 ) -> bool {
     let Some(subscriber) = subscribers[index].as_mut() else {
         return false;
@@ -2306,10 +2478,7 @@ fn announce_end(
 /// Drop the durable-history references once the broker is finished. Retained
 /// samples are live only for this fabric instance; shutdown releases their
 /// fixed frame and buffer charges before the component exits.
-fn release_retained(
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
-) {
+fn release_retained(publishers: &mut [Option<Publisher>], frames: &mut [Frame]) {
     for publisher in publishers.iter_mut().flatten() {
         while let Some(entry) = publisher.retained.pop() {
             release_frame(entry.slot as usize, frames);
@@ -2318,7 +2487,7 @@ fn release_retained(
 }
 
 /// Whether every publisher declared on `route` has finished or died.
-fn route_finished(route: usize, publishers: &[Option<Publisher>; MAX_PARTICIPANTS]) -> bool {
+fn route_finished(route: usize, publishers: &[Option<Publisher>]) -> bool {
     publishers
         .iter()
         .flatten()
@@ -2327,7 +2496,7 @@ fn route_finished(route: usize, publishers: &[Option<Publisher>; MAX_PARTICIPANT
 }
 
 /// Drop one reference to a fabric frame, releasing its storage at zero.
-fn release_frame(frame: usize, frames: &mut [Frame; MAX_FRAMES]) {
+fn release_frame(frame: usize, frames: &mut [Frame]) {
     if frames[frame].refs == 0 {
         return;
     }
@@ -2445,40 +2614,10 @@ fn graph_route_index_of(local: usize) -> Option<u32> {
         .map(|i| i as u32)
 }
 
-/// Refuse a graph whose declared subscriber histories cannot all be held at
-/// once (B70/CP2).
-///
-/// The builder checks this for every manifest it renders, but a component built
-/// against a generation this repository did not produce has no such guarantee —
-/// and the failure it protects against is a deadlock, which is the one class
-/// worth spending a boot-time check on. Read from the same rows provisioning
-/// reads, so no second statement of the graph is involved.
-///
-/// Sums the *declared* `historyDepth`, which is exactly what
-/// `resolve_fabric_profile`'s `ring_capacity` sums, and deliberately not the
-/// `MIN_RING_SLOTS`-floored depth `provision_edge` allocates a ring at. The two
-/// differ for any participant declaring a shallower history than the ring's
-/// structural minimum, and using the floored figure here would refuse graphs
-/// the builder accepts — a component rejecting a generation the toolchain
-/// certified. The floor costs ring *slots*, which the fabric does not own; a
-/// frame is referenced once per queued sample, so the declared depth is what
-/// bounds this table.
-fn admit_declared_frames(rows: &[slime_components::fabric_self_view::Row]) {
-    let required: usize = rows
-        .iter()
-        .filter(|row| row.direction == DIRECTION_SUBSCRIBE)
-        .filter(|row| local_route_index(row.route_index).is_some())
-        .map(|row| row.history_depth)
-        .sum();
-    if required > MAX_FRAMES {
-        fail(b"declared subscriber history exceeds the frame table");
-    }
-}
-
 fn refresh_matches(
     route: usize,
-    publishers: &[Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
+    publishers: &[Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
 ) {
     for subscriber in subscribers
         .iter_mut()
@@ -2602,9 +2741,9 @@ fn receive_time(pending_time: &mut Option<u64>, time_dead: &mut bool) {
 fn apply_time(
     now_ns: &mut u64,
     pending_time: &mut Option<u64>,
-    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
 ) -> bool {
     let Some(next) = pending_time.take() else {
         return false;

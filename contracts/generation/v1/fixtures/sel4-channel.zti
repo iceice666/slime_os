@@ -106,6 +106,7 @@
       size = 4096;
     };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

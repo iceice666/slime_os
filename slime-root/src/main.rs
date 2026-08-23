@@ -1713,8 +1713,18 @@ fn bring_up_block(
 const fn input_script(generation: u64) -> &'static [u8] {
     match generation {
         // The dango plane: the oracle's generation-7 session, byte for byte, so
-        // the same component produces the same transcript.
-        30 => b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n\x1b",
+        // the same component produces the same transcript — plus one C10.4
+        // repeat.
+        //
+        // The repeat is `sysinfo` again, and it must be the *same* executable as
+        // the first command rather than a fifth one. `begin_task_arena` retains
+        // a released arena's parent untyped for reuse by the next task of the
+        // same size, so a cycle launching a *different* executable legitimately
+        // consumes a new parent and the free-frame count legitimately falls.
+        // Only a repeat of one executable makes "the count returns to where it
+        // started" a property of reclamation rather than of which binaries the
+        // script happened to name.
+        30 => b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n$(sysinfo)\n\x1b",
         // The input plane's own script: two characters, a space, a character,
         // and a newline — enough to prove ordering, the character encoding, the
         // named-key encoding, and exhaustion.
@@ -4774,6 +4784,31 @@ fn reclaim_task_objects(
             id.0
         ),
     }
+    // C10.4: the allocator's own free capacity, printed at the one point in the
+    // boot where a task has just returned everything it held.
+    //
+    // Every count above is of things the root *tracks* — CSlots reclaimed,
+    // tasks live, buffers released — and each is reported by the same
+    // bookkeeping that would be wrong if reclamation were broken. B9 is the
+    // standing evidence that this is not a hypothetical: terminated tasks were
+    // marked terminated and their buffers reclaimed while thirteen frames per
+    // spawn were never returned, and every counter the root printed agreed with
+    // every other one throughout.
+    //
+    // These three are read from the allocator's watermarks instead, so a leak
+    // shows up as a number that fails to come back rather than as a
+    // disagreement between two tallies that share an author. `slots` and
+    // `bytes` are what a repeated spawn/exit workload must return to its
+    // starting value; `live_objects` is what must return to *its* starting
+    // value even though the arena is reused rather than freed.
+    sel4::debug_println!(
+        "SLIME_ROOT reclaim census task={} slots={} bytes={} live_objects={} arena_reuses={}",
+        id.0,
+        allocator.slots_remaining(),
+        allocator.untyped_bytes_remaining(),
+        allocator.live_objects(),
+        allocator.arena_reuses(),
+    );
 }
 
 /// Stable name for a private-memory refusal, for the root's own marker (C10.1).
@@ -5433,15 +5468,20 @@ fn serve_loan_lifecycle(
     let vspace = VSpaceCap(task.vspace.vspace.bits() as usize);
     let mut adapter = BufferAdapter::new(allocator);
     let outcome = match operation {
-        LoanLifecycleRequest::Map => buffers.map_loan(
-            &mut adapter,
-            holder,
-            handle,
-            vspace,
-            words[1] as usize,
-            words[2] as usize,
-            words[3] as usize,
-        ),
+        LoanLifecycleRequest::Map => {
+            match admit_mapping_destination(task, words[1] as usize, words[3] as usize) {
+                Ok(()) => buffers.map_loan(
+                    &mut adapter,
+                    holder,
+                    handle,
+                    vspace,
+                    words[1] as usize,
+                    words[2] as usize,
+                    words[3] as usize,
+                ),
+                Err(response) => return response,
+            }
+        }
         LoanLifecycleRequest::Return => buffers.return_loan(&mut adapter, holder, handle),
         LoanLifecycleRequest::Revoke => buffers.revoke_loan(&mut adapter, holder, handle),
     };
@@ -5711,20 +5751,23 @@ fn serve_buffer_lifecycle(
     let outcome = match operation {
         BufferLifecycleRequest::Map => {
             let writable = words[0] >> 32 != 0;
-            buffers.map(
-                &mut adapter,
-                holder,
-                handle,
-                vspace,
-                words[1] as usize,
-                words[2] as usize,
-                words[3] as usize,
-                if writable {
-                    MappingRights::ReadWrite
-                } else {
-                    MappingRights::ReadOnly
-                },
-            )
+            match admit_mapping_destination(task, words[1] as usize, words[3] as usize) {
+                Ok(()) => buffers.map(
+                    &mut adapter,
+                    holder,
+                    handle,
+                    vspace,
+                    words[1] as usize,
+                    words[2] as usize,
+                    words[3] as usize,
+                    if writable {
+                        MappingRights::ReadWrite
+                    } else {
+                        MappingRights::ReadOnly
+                    },
+                ),
+                Err(response) => return response,
+            }
         }
         BufferLifecycleRequest::Unmap => {
             buffers.unmap(&mut adapter, holder, handle, vspace, words[1] as usize)
@@ -5733,6 +5776,59 @@ fn serve_buffer_lifecycle(
         BufferLifecycleRequest::Release => buffers.release(&mut adapter, holder, handle),
     };
     finish_buffer_lifecycle(operation, tasks, id, slot, outcome, served)
+}
+
+/// Refuse a mapping whose destination runs into the caller's own task-private
+/// memory window (C10.4).
+///
+/// The two memory planes are otherwise independent by construction — separate
+/// tables, separate ceilings, separate allocation sources, and no capability
+/// kind for a private region — but they share one thing: the child's address
+/// space. The private window is *reserved* address space whose leaf frames
+/// arrive on demand, so an address inside it that the component's allocator has
+/// not yet grown into is simply unmapped, and a shared-buffer mapping there
+/// succeeds. This is the one check that keeps the last shared resource from
+/// being a way to alias the two.
+///
+/// Enforced here rather than inside `SharedBufferTable`, for two reasons. The
+/// table holds no task records: the window lives on the child VSpace, and this
+/// dispatcher is the one place that has already resolved both. And the rule is
+/// about the *caller*, not about the region — a buffer legitimately maps into
+/// any other component's address space at the same numeric address, so it is
+/// not a property of the buffer that could be checked once when it is created.
+///
+/// A malformed length is left to the table, which owns every other range rule
+/// and reports them uniformly; this refuses only what it can decide.
+fn admit_mapping_destination(
+    task: &task::Task,
+    base: usize,
+    length: usize,
+) -> Result<(), Response> {
+    let Some(end) = base.checked_add(length) else {
+        // Not this check's refusal to make: `validate_mapping_range` reports
+        // the same overflow as `BadRange` for every mapping path, and answering
+        // it here would give one caller a different status for one operation.
+        return Ok(());
+    };
+    if task.private_memory.overlaps(&(base..end)) {
+        let window = task.private_memory.window();
+        sel4::debug_println!(
+            "SLIME_MEM mapping refused task={} base={base:#x} end={end:#x} window={:#x}..{:#x}",
+            task.id.0,
+            window.start,
+            window.end,
+        );
+        // `InvalidOperation`, which is the variant answering `ERR_INVALID_ARG`
+        // — the same class every other malformed mapping request gets. The
+        // refusal is deliberately not distinguishable on the wire from a bad
+        // range: a component that could tell the two apart could map its own
+        // window's bounds by watching which code a probe returns, and the
+        // window's placement is not something a component is told. The root's
+        // marker above names the cause for the transcript, which is where an
+        // attributable refusal belongs.
+        return Err(Response::error(IpcError::InvalidOperation));
+    }
+    Ok(())
 }
 
 /// Turn a buffer-lifecycle table outcome into the wire response.
