@@ -255,6 +255,21 @@ operations :: List Operation = {
   operation "clock" "TIMER_CANCEL" 46;
   operation "clock" "SIMULATED_READ" 47;
   operation "clock" "SIMULATED_ADVANCE" 48;
+  -- C9.2's declared wake sources. Self-scoped by badge exactly as
+  -- `RESOLVE_BINDING` is: the request carries a cursor and a transfer
+  -- descriptor, never a waiter, so a component reads its own source table and
+  -- only its own. Each record is a `wait-set/v1` entry the caller decodes with
+  -- `boot_contracts::wait_set`, in the contract's ascending-badge dispatch
+  -- order, so the reply is the tie rule rather than merely its inputs.
+  --
+  -- Gated on `lifecycle`, the one service every launched instance holds, for the
+  -- reason `BOOT_ACTION` and `PRIVATE_MEMORY_GROW` record: blocking on your own
+  -- declared notification is a property of being a task, so gating it on a
+  -- capability service would make whether a component can wait depend on an
+  -- unrelated grant shape. A component the generation declares no sources for is
+  -- answered zero records, which is the deny-by-default answer -- it has no
+  -- source to register, and there is nothing about a peer for it to learn.
+  operation "lifecycle" "WAIT_SOURCES" 49;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

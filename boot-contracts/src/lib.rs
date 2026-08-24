@@ -33,3 +33,4 @@ pub mod stream_history;
 pub mod target_profile;
 pub mod trace;
 pub mod transfer;
+pub mod wait_set;

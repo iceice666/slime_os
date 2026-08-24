@@ -179,6 +179,25 @@ ClockAuthorityEntry :: type {
   timerBadgeBit? : Int;
 };
 
+-- One declared wake source in a waiter's C9.2 wait set: which badge bit on
+-- which of its Notification grants means what, and which of its own slots to
+-- drain when that bit arrives.
+--
+-- Declared rather than derived because a waiter cannot derive it. `slime-root`
+-- computes a signaller's badge from the *signaller's* declared slot, which is a
+-- fact about the peer, and C9.1's timer badge is contract data independent of
+-- any slot; nothing in either table says whether a bit is a stream ingress, a
+-- call reply, or a peer death. `kind` is one of `stream`, `call`, `operation`,
+-- `timer`, `supervision`, or `qosEvent`. `drainSlot` is the waiter's own slot
+-- and is omitted exactly for `timer`, which delivers no payload.
+WaitSetSourceEntry :: type {
+  waiter : Text;
+  notification : Text;
+  badgeBit : Int;
+  kind : Text;
+  drainSlot? : Int;
+};
+
 -- One named full-graph profile override. Profiles may replace only an exact
 -- participant's interposition chain; every other authority and policy field
 -- remains fixed by the base graph.
@@ -307,6 +326,11 @@ GenerationManifest :: type {
   -- root-brokered clock operation; raw counter access is outside this service
   -- contract as documented by contracts/clock-authority/v1.
   clockAuthority? : List ClockAuthorityEntry;
+  -- Optional C9.2 wait-set source table. Absent and empty both mean no
+  -- component may register a wake source, so a wait set built by an undeclared
+  -- waiter has nothing to dispatch — the deny-by-default answer rather than an
+  -- unbounded one.
+  waitSet? : List WaitSetSourceEntry;
   objects : List Object;
   executables : List Executable;
   instances : List Instance;
