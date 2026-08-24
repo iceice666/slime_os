@@ -87,11 +87,15 @@ applies is `just devlog_check`.
   written zero by the builder with the reason in a comment, and the kernel has
   nothing to charge. Keeping "conserved CPU resource accounts" as a C9
   deliverable would put a field in a contract that no mechanism honours.
-- Rejected alternative: turn MCS on. `sel4/config/qemu-arm-virt.cmake:21-23`
-  already states the terms — the AArch64 functional-correctness proofs do not
-  cover that configuration, so enabling it trades the verified-kernel claim for
-  a scheduling feature. That is an assurance decision with its own evidence
-  requirements, and a budgeted-CPU slice is blocked on it rather than on C9.
+- Rejected alternative: turn MCS on. This is an assurance decision with its own
+  evidence requirements, and a budgeted-CPU slice is blocked on it rather than
+  on C9. **Superseded in part:** the terms I cited here from
+  `sel4/config/qemu-arm-virt.cmake:21-23` were imprecise, and
+  [`devlog/2026-08-24-mcs-cost-reassessed/`](../2026-08-24-mcs-cost-reassessed/index.md)
+  corrects them — upstream lists AArch64 MCS proofs as *in progress*, and this
+  QEMU build is already outside the verified set, so the real costs are the
+  Reply-object IPC migration and the absent declaration surface. The decision
+  to keep MCS off, and C9.3's scope, are unchanged.
 
 - Decision: C9.2's wait sets are userspace, and the root gains no wait state.
 - Rationale: B46 deleted the root's `WaitSet` along with `ChannelTable`,

@@ -7,9 +7,17 @@ set(KernelArmHypervisorSupport ON CACHE BOOL "")
 # budgets, periods, and timeout faults — which is exactly what a generation
 # would need to bound CPU the way it already bounds memory and capabilities.
 # It is off because this repository's whole claim is upstream seL4 with its
-# assurance intact, and the functional-correctness proofs do not cover the MCS
-# configuration on AArch64. Turning it on would trade a verified kernel for a
-# scheduling feature, silently, in a config file.
+# assurance intact. State the terms precisely, because they are narrower than
+# "MCS is unverified": `deps/sel4/CAVEATS.md` lists AArch64 MCS functional
+# correctness as *in progress* (RISC-V MCS is verified and shipped), and it
+# lists MCS as foundation-supported and stable with small API changes expected.
+# Note also what this very file already concedes: `KernelVerificationBuild OFF`
+# plus `KernelDebugBuild`/`KernelPrinting ON` below, and `qemu-arm-virt` in no
+# verified-platform list, put *this* build outside the verified set already.
+# `sel4/config/bcm2712-rpi5.cmake` is the config where the claim is load-
+# bearing, since it includes upstream's own `AARCH64_bcm2712_verified.cmake`.
+# So MCS costs little here and a real proof-coverage gap there; the decision is
+# per-target, and flipping it in this file alone would not be the same decision.
 #
 # What that costs is stated rather than hidden: without MCS the kernel has no
 # notion of budget or period, so `ScheduleRecord`'s `budget_us` and

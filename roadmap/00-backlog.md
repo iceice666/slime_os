@@ -24,7 +24,42 @@ full and says why.
 
 ## Open
 
-(none)
+### B77 — `budget_us`/`period_us` are authenticated but unvalidated and unread
+
+**Problem:** `ScheduleRecord` carries `budget_us` and `period_us` as 64-bit
+wire fields (`contracts/generation/v5/schema.zt:203`), and they are covered by
+the generation's authentication like every other byte. Nothing constrains them.
+`scripts/build/build-generation.py:2947-3002` and `:3137-3165` write zero for
+main and worker schedules, and the manifest offers no way to say otherwise — but
+that is builder convention, not an admitted invariant. `check-generation.py:688`
+unpacks both fields and tests neither; `boot-contracts/src/generation.rs:1558`
+decodes both into `Schedule` and `validate` (`:2200-2208`) checks indices,
+priority ordering, flags, and the thread back-reference only; `slime-root` reads
+`Schedule.priority` and never either time field. So a generation built by any
+other producer can declare a 50 ms budget over a 100 ms period, pass the host
+oracle and root admission, boot, and be scheduled with no budget at all — the
+exact "authenticated fiction" `contracts/generation/v1/schema.zt:65-104` says
+these fields exist to avoid.
+
+**Evidence:** grep of `budget_us`/`period_us` across `scripts/`,
+`boot-contracts/src/`, `slime-root/src/`, and `contracts/` returns the schema,
+the generator, the two builder zero-writes, the Python unpack, and the Rust
+field/decode — and no comparison, no bound, and no consumer. Not observed on a
+running system: no fixture declares a nonzero value, because none can.
+
+**Proposed fix:** make the zero explicit as an invariant rather than a habit.
+While `KernelIsMCS OFF`, both validators must refuse a schedule whose
+`budget_us` or `period_us` is nonzero, with the refusal naming the missing
+mechanism. That is a two-line predicate in each validator plus mutation
+coverage, and it converts a silently-ignored field into a stated one. If MCS is
+ever admitted, the refusal is where the real range/aggregate admission replaces
+it — a deliberate edit, not a forgotten gap.
+
+**Exit condition:** a v5 generation declaring a nonzero `budget_us` or
+`period_us` is refused by `scripts/check/check-generation.py` and by
+`Generation::validate`, each with a distinct reason, and a host mutation test
+covers both; every shipped fixture still passes `just contracts_check` and
+`just generation_check`.
 
 ## Deferred follow-ups
 

@@ -825,11 +825,17 @@ rather than a plan.
   budgets, and periods are **out of C9's scope** while `KernelIsMCS OFF`:
   non-MCS seL4 has no budget to charge, `ScheduleRecord`'s `budget_us` and
   `period_us` are written zero by the builder, and no C9 contract may add a
-  field that pretends otherwise. Admitting MCS is an assurance decision — the
-  AArch64 functional-correctness proofs do not cover that configuration — and
-  is recorded as such in `sel4/config/qemu-arm-virt.cmake` rather than deferred
-  silently. A budgeted-CPU slice is therefore blocked on that decision, not on
-  C9;
+  field that pretends otherwise. Admitting MCS is an assurance decision, but
+  the terms are narrower than "trade a verified kernel for a scheduling
+  feature": upstream `deps/sel4/CAVEATS.md` lists AArch64 MCS proofs as *in
+  progress* (RISC-V MCS is already verified), and the QEMU build this
+  repository develops against is **already** outside the verified set — it sets
+  `KernelVerificationBuild OFF`, `KernelDebugBuild ON`, and `KernelPrinting
+  ON`, and `qemu-arm-virt` appears in no verified-platform list, while the
+  RPi 5 config does include upstream's `AARCH64_bcm2712_verified.cmake`. So the
+  cost of MCS is not uniform across the two platforms this repository builds,
+  and the honest framing is per-target rather than global. A budgeted-CPU slice
+  is still blocked on that decision, not on C9;
 - **Wait sets are userspace, over B46's primitives.** The root already deleted
   its `WaitSet` when B46 replaced logical channels with native seL4 Endpoints
   and badged Notifications. C9 does not restore a root-owned wait set: a
