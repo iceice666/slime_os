@@ -688,6 +688,14 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         name_offset, thread, authority_process, priority, max_controlled_priority, budget_us, period_us, flags = GENERATION_SCHEDULE.unpack_from(data, schedule_offset + index * GENERATION_SCHEDULE.size)
         require(thread < threads and (authority_process == PLAN_NONE or authority_process < processes) and priority <= max_controlled_priority and flags == 0, "BadSchedule")
         require(thread_rows[thread]["schedule"] == index, "BadSchedule")
+        # B77: the wire carries `budget_us`/`period_us`, the kernel has nothing
+        # to charge while `KernelIsMCS OFF`, and `slime-root` reads neither. A
+        # nonzero value is therefore authenticated fiction: it would survive
+        # this oracle, survive root admission, boot, and be scheduled with no
+        # budget at all. Refuse it here rather than decode and ignore it. When
+        # MCS is admitted, this is the line real range and aggregate admission
+        # replaces -- a deliberate edit, not a forgotten gap.
+        require(budget_us == 0 and period_us == 0, "UndeclarableCpuBudget")
     for index in range(fault_policies):
         name_offset, thread, handler_process, endpoint_object, badge, action = GENERATION_FAULT_POLICY.unpack_from(data, fault_policy_offset + index * GENERATION_FAULT_POLICY.size)
         require(thread < threads and (handler_process == PLAN_NONE or handler_process < processes) and endpoint_object < kernel_objects and action != 0, "BadFaultPolicy")

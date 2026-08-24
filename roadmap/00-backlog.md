@@ -24,42 +24,7 @@ full and says why.
 
 ## Open
 
-### B77 — `budget_us`/`period_us` are authenticated but unvalidated and unread
-
-**Problem:** `ScheduleRecord` carries `budget_us` and `period_us` as 64-bit
-wire fields (`contracts/generation/v5/schema.zt:203`), and they are covered by
-the generation's authentication like every other byte. Nothing constrains them.
-`scripts/build/build-generation.py:2947-3002` and `:3137-3165` write zero for
-main and worker schedules, and the manifest offers no way to say otherwise — but
-that is builder convention, not an admitted invariant. `check-generation.py:688`
-unpacks both fields and tests neither; `boot-contracts/src/generation.rs:1558`
-decodes both into `Schedule` and `validate` (`:2200-2208`) checks indices,
-priority ordering, flags, and the thread back-reference only; `slime-root` reads
-`Schedule.priority` and never either time field. So a generation built by any
-other producer can declare a 50 ms budget over a 100 ms period, pass the host
-oracle and root admission, boot, and be scheduled with no budget at all — the
-exact "authenticated fiction" `contracts/generation/v1/schema.zt:65-104` says
-these fields exist to avoid.
-
-**Evidence:** grep of `budget_us`/`period_us` across `scripts/`,
-`boot-contracts/src/`, `slime-root/src/`, and `contracts/` returns the schema,
-the generator, the two builder zero-writes, the Python unpack, and the Rust
-field/decode — and no comparison, no bound, and no consumer. Not observed on a
-running system: no fixture declares a nonzero value, because none can.
-
-**Proposed fix:** make the zero explicit as an invariant rather than a habit.
-While `KernelIsMCS OFF`, both validators must refuse a schedule whose
-`budget_us` or `period_us` is nonzero, with the refusal naming the missing
-mechanism. That is a two-line predicate in each validator plus mutation
-coverage, and it converts a silently-ignored field into a stated one. If MCS is
-ever admitted, the refusal is where the real range/aggregate admission replaces
-it — a deliberate edit, not a forgotten gap.
-
-**Exit condition:** a v5 generation declaring a nonzero `budget_us` or
-`period_us` is refused by `scripts/check/check-generation.py` and by
-`Generation::validate`, each with a distinct reason, and a host mutation test
-covers both; every shipped fixture still passes `just contracts_check` and
-`just generation_check`.
+(none)
 
 ## Deferred follow-ups
 
@@ -94,6 +59,22 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B77 — `budget_us`/`period_us` are authenticated but unvalidated and unread
+
+**Status:** Resolved 2026-08-24. **Class:** Debt (authenticated wire fields no
+mechanism honoured, admitted by both readers and consumed by neither).
+**Was:** A v5 generation could declare a nonzero `budget_us`/`period_us`, pass
+`check-generation.py` and `Generation::validate`, boot, and be scheduled with no
+budget at all, because the builder's zero was a convention rather than an
+admitted invariant and `slime-root` read only `Schedule.priority`.
+**Exit condition (observed):** both readers now refuse with distinct reasons —
+`UndeclarableCpuBudget` from the host oracle and `DecodeError::NonZeroReserved`
+from the decoder — and `just generation_check` drives two resealed mutations
+through both, each proven load-bearing by neutralizing one guard at a time and
+observing the gate fail; `just contracts_check`, `just test_sel4_root` (152),
+and `just sel4_root_boot_check` pass.
+**Evidence:** [`devlog/2026-08-24-b77-undeclarable-cpu-budget/`](../devlog/2026-08-24-b77-undeclarable-cpu-budget/index.md)
+
 ### B70 — component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser, blocking out-of-tree components
 
 **Status:** Resolved 2026-08-22. **Class:** Debt (a compile-time coupling that

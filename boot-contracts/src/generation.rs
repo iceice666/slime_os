@@ -2208,6 +2208,17 @@ impl<'a> Generation<'a> {
             {
                 return Err(DecodeError::BadIndex);
             }
+            // B77: `budget_us`/`period_us` are authenticated wire fields that no
+            // mechanism honours while the kernel is built `KernelIsMCS OFF` --
+            // nothing here reads them, and non-MCS seL4 has no budget to charge.
+            // Refusing a nonzero value keeps the zero an admitted invariant
+            // rather than a builder habit, so a generation from another producer
+            // cannot declare a budget that boots and is silently ignored. This
+            // is a distinct reason from `BadIndex` on purpose: the record is
+            // structurally fine, it just claims authority the platform lacks.
+            if schedule.budget_us != 0 || schedule.period_us != 0 {
+                return Err(DecodeError::NonZeroReserved);
+            }
         }
         for index in 0..self.fault_policy_count {
             let fault = self.fault_policy(index)?;
