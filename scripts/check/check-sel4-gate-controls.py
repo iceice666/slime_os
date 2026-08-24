@@ -199,6 +199,13 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # four different ones.
     ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 16),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 11),
+    # P4: the physical Raspberry Pi 5 gate. Registered here for exactly the
+    # reason a hardware gate needs it most — this control imports the checker
+    # and exercises synthetic transcripts, so the marker table stays proven
+    # non-vacuous without a board, an adapter, or a boot. Eleven markers: the
+    # allocator, the admitted generation, three timer markers, two activations,
+    # two reclamations, the drained graph, and the ready state.
+    ("rpi5_boot", "check/check-rpi5-boot.py", 11),
 )
 
 

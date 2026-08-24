@@ -628,6 +628,47 @@ architecture_contract_check: contracts_check
 rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check rpi5_ros2_demo_contract_v2_check
     python3 scripts/check/check-rpi5-artifacts.py
 
+# P4: configure, build, and install seL4 for the `bcm2712` Raspberry Pi 5
+# platform, build the root child, root task, and loader against that prefix, and
+# write `build/slime-sel4-bcm2712-rpi5.identity.json`. A separate prefix, cargo
+# target directory, generation, image, and pinned artifact hash set from the
+# qemu-arm-virt build, because it is a different kernel for a different board:
+# every executable in it is admitted for `aarch64-rpi5` alone.
+sel4_rpi5_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform bcm2712-rpi5 --skip-pin-check
+
+# P4: flatten the packaged RPi5 ELF into the exact boot files
+# `sel4/pins.toml [bcm2712_rpi5].boot_files` pins — `kernel8.img` and
+# `config.txt`. `objcopy -O binary` cannot do this: the loader's payload lives
+# in program headers carrying no sections, so objcopy silently drops it and
+# emits an image that boots nothing. Writes no block device.
+rpi5_media_check: sel4_rpi5_image_check
+    python3 scripts/build/build-rpi5-media.py
+
+# P4: boot the pinned bytes on the named Raspberry Pi 5 and require ordered
+# generation, timer, task, fault, and ready evidence on UART10 at the baud
+# `contracts/rpi5-ros2-demo/v2` pins. Physical: it proves the media is this
+# build's, then reads a real serial device. A QEMU pass cannot complete this
+# milestone (roadmap invariant 8), so a missing board, adapter, or media is a
+# failure and never a skip.
+#
+# Requires the operator to copy `build/rpi5-media/*` onto the FAT32 boot
+# partition and reset the board:
+#   just rpi5_media_check
+#   cp build/rpi5-media/* /Volumes/<BOOT>/ && diskutil unmount /Volumes/<BOOT>
+#   just rpi5_boot_check /dev/cu.usbserial-XXXX
+rpi5_boot_check serial="": sel4_pin_check rpi5_artifact_check
+    python3 scripts/check/check-rpi5-boot.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
+# Bring-up aid, not a gate: print whatever the Pi 5's debug UART emits and
+# assert nothing. Builds no artifacts and qualifies no board, so it answers the
+# one question `rpi5_boot_check` cannot when the wire is silent — whether any
+# byte reaches this host. Exits on its own after 10s of quiet or the timeout.
+#
+#   just rpi5_serial_monitor /dev/cu.usbserial-120
+rpi5_serial_monitor serial timeout="120":
+    python3 scripts/check/check-rpi5-boot.py --monitor --serial {{ serial }} --timeout {{ timeout }}
+
 # Historical architecture gate backed by a real neutral-source boundary scan.
 aarch64_boot_check: sel4_root_boot_check
 
@@ -645,8 +686,10 @@ generation_check: contracts_check sel4_component_graph_check
 framework_safety_check:
     python3 scripts/check/check-framework-authority.py
 
-# Physical Framework image production is intentionally unavailable. P4 remains
-# blocked until a seL4 hardware image and observed removable-media boot exist.
+# Physical Framework image production is intentionally unavailable. P4's board
+# image now builds (`just sel4_rpi5_image_check`, `just rpi5_media_check`); what
+# P4 still lacks is the observed removable-media boot, which `just
+# rpi5_boot_check` requires and never emulates.
 # Historical devlog identifiers remain explicit aliases to their product gates.
 test: sel4_root_boot_check sel4_component_graph_check sel4_gate_control_check
 
