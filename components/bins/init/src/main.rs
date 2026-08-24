@@ -153,6 +153,8 @@ mod boot_action {
     pub const PRIVATE_MEMORY: u32 = 30;
     /// C9.1's explicit clock and timer service authority plane.
     pub const CLOCK_AUTHORITY: u32 = 31;
+    /// C9.2's bounded userspace wait set over one declared Notification.
+    pub const WAIT_SET: u32 = 32;
 
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
@@ -191,6 +193,7 @@ mod boot_action {
     const _: () = assert!(DEMO == BootAction::Demo.id());
     const _: () = assert!(PRIVATE_MEMORY == BootAction::PrivateMemory.id());
     const _: () = assert!(CLOCK_AUTHORITY == BootAction::ClockAuthority.id());
+    const _: () = assert!(WAIT_SET == BootAction::WaitSet.id());
 }
 
 /// Compose the graph the generation selected.
@@ -260,6 +263,14 @@ fn compose_declared_graph(startup_arg: u32) {
         }
         action::CLOCK_AUTHORITY => {
             slime_rt::debug_write(b"[init] clock authority plane is root-launched\n");
+            slime_rt::exit(0)
+        }
+        // C9.2's waiter, signaller, and denied instances are all root-autostart,
+        // and the waiter spawns the peer it supervises itself — a supervision
+        // source must name a handle its own holder obtained, so init handing one
+        // over would prove the wrong thing.
+        action::WAIT_SET => {
+            slime_rt::debug_write(b"[init] wait set plane is root-launched\n");
             slime_rt::exit(0)
         }
         action::CROSSING => {

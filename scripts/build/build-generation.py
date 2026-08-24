@@ -185,6 +185,21 @@ from boot_contracts import (
     CLOCK_AUTHORITY_MAX_HOLDERS,
     CLOCK_AUTHORITY_MAX_LIVE_TIMERS_PER_HOLDER,
     CLOCK_AUTHORITY_MAX_LIVE_TIMERS,
+    WAIT_SET_ENTRY,
+    WAIT_SET_HEADER,
+    WAIT_SET_HEADER_BYTES,
+    WAIT_SET_ENTRY_BYTES,
+    WAIT_SET_MAGIC,
+    WAIT_SET_VERSION,
+    WAIT_SET_MAX_ENTRIES,
+    WAIT_SET_MAX_SOURCES_PER_WAITER,
+    WAIT_SET_KIND_STREAM,
+    WAIT_SET_KIND_CALL,
+    WAIT_SET_KIND_OPERATION,
+    WAIT_SET_KIND_TIMER,
+    WAIT_SET_KIND_SUPERVISION,
+    WAIT_SET_KIND_QOS_EVENT,
+    WAIT_SET_DRAIN_SLOT_ABSENT,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -286,6 +301,13 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-clock-authority.zti",
+    # C9.2: a bounded userspace wait set over one declared Notification.
+    "sel4-wait-set": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-wait-set.zti",
     "sel4-crossing": ROOT
     / "contracts"
     / "generation"
@@ -1228,6 +1250,176 @@ def build_clock_authority(manifest: dict) -> bytes:
         total_len,
     )
     return header + b"".join(CLOCK_AUTHORITY_ENTRY.pack(*entry) for entry in entries)
+
+
+def wait_set_waiter_identity(name: str) -> bytes:
+    """Stable per-waiter identity, matching boot_contracts::wait_set."""
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-wait-set-waiter-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def wait_set_notification_grant_identity(name: str) -> int:
+    """Stable notification-grant identity used by the wait-set resource.
+
+    A different domain tag from the clock resource's, so an identity minted for a
+    timer entry cannot be lifted verbatim into a wait-set entry naming another
+    object's badge.
+    """
+    encoded = name.encode("utf-8")
+    digest = sha256(
+        b"slime-wait-set-notification-grant-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+    return int.from_bytes(digest[:8], "little")
+
+
+WAIT_SET_KIND = {
+    "stream": WAIT_SET_KIND_STREAM,
+    "call": WAIT_SET_KIND_CALL,
+    "operation": WAIT_SET_KIND_OPERATION,
+    "timer": WAIT_SET_KIND_TIMER,
+    "supervision": WAIT_SET_KIND_SUPERVISION,
+    "qosEvent": WAIT_SET_KIND_QOS_EVENT,
+}
+
+
+def validated_wait_set(manifest: dict) -> list[tuple[bytes, int, int, int, int, int]]:
+    """Every declared wake source, checked against the topology it names.
+
+    Each entry must resolve to a badge the generation already produces on a
+    Notification the waiter already waits on: a declared signaller's
+    `1 << (slot % 63)`, or the C9.1 timer badge for this same holder. That is what
+    keeps the resource from granting anything — it renames facts the notification
+    and clock tables already fix, so an entry cannot invent a wake source.
+    """
+    declarations = manifest.get("waitSet") or []
+    if len(declarations) > WAIT_SET_MAX_ENTRIES:
+        fail("wait set exceeds source bound")
+    instances = {entry["name"] for entry in manifest["instances"]}
+    grants = {entry["name"]: entry for entry in manifest.get("notificationGrants", [])}
+    bindings = manifest.get("notificationBindings", [])
+    clocks = {entry["holder"]: entry for entry in manifest.get("clockAuthority") or []}
+    entries: list[tuple[bytes, int, int, int, int, int]] = []
+    seen: set[tuple[str, int]] = set()
+    per_waiter: dict[str, int] = {}
+    for declaration in declarations:
+        waiter = declaration["waiter"]
+        if waiter not in instances:
+            fail(f"wait set: unknown waiter {waiter}")
+        notification = declaration["notification"]
+        badge_bit = declaration["badgeBit"]
+        if (
+            not isinstance(badge_bit, int)
+            or isinstance(badge_bit, bool)
+            or not 0 <= badge_bit < 63
+        ):
+            fail(f"wait set: invalid badgeBit for {waiter}")
+        if (waiter, badge_bit) in seen:
+            fail(f"wait set: duplicate badge bit {badge_bit} for {waiter}")
+        seen.add((waiter, badge_bit))
+        per_waiter[waiter] = per_waiter.get(waiter, 0) + 1
+        if per_waiter[waiter] > WAIT_SET_MAX_SOURCES_PER_WAITER:
+            fail(f"wait set: {waiter} declares more sources than one wait set may hold")
+        kind = WAIT_SET_KIND.get(declaration["kind"])
+        if kind is None:
+            fail(f"wait set: unknown source kind {declaration['kind']!r} for {waiter}")
+        grant = grants.get(notification)
+        if grant is None or grant["target"] != waiter:
+            fail(f"wait set: {notification} is not a wait grant targeting {waiter}")
+        if not any(
+            binding["grant"] == notification
+            and binding["holder"] == waiter
+            and binding["role"] == "wait"
+            for binding in bindings
+        ):
+            fail(f"wait set: {waiter} has no wait binding on {notification}")
+        # The badge must be one the generation actually produces on this object,
+        # and there are exactly three producers. A peer signals its declared
+        # `1 << (slot % 63)`; the root signals a C9.1 timer badge; and the root
+        # signals a supervision badge when a task the waiter supervises ends. A
+        # badge matching none of the three names a bit nothing can ever set,
+        # which is a source that would look registered and never fire.
+        signalled = any(
+            binding["grant"] == notification
+            and binding["role"] == "signal"
+            and binding["slot"] % 63 == badge_bit
+            for binding in bindings
+        )
+        clock = clocks.get(waiter)
+        timer_badge = (
+            clock is not None
+            and clock.get("timerNotification") == notification
+            and clock.get("timerBadgeBit") == badge_bit
+        )
+        if kind == WAIT_SET_KIND_TIMER:
+            if not timer_badge:
+                fail(
+                    f"wait set: {waiter}'s timer source does not name its declared "
+                    "C9.1 expiry badge"
+                )
+            if signalled:
+                fail(
+                    f"wait set: {waiter}'s timer badge collides with a declared "
+                    "signaller on the same notification"
+                )
+        elif kind == WAIT_SET_KIND_SUPERVISION:
+            # Root-signalled, like the timer, because the peer whose death it
+            # reports is the thing that died. So it must *not* collide with a
+            # declared signaller or with the timer badge: all three producers
+            # write the same word, and two of them on one bit would make a wake
+            # ambiguous.
+            if signalled or timer_badge:
+                fail(
+                    f"wait set: {waiter}'s supervision badge collides with a "
+                    "declared signaller or its timer badge"
+                )
+        elif not signalled:
+            fail(
+                f"wait set: badge bit {badge_bit} on {notification} is signalled by "
+                f"no declared peer of {waiter}"
+            )
+        elif timer_badge:
+            fail(f"wait set: {waiter}'s timer badge is declared as a {declaration['kind']} source")
+        drain_slot = declaration.get("drainSlot")
+        if kind == WAIT_SET_KIND_TIMER:
+            if drain_slot is not None:
+                fail(f"wait set: {waiter}'s timer source declares a drain slot")
+            drain_slot = WAIT_SET_DRAIN_SLOT_ABSENT
+        else:
+            if (
+                not isinstance(drain_slot, int)
+                or isinstance(drain_slot, bool)
+                or not 0 <= drain_slot < WAIT_SET_DRAIN_SLOT_ABSENT
+            ):
+                fail(f"wait set: {waiter}'s {declaration['kind']} source needs a drain slot")
+        entries.append(
+            (
+                wait_set_waiter_identity(waiter),
+                1 << badge_bit,
+                wait_set_notification_grant_identity(notification),
+                kind,
+                drain_slot,
+                0,
+            )
+        )
+    # `(identity, badge)` ascending is both the canonical encoding and the
+    # contract's dispatch tie rule, so the sort here is what makes a waiter's
+    # ready set drain in a documented order without sorting at runtime.
+    entries.sort(key=lambda entry: (entry[0], entry[1]))
+    return entries
+
+
+def build_wait_set(manifest: dict) -> bytes:
+    entries = validated_wait_set(manifest)
+    total_len = WAIT_SET_HEADER_BYTES + len(entries) * WAIT_SET_ENTRY_BYTES
+    header = WAIT_SET_HEADER.pack(
+        WAIT_SET_MAGIC,
+        WAIT_SET_VERSION,
+        WAIT_SET_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
+    return header + b"".join(WAIT_SET_ENTRY.pack(*entry) for entry in entries)
 
 
 FABRIC_CONTRACT_KIND = {
@@ -4155,6 +4347,11 @@ def build_sel4_generation(
         payloads["clock-authority"] = build_clock_authority(manifest)
     elif declared_clock_authority:
         fail("clockAuthority declared without a clock-authority resource object")
+    declared_wait_set = manifest.get("waitSet") or []
+    if "wait-set" in object_ids:
+        payloads["wait-set"] = build_wait_set(manifest)
+    elif declared_wait_set:
+        fail("waitSet declared without a wait-set resource object")
     # C10.4: a component that cannot run without a private heap must be given
     # one, so the builder refuses the omission rather than shipping a generation
     # that boots into a dead service.

@@ -117,6 +117,10 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     # C9.1. Init holds the one probe executable and no clock authority slot:
     # clock operations use the already-reserved badged root-service endpoint.
     ("sel4-clock-authority", "--clock-authority-plane", "slime-sel4-clock-authority.elf"),
+    # C9.2. Init holds nothing either: the waiter resolves its own wake
+    # notification through CP2 and spawns the peer it supervises, because a
+    # supervision source must name a handle its own holder obtained.
+    ("sel4-wait-set", "--wait-set-plane", "slime-sel4-wait-set.elf"),
 )
 
 

@@ -127,6 +127,12 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # cancellation/quota/expiry, live-timer teardown, a distinct malformed
     # request, the undeclared holder, three observations, and terminal cleanup.
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
+    # C9.2: 15 markers over five causal chains and three order-independent ones
+    # — bounded registration with its refused ceilings, the whole declared source
+    # set observed through one wait set, the peer that signalled the stream
+    # source, the undeclared instance registering nothing, terminal cleanup, and
+    # the root-attributed supervision/clock installs plus the coalesced wake.
+    ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

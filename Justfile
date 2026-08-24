@@ -166,6 +166,13 @@ private_memory_check: sel4_pin_check
 clock_authority_check: sel4_pin_check
     python3 scripts/check/check-sel4-clock-authority-plane.py
 
+
+# C9.2: a bounded userspace wait set over one declared Notification —
+# registration, badge demultiplexing, deterministic dispatch order, every
+# ceiling refused, and a peer death observed through a declared source.
+wait_set_check: sel4_pin_check
+    python3 scripts/check/check-sel4-wait-set-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across
@@ -1080,7 +1087,13 @@ test_sel4_root:
     # termination cleanup, reuse of live-authority slots across lifetime task
     # ids, and stale expiry suppression; `ipc` adds the sixth for exact clock
     # request shapes.
-    expected=158
+    #
+    # C9.2: 158 -> 160. The new `wait_set` module contributes both: a task is
+    # declared once and its row survives a source-free declaration (so
+    # `clear_task` answers about a live task rather than about whether it was
+    # ever declared), and the per-waiter supervision ceiling is the contract's
+    # own source ceiling rather than a second number this module picked.
+    expected=160
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
