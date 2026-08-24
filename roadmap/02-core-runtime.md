@@ -764,7 +764,8 @@ by `sel4_fault_check`.
 
 ## C9: Robot runtime authority
 
-**Status:** Not started. Decomposed into C9.1–C9.6.
+**Status:** In progress. Decomposed into C9.1–C9.6; C9.1 and C9.2 are complete,
+so RP5's two named dependencies on this track are closed. C9.3–C9.6 are open.
 
 This track supplies the timing, execution, lifecycle, and observation contracts
 needed by robot and mixed interactive workloads. It does not promise hard
@@ -904,72 +905,50 @@ cannot discard the expiry transition it follows.
 
 ### C9.2 — Bounded userspace wait sets and executors
 
-**Status:** Not started.
+**Status:** Complete.
+**Delivered:** A versioned Zutai `wait-set/v1` generation resource declaring, per
+waiter, which badge bit on its one Notification means which source kind and which
+of its own slots to drain — data a waiter cannot compute, because `slime-root`
+derives a signaller's badge from the *signaller's* declared slot and C9.1's timer
+badge is contract data independent of any slot. `boot-contracts` decodes it and
+owns the bounded state machine (registration ordered by badge, demultiplexing, the
+ready queue, bounded dispatch); `slime-rt`'s `wait_set` is the shell that reads the
+declared sources over one new self-scoped root operation (`WAIT_SOURCES`, label 49)
+and blocks on the Notification. Three producers write that one word — a declared
+peer signaller, C9.1's timer badge, and a new root-signalled supervision badge —
+and both the host builder and root admission enforce that a badge belongs to
+exactly one of them. The root gains no wait set, no ready queue, and no source
+registry: its only addition is the death signal a peer cannot send, gated on the
+waiter's own declared slot still holding a supervision capability naming the dead
+task, so the badge adds a wake rather than authority. The ready-queue ceiling is
+*proven* rather than enforced — register's badge dedup plus `MAX_READY ==
+MAX_SOURCES` makes overflow unreachable, so a ceiling error there would be the
+dead guard B76 removed — and the wait set's tables stay fixed at the contract's
+per-waiter ceiling rather than allocated from the C10 region, because 216 bytes is
+not the 29960 C10.4 removed and a `Vec` would put an allocator in every component
+that waits.
+**Exit condition (observed):** `just wait_set_check` boots generation 42 and
+observes a waiter register three sources on one Notification (`mask=0x20208` —
+bits 3, 9, 17), refuse a duplicate badge, an undeclared badge, and an over-budget
+dispatch while remaining usable, then recover two independently signalled sources
+from a single coalesced badge word (`wake ready=2 dispatched=2`, the widest single
+poll) and dispatch them in ascending badge order, receive the timer expiry on a
+later block through that same Notification, and cover all three sources in two
+dispatching passes; the root delivers the peer death itself
+(`SLIME_WAIT death task=4 woken=1`), an instance the resource does not name reads
+zero sources and registers nothing, and the graph closes
+`SLIME_GRAPH HEALTHY generation=42 required=4 live=0 completed=4 failed=0`. Two
+review rounds found five issues — a mispinned marker count that aborted the
+gate-control negative control, a tie rule resting on a false ordering premise, an
+unreachable ceiling error, and two vacuous plane assertions — all applied, with
+the tie rule's two failure sequences now pinned by host tests.
+**Gates:** `just wait_set_check`, `just sel4_gate_control_check` (37 gates, 1415
+mutations), `just sel4_boot_layout_check` (28 plane layouts), `just contracts_check`,
+`just generation_check`, `just test_sel4_root` (160), `just test_host` (250)
+**Evidence:** [`devlog/2026-08-25-c9-2-bounded-wait-sets/`](../devlog/2026-08-25-c9-2-bounded-wait-sets/index.md)
 
 **Depends on:** C9.1's timer source and B46's native Endpoint/Notification
 mechanism.
-
-#### Deliverables
-
-- implement a bounded wait set in `slime-rt` that blocks on **one** declared
-  notification and demultiplexes the badge word, because that is the only
-  multi-source block seL4 offers a userspace thread: `notification_wait` is one
-  `seL4_Wait` on one capability, and a component's notifications live in
-  distinct CSpace slots. Every source the wait set admits must therefore be a
-  signaller of that one notification, which is the topology
-  `scripts/build/build-generation.py` already validates — exactly one waiter,
-  one or more signallers — and which `sel4-call.zti` already declares with four;
-- admit stream, call, operation, timer, supervision, and QoS-event sources as
-  declared source kinds, each mapped to a declared badge bit, so a woken badge
-  word identifies the ready set rather than merely "something happened". The
-  badge is 64 bits and `slime-root/src/notification.rs` already assigns
-  `1 << (slot % 63)`, so the per-wait-set source ceiling is a property of the
-  badge width rather than a number this slice invents;
-- deliver C9.1's timer expiries as signals on that same notification, so a wait
-  set blocks on time and messages together instead of choosing between them;
-- after a wake, drain each badged source's endpoint with the existing
-  non-blocking receive, so the wait set never blocks a second time to find out
-  what became ready;
-- fix a deterministic tie rule over the badge word for simultaneously ready
-  sources and document it as the contract, so identical readiness produces
-  identical dispatch order;
-- bound the ready queue, the number of registered sources, and callbacks per
-  wake before allocation, with a structured error at each ceiling;
-- keep the whole mechanism userspace: the root gains no wait set, no ready
-  queue, and no source registry. Its only contribution is the declared
-  notification it already materializes and the timer that signals it;
-- allocate the wait set from the C10 private region rather than a worst-case
-  static array, so a component pays for the sources it declares.
-
-#### Required checks
-
-- a wait set blocking on a timer and two endpoints wakes once per ready set,
-  identifies each ready source from the badge word, and dispatches nothing it
-  was not registered for;
-- two sources signalling before the waiter runs are both dispatched from the
-  single coalesced badge, rather than one being lost or requiring a second
-  block;
-- simultaneous readiness on several sources dispatches in the documented tie
-  order, identically across repeated boots;
-- source-count, ready-queue, and callbacks-per-wake ceilings each refuse with
-  their own error and leave the wait set usable;
-- a component whose peer dies observes it through its registered supervision
-  source rather than by timing out;
-- registering a source a component has no authority for is refused.
-
-#### Planned verification target
-
-```sh
-just wait_set_check
-```
-
-#### Exit condition
-
-A component registers timer, message, and supervision sources against one
-declared notification, blocks once per ready set, recovers every ready source
-from the coalesced badge word, and dispatches them in a documented
-deterministic order under repeated boots, with every ceiling refused
-structurally and no root-side wait state.
 
 ### C9.3 — Declared scheduling class
 
