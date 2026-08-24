@@ -148,7 +148,13 @@ def roadmap_ids() -> set[str]:
 
 
 def just_targets() -> set[str]:
-    return set(re.findall(r"^([a-z_0-9]+):", JUSTFILE.read_text(), re.M))
+    # Recipe parameters sit between the name and the colon
+    # (`rpi5_boot_check serial="": deps`), so a pattern demanding `name:`
+    # immediately would silently treat every parameterised gate as nonexistent
+    # and reject devlog entries that correctly cite one.
+    return set(
+        re.findall(r"^([a-z_0-9]+)(?:\s+[^:\n]*)?:", JUSTFILE.read_text(), re.M)
+    )
 
 
 KNOWN_IDS = roadmap_ids()
