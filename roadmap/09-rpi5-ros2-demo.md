@@ -2,7 +2,7 @@
 
 **Purpose:** Drive the near-term project toward one observed robotics workload: Slime OS running on a Raspberry Pi 5 with two local ROS 2 nodes exchanging bounded topic data through a minimal bounded Zenoh profile with classic CDR payloads.
 
-**Status:** In progress — RP0, RP1, and RP2 complete. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`; RP3 is next and waits on P4's board qualification.
+**Status:** In progress — RP0, RP1, and RP2 complete. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`. RP3 is next and is deferred on hardware with P4: the board image and gate exist, but no working USB-UART adapter does, and seL4 ships no display driver to substitute.
 
 **Acceptance target:** A reproducible Raspberry Pi 5 boot runs a declared publisher node and subscriber node. The publisher emits a bounded ROS 2 topic stream through the admitted transport profile, the subscriber observes the expected samples in order under the declared QoS/profile, and the run records image identity, board/firmware/media identity, generation/release identity, serial transcript, semantic/wire trace, and every device/storage/stream/network capability involved.
 
@@ -142,7 +142,12 @@ scope.
 
 ## RP3 — Raspberry Pi 5 serial boot and minimum board services
 
-**Status:** Not started.
+**Status:** Deferred on hardware, not started otherwise. P4 landed the `bcm2712`
+kernel, loader, and removable-media boot files this milestone's first deliverable
+asked for, so what remains here is the observed board boot — blocked on a working
+USB-UART adapter. seL4 ships no display driver (only `serial`, `timer`, `smmu`),
+so the debug header is the only evidence path; see [P4's *Why serial is the only
+evidence path*](07-architecture-portability.md#why-serial-is-the-only-evidence-path).
 
 **Depends on:** RP2 and P4's Raspberry Pi 5 qualification slice.
 

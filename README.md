@@ -65,11 +65,11 @@ POSIX and Linux compatibility may exist later as userspace personalities or isol
 
 seL4 16.0.0 is pinned in `sel4/pins.toml` and configured by `sel4/config/qemu-arm-virt.cmake`. The machine is `qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m 2048M`, with virtio block devices attached by the gates that need them.
 
-The five admitted target profiles are declared in `contracts/target-profile/v1/schema.zt`. Only `aarch64-sel4-qemu-virt` (id 5) builds an image today; `x86_64-qemu-virtio` (id 1) is the retained pre-P0 identity that the bounded rollback window must still decode, and `aarch64-qemu-virt`, `aarch64-rpi5`, and `riscv64-qemu-virt` are declared but unbuilt. Every generation names exactly one profile, and stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
+The five admitted target profiles are declared in `contracts/target-profile/v1/schema.zt`. Two build an image today: `aarch64-sel4-qemu-virt` (id 5), the automated product target, and `aarch64-rpi5` (id 3), P4's physical board, built by `just sel4_rpi5_image_check` from `sel4/config/bcm2712-rpi5.cmake` into its own prefix with its own pinned artifact hashes. `x86_64-qemu-virtio` (id 1) is the retained pre-P0 identity that the bounded rollback window must still decode, and `aarch64-qemu-virt` and `riscv64-qemu-virt` are declared but unbuilt. Every generation names exactly one profile, and stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
 
 ### Tier 1: named physical targets
 
-`aarch64-rpi5` is the near-term physical target and the demo's acceptance board; it is declared and contract-qualified but not yet booted. See [`roadmap/09-rpi5-ros2-demo.md`](roadmap/09-rpi5-ros2-demo.md).
+`aarch64-rpi5` is the near-term physical target and the demo's acceptance board. Its kernel, loader, and removable-media boot files now build reproducibly (`just rpi5_media_check`), but the board has **not** been booted, so P4 is open: `just rpi5_boot_check` verifies the media and then fails closed on the missing serial evidence. See [`roadmap/09-rpi5-ros2-demo.md`](roadmap/09-rpi5-ros2-demo.md) and [`devlog/2026-08-24-p4-rpi5-board-bringup/`](devlog/2026-08-24-p4-rpi5-board-bringup/index.md).
 
 `x86_64-framework13-amd-ai300` remains the eventual daily-driver target, deferred off the critical path. Its M4 removable-media vertical slice was observed on the retired custom kernel; no seL4 Framework image exists, so `just framework_inventory_check` fails closed.
 

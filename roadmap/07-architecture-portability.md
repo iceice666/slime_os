@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress — P0, P1, P2.1, P2.2, and P5 complete. P2.3–P2.6 are superseded by P5.
+**Status:** In progress — P0, P1, P2.1, P2.2, and P5 complete. P2.3–P2.6 are superseded by P5. P4's build path landed 2026-08-24 and its board boot is deferred on hardware: the gate and artifacts are ready, the USB-UART adapter on hand does not work, and the debug UART is the only console seL4 has.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -216,9 +216,79 @@ The pinned RV64 QEMU profile passes the same architecture-neutral isolation, wai
 
 ## P4: Raspberry Pi 5 physical architecture qualification
 
-**Status:** Not started.
+**Status:** Deferred on hardware — the build path is complete and reproducible;
+the board boot is **not** observed, so P4 is not closed. Blocked on a working
+USB-UART adapter, not on code: the one on hand does not produce bytes, and the
+debug header is the only console this kernel has (see *Why serial is the only
+evidence path* below).
+
+**Delivered so far (2026-08-24):** `bcm2712` is a second seL4 build platform
+beside `qemu-arm-virt`, with its own prefix, cargo target directories,
+generation, image, identity manifest, and pinned artifact hashes
+(`[bcm2712_rpi5]`, `[observed_prefix_bcm2712_rpi5]`), reproducible byte-identical
+across from-scratch rebuilds. Three blockers were closed rather than deferred:
+`sel4-kernel-loader` had no `PLAT_BCM2712` arm at all (failing with `unresolved
+import imp`), so `deps/rust-sel4` is now a fork adding a PL011 console on the
+UART10 the board's own `overlay-rpi5.dts` designates; `objcopy -O binary` cannot
+produce the boot image, because the loader payload lives in program headers
+carrying no sections and is silently dropped (38312 bytes out of 797696), so
+`scripts/build/build-rpi5-media.py` flattens PT_LOAD segments by physical
+address into the pinned `kernel8.img`/`config.txt`; and upstream's *verified*
+bcm2712 configuration forces `PRINTING` off, which would have made this
+milestone's own serial exit condition unobservable. Board facts — memory window,
+GIC-400/GICv2, 54 MHz generic timer, UART10 at `0x107d001000` — are read from
+seL4's own platform description, never asserted by Slime.
+
+**Not delivered:** the observed boot. `just rpi5_boot_check` builds, proves the
+media is this build's, and then fails closed naming the missing serial device;
+it never falls back to QEMU. Also open: the board is deliberately outside the
+verified kernel configuration (recorded, not incidental), and it sees 1019 MiB
+because upstream ships no RPi5 overlay above the VideoCore base.
+
+**Gates:** `just sel4_rpi5_image_check`, `just rpi5_media_check`, `just rpi5_boot_check`
+**Evidence:** [`devlog/2026-08-24-p4-rpi5-board-bringup/`](../devlog/2026-08-24-p4-rpi5-board-bringup/index.md)
 
 **Depends on:** P5, which supplies the kernel this board runs. P2's custom-kernel AArch64 slice is superseded and is not a prerequisite.
+
+### Why serial is the only evidence path
+
+Recorded here because "just use HDMI" is the obvious question, and the answer is
+structural rather than a missing feature.
+
+seL4 ships exactly three driver families — `deps/sel4/src/drivers/{serial,timer,smmu}`.
+There is no display, framebuffer, HDMI, storage, or network driver anywhere in
+the kernel, and that is the design: everything except the mechanism needed to
+*be* a microkernel lives in userspace. A grep for framebuffer or HDMI output in
+`src/`/`include/` finds only x86 `boot_sys.c` and an unrelated `.dts`.
+
+Even the serial driver is not really an exception. It exists only to implement
+`printf`/`seL4_DebugPutChar` for debugging, is selected by device-tree
+`compatible` string (`arm,pl011` → `pl011.c` for this board), and is compiled
+out entirely in the verified configuration — `AARCH64_bcm2712_verified.cmake`
+sets `KernelVerificationBuild ON`, which forces `KernelPrinting OFF`. So the
+kernel's console is a debug facility that the proof configuration deliberately
+removes, not a supported output device.
+
+That leaves three ways a Pi 5 could ever show output, and only one is available
+now:
+
+1. **Debug UART** (current): `seL4_DebugPutChar` over UART10, which the board's
+   own `overlay-rpi5.dts` designates through `seL4,elfloader-devices`. Needs a
+   working USB-UART adapter. This is what P4 is blocked on.
+2. **A userspace display driver**: real work, and much larger than it sounds on
+   this SoC — the Pi 5's video output sits behind the RP1 southbridge across
+   PCIe, so it needs PCIe enumeration, address translation, and HDMI/VC
+   bring-up before a single pixel, all as generation-declared device authority.
+   Roadmap invariant 2 puts it in userspace, and invariant 4 requires a real
+   gate. It is also the wrong shape for boot evidence: a framebuffer cannot
+   report a fault that happens before it is mapped.
+3. **JTAG/SWD** over the same 3-pin header: needs a debug probe and gives
+   register state rather than a transcript, so it diagnoses a wedge but does not
+   produce the ordered marker evidence P4's exit condition asks for.
+
+Roadmap invariant: framebuffer output alone is never milestone completion. That
+rule already anticipated this — a display would not close P4 even if it existed.
+The cheap unblock is a different USB-UART adapter.
 
 ### Deliverables
 

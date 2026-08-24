@@ -327,3 +327,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-24 | [Planning C9: every mechanism exists, none of it reaches a component — and two deliverables the platform cannot hold](2026-08-24-c9-decomposition/index.md) | Decision | Proposed | C9, C9.1, C9.2, C9.3, C9.4, C9.5, C9.6, C10, C10.4, C8.11, C8.15, RP5, A3, D3, D4, B46, B48 |
 | 2026-08-24 | [Reassessing MCS: the cost is per-target, and the QEMU build already left the verified set](2026-08-24-mcs-cost-reassessed/index.md) | Decision | Proposed | C9, C9.3, B48, B77 |
 | 2026-08-24 | [B77: two readers admitted a CPU budget neither of them could honour](2026-08-24-b77-undeclarable-cpu-budget/index.md) | Defect | Verified | B77, B48, C9, C9.3 |
+| 2026-08-24 | [P4 Raspberry Pi 5 bring-up: a second seL4 platform, and the assurance it costs](2026-08-24-p4-rpi5-board-bringup/index.md) | Change | Verified | P4, RP3, P5, P5.1 |
