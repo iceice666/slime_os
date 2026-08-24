@@ -207,6 +207,12 @@ SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 # `default`, changing the frozen product generation. See `sel4.md` beside it.
 SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
 SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
+# P4's physical target. It builds the same seL4 manifests from the same graph
+# declarations; only the profile every executable is admitted for differs, so
+# `manifest["target"]` is rewritten to it and stage-0 refuses QEMU-qualified
+# components on the board and board-qualified ones under QEMU.
+SEL4_BOARD_TARGET_PROFILE = "aarch64-rpi5"
+SEL4_TARGET_PROFILES = (SEL4_TARGET_PROFILE, SEL4_BOARD_TARGET_PROFILE)
 # Additional seL4 manifests carry distinct authenticated boot actions and
 # generation-derived component tables while sharing the same target profile.
 SEL4_MANIFESTS = {
@@ -838,7 +844,7 @@ def manifest_source() -> Path:
     one built for the same target; absent, it is the P5.2 graph, so every
     existing caller keeps its behaviour without passing anything.
     """
-    if os.environ.get("SLIME_TARGET_PROFILE") == SEL4_TARGET_PROFILE:
+    if os.environ.get("SLIME_TARGET_PROFILE") in SEL4_TARGET_PROFILES:
         name = os.environ.get("SLIME_SEL4_MANIFEST", "sel4")
         source = SEL4_MANIFESTS.get(name)
         if source is None:
@@ -4237,7 +4243,7 @@ def main() -> None:
     target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")
-    if target_profile.name != SEL4_TARGET_PROFILE:
+    if target_profile.name not in SEL4_TARGET_PROFILES:
         fail("custom-kernel generation builds were retired with P5; select a seL4 manifest")
     output.mkdir(parents=True, exist_ok=True)
     build_sel4_generation(

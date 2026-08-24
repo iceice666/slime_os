@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
@@ -18,12 +19,71 @@ ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 SEL4_SOURCE = ROOT / "deps" / "sel4"
 RUST_SEL4_SOURCE = ROOT / "deps" / "rust-sel4"
-SEL4_CONFIG = ROOT / "sel4" / "config" / "qemu-arm-virt.cmake"
 BUILD_ROOT = ROOT / "build"
-SEL4_BUILD = BUILD_ROOT / "sel4-qemu"
-SEL4_PREFIX = BUILD_ROOT / "sel4-prefix"
 CARGO_BUILD = BUILD_ROOT / "sel4-cargo"
 ARTIFACTS = BUILD_ROOT / "sel4-artifacts"
+
+
+@dataclass(frozen=True)
+class Platform:
+    """One seL4 build platform: the board or machine an image targets.
+
+    Everything here is what makes two platforms differ. The rest of this
+    script — variants, generations, the loader, packaging — is shared, because
+    which board an image runs on is orthogonal to which generation it embeds.
+
+    `qemu_dtb` distinguishes the two device-tree routes. `qemu-arm-virt` has no
+    device tree until QEMU is asked to dump one, so the build extracts it
+    deterministically and passes it in. `bcm2712` ships its description in
+    tree (`tools/dts/rpi5b.dts` plus overlays), so passing a DTB would override
+    the board's own facts with an emulator's.
+
+    `pins_section` names this platform's `sel4/pins.toml` table, and
+    `observed_prefix_section` its pinned artifact hashes: the two platforms
+    build different kernels, so one set of hashes cannot describe both.
+    """
+
+    name: str
+    config: Path
+    build_dir: Path
+    prefix_dir: Path
+    target_profile: str
+    pins_section: str
+    observed_prefix_section: str
+    random_seed: str
+    qemu_dtb: bool
+
+
+QEMU_ARM_VIRT = Platform(
+    name="qemu-arm-virt",
+    config=ROOT / "sel4" / "config" / "qemu-arm-virt.cmake",
+    build_dir=BUILD_ROOT / "sel4-qemu",
+    prefix_dir=BUILD_ROOT / "sel4-prefix",
+    target_profile="aarch64-sel4-qemu-virt",
+    pins_section="qemu_arm_virt",
+    observed_prefix_section="observed_prefix",
+    # Unchanged from when this was the only platform: the pinned
+    # `[observed_prefix]` hashes were observed with this exact seed, and
+    # changing it would move `kernel.elf` and report as toolchain drift.
+    random_seed="slime-sel4-qemu-arm-virt",
+    qemu_dtb=True,
+)
+
+# P4's physical target. The kernel is a different build from the one above, so
+# it installs into its own prefix and pins its own artifact hashes.
+BCM2712_RPI5 = Platform(
+    name="bcm2712-rpi5",
+    config=ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake",
+    build_dir=BUILD_ROOT / "sel4-rpi5",
+    prefix_dir=BUILD_ROOT / "sel4-rpi5-prefix",
+    target_profile="aarch64-rpi5",
+    pins_section="bcm2712_rpi5",
+    observed_prefix_section="observed_prefix_bcm2712_rpi5",
+    random_seed="slime-sel4-bcm2712-rpi5",
+    qemu_dtb=False,
+)
+
+PLATFORMS = {platform.name: platform for platform in (QEMU_ARM_VIRT, BCM2712_RPI5)}
 IMAGE = BUILD_ROOT / "slime-sel4.elf"
 MANIFEST = BUILD_ROOT / "slime-sel4.identity.json"
 # P5.2's component-graph image is written beside the P5.1 one rather than
@@ -425,9 +485,9 @@ def directory_digest(directory: Path) -> str:
     return digest.hexdigest()
 
 
-def boot_bundle_identity() -> str:
+def boot_bundle_identity(platform: Platform) -> str:
     """Versioned identity of the immutable seL4 kernel and loader."""
-    kernel = require_file(SEL4_PREFIX / "bin" / "kernel.elf", "installed seL4 kernel")
+    kernel = require_file(platform.prefix_dir / "bin" / "kernel.elf", "installed seL4 kernel")
     digest = hashlib.sha256()
     digest.update(b"slime-sel4-boot-bundle-v1\0")
     digest.update(bytes.fromhex(sha256_file(kernel)))
@@ -524,14 +584,14 @@ ENVIRONMENT_FLAG_NAMES = ("ASMFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS")
 # over the in-tree file and silently change what gets built.
 ENVIRONMENT_SEARCH_NAMES = ("CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "CMAKE_PREFIX_PATH")
 
-# Replaces the dev shell's derivation hash as GCC's symbol-naming seed. One
-# value for the whole build is safe: the seed only suffixes file-scope static
-# and section names, and `kernel.elf` links five objects — `kernel_all.c` plus
-# `head.S`, `traps.S`, `idle.S`, and `machine_asm.S` — so there is nothing for a
-# shared seed to collide with. Thirteen compile edges share these flags in all;
-# the other eight are bitfield/pruning scaffolding and libsel4, never co-linked
-# into the pinned artifact.
-SEL4_RANDOM_SEED = "slime-sel4-qemu-arm-virt"
+# GCC's symbol-naming seed replaces the dev shell's derivation hash; each
+# platform carries its own in `Platform.random_seed`. One value per platform is
+# safe: the seed only suffixes file-scope static and section names, and
+# `kernel.elf` links five objects — `kernel_all.c` plus `head.S`, `traps.S`,
+# `idle.S`, and `machine_asm.S` — so there is nothing for a shared seed to
+# collide with. Thirteen compile edges share these flags in all; the other
+# eight are bitfield/pruning scaffolding and libsel4, never co-linked into the
+# pinned artifact.
 
 
 ENVIRONMENT_DROPPED_NAMES = (
@@ -557,10 +617,13 @@ def sel4_build_environment() -> dict[str, str]:
     }
 
 
-def cargo_environment(toolchain: str) -> dict[str, str]:
+def cargo_environment(toolchain: str, platform: Platform) -> dict[str, str]:
     environment = dict(os.environ)
     environment["RUSTUP_TOOLCHAIN"] = toolchain
-    environment["SEL4_PREFIX"] = str(SEL4_PREFIX)
+    # Selects which kernel the loader and root task compile against: the
+    # loader's platform module, its link address, and the embedded platform
+    # info all come from this prefix.
+    environment["SEL4_PREFIX"] = str(platform.prefix_dir)
     # `sel4-sys` runs bindgen over the installed libsel4 headers, and bindgen
     # resolves libclang at run time. Failing here beats a build-script panic
     # minutes into the kernel-loader build.
@@ -671,15 +734,21 @@ QEMU_DTB_CPU = "cortex-a53"
 QEMU_DTB_MEMORY = "1024"
 
 
-def dump_device_tree() -> Path:
+def dump_device_tree(platform: Platform) -> Path:
     """Dump the platform device tree once, deterministically.
+
+    Only for platforms whose description does not exist until an emulator is
+    asked for it (`Platform.qemu_dtb`). A real board ships its device tree in
+    the kernel source tree, and dumping QEMU's over it would replace the
+    board's own memory map, interrupt controller, and console with a machine
+    that is not the target.
 
     Memory size is the kernel's own `QEMU_MEMORY` default for this platform,
     not the 2048 MiB the product boots with: the kernel derives its physical
     memory window from this description, and the pinned prefix was produced
     with the default. Widening it is a platform change, not a harness knob.
     """
-    dtb = SEL4_BUILD / "slime-qemu-arm-virt.dtb"
+    dtb = platform.build_dir / f"slime-{platform.name}.dtb"
     dtb.parent.mkdir(parents=True, exist_ok=True)
     run(
         [
@@ -699,8 +768,8 @@ def dump_device_tree() -> Path:
     return require_file(dtb, "dumped platform device tree")
 
 
-def configure_and_install_sel4() -> None:
-    require_file(SEL4_CONFIG, "qemu-arm-virt seL4 configuration")
+def configure_and_install_sel4(platform: Platform) -> None:
+    require_file(platform.config, f"{platform.name} seL4 configuration")
     require_tool("cmake")
     require_tool("ninja")
     require_tool("dtc")
@@ -708,14 +777,16 @@ def configure_and_install_sel4() -> None:
     # invocation XML before generating headers; its absence surfaces as a bare
     # exit-127 ninja failure several steps into the build.
     require_tool("xmllint")
-    # The kernel's qemu-arm-virt platform config extracts its device tree by
-    # invoking QEMU, so the emulator is a build input, not only a boot input.
-    require_tool("qemu-system-aarch64")
     require_sel4_python_modules()
     cross_prefix = cross_compiler_prefix()
-    SEL4_BUILD.mkdir(parents=True, exist_ok=True)
-    SEL4_PREFIX.mkdir(parents=True, exist_ok=True)
-    dtb = dump_device_tree()
+    platform.build_dir.mkdir(parents=True, exist_ok=True)
+    platform.prefix_dir.mkdir(parents=True, exist_ok=True)
+    dtb = None
+    if platform.qemu_dtb:
+        # This platform's config extracts its device tree by invoking QEMU, so
+        # the emulator is a build input, not only a boot input.
+        require_tool("qemu-system-aarch64")
+        dtb = dump_device_tree(platform)
     # Four reproducibility leaks in the upstream build, all closed here so the
     # observed prefix hashes in `sel4/pins.toml` mean something:
     #  * QEMU's `virt` machine seeds `rng-seed`/`kaslr-seed` into every dumped
@@ -768,42 +839,40 @@ def configure_and_install_sel4() -> None:
     #    injections.
     common_flags = (
         f"-ffile-prefix-map={SEL4_SOURCE}=/slime/sel4 "
-        f"-ffile-prefix-map={SEL4_BUILD}=/slime/build "
-        f"-frandom-seed={SEL4_RANDOM_SEED} "
+        f"-ffile-prefix-map={platform.build_dir}=/slime/build "
+        f"-frandom-seed={platform.random_seed} "
         "-fomit-frame-pointer -momit-leaf-frame-pointer"
     )
     environment = sel4_build_environment()
+    configure = [
+        "cmake",
+        "-S",
+        str(SEL4_SOURCE),
+        "-B",
+        str(platform.build_dir),
+        "-G",
+        "Ninja",
+        "-C",
+        str(platform.config),
+        f"-DCMAKE_INSTALL_PREFIX={platform.prefix_dir}",
+        f"-DCROSS_COMPILER_PREFIX={cross_prefix}",
+        f"-DCMAKE_C_FLAGS={common_flags}",
+        f"-DCMAKE_ASM_FLAGS={common_flags}",
+        # Empty rather than absent: an explicit cache entry is what stops a
+        # tree configured under a shell that exported `LDFLAGS` from
+        # retaining it. seL4 appends its own linker flags itself.
+        "-DCMAKE_EXE_LINKER_FLAGS=",
+    ]
+    if dtb is not None:
+        configure.append(f"-DQEMU_DTB={dtb}")
+    run(configure, environment=environment, description="configure seL4")
     run(
-        [
-            "cmake",
-            "-S",
-            str(SEL4_SOURCE),
-            "-B",
-            str(SEL4_BUILD),
-            "-G",
-            "Ninja",
-            "-C",
-            str(SEL4_CONFIG),
-            f"-DCMAKE_INSTALL_PREFIX={SEL4_PREFIX}",
-            f"-DCROSS_COMPILER_PREFIX={cross_prefix}",
-            f"-DQEMU_DTB={dtb}",
-            f"-DCMAKE_C_FLAGS={common_flags}",
-            f"-DCMAKE_ASM_FLAGS={common_flags}",
-            # Empty rather than absent: an explicit cache entry is what stops a
-            # tree configured under a shell that exported `LDFLAGS` from
-            # retaining it. seL4 appends its own linker flags itself.
-            "-DCMAKE_EXE_LINKER_FLAGS=",
-        ],
-        environment=environment,
-        description="configure seL4",
-    )
-    run(
-        ["cmake", "--build", str(SEL4_BUILD), "--parallel"],
+        ["cmake", "--build", str(platform.build_dir), "--parallel"],
         environment=environment,
         description="build seL4",
     )
     run(
-        ["cmake", "--install", str(SEL4_BUILD)],
+        ["cmake", "--install", str(platform.build_dir)],
         environment=environment,
         description="install seL4",
     )
@@ -812,6 +881,7 @@ def configure_and_install_sel4() -> None:
 def build_sel4_generation(
     manifest: str = "sel4",
     *,
+    platform: Platform = QEMU_ARM_VIRT,
     output_name: str | None = None,
     environment: dict[str, str] | None = None,
     component_spec_root: Path | None = None,
@@ -826,10 +896,20 @@ def build_sel4_generation(
     if prebuilt_generation is not None:
         return require_file(prebuilt_generation.resolve(), "prebuilt seL4 generation")
     name = output_name or ("sel4-generation" if manifest == "sel4" else f"{manifest}-generation")
-    output = BUILD_ROOT / name
+    # Per platform: the components inside are admitted for one exact target
+    # profile, so a board generation is not interchangeable with the QEMU one
+    # of the same name.
+    output = BUILD_ROOT / name if platform is QEMU_ARM_VIRT else BUILD_ROOT / platform.name / name
     output.mkdir(parents=True, exist_ok=True)
     environment = dict(environment if environment is not None else os.environ)
-    environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
+    # The components link against libsel4, so their build scripts need this
+    # platform's prefix. Set here rather than inherited: the callers that pass
+    # an `environment` build it from `os.environ`, which carries whatever
+    # prefix — or none — the ambient shell had.
+    environment["SEL4_PREFIX"] = str(platform.prefix_dir)
+    # Every executable byte in the generation is admitted for exactly this
+    # profile, so a board image cannot embed QEMU-qualified components.
+    environment["SLIME_TARGET_PROFILE"] = platform.target_profile
     environment["SLIME_SEL4_MANIFEST"] = manifest
     command = [sys.executable, str(ROOT / "scripts" / "build" / "build-generation.py")]
     if component_spec_root is not None:
@@ -844,19 +924,20 @@ def build_application(
     pins: dict[str, object],
     *,
     variant: str = FIXTURE_VARIANT,
+    platform: Platform = QEMU_ARM_VIRT,
     component_spec_root: Path | None = None,
     external_components: list[str] | None = None,
     prebuilt_generation: Path | None = None,
 ) -> tuple[Path, Path]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
-    environment = cargo_environment(toolchain)
+    environment = cargo_environment(toolchain, platform)
     root_target = ROOT / text(rust_sel4, "root_target", "rust_sel4")
     child_target = RUST_SEL4_SOURCE / "support" / "targets" / "aarch64-sel4-minimal.json"
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
 
-    child_target_dir = CARGO_BUILD / "child"
+    child_target_dir = CARGO_BUILD / platform.name / "child"
     cargo_build(
         manifest=CHILD_MANIFEST,
         package="slime-root-child",
@@ -872,7 +953,7 @@ def build_application(
     root_environment = environment.copy()
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
     if variant == BOOT_SELECTION_VARIANT:
-        bundle_identity = boot_bundle_identity()
+        bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
         root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = bundle_identity
     else:
@@ -914,6 +995,7 @@ def build_application(
         root_environment["SLIME_GENERATION"] = str(
             build_sel4_generation(
                 manifest,
+                platform=platform,
                 environment=generation_environment,
                 component_spec_root=component_spec_root,
                 external_components=external_components,
@@ -938,8 +1020,11 @@ def build_application(
         )
     # Separate target directories: the images embed different generations, so
     # sharing one would make each build invalidate the others' artifacts and
-    # whichever gate ran last would boot a rebuilt image.
-    root_target_dir = CARGO_BUILD / VARIANT_TARGET_DIRS[variant]
+    # whichever gate ran last would boot a rebuilt image. Keyed by platform for
+    # the same reason one level up — the root task compiles against a specific
+    # `SEL4_PREFIX`, so a QEMU and a board build of the same variant are
+    # different binaries.
+    root_target_dir = CARGO_BUILD / platform.name / VARIANT_TARGET_DIRS[variant]
     cargo_build(
         manifest=ROOT / "Cargo.toml",
         package="slime-root",
@@ -958,20 +1043,26 @@ def build_application(
     return child_elf, root_elf
 
 
-def build_loader(pins: dict[str, object]) -> tuple[Path, Path]:
+def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Path]:
     """Build the kernel loader and its host packaging tool.
 
     Both run with `deps/rust-sel4` as the working directory: that workspace's
     `.cargo/config.toml` supplies the `rust-lld` linker selection and the
     `RUST_TARGET_PATH` its crates expect, and cargo discovers configuration
     from the working directory rather than from `--manifest-path`.
+
+    The loader is platform-specific even though its target triple is not: it
+    compiles one `plat` module for the console it prints on and links at an
+    address derived from that platform's `kernel.elf`. It therefore builds into
+    a per-platform target directory, so a board image can never be packaged
+    with a loader left behind by a QEMU build.
     """
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
     loader_target = text(rust_sel4, "loader_target", "rust_sel4")
-    environment = cargo_environment(toolchain)
+    environment = cargo_environment(toolchain, platform)
 
-    loader_target_dir = CARGO_BUILD / "loader"
+    loader_target_dir = CARGO_BUILD / platform.name / "loader"
     cargo_build(
         manifest=RUST_SEL4_SOURCE / "Cargo.toml",
         package="sel4-kernel-loader",
@@ -1008,12 +1099,14 @@ def build_loader(pins: dict[str, object]) -> tuple[Path, Path]:
     return loader, payload_tool
 
 
-def package_image(payload_tool: Path, loader: Path, root_elf: Path, image: Path) -> None:
+def package_image(
+    payload_tool: Path, loader: Path, root_elf: Path, image: Path, platform: Platform
+) -> None:
     run(
         [
             str(payload_tool),
             "--sel4-prefix",
-            str(SEL4_PREFIX),
+            str(platform.prefix_dir),
             "--loader",
             str(loader),
             "--app",
@@ -1026,9 +1119,13 @@ def package_image(payload_tool: Path, loader: Path, root_elf: Path, image: Path)
     require_file(image, "packaged seL4 image")
 
 
-def copy_artifact(source: Path, name: str) -> Path:
-    ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    destination = ARTIFACTS / name
+def copy_artifact(source: Path, name: str, platform: Platform = QEMU_ARM_VIRT) -> Path:
+    # Board and QEMU artifacts of the same name are different binaries, so the
+    # board's live in their own subdirectory rather than overwriting the ones
+    # every existing seL4 gate reads.
+    directory = ARTIFACTS if platform is QEMU_ARM_VIRT else ARTIFACTS / platform.name
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / name
     try:
         shutil.copyfile(source, destination)
     except OSError as error:
@@ -1046,31 +1143,35 @@ def write_manifest(
     image: Path = IMAGE,
     manifest_path: Path = MANIFEST,
     variant: str = FIXTURE_VARIANT,
+    platform: Platform = QEMU_ARM_VIRT,
     generation: Path | None = None,
 ) -> None:
-    kernel = require_file(SEL4_PREFIX / "bin" / "kernel.elf", "installed seL4 kernel")
+    prefix = platform.prefix_dir
+    kernel = require_file(prefix / "bin" / "kernel.elf", "installed seL4 kernel")
     kernel_config = require_file(
-        SEL4_PREFIX / "libsel4" / "include" / "kernel" / "gen_config.json",
+        prefix / "libsel4" / "include" / "kernel" / "gen_config.json",
         "installed seL4 kernel config",
     )
     libsel4_config = require_file(
-        SEL4_PREFIX / "libsel4" / "include" / "sel4" / "gen_config.json",
+        prefix / "libsel4" / "include" / "sel4" / "gen_config.json",
         "installed libsel4 config",
     )
-    dtb = require_file(SEL4_PREFIX / "support" / "kernel.dtb", "installed seL4 DTB")
+    dtb = require_file(prefix / "support" / "kernel.dtb", "installed seL4 DTB")
     platform_info = require_file(
-        SEL4_PREFIX / "support" / "platform_gen.yaml", "installed platform metadata"
+        prefix / "support" / "platform_gen.yaml", "installed platform metadata"
     )
     root_target = ROOT / text(table(pins, "rust_sel4"), "root_target", "rust_sel4")
     child_target = RUST_SEL4_SOURCE / "support" / "targets" / "aarch64-sel4-minimal.json"
 
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
-    stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf")
-    stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf")
-    stable_loader = copy_artifact(loader, "sel4-kernel-loader")
-    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload")
+    stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
+    stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
+    stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
+    stable_payload_tool = copy_artifact(
+        payload_tool, "sel4-kernel-loader-add-payload", platform
+    )
 
-    qemu = table(pins, "qemu_arm_virt")
+    manifest_platform = table(pins, platform.pins_section)
     manifest = {
         "schema": 1,
         "kind": "slime-sel4-image-identity",
@@ -1090,7 +1191,7 @@ def write_manifest(
         },
         "config": {
             "pins": file_record(PINS_PATH),
-            "cmake": file_record(SEL4_CONFIG),
+            "cmake": file_record(platform.config),
             "root_target": file_record(root_target),
             "child_target": file_record(child_target),
             "kernel_config": file_record(kernel_config),
@@ -1115,14 +1216,31 @@ def write_manifest(
         # bool cannot name three images, so `variant` is what a new gate reads.
         "component_graph": variant == GRAPH_VARIANT,
         "variant": variant,
-        "qemu": {
-            "machine": text(qemu, "machine", "qemu_arm_virt"),
-            "cpu": text(qemu, "cpu", "qemu_arm_virt"),
-            "cpus": qemu["cpus"],
-            "memory_mib": qemu["memory_mib"],
-            "version": text(qemu, "qemu_version", "qemu_arm_virt"),
-        },
+        # Which board or machine this image is built for. Every field above is
+        # a function of it, so a gate can refuse an image built for the other
+        # platform rather than discovering it from a silent boot failure.
+        "platform": platform.name,
+        "target_profile": platform.target_profile,
     }
+    if platform is QEMU_ARM_VIRT:
+        # Emulator launch facts, which existing seL4 gates read to build their
+        # QEMU command line. A physical board has no counterpart, and inventing
+        # one would let a gate believe it could boot the board by emulation.
+        manifest["qemu"] = {
+            "machine": text(manifest_platform, "machine", platform.pins_section),
+            "cpu": text(manifest_platform, "cpu", platform.pins_section),
+            "cpus": manifest_platform["cpus"],
+            "memory_mib": manifest_platform["memory_mib"],
+            "version": text(manifest_platform, "qemu_version", platform.pins_section),
+        }
+    else:
+        manifest["board"] = {
+            "platform": text(manifest_platform, "platform", platform.pins_section),
+            "soc": text(manifest_platform, "soc", platform.pins_section),
+            "serial": text(manifest_platform, "serial", platform.pins_section),
+            "serial_baud": manifest_platform["serial_baud"],
+            "boot_files": manifest_platform["boot_files"],
+        }
     if generation is not None:
         generation_bytes = require_file(generation, "embedded generation").read_bytes()
         if len(generation_bytes) < 56:
@@ -1133,7 +1251,7 @@ def write_manifest(
             "sha256": hashlib.sha256(generation_bytes).hexdigest(),
         }
     if variant == BOOT_SELECTION_VARIANT:
-        manifest["boot_bundle_identity"] = boot_bundle_identity()
+        manifest["boot_bundle_identity"] = boot_bundle_identity(platform)
     encoded = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     try:
         manifest_path.write_text(encoded, encoding="utf-8")
@@ -1423,6 +1541,15 @@ def main() -> None:
         type=Path,
         help="embed an already built generation instead of rebuilding it",
     )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default=QEMU_ARM_VIRT.name,
+        help=(
+            "which board or machine to build for; every artifact, the embedded "
+            "generation's target profile, and the loader's console follow from it"
+        ),
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -1485,26 +1612,38 @@ def main() -> None:
         )
     if arguments.prebuilt_generation is not None and variant == BOOT_SELECTION_VARIANT:
         fail("--prebuilt-generation cannot be combined with --boot-selection")
+    platform = PLATFORMS[arguments.platform]
     BUILD_ROOT.mkdir(parents=True, exist_ok=True)
-    configure_and_install_sel4()
+    configure_and_install_sel4(platform)
     run(
         [
             sys.executable,
             str(ROOT / "scripts" / "check" / "check-sel4-pins.py"),
             "--prefix",
+            "--platform",
+            platform.name,
         ],
         description="verify installed seL4 prefix",
     )
     child_elf, root_elf = build_application(
         pins,
         variant=variant,
+        platform=platform,
         component_spec_root=arguments.component_spec_root,
         external_components=arguments.external_component,
         prebuilt_generation=arguments.prebuilt_generation,
     )
-    loader, payload_tool = build_loader(pins)
+    loader, payload_tool = build_loader(pins, platform)
     image, manifest_path = VARIANT_IMAGES[variant]
-    package_image(payload_tool, loader, root_elf, image)
+    if platform is not QEMU_ARM_VIRT:
+        # A board image is a different artifact from the QEMU image of the same
+        # variant, so it never overwrites it: every existing seL4 gate reads the
+        # QEMU path by name.
+        image = image.with_name(f"{image.stem}-{platform.name}{image.suffix}")
+        manifest_path = manifest_path.with_name(
+            manifest_path.name.replace(".identity.json", f"-{platform.name}.identity.json")
+        )
+    package_image(payload_tool, loader, root_elf, image, platform)
     write_manifest(
         pins,
         child_elf=child_elf,
@@ -1514,6 +1653,7 @@ def main() -> None:
         image=image,
         manifest_path=manifest_path,
         variant=variant,
+        platform=platform,
         generation=arguments.prebuilt_generation,
     )
     print(
