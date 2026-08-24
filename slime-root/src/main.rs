@@ -31,9 +31,10 @@
 #[cfg(slime_boot_selector)]
 use slime_root::boot_selector;
 use slime_root::{
-    buffer_adapter, child_vspace, console, cspace, device, directory, event, fault, generation,
-    graph, ipc, launched, notification, object_allocator, peer_endpoint, platform_timer,
-    private_memory, shared_buffer, supervision, task, timer, transfer_window, virtio_blk,
+    buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
+    generation, graph, ipc, launched, notification, object_allocator, peer_endpoint,
+    platform_timer, private_memory, shared_buffer, supervision, task, timer, transfer_window,
+    virtio_blk,
 };
 
 use core::ptr;
@@ -50,7 +51,7 @@ use boot_contracts::generation::{RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANS
 use buffer_adapter::BufferAdapter;
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use device::{BlockDevices, MAX_BLOCK_DEVICES};
-use event::TaskEpoch;
+use event::{TaskEpoch, TimerId};
 use fault::{LifecycleEventKind, SupervisionTable};
 use generation::{Admission, Authority, bound_authority};
 use ipc::{IpcError, Response, poll_notification};
@@ -82,8 +83,8 @@ const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
 // - `shared_buffer_labels::OCCUPANCY` derives its holder from the badge for the
 //   same reason.
 use slime_proto::syscall_abi::{
-    capability_table_labels, capability_transfer_labels, directory_labels, fixture_labels,
-    lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+    capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
+    fixture_labels, lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -605,6 +606,9 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         timer_end.0.wrapping_sub(timer_start.0),
     );
     sel4::debug_println!("SLIME_TIMER OK");
+    if let Err(error) = timer_adapter.bind_to(sel4::init_thread::slot::TCB.cap()) {
+        fatal!("timer notification could not bind to root: {error:?}")
+    }
     // ---- end timer phase ----
 
     let scratch = match ScratchPage::claim(bootinfo, ptr::addr_of!(FREE_PAGE) as usize) {
@@ -799,8 +803,11 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             bootinfo,
             allocator,
             &scratch,
-            service_endpoint,
-            console_endpoint,
+            RootEndpoints {
+                service: service_endpoint,
+                console: console_endpoint,
+            },
+            &mut timer_adapter,
             &mut block_devices,
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
@@ -1225,6 +1232,7 @@ const _: () = assert!(MAX_COMPONENT_ELF_BYTES >= 64 * 1024);
 static mut PEER_ENDPOINTS: peer_endpoint::PeerEndpointTable =
     peer_endpoint::PeerEndpointTable::new();
 static mut NOTIFICATIONS: notification::NotificationTable = notification::NotificationTable::new();
+static mut CLOCK_SERVICE: clock::ClockService = clock::ClockService::new();
 
 const MAX_CAPABILITY_EXPORTS: usize = 64;
 #[derive(Clone, Copy)]
@@ -1910,14 +1918,20 @@ extern "C" fn console_entry(context: usize) -> ! {
     unsafe { console::serve(&*(context as *const console::ConsoleContext)) }
 }
 
+#[derive(Clone, Copy)]
+struct RootEndpoints {
+    service: sel4::cap::Endpoint,
+    console: sel4::cap::Endpoint,
+}
+
 fn launch_instance_graph(
     generation: &Generation<'_>,
     admission: &Admission,
     bootinfo: &sel4::BootInfo,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
-    service_endpoint: sel4::cap::Endpoint,
-    console_endpoint: sel4::cap::Endpoint,
+    endpoints: RootEndpoints,
+    timer_adapter: &mut PhysicalTimerAdapter,
     block_devices: &mut BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
@@ -1943,6 +1957,22 @@ fn launch_instance_graph(
             .as_ref()
             .map_or(0, PrivateMemoryBudget::holder_count),
         private_budget.is_some() as u8,
+    );
+    let clock_authority = match generation::clock_authority_object(generation) {
+        Some(Ok(authority)) => Some(authority),
+        Some(Err(error)) => {
+            fatal!("SLIME_CLOCK FAIL admitted authority will not decode: {error:?}")
+        }
+        None => None,
+    };
+    sel4::debug_println!(
+        "SLIME_CLOCK authority holders={} timer_quota={}",
+        clock_authority
+            .as_ref()
+            .map_or(0, |authority| authority.holder_count()),
+        clock_authority
+            .as_ref()
+            .map_or(0, |authority| authority.timer_quota()),
     );
 
     for instance_index in 0..generation.instance_count() {
@@ -2096,8 +2126,8 @@ fn launch_instance_graph(
         let id = match tasks.create(
             allocator,
             &image,
-            service_endpoint,
-            console_endpoint,
+            endpoints.service,
+            endpoints.console,
             authority,
             Supervision::SelfManaged,
             sel4::init_thread::slot::VSPACE.cap(),
@@ -2316,6 +2346,45 @@ fn launch_instance_graph(
         notification_report.created,
         notification_report.bindings,
     );
+    // This generation creates one clock service instance. The static lives
+    // across the process lifetime, but a boot reaches this path once; resetting
+    // here makes that lifetime explicit and prevents stale authority if the
+    // launch path ever becomes restartable.
+    unsafe { *ptr::addr_of_mut!(CLOCK_SERVICE) = clock::ClockService::new() };
+    let clock_service = unsafe { &mut *ptr::addr_of_mut!(CLOCK_SERVICE) };
+    for launched in launched_instances.iter() {
+        let Some(task) = tasks.get(launched.task) else {
+            fatal!(
+                "SLIME_CLOCK FAIL launched task {} is missing",
+                launched.task.0
+            )
+        };
+        let authority = match clock_service.declare(
+            clock_authority.as_ref(),
+            generation,
+            notifications,
+            allocator,
+            task.cleanup.arena,
+            launched.task,
+            launched.instance,
+        ) {
+            Ok(authority) => authority,
+            Err(error) => fatal!(
+                "SLIME_CLOCK FAIL authority install task={} error={error:?}",
+                launched.task.0
+            ),
+        };
+        sel4::debug_println!(
+            "SLIME_CLOCK authority task={} instance={} flags={:#x} timers={} badge={:#x}",
+            launched.task.0,
+            generation
+                .instance(launched.instance)
+                .map_or("?", |instance| instance.name),
+            authority.flags(),
+            authority.timer_quota(),
+            authority.timer_badge(),
+        );
+    }
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
     let table = bootstrap.and_then(|id| tasks.authority(id));
@@ -2466,7 +2535,7 @@ fn launch_instance_graph(
     start_console_dispatcher(
         bootinfo,
         allocator,
-        console_endpoint,
+        endpoints.console,
         ConsoleTables {
             windows: &windows,
             tasks: &tasks,
@@ -2480,11 +2549,13 @@ fn launch_instance_graph(
     serve_instance_graph(
         generation,
         &mut launched_instances,
-        service_endpoint,
-        console_endpoint,
+        endpoints.service,
+        endpoints.console,
         &mut tasks,
         &mut windows,
         &mut buffers,
+        clock_service,
+        timer_adapter,
         allocator,
         scratch,
         admission.fabric_capability_slots,
@@ -2570,12 +2641,14 @@ fn declared_private_memory_pages(
         .map_or(0, |quota| quota.page_quota as usize)
 }
 
-/// Iterations the graph service loop will run before declaring the graph wedged.
+/// Component arrivals the graph service loop will handle before declaring the
+/// graph wedged. Bound timer-Notification wakes are serviced independently and
+/// do not consume this request-path progress ceiling.
 ///
 /// Generous against what the declared components actually issue — each binds a
 /// window, and spawn-service additionally runs a shared-buffer probe and spawns
-/// two children — while still bounding a livelock so it fails in seconds rather
-/// than burning the gate's whole timeout.
+/// two children — while still bounding a request livelock so it fails in seconds
+/// rather than burning the gate's whole timeout.
 ///
 /// component that blocks now costs two iterations where it cost one — the
 /// `recv` that reports `WouldBlock` and the `wait` that parks.
@@ -2609,6 +2682,8 @@ fn serve_instance_graph(
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     buffers: &mut SharedBufferTable,
+    clock_service: &mut clock::ClockService,
+    timer_adapter: &mut PhysicalTimerAdapter,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     // The fabric graph's declared `capabilitySlots` ceiling, or 0 when this
@@ -2651,8 +2726,7 @@ fn serve_instance_graph(
         })
         .count();
     let mut completed_required = [false; generation::MAX_ADMITTED_INSTANCES];
-    for _ in 0..MAX_GRAPH_ITERATIONS {
-        iterations += 1;
+    while iterations < MAX_GRAPH_ITERATIONS {
         if live == 0 {
             sel4::debug_println!(
                 "SLIME_ROOT allocator quiescent live_slots={} live_objects={} live_bytes={}",
@@ -2675,8 +2749,20 @@ fn serve_instance_graph(
                     .absolute_cptr(sel4::cap::Unspecified::from_bits(task::CHILD_SLOT_RECEIVE)),
             );
         });
+        // Timer Notifications are deliberately outside the component-request
+        // progress budget: aborting after a valid expiry would misdiagnose
+        // timer traffic as a wedged graph. Per-holder and aggregate timer
+        // quotas bound the work performed by each wake.
         let reception = ipc::recv_request(endpoint);
         let (info, badge) = (reception.info, reception.badge);
+        if badge == timer_adapter.signal_badge() {
+            // A bound-Notification delivery writes the badge register only;
+            // message-info registers retain unrelated state and are not a
+            // valid request-shape discriminator on this path.
+            service_clock_source(clock_service, timer_adapter);
+            continue;
+        }
+        iterations += 1;
         let Some((id, arrival)) = TaskId::from_badge(badge) else {
             sel4::debug_println!("SLIME_GRAPH unbadged arrival badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
@@ -2734,6 +2820,7 @@ fn serve_instance_graph(
             if let Some(task) = tasks.get(id) {
                 let _ = task.suspend();
             }
+            drop_task_clock(clock_service, timer_adapter, id);
             reclaim_dead_task(buffers, allocator, id);
             windows.release(id);
             reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -2768,6 +2855,17 @@ fn serve_instance_graph(
             ipc::reply(Response::error(IpcError::UnsupportedOperation));
             continue;
         };
+        let (label, words) = (request.label, request.mrs);
+        if ipc::clock_request_len(label).is_some_and(|expected| request.len != expected) {
+            sel4::debug_println!(
+                "SLIME_CLOCK malformed task={} label={label} words={} expected={:?}",
+                id.0,
+                request.len,
+                ipc::clock_request_len(label),
+            );
+            ipc::reply(Response::error(IpcError::InvalidLength));
+            continue;
+        }
         let authorized = generation
             .instance_has_service(instance, required_service)
             .unwrap_or(false);
@@ -2780,7 +2878,6 @@ fn serve_instance_graph(
             ipc::reply(Response::error(IpcError::BadCapability));
             continue;
         }
-        let (label, words) = (request.label, request.mrs);
 
         match label {
             // M6.3: the three directory operations (P5.4.3).
@@ -2842,6 +2939,7 @@ fn serve_instance_graph(
                 if let Some(task) = tasks.get(id) {
                     let _ = task.suspend();
                 }
+                drop_task_clock(clock_service, timer_adapter, id);
                 reclaim_dead_task(buffers, allocator, id);
                 windows.release(id);
                 reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -2865,6 +2963,7 @@ fn serve_instance_graph(
                     tasks,
                     windows,
                     buffers,
+                    clock_service,
                     allocator,
                     scratch,
                     endpoint,
@@ -3502,6 +3601,15 @@ fn serve_instance_graph(
                         Response::error(IpcError::InvalidOperation)
                     }
                 };
+                ipc::reply(response);
+            }
+            clock_labels::MONOTONIC_READ
+            | clock_labels::TIMER_ARM
+            | clock_labels::TIMER_CANCEL
+            | clock_labels::SIMULATED_READ
+            | clock_labels::SIMULATED_ADVANCE => {
+                let response =
+                    serve_clock_request(clock_service, timer_adapter, id, label, words[0]);
                 ipc::reply(response);
             }
             shared_buffer_labels::UNMAP
@@ -4384,6 +4492,7 @@ fn serve_spawn(
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     buffers: &mut SharedBufferTable,
+    clock_service: &mut clock::ClockService,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -4552,6 +4661,47 @@ fn serve_spawn(
             .cspace
             .installed((copied + notification_copied) as u32);
     }
+    let child_clock = match clock::authority_object(generation) {
+        Some(Ok(authority)) => clock_service.declare(
+            Some(&authority),
+            generation,
+            unsafe { &*ptr::addr_of!(NOTIFICATIONS) },
+            allocator,
+            child_arena,
+            child,
+            plan.instance,
+        ),
+        Some(Err(_)) => Err(clock::ClockError::Malformed),
+        None => clock_service.declare(
+            None,
+            generation,
+            unsafe { &*ptr::addr_of!(NOTIFICATIONS) },
+            allocator,
+            child_arena,
+            child,
+            plan.instance,
+        ),
+    };
+    let child_clock = match child_clock {
+        Ok(authority) => authority,
+        Err(error) => {
+            clock_service.clear_task(child);
+            release_child(tasks, windows, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn failed task={} component={name} error=ClockInstall({error:?})",
+                id.0
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+    };
+    sel4::debug_println!(
+        "SLIME_CLOCK authority task={} instance={} flags={:#x} timers={} badge={:#x}",
+        child.0,
+        name,
+        child_clock.flags(),
+        child_clock.timer_quota(),
+        child_clock.timer_badge(),
+    );
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
@@ -4572,6 +4722,7 @@ fn serve_spawn(
     let Some(handle) = handle else {
         // The parent's table is full. The copied child table can simply be
         // released; the parent's grants were never consumed.
+        clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=NoHandleSlot",
@@ -4584,6 +4735,7 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=Activate",
@@ -4598,6 +4750,7 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         return Response::error(IpcError::BadCapability);
     }
@@ -4694,6 +4847,168 @@ fn serve_supervision_derive(
         source.task.0
     );
     Response::success(0, sel4::Word::from(derived))
+}
+
+fn serve_clock_request(
+    service: &mut clock::ClockService,
+    timer_adapter: &mut PhysicalTimerAdapter,
+    task: TaskId,
+    label: sel4::Word,
+    operand: sel4::Word,
+) -> Response {
+    let authority = service.authority(task);
+    let mut now = || {
+        timer_adapter
+            .monotonic_now()
+            .map_err(|_| clock::ClockError::TimeOverflow)
+    };
+    let outcome = match label {
+        clock_labels::MONOTONIC_READ => now()
+            .and_then(|instant| clock::ClockService::read_monotonic(authority, instant))
+            .map(|value| (value as i64, 0)),
+        clock_labels::TIMER_ARM => now()
+            .and_then(|instant| service.arm(authority, task, instant, operand))
+            .and_then(|(timer_id, programming)| {
+                apply_deadline_programming(timer_adapter, programming)
+                    .map_err(|_| clock::ClockError::TimeOverflow)?;
+                Ok((timer_id.0 as i64, service.live_timers() as sel4::Word))
+            }),
+        clock_labels::TIMER_CANCEL => now()
+            .and_then(|instant| service.cancel(authority, task, instant, TimerId(operand)))
+            .and_then(|programming| {
+                apply_deadline_programming(timer_adapter, programming)
+                    .map_err(|_| clock::ClockError::TimeOverflow)?;
+                Ok((0, service.live_timers() as sel4::Word))
+            }),
+        clock_labels::SIMULATED_READ => service
+            .read_simulated(authority)
+            .map(|value| (value as i64, 0)),
+        clock_labels::SIMULATED_ADVANCE => service
+            .advance_simulated(authority, operand)
+            .map(|previous| (previous as i64, 0)),
+        _ => return Response::error(IpcError::UnsupportedOperation),
+    };
+    match outcome {
+        Ok((result, aux)) => {
+            sel4::debug_println!(
+                "SLIME_CLOCK served task={} label={label} result={result} live={}",
+                task.0,
+                service.live_timers(),
+            );
+            Response::success(result, aux)
+        }
+        Err(error) => {
+            sel4::debug_println!(
+                "SLIME_CLOCK refused task={} label={label} class={} detail={error:?}",
+                task.0,
+                clock_error_class(error),
+            );
+            Response::error(clock_error_status(error))
+        }
+    }
+}
+
+fn service_clock_source(
+    service: &mut clock::ClockService,
+    timer_adapter: &mut PhysicalTimerAdapter,
+) {
+    let clock::TimerSourceOutcome { expired, failure } =
+        service.service_timer_source(timer_adapter);
+    if let Some(failure) = failure {
+        match failure {
+            clock::TimerSourceFailure::Clock(error) => {
+                sel4::debug_println!("SLIME_CLOCK FAIL expiry clock error={error:?}");
+                return;
+            }
+            clock::TimerSourceFailure::Scheduler(error) => {
+                sel4::debug_println!("SLIME_CLOCK FAIL expiry scheduler error={error:?}");
+                return;
+            }
+            clock::TimerSourceFailure::Program(error) => sel4::debug_println!(
+                "SLIME_CLOCK FAIL deadline reprogramming error={error:?} due={}",
+                expired.due(),
+            ),
+            clock::TimerSourceFailure::Acknowledge(error) => sel4::debug_println!(
+                "SLIME_CLOCK FAIL irq acknowledgement error={error:?} due={}",
+                expired.due(),
+            ),
+        }
+    }
+    let due = expired.due();
+    let mut delivered = 0;
+    for task in expired.tasks() {
+        match service.authority(task).signal_timer() {
+            Ok(()) => delivered += 1,
+            Err(error) => sel4::debug_println!(
+                "SLIME_CLOCK FAIL expiry signal task={} error={error:?}",
+                task.0,
+            ),
+        }
+    }
+    sel4::debug_println!(
+        "SLIME_CLOCK expired due={due} delivered={delivered} live={}",
+        service.live_timers(),
+    );
+}
+
+fn drop_task_clock(
+    service: &mut clock::ClockService,
+    timer_adapter: &mut PhysicalTimerAdapter,
+    task: TaskId,
+) {
+    let before = service.live_timers();
+    let now = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => {
+            sel4::debug_println!(
+                "SLIME_CLOCK FAIL teardown clock task={} error={error:?}",
+                task.0,
+            );
+            service.clear_task(task);
+            return;
+        }
+    };
+    match service.cancel_task(task, now) {
+        Ok(programming) => {
+            if apply_deadline_programming(timer_adapter, programming).is_err() {
+                sel4::debug_println!("SLIME_CLOCK FAIL teardown programming task={}", task.0,);
+            }
+        }
+        Err(error) => {
+            sel4::debug_println!("SLIME_CLOCK FAIL teardown task={} error={error:?}", task.0,)
+        }
+    }
+    service.clear_task(task);
+    sel4::debug_println!(
+        "SLIME_CLOCK teardown task={} before={before} live={}",
+        task.0,
+        service.live_timers(),
+    );
+}
+
+const fn clock_error_status(error: clock::ClockError) -> IpcError {
+    match error {
+        clock::ClockError::Undeclared | clock::ClockError::InvalidNotification => {
+            IpcError::BadCapability
+        }
+        clock::ClockError::TimerLimit => IpcError::DestinationSlotsExhausted,
+        clock::ClockError::TimerNotFound => IpcError::BadCapability,
+        clock::ClockError::Malformed
+        | clock::ClockError::TimeOverflow
+        | clock::ClockError::SimulatedTimeOverflow => IpcError::InvalidOperation,
+    }
+}
+
+const fn clock_error_class(error: clock::ClockError) -> &'static str {
+    match error {
+        clock::ClockError::Undeclared => "undeclared",
+        clock::ClockError::Malformed => "malformed",
+        clock::ClockError::InvalidNotification => "notification",
+        clock::ClockError::TimerLimit => "timer-limit",
+        clock::ClockError::TimerNotFound => "timer-absent",
+        clock::ClockError::TimeOverflow => "time-overflow",
+        clock::ClockError::SimulatedTimeOverflow => "simulated-overflow",
+    }
 }
 
 fn record_termination(

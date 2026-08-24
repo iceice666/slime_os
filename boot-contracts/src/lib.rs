@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod boot_layout;
 pub mod bootstate;
+pub mod clock_authority;
 pub mod component_image;
 pub mod crc32;
 pub mod fabric_graph;

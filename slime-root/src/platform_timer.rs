@@ -36,11 +36,15 @@
 //! Acquiring [`PhysicalTimerAdapter`] proves the root task holds the one
 //! architected-timer IRQ seL4 leaves for userspace on this platform, binds it
 //! to a notification the root can wait on, and can read/program/acknowledge
-//! the EL1 physical timer directly. It does **not** establish temporal
-//! isolation, a CPU reservation, or any deadline guarantee: this is a plain
-//! non-MCS one-shot compare timer shared with nothing, and a scheduling
-//! delay of arbitrary length can still separate the compare condition
-//! becoming true from this task next running.
+//! the EL1 physical timer directly. It does **not** make the control registers
+//! root-exclusive: `KernelArmExportPTMRUser` applies globally, so hostile EL0
+//! component code can disable or overwrite the same `CNTP_*` comparator and
+//! disrupt the root-brokered service without possessing C9.1 timer authority.
+//! Closing that integrity wall requires a kernel/platform change. It also does
+//! not establish temporal isolation, a CPU reservation, or any deadline
+//! guarantee: this is a plain non-MCS one-shot compare timer, and a scheduling
+//! delay of arbitrary length can still separate the compare condition becoming
+//! true from this task next running.
 
 use crate::event::MonotonicInstant;
 use crate::object_allocator::{AllocError, ObjectAllocator};
@@ -160,6 +164,16 @@ impl PhysicalTimerAdapter {
     /// signal yet" on a [`seL4_Poll`]-style non-blocking check.
     pub const fn signal_badge(&self) -> sel4::Badge {
         SIGNAL_BADGE
+    }
+
+    /// Bind the timer IRQ's notification to the root service thread.
+    ///
+    /// With a bound Notification, a blocking `seL4_Recv` on the root service
+    /// endpoint returns a badge-only wake when the timer fires. Requests and
+    /// timer delivery therefore share one blocking point without a polling
+    /// thread or lost-wake window.
+    pub fn bind_to(&self, tcb: sel4::cap::Tcb) -> Result<(), sel4::Error> {
+        tcb.tcb_bind_notification(self.notification)
     }
 
     /// `CNTFRQ_EL0`: ticks per second for this counter. Firmware-programmed

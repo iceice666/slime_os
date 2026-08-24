@@ -23,8 +23,8 @@ reviewable diff rather than a silent renumbering.
 
 Each plane boots a different generation, and `layout_for` prunes the base table
 by which components that generation declares. The pruning is the interesting
-part -- it renumbers -- so freezing one plane would leave the other seven
-unguarded against exactly the change most likely to break them.
+part -- it renumbers -- so freezing one plane would leave every other
+composition unguarded against exactly the change most likely to break it.
 
 # Relationship to the boot itself
 
@@ -114,6 +114,9 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4-powerbox", "--powerbox-plane", "slime-sel4-powerbox.elf"),
     ("sel4-dango", "--dango-plane", "slime-sel4-dango.elf"),
     ("sel4-transfer", "--transfer-plane", "slime-sel4-transfer.elf"),
+    # C9.1. Init holds the one probe executable and no clock authority slot:
+    # clock operations use the already-reserved badged root-service endpoint.
+    ("sel4-clock-authority", "--clock-authority-plane", "slime-sel4-clock-authority.elf"),
 )
 
 

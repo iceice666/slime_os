@@ -47,7 +47,7 @@ maxThreads :: Int = 48;
 maxKernelObjects :: Int = 4096;
 maxMappings :: Int = 4096;
 maxCapBindings :: Int = 4096;
-maxServiceBindings :: Int = 432;
+maxServiceBindings :: Int = 480;
 maxSchedules :: Int = 48;
 maxFaultPolicies :: Int = 48;
 maxSpawnTemplates :: Int = 48;
@@ -102,6 +102,10 @@ rightBits :: List RightBit = {
   right "INPUT_READ" 23 "inputRead";
   right "BUFFER_CREATE" 24 "bufferCreate";
   right "BUFFER_LOAN" 25 "bufferLoan";
+  right "CLOCK_MONOTONIC_READ" 26 "clockMonotonicRead";
+  right "CLOCK_TIMER_USE" 27 "clockTimerUse";
+  right "CLOCK_SIMULATED_READ" 28 "clockSimulatedRead";
+  right "CLOCK_SIMULATED_ADVANCE" 29 "clockSimulatedAdvance";
 };
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };

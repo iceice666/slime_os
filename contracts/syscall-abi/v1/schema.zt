@@ -235,6 +235,26 @@ operations :: List Operation = {
   -- `BOOT_ACTION` records. A task the generation gives no quota is refused by
   -- its zero ceiling, which is a budget answer rather than an authority one.
   operation "lifecycle" "PRIVATE_MEMORY_GROW" 43;
+  -- C9.1's generation-declared clock service. The caller identity comes from
+  -- the badged root endpoint; no operation accepts a holder or notification
+  -- argument. `MONOTONIC_READ` returns the current hardware counter. `TIMER_ARM`
+  -- takes a relative counter-tick delay and returns an opaque timer id;
+  -- `TIMER_CANCEL` consumes that id. `SIMULATED_READ` and
+  -- `SIMULATED_ADVANCE` operate on the generation's deterministic test clock,
+  -- which is independent from the hardware counter and advances only through
+  -- the declared advance operation.
+  --
+  -- Authority is four independent bits in `clock-authority/v1`, not the
+  -- lifecycle service and not a capability-table entry. An absent holder and
+  -- a holder lacking the requested bit both answer `BAD_CAP`; malformed word
+  -- counts answer `INVALID_ARG`, so denial and malformed requests are
+  -- distinguishable. Timer expiry is delivered through the holder's declared
+  -- generation Notification and badge, never through this reply channel.
+  operation "clock" "MONOTONIC_READ" 44;
+  operation "clock" "TIMER_ARM" 45;
+  operation "clock" "TIMER_CANCEL" 46;
+  operation "clock" "SIMULATED_READ" 47;
+  operation "clock" "SIMULATED_ADVANCE" 48;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.
@@ -258,6 +278,7 @@ services :: List Service = {
   service "directory" "directory_labels";
   service "sharedBuffer" "shared_buffer_labels";
   service "capabilityTransfer" "capability_transfer_labels";
+  service "clock" "clock_labels";
 };
 
 -- The status a root service returns in reply MR0. Deliberately coarse: a

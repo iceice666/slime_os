@@ -176,6 +176,15 @@ from boot_contracts import (
     MAX_PRIVATE_MEMORY_BUDGET_HOLDERS,
     PRIVATE_MEMORY_ROOT_REGION_PAGES,
     PRIVATE_MEMORY_ROOT_TOTAL_PAGES,
+    CLOCK_AUTHORITY_ENTRY,
+    CLOCK_AUTHORITY_HEADER,
+    CLOCK_AUTHORITY_HEADER_BYTES,
+    CLOCK_AUTHORITY_ENTRY_BYTES,
+    CLOCK_AUTHORITY_MAGIC,
+    CLOCK_AUTHORITY_VERSION,
+    CLOCK_AUTHORITY_MAX_HOLDERS,
+    CLOCK_AUTHORITY_MAX_LIVE_TIMERS_PER_HOLDER,
+    CLOCK_AUTHORITY_MAX_LIVE_TIMERS,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -270,6 +279,13 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-private-memory.zti",
+    # C9.1: independently grantable monotonic, timer, and simulated clocks.
+    "sel4-clock-authority": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-clock-authority.zti",
     "sel4-crossing": ROOT
     / "contracts"
     / "generation"
@@ -1088,6 +1104,132 @@ def validated_private_memory_quotas(holders: list[dict]) -> dict[str, dict]:
     return by_name
 
 
+def clock_authority_holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching boot_contracts::clock_authority."""
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-clock-authority-holder-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def clock_notification_grant_identity(name: str) -> int:
+    """Stable notification-grant identity used by the clock resource."""
+    encoded = name.encode("utf-8")
+    digest = sha256(
+        b"slime-clock-notification-grant-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+    return int.from_bytes(digest[:8], "little")
+
+
+def validated_clock_authorities(
+    manifest: dict,
+) -> list[tuple[bytes, int, int, int, int, int]]:
+    declarations = manifest.get("clockAuthority") or []
+    if len(declarations) > CLOCK_AUTHORITY_MAX_HOLDERS:
+        fail("clock authority exceeds holder bound")
+    instances = {entry["name"] for entry in manifest["instances"]}
+    grants = {entry["name"]: entry for entry in manifest.get("notificationGrants", [])}
+    bindings = manifest.get("notificationBindings", [])
+    entries: list[tuple[bytes, int, int, int, int, int]] = []
+    names: set[str] = set()
+    timer_total = 0
+    for declaration in declarations:
+        holder = declaration["holder"]
+        if holder in names:
+            fail(f"clock authority: duplicate holder {holder}")
+        names.add(holder)
+        if holder not in instances:
+            fail(f"clock authority: unknown holder {holder}")
+        flags = 0
+        for field, right in (
+            ("monotonicRead", RIGHT["clockMonotonicRead"]),
+            ("timerUse", RIGHT["clockTimerUse"]),
+            ("simulatedRead", RIGHT["clockSimulatedRead"]),
+            ("simulatedAdvance", RIGHT["clockSimulatedAdvance"]),
+        ):
+            if declaration[field]:
+                flags |= right
+        if flags == 0:
+            fail(f"clock authority: holder {holder} declares no authority")
+        quota = declaration["timerQuota"]
+        if (
+            not isinstance(quota, int)
+            or isinstance(quota, bool)
+            or not 0 <= quota <= CLOCK_AUTHORITY_MAX_LIVE_TIMERS_PER_HOLDER
+        ):
+            fail(f"clock authority: invalid timerQuota for {holder}")
+        timer_use = bool(flags & RIGHT["clockTimerUse"])
+        notification = declaration.get("timerNotification")
+        badge_bit = declaration.get("timerBadgeBit")
+        grant_identity = 0
+        badge = 0
+        if timer_use:
+            if quota == 0 or not isinstance(notification, str):
+                fail(f"clock authority: timer holder {holder} lacks quota or notification")
+            if (
+                not isinstance(badge_bit, int)
+                or isinstance(badge_bit, bool)
+                or not 0 <= badge_bit < 63
+            ):
+                fail(f"clock authority: invalid timerBadgeBit for {holder}")
+            grant = grants.get(notification)
+            if grant is None or grant["target"] != holder:
+                fail(f"clock authority: timer notification for {holder} is not its wait grant")
+            wait_binding = any(
+                binding["grant"] == notification
+                and binding["holder"] == holder
+                and binding["role"] == "wait"
+                for binding in bindings
+            )
+            if not wait_binding:
+                fail(f"clock authority: timer notification for {holder} has no wait binding")
+            colliding_signallers = [
+                binding
+                for binding in bindings
+                if binding["grant"] == notification
+                and binding["role"] == "signal"
+                and binding["slot"] % 63 == badge_bit
+            ]
+            if colliding_signallers:
+                fail(
+                    f"clock authority: timer badge for {holder} "
+                    "collides with a declared signaller"
+                )
+            grant_identity = clock_notification_grant_identity(notification)
+            badge = 1 << badge_bit
+        elif quota != 0 or notification is not None or badge_bit is not None:
+            fail(f"clock authority: non-timer holder {holder} declares timer delivery")
+        timer_total += quota
+        entries.append(
+            (
+                clock_authority_holder_identity(holder),
+                flags,
+                quota,
+                0,
+                grant_identity,
+                badge,
+            )
+        )
+    if timer_total > CLOCK_AUTHORITY_MAX_LIVE_TIMERS:
+        fail("clock authority: aggregate timer quota exceeds root ceiling")
+    entries.sort(key=lambda entry: entry[0])
+    return entries
+
+
+def build_clock_authority(manifest: dict) -> bytes:
+    entries = validated_clock_authorities(manifest)
+    total_len = CLOCK_AUTHORITY_HEADER_BYTES + len(entries) * CLOCK_AUTHORITY_ENTRY_BYTES
+    header = CLOCK_AUTHORITY_HEADER.pack(
+        CLOCK_AUTHORITY_MAGIC,
+        CLOCK_AUTHORITY_VERSION,
+        CLOCK_AUTHORITY_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
+    return header + b"".join(CLOCK_AUTHORITY_ENTRY.pack(*entry) for entry in entries)
+
+
 FABRIC_CONTRACT_KIND = {
     "stream": FABRIC_CONTRACT_KIND_STREAM,
     "call": FABRIC_CONTRACT_KIND_CALL,
@@ -1335,6 +1477,10 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
     if manifest.get("privateMemoryBudget") is not None:
         resolved["privateMemoryBudget"] = [
             entry for entry in manifest["privateMemoryBudget"] if entry["holder"] in kept
+        ]
+    if manifest.get("clockAuthority") is not None:
+        resolved["clockAuthority"] = [
+            entry for entry in manifest["clockAuthority"] if entry["holder"] in kept
         ]
     required = profile["requiredInstances"] or manifest["health"]["requiredInstances"]
     missing = sorted(set(required) - kept)
@@ -2784,6 +2930,7 @@ SERVICE_DIRECTORY = 6
 SERVICE_INPUT = 7
 SERVICE_BLOCK = 8
 SERVICE_CONSOLE = 9
+SERVICE_CLOCK = 10
 # Fixed userspace ABI slots. Several typed mechanisms share the root transport
 # endpoint at slot 1; the service discriminant states the authority carried.
 ROOT_SERVICE_SLOT = 1
@@ -2814,6 +2961,7 @@ def declared_services(
     grants_by_name: dict[str, dict],
     minted_bindings: list[dict],
     shared_buffer_holders: set[str],
+    clock_holders: set[str],
 ) -> set[int]:
     services = {SERVICE_LIFECYCLE, SERVICE_CONSOLE}
     if executable["role"] == "init" or executable["spawnBudget"] > 0:
@@ -2827,6 +2975,11 @@ def declared_services(
         # authenticated per-holder budget is the declaration that authorizes
         # that receiver-side shared-buffer mechanism.
         services.add(SERVICE_SHARED_BUFFER)
+    if instance["name"] in clock_holders:
+        # The authenticated clock-authority resource is the service declaration:
+        # holders get the shared root transport, while absent instances have no
+        # clock service binding and are refused before dispatch.
+        services.add(SERVICE_CLOCK)
     capability_declarations = [
         grants_by_name[binding["grant"]] for binding in instance["bindings"]
     ] + [
@@ -3023,6 +3176,7 @@ def build_sel4_plan(
                 grants_by_name,
                 manifest.get("mintedBindings", []),
                 {entry["holder"] for entry in manifest.get("sharedBufferBudget", [])},
+                {entry["holder"] for entry in manifest.get("clockAuthority") or []},
             )
         ):
             if service == SERVICE_CONSOLE:
@@ -3996,6 +4150,11 @@ def build_sel4_generation(
         # declaring holders without the object would boot with every one of
         # them denied and no indication why.
         fail("privateMemoryBudget declared without a private-memory-budget resource object")
+    declared_clock_authority = manifest.get("clockAuthority") or []
+    if "clock-authority" in object_ids:
+        payloads["clock-authority"] = build_clock_authority(manifest)
+    elif declared_clock_authority:
+        fail("clockAuthority declared without a clock-authority resource object")
     # C10.4: a component that cannot run without a private heap must be given
     # one, so the builder refuses the omission rather than shipping a generation
     # that boots into a dead service.

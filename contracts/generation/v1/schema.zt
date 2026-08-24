@@ -161,6 +161,24 @@ PrivateMemoryBudgetEntry :: type {
   pageQuota : Int;
 };
 
+-- One instance's C9.1 root-brokered clock service authority. The four
+-- booleans are independent: a timer-only holder need not read either clock,
+-- and simulated time has separate read and advance authority so a consumer
+-- cannot change the test clock it observes. `timerQuota` must be nonzero only
+-- with `timerUse`; `timerNotification` then names the generation-owned
+-- NotificationGrant whose target is this holder, and `timerBadgeBit` is the
+-- single badge bit expiry signals accumulate on that notification.
+ClockAuthorityEntry :: type {
+  holder : Text;
+  monotonicRead : Bool;
+  timerUse : Bool;
+  simulatedRead : Bool;
+  simulatedAdvance : Bool;
+  timerQuota : Int;
+  timerNotification? : Text;
+  timerBadgeBit? : Int;
+};
+
 -- One named full-graph profile override. Profiles may replace only an exact
 -- participant's interposition chain; every other authority and policy field
 -- remains fixed by the base graph.
@@ -285,6 +303,10 @@ GenerationManifest :: type {
   -- that grants nobody working memory says so by omission instead of carrying
   -- an empty list it never reads.
   privateMemoryBudget? : List PrivateMemoryBudgetEntry;
+  -- Optional C9.1 clock service authority. Absent and empty both deny every
+  -- root-brokered clock operation; raw counter access is outside this service
+  -- contract as documented by contracts/clock-authority/v1.
+  clockAuthority? : List ClockAuthorityEntry;
   objects : List Object;
   executables : List Executable;
   instances : List Instance;
@@ -321,6 +343,7 @@ FromData @FabricRoute :: derive
 FromData @FabricLimits :: derive
 FromData @FabricGraph :: derive
 FromData @BootProfile :: derive
+FromData @ClockAuthorityEntry :: derive
 FromData @GenerationManifest :: derive
 
 decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
@@ -335,6 +358,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   Instance =;
   SharedBufferBudgetEntry =;
   PrivateMemoryBudgetEntry =;
+  ClockAuthorityEntry =;
   FabricProfileInterposition =;
   FabricProfile =;
   CapabilityGrant =;

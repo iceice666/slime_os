@@ -875,67 +875,32 @@ rather than a plan.
 
 ### C9.1 — Explicit clock and timer service authority
 
-**Status:** Not started.
+**Status:** Complete.
+**Delivered:** A versioned Zutai `clock-authority/v1` generation resource and
+five generated root-service operations grant monotonic read, timer use,
+simulated read, and simulated advance independently. `slime-root` brokers the
+existing physical timer through per-live-task authority and timer quotas,
+delivers every already-decided one-shot expiry on each holder's declared
+Notification and badge even if a later platform step fails, separates timer
+wakes from the bounded component-request iteration count, distinguishes
+malformed requests from absent authority, and reclaims live timers on
+termination. The contract records the platform wall rather than
+overclaiming it: current AArch64 seL4 profiles grant physical counter and timer
+register access globally, so these rights gate the service semantics, not
+hostile native register access.
+**Exit condition (observed):** `just clock_authority_check` boots generation 41
+with separate monotonic, timer, simulated-reader, simulated-advancer, and
+denied instances; root-attributed evidence observes advancing monotonic time,
+cancellation without delivery, per-task quota refusal, one-shot expiry through
+badge `0x200`, simulated time changing only under its advancer, every undeclared
+operation refused, malformed length distinguished, and one remaining live timer
+dropped at the timer holder's exit while the root timer phase remains healthy;
+`just test_sel4_root` additionally observes that an IRQ acknowledgement failure
+cannot discard the expiry transition it follows.
+**Gates:** `just clock_authority_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root`
+**Evidence:** [`devlog/2026-08-24-c9-1-clock-authority/`](../devlog/2026-08-24-c9-1-clock-authority/index.md)
 
-**Depends on:** P5's timer mechanism, already live in
-`slime-root/src/{platform_timer,timer,event}.rs` and observed by
-`just sel4_root_boot_check`.
-
-#### Deliverables
-
-- declare clock authority as generation data: a versioned Zutai contract naming
-  which instances may read monotonic time, arm timers, and read simulated time,
-  as distinct authorities rather than one "clock" bit, so a component that may
-  sleep need not be able to read the wall clock;
-- add root operations for monotonic read, timer arm, and timer cancel, gated on
-  that declared authority, allocated as new labels in
-  `contracts/syscall-abi/v1/` and documented in `../docs/syscall-abi.md` in the
-  same change;
-- broker each component's timers through the existing `TimerScheduler` with a
-  per-task ceiling on live timers, so one component cannot exhaust the queue
-  another depends on, and expiry delivers as a signal on that component's
-  declared notification with a declared badge bit — not a new wake mechanism —
-  which is what lets C9.2 block on time and messages in one wait;
-- make simulated time a distinct declared authority whose advance is a
-  component operation, so the C8 corpus's deterministic time inputs become a
-  service instead of scenario-specific messages, without changing C8 QoS
-  state-machine meanings;
-- deny by default: an instance absent from the clock authority receives no
-  slot, and every operation refuses with a structured error;
-- record the register wall in the contract's own documentation, so a reader of
-  the clock contract learns what it does not enforce.
-
-#### Required checks
-
-- a component holding monotonic authority reads a counter that advances, and
-  two successive reads never go backwards;
-- a component with no clock authority is refused every clock operation, and its
-  refusal is distinguishable from a malformed request;
-- monotonic, timer, and simulated-time authority are independently grantable:
-  each of the three is exercised by a holder that lacks the other two;
-- an armed timer expires once, delivers to its holder's declared notification,
-  and a cancelled timer never delivers;
-- the per-task live-timer ceiling refuses the arm that would exceed it and
-  leaves every other component's timers intact;
-- a component's live timers are dropped when it terminates, observable as a
-  deadline queue returning to its pre-spawn occupancy;
-- simulated time advances only when its holder advances it, and a component
-  holding simulated-time authority alone cannot observe the hardware counter
-  through it.
-
-#### Planned verification target
-
-```sh
-just clock_authority_check
-```
-
-#### Exit condition
-
-A generation declares monotonic, timer, and simulated-time authority
-separately; holders read time, arm and cancel bounded timers delivered through
-their own declared notifications, and a component absent from the declaration
-is refused every operation with a structured error while the root's own timer
-phase keeps working.
+**Depends on:** P5's timer mechanism, observed by `just sel4_root_boot_check`.
 
 ### C9.2 — Bounded userspace wait sets and executors
 

@@ -30,8 +30,8 @@ pub use slime_proto::syscall_abi::{
     MAX_CAPS_PER_MSG, MAX_MSG,
 };
 use slime_proto::syscall_abi::{
-    capability_table_labels, capability_transfer_labels, directory_labels, lifecycle_labels,
-    shared_buffer_labels, spawn_labels, supervision_labels,
+    capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
+    lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
 };
 
 /// Whether delegation consumes the source logical capability or retains it.
@@ -649,6 +649,54 @@ pub fn private_memory_grow(delta: usize) -> Result<PrivateMemory, i64> {
         base: base as usize,
         pages: result as usize,
     })
+}
+
+/// Read the generation-authorized hardware monotonic counter (C9.1).
+pub fn monotonic_read() -> Result<u64, i64> {
+    let result = transport::monotonic_read();
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+
+/// Arm one relative hardware timer and receive its opaque identifier.
+///
+/// Expiry signals the Notification and badge declared for this instance in the
+/// generation. The per-holder live-timer ceiling is enforced by the root.
+pub fn timer_arm(delay: u64) -> Result<u64, i64> {
+    let result = transport::timer_arm(delay);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+
+/// Cancel one live timer owned by this task.
+pub fn timer_cancel(timer: u64) -> i64 {
+    transport::timer_cancel(timer)
+}
+
+/// Read the generation's deterministic simulated-time clock.
+pub fn simulated_time_read() -> Result<u64, i64> {
+    let result = transport::simulated_time_read();
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+
+/// Advance simulated time, returning its value before the advance.
+pub fn simulated_time_advance(delta: u64) -> Result<u64, i64> {
+    let result = transport::simulated_time_advance(delta);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
 }
 
 /// Atomically swaps a directory namespace root after the new snapshot object

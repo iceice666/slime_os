@@ -53,7 +53,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
     ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=5 instances=5 slimecm=0 elf=5 unrecognized=0"),
     # C10.2: this generation declares no `privateMemoryBudget` at all, which is
-    # the case 31 of the 32 fixtures are in and which the private-memory plane
+    # the case 22 of the 33 fixtures are in and which the private-memory plane
     # cannot state — that plane exists precisely to carry a budget. `declared=0`
     # is the root reporting that it found no budget resource, printed once
     # before any instance is constructed; the paired failure markers below are

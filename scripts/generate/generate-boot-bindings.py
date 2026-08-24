@@ -53,6 +53,11 @@ GENERATORS = (
         "private_memory_budget.rs",
     ),
     (
+        ROOT / "contracts" / "clock-authority" / "v1" / "schema.zt",
+        "clock_authority.py",
+        "clock_authority.rs",
+    ),
+    (
         ROOT / "contracts" / "fabric-graph" / "v1" / "schema.zt",
         "fabric_graph.py",
         "fabric_graph.rs",

@@ -81,7 +81,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # binding its instance was never granted.
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
     # C10.2: 30 -> 31. This generation declares no `privateMemoryBudget`, which
-    # is the case 31 of the 32 fixtures are in and the private-memory plane
+    # is the case 22 of the 33 fixtures are in and the private-memory plane
     # cannot state — it exists to carry a budget. The new marker is the root
     # reporting it found none, paired with two failure markers that make "and
     # therefore every component is denied" an assertion rather than an
@@ -123,6 +123,10 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # asserts that exhausting either memory plane leaves the other's declared
     # ceiling intact and that a shared buffer cannot land in the private window.
     ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 22),
+    # C9.1: 19 markers across five root-attributed authority installs,
+    # cancellation/quota/expiry, live-timer teardown, a distinct malformed
+    # request, the undeclared holder, three observations, and terminal cleanup.
+    ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

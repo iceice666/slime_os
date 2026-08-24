@@ -1,3 +1,4 @@
+use crate::clock_authority::{self, ClockAuthority};
 use crate::sha256::Sha256;
 use crate::shared_buffer_budget::{self, SharedBufferBudget};
 
@@ -185,6 +186,8 @@ pub enum BootAction {
     /// C10.2's generation-declared private-memory budget: one executable
     /// declared twice, as a granted holder and an omitted one.
     PrivateMemory = 30,
+    /// C9.1's independently grantable monotonic, timer, and simulated clocks.
+    ClockAuthority = 31,
 }
 
 impl BootAction {
@@ -237,6 +240,7 @@ impl BootAction {
         Self::Traffic,
         Self::Demo,
         Self::PrivateMemory,
+        Self::ClockAuthority,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -280,6 +284,7 @@ impl BootAction {
                 Self::Traffic => Self::Traffic.id(),
                 Self::Demo => Self::Demo.id(),
                 Self::PrivateMemory => Self::PrivateMemory.id(),
+                Self::ClockAuthority => Self::ClockAuthority.id(),
             };
             declared == id
         })
@@ -317,6 +322,7 @@ impl BootAction {
             "traffic" => Self::Traffic,
             "demo" => Self::Demo,
             "private-memory" => Self::PrivateMemory,
+            "clock-authority" => Self::ClockAuthority,
             _ => return None,
         })
     }
@@ -2097,7 +2103,7 @@ impl<'a> Generation<'a> {
                 return Err(DecodeError::BadBinding);
             }
         }
-        let mut seen_services = [[false; 10]; MAX_PROCESSES];
+        let mut seen_services = [[false; 11]; MAX_PROCESSES];
         for index in 0..self.service_binding_count {
             let binding = self.service_binding(index)?;
             let object_kind = if binding.object < self.kernel_object_count {
@@ -2116,6 +2122,7 @@ impl<'a> Generation<'a> {
                     | SERVICE_INPUT
                     | SERVICE_BLOCK
                     | SERVICE_CONSOLE
+                    | SERVICE_CLOCK
             );
             let expected_slot = if binding.service == SERVICE_CONSOLE {
                 CONSOLE_SERVICE_SLOT
@@ -2139,7 +2146,7 @@ impl<'a> Generation<'a> {
             let process = self.process(process_index)?;
             let instance = self.instance(process.instance)?;
             let executable = self.executable(instance.executable)?;
-            let mut required = [false; 10];
+            let mut required = [false; 11];
             required[SERVICE_LIFECYCLE as usize] = true;
             required[SERVICE_CONSOLE as usize] = true;
             let holder_identity = shared_buffer_budget::holder_identity(instance.name);
@@ -2155,6 +2162,20 @@ impl<'a> Generation<'a> {
             });
             if budgeted_for_shared_buffer {
                 required[SERVICE_SHARED_BUFFER as usize] = true;
+            }
+            let clock_holder_identity = clock_authority::holder_identity(instance.name);
+            let authorized_for_clock = (0..self.object_count).any(|object_index| {
+                self.object(object_index).is_ok_and(|object| {
+                    object.kind == KIND_RESOURCE
+                        && object.bytes.starts_with(&clock_authority::MAGIC)
+                        && ClockAuthority::decode(object.bytes)
+                            .ok()
+                            .and_then(|authority| authority.authority_for(&clock_holder_identity))
+                            .is_some()
+                })
+            });
+            if authorized_for_clock {
+                required[SERVICE_CLOCK as usize] = true;
             }
             if executable.role == ROLE_INIT || executable.spawn_budget != 0 {
                 // Spawn returns a supervision capability, so declaring spawn
@@ -2656,13 +2677,17 @@ mod tests {
             RIGHT_INPUT_READ,
             RIGHT_BUFFER_CREATE,
             RIGHT_BUFFER_LOAN,
+            RIGHT_CLOCK_MONOTONIC_READ,
+            RIGHT_CLOCK_TIMER_USE,
+            RIGHT_CLOCK_SIMULATED_READ,
+            RIGHT_CLOCK_SIMULATED_ADVANCE,
         ];
         let union = named
             .iter()
             .fold(0, |accumulator, right| accumulator | right);
         assert_eq!(union, RIGHT_ALL);
         assert_eq!(RIGHT_ALL & (1 << 17), 0);
-        assert_ne!(RIGHT_ALL, (1 << 26) - 1);
+        assert_ne!(RIGHT_ALL, (1 << 30) - 1);
         // The mask is what every grant, mapping, and minted-binding check
         // applies, so an undefined bit must survive none of them.
         assert_ne!((RIGHT_SEND | RIGHT_RECV | 1 << 17) & !RIGHT_ALL, 0);
@@ -2716,7 +2741,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 30] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 31] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2747,6 +2772,7 @@ mod tests {
         (BootAction::Traffic, 28),
         (BootAction::Demo, 29),
         (BootAction::PrivateMemory, 30),
+        (BootAction::ClockAuthority, 31),
     ];
 
     #[test]

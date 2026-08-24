@@ -25,8 +25,8 @@ use super::wire::{
 use super::{
     CapabilityDisposition, ERR_INVALID_ARG, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
     MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SpawnGrant, capability_table_labels,
-    capability_transfer_labels, directory_labels, lifecycle_labels, shared_buffer_labels,
-    spawn_labels, supervision_labels,
+    capability_transfer_labels, clock_labels, directory_labels, lifecycle_labels,
+    shared_buffer_labels, spawn_labels, supervision_labels,
 };
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word. Generated from `contracts/syscall-abi/v1`; the root decodes the same
@@ -1103,6 +1103,26 @@ pub fn spawn_budget() -> i64 {
 /// without a second call. `delta = 0` is a size query that allocates nothing.
 pub fn private_memory_grow(delta: usize) -> (i64, u64) {
     pair_of(lifecycle_labels::PRIVATE_MEMORY_GROW, &[delta as Word])
+}
+
+pub fn monotonic_read() -> i64 {
+    result_of(clock_labels::MONOTONIC_READ, &[])
+}
+
+pub fn timer_arm(delay: u64) -> i64 {
+    result_of(clock_labels::TIMER_ARM, &[delay as Word])
+}
+
+pub fn timer_cancel(timer: u64) -> i64 {
+    result_of(clock_labels::TIMER_CANCEL, &[timer as Word])
+}
+
+pub fn simulated_time_read() -> i64 {
+    result_of(clock_labels::SIMULATED_READ, &[])
+}
+
+pub fn simulated_time_advance(delta: u64) -> i64 {
+    result_of(clock_labels::SIMULATED_ADVANCE, &[delta as Word])
 }
 
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

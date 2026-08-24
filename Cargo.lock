@@ -711,6 +711,17 @@ name = "slime-build-support"
 version = "0.1.0"
 
 [[package]]
+name = "slime-component-clock-authority-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "sel4",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-console"
 version = "0.1.0"
 dependencies = [

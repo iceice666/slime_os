@@ -38,7 +38,7 @@ pub const MAX_THREADS: usize = 48;
 pub const MAX_KERNEL_OBJECTS: usize = 4096;
 pub const MAX_MAPPINGS: usize = 4096;
 pub const MAX_CAP_BINDINGS: usize = 4096;
-pub const MAX_SERVICE_BINDINGS: usize = 432;
+pub const MAX_SERVICE_BINDINGS: usize = 480;
 pub const MAX_SCHEDULES: usize = 48;
 pub const MAX_FAULT_POLICIES: usize = 48;
 pub const MAX_SPAWN_TEMPLATES: usize = 48;
@@ -67,6 +67,7 @@ pub const SERVICE_DIRECTORY: u32 = 6;
 pub const SERVICE_INPUT: u32 = 7;
 pub const SERVICE_BLOCK: u32 = 8;
 pub const SERVICE_CONSOLE: u32 = 9;
+pub const SERVICE_CLOCK: u32 = 10;
 pub const RIGHT_SEND: u64 = 1;
 pub const RIGHT_RECV: u64 = 2;
 pub const RIGHT_TRANSFER: u64 = 4;
@@ -92,7 +93,11 @@ pub const RIGHT_DIRECTORY_DERIVE: u64 = 4194304;
 pub const RIGHT_INPUT_READ: u64 = 8388608;
 pub const RIGHT_BUFFER_CREATE: u64 = 16777216;
 pub const RIGHT_BUFFER_LOAN: u64 = 33554432;
-pub const RIGHT_ALL: u64 = 66977791;
+pub const RIGHT_CLOCK_MONOTONIC_READ: u64 = 67108864;
+pub const RIGHT_CLOCK_TIMER_USE: u64 = 134217728;
+pub const RIGHT_CLOCK_SIMULATED_READ: u64 = 268435456;
+pub const RIGHT_CLOCK_SIMULATED_ADVANCE: u64 = 536870912;
+pub const RIGHT_ALL: u64 = 1073610751;
 
 /// The rights bit a generation manifest spells `name`, or `None`.
 ///
@@ -127,6 +132,10 @@ pub fn right_named(name: &str) -> Option<u64> {
         "inputRead" => RIGHT_INPUT_READ,
         "bufferCreate" => RIGHT_BUFFER_CREATE,
         "bufferLoan" => RIGHT_BUFFER_LOAN,
+        "clockMonotonicRead" => RIGHT_CLOCK_MONOTONIC_READ,
+        "clockTimerUse" => RIGHT_CLOCK_TIMER_USE,
+        "clockSimulatedRead" => RIGHT_CLOCK_SIMULATED_READ,
+        "clockSimulatedAdvance" => RIGHT_CLOCK_SIMULATED_ADVANCE,
         _ => return None,
     })
 }

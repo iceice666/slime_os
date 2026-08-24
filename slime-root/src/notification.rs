@@ -58,6 +58,25 @@ impl NotificationTable {
         self.len == 0
     }
 
+    /// The root-held Notification named by a C9.1 timer authority entry. Only
+    /// a grant whose declared target is `instance` resolves; the entry cannot
+    /// redirect expiry to another component. The expiry badge itself is
+    /// contract data: it is an additional root signaller on this object, not a
+    /// generation NotificationBinding and therefore not derived from a slot.
+    pub fn timer_target(
+        &self,
+        generation: &Generation<'_>,
+        instance: usize,
+        grant_identity: u64,
+    ) -> Option<sel4::cap::Notification> {
+        self.entries.iter().flatten().find_map(|entry| {
+            let grant = generation.notification_grant(entry.grant).ok()?;
+            (grant.target == instance
+                && boot_contracts::clock_authority::notification_grant_identity(grant.name)
+                    == grant_identity)
+                .then_some(entry.object)
+        })
+    }
     pub fn native_slot(
         declared: sel4::CPtrBits,
         cnode_size_bits: usize,

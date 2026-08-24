@@ -38,12 +38,12 @@ pub use boot_contracts::fabric_graph::MAX_INGRESS_SOURCES as MAX_WAIT_SOURCES;
 /// happens to occupy a nearby number.
 pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
     use boot_contracts::generation::{
-        SERVICE_CAPABILITY_TRANSFER, SERVICE_DIRECTORY, SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER,
-        SERVICE_SPAWN, SERVICE_SUPERVISION,
+        SERVICE_CAPABILITY_TRANSFER, SERVICE_CLOCK, SERVICE_DIRECTORY, SERVICE_LIFECYCLE,
+        SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
     };
     use slime_proto::syscall_abi::{
-        capability_table_labels, capability_transfer_labels, directory_labels, lifecycle_labels,
-        shared_buffer_labels, spawn_labels, supervision_labels,
+        capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
+        lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
     };
     match label {
         lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
@@ -103,6 +103,27 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | shared_buffer_labels::REVOKE
         | shared_buffer_labels::OCCUPANCY => Some(SERVICE_SHARED_BUFFER),
         directory_labels::DERIVE => Some(SERVICE_DIRECTORY),
+        clock_labels::MONOTONIC_READ
+        | clock_labels::TIMER_ARM
+        | clock_labels::TIMER_CANCEL
+        | clock_labels::SIMULATED_READ
+        | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
+        _ => None,
+    }
+}
+
+/// Required fast-register count for each C9.1 clock operation.
+///
+/// Kept beside label routing so malformed requests are refused before they
+/// reach the clock mechanism. A zero-valued extra word is still malformed:
+/// request shape is part of the ABI, not merely whether unused data matters.
+pub const fn clock_request_len(label: sel4::Word) -> Option<usize> {
+    use slime_proto::syscall_abi::clock_labels;
+    match label {
+        clock_labels::MONOTONIC_READ | clock_labels::SIMULATED_READ => Some(0),
+        clock_labels::TIMER_ARM | clock_labels::TIMER_CANCEL | clock_labels::SIMULATED_ADVANCE => {
+            Some(1)
+        }
         _ => None,
     }
 }
@@ -1084,12 +1105,12 @@ pub fn binding_name_admissible(name: &[u8]) -> bool {
 mod tests {
     use super::*;
     use boot_contracts::generation::{
-        SERVICE_CAPABILITY_TRANSFER, SERVICE_DIRECTORY, SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER,
-        SERVICE_SPAWN, SERVICE_SUPERVISION,
+        SERVICE_CAPABILITY_TRANSFER, SERVICE_CLOCK, SERVICE_DIRECTORY, SERVICE_LIFECYCLE,
+        SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
     };
     use slime_proto::syscall_abi::{
-        capability_table_labels, capability_transfer_labels, directory_labels, lifecycle_labels,
-        shared_buffer_labels, spawn_labels, supervision_labels,
+        capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
+        lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
     };
 
     /// Every declared operation routes to the mechanism that owns it. B61 moved
@@ -1157,6 +1178,11 @@ mod tests {
             (shared_buffer_labels::REVOKE, SERVICE_SHARED_BUFFER),
             (shared_buffer_labels::OCCUPANCY, SERVICE_SHARED_BUFFER),
             (directory_labels::DERIVE, SERVICE_DIRECTORY),
+            (clock_labels::MONOTONIC_READ, SERVICE_CLOCK),
+            (clock_labels::TIMER_ARM, SERVICE_CLOCK),
+            (clock_labels::TIMER_CANCEL, SERVICE_CLOCK),
+            (clock_labels::SIMULATED_READ, SERVICE_CLOCK),
+            (clock_labels::SIMULATED_ADVANCE, SERVICE_CLOCK),
         ] {
             assert_eq!(
                 service_for_root_label(label),
@@ -1194,12 +1220,12 @@ mod tests {
             // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, 38 until
             // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, 40 until
             // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, 42 until `SPAWN_BUDGET`,
-            // and 43 until C10.1's `PRIVATE_MEMORY_GROW`. Moving one out of
-            // this list is the whole change: a number this test asserts routes
-            // nowhere and a number the contract declares are the same fact
-            // stated twice, so assigning a label must fail here first.
-            44,
-            64,
+            // 43 until C10.1's `PRIVATE_MEMORY_GROW`, and 44-48 until C9.1's
+            // clock service. Moving one out of this list is the whole change: a
+            // number this test asserts routes nowhere and a number the contract
+            // declares are the same fact stated twice, so assigning a label
+            // must fail here first.
+            49,
             sel4::Word::MAX,
         ] {
             assert_eq!(
@@ -1208,6 +1234,16 @@ mod tests {
                 "retired or unknown label {label} was routed to a mechanism"
             );
         }
+    }
+
+    #[test]
+    fn clock_request_shapes_are_exact() {
+        assert_eq!(clock_request_len(clock_labels::MONOTONIC_READ), Some(0));
+        assert_eq!(clock_request_len(clock_labels::SIMULATED_READ), Some(0));
+        assert_eq!(clock_request_len(clock_labels::TIMER_ARM), Some(1));
+        assert_eq!(clock_request_len(clock_labels::TIMER_CANCEL), Some(1));
+        assert_eq!(clock_request_len(clock_labels::SIMULATED_ADVANCE), Some(1));
+        assert_eq!(clock_request_len(lifecycle_labels::EXIT), None);
     }
 
     /// The fixture directive shares the root endpoint but is not a component

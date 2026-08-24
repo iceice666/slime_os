@@ -1,10 +1,11 @@
 //! Bounded generation preflight and authority derivation for `slime-root`.
 //!
-//! Admission is a pure decision over decoded v4 generation data: it classifies
+//! Admission is a pure decision over decoded v5 generation data: it classifies
 //! executable payloads and preserves the explicit instance launch model.
 //! Initial authority comes only from per-instance bindings; executables are
 //! never inferred to be instances.
 
+use boot_contracts::clock_authority::{self, ClockAuthority};
 use boot_contracts::component_image::{self, ComponentTargetError};
 use boot_contracts::fabric_graph::{self, FabricGraph, MAX_INTERPOSITION_HOPS};
 use boot_contracts::generation::{
@@ -80,6 +81,9 @@ pub enum GenerationError {
     /// before any component launches — a quota the root cannot honour must not
     /// become a runtime refusal against a ceiling the generation promised.
     UnsatisfiablePrivateMemoryBudget,
+    /// The generation carries clock authority that is malformed or asks for
+    /// more live timers than this root can provision (C9.1).
+    UnsatisfiableClockAuthority,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -506,6 +510,90 @@ pub fn private_memory_budget_object<'a>(
     }
     None
 }
+/// Locate the generation-authenticated clock-authority resource, if declared.
+///
+/// First match wins, including a malformed first match. Continuing after a bad
+/// resource would make authority depend on object ordering and could silently
+/// select a later permissive declaration.
+pub fn clock_authority_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<ClockAuthority<'a>, clock_authority::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= clock_authority::MAGIC.len()
+            && object.bytes[..clock_authority::MAGIC.len()] == clock_authority::MAGIC
+        {
+            return Some(ClockAuthority::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Validate a declared clock authority, reporting how many holders it names.
+/// Missing authority denies the service to every component; malformed timer
+/// delivery or a scheduler quota this root cannot honour fails admission.
+fn clock_authority_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<usize>, GenerationError> {
+    let Some(authority) = clock_authority_object(generation) else {
+        return Ok(None);
+    };
+    let authority = authority.map_err(|_| GenerationError::UnsatisfiableClockAuthority)?;
+    for holder_index in 0..authority.holder_count() {
+        let entry = authority
+            .holder(holder_index)
+            .ok_or(GenerationError::UnsatisfiableClockAuthority)?;
+        if !entry.allows(boot_contracts::generation::RIGHT_CLOCK_TIMER_USE) {
+            continue;
+        }
+        let mut target = None;
+        for grant_index in 0..generation.notification_grant_count() {
+            let grant = generation
+                .notification_grant(grant_index)
+                .map_err(|_| GenerationError::UnsatisfiableClockAuthority)?;
+            let instance = generation
+                .instance(grant.target)
+                .map_err(|_| GenerationError::UnsatisfiableClockAuthority)?;
+            if clock_authority::holder_identity(instance.name) == entry.holder_identity
+                && clock_authority::notification_grant_identity(grant.name)
+                    == entry.notification_grant_identity
+            {
+                target = Some((grant_index, grant.target));
+                break;
+            }
+        }
+        let Some((grant_index, target_instance)) = target else {
+            return Err(GenerationError::UnsatisfiableClockAuthority);
+        };
+        let mut waits = 0usize;
+        for binding_index in 0..generation.notification_binding_count() {
+            let binding = generation
+                .notification_binding(binding_index)
+                .map_err(|_| GenerationError::UnsatisfiableClockAuthority)?;
+            if binding.grant != grant_index {
+                continue;
+            }
+            match binding.role {
+                boot_contracts::generation::NotificationRole::Wait => {
+                    if binding.holder == target_instance {
+                        waits += 1;
+                    }
+                }
+                boot_contracts::generation::NotificationRole::Signal => {
+                    let badge = 1u64 << (binding.slot % 63);
+                    if badge == entry.notification_badge {
+                        return Err(GenerationError::UnsatisfiableClockAuthority);
+                    }
+                }
+            }
+        }
+        if waits != 1 {
+            return Err(GenerationError::UnsatisfiableClockAuthority);
+        }
+    }
+    Ok(Some(authority.holder_count()))
+}
 
 /// Whether this root can honour a declared private-memory budget (C10.2).
 ///
@@ -585,6 +673,9 @@ pub struct Admission {
     /// above — so `crate::cspace::breaches_ceiling` treats both cases alike
     /// rather than distinguishing an absent graph from a permissive one.
     pub fabric_capability_slots: u32,
+    /// Holders named by the authenticated clock-authority resource, or `None`
+    /// when the generation declares no clock authority at all (C9.1).
+    pub clock_holders: Option<usize>,
     /// Holders the generation's private-memory budget names, or `None` when it
     /// declares no budget at all (C10.2).
     ///
@@ -637,6 +728,10 @@ impl Admission {
         // fails the whole generation rather than becoming a refusal against a
         // ceiling the generation promised a component it had.
         let private_memory_holders = private_memory_budget_admission(generation)?;
+        // C9.1: validate the authority resource and every timer-delivery
+        // binding before any instance launches. The runtime authority table is
+        // separately bounded by the concurrently live TaskTable.
+        let clock_holders = clock_authority_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
@@ -701,6 +796,7 @@ impl Admission {
             slime_component_images,
             unrecognized_images,
             wrong_target_images,
+            clock_holders,
             fabric_graph_admitted: fabric.is_some(),
             fabric_schemas: fabric.map_or(0, |shape| shape.schemas),
             fabric_routes: fabric.map_or(0, |shape| shape.routes),

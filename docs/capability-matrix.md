@@ -66,7 +66,8 @@ numbered by `boot-contracts/src/generated/generation.rs`.
 
 ## Current matrix
 
-Rights are a flat `u64`. `RIGHT_ALL = (1 << 26) - 1`, so bits 26–63 are free.
+Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
+29, excluding the deliberate gap at bit 17; bits 30–63 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -88,6 +89,10 @@ Rights are a flat `u64`. `RIGHT_ALL = (1 << 26) - 1`, so bits 26–63 are free.
 | SharedBufferFactory | BUFFER_CREATE (24) | `SHARED BUFFER CREATE` mints a root-identified `SharedBuffer` under fixed global byte/object bounds; `SHARED BUFFER RELEASE` reclaims it | generation manifest | gated (C7.2) |
 | SharedBuffer | BUFFER_LOAN (25) | `SHARED BUFFER LOAN` mints an exact loan for a named receiver; `SHARED BUFFER REVOKE` settles it as lender | same | gated (C7.5) |
 | Loan | BUFFER_MAP (9) / BUFFER_WRITE (8) | receiver-bound `SHARED BUFFER LOAN MAP` within the loaned subrange at the loan's own protection; `SHARED BUFFER RETURN` settles it once | root-created by `SHARED BUFFER LOAN`; delivered to the named receiver only | gated (C7.5) |
+| Clock service | CLOCK_MONOTONIC_READ (26) | `CLOCK MONOTONIC READ` for the authenticated caller | generation `clock-authority/v1`; root-brokered state, no new seL4 object kind | gated (C9.1) |
+| Clock service | CLOCK_TIMER_USE (27) | `CLOCK TIMER ARM` / `CLOCK TIMER CANCEL`, bounded by the holder's declared live-timer quota and delivered on its declared Notification; gates the root service, but cannot prevent hostile native code from writing globally enabled `CNTP_*` control registers on current AArch64 profiles | same | gated (C9.1; register-integrity wall documented by `clock-authority/v1`) |
+| Clock service | CLOCK_SIMULATED_READ (28) | `CLOCK SIMULATED READ` | same | gated (C9.1) |
+| Clock service | CLOCK_SIMULATED_ADVANCE (29) | `CLOCK SIMULATED ADVANCE`; independently grantable from simulated read | same | gated (C9.1) |
 
 `CAPABILITY RESOLVE BINDING` (label 37) appears in no row above, and its absence
 is the statement: it is gated by *nothing*, because it grants nothing. It answers
@@ -247,6 +252,7 @@ Semantics not visible in the table:
 | Live children per spawner | manifest `spawnBudget <= 32` | `MAX_SPAWN_BUDGET`; `SpawnError::BudgetExhausted` |
 | Declared native Endpoints per task | `CHILD_NATIVE_REGION_SLOTS = 31` | child CSpace regions in `slime-root/src/task.rs` |
 | Peer endpoints / notifications | `MAX_PEER_ENDPOINTS = 48`, `MAX_NOTIFICATIONS = 31` | `slime-root/src/{peer_endpoint,notification}.rs` |
+| Clock-authority holders / live timers | `MAX_HOLDERS = 48`, `MAX_LIVE_TIMERS_PER_HOLDER = 4`, `MAX_LIVE_TIMERS = 64` | `clock-authority/v1` decode plus `ClockService::arm`; omission denies every clock operation |
 | Threads per component | `MAX_CHILD_THREADS = 2` | `slime-root/src/child_vspace.rs` (B47) |
 | Task arenas / root CSlots | `MAX_TASK_ARENAS = 48`, `MAX_ROOT_CSLOTS = 262_144` | `slime-root/src/object_allocator.rs` |
 | Live shared buffers | `MAX_SHARED_BUFFERS = 32` | `SharedBufferError::ObjectsExhausted` |

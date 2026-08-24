@@ -174,7 +174,7 @@ pythonBindings :: Format -> Text
     "MAX_PROCESSES = "; n.toText format.maxProcesses; "\n"; "MAX_THREADS = "; n.toText format.maxThreads; "\n"; "MAX_KERNEL_OBJECTS = "; n.toText format.maxKernelObjects; "\n"; "MAX_MAPPINGS = "; n.toText format.maxMappings; "\n"; "MAX_CAP_BINDINGS = "; n.toText format.maxCapBindings; "\n"; "MAX_SERVICE_BINDINGS = "; n.toText format.maxServiceBindings; "\n"; "MAX_SCHEDULES = "; n.toText format.maxSchedules; "\n"; "MAX_FAULT_POLICIES = "; n.toText format.maxFaultPolicies; "\n"; "MAX_SPAWN_TEMPLATES = "; n.toText format.maxSpawnTemplates; "\n"; "MAX_RESOURCE_QUOTAS = "; n.toText format.maxResourceQuotas; "\n"; "MAX_MINTED_BINDINGS = "; n.toText format.maxMintedBindings; "\n"; "MAX_NOTIFICATION_GRANTS = "; n.toText format.maxNotificationGrants; "\n"; "MAX_NOTIFICATION_BINDINGS = "; n.toText format.maxNotificationBindings; "\n";
     "MAX_STRING_BYTES = "; n.toText format.maxStringBytes; "\n"; "MAX_STRING_TABLE_BYTES = "; n.toText format.maxStringTableBytes; "\n"; "MAX_OBJECT_PAYLOAD_BYTES = "; n.toText format.maxObjectPayloadBytes; "\n";
     "GENERATION_CAPABILITY_ENDPOINT = 1\n"; "GENERATION_CAPABILITY_EXECUTABLE = 2\n"; "GENERATION_CAPABILITY_SHARED_BUFFER_FACTORY = 3\n"; "GENERATION_CAPABILITY_BLOCK = 4\n"; "GENERATION_CAPABILITY_DIRECTORY = 5\n"; "GENERATION_CAPABILITY_INPUT = 6\n"; "GENERATION_CAPABILITY_SUPERVISION = 7\n"; "GENERATION_CAPABILITY_SHARED_BUFFER = 8\n"; "GENERATION_CAPABILITY_LOAN = 9\n";
-    "GENERATION_SERVICE_LIFECYCLE = 1\n"; "GENERATION_SERVICE_SPAWN = 2\n"; "GENERATION_SERVICE_SUPERVISION = 3\n"; "GENERATION_SERVICE_CAPABILITY_TRANSFER = 4\n"; "GENERATION_SERVICE_SHARED_BUFFER = 5\n"; "GENERATION_SERVICE_DIRECTORY = 6\n"; "GENERATION_SERVICE_INPUT = 7\n"; "GENERATION_SERVICE_BLOCK = 8\n"; "GENERATION_SERVICE_CONSOLE = 9\n";
+    "GENERATION_SERVICE_LIFECYCLE = 1\n"; "GENERATION_SERVICE_SPAWN = 2\n"; "GENERATION_SERVICE_SUPERVISION = 3\n"; "GENERATION_SERVICE_CAPABILITY_TRANSFER = 4\n"; "GENERATION_SERVICE_SHARED_BUFFER = 5\n"; "GENERATION_SERVICE_DIRECTORY = 6\n"; "GENERATION_SERVICE_INPUT = 7\n"; "GENERATION_SERVICE_BLOCK = 8\n"; "GENERATION_SERVICE_CONSOLE = 9\n"; "GENERATION_SERVICE_CLOCK = 10\n";
     w.join (map pythonRightConst format.rightBits);
     "GENERATION_RIGHT_ALL = "; n.toText (rightsMask format.rightBits); "\n";
     "GENERATION_RIGHT_BY_MANIFEST_NAME = {\n";
@@ -252,6 +252,7 @@ rustBindings :: Format -> Text
     r.u32Const "SERVICE_INPUT" 7;
     r.u32Const "SERVICE_BLOCK" 8;
     r.u32Const "SERVICE_CONSOLE" 9;
+    r.u32Const "SERVICE_CLOCK" 10;
     r.join (map rustRightConst format.rightBits);
     r.u64Const "RIGHT_ALL" (rightsMask format.rightBits);
     "\n/// The rights bit a generation manifest spells `name`, or `None`.\n";

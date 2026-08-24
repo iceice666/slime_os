@@ -159,6 +159,13 @@ sel4_reclamation_check: sel4_pin_check
 private_memory_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py
 
+
+# C9.1: boot independently authorized monotonic, timer, and simulated clocks;
+# observe a one-shot expiry on the holder's declared notification, cancellation,
+# per-holder quota isolation, teardown cleanup, and deny-by-default refusal.
+clock_authority_check: sel4_pin_check
+    python3 scripts/check/check-sel4-clock-authority-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across
@@ -1067,7 +1074,13 @@ test_sel4_root:
     # guard granule below the window stays usable), and a denied region
     # overlaps nothing (so a component with no declared quota is not a
     # component that may not map).
-    expected=152
+    #
+    # C9.1: 152 -> 158. The new `clock` module contributes five tests over
+    # independently grantable authorities, per-task timer quota isolation,
+    # termination cleanup, reuse of live-authority slots across lifetime task
+    # ids, and stale expiry suppression; `ipc` adds the sixth for exact clock
+    # request shapes.
+    expected=158
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
@@ -1102,7 +1115,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 16 modules"
+    echo "slime-root host tests: $actual/$expected across 17 modules"
 
 # Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 ruff:

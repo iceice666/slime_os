@@ -49,6 +49,7 @@ extern crate alloc;
 pub mod boot_selector;
 pub mod buffer_adapter;
 pub mod child_vspace;
+pub mod clock;
 pub mod console;
 pub mod cspace;
 pub mod device;

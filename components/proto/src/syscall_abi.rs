@@ -63,6 +63,14 @@ pub mod capability_transfer_labels {
     pub const EXPORT_FINALIZE: u64 = 36;
 }
 
+pub mod clock_labels {
+    pub const MONOTONIC_READ: u64 = 44;
+    pub const TIMER_ARM: u64 = 45;
+    pub const TIMER_CANCEL: u64 = 46;
+    pub const SIMULATED_READ: u64 = 47;
+    pub const SIMULATED_ADVANCE: u64 = 48;
+}
+
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
 pub const ERR_PEER_DEAD: i64 = -2;
