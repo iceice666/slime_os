@@ -6,9 +6,17 @@ release = "16.0.0"
 commit = "6e7c3b733d296cfd88d5fbf635c96e447a882374"
 
 [rust_sel4]
-repository = "https://github.com/seL4/rust-sel4.git"
-release = "v5.0.0"
-commit = "d441a880938209f661201704dfbee7b91c5aa905"
+# Forked from seL4/rust-sel4 at v5.0.0 (d441a880938209f661201704dfbee7b91c5aa905)
+# to add the bcm2712 loader platform P4 needs: upstream's platform selector
+# (`crates/sel4-kernel-loader/src/plat/mod.rs`) has arms for qemu-arm-virt,
+# bcm2711, and RISC-V only, so building the loader against a bcm2712 prefix
+# defined no `imp` module and failed with `unresolved import imp`. The fork
+# adds a PL011 console on UART10 at 0x107d001000 — the console seL4's own
+# `src/plat/bcm2712/overlay-rpi5.dts` designates via `seL4,elfloader-devices`
+# — and PSCI secondary-core startup. No other crate is touched.
+repository = "https://github.com/iceice666/rust-sel4.git"
+release = "v5.0.0-slime-bcm2712"
+commit = "1ef65fb100051a54c74eecc03050fa48ac0dec69"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
@@ -31,6 +39,52 @@ qemu_version = "11.0.1"
 # `slime-root`'s timer phase programs the EL1 physical timer directly from
 # EL0 (`slime-root/src/platform_timer.rs`); these grant PL0 access to the
 # physical counter/frequency and physical timer control/compare registers.
+export_pcnt_user = true
+export_ptmr_user = true
+
+# P4's physical target. Every value here is read from seL4's own platform
+# description or the board's firmware device tree, never asserted by Slime:
+#  * `serial`/`serial_baud` from `deps/sel4/tools/dts/rpi5b.dts`, whose
+#    `aliases/serial10` resolves to `/soc@107c000000/serial@7d001000`
+#    (`compatible = "arm,pl011"`) and whose `chosen/stdout-path` is
+#    `serial10:115200n8`. `src/plat/bcm2712/overlay-rpi5.dts` names that same
+#    alias in `seL4,elfloader-devices` and `seL4,kernel-devices`, and the
+#    firmware DTB on boot media agrees (`aliases/console`).
+#  * `interrupt_controller` from that platform's
+#    `INTERRUPT_CONTROLLER arch/machine/gic_v2.h`, matching the board's
+#    GIC-400 at `interrupt-controller@7fff9000`.
+#  * `timer_frequency_hz` from its `TIMER_FREQUENCY 54000000`, and `max_irq`
+#    from its `MAX_IRQ 320`.
+#  * `usable_memory_bytes` is what the installed `platform_gen.json` reports
+#    once seL4 subtracts the firmware's ATF reservation from the overlay's
+#    single range: 0x80000..0x3fc00000. See `sel4/config/bcm2712-rpi5.cmake`
+#    for why this is not the board's full RAM.
+#
+# `boot_files` is the firmware contract, not a Slime choice: the BCM2712 ROM
+# reads the SPI EEPROM, which reads a FAT32 partition and loads `config.txt`
+# and the 64-bit kernel it names.
+[bcm2712_rpi5]
+platform = "bcm2712"
+sel4_arch = "aarch64"
+cpu = "cortex-a76"
+soc = "bcm2712"
+board = "raspberry-pi-5-model-b"
+# Observed in the built prefix, not chosen here: the pinned verified profile
+# `AARCH64_bcm2712_verified.cmake` leaves `CONFIG_ARM_HYPERVISOR_SUPPORT` set,
+# and `overlay-rpi5.dts` supplies the vGIC maintenance IRQ that mode needs.
+hypervisor = true
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+serial = "uart10-pl011-0x107d001000"
+serial_baud = 115200
+interrupt_controller = "arm-gic-400-gicv2"
+timer_frequency_hz = 54000000
+max_irq = 320
+usable_memory_bytes = 1069023232
+boot_files = ["config.txt", "kernel8.img"]
 export_pcnt_user = true
 export_ptmr_user = true
 
@@ -70,3 +124,20 @@ kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"
 platform_info_sha256 = "9a8eca4b07ddf06130d713ce4e4a7d52944955fc29fa826b5e28c9a318d65f6c"
+
+# The same contract for P4's board kernel, observed from
+# `just sel4_rpi5_image_check`. A separate table because this is a different
+# kernel from the one above — different platform, CPU, device tree, and
+# interrupt controller — so a single set of hashes could not describe both.
+#
+# `dtb_sha256` is a stronger pin here than for qemu-arm-virt: the Pi 5's device
+# tree is compiled from `deps/sel4/tools/dts/rpi5b.dts` plus the two overlays
+# rather than dumped from an emulator, so this hash changes if and only if the
+# pinned kernel's own board description changes. Widening the memory overlay
+# moves it, which is the intended alarm.
+[observed_prefix_bcm2712_rpi5]
+kernel_sha256 = "4c29234e4d811baa21af74783377d3fdd80161bfe26582eff96f3fa4d1520a4c"
+kernel_config_sha256 = "e752fd2d5e09498548381feb5fcb8cf18502799305bccce7b0435a07466938a2"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
+dtb_sha256 = "5e38d5dad9b4e1b3e600330acb7750599c0a0d146c5c790ff8175b9d24e9db1b"
+platform_info_sha256 = "1e386f61b9578985a7cdfff93e647cbfab0468ff88fbf339ff715619d7ce138a"

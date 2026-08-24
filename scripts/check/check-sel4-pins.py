@@ -22,11 +22,24 @@ QEMU_CONFIG_PATH = ROOT / "sel4" / "config" / "qemu-arm-virt.cmake"
 RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
 RUST_SEL4_PATH = ROOT / "deps" / "rust-sel4"
-PREFIX_PATH = ROOT / "build" / "sel4-prefix"
+# Each platform installs its own prefix and pins its own artifact hashes: the
+# two build different kernels, so one hash set cannot describe both.
+PREFIX_PATHS = {
+    "qemu-arm-virt": (ROOT / "build" / "sel4-prefix", "observed_prefix"),
+    "bcm2712-rpi5": (
+        ROOT / "build" / "sel4-rpi5-prefix",
+        "observed_prefix_bcm2712_rpi5",
+    ),
+}
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DATED_NIGHTLY = re.compile(r"nightly-\d{4}-\d{2}-\d{2}")
+# `FORCE` is matched, not ignored: `bcm2712-rpi5.cmake` needs it to override a
+# value its included verified profile already cached, and a `set(...)` this
+# regex failed to match would be a pinned option the gate silently stopped
+# reading.
 CMAKE_SET = re.compile(
-    r'^set\(\s*([A-Za-z0-9_]+)\s+(?:"([^"]*)"|([^\s\)]+))(?:\s+CACHE\s+\w+\s+"[^"]*")?\s*\)$'
+    r'^set\(\s*([A-Za-z0-9_]+)\s+(?:"([^"]*)"|([^\s\)]+))'
+    r'(?:\s+CACHE\s+\w+\s+"[^"]*")?(?:\s+FORCE)?\s*\)$'
 )
 
 
@@ -353,12 +366,20 @@ def check_profile(pins: dict[str, object]) -> None:
 
     rpi5 = parse_cmake_cache(RPI5_CONFIG_PATH)
     include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/AARCH64_bcm2712_verified.cmake"
-    # The inherited verified profile supplies platform/architecture and turns
-    # printing off; this product overlay must explicitly restore every runtime
-    # mechanism slime-root consumes.
+    # The inherited verified profile supplies platform/architecture, turns
+    # printing off, and sets `KernelVerificationBuild ON`; this product overlay
+    # must explicitly restore every runtime mechanism slime-root consumes.
+    #
+    # The three printing-related entries are pinned here so the board's
+    # observability cannot be lost silently: without them the kernel emits no
+    # UART output and P4/RP3 have no evidence path. They also record that this
+    # kernel is deliberately outside the verified set — see the config's own
+    # comment for the cost.
     required_rpi5 = {
         "KernelIsMCS": "OFF",
         "KernelMaxNumNodes": "1",
+        "KernelVerificationBuild": "OFF",
+        "KernelDebugBuild": "ON",
         "KernelPrinting": "ON",
         "KernelArmExportPCNTUser": "ON",
         "KernelArmExportPTMRUser": "ON",
@@ -417,31 +438,37 @@ def check_qemu_version(pins: dict[str, object]) -> None:
         fail(f"QEMU version is {match.group(1)}, expected {expected}")
 
 
-def check_prefix(pins: dict[str, object]) -> None:
-    observed = table(pins, "observed_prefix")
+def check_prefix(pins: dict[str, object], platform: str) -> None:
+    prefix, section = PREFIX_PATHS[platform]
+    observed = table(pins, section)
     files = {
-        "kernel_sha256": PREFIX_PATH / "bin" / "kernel.elf",
-        "kernel_config_sha256": PREFIX_PATH
+        "kernel_sha256": prefix / "bin" / "kernel.elf",
+        "kernel_config_sha256": prefix
         / "libsel4"
         / "include"
         / "kernel"
         / "gen_config.json",
-        "libsel4_config_sha256": PREFIX_PATH
+        "libsel4_config_sha256": prefix
         / "libsel4"
         / "include"
         / "sel4"
         / "gen_config.json",
-        "dtb_sha256": PREFIX_PATH / "support" / "kernel.dtb",
-        "platform_info_sha256": PREFIX_PATH / "support" / "platform_gen.yaml",
+        "dtb_sha256": prefix / "support" / "kernel.dtb",
+        "platform_info_sha256": prefix / "support" / "platform_gen.yaml",
     }
+    rebuild = (
+        "just sel4_qemu_image_check"
+        if platform == "qemu-arm-virt"
+        else "just sel4_rpi5_image_check"
+    )
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")
-        expected = require_sha256(text(observed, key, "observed_prefix"), key)
+        expected = require_sha256(text(observed, key, section), key)
         actual = sha256_file(path, fail)
         if actual != expected:
             fail(
                 f"{path.relative_to(ROOT)} SHA-256 is {actual}, expected {expected}; "
-                "rebuild with `just sel4_qemu_image_check` or inspect toolchain drift"
+                f"rebuild with `{rebuild}` or inspect toolchain drift"
             )
 
 
@@ -451,6 +478,12 @@ def main() -> None:
         "--prefix",
         action="store_true",
         help="also require the installed seL4 prefix to match observed artifact hashes",
+    )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PREFIX_PATHS),
+        default="qemu-arm-virt",
+        help="which platform's installed prefix --prefix validates",
     )
     parser.add_argument(
         "--skip-host-tools",
@@ -469,7 +502,7 @@ def main() -> None:
         check_rustup_policy(pins)
         check_qemu_version(pins)
     if arguments.prefix:
-        check_prefix(pins)
+        check_prefix(pins, arguments.platform)
     print("seL4 pin check: exact source, toolchain, target, config, and host pins verified")
 
 
