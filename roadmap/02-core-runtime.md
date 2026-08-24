@@ -823,11 +823,14 @@ rather than a plan.
   generation data and enforced per B48 (`Instance.priority`,
   `Instance.workerPriority`, `SLIME_GRAPH schedule`). Conserved CPU accounts,
   budgets, and periods are **out of C9's scope** while `KernelIsMCS OFF`:
-  non-MCS seL4 has no budget to charge, `ScheduleRecord`'s `budget_us` and
-  `period_us` are written zero by the builder, and no C9 contract may add a
-  field that pretends otherwise. Admitting MCS is an assurance decision, but
-  the terms are narrower than "trade a verified kernel for a scheduling
-  feature": upstream `deps/sel4/CAVEATS.md` lists AArch64 MCS proofs as *in
+  non-MCS seL4 has no budget to charge, and `ScheduleRecord`'s `budget_us` and
+  `period_us` are now *refused* rather than merely written zero — B77 made both
+  validators reject a nonzero value (`UndeclarableCpuBudget` from the host
+  oracle, `DecodeError::NonZeroReserved` from `Generation::validate`), so no C9
+  contract can add a field that pretends otherwise even by accident. Admitting
+  MCS is an assurance decision, but the terms are narrower than "trade a
+  verified kernel for a scheduling feature": upstream `deps/sel4/CAVEATS.md`
+  lists AArch64 MCS proofs as *in
   progress* (RISC-V MCS is already verified), and the QEMU build this
   repository develops against is **already** outside the verified set — it sets
   `KernelVerificationBuild OFF`, `KernelDebugBuild ON`, and `KernelPrinting

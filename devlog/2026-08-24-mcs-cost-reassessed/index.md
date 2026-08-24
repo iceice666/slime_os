@@ -185,4 +185,27 @@ Declaration surface, from the repo:
 
 ## Corrections
 
-None.
+**2026-08-24 — B77 closed the same day; the *Open risks* bullet naming it as
+open no longer holds.** The body above is left as written, per this log's rule
+that a frozen entry is not edited after the fact. What changed: both validators
+now refuse a nonzero `budget_us`/`period_us`, with the distinct reasons that
+bullet asked for — `UndeclarableCpuBudget` from `check-generation.py` and
+`DecodeError::NonZeroReserved` from `Generation::validate` — and
+`just generation_check` drives four resealed mutations through both readers.
+
+Two things this entry's *Artifacts* section got right for the wrong reason are
+worth recording, because they were found while closing it. First,
+`check-generation.py:688` "unpacks both and tests neither" was accurate but
+understated the difficulty of proving it: the identity hash is verified at
+`:361`, long before the schedule table at `:687`, so a byte-flip mutation is
+refused as `BadGenerationHash` and never reaches the rule. Any arm written
+without resealing the identity would have passed while testing nothing. Second,
+the claim that `boot-contracts/src/generation.rs:2200-2208` "does not constrain
+them" was verified by reading, not by execution — and it could not have been
+verified by execution, because `Generation::decode`'s only production callers
+read bytes linked into the root image, so no host gate had ever run that decoder
+over bytes it chose. That gap is now closed by
+`boot-contracts/examples/admit_generation.rs`, and it was larger than B77: every
+refusal rule in that decoder was untested, not just this one.
+
+Full record: [`devlog/2026-08-24-b77-undeclarable-cpu-budget/`](../2026-08-24-b77-undeclarable-cpu-budget/index.md).

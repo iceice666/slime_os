@@ -2962,7 +2962,9 @@ def build_sel4_plan(
         # place to learn that a number was silently clamped. `budget_us` and
         # `period_us` stay zero until MCS is admitted -- seL4 without it has no
         # notion of either, and writing a figure the kernel cannot enforce
-        # would make the record say more than the system does.
+        # would make the record say more than the system does. Since B77 that is
+        # also enforced rather than trusted: both validators refuse a nonzero
+        # value, so writing one here fails admission instead of shipping.
         priority = instance.get("priority", DEFAULT_CHILD_PRIORITY)
         if not isinstance(priority, int) or isinstance(priority, bool):
             fail(f"instance {name}: invalid priority")

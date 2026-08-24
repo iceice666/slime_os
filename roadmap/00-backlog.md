@@ -69,10 +69,11 @@ budget at all, because the builder's zero was a convention rather than an
 admitted invariant and `slime-root` read only `Schedule.priority`.
 **Exit condition (observed):** both readers now refuse with distinct reasons —
 `UndeclarableCpuBudget` from the host oracle and `DecodeError::NonZeroReserved`
-from the decoder — and `just generation_check` drives two resealed mutations
-through both, each proven load-bearing by neutralizing one guard at a time and
-observing the gate fail; `just contracts_check`, `just test_sel4_root` (152),
-and `just sel4_root_boot_check` pass.
+from the decoder — and `just generation_check` drives four resealed mutations
+(both fields, first and last schedule record) through both readers, each guard
+proven load-bearing by weakening one at a time and observing the gate fail;
+`just contracts_check`, `just test_sel4_root` (152), and
+`just sel4_root_boot_check` pass.
 **Evidence:** [`devlog/2026-08-24-b77-undeclarable-cpu-budget/`](../devlog/2026-08-24-b77-undeclarable-cpu-budget/index.md)
 
 ### B70 — component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser, blocking out-of-tree components

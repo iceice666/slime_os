@@ -20,10 +20,16 @@ set(KernelArmHypervisorSupport ON CACHE BOOL "")
 # per-target, and flipping it in this file alone would not be the same decision.
 #
 # What that costs is stated rather than hidden: without MCS the kernel has no
-# notion of budget or period, so `ScheduleRecord`'s `budget_us` and
-# `period_us` are written zero and a generation cannot declare them. Priority
-# *is* enforced and is declared data — see `Instance.priority` and
-# `SLIME_GRAPH schedule` — so the "one maximal child priority" fallback B48
+# notion of budget or period, so `ScheduleRecord`'s `budget_us` and `period_us`
+# are written zero, and B77 made that an *admitted* rule rather than a builder
+# habit -- both validators now refuse a nonzero value, so a generation from any
+# producer genuinely cannot declare them. Flipping this option therefore means
+# editing those two predicates in the same change (`check-generation.py`'s
+# `UndeclarableCpuBudget` and `Generation::validate`'s `NonZeroReserved`), or
+# every generation will be refused. That coupling is deliberate: it fails loudly
+# at a named line instead of silently admitting a budget nothing charges.
+# Priority *is* enforced and is declared data -- see `Instance.priority` and
+# `SLIME_GRAPH schedule` -- so the "one maximal child priority" fallback B48
 # names is gone either way.
 #
 # Revisiting this means an assurance decision, not a config edit: either the

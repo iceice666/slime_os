@@ -22,7 +22,7 @@ generation from any other producer could therefore declare a 50 ms budget,
 satisfy both validators, boot, and be scheduled with no budget at all — the
 exact "authenticated fiction" the v1 manifest schema comment says these fields
 exist to avoid. Both readers now refuse a nonzero value with distinct reasons,
-and `just generation_check` proves it with two resealed mutations. The fix is
+and `just generation_check` proves it with four resealed mutations. The fix is
 five lines of predicate; most of the work was building a seam that could reach
 the Rust decoder with chosen bytes at all, and then proving the new guards
 actually bite.
@@ -83,16 +83,20 @@ deliberate edit at a named line, not a gap someone has to rediscover.
 
 ## Regression guards
 
-`just generation_check` now carries the mutation arm. Two properties make it
-real rather than decorative:
+`just generation_check` now carries four mutation arms — both fields, on both
+the first and the last schedule record. Three properties make them real rather
+than decorative:
 
 - **The baseline is asserted admitted first**, by both readers, so an arm cannot
   pass by tripping a guard the unmutated generation also trips.
 - **The mutation is resealed**, so it reaches the schedule rule instead of dying
   on the identity hash. The reseal itself is re-verified before the assertion.
-
-Both fields are mutated separately, because a single predicate covering both
-would still pass if only one were ever checked.
+- **Two fields and two record indices.** The fields are separate arms because a
+  single predicate covering both would still pass if only one were checked. The
+  indices are separate arms because the builder writes main-thread and
+  extra-worker schedules on different code paths, and a guard placed outside the
+  per-record loop — or one checking only `schedule(0)` — would satisfy a
+  first-record test while leaving every worker schedule unguarded.
 
 ## Verification
 
@@ -100,7 +104,7 @@ Every gate below was run at the final state of the tree.
 
 | Gate | Result |
 |---|---|
-| `just generation_check` | pass — "2 resealed nonzero-CPU-budget mutations were refused as UndeclarableCpuBudget" |
+| `just generation_check` | pass — "4 resealed nonzero-CPU-budget mutations were refused as UndeclarableCpuBudget" |
 | `just contracts_check` | pass — 30 declared syscall operations documented, bindings current |
 | `just test_sel4_root` | pass — 152/152 across 16 modules |
 | `just sel4_root_boot_check` | pass — ordered generation, timer, task, IPC, fault, and ready markers on qemu-arm-virt |
@@ -109,8 +113,8 @@ Every gate below was run at the final state of the tree.
 | `just ruff` | pass |
 | `just typos` | pass |
 
-**Both guards were proven load-bearing by removing them one at a time**, which
-is the only way to know the new arm can fail:
+**All three guards were proven load-bearing by weakening them one at a time**,
+which is the only way to know the arms can fail:
 
 - Host guard neutralized to `require(True, ...)`, Rust guard intact →
   `generation determinism check: a generation declaring a nonzero budget_us was
@@ -119,8 +123,13 @@ is the only way to know the new arm can fail:
   `generation determinism check: the Rust decoder answered 'admitted' for a
   nonzero budget_us, not 'refused NonZeroReserved'; the two readers disagree
   about B77`.
+- Host guard narrowed to `index != 0 or (...)`, i.e. checking only the first
+  schedule → `generation determinism check: a generation declaring a nonzero
+  budget_us on schedule 4 was admitted by the host oracle`. This is the arm that
+  would otherwise have been missing: the original mutation forged record 0 only,
+  so a first-record-only guard would have passed it.
 
-Both guards were then restored and the gate re-run green.
+Every guard was then restored and the gate re-run green at four arms.
 
 ## Decisions
 

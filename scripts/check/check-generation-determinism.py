@@ -117,18 +117,31 @@ def undeclarable_cpu_budget_refused(generation: bytes, scratch: Path) -> int:
         ],
         "little",
     )
-    record = table + 0 * CHECK.GENERATION_SCHEDULE.size
     # The baseline both readers start from. Without this, an arm could be
     # refused for a reason the unmutated generation shares and still pass.
     baseline = rust_verdict(generation, scratch, "baseline")
     if baseline != "admitted":
         fail(f"the Rust decoder refused the unmutated product generation: {baseline}")
-    arms = (
-        ("budget_us", CHECK.GENERATION_SCHEDULE_BUDGET_US_OFFSET),
-        ("period_us", CHECK.GENERATION_SCHEDULE_PERIOD_US_OFFSET),
+
+    def record(index: int) -> int:
+        return table + index * CHECK.GENERATION_SCHEDULE.size
+
+    # Both fields, and both the first and last schedule record. The two fields
+    # are separate arms because one predicate covering both would still pass if
+    # only one were checked; the two indices are separate arms because the
+    # builder writes main-thread and extra-worker schedules on different code
+    # paths, and a guard placed outside the per-record loop -- or one that
+    # checked only `schedule(0)` -- would pass a first-record-only test while
+    # leaving every worker schedule unguarded.
+    arms = tuple(
+        (f"{field} on schedule {index}", record(index) + field_offset)
+        for index in dict.fromkeys((0, schedules - 1))
+        for field, field_offset in (
+            ("budget_us", CHECK.GENERATION_SCHEDULE_BUDGET_US_OFFSET),
+            ("period_us", CHECK.GENERATION_SCHEDULE_PERIOD_US_OFFSET),
+        )
     )
-    for field, field_offset in arms:
-        at = record + field_offset
+    for field, at in arms:
         if generation[at : at + 8] != bytes(8):
             fail(f"the product generation already declares a nonzero {field}")
         forged = bytearray(generation)
@@ -151,7 +164,7 @@ def undeclarable_cpu_budget_refused(generation: bytes, scratch: Path) -> int:
                 )
         else:
             fail(f"a generation declaring a nonzero {field} was admitted by the host oracle")
-        verdict = rust_verdict(candidate, scratch, f"forged-{field}")
+        verdict = rust_verdict(candidate, scratch, f"forged-{field.replace(' ', '-')}")
         if verdict != "refused NonZeroReserved":
             fail(
                 f"the Rust decoder answered {verdict!r} for a nonzero {field}, not "
