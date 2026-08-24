@@ -77,6 +77,30 @@ impl NotificationTable {
                 .then_some(entry.object)
         })
     }
+
+    /// The root-held Notification named by a C9.2 wait-set entry. Only a grant
+    /// whose declared target is `instance` resolves, so an entry cannot
+    /// attribute a badge to an object its waiter does not wait on.
+    ///
+    /// A sibling of [`Self::timer_target`] rather than a shared helper taking a
+    /// hash function: the two resources deliberately use different identity
+    /// domains, and folding them together would make the domain a parameter a
+    /// caller could pass the wrong value for — which is exactly the replay the
+    /// separate domains exist to prevent.
+    pub fn wait_target(
+        &self,
+        generation: &Generation<'_>,
+        instance: usize,
+        grant_identity: u64,
+    ) -> Option<sel4::cap::Notification> {
+        self.entries.iter().flatten().find_map(|entry| {
+            let grant = generation.notification_grant(entry.grant).ok()?;
+            (grant.target == instance
+                && boot_contracts::wait_set::notification_grant_identity(grant.name)
+                    == grant_identity)
+                .then_some(entry.object)
+        })
+    }
     pub fn native_slot(
         declared: sel4::CPtrBits,
         cnode_size_bits: usize,

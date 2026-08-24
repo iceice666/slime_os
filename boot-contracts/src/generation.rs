@@ -188,6 +188,8 @@ pub enum BootAction {
     PrivateMemory = 30,
     /// C9.1's independently grantable monotonic, timer, and simulated clocks.
     ClockAuthority = 31,
+    /// C9.2's bounded userspace wait set over one declared Notification.
+    WaitSet = 32,
 }
 
 impl BootAction {
@@ -241,6 +243,7 @@ impl BootAction {
         Self::Demo,
         Self::PrivateMemory,
         Self::ClockAuthority,
+        Self::WaitSet,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -285,6 +288,7 @@ impl BootAction {
                 Self::Demo => Self::Demo.id(),
                 Self::PrivateMemory => Self::PrivateMemory.id(),
                 Self::ClockAuthority => Self::ClockAuthority.id(),
+                Self::WaitSet => Self::WaitSet.id(),
             };
             declared == id
         })
@@ -323,6 +327,7 @@ impl BootAction {
             "demo" => Self::Demo,
             "private-memory" => Self::PrivateMemory,
             "clock-authority" => Self::ClockAuthority,
+            "wait-set" => Self::WaitSet,
             _ => return None,
         })
     }
@@ -2741,7 +2746,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 31] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 32] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2773,6 +2778,7 @@ mod tests {
         (BootAction::Demo, 29),
         (BootAction::PrivateMemory, 30),
         (BootAction::ClockAuthority, 31),
+        (BootAction::WaitSet, 32),
     ];
 
     #[test]

@@ -34,7 +34,7 @@ use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, notification, object_allocator, peer_endpoint,
     platform_timer, private_memory, shared_buffer, supervision, task, timer, transfer_window,
-    virtio_blk,
+    virtio_blk, wait_set,
 };
 
 use core::ptr;
@@ -1233,6 +1233,7 @@ static mut PEER_ENDPOINTS: peer_endpoint::PeerEndpointTable =
     peer_endpoint::PeerEndpointTable::new();
 static mut NOTIFICATIONS: notification::NotificationTable = notification::NotificationTable::new();
 static mut CLOCK_SERVICE: clock::ClockService = clock::ClockService::new();
+static mut WAIT_SET_SERVICE: wait_set::WaitSetService = wait_set::WaitSetService::new();
 
 const MAX_CAPABILITY_EXPORTS: usize = 64;
 #[derive(Clone, Copy)]
@@ -1974,6 +1975,20 @@ fn launch_instance_graph(
             .as_ref()
             .map_or(0, |authority| authority.timer_quota()),
     );
+    let wait_sources = match wait_set::source_object(generation) {
+        Some(Ok(sources)) => Some(sources),
+        Some(Err(error)) => {
+            fatal!("SLIME_WAIT FAIL admitted sources will not decode: {error:?}")
+        }
+        None => None,
+    };
+    sel4::debug_println!(
+        "SLIME_WAIT sources declared={} resource={}",
+        wait_sources
+            .as_ref()
+            .map_or(0, |sources| sources.entry_count()),
+        wait_sources.is_some() as u8,
+    );
 
     for instance_index in 0..generation.instance_count() {
         let instance = match generation.instance(instance_index) {
@@ -2386,6 +2401,45 @@ fn launch_instance_graph(
         );
     }
 
+    // C9.2's supervision-source delivery, declared per launched task on the same
+    // rule as the clock authority above: every live task gets a row, including
+    // one the resource names no source for, so the table answers about a live
+    // task rather than about whether it was ever declared.
+    unsafe { *ptr::addr_of_mut!(WAIT_SET_SERVICE) = wait_set::WaitSetService::new() };
+    let wait_set_service = unsafe { &mut *ptr::addr_of_mut!(WAIT_SET_SERVICE) };
+    for launched in launched_instances.iter() {
+        let Some(task) = tasks.get(launched.task) else {
+            fatal!(
+                "SLIME_WAIT FAIL launched task {} is missing",
+                launched.task.0
+            )
+        };
+        let declared = match wait_set_service.declare(
+            wait_sources.as_ref(),
+            generation,
+            notifications,
+            allocator,
+            task.cleanup.arena,
+            launched.task,
+            launched.instance,
+        ) {
+            Ok(declared) => declared,
+            Err(error) => fatal!(
+                "SLIME_WAIT FAIL source install task={} error={error:?}",
+                launched.task.0
+            ),
+        };
+        if declared != 0 {
+            sel4::debug_println!(
+                "SLIME_WAIT supervision task={} instance={} sources={declared}",
+                launched.task.0,
+                generation
+                    .instance(launched.instance)
+                    .map_or("?", |instance| instance.name),
+            );
+        }
+    }
+
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
     let table = bootstrap.and_then(|id| tasks.authority(id));
     sel4::debug_println!(
@@ -2555,6 +2609,7 @@ fn launch_instance_graph(
         &mut windows,
         &mut buffers,
         clock_service,
+        wait_set_service,
         timer_adapter,
         allocator,
         scratch,
@@ -2683,6 +2738,7 @@ fn serve_instance_graph(
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     buffers: &mut SharedBufferTable,
     clock_service: &mut clock::ClockService,
+    wait_set_service: &mut wait_set::WaitSetService,
     timer_adapter: &mut PhysicalTimerAdapter,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -2820,6 +2876,13 @@ fn serve_instance_graph(
             if let Some(task) = tasks.get(id) {
                 let _ = task.suspend();
             }
+            // C9.2: wake every waiter whose declared supervision source names
+            // this task, *before* its own row is dropped, so a supervisor
+            // learns of a peer's death through the source it registered rather
+            // than by timing out. Signalled while the authority tables are
+            // still intact, because the wake is gated on the waiter's slot
+            // still holding a handle naming this task.
+            signal_declared_death(wait_set_service, tasks, id);
             drop_task_clock(clock_service, timer_adapter, id);
             reclaim_dead_task(buffers, allocator, id);
             windows.release(id);
@@ -2939,6 +3002,10 @@ fn serve_instance_graph(
                 if let Some(task) = tasks.get(id) {
                     let _ = task.suspend();
                 }
+                // C9.2, on the same ordering as the fault path above: an
+                // orderly exit is a peer death too, and a supervisor that only
+                // learned of faults would still have to poll for the common case.
+                signal_declared_death(wait_set_service, tasks, id);
                 drop_task_clock(clock_service, timer_adapter, id);
                 reclaim_dead_task(buffers, allocator, id);
                 windows.release(id);
@@ -2964,6 +3031,7 @@ fn serve_instance_graph(
                     windows,
                     buffers,
                     clock_service,
+                    wait_set_service,
                     allocator,
                     scratch,
                     endpoint,
@@ -3197,6 +3265,59 @@ fn serve_instance_graph(
                                 sel4::debug_println!(
                                     "SLIME_GRAPH graph read refused task={} instance={instance}",
                                     id.0,
+                                );
+                                Response::error(IpcError::InvalidOperation)
+                            }
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
+            // C9.2's declared wake sources, answered only about the caller
+            // itself.
+            //
+            // Paged through the transfer window exactly as `GRAPH_READ` is, and
+            // for the same reason: one record is 64 bytes against a 64-byte
+            // message bound, so it cannot travel in registers. `InvalidOperation`
+            // means the generation declares no wait set at all; a waiter the
+            // table does not name is answered zero records, because being
+            // declared nothing and there being nothing to declare are different
+            // facts and only the first is about this caller.
+            lifecycle_labels::WAIT_SOURCES => {
+                let cursor = words.first().copied().unwrap_or(0) as usize;
+                let response = match words.get(2).copied() {
+                    Some(transfer) => {
+                        let mut rows =
+                            [0u8; ipc::WAIT_SOURCE_ROWS_PER_CALL * ipc::WAIT_SOURCE_ROW_BYTES];
+                        match ipc::read_wait_sources(generation, instance, cursor, &mut rows) {
+                            Some(count) => {
+                                let bytes = &rows[..count * ipc::WAIT_SOURCE_ROW_BYTES];
+                                match transfer_window::write_staged_region(
+                                    windows.bound(id, descriptor_thread(transfer)),
+                                    bytes,
+                                    scratch,
+                                ) {
+                                    Ok(descriptor) => {
+                                        sel4::debug_println!(
+                                            "SLIME_WAIT sources task={} instance={} cursor={cursor} rows={count}",
+                                            id.0,
+                                            generation
+                                                .instance(instance)
+                                                .map_or("?", |instance| instance.name),
+                                        );
+                                        Response::success(count as i64, descriptor)
+                                    }
+                                    Err(error) => Response::error(error),
+                                }
+                            }
+                            None => {
+                                sel4::debug_println!(
+                                    "SLIME_WAIT sources absent task={} instance={}",
+                                    id.0,
+                                    generation
+                                        .instance(instance)
+                                        .map_or("?", |instance| instance.name),
                                 );
                                 Response::error(IpcError::InvalidOperation)
                             }
@@ -4493,6 +4614,7 @@ fn serve_spawn(
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     buffers: &mut SharedBufferTable,
     clock_service: &mut clock::ClockService,
+    wait_set_service: &mut wait_set::WaitSetService,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -4702,6 +4824,38 @@ fn serve_spawn(
         child_clock.timer_quota(),
         child_clock.timer_badge(),
     );
+    // C9.2's supervision sources for the child, on the same rule as its clock
+    // authority: declared before it runs, from the same generation resource, so
+    // a spawned waiter's sources are not a boot-only property.
+    let child_sources = match wait_set_service.declare(
+        wait_set::source_object(generation)
+            .and_then(Result::ok)
+            .as_ref(),
+        generation,
+        unsafe { &*ptr::addr_of!(NOTIFICATIONS) },
+        allocator,
+        child_arena,
+        child,
+        plan.instance,
+    ) {
+        Ok(declared) => declared,
+        Err(error) => {
+            wait_set_service.clear_task(child);
+            clock_service.clear_task(child);
+            release_child(tasks, windows, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn failed task={} component={name} error=WaitSetInstall({error:?})",
+                id.0
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+    };
+    if child_sources != 0 {
+        sel4::debug_println!(
+            "SLIME_WAIT supervision task={} instance={name} sources={child_sources}",
+            child.0,
+        );
+    }
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
@@ -4722,6 +4876,7 @@ fn serve_spawn(
     let Some(handle) = handle else {
         // The parent's table is full. The copied child table can simply be
         // released; the parent's grants were never consumed.
+        wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         sel4::debug_println!(
@@ -4735,6 +4890,7 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         sel4::debug_println!(
@@ -4750,6 +4906,7 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         return Response::error(IpcError::BadCapability);
@@ -4984,6 +5141,26 @@ fn drop_task_clock(
         task.0,
         service.live_timers(),
     );
+}
+
+/// Wake every waiter whose declared C9.2 supervision source names `dead`, then
+/// retire the dead task's own row.
+///
+/// One helper rather than two calls at each site, because the order matters and
+/// is easy to get wrong: the signal is gated on the *waiter's* slot still
+/// holding a handle naming `dead`, so it must run while the authority tables are
+/// intact, and `dead`'s own row must go afterwards or a task supervising itself
+/// through a stale slot would be signalled on the way out.
+fn signal_declared_death(
+    service: &mut wait_set::WaitSetService,
+    tasks: &TaskTable<MAX_TASKS>,
+    dead: TaskId,
+) {
+    let woken = service.signal_death(tasks, dead);
+    service.clear_task(dead);
+    if woken != 0 {
+        sel4::debug_println!("SLIME_WAIT death task={} woken={woken}", dead.0);
+    }
 }
 
 const fn clock_error_status(error: clock::ClockError) -> IpcError {

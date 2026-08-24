@@ -71,3 +71,4 @@ pub mod task;
 pub mod timer;
 pub mod transfer_window;
 pub mod virtio_blk;
+pub mod wait_set;

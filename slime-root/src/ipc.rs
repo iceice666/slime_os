@@ -57,6 +57,14 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         // than an authority: a task the generation names no quota for is
         // refused by its zero ceiling.
         lifecycle_labels::PRIVATE_MEMORY_GROW => Some(SERVICE_LIFECYCLE),
+        // C9.2's declared wake sources. Lifecycle on the same rule: what a
+        // component may block on is fixed by the generation's own source table,
+        // and every launched instance holds this service, so the gate does not
+        // have to stand in for a grant shape it is unrelated to. A waiter the
+        // table does not name is answered an empty set, which is the
+        // deny-by-default answer rather than a refusal — it has no source to
+        // register, and an empty answer discloses nothing about a peer.
+        lifecycle_labels::WAIT_SOURCES => Some(SERVICE_LIFECYCLE),
         // B70's boot action. Lifecycle rather than the capability table, though
         // the label sits in that table's namespace, because the service is the
         // *authority gate* and this operation needs the one every instance
@@ -1090,6 +1098,73 @@ pub fn read_graph_participants(
     Some(written / GRAPH_ROW_BYTES)
 }
 
+/// Bytes one encoded wake-source record occupies in a `WAIT_SOURCES` reply.
+///
+/// The contract's own record size: the caller decodes with
+/// `boot_contracts::wait_set`, so a reply laid out to any other stride would
+/// decode as garbage rather than fail.
+pub const WAIT_SOURCE_ROW_BYTES: usize = boot_contracts::wait_set::ENTRY_BYTES;
+
+/// Wake-source records one `WAIT_SOURCES` call may answer.
+///
+/// One record is 64 bytes against the same message bound, so the answer travels
+/// through the caller's transfer window and is paged. The per-waiter ceiling is
+/// `MAX_SOURCES_PER_WAITER` = 9, so a full source table needs at most two calls.
+pub const WAIT_SOURCE_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / WAIT_SOURCE_ROW_BYTES;
+
+/// Copy the caller's own wake-source records `cursor..` into `out`, returning
+/// how many were written.
+///
+/// Self-scoped, and that is the whole authority test: the records answered are
+/// the ones whose `waiter_identity` is this instance's, so a component reads
+/// what the generation declares *about it* and nothing about a peer. Unlike
+/// `read_graph_participants` there is no holder case at all — no component
+/// brokers another's wait set, because a wait set is not a shared object.
+///
+/// `None` only when the generation embeds no wait-set resource. A waiter with no
+/// records gets `Some(0)`, on the same rule: "no table here" and "no sources for
+/// you" are different facts, and both leave the caller with nothing to register.
+///
+/// The records arrive in the resource's own ascending `(waiter, badge)` order,
+/// which the contract fixes as the dispatch tie rule — so a waiter that drains
+/// in receive order is already draining in the documented order, and paging
+/// cannot reorder it.
+pub fn read_wait_sources(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(sources)) = crate::generation::wait_set_object(generation) else {
+        return None;
+    };
+    let name = generation.instance(instance).ok()?.name;
+    let identity = boot_contracts::wait_set::waiter_identity(name);
+    let mut written = 0;
+    let mut seen = 0;
+    for index in 0..sources.entry_count() {
+        let entry = sources.entry(index)?;
+        if entry.waiter_identity != identity {
+            continue;
+        }
+        // `cursor` counts this waiter's own records, not rows of the table, so
+        // paging cannot let a waiter infer where its sources sit among others'.
+        if seen < cursor {
+            seen += 1;
+            continue;
+        }
+        seen += 1;
+        let end = written + WAIT_SOURCE_ROW_BYTES;
+        if end > out.len() || written / WAIT_SOURCE_ROW_BYTES >= WAIT_SOURCE_ROWS_PER_CALL {
+            break;
+        }
+        out[written..end].copy_from_slice(sources.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / WAIT_SOURCE_ROW_BYTES)
+}
+
 /// The bounds `resolve_binding_slot` applies before it looks anything up.
 ///
 /// Separated from the lookup so the guards are reachable without a decoded
@@ -1220,12 +1295,13 @@ mod tests {
             // 37 was here until CP2 assigned it to `RESOLVE_BINDING`, 38 until
             // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, 40 until
             // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, 42 until `SPAWN_BUDGET`,
-            // 43 until C10.1's `PRIVATE_MEMORY_GROW`, and 44-48 until C9.1's
-            // clock service. Moving one out of this list is the whole change: a
+            // 43 until C10.1's `PRIVATE_MEMORY_GROW`, 44-48 until C9.1's clock
+            // service, and 49 until C9.2's `WAIT_SOURCES`. Moving one out of
+            // this list is the whole change: a
             // number this test asserts routes nowhere and a number the contract
             // declares are the same fact stated twice, so assigning a label
             // must fail here first.
-            49,
+            50,
             sel4::Word::MAX,
         ] {
             assert_eq!(

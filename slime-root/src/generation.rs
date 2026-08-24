@@ -14,6 +14,7 @@ use boot_contracts::generation::{
 };
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
 use boot_contracts::target_profile::TargetProfile;
+use boot_contracts::wait_set::{self, WaitSet};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
@@ -84,6 +85,16 @@ pub enum GenerationError {
     /// The generation carries clock authority that is malformed or asks for
     /// more live timers than this root can provision (C9.1).
     UnsatisfiableClockAuthority,
+    /// The generation carries a wait-set source table that is malformed, names a
+    /// badge no declared signaller or timer produces, or attributes a source to
+    /// a Notification its waiter does not wait on (C9.2).
+    ///
+    /// One variant rather than one per rule, on
+    /// [`Self::UnsatisfiableClockAuthority`]'s precedent: every case is the same
+    /// decision — the declared source table cannot be honoured — and a component
+    /// never sees these, so a finer vocabulary would only be read by the marker
+    /// the root prints, which names the failing entry itself.
+    UnsatisfiableWaitSet,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -595,6 +606,131 @@ fn clock_authority_admission(
     Ok(Some(authority.holder_count()))
 }
 
+/// Locate the generation-authenticated wait-set resource, if declared.
+///
+/// First match wins including a malformed one, on `clock_authority_object`'s
+/// rule: continuing would make a waiter's source table depend on object
+/// ordering.
+pub fn wait_set_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<WaitSet<'a>, wait_set::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= wait_set::MAGIC.len()
+            && object.bytes[..wait_set::MAGIC.len()] == wait_set::MAGIC
+        {
+            return Some(WaitSet::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Validate a declared wait set, reporting how many sources it names.
+///
+/// Every entry must resolve to a badge this generation actually produces on a
+/// Notification the waiter actually waits on: a declared signaller's
+/// `1 << (slot % 63)`, or — for a timer source — the C9.1 expiry badge declared
+/// for that same holder. That is what makes the resource grant nothing. It
+/// renames facts the notification and clock tables already fix, so an entry
+/// naming an unsignalled bit, another instance's grant, or a timer badge it has
+/// no clock authority for is refused here rather than presenting at runtime as a
+/// source that never fires.
+fn wait_set_admission(generation: &Generation<'_>) -> Result<Option<usize>, GenerationError> {
+    let Some(sources) = wait_set_object(generation) else {
+        return Ok(None);
+    };
+    let sources = sources.map_err(|_| GenerationError::UnsatisfiableWaitSet)?;
+    let clocks = match clock_authority_object(generation) {
+        Some(Ok(authority)) => Some(authority),
+        Some(Err(_)) => return Err(GenerationError::UnsatisfiableWaitSet),
+        None => None,
+    };
+    for index in 0..sources.entry_count() {
+        let entry = sources
+            .entry(index)
+            .ok_or(GenerationError::UnsatisfiableWaitSet)?;
+        // The grant must be one this waiter waits on, resolved through the
+        // waiter's own identity so an entry cannot borrow a peer's grant.
+        let mut target = None;
+        for grant_index in 0..generation.notification_grant_count() {
+            let grant = generation
+                .notification_grant(grant_index)
+                .map_err(|_| GenerationError::UnsatisfiableWaitSet)?;
+            let instance = generation
+                .instance(grant.target)
+                .map_err(|_| GenerationError::UnsatisfiableWaitSet)?;
+            if wait_set::waiter_identity(instance.name) == entry.waiter_identity
+                && wait_set::notification_grant_identity(grant.name)
+                    == entry.notification_grant_identity
+            {
+                target = Some((grant_index, grant.target, grant.name));
+                break;
+            }
+        }
+        let Some((grant_index, waiter_instance, grant_name)) = target else {
+            return Err(GenerationError::UnsatisfiableWaitSet);
+        };
+        let mut waits = 0usize;
+        let mut signalled = false;
+        for binding_index in 0..generation.notification_binding_count() {
+            let binding = generation
+                .notification_binding(binding_index)
+                .map_err(|_| GenerationError::UnsatisfiableWaitSet)?;
+            if binding.grant != grant_index {
+                continue;
+            }
+            match binding.role {
+                boot_contracts::generation::NotificationRole::Wait => {
+                    if binding.holder == waiter_instance {
+                        waits += 1;
+                    }
+                }
+                boot_contracts::generation::NotificationRole::Signal => {
+                    if 1u64 << (binding.slot % 63) == entry.badge {
+                        signalled = true;
+                    }
+                }
+            }
+        }
+        if waits != 1 {
+            return Err(GenerationError::UnsatisfiableWaitSet);
+        }
+        // Three producers write this one word, and a badge belongs to exactly
+        // one of them. A peer signals its declared `1 << (slot % 63)`; the root
+        // signals a C9.1 timer badge; and the root signals a supervision badge
+        // when a task the waiter supervises ends. Two producers on one bit would
+        // make a wake ambiguous, and none would make the source unreachable, so
+        // both are refused.
+        let timer_badge = clocks.is_some_and(|authority| {
+            generation.instance(waiter_instance).is_ok_and(|instance| {
+                authority
+                    .authority_for(&clock_authority::holder_identity(instance.name))
+                    .is_some_and(|holder| {
+                        holder.notification_badge == entry.badge
+                            && holder.notification_grant_identity
+                                == clock_authority::notification_grant_identity(grant_name)
+                    })
+            })
+        });
+        let root_signalled = matches!(
+            entry.kind,
+            wait_set::SourceKind::Timer | wait_set::SourceKind::Supervision
+        );
+        // A root-signalled source must not also be a peer's badge; a
+        // peer-signalled one must be exactly that and nothing else.
+        if signalled == root_signalled {
+            return Err(GenerationError::UnsatisfiableWaitSet);
+        }
+        // The timer badge is C9.1's own, so only a timer source may claim it and
+        // a timer source must.
+        if timer_badge != (entry.kind == wait_set::SourceKind::Timer) {
+            return Err(GenerationError::UnsatisfiableWaitSet);
+        }
+    }
+    Ok(Some(sources.entry_count()))
+}
+
 /// Whether this root can honour a declared private-memory budget (C10.2).
 ///
 /// Separated from the generation walk for the same reason
@@ -684,6 +820,14 @@ pub struct Admission {
     /// both deny every component, but only the second means the generation
     /// carries a budget resource whose contents a gate can check.
     pub private_memory_holders: Option<usize>,
+    /// Wake sources named by the authenticated wait-set resource, or `None` when
+    /// the generation declares none at all (C9.2).
+    ///
+    /// `None` and `Some(0)` are distinguished for the reason
+    /// `private_memory_holders` is: both leave every waiter with nothing to
+    /// register, but only the second carries a resource whose contents a gate can
+    /// check.
+    pub wait_set_sources: Option<usize>,
 }
 
 impl Admission {
@@ -732,6 +876,11 @@ impl Admission {
         // binding before any instance launches. The runtime authority table is
         // separately bounded by the concurrently live TaskTable.
         let clock_holders = clock_authority_admission(generation)?;
+        // C9.2: every declared wake source resolves to a badge this generation
+        // produces on a Notification its waiter waits on. Checked with the
+        // clock authority above, because a timer source is valid only against
+        // that same resource.
+        let wait_set_sources = wait_set_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
@@ -804,6 +953,7 @@ impl Admission {
             fabric_interpositions: fabric.map_or(0, |shape| shape.interpositions),
             fabric_capability_slots: fabric.map_or(0, |shape| shape.capability_slots),
             private_memory_holders,
+            wait_set_sources,
         })
     }
 
