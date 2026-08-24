@@ -1255,6 +1255,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-wait-set-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-components"
 version = "0.1.0"
 dependencies = [
@@ -1285,6 +1294,7 @@ dependencies = [
 name = "slime-rt"
 version = "0.1.0"
 dependencies = [
+ "boot-contracts",
  "sel4",
  "sel4-panicking-env",
  "sel4-runtime-common",

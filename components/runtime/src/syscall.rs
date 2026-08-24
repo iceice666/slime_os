@@ -540,6 +540,30 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
     }
 }
 
+/// Read this component's own C9.2 declared wake sources, from `cursor`.
+///
+/// Fills `out` with contract-encoded `wait-set/v1` entry records and returns how
+/// many were written; the caller decodes them with `boot_contracts::wait_set`
+/// and resumes from `cursor + count` until a call answers fewer than `out` could
+/// hold. Records arrive in the contract's ascending-badge dispatch order.
+///
+/// Self-scoped, like [`resolve_binding`]: the request carries no waiter, so a
+/// component reads what the generation declares about it and nothing about a
+/// peer. A generation declaring no wait-set resource is refused, which is how a
+/// caller tells "this composition has no wait sets" from "none are declared for
+/// me" — the second answers zero records.
+///
+/// [`crate::WaitSet`] is the intended consumer; this exists because the wait set
+/// is userspace policy over the ABI rather than part of it.
+pub fn wait_sources(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::wait_sources(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// The graph's index for the route whose identity is `identity`.
 ///
 /// A participant folds its route name, interface identity, and contract kind

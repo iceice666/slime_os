@@ -1057,6 +1057,35 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> i64 {
     }
 }
 
+/// Read this component's own C9.2 declared wake sources (label 49).
+///
+/// `graph_read`'s exact shape, and paged for the same reason: one record is 64
+/// bytes against the message bound, so the answer travels through the transfer
+/// window and the caller resumes from `cursor + count`. Self-scoped — the
+/// request names no waiter — so a component reads only its own sources, and a
+/// generation that declares no wait-set resource is refused rather than
+/// answered zero, which lets a caller tell "no table" from "none for me".
+pub fn wait_sources(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        lifecycle_labels::WAIT_SOURCES,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
 /// Resolve a route identity to the graph's index for it.
 pub fn graph_route_index(identity: &[u8; 32]) -> i64 {
     let transfer = match stage(identity, &[]) {

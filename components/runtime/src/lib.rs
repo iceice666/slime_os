@@ -24,6 +24,10 @@ mod sha256;
 mod syscall;
 
 mod runtime;
+/// C9.2's bounded wait set over one declared Notification. A module rather than
+/// flat re-exports, on `private_heap_probe`'s rule: `Source`, `Ready`, and the
+/// three ceilings are only meaningful under the name of the thing they bound.
+pub mod wait_set;
 
 #[cfg(feature = "heap")]
 pub use heap::{BumpHeap, HEAP_BYTES, heap_used};
@@ -43,8 +47,12 @@ pub use syscall::{
     shared_buffer_loan_map, shared_buffer_map, shared_buffer_occupancy, shared_buffer_release,
     shared_buffer_return, shared_buffer_revoke, shared_buffer_seal, shared_buffer_unmap,
     simulated_time_advance, simulated_time_read, spawn, spawn_budget, supervision_derive,
-    supervision_status, timer_arm, timer_cancel, try_send, unhealthy, yield_now,
+    supervision_status, timer_arm, timer_cancel, try_send, unhealthy, wait_sources, yield_now,
 };
+
+/// C9.2's wait set, re-exported for the common case: a component builds one over
+/// its declared Notification and registers the sources it cares about.
+pub use wait_set::{WaitError, WaitSet};
 
 /// The CSpace slot holding this component's root service endpoint — its only
 /// root authority on the native seL4 transport.

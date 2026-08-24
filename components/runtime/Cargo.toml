@@ -38,6 +38,12 @@ sel4-runtime-common = { path = "../../deps/rust-sel4/crates/sel4-runtime-common"
 # hand-authored the tables; `slime-root/src/console.rs` records a numbering
 # disagreement between them that produced silently garbled keystrokes.
 slime-proto = { path = "../proto" }
+# C9.2: the wait-set source records the root serves are decoded with
+# `boot_contracts::wait_set`, so the badge/kind/slot layout has one reader
+# rather than a second copy here. Acyclic: `boot-contracts` depends on no
+# workspace crate, and components already link it (`clock-authority-probe`
+# reads the rights vocabulary from it).
+boot-contracts = { path = "../../boot-contracts" }
 
 [lints]
 workspace = true
