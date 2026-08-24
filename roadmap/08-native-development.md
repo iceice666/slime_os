@@ -8,7 +8,7 @@
 
 **Source directions:** [direction 3](../docs/directions/03-nondeterminism-as-capabilities.md), [direction 23](../docs/directions/23-build-provenance.md), and [direction 30](../docs/directions/30-deterministic-on-device-builds.md).
 
-**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory capabilities, Dango, spawn service, generation management, and transfer; [P0](07-architecture-portability.md#p0-architecture-target-and-executable-artifact-contracts) for exact target/artifact identity; and [C9](02-core-runtime.md#c9-robot-runtime-authority) for explicit time, bounded resource accounts, lifecycle control, and fresh-authority restart. D7 additionally consumes [X1](05-foreign-workloads.md#x1-linux-userspace-personality) for the current Rust toolchain unless an independently qualified native Rust toolchain lands first.
+**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory capabilities, Dango, spawn service, generation management, and transfer; [P0](07-architecture-portability.md#p0-architecture-target-and-executable-artifact-contracts) for exact target/artifact identity; and [C9](02-core-runtime.md#c9-robot-runtime-authority) for explicit time ([C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority)), lifecycle control, and fresh-authority restart ([C9.4](02-core-runtime.md#c94--lifecycle-transitions-and-supervised-restart)). Bounded *CPU* accounts are not among them: they have no mechanism while the pinned kernel is built `KernelIsMCS OFF`, so D3's build account bounds memory, task count, buffer pages, and byte counts — every quantity the existing per-spawner and per-holder accounting already carries — and charges wall-clock time rather than conserved CPU. D7 additionally consumes [X1](05-foreign-workloads.md#x1-linux-userspace-personality) for the current Rust toolchain unless an independently qualified native Rust toolchain lands first.
 
 ## Boundaries
 
@@ -54,7 +54,7 @@ normalized source closure
 ## Sequencing
 
 1. D1 can begin from completed M6 directory and Dango mechanisms. D2 can proceed independently after P0 fixes the producer-neutral target/artifact contract.
-2. D3 composes D1 and D2 with C9 resource/time/lifecycle authority into a hermetic on-device build service.
+2. D3 composes D1 and D2 with C9 time/lifecycle authority and the existing per-spawner/per-holder resource accounting into a hermetic on-device build service.
 3. D4 consumes D3 output through a new bounded executable-admission mechanism and closes the first edit → compile → run loop without changing BootState.
 4. D5 is an independent C8/C9 lifecycle slice over signed generations; it introduces the narrow, transactional live-update class and deterministic reboot-required classification.
 5. D6 composes D4 and D5 with M6 generation management: local artifacts are tested ephemerally, authorized externally, then either switched live or selected for next boot.
@@ -128,14 +128,14 @@ A pinned compiler for the new language directly emits a byte-deterministic targe
 
 **Status:** Not started.
 
-**Depends on:** D1–D2, C9 explicit time/resource/lifecycle authority, M5.4 object storage, and M5.8's separation of release authorization. This milestone absorbs the build-relevant mechanism from directions 3, 23, and 30.
+**Depends on:** D1–D2, [C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority)'s explicit time and [C9.4](02-core-runtime.md#c94--lifecycle-transitions-and-supervised-restart)'s lifecycle authority, M5.4 object storage, and M5.8's separation of release authorization. This milestone absorbs the build-relevant mechanism from directions 3, 23, and 30. It does not depend on a conserved CPU account: see the track dependencies above.
 
 ### Deliverables
 
 - define versioned Zutai build-request, build-result, diagnostic, and detached build-provenance schemas naming the exact source snapshot, toolchain closure, target, parameters, resource account, output identities, and builder identity;
 - run the compiler as a bounded component whose only inputs are content-addressed source/toolchain objects and normalized request data, whose scratch/output directories are explicit capabilities, and whose successful outputs become sealed immutable objects;
 - complete the deterministic-component authority rule: C9 Clock authority and an object-specific Entropy authority are explicit; a manifest-declared deterministic builder receives neither real source and cannot receive one later through capability transfer; a seeded fixture is a distinct declared input rather than ambient randomness;
-- charge CPU, memory, task count, shared-buffer pages, scratch bytes, output bytes, diagnostic bytes, and child count to a manifest-declared build account, with structured exhaustion and full cleanup on exit, fault, timeout, cancellation, or supervisor restart;
+- charge memory, task count, shared-buffer pages, private-memory pages, scratch bytes, output bytes, diagnostic bytes, and child count to a manifest-declared build account, with structured exhaustion and full cleanup on exit, fault, timeout, cancellation, or supervisor restart. CPU is bounded as elapsed wall-clock time against a declared deadline rather than as a conserved account, because the pinned kernel is built `KernelIsMCS OFF` and has no budget to charge;
 - key caching on the entire normalized input closure, never a mutable path or timestamp; validate a cached object's digest and producer contract before reuse;
 - emit detached provenance binding source, toolchain, target, parameters, builder identity, and outputs. Stage-0 does not parse provenance, and provenance never grants release authorization;
 - support the new language compiler as the first native build component while keeping the request/result protocol language-neutral for later Rust or other admitted toolchains.
@@ -163,7 +163,7 @@ A native build service inside QEMU consumes one content-addressed source/toolcha
 
 **Status:** Not started.
 
-**Depends on:** D3, M6 spawn/supervision, and C9 lifecycle/resource accounts.
+**Depends on:** D3, M6 spawn/supervision, and [C9.4](02-core-runtime.md#c94--lifecycle-transitions-and-supervised-restart)'s lifecycle transitions. The session's resource bounds are the existing per-supervision-subtree limits this milestone declares below, not a conserved CPU account.
 
 ### Deliverables
 

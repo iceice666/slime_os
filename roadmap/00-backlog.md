@@ -38,6 +38,18 @@ successor closes it.
 
 Evidence for all three: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).
 
+- C10.4 left `fabric-service`'s 16-page private-memory quota uniform across ten
+  fixtures whose declared graphs need four pages at most — the same
+  over-declaration C10.4 removed from `.bss`, one level up. The builder already
+  computes each generation's frame demand, so deriving the quota from the
+  declared graph is possible.
+- C10.4 left the remaining worst-case-sized components unconverted
+  (`fabric-subscriber-b`'s mailboxes, the store plane's bump-allocator
+  components). The mechanism is now proven on a product component, so these are
+  ordinary work rather than milestone work.
+
+Evidence for both: [`devlog/2026-08-24-c10-4-adoption-and-leak-evidence/`](../devlog/2026-08-24-c10-4-adoption-and-leak-evidence/index.md).
+
 **Closed 2026-08-21:** B65's remaining half — "the 52-binary fixture population
 uncollapsed" — is resolved by CP3 in the [Component platform
 track](10-component-platform.md). `components/bins` is now 52 independent

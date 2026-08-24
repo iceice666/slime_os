@@ -94,8 +94,11 @@ route when they span clusters.
 - **lifecycle** (2, 8, 16, 25, 32): component lifetime semantics — revocation
   and leases (2), supervision (8), resource accounts (25), the powerbox
   pattern (16), and scheduling-class authority (32). Entries 2, 8, 25, and
-  32 share the M6 spawn-service prerequisites; 32 additionally extends 25's
-  account model to CPU ordering.
+  32 share the M6 spawn-service prerequisites. 32's promoted half is
+  [Core C9.3](../../roadmap/02-core-runtime.md#c93--declared-scheduling-class),
+  which owns class ordering but *not* 25's conserved account model: the pinned
+  kernel is built `KernelIsMCS OFF`, so there is no CPU budget to charge and
+  extending 25 to CPU ordering is blocked on that assurance decision.
 - **updates** (5, 12, 13, 23): machinery around the generation parent
   chain — bisect (12) and shadow boot (13) consume M5.6 rollback;
   build-provenance attestations (23) accompany the M5.8 release pipeline;
@@ -129,7 +132,7 @@ without waiting for any milestone:
 | 13 | shadow sub-graph manifest design and execution probe | M6 spawn machinery is complete; the constrained environment remains open |
 | 17, 18, 19 | matrix amendments and design notes (paper) | kernel work bound to the [Hardware H track](../../roadmap/04-platform-hardware.md) |
 | 31 | syscall-to-capability mapping table for a minimal workload (paper) | M6 prerequisites are complete; Foreign X1 implementation remains future; guest-VM half needs [Foreign X2](../../roadmap/05-foreign-workloads.md) |
-| 32 | scheduling-class schema and authority-vs-policy design note (paper) | M6 prerequisites are complete; Core C9 also consumes entry 25's general account model |
+| 32 | scheduling-class schema and authority-vs-policy design note (paper) | M6 prerequisites are complete; Core C9.3 owns the class half, and entry 25's conserved CPU account is blocked on the MCS assurance decision rather than on C9 |
 | 33 | Secret matrix amendment + recorder/revocation interaction (paper) | M6 prerequisites are complete; at-rest sealing interim vs Authority A4 TPM binding remains open |
 
 ## Sequencing

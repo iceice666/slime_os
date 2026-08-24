@@ -14,7 +14,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | --- | --- | --- |
 | [Backlog](00-backlog.md) | B1–B76 resolved; **no open items** — B70 closed 2026-08-22 when the last nine `fabric_profile` `include!` sites became authenticated `fabric-graph` header fields, `RuntimeLimits` queries, and published contract constants, and `components/build-support` stopped reading manifests entirely | No open backlog item gates the next milestone. B61/B63/B65 each record a deliberately deferred half a future audit should start from |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate. **C10 closed 2026-08-24** across C10.1–C10.4: one task-private 2 MiB window per child, an authenticated `private-memory-budget/v1` resource fixing every component's ceiling, a `GlobalAlloc` over that region, and adoption by `fabric-service` — the graph's own broker, in ten fixtures — which now sizes its role and frame tables from the graph a generation declares rather than from the contract's ceilings, freeing 29960 bytes of `.bss` plus `.data` per generation. A repeated spawn/exit cycle returns the frame allocator's own watermarks exactly, and a shared buffer cannot be mapped into a private window | C9 robot runtime authority, the last undecomposed core-runtime track. C10's own follow-ups are ordinary work rather than milestone work: the remaining worst-case-sized components, and deriving each holder's page quota from its declared graph the way its tables now are |
+| [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate. **C10 closed 2026-08-24** across C10.1–C10.4: one task-private 2 MiB window per child, an authenticated `private-memory-budget/v1` resource fixing every component's ceiling, a `GlobalAlloc` over that region, and adoption by `fabric-service` — the graph's own broker, in ten fixtures — which now sizes its role and frame tables from the graph a generation declares rather than from the contract's ceilings, freeing 29960 bytes of `.bss` plus `.data` per generation. A repeated spawn/exit cycle returns the frame allocator's own watermarks exactly, and a shared buffer cannot be mapped into a private window. **C9 is decomposed into C9.1–C9.6** and is the track's one open milestone | C9.1 explicit clock and timer service authority: the root already owns the timer and no component can reach it. Planning C9 rescoped two of its original deliverables against the pinned platform — EL0 counter access is a global kernel grant the root depends on, so clock authority gates the service rather than the register, and conserved CPU accounts are blocked on the MCS assurance decision rather than on C9 |
 | [Component platform](10-component-platform.md) | CP0–CP5 complete; CP2's root-served query resolves grant bindings, namespaced boot-layout roles, capability roles, the fabric graph, and the generation's boot action, and its site-by-site migration finished with B70's closure | CP5 closed 2026-08-22: a pinned git SDK built both RP4 data-path components in a distinct repository, admitted their content-bound ELFs through CP4, passed baseline, peer-death, malformed-descriptor, and wrong-type AArch64 QEMU boots, and left the in-tree fallback intact. The next demo dependency is RP4 on physical Raspberry Pi 5 after RP3/P4 qualification |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0, RP1, and RP2 complete. RP2 closed 2026-08-20 with `sel4-demo.zti`, the first generation carrying the C7 data path, the C8 route graph, and the product component graph together, plus the rollback and wrong-target arms it owed the demo; RP3–RP8 planned | RP3's Raspberry Pi 5 serial boot, which depends on P4's board qualification |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
@@ -53,7 +53,8 @@ flowchart TD
     P2["P2.1–P2.2 AArch64\nhistorical; P2.3–P2.6 superseded"]
     P5["P5 seL4 substitution\ncomplete; product path"]
     P4["P4 Raspberry Pi 5 qualification"]
-    C10["C10 private component memory"]
+    C9["C9 robot runtime authority\nC9.1–C9.6"]
+    C10["C10 private component memory\ncomplete"]
     CP0["CP0 component-spec/v1\ncomplete"]
     CP1["CP1 system-spec/v1 + generation derivation\ncomplete"]
     CP2["CP2 runtime binding resolution"]
@@ -98,7 +99,10 @@ flowchart TD
     CP3 --> CP5
     CP4 --> CP5
     CP5 --> RP4
+    C8 --> C9
+    P5 --> C9
     C10 --> RP5
+    C9 -.->|clock/timer, wait sets| RP5
     R0 --> RP6
     X1 -.->|only if chosen| RP6
     RP8 --> R1 --> R2

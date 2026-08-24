@@ -225,7 +225,7 @@ Before the transport and ROS layers are introduced, two isolated components — 
 
 **Status:** Not started.
 
-**Depends on:** RP4 and the subset of C10/private-memory, clock/timer, and datagram/network service required by R0.
+**Depends on:** RP4, C10's private memory (complete), and the subset of clock/timer and datagram/network service required by R0. The clock/timer and executor halves are [C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority) and [C9.2](02-core-runtime.md#c92--bounded-userspace-wait-sets-and-executors); RP5 needs those two slices, not the whole C9 track.
 
 ### Deliverables
 
@@ -236,7 +236,7 @@ Before the transport and ROS layers are introduced, two isolated components — 
 - bound heap pages, executor queues, timers, log bytes, parameter bytes, transport receive queues, publisher/subscriber history, batches, retries, and outstanding messages before activation;
 - keep unsupported POSIX, dynamic loading, package discovery, router or scouting-based discovery, plugin behavior, or vendor-specific ambient middleware configuration visibly unsupported rather than accidentally ambient.
 
-The envelope must stay within the mechanisms this repository already has. The component runtime's allocator is a bump allocator whose `dealloc` is a no-op, and there is no async executor anywhere in `components/` — so a transport implementation that assumes a general-purpose heap or an async runtime is out of scope for RP5, and vendoring one that does would require both mechanisms first. Profile 0's blocking, fixed-buffer shape is chosen to need neither.
+The envelope must stay within the mechanisms this repository already has, and one half of that constraint lifted with C10. A real general-purpose heap now exists: `components/runtime/src/private_heap.rs` is a free-list `GlobalAlloc` over the task-private region with a working `dealloc`, behind the `private-heap` feature and bounded by a generation-declared page quota — `fabric-service` ships on it. The bump allocator in `components/runtime/src/heap.rs`, whose `dealloc` is a no-op, remains the default for components that do not opt in. What is still absent is an executor: there is no async runtime anywhere in `components/`, and the bounded wait set that would replace one is [C9.2](02-core-runtime.md#c92--bounded-userspace-wait-sets-and-executors). So a transport implementation assuming an async runtime is still out of scope for RP5, while one assuming a heap is now merely a declared quota. Profile 0's blocking, fixed-buffer shape is chosen to need neither.
 
 ### Required checks
 

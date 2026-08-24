@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and all of C8 (C8.1–C8.15) are complete under their named QEMU gates. The C8 track closed on 2026-08-17: C8.13's concurrent cross-plane traffic and resource ceilings (with C8.13.1–C8.13.3), C8.14's degradation and fault-isolation envelope, and C8.15's aggregate determinism gate, which boots both aggregate schedules twice over one declared composition and compares 279 semantically identical trace records field by field. The backlog is clear: B55's full-graph boot defects and B56's unpassable C8.9 profile check are both resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C9 (robot runtime authority) and C10 (bounded private component memory) are the track's remaining open milestones.
+**Status:** C7 and all of C8 (C8.1–C8.15) are complete under their named QEMU gates. The C8 track closed on 2026-08-17: C8.13's concurrent cross-plane traffic and resource ceilings (with C8.13.1–C8.13.3), C8.14's degradation and fault-isolation envelope, and C8.15's aggregate determinism gate, which boots both aggregate schedules twice over one declared composition and compares 279 semantically identical trace records field by field. The backlog is clear: B55's full-graph boot defects and B56's unpassable C8.9 profile check are both resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C10 (bounded private component memory) closed 2026-08-24 across C10.1–C10.4. C9 (robot runtime authority) is the track's one remaining open milestone, now decomposed into C9.1–C9.6; two of its original deliverables were rescoped against the pinned platform rather than carried as plans — EL0 counter access is a global kernel grant the root itself depends on, and conserved CPU accounts have no mechanism while `KernelIsMCS OFF`.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -22,8 +22,8 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 1. C7 consumes the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 2. C8 consumes C7's bounded sample plane.
-3. C9 consumes C8 plus the scheduler and time mechanisms from M1/M2, after P1 has made their architecture boundary explicit.
-4. C10 consumes C7's per-holder quota and accounting pattern only. It does not consume C8 or C9 and may proceed in parallel with the remaining fabric slices.
+3. C9 consumes C8 plus P5's timer, interrupt, context-switch, and idle mechanisms. It is decomposed into C9.1–C9.6, sequenced so each slice's evidence is the next one's precondition: clock authority, then wait sets over it, then class, then restart, then replay, then the composed workload.
+4. C10 consumed C7's per-holder quota and accounting pattern only; it did not consume C8 or C9, and closed 2026-08-24.
 5. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
 6. ROS R1 consumes C8 and H6 networking; it does not block C9, and its initial wire-conformance gate does not require a physical-board boot.
 
@@ -764,45 +764,424 @@ by `sel4_fault_check`.
 
 ## C9: Robot runtime authority
 
+**Status:** Not started. Decomposed into C9.1–C9.6.
+
+This track supplies the timing, execution, lifecycle, and observation contracts
+needed by robot and mixed interactive workloads. It does not promise hard
+real-time behavior from QEMU; deterministic state-machine checks precede
+measured latency evidence on a named physical target.
+
+**Depends on:** C8 and architecture-portability milestone P5, which supplies the
+privileged timer, interrupt, context-switch, and idle mechanisms from upstream
+seL4. C9 defines architecture-neutral timer, wait-set, scheduling-class,
+lifecycle, and observation semantics above them; `slime-root` owns the bounded
+mechanism that brokers them (`slime-root/src/{platform_timer,timer,event,notification,supervision,fault}.rs`).
+
+R2's ROS 2 managed-node and parameter-service compatibility is expected to be
+implemented as a profile over C9's lifecycle-transition and parameter-state
+schemas rather than a separate ROS-specific state machine; see
+[`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md).
+
+**Motivation:** every mechanism this track needs at the bottom already exists
+and none of it reaches a component. `slime-root` claims the one architected-timer
+PPI seL4 leaves userspace, binds it to a notification, programs one-shot
+deadlines, and drains a bounded deadline queue emitting totally ordered
+scheduling events (`slime-root/src/{platform_timer,timer,event}.rs`), and
+`just sel4_root_boot_check` observes the whole path in ordered `SLIME_TIMER`
+markers. But the live product use of `TimerScheduler` is that startup proof:
+no component-visible operation reads a clock or arms a timer, the generated
+syscall ABI has no time label, and a component that wants to wait on several
+sources today blocks on one generation-declared badged notification and then
+sweeps its endpoints by hand. Restart is the same shape — `fault.rs` carries
+`Timeout`, `PeerLoss`, and `Unhealthy` terminal states with no production
+caller, and nothing restarts anything.
+
+### Architecture decisions
+
+These four fix the shape of every slice below, and two of them record a wall
+rather than a plan.
+
+- **The clock is a service, not a register grant.** C9 gates root-mediated
+  monotonic reads, timer arm/cancel, and simulated time behind declared
+  authority, and a component absent from that authority gets no service. It
+  does *not* claim that raw counter reads are impossible: seL4 sets
+  `CNTKCTL_EL1.EL0PCTEN`/`.EL0PTEN` **once, globally, at kernel boot**
+  (`armv_init_user_access` in
+  `deps/sel4/src/arch/arm/armv/armv8-a/64/user_access.c`), never per-TCB, and
+  `sel4/config/qemu-arm-virt.cmake` must enable both because `slime-root`
+  programs the EL1 physical timer from EL0 itself. The grant is therefore
+  all-or-nothing and the root is inside it. Any EL0 code can execute
+  `mrs CNTPCT_EL0`; no shipped component does, and no component API exposes it.
+  Revoking the grant would leave the root with no timer at all — PPI 30 is the
+  only architected-timer PPI seL4 does not claim under
+  `KernelArmHypervisorSupport ON` — so closing this is a kernel-side question,
+  not a config edit. C9's clock authority is consequently an *authority over
+  the service and its semantics* (simulated time, deadline ordering, recorded
+  determinism), and this paragraph is the boundary that claim is read against;
+- **Scheduling classes rest on priority, and budgets stay undeclarable.**
+  Class assignment maps to seL4 TCB priorities, which are already declared
+  generation data and enforced per B48 (`Instance.priority`,
+  `Instance.workerPriority`, `SLIME_GRAPH schedule`). Conserved CPU accounts,
+  budgets, and periods are **out of C9's scope** while `KernelIsMCS OFF`:
+  non-MCS seL4 has no budget to charge, `ScheduleRecord`'s `budget_us` and
+  `period_us` are written zero by the builder, and no C9 contract may add a
+  field that pretends otherwise. Admitting MCS is an assurance decision — the
+  AArch64 functional-correctness proofs do not cover that configuration — and
+  is recorded as such in `sel4/config/qemu-arm-virt.cmake` rather than deferred
+  silently. A budgeted-CPU slice is therefore blocked on that decision, not on
+  C9;
+- **Wait sets are userspace, over B46's primitives.** The root already deleted
+  its `WaitSet` when B46 replaced logical channels with native seL4 Endpoints
+  and badged Notifications. C9 does not restore a root-owned wait set: a
+  bounded ready queue with deterministic tie rules is `slime-rt` code over
+  `notification_wait` and per-endpoint receive, and the root's contribution is
+  the timer source that lets such a queue block on time as well as messages;
+- **Restart is a userspace supervisor over root mechanism.** `slime-root`
+  observes termination, holds single-assignment terminal state, and reclaims;
+  it does not decide that something should run again. Attempt bounds, backoff,
+  health dependencies, and lifecycle transitions are generation-declared policy
+  executed by a component holding supervision authority, so the root gains no
+  restart policy and no notion of a component's health;
+- **C9's authorities are rights, and the matrix changes with them.** Unlike C10
+  — which added no object kind and no right, so
+  `../docs/capability-matrix.md` stayed unchanged — C9.1's monotonic, timer,
+  and simulated-time authorities and C9.3's promotion authority each gate a
+  root operation on a *named* authority a generation grants, which is what a
+  right is. Each is therefore a new bit in `contracts/generation/v5`'s rights
+  vocabulary with a matrix row, landing in the same change as the operation and
+  gate it guards, as invariant 4 in [`README.md`](README.md) requires. C9 adds
+  no new seL4 object kind: the timer is root-brokered state keyed by task, not
+  a capability a component can name, transfer, or derive.
+
+### Sequence
+
+1. C9.1 exposes the existing root timer as declared component authority.
+2. C9.2 builds bounded userspace wait sets over C9.1's timer source and B46's
+   notifications.
+3. C9.3 makes scheduling class declared, enforced, and non-self-wideable.
+4. C9.4 adds lifecycle transitions and supervised restart with fresh authority.
+5. C9.5 adds typed recording and deterministic replay.
+6. C9.6 composes the sensor → controller → actuator workload that exercises all
+   five under contention and an injected restart.
+
+### C9.1 — Explicit clock and timer service authority
+
 **Status:** Not started.
 
-This slice supplies the timing, execution, lifecycle, and observation contracts needed by robot and mixed interactive workloads. It does not promise hard real-time behavior from QEMU; deterministic state-machine checks precede measured latency evidence on a named physical target.
+**Depends on:** P5's timer mechanism, already live in
+`slime-root/src/{platform_timer,timer,event}.rs` and observed by
+`just sel4_root_boot_check`.
 
-**Depends on:** C8 and architecture-portability milestone P5, which supplies the privileged timer, interrupt, context-switch, and idle mechanisms from upstream seL4. C9 defines architecture-neutral timer, wait-set, scheduling-class, lifecycle, and observation semantics above them; `slime-root` owns the bounded mechanism that brokers them (`slime-root/src/{platform_timer,notification,supervision}.rs`).
+#### Deliverables
 
-R2's ROS 2 managed-node and parameter-service compatibility is expected to be implemented as a profile over C9's lifecycle-transition and parameter-state schemas rather than a separate ROS-specific state machine; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md).
+- declare clock authority as generation data: a versioned Zutai contract naming
+  which instances may read monotonic time, arm timers, and read simulated time,
+  as distinct authorities rather than one "clock" bit, so a component that may
+  sleep need not be able to read the wall clock;
+- add root operations for monotonic read, timer arm, and timer cancel, gated on
+  that declared authority, allocated as new labels in
+  `contracts/syscall-abi/v1/` and documented in `../docs/syscall-abi.md` in the
+  same change;
+- broker each component's timers through the existing `TimerScheduler` with a
+  per-task ceiling on live timers, so one component cannot exhaust the queue
+  another depends on, and expiry delivers as a signal on that component's
+  declared notification with a declared badge bit — not a new wake mechanism —
+  which is what lets C9.2 block on time and messages in one wait;
+- make simulated time a distinct declared authority whose advance is a
+  component operation, so the C8 corpus's deterministic time inputs become a
+  service instead of scenario-specific messages, without changing C8 QoS
+  state-machine meanings;
+- deny by default: an instance absent from the clock authority receives no
+  slot, and every operation refuses with a structured error;
+- record the register wall in the contract's own documentation, so a reader of
+  the clock contract learns what it does not enforce.
 
-### Deliverables
+#### Required checks
 
-- expose monotonic time, optional wall time, timers, and simulated time as distinct explicit service capabilities; a component with no clock grant cannot observe time implicitly;
-- implement userspace wait sets/executors over stream, call, operation, timer, supervision, and QoS-event endpoints with bounded ready queues and deterministic tie rules, built on the native seL4 Endpoint/Notification wait mechanism B46 established rather than a root-owned wait set;
-- add manifest-declared `SchedulingClass` per component or supervision subtree, initially foreground, normal, and best-effort, plus conserved CPU resource accounts;
-- keep scheduling mechanism in seL4 — TCB priorities and, where its proof permits, MCS scheduling contexts — while class assignment, dynamic promotion, and workload policy remain generation/userspace decisions; a component cannot widen its own class. B48 established per-thread declared priority and deferred AArch64 MCS until its proof is complete, so a C9 class contract must state which of the two it rests on;
-- preserve class and resource-account bounds across supervised restart while issuing fresh endpoint, mapping, and device authority;
-- define component lifecycle transitions, health dependencies, bounded restart/backoff policy, and parameter state as versioned userspace schemas rather than root or seL4 policy;
-- add typed recording and replay for declared fabric routes; clock, entropy, device input, and other nondeterminism must be either capability-recorded or explicitly excluded from a deterministic claim;
-- build a simulated sensor → controller → actuator workload that exercises timer, stream, call, lifecycle, restart, and contention paths with no privileged special-casing;
-- keep timer delivery, interrupt acknowledgement, context switching, CPU idle, and preemption behind seL4 and the admitted architecture profile; no GIC identifier, AArch64 register frame, or RISC-V trap field appears in the C9 userspace contracts.
+- a component holding monotonic authority reads a counter that advances, and
+  two successive reads never go backwards;
+- a component with no clock authority is refused every clock operation, and its
+  refusal is distinguishable from a malformed request;
+- monotonic, timer, and simulated-time authority are independently grantable:
+  each of the three is exercised by a holder that lacks the other two;
+- an armed timer expires once, delivers to its holder's declared notification,
+  and a cancelled timer never delivers;
+- the per-task live-timer ceiling refuses the arm that would exceed it and
+  leaves every other component's timers intact;
+- a component's live timers are dropped when it terminates, observable as a
+  deadline queue returning to its pre-spawn occupancy;
+- simulated time advances only when its holder advances it, and a component
+  holding simulated-time authority alone cannot observe the hardware counter
+  through it.
 
-### Required checks
+#### Planned verification target
 
-- a component without clock, parameter, lifecycle-control, recorder, or scheduling-promotion authority cannot exercise that operation through another ambient API;
-- a best-effort workload saturating available CPU cannot claim foreground class, escape its conserved account, or prevent the declared control workload from being scheduled according to the selected class contract;
-- wait-set queues, timer counts, callbacks per wake, parameter bytes, restart attempts, backoff duration, and recorded trace bytes are bounded before allocation;
-- supervised restart preserves declared class and graph shape but cannot reuse stale buffers, endpoints, timers, or device mappings;
-- identical recorded typed inputs, clock events, and lifecycle transitions produce identical replayed component outputs for a manifest-declared deterministic component;
-- deadline misses, timer expiry, liveliness loss, process fault, peer loss, cancellation, and scheduling-budget exhaustion remain distinct at the userspace boundary.
-- the C9 semantic corpus can be replayed on later AArch64 board and RV64 profiles without changing operation meanings, event kinds, scheduling classes, bounds, or generated schemas; raw register and physical-address traces are not cross-architecture equality inputs;
+```sh
+just clock_authority_check
+```
 
-### Planned verification target
+#### Exit condition
+
+A generation declares monotonic, timer, and simulated-time authority
+separately; holders read time, arm and cancel bounded timers delivered through
+their own declared notifications, and a component absent from the declaration
+is refused every operation with a structured error while the root's own timer
+phase keeps working.
+
+### C9.2 — Bounded userspace wait sets and executors
+
+**Status:** Not started.
+
+**Depends on:** C9.1's timer source and B46's native Endpoint/Notification
+mechanism.
+
+#### Deliverables
+
+- implement a bounded wait set in `slime-rt` that blocks on **one** declared
+  notification and demultiplexes the badge word, because that is the only
+  multi-source block seL4 offers a userspace thread: `notification_wait` is one
+  `seL4_Wait` on one capability, and a component's notifications live in
+  distinct CSpace slots. Every source the wait set admits must therefore be a
+  signaller of that one notification, which is the topology
+  `scripts/build/build-generation.py` already validates — exactly one waiter,
+  one or more signallers — and which `sel4-call.zti` already declares with four;
+- admit stream, call, operation, timer, supervision, and QoS-event sources as
+  declared source kinds, each mapped to a declared badge bit, so a woken badge
+  word identifies the ready set rather than merely "something happened". The
+  badge is 64 bits and `slime-root/src/notification.rs` already assigns
+  `1 << (slot % 63)`, so the per-wait-set source ceiling is a property of the
+  badge width rather than a number this slice invents;
+- deliver C9.1's timer expiries as signals on that same notification, so a wait
+  set blocks on time and messages together instead of choosing between them;
+- after a wake, drain each badged source's endpoint with the existing
+  non-blocking receive, so the wait set never blocks a second time to find out
+  what became ready;
+- fix a deterministic tie rule over the badge word for simultaneously ready
+  sources and document it as the contract, so identical readiness produces
+  identical dispatch order;
+- bound the ready queue, the number of registered sources, and callbacks per
+  wake before allocation, with a structured error at each ceiling;
+- keep the whole mechanism userspace: the root gains no wait set, no ready
+  queue, and no source registry. Its only contribution is the declared
+  notification it already materializes and the timer that signals it;
+- allocate the wait set from the C10 private region rather than a worst-case
+  static array, so a component pays for the sources it declares.
+
+#### Required checks
+
+- a wait set blocking on a timer and two endpoints wakes once per ready set,
+  identifies each ready source from the badge word, and dispatches nothing it
+  was not registered for;
+- two sources signalling before the waiter runs are both dispatched from the
+  single coalesced badge, rather than one being lost or requiring a second
+  block;
+- simultaneous readiness on several sources dispatches in the documented tie
+  order, identically across repeated boots;
+- source-count, ready-queue, and callbacks-per-wake ceilings each refuse with
+  their own error and leave the wait set usable;
+- a component whose peer dies observes it through its registered supervision
+  source rather than by timing out;
+- registering a source a component has no authority for is refused.
+
+#### Planned verification target
+
+```sh
+just wait_set_check
+```
+
+#### Exit condition
+
+A component registers timer, message, and supervision sources against one
+declared notification, blocks once per ready set, recovers every ready source
+from the coalesced badge word, and dispatches them in a documented
+deterministic order under repeated boots, with every ceiling refused
+structurally and no root-side wait state.
+
+### C9.3 — Declared scheduling class
+
+**Status:** Not started.
+
+**Depends on:** B48's per-thread declared priority. Explicitly **not** MCS: see
+the architecture decision above.
+
+#### Deliverables
+
+- add a `SchedulingClass` to the component and generation contracts —
+  foreground, normal, best-effort — mapped to concrete TCB priorities, with the
+  mapping itself declared rather than compiled in;
+- admit class per instance and per supervision subtree, deny-by-default to
+  normal, and refuse a generation whose class assignment contradicts its
+  declared priorities rather than silently preferring one;
+- make dynamic promotion an explicit authority a component may hold over
+  *another* component's class, never its own, so no component can widen itself;
+- state in the contract that CPU quantity is not bounded by this mechanism, and
+  keep `budget_us`/`period_us` zero and undeclarable.
+
+#### Required checks
+
+- a best-effort workload saturating the CPU cannot prevent a foreground
+  component from being scheduled, observable as ordered progress markers;
+- a component cannot raise its own class through any operation, including one
+  it holds promotion authority for;
+- a generation whose declared class and declared priority disagree is refused
+  at build and at admission;
+- class survives a supervised restart rather than reverting to the default.
+  This one is observed by C9.4's gate, not C9.3's, because nothing restarts a
+  component until C9.4 exists; it is listed here so the property is owned by the
+  slice that defines class rather than discovered by the slice that restarts.
+
+#### Planned verification target
+
+```sh
+just scheduling_class_check
+```
+
+#### Exit condition
+
+A generation declares scheduling class per instance; a saturating best-effort
+workload cannot starve a declared foreground component, no component can widen
+its own class, and a class/priority contradiction is refused before boot.
+Restart survival is C9.4's to observe, so C9.3 closes without it.
+
+### C9.4 — Lifecycle transitions and supervised restart
+
+**Status:** Not started.
+
+**Depends on:** C9.1 (backoff needs a clock), C9.3 (class must survive
+restart), and the root's existing termination observation in
+`slime-root/src/{fault,supervision}.rs`.
+
+#### Deliverables
+
+- define lifecycle transitions, health dependencies, restart attempt bounds,
+  backoff policy, and parameter state as versioned Zutai schemas, promoting
+  `ComponentSpec.lifecycle`'s declarative state list into an admitted
+  transition graph;
+- implement restart as a userspace supervisor holding declared supervision
+  authority: it observes a termination, consults declared policy, and requests
+  a fresh spawn; the root gains no restart policy;
+- reissue every authority on restart — endpoints, mappings, buffers, timers,
+  device grants — so a restarted component cannot reach a predecessor's state,
+  and give the root the mechanism to prove staleness rather than assume it;
+- give `fault.rs`'s existing `Timeout`, `PeerLoss`, and `Unhealthy` terminal
+  states production callers, or delete them; they are currently dead public API
+  with no caller and no test — `fault.rs`'s four tests exercise `ipc_completed`,
+  `fault`, and `exit` only;
+- make parameter state an *authority*, not merely a schema: a component holding
+  no parameter grant cannot read or write another's parameters, which is what
+  C9.6's exit condition means by "parameter authority" and what the
+  pre-decomposition C9 gated in its first required check.
+
+#### Required checks
+
+- a component killed by fault, by exit, and by declared unhealthiness each
+  restarts under its declared policy, and the three are distinguishable;
+- restart attempts are bounded and backoff is observed against C9.1's clock,
+  not a spin count;
+- a restarted component cannot use any predecessor endpoint, mapping, buffer,
+  or timer, and an attempt is refused rather than ignored;
+- a component whose declared health dependency is down is not started, and is
+  started when the dependency recovers;
+- restart preserves declared scheduling class and private-memory quota;
+- exhausting the attempt bound leaves the graph in a declared terminal state
+  rather than restarting forever;
+- a component holding no parameter authority cannot read or write another
+  component's parameters, and its refusal is distinguishable from a missing key.
+
+#### Planned verification target
+
+```sh
+just lifecycle_restart_check
+```
+
+#### Exit condition
+
+A supervisor restarts a failed component under generation-declared attempt and
+backoff policy, the restarted instance holds entirely fresh authority and its
+original class and quota, stale predecessor capabilities are refused, parameter
+state is reachable only with declared parameter authority, and attempt
+exhaustion terminates deterministically.
+
+### C9.5 — Typed recording and deterministic replay
+
+**Status:** Not started.
+
+**Depends on:** C9.1's clock authority, C9.2's deterministic dispatch order,
+and C8.11's trace contract.
+
+#### Deliverables
+
+- record declared fabric routes, clock reads, timer expiries, and lifecycle
+  transitions as a typed bounded trace, reusing C8.11's record shape rather
+  than a second trace format;
+- classify every nondeterminism source as capability-recorded or excluded from
+  the deterministic claim, and refuse a generation that declares a component
+  deterministic while granting it an unrecorded source;
+- replay a recorded trace into a component and compare its typed outputs
+  field by field, following C8.15's semantic-comparison pattern;
+- bound recorded trace bytes before allocation.
+
+#### Required checks
+
+- a deterministic component replays a recorded trace to byte-identical typed
+  outputs across two boots;
+- a component granted an unrecorded nondeterminism source cannot be declared
+  deterministic;
+- a truncated or reordered trace is refused rather than partially replayed;
+- the trace ceiling is refused structurally.
+
+#### Planned verification target
+
+```sh
+just replay_check
+```
+
+#### Exit condition
+
+A component declared deterministic reproduces identical typed outputs from a
+complete recorded trace of its routes, clock reads, and lifecycle transitions,
+and a generation granting it unrecorded nondeterminism is refused.
+
+### C9.6 — Robot workload composition
+
+**Status:** Not started.
+
+**Depends on:** C9.1–C9.5.
+
+#### Deliverables
+
+- build a simulated sensor → controller → actuator graph over the native
+  fabric, with no privileged special-casing, exercising timer, stream, call,
+  lifecycle, restart, and contention paths;
+- run it under CPU contention from a declared best-effort load and an injected
+  controller restart;
+- assert the composed envelope the way C8.15 does: one composition, both
+  schedules, compared semantically rather than by marker presence alone.
+
+#### Required checks
+
+- the graph runs to completion under contention with declared scheduling order
+  preserved;
+- an injected controller restart is bounded, reissues authority, and the graph
+  resumes;
+- deadline miss, timer expiry, liveliness loss, fault, peer loss, and
+  cancellation remain distinct at the userspace boundary;
+- the semantic corpus is architecture-neutral: no GIC identifier, AArch64
+  register frame, or physical address appears in a C9 contract or trace record.
+
+#### Planned verification target
 
 ```sh
 just robot_runtime_check
 ```
 
-### Exit condition
+#### Exit condition
 
-A simulated sensor/controller/actuator graph runs through the native fabric with explicit time, scheduling, lifecycle, and parameter authority; under CPU contention and an injected component restart it remains bounded, preserves the declared scheduling order, restores fresh authority, and reproduces its typed outputs from a complete recorded input trace.
+A simulated sensor/controller/actuator graph runs through the native fabric with
+explicit time, scheduling, lifecycle, and parameter authority; under CPU
+contention and an injected component restart it remains bounded, preserves the
+declared scheduling order, restores fresh authority, and reproduces its typed
+outputs from a complete recorded input trace.
 
 ## C10: Bounded private component memory
 

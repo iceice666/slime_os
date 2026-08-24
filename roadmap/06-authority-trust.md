@@ -8,7 +8,7 @@
 
 ## Composite authority boundary
 
-The earlier combined plan grouped revocation, scheduling class, and secrets. This track owns revocation and secrets as A1 and A2; Core C9 owns manifest-declared scheduling class, generation-controlled assignment, userspace dynamic reclassification, prevention of self-widening, composition with resource-account quantity, and preservation across supervision restart.
+The earlier combined plan grouped revocation, scheduling class, and secrets. This track owns revocation and secrets as A1 and A2; Core [C9.3](02-core-runtime.md#c93--declared-scheduling-class) owns manifest-declared scheduling class, generation-controlled assignment, userspace dynamic reclassification, prevention of self-widening, and preservation across supervision restart. Composition with *resource-account quantity* is not C9's: conserved CPU accounts have no mechanism while the pinned kernel is built `KernelIsMCS OFF`, so that half is blocked on the MCS assurance decision recorded in `sel4/config/qemu-arm-virt.cmake` rather than on this track or C9.
 
 The composite release boundary still requires all three mechanisms: a component cannot claim an ungranted scheduling class, every capability-matrix amendment lands with its gate, foreground ordering survives contention, grants can be revoked, and scoped secrets remain usable without becoming readable or recordable.
 
@@ -72,7 +72,7 @@ A scoped credential is usable but neither readable nor recordable: a USE-only ho
 
 **Status:** Planned; not implemented.
 
-**Dependencies:** Platform-hardware accelerator bring-up and IOMMU-enforced DMA in [Platform hardware](04-platform-hardware.md); SharedBuffer handoff; generation manifests; entry-25 resource-account semantics and entry-9 grant introspection in [Core runtime](02-core-runtime.md); and Core C9 wherever queue ordering or preemption uses scheduling authority. The existing `storage_cap_check` pattern is the rights-gating template, not evidence that accelerator authority exists. Source: [direction 28](../docs/directions/28-accelerator-objects.md).
+**Dependencies:** Platform-hardware accelerator bring-up and IOMMU-enforced DMA in [Platform hardware](04-platform-hardware.md); SharedBuffer handoff; generation manifests; entry-9 grant introspection in [Core runtime](02-core-runtime.md); and [C9.3](02-core-runtime.md#c93--declared-scheduling-class) wherever queue ordering or preemption uses scheduling authority. Entry-25's conserved `ResourceAccount` is *not* available from Core runtime: C9 disclaims conserved CPU accounts while the pinned kernel is built `KernelIsMCS OFF`, so A3's compute budget must pick a unit it can actually charge — tokens, work items, or queue time per window — rather than inheriting a general account model. The existing `storage_cap_check` pattern is the rights-gating template, not evidence that accelerator authority exists. Source: [direction 28](../docs/directions/28-accelerator-objects.md).
 
 ### Deliverables
 
