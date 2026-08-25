@@ -333,3 +333,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-25 | [C9.3: a class is a priority, and the band that names it](2026-08-25-c9-3-declared-scheduling-class/index.md) | Change | Verified | C9.3, C9, C9.1, C9.2, C9.4, B48, B71, B77 |
 | 2026-08-25 | [C9.4: the root charges the bound, and userspace decides the restart](2026-08-25-c9-4-supervised-restart/index.md) | Change | Verified | C9.4, C9, C9.1, C9.2, C9.3, B71, B76 |
 | 2026-08-25 | [Planning CP6–CP10: one source tree, one generated SDK, and tested release pairs](2026-08-25-cp6-cp10-sdk-release-plan/index.md) | Decision | Proposed | CP6, CP7, CP8, CP9, CP10 |
+| 2026-08-25 | [CP6–CP10: one exporter, one published mirror, and a consumer that can roll back](2026-08-25-cp6-cp10-component-sdk-releases/index.md) | Change | Verified | CP6, CP7, CP8, CP9, CP10, CP5 |

@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, derive generation inputs from that specification, and support components authored, built, released, and upgraded outside this repository through a reproducible SDK whose source remains owned here. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to the existing seL4 product path rather than the full platform that document describes.
 
-**Status:** CP0–CP5 complete. CP6–CP10 planned as the durable SDK publication and consumer-lifecycle follow-on.
+**Status:** CP0–CP10 complete, with CP7's hosted-publication clause deferred and named in its entry. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -14,7 +14,7 @@
 - CP4 introduces no per-component signature, provenance record, or new trust root. A generation containing an externally supplied component is trusted exactly as every generation is today, by the existing whole-generation release signature (`boot-contracts/src/release.rs::INITIAL_TRUST_ROOT`). Per-component provenance is separate future work, not part of this track.
 - This track is independent of [D1–D7](08-native-development.md). D4's `ExecutableFactory`/`EXECUTABLE_ADMIT` authority is a *runtime*, in-booted-system, ephemeral admission mechanism for un-persisted dev-loop execution; CP4 is a *host-side, build-time* admission mechanism that produces an ordinary, persistent, normally signed generation. Neither depends on the other, and neither milestone should be implemented in terms of the other's mechanism.
 - CP5's "separate checkout" means a genuinely distinct git repository, not a new directory inside this repository's Cargo workspace. CP3's in-repo crate split is a necessary mechanical precondition but is explicitly not sufficient by itself to claim components can be developed "out-of-tree" — that claim is CP5's alone, mirroring how this repository already refuses to conflate QEMU evidence with physical-board evidence elsewhere in this roadmap.
-- CP5's completed exit condition covers a temporary pinned SDK bundle and the RP4 QEMU data path only. CP6–CP10 extend that evidence to a permanent generated repository, downloadable platform build inputs, explicit compatibility declarations, and a pinned consumer upgrade path; they do not retroactively widen CP5's claim.
+- CP5's completed exit condition covered a temporary pinned SDK bundle and the RP4 QEMU data path only. CP6–CP10 extended that evidence to a repository-owned deterministic exporter, a publication path proven against a local clone of the canonical repository, downloadable per-profile platform build inputs, evidence-backed compatibility declarations, and a pinned consumer upgrade and rollback path. They did not retroactively widen CP5's claim, and CP7's own entry records that no commit is hosted in the canonical repository yet.
 - Converting every remaining `sel4-*.zti` fixture to spec-derived form is deferred follow-on work once CP1's generator is proven on `valid.zti` and one `sel4-*.zti`; CP1's exit condition does not require converting all of them.
 - CP6–CP10 do not move authoritative runtime, protocol, contract, target, or toolchain sources out of this repository. The SDK repository is a generated release mirror with one-way synchronization from `slime_os`; fixes land here first and are exported, never patched independently in the mirror.
 - SDK release metadata is a persisted cross-repository format and therefore remains a versioned Zutai contract under `contracts/`. The SDK adds no per-component signature, provenance trust root, or root-side admission path: ELF content hashes and the existing whole-generation release signature remain authoritative.
@@ -245,7 +245,7 @@ Two RP4 data-path components, authored and built entirely in a separate git chec
 
 ## CP6 — Deterministic component SDK export
 
-**Status:** Planned.
+**Status:** Complete.
 
 **Depends on:** CP5.
 
@@ -275,9 +275,17 @@ just component_sdk_export_check
 
 One checked-in exporter, invoked twice from the same `slime_os` commit, produces byte-identical self-describing SDK trees; CP5 uses that exact output, and no test-local alternate bundle recipe survives.
 
+**Delivered:** `contracts/component-sdk-release/v1` declares what an export is — the originating commit, the exported-tree identity, every exported crate and public contract identity, the pinned toolchain and sources, the per-profile platform build inputs, and the compatibility identities — and `scripts/lib/component_sdk.py` is the only thing that produces one. Digests are domain-separated over an explicit length-prefixed encoding rather than over `tar` bytes a host controls, and `treeIdentity` excludes exactly the three record files the contract names. Exported crate manifests are copied byte-for-byte: the generated SDK workspace supplies the `[workspace.lints]` and release-profile tables `[lints] workspace = true` resolves against, read from this repository's own root manifest. The public contract set is *derived* from the `@generated by` headers in the exported bytes rather than listed, so a binding that moves crates cannot silently leave a format out of the set compatibility is decided on. `just component_sdk_out_of_tree_check` consumes this exporter and its own bundle recipe is deleted.
+
+**Exit condition (observed):** `just component_sdk_export_check` exported one source tree twice byte-identically with equal exported-tree and release identities; four sensitivity probes required an exported source and a pin to move the release identity and two product-only files to leave it unchanged; the emitted record decoded as `#valid` through the generated binding with all 5 crate and 39 contract digests recomputed against the emitted bytes; a minimal external repository resolved all five SDK crates through a pinned git commit of the export with nothing escaping to this checkout; and a component built from that commit entered CP4's path and booted the QEMU component graph. Three malformed export requests were refused.
+
+**Gates:** `just component_sdk_export_check`, `just contracts_check`, `just component_sdk_out_of_tree_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+
 ## CP7 — Permanent SDK repository and one-way publication
 
-**Status:** Planned.
+**Status:** Complete, with one clause deferred and named below.
 
 **Depends on:** CP6.
 
@@ -309,9 +317,19 @@ just component_sdk_release_check
 
 An immutable SDK commit and signed tag exist in the canonical repository, regenerate exactly from their recorded `slime_os` commit, and build a QEMU-booted external component without any source or dependency path into this checkout.
 
+**Delivered:** `scripts/build/publish-component-sdk.py` is the release path. It exports a *detached worktree of the commit it records* rather than the working tree, which is what makes a recorded `sourceCommit` a reproducible claim instead of a label, and it writes at most one generated commit plus one immutable signed `sdk-v<version>` tag whose message names both the source commit and the exported-tree identity. Idempotence is decided by the exported-tree identity rather than by a diff: CP6 makes two exports of one commit byte-identical, so an unchanged identity means there is nothing to publish. `--sdk-repository` is separate from `--sdk-url`, so the recorded canonical repository is release identity while the URL is only transport. Tags are signed through the repository's existing Ed25519 SSH release trust root rather than a second key format.
+
+**Exit condition (observed):** `just component_sdk_release_check` published SDK 1.0.0 as one commit and one signed tag naming source `a8c73ff`; republishing the unchanged tree wrote no commit and left the branch at one; a dirty exported set under a defaulted source commit, an unverified source commit, a reused version with a changed tree, and an SDK tree carrying a non-allowlisted file were each refused with a distinguishing message; the published commit regenerated byte-identically from the source commit its own record names, while a one-line hand edit to the mirror's README was refused; a fresh clone of the published commit resolved all five SDK crates through it, built an external component that entered a signed generation, and booted the QEMU component graph; and with every SDK clone deleted the ordinary in-tree component graph still built and booted.
+
+**Deferred clause:** the required check naming "the permanently hosted commit, not a temporary stand-in" is *not* met and is not claimed. Every arm above ran against a local bare clone of [`iceice666/slime_os-component_sdk`](https://github.com/iceice666/slime_os-component_sdk)'s `generated` branch, driven through the real publisher, so what is proven is the publisher's behavior rather than GitHub's. Publishing for real needs two things this milestone does not have: the recorded `slime_os` source commit present on `origin`, since a hosted SDK commit whose source commit is unpublished is an artifact nobody can regenerate, and a release identity whose signing key is not `contracts/release/v1/test-keys`. The branch protection, force-push denial, and credential boundary are GitHub settings rather than repository artifacts and are configured out of band, on the same terms this track already refuses to call QEMU evidence board evidence.
+
+**Gates:** `just component_sdk_release_check`, `just component_sdk_export_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+
 ## CP8 — Platform build-input releases
 
-**Status:** Planned.
+**Status:** Complete.
 
 **Depends on:** CP6, CP7.
 
@@ -341,9 +359,21 @@ just component_sdk_prefix_check
 
 A clean external checkout builds target-qualified QEMU and RPi component ELFs using only one immutable SDK release and its verified platform asset; the QEMU ELF boots, and neither build references `slime_os/build/sel4-prefix*`.
 
+**Delivered:** each release carries one content-addressed `tar` per supported profile — `aarch64-sel4-qemu-virt` and `aarch64-rpi5` — bound in the release record to its profile, its platform, the five `sel4/pins.toml` artifact hashes for that platform, an archive hash, an extracted-tree hash, and the exact `build-sel4.py` plus `check-sel4-pins.py` rebuild recipe. The archive and the extraction are hashed separately because reproducible bytes and a reproducible extraction are two claims and only the second is what Cargo and bindgen read. `tools/sdk-build.py` verifies the record, the archive, and the extracted tree before exporting `SEL4_PREFIX`, `SLIME_TARGET_PROFILE`, the target, and the flags.
+
+Two things the QEMU profile alone hid. The RPi profile builds components against the `aarch64-unknown-none` triple with its own link flags rather than the seL4 JSON target, so the record now carries each profile's target, whether it is a JSON specification, and its exact `RUSTFLAGS` and Cargo flags — one hard-coded flag set produced an ELF the generation builder refused with "invalid component load layout". And that triple links against a repository-level linker script an out-of-tree crate cannot find relative to its own manifest, so `components/build-support` honours `SLIME_COMPONENT_LINKER_DIR` and the export ships the scripts as build inputs. The exporter also canonicalizes the two libsel4 headers seL4's own Python generators stamp with an absolute `.bf` path, to the same `/slime/sel4` logical prefix the kernel build maps its debug paths to; every *other* host path in an exported byte is a refusal rather than a rewrite.
+
+**Exit condition (observed):** `just component_sdk_prefix_check` extracted both archives into empty directories, reproduced their recorded tree identities, found no build-host path, and matched each kernel against its pin. An external checkout then built target-qualified ELFs for both profiles with `SEL4_PREFIX` pointed at a nonexistent path and `SLIME_TARGET_PROFILE` set wrong beforehand, so a build that still succeeded can only have taken both from the release record; neither build referenced `build/sel4-prefix*`. The QEMU ELF entered a signed generation and booted the QEMU component graph. The QEMU-target ELF was refused by the RPi build with "invalid component load layout", and the RPi ELF was admitted only under profile id 3 while a QEMU-profile generation wrapping it declared profile id 5 for the root to refuse before mapping — host-side qualification only, and explicitly not physical-board evidence. Corrupt, truncated, swapped-profile, and metadata-mismatched archives were each refused before Cargo ran.
+
+**Amended deliverable:** the profile is named `aarch64-rpi5` rather than `bcm2712-rpi5`. Those are two vocabularies: `bcm2712-rpi5` is the `build-sel4.py` *platform* that produces the prefix, and `aarch64-rpi5` is the `contracts/target-profile/v1` *profile* a component is qualified against. The record carries both, because a consumer that conflated them would export the wrong `SLIME_TARGET_PROFILE` beside a correct prefix.
+
+**Gates:** `just component_sdk_prefix_check`, `just component_sdk_release_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+
 ## CP9 — SDK versioning and compatibility matrix
 
-**Status:** Planned.
+**Status:** Complete.
 
 **Depends on:** CP7, CP8.
 
@@ -373,9 +403,17 @@ just component_sdk_compatibility_check
 
 Two consecutive immutable SDK releases are correctly classified, every published compatibility row has direct build/admission/boot evidence, and no untested cross-release pairing is presented as supported.
 
+**Delivered:** the version policy is stated over identities that can make a component disagree with the system it is loaded into *after* it compiles, never over crate versions. Five are scalar and breaking on any change — syscall ABI, component-image format, the public contract set, the toolchain, and the `rust-sel4` pin. Two are structural and compared as keyed sets: the exported crates and the target profiles. That split is the milestone's real content. Adding a profile or a crate is a compatible feature and changing or removing one is breaking, and a digest over either set could only report "different" — which would make every platform CP8 adds a major release and so make the classification useless exactly where it matters. `admit_version_change` is one-directional: overstating a change is allowed, understating one is refused with the changed axis named. `sdk/compatibility-matrix.{zti,json,identity}` is the published matrix, decoded by `just contracts_check` through the contract rather than trusted because this repository wrote it.
+
+**Exit condition (observed):** `just component_sdk_compatibility_check` published SDK 1.0.0 and 1.1.0 as two immutable commits and classified them `initial` and `compatible-feature`, the second because it genuinely adds the RPi profile with every other identity unchanged. Five scalar and two structural negative controls each moved one identity in isolation and forced the expected classification, including the case the milestone exists for: a release claiming a patch while its syscall ABI changed, with all crate versions equal, was refused naming `syscallAbi`. A non-advancing version was refused outright. Both published rows name immutable SDK and product commits and cite the component ELF, the generation identity, and `just sel4_component_graph_check` — each observed in that run, with the prior release's row retained only because its own fixture still built, entered a generation, and booted. Three untested pairings — the RPi profile nobody booted, the first SDK against another product commit, and a synthetic future commit — each reported unsupported.
+
+**Gates:** `just component_sdk_compatibility_check`, `just contracts_check`, `just component_sdk_prefix_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+
 ## CP10 — Consumer pin, upgrade, and rollback workflow
 
-**Status:** Planned.
+**Status:** Complete.
 
 **Depends on:** CP9.
 
@@ -404,3 +442,13 @@ just component_sdk_upgrade_check
 ### Exit condition
 
 A separate consumer repository moves between two immutable SDK releases, boots the newly content-bound generation, and then reproduces and boots the prior generation after rollback, with no floating reference or dependency on a `slime_os` checkout.
+
+**Delivered:** every release ships `template/`, a workspace pinning all five SDK crates by full commit, plus `tools/sdk-update.py`, which moves a consumer to a new release by changing the SDK revision, the lockfile, the verified platform asset, and the recorded release identity together. The update works in a staging copy and promotes it only after the rebuild succeeds, so a failure at any step leaves the previous checkout exactly as it was, and it reports the rebuilt component's bare-ELF SHA-256 for the operator-owned component spec.
+
+**Exit condition (observed):** `just component_sdk_upgrade_check` created a consumer from the shipped template, verified its pin is a full commit with no branch, tag, registry, or `slime_os` path reference, and built it as shipped with `--locked`. It then booted a content-bound generation, upgraded to the second release — changing exactly `Cargo.toml`, `Cargo.lock`, and both recorded-release files, asserted as a set — rebuilt the ELF, and booted the new generation. Five failures were injected at the five named points: an SDK commit the repository lacks, a corrupt prefix archive, consumer source that does not compile, a component spec whose declared content hash disagrees with the bytes, and the retained generation's continued admissibility standing for health confirmation. After each, the manifest, lockfile, recorded release, and built ELF were unchanged. Rollback then restored the retained snapshot and reproduced the previous ELF and generation byte-for-byte, with matching generation identity, and booted. The in-tree fallback generation built and booted afterwards.
+
+**Amended deliverable:** the template's own component is built as shipped to prove the template compiles, and then given the `console` component's behavior for the boot arms. The substitution is necessary rather than convenient: the QEMU component graph drives `console` through a scripted scenario and waits for its markers, so a component that merely started and exited would leave the graph waiting until the boot timed out. What the upgrade and rollback arms observe is the pin, the rebuild, and the generation identity, so the component beneath them must be one the graph actually composes.
+
+**Gates:** `just component_sdk_upgrade_check`, `just component_sdk_compatibility_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
