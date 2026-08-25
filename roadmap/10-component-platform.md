@@ -1,8 +1,8 @@
 # Component specification and out-of-tree development track
 
-**Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
+**Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, derive generation inputs from that specification, and support components authored, built, released, and upgraded outside this repository through a reproducible SDK whose source remains owned here. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to the existing seL4 product path rather than the full platform that document describes.
 
-**Status:** CP0–CP5 complete. The track closed 2026-08-22 with B70's last nine `include!` sites.
+**Status:** CP0–CP5 complete. CP6–CP10 planned as the durable SDK publication and consumer-lifecycle follow-on.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -14,8 +14,11 @@
 - CP4 introduces no per-component signature, provenance record, or new trust root. A generation containing an externally supplied component is trusted exactly as every generation is today, by the existing whole-generation release signature (`boot-contracts/src/release.rs::INITIAL_TRUST_ROOT`). Per-component provenance is separate future work, not part of this track.
 - This track is independent of [D1–D7](08-native-development.md). D4's `ExecutableFactory`/`EXECUTABLE_ADMIT` authority is a *runtime*, in-booted-system, ephemeral admission mechanism for un-persisted dev-loop execution; CP4 is a *host-side, build-time* admission mechanism that produces an ordinary, persistent, normally signed generation. Neither depends on the other, and neither milestone should be implemented in terms of the other's mechanism.
 - CP5's "separate checkout" means a genuinely distinct git repository, not a new directory inside this repository's Cargo workspace. CP3's in-repo crate split is a necessary mechanical precondition but is explicitly not sufficient by itself to claim components can be developed "out-of-tree" — that claim is CP5's alone, mirroring how this repository already refuses to conflate QEMU evidence with physical-board evidence elsewhere in this roadmap.
-- Out-of-tree development is proven for [RP4](09-rpi5-ros2-demo.md#rp4--arm-component-data-path-on-qemu-and-raspberry-pi-5)'s two Arm data-path components only. Extending it to RP6's ROS 2 node components, publishing a public registry, or a hosted SDK release, is not part of this track's exit condition.
+- CP5's completed exit condition covers a temporary pinned SDK bundle and the RP4 QEMU data path only. CP6–CP10 extend that evidence to a permanent generated repository, downloadable platform build inputs, explicit compatibility declarations, and a pinned consumer upgrade path; they do not retroactively widen CP5's claim.
 - Converting every remaining `sel4-*.zti` fixture to spec-derived form is deferred follow-on work once CP1's generator is proven on `valid.zti` and one `sel4-*.zti`; CP1's exit condition does not require converting all of them.
+- CP6–CP10 do not move authoritative runtime, protocol, contract, target, or toolchain sources out of this repository. The SDK repository is a generated release mirror with one-way synchronization from `slime_os`; fixes land here first and are exported, never patched independently in the mirror.
+- SDK release metadata is a persisted cross-repository format and therefore remains a versioned Zutai contract under `contracts/`. The SDK adds no per-component signature, provenance trust root, or root-side admission path: ELF content hashes and the existing whole-generation release signature remain authoritative.
+- Publishing a `bcm2712-rpi5` prefix proves that an external component can be built and target-qualified against that exact platform input. It does not claim physical Raspberry Pi 5 boot support; only the existing physical-board gates can make that claim.
 
 ## Sequencing
 
@@ -24,6 +27,11 @@
 3. CP3 depends on CP2's runtime binding resolution: splitting components into independent crates is only useful once no crate-shared `build.rs` output is required at compile time.
 4. CP4 depends on CP0 (a place to declare a component's implementation as workspace-built or externally supplied), CP2 (so an externally built component needs no `OUT_DIR`-generated file), and CP3 (the crate convention an external build reproduces).
 5. CP5 depends on CP3 and CP4, and is what [RP4](09-rpi5-ros2-demo.md#rp4--arm-component-data-path-on-qemu-and-raspberry-pi-5) now requires before its own exit condition is satisfied.
+6. CP6 depends on CP5 and turns its temporary bundle construction into one deterministic, contract-described exporter inside this repository.
+7. CP7 depends on CP6 and publishes the exporter output to one permanent, bot-owned SDK repository; publication never runs from untrusted pull-request code.
+8. CP8 depends on CP6 and CP7 and publishes the platform-specific seL4 prefixes that an external build otherwise has to borrow from a `slime_os` checkout.
+9. CP9 depends on CP7 and CP8 and defines release versioning and the tested compatibility matrix; an untested cross-release pairing remains unsupported rather than inferred from SemVer.
+10. CP10 depends on CP9 and proves the consumer-side pin, update, generation rebuild, boot, and rollback workflow across two immutable SDK releases.
 
 ## CP0 — Component specification model
 
@@ -234,3 +242,165 @@ Two RP4 data-path components, authored and built entirely in a separate git chec
 **Gates:** `just component_sdk_out_of_tree_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just ruff`.
 
 **Evidence:** [`devlog/2026-08-22-cp5-out-of-tree-component-sdk/`](../devlog/2026-08-22-cp5-out-of-tree-component-sdk/index.md)
+
+## CP6 — Deterministic component SDK export
+
+**Status:** Planned.
+
+**Depends on:** CP5.
+
+### Deliverables
+
+- add `contracts/component-sdk-release/v1/schema.zt` as the source of truth for SDK release metadata, including the originating `slime_os` commit, exported-tree identity, Rust toolchain, seL4 and `rust-sel4` pins, target-spec identities, public contract-set identities, and the supported target profiles;
+- replace CP5's test-local copy-and-patch logic with one repository-owned exporter that emits `boot-contracts`, `slime-rt`, `slime-proto`, `slime-components`, `slime-build-support`, the pinned `rust-sel4` source, target specifications, generated public bindings, a root workspace manifest, and the decoded release record from an explicit allowlist;
+- preserve exported crate manifests byte-for-byte. The generated SDK workspace supplies the inherited lint and release-profile context instead of deleting `publish = false` or `[lints] workspace = true` after copying;
+- exclude component implementations, generation fixtures, product compositions, signing keys, build outputs, and every manifest-derived per-plane table from the export;
+- make CP5 consume this exporter so the candidate path and the eventual release path cannot construct different SDKs.
+
+### Required checks
+
+- two isolated exports from the same source tree are byte-identical and report the same exported-tree identity;
+- changing any allowlisted public source or pin changes the identity, while an unrelated product-only file does not;
+- the emitted release record decodes through the generated Zutai binding and every recorded digest matches the emitted bytes;
+- Cargo metadata for a minimal external repository resolves every SDK crate inside the exported tree and no dependency escapes to the source `slime_os` checkout;
+- a component built from a local git commit of the export enters the existing CP4 path and boots on the QEMU component graph.
+
+### Planned verification target
+
+```sh
+just component_sdk_export_check
+```
+
+### Exit condition
+
+One checked-in exporter, invoked twice from the same `slime_os` commit, produces byte-identical self-describing SDK trees; CP5 uses that exact output, and no test-local alternate bundle recipe survives.
+
+## CP7 — Permanent SDK repository and one-way publication
+
+**Status:** Planned.
+
+**Depends on:** CP6.
+
+**Repository:** [`iceice666/slime_os-component_sdk`](https://github.com/iceice666/slime_os-component_sdk). Created empty on 2026-08-25; CP6 must define the reproducible contents before CP7 creates its first generated commit.
+
+### Deliverables
+
+- use [`iceice666/slime_os-component_sdk`](https://github.com/iceice666/slime_os-component_sdk) as the canonical generated SDK repository; its generated branch and release tags are writable only by the release identity, with force-push and direct human edits disabled;
+- publish only from an exact protected `slime_os` commit after CP6 and the existing external-component gates pass; pull-request jobs may build a candidate export but hold no credential capable of writing the SDK repository;
+- write one generated commit carrying the complete SDK tree and its originating `slime_os` commit, then create an immutable signed `sdk-v<version>` tag; external components continue to pin the full commit rather than a branch or movable tag;
+- make publication idempotent: an unchanged exported-tree identity creates no new SDK commit or tag, and a changed tree cannot reuse an existing version;
+- add a reverse drift check that clones the permanent SDK commit, regenerates it from the recorded `slime_os` source commit, and refuses any byte difference. Corrections are made in `slime_os` and republished, never committed directly to the generated mirror.
+
+### Required checks
+
+- a fresh clone of the permanent SDK repository builds the external fixture with every SDK dependency resolved through the pinned SDK commit and no path into a local `slime_os` checkout;
+- publication refuses a dirty source tree, an unverified source commit, a mismatched release record, a reused version, and an SDK tree containing a non-allowlisted file;
+- the permanent commit regenerates byte-identically from the source commit named by its release record;
+- the permanently hosted commit, not a temporary stand-in, supplies an external ELF that enters a signed generation and passes the QEMU component graph gate;
+- deletion of the SDK clone does not affect the ordinary in-tree component build or boot.
+
+### Planned verification target
+
+```sh
+just component_sdk_release_check
+```
+
+### Exit condition
+
+An immutable SDK commit and signed tag exist in the canonical repository, regenerate exactly from their recorded `slime_os` commit, and build a QEMU-booted external component without any source or dependency path into this checkout.
+
+## CP8 — Platform build-input releases
+
+**Status:** Planned.
+
+**Depends on:** CP6, CP7.
+
+### Deliverables
+
+- publish a content-addressed seL4 prefix archive for each SDK-supported profile, initially `aarch64-sel4-qemu-virt` and `bcm2712-rpi5`, rather than requiring `SEL4_PREFIX` to point into `slime_os/build/`;
+- bind each archive in the CP6 Zutai release record to its profile, seL4 source/config identity, kernel and libsel4 configuration hashes, platform-info hash, archive hash, target-spec hash, Rust nightly, and `rust-sel4` commit;
+- publish the exact source rebuild recipe beside the prebuilt archive, retaining `sel4/pins.toml` and the existing prefix checks as the authority for its contents;
+- provide one non-interactive SDK build entry point that verifies the release record and archive before exporting `SEL4_PREFIX`, `SLIME_TARGET_PROFILE`, target specification, and required Cargo flags;
+- keep profile assets separate: a QEMU-qualified component cannot silently consume the RPi prefix or target identity, and vice versa.
+
+### Required checks
+
+- archives extracted in an empty directory reproduce the recorded prefix identities and contain no absolute build-host or source-checkout path;
+- an external component builds with only the permanent SDK clone, the selected downloaded prefix, `libclang`, and the pinned Rust toolchain; no file below the `slime_os` checkout is opened;
+- the QEMU asset produces an ELF admitted into and booted by the QEMU product image;
+- the RPi asset produces an ELF admitted for `bcm2712-rpi5` and refused as wrong-target by the QEMU profile; this host-side qualification is not recorded as physical-board evidence;
+- corrupt, truncated, swapped-profile, and metadata-mismatched archives are refused before Cargo or bindgen runs.
+
+### Planned verification target
+
+```sh
+just component_sdk_prefix_check
+```
+
+### Exit condition
+
+A clean external checkout builds target-qualified QEMU and RPi component ELFs using only one immutable SDK release and its verified platform asset; the QEMU ELF boots, and neither build references `slime_os/build/sel4-prefix*`.
+
+## CP9 — SDK versioning and compatibility matrix
+
+**Status:** Planned.
+
+**Depends on:** CP7, CP8.
+
+### Deliverables
+
+- define the SDK version policy separately from Cargo source compatibility: release metadata records syscall-ABI, component-image, public Zutai contract-set, target-spec, toolchain, `rust-sel4`, and prefix identities that can affect a built component;
+- classify release changes as patch, compatible feature, or breaking, with an automated comparison refusing a release whose version change understates any changed identity or removed public API;
+- begin with exact-pair support: an SDK release is supported against its originating product release. Cross-release compatibility appears in the matrix only after the same external component source or artifact is exercised by the declared build, admission, and boot gates;
+- publish a machine-readable compatibility matrix derived from tested release pairs, not a hand-maintained promise; absence from the matrix means unsupported, not implicitly compatible;
+- retain the existing trust model: the matrix is release guidance and CI evidence, not a new root-side provenance field or an admission bypass.
+
+### Required checks
+
+- negative controls change each compatibility identity in isolation and force the expected release classification;
+- a release cannot claim compatibility from equal crate versions while its syscall ABI, target specification, component-image format, protocol identity, or platform prefix changed incompatibly;
+- every matrix row names immutable SDK and `slime_os` commits and is backed by a build plus the narrowest applicable QEMU boot gate;
+- an untested old/new pairing is absent and reported unsupported rather than accepted by version-range inference;
+- patch and compatible-feature examples retain the prior row only when the prior external fixture still builds, enters a generation, and boots unchanged.
+
+### Planned verification target
+
+```sh
+just component_sdk_compatibility_check
+```
+
+### Exit condition
+
+Two consecutive immutable SDK releases are correctly classified, every published compatibility row has direct build/admission/boot evidence, and no untested cross-release pairing is presented as supported.
+
+## CP10 — Consumer pin, upgrade, and rollback workflow
+
+**Status:** Planned.
+
+**Depends on:** CP9.
+
+### Deliverables
+
+- provide a canonical external component workspace template that pins the SDK by full commit, commits `Cargo.lock`, selects one release-record profile, and contains no branch, tag-only, registry, or `slime_os` path dependency;
+- provide a non-interactive update command that changes the SDK commit, lockfile, verified platform asset, and recorded release identity together, then rebuilds the component and reports its new bare-ELF SHA-256 for the operator-owned component spec;
+- exercise the real composition update: update the external component spec's `implementation.contentHash`, build and sign the generation through CP4, embed that exact generation, and boot it before the new pin is considered usable;
+- retain the previous SDK pin, prefix asset, component ELF, and generation as immutable rollback inputs until the updated generation passes its declared health gate;
+- make a failed dependency resolution, build, admission, signing, or boot leave the prior consumer checkout and prior bootable generation selected and reproducible.
+
+### Required checks
+
+- the template builds from a fresh clone with `cargo build --locked` and rejects every floating SDK reference;
+- upgrading from the first CP9 release to the second changes all coupled pins in one reviewable diff, rebuilds the external ELF, updates its content hash, and boots the resulting generation;
+- fault injection at dependency fetch, prefix verification, compile, digest admission, and QEMU health confirmation leaves the previous pin and generation usable;
+- rolling back the consumer repository reproduces the previous ELF and generation identities byte-for-byte from retained immutable inputs;
+- the in-tree fallback generation still builds and boots after both the upgrade and rollback scenarios.
+
+### Planned verification target
+
+```sh
+just component_sdk_upgrade_check
+```
+
+### Exit condition
+
+A separate consumer repository moves between two immutable SDK releases, boots the newly content-bound generation, and then reproduces and boots the prior generation after rollback, with no floating reference or dependency on a `slime_os` checkout.
