@@ -61,6 +61,10 @@ SYSTEM_SPEC_CONTRACT = ROOT / "contracts" / "system-spec" / "v1"
 SYSTEM_SPEC_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-system-spec-bindings.py"
 )
+COMPONENT_SDK_RELEASE_CONTRACT = ROOT / "contracts" / "component-sdk-release" / "v1"
+COMPONENT_SDK_RELEASE_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-component-sdk-release-bindings.py"
+)
 FABRIC_GRAPH_CONTRACT = ROOT / "contracts" / "fabric-graph" / "v1"
 CAPABILITY_TRANSFER_CONTRACT = ROOT / "contracts" / "capability-transfer" / "v1"
 CAPABILITY_TRANSFER_BINDING_GENERATOR = (
@@ -268,6 +272,36 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "schema.zt"))
+run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "check.zt"))
+run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "check-matrix.zt"))
+run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "gen_python.zt"))
+subprocess.run(
+    [sys.executable, str(COMPONENT_SDK_RELEASE_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+# CP9's published matrix is persisted contract data, so it decodes through the
+# contract rather than being trusted because this repository wrote it.
+matrix_path = ROOT / "sdk" / "compatibility-matrix.zti"
+if matrix_path.is_file():
+    matrix_environment = os.environ.copy()
+    matrix_environment["SLIME_COMPONENT_SDK_MATRIX_PATH"] = str(matrix_path)
+    decoded_matrix = subprocess.run(
+        [str(binary()), "run", str(COMPONENT_SDK_RELEASE_CONTRACT / "check-matrix.zt")],
+        cwd=ROOT,
+        env={**matrix_environment, "ZUTAI_STDLIB_ROOT": str(STDLIB)},
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if decoded_matrix.returncode != 0 or not decoded_matrix.stdout.startswith("#valid"):
+        raise SystemExit(
+            "published compatibility matrix did not decode as #valid:\n"
+            + decoded_matrix.stdout
+            + decoded_matrix.stderr
+        )
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))
@@ -323,5 +357,6 @@ print(
     "powerbox, generation-management, transfer, sample-descriptor, interface-schema, "
     "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
     "fabric-call, fabric-operation, fabric-visibility, fabric-trace, "
-    "component-spec, system-spec, and rpi5-ros2-demo contracts passed"
+    "component-spec, system-spec, component-sdk-release, and rpi5-ros2-demo "
+    "contracts passed"
 )

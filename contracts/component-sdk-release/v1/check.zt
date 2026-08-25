@@ -1,0 +1,13 @@
+schema ::= import "schema.zt";
+env ::= import stdlib.env;
+load ::= import stdlib.load;
+
+main :: { env : Env; load : Load; }
+  -> Validation DecodeIssue schema.ComponentSdkRelease
+  ! { * env.GetEffects; * load.ZtiEffects; }
+  = caps => [
+    path := env.get caps.env "SLIME_COMPONENT_SDK_RELEASE_PATH" ?? "";
+    schema.decodeComponentSdkRelease (load.zti caps.load path)
+  ];
+
+main

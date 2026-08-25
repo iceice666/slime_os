@@ -19,6 +19,8 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+import component_sdk  # noqa: E402
+from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
 
@@ -30,17 +32,14 @@ CHECK = load_script("component_sdk_generation_check", "check/check-generation.py
 EXTERNAL_COMPONENTS = ("fabric-publisher-b", "fabric-subscriber")
 EXTERNAL_MARKERS = ("[cp5-external-producer] done", "[cp5-external-consumer] done")
 PINS = ROOT / "sel4" / "pins.toml"
-SDK_FILES = (
-    "Cargo.toml",
-    "README.md",
-    "boot-contracts",
-    "components/build-support",
-    "components/proto",
-    "components/lib",
-    "components/runtime",
-    "deps/rust-sel4",
-    "targets/aarch64-sel4-minimal.json",
-)
+# CP6: this gate no longer constructs its own SDK. It consumes
+# `scripts/lib/component_sdk.py`'s exporter, so the bundle CP5's out-of-tree
+# proof consumes is byte-for-byte the one CP7 publishes -- which is the point of
+# CP6's exit condition, since a test-local alternate recipe could pass here and
+# differ from every released SDK.
+SDK_VERSION = "1.0.0"
+SDK_REPOSITORY = "https://github.com/iceice666/slime_os-component_sdk"
+PROFILE = "aarch64-sel4-qemu-virt"
 
 
 def fail(message: str) -> NoReturn:
@@ -94,119 +93,37 @@ def zti(value: object, indent: int = 0) -> str:
     raise TypeError(type(value))
 
 
-def copy_path(source: Path, destination: Path) -> None:
-    if source.is_dir():
-        shutil.copytree(
-            source,
-            destination,
-            ignore=shutil.ignore_patterns("target", ".git", "*.rs.bk"),
-        )
-    else:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-
-
-def publish_sdk_crates(sdk: Path) -> None:
-    for relative in (
-        "boot-contracts/Cargo.toml",
-        "components/build-support/Cargo.toml",
-        "components/proto/Cargo.toml",
-        "components/runtime/Cargo.toml",
-        "components/lib/Cargo.toml",
-    ):
-        path = sdk / relative
-        text = path.read_text(encoding="utf-8")
-        text = text.replace("publish = false\n", "")
-        text = text.replace("\n[lints]\nworkspace = true\n", "\n")
-        path.write_text(text, encoding="utf-8")
-
-
-def sdk_manifest() -> str:
-    return """[workspace]
-resolver = "3"
-members = [
-    "boot-contracts",
-    "components/build-support",
-    "components/proto",
-    "components/lib",
-    "components/runtime",
-]
-
-[profile.release]
-panic = "abort"
-opt-level = "s"
-codegen-units = 1
-debug = false
-"""
-
-
-def sdk_readme(pins: dict[str, object], target_digest: str) -> str:
-    rust = pins["rust_sel4"]
-    return f"""# Slime component SDK v1
-
-This git-consumable source bundle is the CP5 boundary for out-of-tree seL4
-components. Pin the SDK repository by its full commit and depend on the crates
-below with `git = <SDK repository>` and `rev = <SDK commit>` plus the named
-`package`:
-
-- `slime-rt`
-- `slime-proto`
-- `slime-components`
-- `boot-contracts`
-- `slime-build-support` for the CP3 `build.rs` convention
-
-The bundle vendors rust-sel4 commit `{rust["commit"]}` from
-`{rust["repository"]}` and carries `targets/aarch64-sel4-minimal.json` at
-SHA-256 `{target_digest}`. It ships no manifest-derived composition table: a
-component resolves every generation fact it needs — its boot action, its own
-graph rows, and the declared resource ceilings — from the authenticated root at
-runtime (B70), so nothing an SDK consumer compiles is bound to one manifest.
-
-Build recipe:
-
-```sh
-export RUSTUP_TOOLCHAIN={rust["toolchain"]}
-export SEL4_PREFIX=/path/to/the/qemu-arm-virt-seL4-prefix
-export LIBCLANG_PATH=/path/to/libclang/lib
-export SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt
-cargo build --release \\
-  --target /path/to/sdk/targets/aarch64-sel4-minimal.json \\
-  -Z json-target-spec \\
-  -Z build-std=core,alloc,compiler_builtins \\
-  -Z build-std-features=compiler-builtins-mem
-```
-
-`SEL4_PREFIX` is the installed prefix produced from seL4 16.0.0 commit
-`{pins["sel4"]["commit"]}` with the repository's `qemu-arm-virt` config.
-`sel4-sys` runs bindgen against that prefix, so `LIBCLANG_PATH` is required.
-The target and the target profile are one versioned SDK set; do not substitute
-a root-task target or an uncommitted build output.
-"""
-
-
 def create_sdk(root: Path) -> tuple[Path, str]:
+    """Export the repository-owned SDK and commit it as a pinnable repository.
+
+    CP6 owns everything about the tree's contents, identity, and release record;
+    this function only turns the export into a git commit an external checkout
+    can pin. The pin check runs first because the exporter records
+    `sel4/pins.toml`'s values into the release record, and a record naming
+    unverified pins would be worse than no record.
+    """
     run(
         [sys.executable, str(SEL4_PIN_CHECK)],
         cwd=ROOT,
         description="verify SDK seL4 source pins",
     )
-    pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
     sdk = root / "component-sdk-v1"
-    sdk.mkdir()
-    for relative in SDK_FILES[2:-1]:
-        copy_path(ROOT / relative, sdk / relative)
-    publish_sdk_crates(sdk)
-    target_source = ROOT / "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json"
-    target = sdk / "targets/aarch64-sel4-minimal.json"
-    copy_path(target_source, target)
-    target_digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    (sdk / "Cargo.toml").write_text(sdk_manifest(), encoding="utf-8")
-    (sdk / "README.md").write_text(sdk_readme(pins, target_digest), encoding="utf-8")
+    try:
+        exported = component_sdk.export(
+            sdk,
+            version=SDK_VERSION,
+            sdk_repository=SDK_REPOSITORY,
+            profiles=(PROFILE,),
+            source=ROOT,
+        )
+    except ComponentSdkError as error:
+        fail(f"SDK export failed: {error}")
+    component_sdk.verify_tree(exported.root, exported.record)
     git(["init", "-q"], cwd=sdk, description="initialize SDK repository")
     git(["config", "user.email", "cp5@example.invalid"], cwd=sdk, description="configure SDK git email")
     git(["config", "user.name", "CP5 gate"], cwd=sdk, description="configure SDK git name")
     git(["add", "."], cwd=sdk, description="stage SDK bundle")
-    git(["commit", "-qm", "sdk: component v1"], cwd=sdk, description="commit SDK bundle")
+    git(["commit", "-qm", f"sdk: component {SDK_VERSION}"], cwd=sdk, description="commit SDK bundle")
     commit = git(["rev-parse", "HEAD"], cwd=sdk, description="read SDK commit")
     if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
         fail(f"SDK commit is not a full SHA-1 identity: {commit!r}")

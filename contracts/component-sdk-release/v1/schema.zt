@@ -1,0 +1,317 @@
+-- Slime OS component SDK release contract, version 1 (CP6).
+--
+-- CP5 proved an out-of-tree component can be built against a pinned SDK, but
+-- it constructed that SDK inside its own gate: the bundle's file set, manifest
+-- rewrites, and toolchain recipe were test-local Python, and nothing described
+-- the result. A consumer therefore had no way to state which SDK it built
+-- against beyond a git revision, and no way to check that the revision it
+-- fetched is the one the producer meant to publish.
+--
+-- This contract is that description. A `ComponentSdkRelease` is the inert,
+-- versioned record one deterministic export emits beside the exported tree: it
+-- names the originating `slime_os` commit, the exported-tree identity, the
+-- exported crates and public contracts, the pinned toolchain and sources, and
+-- the per-profile platform build inputs a component needs before Cargo runs.
+--
+-- Nothing here is a boot wire format. No record is serialized into a
+-- generation, admitted by `slime-root`, or consulted by the loader: SDK
+-- metadata crosses a repository and release boundary, not the boot boundary.
+-- ELF content hashes (`contracts/component-spec/v1`'s `Implementation`) and the
+-- whole-generation release signature (`contracts/release/v1`) remain the only
+-- trust roots for what a system actually runs, exactly as CP4's boundary states.
+--
+-- The authoritative identity of a release record is SHA-256 over
+-- `identityDomain` followed by the normalized, sorted-key, whitespace-free,
+-- ASCII-escaped UTF-8 JSON bytes of the decoded record plus one trailing
+-- newline -- the convention `contracts/interface-schema/v1` established and
+-- `contracts/component-spec/v1` already reuses. Reusing it a third time means
+-- an interface identity, a component identity, and an SDK release identity are
+-- computed by one normalizer rather than three that can drift.
+--
+-- `treeIdentity` covers the exported tree with the three release-record files
+-- (`component-sdk-release.zti`, `component-sdk-release.json`, and
+-- `component-sdk-release.identity`) excluded. A record cannot contain a digest
+-- over bytes that include the record, and excluding exactly the record's own
+-- files is the only exclusion that keeps the digest total over everything a
+-- consumer compiles against.
+
+-- One pinned upstream source. `sel4/pins.toml`'s `[sel4]` and `[rust_sel4]`
+-- tables spelled as data, so an SDK consumer reads the same three fields the
+-- repository's own pin gate validates rather than a paraphrase of them.
+SourcePin :: type {
+  repository : Text;
+  release : Text;
+  commit : Text;
+};
+
+-- One crate the export publishes, with the SHA-256 of its canonical subtree.
+--
+-- `version` is the crate's own `Cargo.toml` version. It is recorded but is
+-- deliberately not the compatibility axis: CP9 classifies a release by the
+-- identities below, because two crates can carry one version across a syscall
+-- ABI change and a component built against either would still compile.
+CrateIdentity :: type {
+  name : Text;
+  version : Text;
+  identity : Text;
+};
+
+-- One public contract whose schema the export ships or a component's built
+-- bytes depend on, identified by the SHA-256 of that contract's own canonical
+-- subtree under `contracts/`.
+ContractIdentity :: type {
+  name : Text;
+  identity : Text;
+};
+
+-- The platform build inputs for one target profile (CP8).
+--
+-- Before CP8 an external build had to point `SEL4_PREFIX` into
+-- `slime_os/build/`, which made "out-of-tree" true for source and false for
+-- build inputs. `archive` is a path inside the exported tree, so a consumer
+-- that has the SDK commit has the prefix; `archiveHash` binds the bytes and
+-- `treeHash` binds the extracted result, because a reproducible archive and a
+-- reproducible extraction are two claims and only the second is what Cargo and
+-- bindgen actually read.
+--
+-- The five artifact hashes are `sel4/pins.toml`'s `[observed_prefix*]` values
+-- for this platform, restated here rather than recomputed: the repository's
+-- existing prefix gate remains the authority for what a rebuilt prefix must
+-- contain, and this record is how a consumer checks it received that prefix.
+PrefixAsset :: type {
+  archive : Text;
+  archiveHash : Text;
+  treeHash : Text;
+  kernelHash : Text;
+  kernelConfigHash : Text;
+  libsel4ConfigHash : Text;
+  dtbHash : Text;
+  platformInfoHash : Text;
+  rebuildRecipe : Text;
+};
+
+-- One supported target profile and everything a build against it needs.
+--
+-- `profile` is a `contracts/target-profile/v1` profile name and `platform` is
+-- the `scripts/build/build-sel4.py` platform that produces its prefix. Both are
+-- recorded because they are not the same vocabulary: `aarch64-rpi5` is the
+-- profile name for the `bcm2712-rpi5` platform, and a consumer that conflated
+-- them would export the wrong `SLIME_TARGET_PROFILE` for a correct prefix.
+TargetProfileAsset :: type {
+  profile : Text;
+  platform : Text;
+  cargoTarget : Text;
+  targetSpecHash : Text;
+  prefix : PrefixAsset;
+};
+
+-- The scalar identities CP9 classifies a release change by.
+--
+-- Each is a digest over something that can make a component disagree with the
+-- system it is loaded into *after* it compiles, and each moves a release to
+-- `breaking` on its own. `syscallAbi` and `componentImage` are the two formats a
+-- built component speaks to the root through; `contractSet` is every public
+-- contract the export carries; `toolchain` and `rustSel4` are the compiler and
+-- the seL4 binding source a component is linked against.
+--
+-- `publicApi`, `targetSpecSet`, and `prefixSet` are recorded here as identities
+-- but are deliberately *not* scalar breaking axes, because a single digest
+-- cannot distinguish the two changes CP9 must classify differently: adding a
+-- target profile or an exported crate is a compatible feature, while changing
+-- or removing an existing one is breaking. Those two are compared structurally
+-- against `ComponentSdkRelease.profiles` and `.crates` instead, which is why
+-- both lists are part of the record rather than only their digests.
+--
+-- Crate versions are absent from every axis on purpose -- see
+-- `CrateIdentity.version`.
+CompatibilityIdentity :: type {
+  syscallAbi : Text;
+  componentImage : Text;
+  contractSet : Text;
+  publicApi : Text;
+  toolchain : Text;
+  rustSel4 : Text;
+  targetSpecSet : Text;
+  prefixSet : Text;
+};
+
+ComponentSdkRelease :: type {
+  formatVersion : Int;
+  version : Text;
+  sourceRepository : Text;
+  sourceCommit : Text;
+  sdkRepository : Text;
+  treeIdentity : Text;
+  toolchain : Text;
+  sel4 : SourcePin;
+  rustSel4 : SourcePin;
+  files : List Text;
+  crates : List CrateIdentity;
+  contracts : List ContractIdentity;
+  profiles : List TargetProfileAsset;
+  compatibility : CompatibilityIdentity;
+};
+
+-- One tested release pairing (CP9).
+--
+-- A row exists only because the named gates were observed on this exact pair.
+-- `productCommit` is the `slime_os` commit the pairing was exercised against,
+-- which is normally but not necessarily `sourceCommit`: a later product commit
+-- re-exercising an earlier SDK release is exactly the cross-release pairing the
+-- matrix exists to record.
+MatrixRow :: type {
+  sdkVersion : Text;
+  sdkCommit : Text;
+  sdkIdentity : Text;
+  productCommit : Text;
+  profile : Text;
+  classification : Text;
+  status : Text;
+  evidence : List Text;
+};
+
+CompatibilityMatrix :: type {
+  formatVersion : Int;
+  rows : List MatrixRow;
+};
+
+FromData @SourcePin :: derive
+FromData @CrateIdentity :: derive
+FromData @ContractIdentity :: derive
+FromData @PrefixAsset :: derive
+FromData @TargetProfileAsset :: derive
+FromData @CompatibilityIdentity :: derive
+FromData @ComponentSdkRelease :: derive
+FromData @MatrixRow :: derive
+FromData @CompatibilityMatrix :: derive
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-component-sdk-release-v1:";
+matrixIdentityDomain :: Text = "slime-component-sdk-matrix-v1:";
+
+-- The three files a release record occupies inside the exported tree. Declared
+-- here rather than in the exporter because `treeIdentity`'s exclusion set is
+-- part of what the digest means, and a digest whose exclusions live in the
+-- producer is a digest a consumer cannot reproduce.
+recordFileName :: Text = "component-sdk-release.zti";
+normalizedFileName :: Text = "component-sdk-release.json";
+identityFileName :: Text = "component-sdk-release.identity";
+
+-- Bounds. Host-side input that is not bounded is unbounded input, on the same
+-- terms as every other contract here.
+--
+-- `maxCrates` is the exported crate count with room for the runtime split a
+-- component consumes; `maxContracts` is bounded by the public contract set an
+-- SDK ships, not by every contract in the repository.
+maxSourceBytes :: Int = 262144;
+maxNormalizedBytes :: Int = 262144;
+maxNameBytes :: Int = 64;
+maxPathBytes :: Int = 160;
+maxTextBytes :: Int = 256;
+maxDigestBytes :: Int = 64;
+maxCommitBytes :: Int = 40;
+maxVersionBytes :: Int = 32;
+maxFiles :: Int = 32;
+maxCrates :: Int = 16;
+maxContracts :: Int = 64;
+maxProfiles :: Int = 4;
+maxRows :: Int = 16;
+maxEvidence :: Int = 12;
+
+-- Closed vocabularies, declared once and consumed by
+-- `scripts/lib/component_sdk_release.py`, so no host checker can admit a value
+-- this contract does not name.
+--
+-- `initial` is a distinct classification rather than a synonym for a major
+-- bump: the first release has nothing to be compared against, so calling it
+-- `breaking` would assert a change nobody observed.
+classificationInitial :: Text = "initial";
+classificationPatch :: Text = "patch";
+classificationCompatibleFeature :: Text = "compatible-feature";
+classificationBreaking :: Text = "breaking";
+
+statusSupported :: Text = "supported";
+
+-- The scalar compatibility axes, in the order a classification reports them.
+--
+-- A change to any of these means a component built against the old release can
+-- compile and then disagree with the system it runs under, so the version must
+-- state a breaking change. They are scalar because each names one thing that is
+-- either the same or not: there is no "added an ABI" that a consumer could
+-- ignore.
+breakingAxes :: List Text = {
+  "syscallAbi";
+  "componentImage";
+  "contractSet";
+  "toolchain";
+  "rustSel4";
+};
+
+-- The structural axes, compared as keyed sets rather than as digests.
+--
+-- Each names a `ComponentSdkRelease` list field whose entries are keyed and
+-- independently offered: adding one is a compatible feature, and changing or
+-- removing one is breaking. A digest over the whole set could only report
+-- "different", which would force every added profile to be a major release and
+-- so make the classification useless exactly where CP8 grows the platform set.
+structuralAxes :: List Text = {
+  "crates";
+  "profiles";
+};
+
+-- The key field each structural axis's entries are identified by, in the same
+-- order. `crates` are keyed by package name and `profiles` by target-profile
+-- name, which is what makes "the same entry changed" distinguishable from "a
+-- new entry appeared".
+structuralKeys :: List Text = {
+  "name";
+  "profile";
+};
+
+decodeComponentSdkRelease :: Data -> Validation DecodeIssue ComponentSdkRelease
+  = data => decode data;
+
+decodeCompatibilityMatrix :: Data -> Validation DecodeIssue CompatibilityMatrix
+  = data => decode data;
+
+{
+  SourcePin =;
+  CrateIdentity =;
+  ContractIdentity =;
+  PrefixAsset =;
+  TargetProfileAsset =;
+  CompatibilityIdentity =;
+  ComponentSdkRelease =;
+  MatrixRow =;
+  CompatibilityMatrix =;
+  decodeComponentSdkRelease =;
+  decodeCompatibilityMatrix =;
+  formatVersion =;
+  identityDomain =;
+  matrixIdentityDomain =;
+  recordFileName =;
+  normalizedFileName =;
+  identityFileName =;
+  maxSourceBytes =;
+  maxNormalizedBytes =;
+  maxNameBytes =;
+  maxPathBytes =;
+  maxTextBytes =;
+  maxDigestBytes =;
+  maxCommitBytes =;
+  maxVersionBytes =;
+  maxFiles =;
+  maxCrates =;
+  maxContracts =;
+  maxProfiles =;
+  maxRows =;
+  maxEvidence =;
+  classificationInitial =;
+  classificationPatch =;
+  classificationCompatibleFeature =;
+  classificationBreaking =;
+  statusSupported =;
+  breakingAxes =;
+  structuralAxes =;
+  structuralKeys =;
+}
