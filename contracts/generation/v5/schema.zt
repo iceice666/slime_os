@@ -106,6 +106,7 @@ rightBits :: List RightBit = {
   right "CLOCK_TIMER_USE" 27 "clockTimerUse";
   right "CLOCK_SIMULATED_READ" 28 "clockSimulatedRead";
   right "CLOCK_SIMULATED_ADVANCE" 29 "clockSimulatedAdvance";
+  right "SCHEDULING_PROMOTE" 30 "schedulingPromote";
 };
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };

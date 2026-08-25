@@ -93,6 +93,7 @@ Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
 | Clock service | CLOCK_TIMER_USE (27) | `CLOCK TIMER ARM` / `CLOCK TIMER CANCEL`, bounded by the holder's declared live-timer quota and delivered on its declared Notification; gates the root service, but cannot prevent hostile native code from writing globally enabled `CNTP_*` control registers on current AArch64 profiles | same | gated (C9.1; register-integrity wall documented by `clock-authority/v1`) |
 | Clock service | CLOCK_SIMULATED_READ (28) | `CLOCK SIMULATED READ` | same | gated (C9.1) |
 | Clock service | CLOCK_SIMULATED_ADVANCE (29) | `CLOCK SIMULATED ADVANCE`; independently grantable from simulated read | same | gated (C9.1) |
+| Scheduling service | SCHEDULING_PROMOTE (30) | `SCHEDULING CLASS PROMOTE` for a subject the caller holds a supervision capability over, bounded by the promotion edge's declared ceiling and refused when the caller names itself. `SCHEDULING CLASS READ` appears in no row: it is self-scoped and grants nothing, so it is gated by nothing | generation `scheduling-class/v1`; root-brokered state keyed by task, no new seL4 object kind | gated (C9.3) |
 
 `CAPABILITY RESOLVE BINDING` (label 37) appears in no row above, and its absence
 is the statement: it is gated by *nothing*, because it grants nothing. It answers

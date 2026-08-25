@@ -270,6 +270,20 @@ operations :: List Operation = {
   -- answered zero records, which is the deny-by-default answer -- it has no
   -- source to register, and there is nothing about a peer for it to learn.
   operation "lifecycle" "WAIT_SOURCES" 49;
+  -- C9.3's declared scheduling class. `CLASS_READ` is self-scoped by badge and
+  -- returns the caller's own class id with its resolved priority beside it, so a
+  -- component can observe what band it runs at without naming anyone.
+  --
+  -- `CLASS_PROMOTE` takes a supervision capability slot naming the subject and
+  -- the requested class id. It names a *class*, never a priority: the priority
+  -- comes from the generation's own band mapping, so a holder cannot reach a
+  -- priority between two bands. Authority is the caller's declared
+  -- `schedulingPromote` right plus a promotion edge the generation declares from
+  -- this holder to that subject, bounded by the edge's own ceiling. A caller
+  -- naming itself is refused before the edge lookup, because promotion is
+  -- authority over *another* component's class and never over the holder's own.
+  operation "scheduling" "CLASS_READ" 50;
+  operation "scheduling" "CLASS_PROMOTE" 51;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.
@@ -294,6 +308,7 @@ services :: List Service = {
   service "sharedBuffer" "shared_buffer_labels";
   service "capabilityTransfer" "capability_transfer_labels";
   service "clock" "clock_labels";
+  service "scheduling" "scheduling_labels";
 };
 
 -- The status a root service returns in reply MR0. Deliberately coarse: a

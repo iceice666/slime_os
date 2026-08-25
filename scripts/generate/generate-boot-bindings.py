@@ -63,6 +63,11 @@ GENERATORS = (
         "wait_set.rs",
     ),
     (
+        ROOT / "contracts" / "scheduling-class" / "v1" / "schema.zt",
+        "scheduling_class.py",
+        "scheduling_class.rs",
+    ),
+    (
         ROOT / "contracts" / "fabric-graph" / "v1" / "schema.zt",
         "fabric_graph.py",
         "fabric_graph.rs",

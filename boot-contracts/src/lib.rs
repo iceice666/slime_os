@@ -26,6 +26,7 @@ pub mod object_store;
 pub mod private_memory_budget;
 pub mod recovery;
 pub mod release;
+pub mod scheduling_class;
 pub mod sha256;
 pub mod shared_buffer_budget;
 pub mod store_disk;

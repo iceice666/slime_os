@@ -72,6 +72,11 @@ pub mod clock_labels {
     pub const SIMULATED_ADVANCE: u64 = 48;
 }
 
+pub mod scheduling_labels {
+    pub const CLASS_READ: u64 = 50;
+    pub const CLASS_PROMOTE: u64 = 51;
+}
+
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
 pub const ERR_PEER_DEAD: i64 = -2;

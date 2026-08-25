@@ -190,6 +190,8 @@ pub enum BootAction {
     ClockAuthority = 31,
     /// C9.2's bounded userspace wait set over one declared Notification.
     WaitSet = 32,
+    /// C9.3's declared scheduling class and its promotion authority.
+    SchedulingClass = 33,
 }
 
 impl BootAction {
@@ -244,6 +246,7 @@ impl BootAction {
         Self::PrivateMemory,
         Self::ClockAuthority,
         Self::WaitSet,
+        Self::SchedulingClass,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -289,6 +292,7 @@ impl BootAction {
                 Self::PrivateMemory => Self::PrivateMemory.id(),
                 Self::ClockAuthority => Self::ClockAuthority.id(),
                 Self::WaitSet => Self::WaitSet.id(),
+                Self::SchedulingClass => Self::SchedulingClass.id(),
             };
             declared == id
         })
@@ -328,6 +332,7 @@ impl BootAction {
             "private-memory" => Self::PrivateMemory,
             "clock-authority" => Self::ClockAuthority,
             "wait-set" => Self::WaitSet,
+            "scheduling-class" => Self::SchedulingClass,
             _ => return None,
         })
     }
@@ -2686,6 +2691,7 @@ mod tests {
             RIGHT_CLOCK_TIMER_USE,
             RIGHT_CLOCK_SIMULATED_READ,
             RIGHT_CLOCK_SIMULATED_ADVANCE,
+            RIGHT_SCHEDULING_PROMOTE,
         ];
         let union = named
             .iter()
@@ -2746,7 +2752,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 32] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 33] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2779,6 +2785,7 @@ mod tests {
         (BootAction::PrivateMemory, 30),
         (BootAction::ClockAuthority, 31),
         (BootAction::WaitSet, 32),
+        (BootAction::SchedulingClass, 33),
     ];
 
     #[test]

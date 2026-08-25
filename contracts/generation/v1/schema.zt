@@ -198,6 +198,63 @@ WaitSetSourceEntry :: type {
   drainSlot? : Int;
 };
 
+-- The concrete TCB priority one C9.3 scheduling class runs at.
+--
+-- The mapping is manifest data rather than a constant in the builder and a
+-- matching constant in the root, because C9.3's deliverable is that a
+-- composition declares its own band layout. `class` is one of `foreground`,
+-- `normal`, or `bestEffort`; every class the resource uses must have exactly
+-- one band, and no two bands may share a priority — two names for one priority
+-- is a mapping that cannot be observed.
+SchedulingClassBand :: type {
+  class : Text;
+  priority : Int;
+};
+
+-- One instance's declared C9.3 scheduling class.
+--
+-- `class` is the band this instance's main thread runs at; `workerClass`
+-- defaults to `class` and is the band its extra threads run at, which is the
+-- B48 case: a component may hold a busy worker without its own IPC thread
+-- inheriting that band.
+--
+-- Deny-by-default here means the declared `normal` band, not refusal: every
+-- thread the root launches already runs at some priority, so an instance the
+-- table omits has a correct answer rather than a denial. A class is ordering,
+-- not a reservation — CPU quantity is bounded by nothing here, because
+-- `KernelIsMCS OFF` leaves the kernel no budget to charge (B77).
+SchedulingClassEntry :: type {
+  instance : Text;
+  class : Text;
+  workerClass? : Text;
+};
+
+-- One C9.3 promotion edge: `holder` may set `subject`'s class at runtime, to
+-- any declared band at or below `ceiling`'s priority.
+--
+-- `holder` and `subject` must differ. That is the "no component can widen
+-- itself" rule made structural rather than a runtime name comparison: a
+-- self-edge is refused by the builder and by the decoder, so a self-widening
+-- component is a generation that does not decode rather than a request the root
+-- must remember to say no to.
+--
+-- The ceiling is per-edge so a supervisor trusted to raise one component into
+-- `foreground` is not thereby trusted to raise every component it can name.
+SchedulingPromotionEntry :: type {
+  holder : Text;
+  subject : Text;
+  ceiling : Text;
+};
+
+-- The C9.3 scheduling-class table: the band mapping, the per-instance
+-- assignment, and the promotion edges, together because none of the three is
+-- meaningful without the other two.
+SchedulingClassPolicy :: type {
+  bands : List SchedulingClassBand;
+  instances : List SchedulingClassEntry;
+  promotions : List SchedulingPromotionEntry;
+};
+
 -- One named full-graph profile override. Profiles may replace only an exact
 -- participant's interposition chain; every other authority and policy field
 -- remains fixed by the base graph.
@@ -331,6 +388,11 @@ GenerationManifest :: type {
   -- waiter has nothing to dispatch — the deny-by-default answer rather than an
   -- unbounded one.
   waitSet? : List WaitSetSourceEntry;
+  -- Optional C9.3 scheduling-class policy. Absent means the generation declares
+  -- no class policy: every instance runs at the root's default child priority,
+  -- which is what every generation before C9.3 did. Present, it fixes the band
+  -- mapping, every named instance's class, and who may promote whom.
+  schedulingClass? : SchedulingClassPolicy;
   objects : List Object;
   executables : List Executable;
   instances : List Instance;
@@ -368,6 +430,10 @@ FromData @FabricLimits :: derive
 FromData @FabricGraph :: derive
 FromData @BootProfile :: derive
 FromData @ClockAuthorityEntry :: derive
+FromData @SchedulingClassBand :: derive
+FromData @SchedulingClassEntry :: derive
+FromData @SchedulingPromotionEntry :: derive
+FromData @SchedulingClassPolicy :: derive
 FromData @GenerationManifest :: derive
 
 decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
@@ -383,6 +449,10 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   SharedBufferBudgetEntry =;
   PrivateMemoryBudgetEntry =;
   ClockAuthorityEntry =;
+  SchedulingClassBand =;
+  SchedulingClassEntry =;
+  SchedulingPromotionEntry =;
+  SchedulingClassPolicy =;
   FabricProfileInterposition =;
   FabricProfile =;
   CapabilityGrant =;

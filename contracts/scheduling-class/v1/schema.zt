@@ -1,0 +1,228 @@
+-- Slime OS scheduling class, version 1 (C9.3).
+--
+-- A generation resource object that declares, for each named instance, which
+-- scheduling class it runs at and who may change that class at runtime. Three
+-- classes are named -- foreground, normal, best-effort -- and each is mapped to
+-- a concrete seL4 TCB priority *by this resource*, not by a constant compiled
+-- into the builder or the root. C9.3's deliverable is that the mapping itself
+-- is declared, so a composition that wants a different band says so in its
+-- manifest instead of patching two programs.
+--
+-- Deny-by-default lands on `normal`, not on refusal. A class is not authority
+-- to consume anything: every thread the root launches already runs at some
+-- priority, so "this generation declares no class for that instance" has a
+-- correct answer -- the declared normal priority -- rather than a denial. What
+-- *is* authority is changing another instance's class after boot, and that is a
+-- separate per-holder right (`RIGHT_SCHEDULING_PROMOTE`) with its own subject
+-- list.
+--
+-- CPU *quantity* is not bounded by this mechanism and this contract says so
+-- rather than leaving it inferable. `KernelIsMCS OFF` gives the kernel no
+-- budget to charge, so `ScheduleRecord.budget_us`/`period_us` stay zero and
+-- undeclarable -- B77 made both readers refuse a nonzero value. A class
+-- therefore orders access to the CPU; it does not reserve an amount of it.
+--
+-- Promotion is an authority over *another* instance's class and never over the
+-- holder's own. That is enforced structurally rather than by a runtime name
+-- comparison: `subject_identity` is the folded identity of the instance whose
+-- class may change, `holder_identity` is the folded identity of the component
+-- that may change it, and an entry whose two identities are equal is refused by
+-- both the builder and the decoder. A self-widening component is thus not a
+-- request the root has to say no to; it is a generation that does not decode.
+--
+-- Logical records and concrete packed little-endian layouts live together. The
+-- renderer reflects every record, checks field order against its layout, and
+-- writes the Python and Rust binding fragments consumed by the boot binding
+-- assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+headerBytes :: Int = 32;
+classBytes :: Int = 16;
+entryBytes :: Int = 48;
+promotionBytes :: Int = 72;
+
+-- One band per declared class, so the mapping table is exactly three rows.
+maxClasses :: Int = 3;
+-- `contracts/generation/v5`'s admitted instance ceiling: a resource naming more
+-- instances than a generation can admit could never be fully installed.
+maxInstances :: Int = 48;
+-- One promotion entry is one (holder, subject) edge. Bounded well below
+-- `maxInstances` squared: a composition where every component may
+-- reprioritize every other has declared no policy at all.
+maxPromotions :: Int = 32;
+
+-- The closed class vocabulary. `id` is an ABI: a component compiled against an
+-- older generation names the same number, so ids are pinned individually rather
+-- than derived from declaration order. `manifest` is the spelling a `.zti`
+-- writes; `name` is the constant suffix both bindings emit.
+--
+-- Three *assignable* classes and not more: `foreground` is what must keep
+-- running when the machine is busy, `bestEffort` is what may be starved to keep
+-- that true, and `normal` is the ordinary middle. A fourth band would need a
+-- workload that can distinguish it, and this milestone's gate cannot.
+--
+-- `undeclared` is a fourth *name* but not a fourth band, and the distinction is
+-- the point. An instance this resource does not name is not in a band at all:
+-- the builder leaves its thread at the root's own child priority, so reporting
+-- it as `normal` would name a band whose declared priority the thread is not
+-- running at -- and would make promoting it *to* `normal` look like a no-op
+-- class change while silently moving its priority. It carries id 0 so a
+-- component reading its own class can tell "the generation placed me in a band"
+-- from "the generation said nothing about me", and it is not assignable: no
+-- manifest may declare it and no promotion may request it.
+ClassName :: type { name : Text; id : Int; manifest : Text; };
+
+class :: Text -> Int -> Text -> ClassName
+  = name id manifest => { name = name; id = id; manifest = manifest; };
+
+-- The assignable classes, in ascending id order. This is the vocabulary a
+-- manifest writes and a promotion may name.
+classNames :: List ClassName = {
+  class "FOREGROUND" 1 "foreground";
+  class "NORMAL" 2 "normal";
+  class "BEST_EFFORT" 3 "bestEffort";
+};
+
+-- The id reported for an instance this resource does not name. Declared here so
+-- both bindings agree, and deliberately outside `classNames`: it is an answer,
+-- never an assignment.
+undeclaredClassId :: Int = 0;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+SchedulingClassHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  class_count : Int;
+  instance_count : Int;
+  promotion_count : Int;
+  total_len : Int;
+};
+
+-- One class band: which class, and the exact TCB priority its threads run at.
+--
+-- `priority` is the whole mapping. The root applies it to a thread's TCB, and
+-- because `slime-root` itself runs above every child, a band at or above the
+-- root's own priority would let a child stall the service loop every other
+-- child waits on (B48). The ceiling is the root's declared child ceiling and is
+-- checked by both readers.
+SchedulingClassBand :: type {
+  class_id : Int;
+  priority : Int;
+  reserved : Int;
+};
+
+-- One instance's declared class, and the class its extra threads run at.
+--
+-- `worker_class_id` is separate because a component may legitimately hold a busy
+-- worker without its own IPC thread inheriting that band -- the case B48 exists
+-- for. It defaults to `class_id` in the manifest, so a composition that does not
+-- care writes one field.
+SchedulingClassEntry :: type {
+  subject_identity : Int;
+  class_id : Int;
+  worker_class_id : Int;
+  reserved : Int;
+};
+
+-- One promotion edge: `holder_identity` may set `subject_identity`'s class, to
+-- any class whose band is at or below `ceiling_priority`.
+--
+-- The ceiling is per-edge rather than global so a supervisor may be trusted to
+-- raise one component into `foreground` without thereby being trusted to raise
+-- every component it can name. `holder_identity == subject_identity` is refused:
+-- see the header comment.
+--
+-- **An edge is admissible only from a spawner to an instance it owns.** That is
+-- narrower than the record's shape suggests, and it is enforced by
+-- `slime-root`'s admission rather than by this decoder, because only the
+-- generation knows the ownership forest. The reason is that the *right* rides on
+-- a capability: `slime-root` sets `SCHEDULING_PROMOTE` on the supervision handle
+-- a spawner receives for its own child, exactly where this table declares an
+-- edge between them. An edge naming a subject its holder does not own could
+-- therefore never resolve to a capability, and would read at runtime as a
+-- declared policy that silently never applies -- so it is refused at admission
+-- instead. Two root-owned peers cannot hold an edge, and two instances of one
+-- executable cannot promote each other unless one spawns the other.
+SchedulingPromotionEntry :: type {
+  holder_identity : Int;
+  subject_identity : Int;
+  ceiling_priority : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema SchedulingClassHeader;
+bandSchema ::= schema SchedulingClassBand;
+entrySchema ::= schema SchedulingClassEntry;
+promotionSchema ::= schema SchedulingPromotionEntry;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "class_count"; width = 2; signed = false; byteArray = false; };
+  { name = "instance_count"; width = 2; signed = false; byteArray = false; };
+  { name = "promotion_count"; width = 2; signed = false; byteArray = false; };
+  { name = "total_len"; width = 2; signed = false; byteArray = false; };
+};
+
+bandLayout :: List WireField = {
+  { name = "class_id"; width = 4; signed = false; byteArray = false; };
+  { name = "priority"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 8; signed = false; byteArray = false; };
+};
+
+entryLayout :: List WireField = {
+  { name = "subject_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "class_id"; width = 4; signed = false; byteArray = false; };
+  { name = "worker_class_id"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 8; signed = false; byteArray = false; };
+};
+
+promotionLayout :: List WireField = {
+  { name = "holder_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "subject_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "ceiling_priority"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =;
+  headerBytes =;
+  classBytes =;
+  entryBytes =;
+  promotionBytes =;
+  maxClasses =;
+  maxInstances =;
+  maxPromotions =;
+  undeclaredClassId =;
+  classNames =;
+  headerFields = headerSchema.fields ?? {;};
+  bandFields = bandSchema.fields ?? {;};
+  entryFields = entrySchema.fields ?? {;};
+  promotionFields = promotionSchema.fields ?? {;};
+  headerLayout =;
+  bandLayout =;
+  entryLayout =;
+  promotionLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/scheduling_class.py"; };
+    rustPath := t.join "" { root; "/scheduling_class.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main
