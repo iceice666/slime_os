@@ -79,13 +79,20 @@ def run(
 
 
 def canonical_remote(root: Path) -> str:
+    """A local bare repository standing in for the canonical SDK remote.
+
+    Returned as a `file://` URI rather than a bare path: a consumer manifest's
+    `git = "..."` is a URL, and Cargo refuses a relative one. The canonical
+    repository the record *names* is unchanged -- that is publication's
+    `--sdk-repository`, separate from this transport.
+    """
     bare = root / "slime_os-component_sdk.git"
     run(
         ["git", "init", "--quiet", "--bare", "--initial-branch", BRANCH, str(bare)],
         cwd=root,
         description="create the stand-in canonical repository",
     )
-    return str(bare)
+    return bare.resolve().as_uri()
 
 
 def publish(url: str, version: str, profiles: tuple[str, ...]) -> None:
@@ -129,6 +136,16 @@ def consumer_from_template(root: Path, sdk: Path, url: str, commit: str, *, name
     are rewritten here to this run's stand-in remote and its first published
     commit, which is the same substitution `tools/sdk-update.py` performs for a
     later upgrade.
+
+    The template's own `src/main.rs` is built as shipped -- that is what proves
+    the template compiles from a fresh clone -- and then replaced by the
+    `console` component's source for the boot arms. The substitution is
+    necessary rather than convenient: the QEMU component graph drives `console`
+    through a scripted scenario and waits for its markers, so a component that
+    merely started and exited would leave the graph waiting and the boot would
+    time out. What the upgrade and rollback arms are about is the *pin*, the
+    rebuild, and the generation identity, so the component under it must be one
+    the graph actually composes.
     """
     checkout = root / name
     shutil.copytree(sdk / "template", checkout)
@@ -146,6 +163,14 @@ def consumer_from_template(root: Path, sdk: Path, url: str, commit: str, *, name
     ):
         run(["git", *arguments], cwd=checkout, description=description)
     return checkout
+
+
+def adopt_console_role(checkout: Path) -> None:
+    """Give the template component the behavior the component graph composes."""
+    shutil.copyfile(
+        ROOT / "components" / "bins" / "console" / "src" / "main.rs",
+        checkout / "component" / "src" / "main.rs",
+    )
 
 
 def assert_pin_shape(checkout: Path, commit: str, url: str) -> None:
@@ -355,9 +380,16 @@ def prove_fault_injection(
         fail("an update to a nonexistent SDK commit succeeded")
 
     # 2. Prefix verification: the archive the update would verify is corrupt.
+    # One bit at the archive's midpoint, not a zeroed range: a tar carries long
+    # runs of zero padding, so overwriting a range with zeros can change nothing
+    # and prove nothing.
     archive = second_sdk / "prefixes" / f"{PROFILE}.tar"
     original = archive.read_bytes()
-    archive.write_bytes(original[:1024] + b"\0" * 1024 + original[2048:])
+    corrupt = bytearray(original)
+    corrupt[len(corrupt) // 2] ^= 0xFF
+    if bytes(corrupt) == original:
+        fail("the prefix corruption changed nothing, so it proves nothing")
+    archive.write_bytes(bytes(corrupt))
     try:
         refused = update(checkout, second_sdk, root, url=url, commit=commit, allow_failure=True)
         if refused.returncode == 0:
@@ -425,6 +457,9 @@ def main() -> None:
 
         checkout = consumer_from_template(root, first_sdk, url, first_commit, name="consumer")
         assert_pin_shape(checkout, first_commit, url)
+        # The template as shipped builds from a fresh clone with `--locked`.
+        build_locked(checkout, first_sdk, root, "template")
+        adopt_console_role(checkout)
         first_elf = build_locked(checkout, first_sdk, root, "initial")
         first_digest = hashlib.sha256(first_elf.read_bytes()).hexdigest()
         _, first_output = compose_and_boot(root, first_elf, "initial")

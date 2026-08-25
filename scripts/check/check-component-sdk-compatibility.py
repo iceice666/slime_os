@@ -177,7 +177,10 @@ def prove_negative_controls(first: dict, second: dict) -> None:
         try:
             component_sdk.admit_version_change(second, mutated)
         except ComponentSdkError as error:
-            if "major" not in str(error):
+            # The refusal must name both what was required and what moved:
+            # a message that said only "refused" would leave an operator
+            # guessing which identity changed.
+            if contract.CLASSIFICATION_BREAKING not in str(error) or axis not in str(error):
                 fail(f"a changed {axis} under a minor bump was refused wrongly: {error}")
         else:
             fail(f"a changed {axis} was admitted under a minor version bump")
