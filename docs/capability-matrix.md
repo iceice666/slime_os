@@ -67,7 +67,7 @@ numbered by `boot-contracts/src/generated/generation.rs`.
 ## Current matrix
 
 Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
-29, excluding the deliberate gap at bit 17; bits 30–63 are free.
+33, excluding the deliberate gap at bit 17; bits 34–63 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -94,6 +94,9 @@ Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
 | Clock service | CLOCK_SIMULATED_READ (28) | `CLOCK SIMULATED READ` | same | gated (C9.1) |
 | Clock service | CLOCK_SIMULATED_ADVANCE (29) | `CLOCK SIMULATED ADVANCE`; independently grantable from simulated read | same | gated (C9.1) |
 | Scheduling service | SCHEDULING_PROMOTE (30) | `SCHEDULING CLASS PROMOTE` for a subject the caller holds a supervision capability over, bounded by the promotion edge's declared ceiling and refused when the caller names itself. `SCHEDULING CLASS READ` appears in no row: it is self-scoped and grants nothing, so it is gated by nothing | generation `scheduling-class/v1`; root-brokered state keyed by task, no new seL4 object kind | gated (C9.3) |
+| Lifecycle service | LIFECYCLE_RESTART (31) | `SUPERVISION RESTART ADMIT` for a subject the caller holds a supervision capability over, charging the generation's declared attempt budget and answering its declared backoff instant. `LIFECYCLE STATE READ` and `LIFECYCLE STATE ADVANCE` appear in no row: both are self-scoped by badge, `STATE_READ` grants nothing, and `STATE_ADVANCE` moves only the caller's own state along an edge the generation admits — so the transition graph is the bound rather than any right | generation `lifecycle-policy/v1`; the bit rides on the supervision handle the root mints for a spawner exactly where the policy declares a restart bound for that child, so the right and the policy are one fact with one source | gated (C9.4) |
+| Lifecycle service | PARAMETER_READ (32) | `SUPERVISION PARAMETER READ` for a subject the caller holds a supervision capability over, or for the caller's own instance through `PARAMETER_SELF_SLOT`. A declared parameter edge carrying read must also exist, and its absence is refused distinguishably from an unset key | generation `lifecycle-policy/v1`; the bit rides on the spawn-minted supervision handle where the policy declares the edge | gated (C9.4) |
+| Lifecycle service | PARAMETER_WRITE (33) | `SUPERVISION PARAMETER WRITE`, gated independently of read: a supervisor that must observe a component's configuration to decide a restart does not thereby get to change it | same | gated (C9.4) |
 
 `CAPABILITY RESOLVE BINDING` (label 37) appears in no row above, and its absence
 is the statement: it is gated by *nothing*, because it grants nothing. It answers

@@ -98,7 +98,10 @@ pub const RIGHT_CLOCK_TIMER_USE: u64 = 134217728;
 pub const RIGHT_CLOCK_SIMULATED_READ: u64 = 268435456;
 pub const RIGHT_CLOCK_SIMULATED_ADVANCE: u64 = 536870912;
 pub const RIGHT_SCHEDULING_PROMOTE: u64 = 1073741824;
-pub const RIGHT_ALL: u64 = 2147352575;
+pub const RIGHT_LIFECYCLE_RESTART: u64 = 2147483648;
+pub const RIGHT_PARAMETER_READ: u64 = 4294967296;
+pub const RIGHT_PARAMETER_WRITE: u64 = 8589934592;
+pub const RIGHT_ALL: u64 = 17179738111;
 
 /// The rights bit a generation manifest spells `name`, or `None`.
 ///
@@ -138,6 +141,9 @@ pub fn right_named(name: &str) -> Option<u64> {
         "clockSimulatedRead" => RIGHT_CLOCK_SIMULATED_READ,
         "clockSimulatedAdvance" => RIGHT_CLOCK_SIMULATED_ADVANCE,
         "schedulingPromote" => RIGHT_SCHEDULING_PROMOTE,
+        "lifecycleRestart" => RIGHT_LIFECYCLE_RESTART,
+        "parameterRead" => RIGHT_PARAMETER_READ,
+        "parameterWrite" => RIGHT_PARAMETER_WRITE,
         _ => return None,
     })
 }

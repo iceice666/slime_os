@@ -284,6 +284,44 @@ operations :: List Operation = {
   -- authority over *another* component's class and never over the holder's own.
   operation "scheduling" "CLASS_READ" 50;
   operation "scheduling" "CLASS_PROMOTE" 51;
+  -- C9.4's lifecycle transitions and supervised restart. Five operations, split
+  -- by what names the subject: two are self-scoped by badge, three name another
+  -- component through a capability the generation grants.
+  --
+  -- `STATE_READ` is self-scoped and returns the caller's own lifecycle state
+  -- with the declared restart attempts it has left beside it, so a component can
+  -- observe whether it is a first launch or a replacement without naming anyone.
+  -- Gated on `lifecycle` for `WAIT_SOURCES`' reason: which state a component is
+  -- in is a property of being a task, not of any grant.
+  --
+  -- `STATE_ADVANCE` is self-scoped too, and it is the transition graph's only
+  -- mutator. A component requests its *own* next state and the root refuses any
+  -- edge the generation does not admit, so the graph is enforced rather than
+  -- documented. A component cannot advance another's state at all: that would be
+  -- lifecycle authority no C9.4 field grants.
+  --
+  -- `RESTART_ADMIT` takes a supervision capability slot naming the dead subject
+  -- and returns whether the generation admits restarting it now: the declared
+  -- attempt budget remaining, the terminal cause the root recorded, and the
+  -- backoff instant before which a restart is refused. Authority is the caller's
+  -- declared `lifecycleRestart` right on that handle. The root decides nothing
+  -- about *whether* to restart -- it answers what the generation declares and
+  -- refuses what it does not, and the supervisor holding the handle owns the
+  -- decision and the spawn.
+  --
+  -- `PARAMETER_READ`/`PARAMETER_WRITE` take a supervision capability slot naming
+  -- the subject plus a parameter key, and the write form a value. Authority is
+  -- the caller's declared `parameterRead`/`parameterWrite` right *and* a
+  -- parameter edge the generation declares from this holder to that subject. A
+  -- caller holding no authority is refused `BAD_CAP`; a caller holding authority
+  -- naming a key the subject has not set is answered `INVALID_ARG`, so absent
+  -- authority and a missing key are distinguishable -- which is exactly C9.4's
+  -- last required check.
+  operation "lifecycle" "STATE_READ" 52;
+  operation "lifecycle" "STATE_ADVANCE" 53;
+  operation "supervision" "RESTART_ADMIT" 54;
+  operation "supervision" "PARAMETER_READ" 55;
+  operation "supervision" "PARAMETER_WRITE" 56;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

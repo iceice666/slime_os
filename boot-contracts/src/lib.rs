@@ -20,6 +20,7 @@ pub mod generation;
 pub mod gpt;
 pub mod handoff;
 pub mod kernel_image;
+pub mod lifecycle_policy;
 pub mod normalized_interface_schemas;
 #[cfg(feature = "gpt")]
 pub mod object_store;

@@ -68,6 +68,11 @@ GENERATORS = (
         "scheduling_class.rs",
     ),
     (
+        ROOT / "contracts" / "lifecycle-policy" / "v1" / "schema.zt",
+        "lifecycle_policy.py",
+        "lifecycle_policy.rs",
+    ),
+    (
         ROOT / "contracts" / "fabric-graph" / "v1" / "schema.zt",
         "fabric_graph.py",
         "fabric_graph.rs",

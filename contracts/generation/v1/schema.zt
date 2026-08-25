@@ -255,6 +255,91 @@ SchedulingClassPolicy :: type {
   promotions : List SchedulingPromotionEntry;
 };
 
+-- One admitted C9.4 lifecycle transition. `from` and `to` are the
+-- `contracts/component-spec/v1` state spellings — `Initialize`, `Configure`,
+-- `Start`, `Ready`, `Running`, `Degraded`, `Stop`, `Error` — promoted from that
+-- host-only declarative list into an edge a generation admits and the root
+-- refuses departures from.
+--
+-- Directed: declaring `Running -> Degraded` does not admit the reverse, because
+-- a composition where every degradation is silently recoverable has declared no
+-- degradation policy.
+LifecycleTransition :: type {
+  from : Text;
+  to : Text;
+};
+
+-- One instance's C9.4 restart policy.
+--
+-- `attempts` is the number of *restarts* admitted after the first launch, so
+-- zero is the pre-C9.4 behaviour stated explicitly rather than by omission.
+-- `causes` names the terminal causes this policy restarts on -- `exit`,
+-- `fault`, `unhealthy`, `timeout`, `peerLoss` -- so a component restarted on a
+-- fault but not on a clean exit is one entry rather than two tables, and the
+-- three causes C9.4's first required check must distinguish are distinguishable
+-- in the declaration as well as in the observation.
+--
+-- `backoffNs` is the delay before the first restart in counter ticks, and
+-- `backoffFactor` scales it per attempt in 256th parts, so 256 is flat and 512
+-- doubles. Both readers resolve the same declared numbers: the supervisor arms a
+-- C9.1 timer for the computed delay and the root independently refuses a restart
+-- that arrives early, which is what makes backoff an observed property rather
+-- than a trusted one.
+LifecycleRestartPolicy :: type {
+  instance : Text;
+  attempts : Int;
+  causes : List Text;
+  backoffNs : Int;
+  backoffFactor? : Int;
+};
+
+-- One C9.4 health dependency: `instance` is not started while `dependency` has
+-- not reached `requiredState`.
+--
+-- Distinct from `Instance.dependencies`, which is a one-shot activation barrier
+-- the root evaluates once at autostart. This edge is evaluated on every start
+-- *including a restart*, and it names the exact state the dependency must be in,
+-- because a dependent needing its dependency merely launched and one needing it
+-- serving are different policies.
+LifecycleHealthDependency :: type {
+  instance : Text;
+  dependency : Text;
+  requiredState : Text;
+};
+
+-- One C9.4 parameter-state authority edge: `holder` may read and/or write
+-- `subject`'s parameters.
+--
+-- This is what makes parameter state an *authority* rather than a schema. An
+-- instance holding no edge can reach no parameters at all, its own included, and
+-- `holder == subject` is admitted here -- unlike a scheduling promotion edge --
+-- because a component owning its own configuration is the ordinary case.
+LifecycleParameterGrant :: type {
+  holder : Text;
+  subject : Text;
+  read : Bool;
+  write : Bool;
+};
+
+-- The C9.4 lifecycle policy: the admitted transition graph with its entry and
+-- exhaustion states, the per-instance restart bounds and backoff, the health
+-- dependencies gating a start, and the parameter authority. Declared together
+-- because a restart bound without a terminal state, or a transition graph
+-- without an entry, is not a policy.
+--
+-- `terminalState` is the state an instance enters when its attempt bound is
+-- spent. One graph-wide state rather than one per instance, so "the graph is in
+-- a declared terminal state rather than restarting forever" is observable in one
+-- marker.
+LifecyclePolicy :: type {
+  initialState : Text;
+  terminalState : Text;
+  transitions : List LifecycleTransition;
+  restarts : List LifecycleRestartPolicy;
+  dependencies : List LifecycleHealthDependency;
+  parameters : List LifecycleParameterGrant;
+};
+
 -- One named full-graph profile override. Profiles may replace only an exact
 -- participant's interposition chain; every other authority and policy field
 -- remains fixed by the base graph.
@@ -393,6 +478,12 @@ GenerationManifest :: type {
   -- which is what every generation before C9.3 did. Present, it fixes the band
   -- mapping, every named instance's class, and who may promote whom.
   schedulingClass? : SchedulingClassPolicy;
+  -- Optional C9.4 lifecycle policy. Absent means the generation declares no
+  -- lifecycle graph, no restart bound, no health dependency, and no parameter
+  -- authority: nothing restarts, every transition request is refused, and no
+  -- component can reach any parameter — which is what every generation before
+  -- C9.4 did, stated rather than inferred.
+  lifecyclePolicy? : LifecyclePolicy;
   objects : List Object;
   executables : List Executable;
   instances : List Instance;
@@ -434,6 +525,11 @@ FromData @SchedulingClassBand :: derive
 FromData @SchedulingClassEntry :: derive
 FromData @SchedulingPromotionEntry :: derive
 FromData @SchedulingClassPolicy :: derive
+FromData @LifecycleTransition :: derive
+FromData @LifecycleRestartPolicy :: derive
+FromData @LifecycleHealthDependency :: derive
+FromData @LifecycleParameterGrant :: derive
+FromData @LifecyclePolicy :: derive
 FromData @GenerationManifest :: derive
 
 decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
@@ -453,6 +549,11 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   SchedulingClassEntry =;
   SchedulingPromotionEntry =;
   SchedulingClassPolicy =;
+  LifecycleTransition =;
+  LifecycleRestartPolicy =;
+  LifecycleHealthDependency =;
+  LifecycleParameterGrant =;
+  LifecyclePolicy =;
   FabricProfileInterposition =;
   FabricProfile =;
   CapabilityGrant =;

@@ -192,6 +192,9 @@ pub enum BootAction {
     WaitSet = 32,
     /// C9.3's declared scheduling class and its promotion authority.
     SchedulingClass = 33,
+    /// C9.4's lifecycle transition graph, supervised restart, health
+    /// dependencies, and parameter authority.
+    LifecycleRestart = 34,
 }
 
 impl BootAction {
@@ -247,6 +250,7 @@ impl BootAction {
         Self::ClockAuthority,
         Self::WaitSet,
         Self::SchedulingClass,
+        Self::LifecycleRestart,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -293,6 +297,7 @@ impl BootAction {
                 Self::ClockAuthority => Self::ClockAuthority.id(),
                 Self::WaitSet => Self::WaitSet.id(),
                 Self::SchedulingClass => Self::SchedulingClass.id(),
+                Self::LifecycleRestart => Self::LifecycleRestart.id(),
             };
             declared == id
         })
@@ -333,6 +338,7 @@ impl BootAction {
             "clock-authority" => Self::ClockAuthority,
             "wait-set" => Self::WaitSet,
             "scheduling-class" => Self::SchedulingClass,
+            "lifecycle-restart" => Self::LifecycleRestart,
             _ => return None,
         })
     }
@@ -2692,13 +2698,16 @@ mod tests {
             RIGHT_CLOCK_SIMULATED_READ,
             RIGHT_CLOCK_SIMULATED_ADVANCE,
             RIGHT_SCHEDULING_PROMOTE,
+            RIGHT_LIFECYCLE_RESTART,
+            RIGHT_PARAMETER_READ,
+            RIGHT_PARAMETER_WRITE,
         ];
         let union = named
             .iter()
             .fold(0, |accumulator, right| accumulator | right);
         assert_eq!(union, RIGHT_ALL);
         assert_eq!(RIGHT_ALL & (1 << 17), 0);
-        assert_ne!(RIGHT_ALL, (1 << 30) - 1);
+        assert_ne!(RIGHT_ALL, (1 << 33) - 1);
         // The mask is what every grant, mapping, and minted-binding check
         // applies, so an undefined bit must survive none of them.
         assert_ne!((RIGHT_SEND | RIGHT_RECV | 1 << 17) & !RIGHT_ALL, 0);
@@ -2752,7 +2761,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 33] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 34] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2786,6 +2795,7 @@ mod tests {
         (BootAction::ClockAuthority, 31),
         (BootAction::WaitSet, 32),
         (BootAction::SchedulingClass, 33),
+        (BootAction::LifecycleRestart, 34),
     ];
 
     #[test]

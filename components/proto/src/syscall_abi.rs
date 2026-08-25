@@ -18,6 +18,8 @@ pub mod lifecycle_labels {
     pub const UNHEALTHY: u64 = 9;
     pub const PRIVATE_MEMORY_GROW: u64 = 43;
     pub const WAIT_SOURCES: u64 = 49;
+    pub const STATE_READ: u64 = 52;
+    pub const STATE_ADVANCE: u64 = 53;
 }
 
 pub mod spawn_labels {
@@ -27,6 +29,9 @@ pub mod spawn_labels {
 pub mod supervision_labels {
     pub const STATUS: u64 = 12;
     pub const DERIVE: u64 = 32;
+    pub const RESTART_ADMIT: u64 = 54;
+    pub const PARAMETER_READ: u64 = 55;
+    pub const PARAMETER_WRITE: u64 = 56;
 }
 
 pub mod capability_table_labels {

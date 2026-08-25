@@ -107,6 +107,9 @@ rightBits :: List RightBit = {
   right "CLOCK_SIMULATED_READ" 28 "clockSimulatedRead";
   right "CLOCK_SIMULATED_ADVANCE" 29 "clockSimulatedAdvance";
   right "SCHEDULING_PROMOTE" 30 "schedulingPromote";
+  right "LIFECYCLE_RESTART" 31 "lifecycleRestart";
+  right "PARAMETER_READ" 32 "parameterRead";
+  right "PARAMETER_WRITE" 33 "parameterWrite";
 };
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
