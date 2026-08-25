@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,11 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from boot_contracts import (  # noqa: E402
+    COMPONENT_IMAGE_ELF_MAGIC,
+    COMPONENT_IMAGE_HEADER_TARGET_PROFILE_OFFSET,
+    COMPONENT_IMAGE_MAGIC,
+)
 import component_sdk  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
@@ -178,7 +184,7 @@ def consumer(root: Path, sdk: Path, name: str) -> Path:
 
 
 def build_through_sdk(
-    sdk: Path, checkout: Path, profile: str, root: Path, *, label: str
+    sdk: Path, checkout: Path, profile: str, root: Path, record: dict, *, label: str
 ) -> tuple[Path, str]:
     """Build through the SDK entry point and prove where its inputs came from.
 
@@ -223,9 +229,17 @@ def build_through_sdk(
     )
     if str(ROOT) in exported_prefix or not exported_prefix:
         fail(f"{profile}: the SDK build did not export its own verified prefix")
-    elf = target_dir / "aarch64-sel4-minimal" / "release" / "console.elf"
-    if not elf.is_file():
-        fail(f"{profile}: the SDK build produced no component ELF")
+    # Cargo names the output directory by the JSON specification's file stem or
+    # by the triple itself, and a `[[bin]]` for a triple target carries no `.elf`
+    # suffix. Both come from the record's own `cargoTarget` rather than being
+    # assumed, which is the same resolution `tools/sdk-update.py` performs.
+    asset = next(entry for entry in record["profiles"] if entry["profile"] == profile)
+    release = target_dir / Path(asset["cargoTarget"]).stem / "release"
+    elf = next(
+        (path for path in (release / "console.elf", release / "console") if path.is_file()), None
+    )
+    if elf is None:
+        fail(f"{profile}: the SDK build produced no component artifact in {release}")
     return elf, exported_prefix
 
 
@@ -244,14 +258,30 @@ def external_specs(destination: Path, digest: str) -> None:
 
 
 def build_generation(
-    root: Path, elf: Path, *, profile: str, label: str, allow_failure: bool = False
+    root: Path,
+    elf: Path,
+    *,
+    profile: str,
+    label: str,
+    prefix: str,
+    allow_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """Build a generation whose workspace components come from the SDK's prefix.
+
+    `SEL4_PREFIX` is the SDK-verified, extracted prefix rather than
+    `build/sel4-prefix*`. `build-generation.py` compiles the workspace component
+    wrappers itself, and `sel4-config-data` resolves libsel4 through that
+    variable, so pointing it at the asset is what makes this arm test the asset:
+    the generation's own components are built against the published prefix, not
+    only the external ELF.
+    """
     specs = root / f"specs-{label}"
     specs.mkdir()
     external_specs(specs, hashlib.sha256(elf.read_bytes()).hexdigest())
     environment = os.environ.copy()
     environment["SLIME_TARGET_PROFILE"] = profile
     environment["SLIME_SEL4_MANIFEST"] = "sel4"
+    environment["SEL4_PREFIX"] = prefix
     return run(
         [
             sys.executable,
@@ -269,8 +299,8 @@ def build_generation(
     )
 
 
-def prove_qemu_boot(root: Path, elf: Path) -> None:
-    build_generation(root, elf, profile=QEMU_PROFILE, label="qemu")
+def prove_qemu_boot(root: Path, elf: Path, prefix: str) -> None:
+    build_generation(root, elf, profile=QEMU_PROFILE, label="qemu", prefix=prefix)
     output = root / "generation-qemu"
     generation = CHECK.check_generation((output / "generation.bin").read_bytes())
     store = CHECK.check_bootstore((output / "boot-store.bin").read_bytes())
@@ -299,28 +329,107 @@ def prove_qemu_boot(root: Path, elf: Path) -> None:
     )
 
 
-def prove_rpi_qualification(root: Path, elf: Path) -> None:
-    """The RPi ELF is `bcm2712`-qualified, and the QEMU profile refuses it.
+def declared_profile_ids(root: Path) -> tuple[int, int]:
+    """The target-profile id each generation wrapped the external ELF under.
+
+    Read out of the generation bytes rather than inferred: the wrapper's
+    `targetProfile` field is exactly what `boot_contracts::target_profile::admit`
+    compares before a component's bytes are mapped, so reading it is what makes
+    "the profiles are not interchangeable" an observation.
+
+    Both wrapper magics are accepted because both are in use and carry the same
+    header: the seL4 profile wraps a whole ELF (`SLIMECME`) while the bare-metal
+    triple re-bases segments onto the profile's component base (`SLIMECM2`). That
+    difference is the point of the comparison, not an obstacle to it.
+    """
+    found = []
+    for label in ("rpi", "rpi-into-qemu"):
+        data = (root / f"generation-{label}" / "generation.bin").read_bytes()
+        index = min(
+            (
+                position
+                for position in (
+                    data.find(COMPONENT_IMAGE_ELF_MAGIC),
+                    data.find(COMPONENT_IMAGE_MAGIC),
+                )
+                if position >= 0
+            ),
+            default=-1,
+        )
+        if index < 0:
+            fail(f"{label}: the generation carries no wrapped component image")
+        (profile_id,) = struct.unpack_from(
+            "<I", data, index + COMPONENT_IMAGE_HEADER_TARGET_PROFILE_OFFSET
+        )
+        found.append(profile_id)
+    return found[0], found[1]
+
+
+def prove_rpi_qualification(
+    root: Path, rpi_elf: Path, qemu_elf: Path, rpi_prefix: str, qemu_prefix: str
+) -> None:
+    """The RPi ELF is `bcm2712`-qualified, and the profiles are not interchangeable.
+
+    Two directions, because the two profiles fail differently and both matter:
+
+    * A QEMU-target ELF entering an RPi generation is refused at build time. The
+      `aarch64-unknown-none` wrapper requires the fixed component load base its
+      target profile declares, and a seL4 JSON-target ELF links at its own
+      addresses, so the host refuses it outright.
+    * An RPi ELF entering a QEMU generation is *admitted* at build time and
+      refused by the root before any of its bytes are mapped. That asymmetry is
+      real rather than a gap: the seL4 wrapper carries the profile's id, ABI, and
+      feature mask, and `boot_contracts::target_profile::admit` compares them by
+      exact equality when the image is loaded. The refusal therefore belongs to
+      the boot path, which is exactly where `just sel4_demo_check`'s wrong-target
+      arm observes it, so this gate asserts the wrapper's declared identity
+      rather than restating a boot assertion that already exists.
 
     Host-side qualification only. The board's own gates are the only evidence
     that can claim a physical boot, and this arm deliberately makes no such
     claim.
     """
-    admitted = build_generation(root, elf, profile=RPI_PROFILE, label="rpi")
+    admitted = build_generation(
+        root, rpi_elf, profile=RPI_PROFILE, label="rpi", prefix=rpi_prefix
+    )
     if f"implementation={EXTERNAL_IMPLEMENTATION} provider=external" not in admitted.stdout:
         fail("the RPi generation did not report the SDK-built component as external")
+
     refused = build_generation(
-        root, elf, profile=QEMU_PROFILE, label="rpi-wrong-target", allow_failure=True
+        root,
+        qemu_elf,
+        profile=RPI_PROFILE,
+        label="qemu-into-rpi",
+        prefix=rpi_prefix,
+        allow_failure=True,
     )
     if refused.returncode == 0:
-        fail("a bcm2712-qualified ELF was admitted into a QEMU-profile generation")
-    if "target" not in refused.stdout.lower():
-        fail(f"the wrong-target refusal did not name the target mismatch:\n{refused.stdout}")
-    if (root / "generation-rpi-wrong-target" / "generation.bin").exists():
-        fail("the wrong-target refusal left a signed generation artifact")
+        fail("a QEMU-target ELF was admitted into an RPi-profile generation")
+    if "load layout" not in refused.stdout:
+        fail(f"the cross-profile refusal did not name the layout mismatch:\n{refused.stdout}")
+    if (root / "generation-qemu-into-rpi" / "generation.bin").exists():
+        fail("the cross-profile refusal left a signed generation artifact")
+
+    # The other direction: admitted at build time, and the wrapper it produced
+    # declares the RPi profile rather than the QEMU one, which is what the root
+    # compares before mapping.
+    crossed = build_generation(
+        root,
+        rpi_elf,
+        profile=QEMU_PROFILE,
+        label="rpi-into-qemu",
+        prefix=qemu_prefix,
+    )
+    if f"implementation={EXTERNAL_IMPLEMENTATION} provider=external" not in crossed.stdout:
+        fail("the cross-profile generation did not report the component as external")
+    rpi_id, qemu_id = declared_profile_ids(root)
+    if rpi_id == qemu_id:
+        fail("both generations wrapped the component under one profile identity")
     print(
-        "component SDK prefix: the RPi asset produced a bcm2712-qualified ELF that the "
-        "QEMU profile refused as wrong-target (host-side qualification only)",
+        f"component SDK prefix: the RPi asset produced a bcm2712-qualified ELF (profile "
+        f"id {rpi_id}) the RPi profile admits, the QEMU-target ELF was refused by the "
+        f"RPi build, and a QEMU generation wrapping it declares profile id {qemu_id} for "
+        "the root to refuse before mapping (host-side qualification only)",
         flush=True,
     )
 
@@ -333,14 +442,22 @@ def prove_malformed_archives_are_refused(root: Path, sdk: Path, record: dict) ->
     archive = sdk / qemu["prefix"]["archive"]
     swapped = (sdk / rpi["prefix"]["archive"]).read_bytes()
 
+    # The corruption flips one bit at the archive's midpoint rather than zeroing a
+    # range: a tar carries long runs of zero padding, and an earlier version of
+    # this control overwrote 512 padding bytes with zeros, changed nothing, and so
+    # proved nothing. The mutation is asserted to differ below.
+    corrupt = bytearray(original)
+    corrupt[len(corrupt) // 2] ^= 0xFF
     cases = (
-        ("corrupt", bytearray(original[:2048] + b"\0" * 512 + original[2560:])),
-        ("truncated", bytearray(original[: len(original) // 3])),
-        ("swapped-profile", bytearray(swapped)),
+        ("corrupt", bytes(corrupt)),
+        ("truncated", original[: len(original) // 3]),
+        ("swapped-profile", swapped),
     )
     try:
         for label, mutated in cases:
-            archive.write_bytes(bytes(mutated))
+            if mutated == original:
+                fail(f"the {label} mutation did not change the archive, so it proves nothing")
+            archive.write_bytes(mutated)
             built = run(
                 [
                     sys.executable,
@@ -357,7 +474,7 @@ def prove_malformed_archives_are_refused(root: Path, sdk: Path, record: dict) ->
             )
             if built.returncode == 0:
                 fail(f"the {label} prefix archive was accepted")
-            if "hash" not in built.stdout and "truncat" not in built.stdout:
+            if "identity" not in built.stdout and "hash" not in built.stdout:
                 fail(f"the {label} refusal did not name the mismatch:\n{built.stdout}")
     finally:
         archive.write_bytes(original)
@@ -406,23 +523,29 @@ def main() -> None:
         record = exported.record
         prove_archives_are_clean(sdk, record, root)
         checkout = consumer(root, sdk, "cp8-consumer")
-        qemu_elf, qemu_prefix = build_through_sdk(sdk, checkout, QEMU_PROFILE, root, label="qemu")
-        rpi_elf, rpi_prefix = build_through_sdk(sdk, checkout, RPI_PROFILE, root, label="rpi")
-        if qemu_prefix == rpi_prefix:
+        qemu_elf, qemu_export = build_through_sdk(
+            sdk, checkout, QEMU_PROFILE, root, record, label="qemu"
+        )
+        rpi_elf, rpi_export = build_through_sdk(
+            sdk, checkout, RPI_PROFILE, root, record, label="rpi"
+        )
+        if qemu_export == rpi_export:
             fail("both profiles resolved to one prefix, so the assets are not separate")
         if qemu_elf.read_bytes() == rpi_elf.read_bytes():
             fail("the two profiles produced byte-identical ELFs, so neither is qualified")
-        prove_qemu_boot(root, qemu_elf)
-        prove_rpi_qualification(root, rpi_elf)
+        qemu_prefix = qemu_export.split("=", 1)[1]
+        rpi_prefix = rpi_export.split("=", 1)[1]
+        prove_qemu_boot(root, qemu_elf, qemu_prefix)
+        prove_rpi_qualification(root, rpi_elf, qemu_elf, rpi_prefix, qemu_prefix)
         prove_malformed_archives_are_refused(root, sdk, record)
 
     print(
         "component SDK prefix check: one immutable SDK release supplied verified "
         f"{QEMU_PROFILE} and {RPI_PROFILE} seL4 prefixes; an external checkout built "
-        "target-qualified ELFs against each with no reference to build/sel4-prefix*, "
-        "the QEMU ELF booted the component graph, the RPi ELF was admitted for "
-        "bcm2712 and refused by the QEMU profile, and four malformed archives were "
-        "refused before Cargo ran"
+        "target-qualified ELFs against each with SEL4_PREFIX poisoned and no reference "
+        "to build/sel4-prefix*, the QEMU ELF booted the component graph, the RPi ELF "
+        "was admitted only for bcm2712 while the QEMU-target ELF was refused by the "
+        "RPi build, and four malformed archives were refused before Cargo ran"
     )
 
 

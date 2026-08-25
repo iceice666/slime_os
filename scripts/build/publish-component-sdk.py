@@ -251,7 +251,20 @@ def replace_tree(clone_root: Path, sdk: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="SDK release version")
-    parser.add_argument("--sdk-url", default=DEFAULT_SDK_REPOSITORY)
+    parser.add_argument(
+        "--sdk-url",
+        default=DEFAULT_SDK_REPOSITORY,
+        help="transport the generated commit is cloned from and pushed to",
+    )
+    parser.add_argument(
+        "--sdk-repository",
+        default=DEFAULT_SDK_REPOSITORY,
+        help=(
+            "canonical SDK repository recorded in the release and pinned by the "
+            "consumer template; distinct from --sdk-url, which is only the "
+            "transport a mirror or a local clone may differ on"
+        ),
+    )
     parser.add_argument("--branch", default=DEFAULT_BRANCH)
     parser.add_argument(
         "--profile",
@@ -304,7 +317,7 @@ def main() -> None:
             exported = component_sdk.export(
                 root / "export",
                 version=arguments.version,
-                sdk_repository=arguments.sdk_url,
+                sdk_repository=arguments.sdk_repository,
                 profiles=profiles,
                 source=worktree,
                 prefix_source=ROOT,

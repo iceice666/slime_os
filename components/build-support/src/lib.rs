@@ -87,10 +87,11 @@ pub fn configure() {
         other => panic!("unsupported component target {other}"),
     };
     if let Some(linker_script) = linker_script {
-        let script = components_dir(&manifest_dir).join(linker_script);
+        let script = linker_script_dir(&manifest_dir).join(linker_script);
         println!("cargo:rustc-link-arg=-T{}", script.display());
         println!("cargo:rerun-if-changed={}", script.display());
     }
+    println!("cargo:rerun-if-env-changed=SLIME_COMPONENT_LINKER_DIR");
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
     match std::env::var("SLIME_TARGET_PROFILE") {
         Ok(profile) => println!("cargo:rustc-env=SLIME_TARGET_PROFILE={profile}"),
@@ -107,14 +108,24 @@ pub fn configure() {
     }
 }
 
-/// `components/`, from a component crate's own manifest directory.
+/// Where the component linker scripts live.
 ///
-/// The linker scripts are repository-level inputs shared by every component, so
-/// they are located relative to this tree rather than copied per crate. An
-/// out-of-tree crate needs no linker script, since only the retired bare-metal
-/// targets use one.
-fn components_dir(manifest_dir: &str) -> PathBuf {
-    // `components/bins/<crate>` -> `components`
+/// `SLIME_COMPONENT_LINKER_DIR` wins when set, and the component SDK's build
+/// entry point sets it (CP8). The scripts are repository-level build inputs
+/// shared by every component -- an `aarch64-unknown-none` component links at the
+/// fixed component base its target profile declares -- so an out-of-tree crate
+/// cannot find them relative to its own manifest, which is where they were
+/// looked for before. Without the override, a crate outside this workspace
+/// building for that target failed at link time with a missing linker script,
+/// or worse would have linked at the wrong base and been refused later by the
+/// generation builder.
+///
+/// The in-tree fallback resolves `components/bins/<crate>` to `components`, so
+/// a workspace component needs no environment at all.
+fn linker_script_dir(manifest_dir: &str) -> PathBuf {
+    if let Ok(directory) = std::env::var("SLIME_COMPONENT_LINKER_DIR") {
+        return PathBuf::from(directory);
+    }
     Path::new(manifest_dir)
         .parent()
         .and_then(Path::parent)

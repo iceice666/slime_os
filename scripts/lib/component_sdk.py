@@ -81,6 +81,15 @@ VENDORED = ("deps/rust-sel4",)
 TARGET_SPEC_SOURCE = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json"
 TARGET_SPEC_SDK = "targets/aarch64-sel4-minimal.json"
 
+# The component linker scripts. Repository-level build inputs rather than crate
+# sources: an `aarch64-unknown-none` component links at the fixed component base
+# `contracts/target-profile/v1` declares, and `slime-build-support` passes the
+# matching script with `-T`. They ship in the SDK because an out-of-tree crate
+# cannot find them relative to its own manifest, and `tools/sdk-build.py` points
+# `SLIME_COMPONENT_LINKER_DIR` at the exported copies.
+LINKER_SCRIPTS = ("components/component.ld", "components/component-aarch64.ld")
+LINKER_SCRIPT_SDK = "linker"
+
 # What the exporter writes rather than copies.
 GENERATED_FILES = (
     "Cargo.toml",
@@ -103,22 +112,60 @@ TREE_DOMAIN = b"slime-component-sdk-tree-v1\0"
 SET_DOMAIN = b"slime-component-sdk-set-v1\0"
 AXIS_DOMAIN = b"slime-component-sdk-axis-v1\0"
 
-# The seL4 platforms an SDK profile can be built from, mapped to the target
-# profile name `contracts/target-profile/v1` declares and the installed prefix
-# `scripts/build/build-sel4.py` produces. Two vocabularies, deliberately kept
-# apart: `aarch64-rpi5` is the *profile* for the `bcm2712-rpi5` *platform*, and
-# a consumer that conflated them would export the wrong `SLIME_TARGET_PROFILE`
-# beside a correct prefix.
-PROFILE_PLATFORMS: dict[str, dict[str, str]] = {
+# Everything an SDK profile needs beyond its prefix bytes, keyed by the target
+# profile name `contracts/target-profile/v1` declares.
+#
+# `platform` is the `scripts/build/build-sel4.py` platform that produces the
+# prefix, kept distinct on purpose: `aarch64-rpi5` is the *profile* for the
+# `bcm2712-rpi5` *platform*, and a consumer that conflated them would export the
+# wrong `SLIME_TARGET_PROFILE` beside a correct prefix.
+#
+# `cargo_target`, `rust_flags`, and `cargo_flags` are read from the same places
+# the product build reads them -- `contracts/target-profile/v1`'s `cargoTarget`
+# and `components/.cargo/config.toml`'s per-triple `rustflags` -- rather than
+# invented here, and they genuinely differ per profile. The seL4 JSON target
+# needs `-Z json-target-spec` plus a `build-std`, inherits no config rustflags,
+# and links a component at its own addresses. The `aarch64-unknown-none` triple
+# has a prebuilt `core`, needs no unstable flag, and must link at the profile's
+# fixed component base -- without `relocation-model=static`, `code-model=small`,
+# and the 4 KiB max page size, the resulting ELF is refused by the generation
+# builder with "invalid component load layout".
+PROFILE_PLATFORMS: dict[str, dict[str, object]] = {
     "aarch64-sel4-qemu-virt": {
         "platform": "qemu-arm-virt",
         "prefix": "build/sel4-prefix",
         "pins": "observed_prefix",
+        "cargo_target": TARGET_SPEC_SDK,
+        "cargo_target_is_spec": True,
+        "rust_flags": ("-C", "link-arg=--build-id=none"),
+        "cargo_flags": (
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ),
     },
     "aarch64-rpi5": {
         "platform": "bcm2712-rpi5",
         "prefix": "build/sel4-rpi5-prefix",
         "pins": "observed_prefix_bcm2712_rpi5",
+        "cargo_target": "aarch64-unknown-none",
+        "cargo_target_is_spec": False,
+        "rust_flags": (
+            "-C",
+            "relocation-model=static",
+            "-C",
+            "code-model=small",
+            "-C",
+            "link-arg=--build-id=none",
+            "-C",
+            "link-arg=-z",
+            "-C",
+            "link-arg=max-page-size=4096",
+        ),
+        "cargo_flags": (),
     },
 }
 DEFAULT_PROFILES = ("aarch64-sel4-qemu-virt", "aarch64-rpi5")
@@ -693,27 +740,49 @@ def main() -> None:
     verify_tree(record)
     profile = select_profile(record, arguments.profile)
     prefix = verify_prefix(profile, Path(arguments.cache).expanduser())
-    target = SDK / profile["cargoTarget"]
-    if not target.is_file():
-        fail("missing target specification " + profile["cargoTarget"])
-    if hashlib.sha256(target.read_bytes()).hexdigest() != profile["targetSpecHash"]:
-        fail("target specification does not match its recorded hash")
+
+    # The target is either a JSON specification inside this tree or a plain
+    # triple. Only the first has bytes to bind, and only the first needs the
+    # unstable flags the record carries.
+    if profile["cargoTargetIsSpec"]:
+        target = SDK / profile["cargoTarget"]
+        if not target.is_file():
+            fail("missing target specification " + profile["cargoTarget"])
+        if hashlib.sha256(target.read_bytes()).hexdigest() != profile["targetSpecHash"]:
+            fail("target specification does not match its recorded hash")
+        target_argument = str(target)
+    else:
+        if profile["targetSpecHash"]:
+            fail("a triple target must not declare a specification hash")
+        target_argument = profile["cargoTarget"]
 
     environment = os.environ.copy()
     environment["RUSTUP_TOOLCHAIN"] = record["toolchain"]
     environment["SEL4_PREFIX"] = str(prefix)
     environment["SLIME_TARGET_PROFILE"] = profile["profile"]
+    # `slime-build-support` passes a `-T` linker script for the bare-metal
+    # triples, and an out-of-tree crate cannot find one relative to its own
+    # manifest. The exported copies are inside this tree.
+    environment["SLIME_COMPONENT_LINKER_DIR"] = str(SDK / "linker")
     if arguments.target_dir:
         environment["CARGO_TARGET_DIR"] = str(Path(arguments.target_dir).resolve())
-    flags = environment.get("RUSTFLAGS", "").split()
-    if "link-arg=--build-id=none" not in flags:
-        flags = ["-C", "link-arg=--build-id=none"] + flags
-    environment["RUSTFLAGS"] = " ".join(flags)
+    # The recorded flags replace any ambient `RUSTFLAGS` rather than merging with
+    # them. A component's link layout is admitted by exact comparison, so an
+    # inherited flag that changed it would produce an ELF the generation builder
+    # refuses -- and an override the operator cannot see is worse than one they
+    # must state.
+    environment["RUSTFLAGS"] = " ".join(profile["rustFlags"])
 
     if arguments.print_environment:
-        for key in ("RUSTUP_TOOLCHAIN", "SEL4_PREFIX", "SLIME_TARGET_PROFILE", "RUSTFLAGS"):
+        for key in (
+            "RUSTUP_TOOLCHAIN",
+            "SEL4_PREFIX",
+            "SLIME_TARGET_PROFILE",
+            "SLIME_COMPONENT_LINKER_DIR",
+            "RUSTFLAGS",
+        ):
             print(key + "=" + environment[key])
-        print("SLIME_TARGET_SPEC=" + str(target))
+        print("SLIME_TARGET=" + target_argument)
     if arguments.verify_only:
         print(
             "slime sdk build: verified "
@@ -725,19 +794,8 @@ def main() -> None:
         )
         return
 
-    command = [
-        "cargo",
-        "build",
-        "--release",
-        "--target",
-        str(target),
-        "-Z",
-        "json-target-spec",
-        "-Z",
-        "build-std=core,alloc,compiler_builtins",
-        "-Z",
-        "build-std-features=compiler-builtins-mem",
-    ]
+    command = ["cargo", "build", "--release", "--target", target_argument]
+    command += list(profile["cargoFlags"])
     if arguments.locked:
         command.append("--locked")
     if arguments.manifest_path:
@@ -862,10 +920,15 @@ def main() -> None:
         profile = next(
             entry for entry in record["profiles"] if entry["profile"] == arguments.profile
         )
+        # Cargo names its output directory by the JSON specification's file stem
+        # or by the triple itself, and a `[[bin]]` for a triple target has no
+        # `.elf` suffix. Both come from the record rather than being assumed.
         stem = Path(profile["cargoTarget"]).stem
-        elf = Path(target_dir) / stem / "release" / f"{arguments.binary}.elf"
-        if not elf.is_file():
-            fail(f"rebuild produced no {elf.name}")
+        release = Path(target_dir) / stem / "release"
+        candidates = [release / f"{arguments.binary}.elf", release / arguments.binary]
+        elf = next((path for path in candidates if path.is_file()), None)
+        if elf is None:
+            fail(f"rebuild produced no {arguments.binary} artifact in {release}")
         digest = hashlib.sha256(elf.read_bytes()).hexdigest()
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -1195,6 +1258,10 @@ def export(
     target_spec = destination / TARGET_SPEC_SDK
     target_spec.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source / TARGET_SPEC_SOURCE, target_spec)
+    linker = destination / LINKER_SCRIPT_SDK
+    linker.mkdir()
+    for relative in LINKER_SCRIPTS:
+        shutil.copyfile(source / relative, linker / Path(relative).name)
 
     (destination / "Cargo.toml").write_text(sdk_workspace_manifest(source), encoding="utf-8")
     tools = destination / "tools"
@@ -1208,18 +1275,26 @@ def export(
         entry.chmod(0o755)
 
     target_spec_hash = hashlib.sha256(target_spec.read_bytes()).hexdigest()
-    profile_records = [
-        {
-            "profile": profile,
-            "platform": PROFILE_PLATFORMS[profile]["platform"],
-            "cargoTarget": TARGET_SPEC_SDK,
-            "targetSpecHash": target_spec_hash,
-            "prefix": export_prefix_asset(
-                destination, profile, table, source=source, prefix_source=prefixes
-            ),
-        }
-        for profile in profiles
-    ]
+    profile_records = []
+    for profile in profiles:
+        binding = PROFILE_PLATFORMS[profile]
+        is_spec = bool(binding["cargo_target_is_spec"])
+        profile_records.append(
+            {
+                "profile": profile,
+                "platform": binding["platform"],
+                "cargoTarget": binding["cargo_target"],
+                "cargoTargetIsSpec": is_spec,
+                # A triple has no specification bytes to bind, so the field is
+                # empty rather than carrying a digest of an unrelated file.
+                "targetSpecHash": target_spec_hash if is_spec else "",
+                "rustFlags": list(binding["rust_flags"]),
+                "cargoFlags": list(binding["cargo_flags"]),
+                "prefix": export_prefix_asset(
+                    destination, profile, table, source=source, prefix_source=prefixes
+                ),
+            }
+        )
 
     crates = []
     for relative, package in EXPORT_CRATES:
@@ -1242,7 +1317,7 @@ def export(
     files = sorted(
         [relative for relative, _ in EXPORT_CRATES]
         + list(VENDORED)
-        + [TARGET_SPEC_SDK, *GENERATED_FILES]
+        + [TARGET_SPEC_SDK, LINKER_SCRIPT_SDK, *GENERATED_FILES]
         + [profile["prefix"]["archive"] for profile in profile_records]
         + list(contract.RECORD_FILE_NAMES)
     )
@@ -1281,7 +1356,13 @@ def export(
         "targetSpecSet": set_digest(
             "targetSpecSet",
             [
-                (entry["profile"], entry["cargoTarget"], entry["targetSpecHash"])
+                (
+                    entry["profile"],
+                    entry["cargoTarget"],
+                    entry["targetSpecHash"],
+                    " ".join(entry["rustFlags"]),
+                    " ".join(entry["cargoFlags"]),
+                )
                 for entry in profile_records
             ],
         ),
@@ -1408,6 +1489,12 @@ def verify_digests(sdk: Path, record: dict, source: Path = ROOT) -> None:
             _fail(f"{profile['profile']}: missing prefix archive")
         if hashlib.sha256(archive.read_bytes()).hexdigest() != profile["prefix"]["archiveHash"]:
             _fail(f"{profile['profile']}: prefix archive hash does not match its bytes")
+        if not profile["cargoTargetIsSpec"]:
+            # A triple has no bytes in the tree, so there is nothing to compare.
+            # It is still checked: the record must not claim a hash for it.
+            if profile["targetSpecHash"]:
+                _fail(f"{profile['profile']}: a triple target declares a specification hash")
+            continue
         target = sdk / profile["cargoTarget"]
         if hashlib.sha256(target.read_bytes()).hexdigest() != profile["targetSpecHash"]:
             _fail(f"{profile['profile']}: target specification hash does not match its bytes")

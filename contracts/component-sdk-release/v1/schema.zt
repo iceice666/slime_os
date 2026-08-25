@@ -97,11 +97,30 @@ PrefixAsset :: type {
 -- recorded because they are not the same vocabulary: `aarch64-rpi5` is the
 -- profile name for the `bcm2712-rpi5` platform, and a consumer that conflated
 -- them would export the wrong `SLIME_TARGET_PROFILE` for a correct prefix.
+--
+-- `cargoTarget` is either a triple or a path to a JSON specification inside the
+-- exported tree, and `cargoTargetIsSpec` says which. The distinction is not
+-- cosmetic: a JSON target needs `-Z json-target-spec` and inherits no
+-- `.cargo/config.toml` rustflags, while a triple inherits the ones the product
+-- build sets and needs none of those flags. `targetSpecHash` binds a JSON
+-- specification's bytes and is empty for a triple, which has no bytes to bind.
+--
+-- `rustFlags` and `cargoFlags` are the exact flags a build for this profile
+-- requires. Recorded per profile rather than assumed by the build entry point
+-- because they genuinely differ: an `aarch64-unknown-none` component is linked
+-- at a fixed component base with a static relocation model, and a seL4 JSON
+-- target component is an ordinary seL4 ELF task at its own link addresses. A
+-- single hard-coded flag set produced a `bcm2712` ELF the generation builder
+-- refused with "invalid component load layout", which is exactly the silent
+-- wrong answer this field exists to prevent.
 TargetProfileAsset :: type {
   profile : Text;
   platform : Text;
   cargoTarget : Text;
+  cargoTargetIsSpec : Bool;
   targetSpecHash : Text;
+  rustFlags : List Text;
+  cargoFlags : List Text;
   prefix : PrefixAsset;
 };
 
