@@ -145,6 +145,23 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # sides, including the one the policy does not name: that is the pair a
     # review found disagreeing.
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
+    # C9.4: 55 markers — 47 over eight causal chains plus eight counted as the
+    # order-independent pseudo-chain `chains_from_gate` appends. The chains are
+    # the declared policy the root resolved plus one line per transition edge
+    # (6); a health dependency refusing a start until it is satisfied (4); a
+    # fault observed, its predecessor handle refused, the restart admitted, the
+    # backoff refused early and then waited (12); the three terminal causes
+    # driving different policy from both sides (8); exhaustion refusing both the
+    # admission and the following spawn (7); the transition graph refusing an
+    # undeclared edge without moving (5); the deny-by-default answers (3); and
+    # the terminal close (2). The graph chain carries five rather than seven
+    # because the two advance lines it used to order on carry no role prefix:
+    # they are bound to one task by `check_graph_walk` instead, which is coverage
+    # the marker framework cannot express. The order-independent eight are the
+    # root's own per-instance state installs, the parameter-authority asymmetry,
+    # and the unset-key refusal that must stay distinguishable from an authority
+    # one — all of which interleave with component output and so fix no order.
+    ("sel4_lifecycle_restart_plane", "check/check-sel4-lifecycle-restart-plane.py", 55),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

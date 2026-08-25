@@ -1035,6 +1035,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-lifecycle-restart-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-powerbox-chooser"
 version = "0.1.0"
 dependencies = [

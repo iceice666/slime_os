@@ -159,6 +159,10 @@ mod boot_action {
     /// C9.3's declared scheduling class and its promotion authority.
     pub const SCHEDULING_CLASS: u32 = 33;
 
+    /// C9.4's lifecycle transition graph, supervised restart, health
+    /// dependencies, and parameter authority.
+    pub const LIFECYCLE_RESTART: u32 = 34;
+
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
     // file matches on it. Renumbering a variant in the contract without
@@ -198,6 +202,7 @@ mod boot_action {
     const _: () = assert!(CLOCK_AUTHORITY == BootAction::ClockAuthority.id());
     const _: () = assert!(WAIT_SET == BootAction::WaitSet.id());
     const _: () = assert!(SCHEDULING_CLASS == BootAction::SchedulingClass.id());
+    const _: () = assert!(LIFECYCLE_RESTART == BootAction::LifecycleRestart.id());
 }
 
 /// Compose the graph the generation selected.
@@ -283,6 +288,14 @@ fn compose_declared_graph(startup_arg: u32) {
         // prove the wrong thing. The same rule as the wait-set plane above.
         action::SCHEDULING_CLASS => {
             slime_rt::debug_write(b"[init] scheduling class plane is root-launched\n");
+            slime_rt::exit(0)
+        }
+        // C9.4's probe instances are root-autostart, and the supervisor spawns
+        // and restarts the worker itself — restart authority must ride on a
+        // handle its own holder obtained, so init handing one over would prove
+        // the wrong thing. The same rule as the two planes above.
+        action::LIFECYCLE_RESTART => {
+            slime_rt::debug_write(b"[init] lifecycle restart plane is root-launched\n");
             slime_rt::exit(0)
         }
         action::CROSSING => {

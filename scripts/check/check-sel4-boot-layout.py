@@ -122,6 +122,11 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     # supervision source must name a handle its own holder obtained.
     ("sel4-wait-set", "--wait-set-plane", "slime-sel4-wait-set.elf"),
     ("sel4-scheduling-class", "--scheduling-class-plane", "slime-sel4-scheduling-class.elf"),
+    (
+        "sel4-lifecycle-restart",
+        "--lifecycle-restart-plane",
+        "slime-sel4-lifecycle-restart.elf",
+    ),
 )
 
 
