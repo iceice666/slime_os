@@ -33,8 +33,8 @@ use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, notification, object_allocator, peer_endpoint,
-    platform_timer, private_memory, shared_buffer, supervision, task, timer, transfer_window,
-    virtio_blk, wait_set,
+    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
+    transfer_window, virtio_blk, wait_set,
 };
 
 use core::ptr;
@@ -84,7 +84,8 @@ const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
 //   same reason.
 use slime_proto::syscall_abi::{
     capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-    fixture_labels, lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+    fixture_labels, lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
+    supervision_labels,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1234,6 +1235,7 @@ static mut PEER_ENDPOINTS: peer_endpoint::PeerEndpointTable =
 static mut NOTIFICATIONS: notification::NotificationTable = notification::NotificationTable::new();
 static mut CLOCK_SERVICE: clock::ClockService = clock::ClockService::new();
 static mut WAIT_SET_SERVICE: wait_set::WaitSetService = wait_set::WaitSetService::new();
+static mut SCHEDULING_SERVICE: scheduling::SchedulingService = scheduling::SchedulingService::new();
 
 const MAX_CAPABILITY_EXPORTS: usize = 64;
 #[derive(Clone, Copy)]
@@ -1989,6 +1991,13 @@ fn launch_instance_graph(
             .map_or(0, |sources| sources.entry_count()),
         wait_sources.is_some() as u8,
     );
+    let scheduling_policy = match generation::scheduling_class_object(generation) {
+        Some(Ok(policy)) => Some(policy),
+        Some(Err(error)) => {
+            fatal!("SLIME_SCHED FAIL admitted policy will not decode: {error:?}")
+        }
+        None => None,
+    };
 
     for instance_index in 0..generation.instance_count() {
         let instance = match generation.instance(instance_index) {
@@ -2440,6 +2449,69 @@ fn launch_instance_graph(
         }
     }
 
+    // C9.3's declared class, recorded per launched task on the same rule as the
+    // clock authority and wait sources above: every live task gets a row,
+    // including one the policy names no class for, so the table answers about a
+    // live task rather than about whether it was ever declared.
+    //
+    // The band's priority is *already* on each thread: it travels in the plan's
+    // `ScheduleRecord`, which the builder wrote from this same resource, and
+    // `TaskTable::create` applied it before this loop runs. What this install
+    // adds is the root's own view — which class each task is at, so
+    // `CLASS_READ` can answer and `CLASS_PROMOTE` can find a subject. Deriving
+    // the priority twice is exactly the drift B71 closed, so the marker prints
+    // the class beside the priority the schedule record already carries.
+    unsafe { *ptr::addr_of_mut!(SCHEDULING_SERVICE) = scheduling::SchedulingService::new() };
+    let scheduling_service = unsafe { &mut *ptr::addr_of_mut!(SCHEDULING_SERVICE) };
+    for launched in launched_instances.iter() {
+        let class = match scheduling_service.declare(
+            scheduling_policy.as_ref(),
+            generation,
+            launched.task,
+            launched.instance,
+        ) {
+            Ok(class) => class,
+            Err(error) => fatal!(
+                "SLIME_SCHED FAIL class install task={} error={error:?}",
+                launched.task.0
+            ),
+        };
+        if scheduling_policy.is_some() {
+            sel4::debug_println!(
+                "SLIME_SCHED class task={} instance={} class={} priority={} worker={} worker_priority={}",
+                launched.task.0,
+                generation
+                    .instance(launched.instance)
+                    .map_or("?", |instance| instance.name),
+                class.name(),
+                class.priority(),
+                boot_contracts::scheduling_class::class_name(class.worker_class_id()),
+                class.worker_priority(),
+            );
+        }
+    }
+    if let Some(policy) = scheduling_policy.as_ref() {
+        sel4::debug_println!(
+            "SLIME_SCHED policy bands={} instances={} promotions={} unnamed={}",
+            policy.class_count(),
+            policy.instance_count(),
+            policy.promotion_count(),
+            boot_contracts::scheduling_class::class_name(
+                boot_contracts::scheduling_class::UNDECLARED_CLASS_ID
+            ),
+        );
+        for index in 0..policy.class_count() {
+            let Some(band) = policy.band(index) else {
+                fatal!("SLIME_SCHED FAIL band {index} is missing")
+            };
+            sel4::debug_println!(
+                "SLIME_SCHED band class={} priority={}",
+                boot_contracts::scheduling_class::class_name(band.class_id),
+                band.priority,
+            );
+        }
+    }
+
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
     let table = bootstrap.and_then(|id| tasks.authority(id));
     sel4::debug_println!(
@@ -2610,6 +2682,8 @@ fn launch_instance_graph(
         &mut buffers,
         clock_service,
         wait_set_service,
+        scheduling_service,
+        scheduling_policy.as_ref(),
         timer_adapter,
         allocator,
         scratch,
@@ -2739,6 +2813,8 @@ fn serve_instance_graph(
     buffers: &mut SharedBufferTable,
     clock_service: &mut clock::ClockService,
     wait_set_service: &mut wait_set::WaitSetService,
+    scheduling_service: &mut scheduling::SchedulingService,
+    scheduling_policy: Option<&boot_contracts::scheduling_class::SchedulingClass<'_>>,
     timer_adapter: &mut PhysicalTimerAdapter,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -2884,6 +2960,12 @@ fn serve_instance_graph(
             // still holding a handle naming this task.
             signal_declared_death(wait_set_service, tasks, id);
             drop_task_clock(clock_service, timer_adapter, id);
+            // C9.3: a class row keyed by a dead task would let a later task at
+            // the same table index inherit its band. `TaskId` is never reused,
+            // so this is bookkeeping rather than a correctness fix, but a table
+            // that grows for the boot's lifetime is the shape a bounded root
+            // should not have.
+            scheduling_service.release(id);
             reclaim_dead_task(buffers, allocator, id);
             windows.release(id);
             reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -2925,6 +3007,16 @@ fn serve_instance_graph(
                 id.0,
                 request.len,
                 ipc::clock_request_len(label),
+            );
+            ipc::reply(Response::error(IpcError::InvalidLength));
+            continue;
+        }
+        if ipc::scheduling_request_len(label).is_some_and(|expected| request.len != expected) {
+            sel4::debug_println!(
+                "SLIME_SCHED malformed task={} label={label} words={} expected={:?}",
+                id.0,
+                request.len,
+                ipc::scheduling_request_len(label),
             );
             ipc::reply(Response::error(IpcError::InvalidLength));
             continue;
@@ -3007,6 +3099,9 @@ fn serve_instance_graph(
                 // learned of faults would still have to poll for the common case.
                 signal_declared_death(wait_set_service, tasks, id);
                 drop_task_clock(clock_service, timer_adapter, id);
+                // C9.3, on the fault path's rule: an orderly exit retires its
+                // class row too.
+                scheduling_service.release(id);
                 reclaim_dead_task(buffers, allocator, id);
                 windows.release(id);
                 reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -3032,6 +3127,8 @@ fn serve_instance_graph(
                     buffers,
                     clock_service,
                     wait_set_service,
+                    scheduling_service,
+                    scheduling_policy,
                     allocator,
                     scratch,
                     endpoint,
@@ -3731,6 +3828,17 @@ fn serve_instance_graph(
             | clock_labels::SIMULATED_ADVANCE => {
                 let response =
                     serve_clock_request(clock_service, timer_adapter, id, label, words[0]);
+                ipc::reply(response);
+            }
+            scheduling_labels::CLASS_READ | scheduling_labels::CLASS_PROMOTE => {
+                let response = serve_scheduling_request(
+                    scheduling_service,
+                    scheduling_policy,
+                    tasks,
+                    id,
+                    label,
+                    &words,
+                );
                 ipc::reply(response);
             }
             shared_buffer_labels::UNMAP
@@ -4615,6 +4723,8 @@ fn serve_spawn(
     buffers: &mut SharedBufferTable,
     clock_service: &mut clock::ClockService,
     wait_set_service: &mut wait_set::WaitSetService,
+    scheduling_service: &mut scheduling::SchedulingService,
+    scheduling_policy: Option<&boot_contracts::scheduling_class::SchedulingClass<'_>>,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -4856,16 +4966,69 @@ fn serve_spawn(
             child.0,
         );
     }
+    // C9.3's declared class for the child, on the same rule as its clock
+    // authority and wake sources: recorded before it runs, from the same
+    // generation resource, so a spawned instance's class is not a boot-only
+    // property. Its band's priority is already on the TCB — `TaskTable::create`
+    // applied the plan's `ScheduleRecord` above — so this records the class the
+    // root will answer `CLASS_READ` with and promote against.
+    let child_class = match scheduling_service.declare(
+        scheduling_policy,
+        generation,
+        child,
+        plan.instance,
+    ) {
+        Ok(class) => class,
+        Err(error) => {
+            scheduling_service.release(child);
+            wait_set_service.clear_task(child);
+            clock_service.clear_task(child);
+            release_child(tasks, windows, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn failed task={} component={name} error=SchedulingInstall({error:?})",
+                id.0
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+    };
+    if scheduling_policy.is_some() {
+        sel4::debug_println!(
+            "SLIME_SCHED class task={} instance={name} class={} priority={}",
+            child.0,
+            child_class.name(),
+            child_class.priority(),
+        );
+    }
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
     // it can never learn the fate of, so the ordering is load-bearing rather
     // than tidy.
+    //
+    // C9.3 rides on this handle: the promote bit is set exactly when the
+    // generation declares a promotion edge from *this spawner's instance* to
+    // *this child's instance*. Deriving it here rather than granting it
+    // separately is what keeps the two statements from disagreeing — the
+    // operation resolves the right off the capability, and the capability
+    // carries the right only where the declared policy already says so.
+    let promote = scheduling_policy.is_some_and(|policy| {
+        let holder = launched
+            .instance_for_task(id)
+            .and_then(|instance| generation.instance(instance).ok())
+            .map(|instance| boot_contracts::scheduling_class::instance_identity(instance.name));
+        let subject = boot_contracts::scheduling_class::instance_identity(name);
+        holder.is_some_and(|holder| policy.promotion_ceiling(&holder, &subject).is_some())
+    });
     let handle = tasks.authority_mut(id).and_then(|table| {
         let slot = table.free_slot_from(1)?;
         let rights = RIGHT_SUPERVISE
             | if plan.transferable_supervision {
                 RIGHT_TRANSFER
+            } else {
+                0
+            }
+            | if promote {
+                boot_contracts::generation::RIGHT_SCHEDULING_PROMOTE
             } else {
                 0
             };
@@ -4876,6 +5039,7 @@ fn serve_spawn(
     let Some(handle) = handle else {
         // The parent's table is full. The copied child table can simply be
         // released; the parent's grants were never consumed.
+        scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
@@ -4890,6 +5054,7 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
@@ -4906,6 +5071,7 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
@@ -5185,6 +5351,124 @@ const fn clock_error_class(error: clock::ClockError) -> &'static str {
         clock::ClockError::TimerNotFound => "timer-absent",
         clock::ClockError::TimeOverflow => "time-overflow",
         clock::ClockError::SimulatedTimeOverflow => "simulated-overflow",
+    }
+}
+
+/// Serve C9.3's two scheduling operations.
+///
+/// `CLASS_READ` is self-scoped and never refused for want of authority: the
+/// instance is the badge's, and every live task has a class because every thread
+/// runs at some priority.
+///
+/// `CLASS_PROMOTE` resolves its subject through a supervision capability the
+/// *caller* holds, so no task identity crosses the wire — the same rule
+/// `supervision_derive` follows (B42). Three checks must all pass: the slot must
+/// hold supervision over the subject with `schedulingPromote`, the generation
+/// must declare a promotion edge from this holder to that subject, and the
+/// requested class's band must sit at or below that edge's ceiling.
+fn serve_scheduling_request(
+    service: &mut scheduling::SchedulingService,
+    policy: Option<&boot_contracts::scheduling_class::SchedulingClass<'_>>,
+    tasks: &TaskTable<MAX_TASKS>,
+    task: TaskId,
+    label: sel4::Word,
+    words: &[sel4::Word],
+) -> Response {
+    match label {
+        scheduling_labels::CLASS_READ => {
+            let class = service.class(task);
+            sel4::debug_println!(
+                "SLIME_SCHED read task={} class={} priority={}",
+                task.0,
+                class.name(),
+                class.priority(),
+            );
+            Response::success(class.class_id() as i64, class.priority())
+        }
+        scheduling_labels::CLASS_PROMOTE => {
+            let Ok(slot) = u32::try_from(words[0]) else {
+                return Response::error(IpcError::InvalidOperation);
+            };
+            let Ok(class_id) = u32::try_from(words[1]) else {
+                return Response::error(IpcError::InvalidOperation);
+            };
+            // The capability, not the wire, names the subject. Narrowed to
+            // `RIGHT_SCHEDULING_PROMOTE` rather than to `RIGHT_SUPERVISE`: a
+            // component may legitimately hold a supervision handle in order to
+            // observe a peer's death without thereby being able to reprioritize
+            // it, so the right the operation is gated on is the one the matrix
+            // names for this operation.
+            let Ok(capability) = tasks
+                .authority(task)
+                .ok_or(IpcError::InvalidOperation)
+                .and_then(|table| {
+                    table.resolve_supervision(
+                        slot,
+                        boot_contracts::generation::RIGHT_SCHEDULING_PROMOTE,
+                    )
+                })
+            else {
+                sel4::debug_println!(
+                    "SLIME_SCHED refused task={} class=undeclared detail=slot",
+                    task.0,
+                );
+                return Response::error(IpcError::BadCapability);
+            };
+            let Some(subject) = tasks.get(capability.task) else {
+                sel4::debug_println!(
+                    "SLIME_SCHED refused task={} class=absent detail=subject",
+                    task.0,
+                );
+                return Response::error(IpcError::BadCapability);
+            };
+            match service.promote(policy, task, capability.task, subject.tcb, class_id) {
+                Ok(class) => {
+                    sel4::debug_println!(
+                        "SLIME_SCHED promoted task={} subject={} class={} priority={}",
+                        task.0,
+                        capability.task.0,
+                        class.name(),
+                        class.priority(),
+                    );
+                    Response::success(class.class_id() as i64, class.priority())
+                }
+                Err(error) => {
+                    sel4::debug_println!(
+                        "SLIME_SCHED refused task={} subject={} class={} detail={error:?}",
+                        task.0,
+                        capability.task.0,
+                        scheduling_error_class(error),
+                    );
+                    Response::error(scheduling_error_status(error))
+                }
+            }
+        }
+        _ => Response::error(IpcError::UnsupportedOperation),
+    }
+}
+
+const fn scheduling_error_status(error: scheduling::SchedulingError) -> IpcError {
+    match error {
+        // A caller naming itself is `InvalidOperation` rather than
+        // `BadCapability`: the capability it presented was real, and the request
+        // is refused for what it asked rather than for what it holds.
+        scheduling::SchedulingError::SelfPromotion
+        | scheduling::SchedulingError::UnknownClass
+        | scheduling::SchedulingError::AboveCeiling
+        | scheduling::SchedulingError::Malformed
+        | scheduling::SchedulingError::SchedParams => IpcError::InvalidOperation,
+        scheduling::SchedulingError::Undeclared => IpcError::BadCapability,
+    }
+}
+
+const fn scheduling_error_class(error: scheduling::SchedulingError) -> &'static str {
+    match error {
+        scheduling::SchedulingError::Undeclared => "undeclared",
+        scheduling::SchedulingError::Malformed => "malformed",
+        scheduling::SchedulingError::SelfPromotion => "self-promotion",
+        scheduling::SchedulingError::AboveCeiling => "above-ceiling",
+        scheduling::SchedulingError::UnknownClass => "unknown-class",
+        scheduling::SchedulingError::SchedParams => "sched-params",
     }
 }
 

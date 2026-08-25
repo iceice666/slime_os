@@ -43,7 +43,8 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
     };
     use slime_proto::syscall_abi::{
         capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-        lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+        lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
+        supervision_labels,
     };
     match label {
         lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
@@ -116,6 +117,15 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | clock_labels::TIMER_CANCEL
         | clock_labels::SIMULATED_READ
         | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
+        // C9.3's class read is self-scoped by badge and grants nothing, so it is
+        // gated on `lifecycle` for `WAIT_SOURCES`' reason: the band a thread
+        // runs at is a property of being a task, not of any grant.
+        scheduling_labels::CLASS_READ => Some(SERVICE_LIFECYCLE),
+        // Promotion names another task through a supervision capability, so it
+        // is gated on the supervision service that resolves such a slot. The
+        // declared `schedulingPromote` right and the generation's promotion edge
+        // are checked by the mechanism, exactly as C9.1 checks its own bits.
+        scheduling_labels::CLASS_PROMOTE => Some(SERVICE_SUPERVISION),
         _ => None,
     }
 }
@@ -132,6 +142,22 @@ pub const fn clock_request_len(label: sel4::Word) -> Option<usize> {
         clock_labels::TIMER_ARM | clock_labels::TIMER_CANCEL | clock_labels::SIMULATED_ADVANCE => {
             Some(1)
         }
+        _ => None,
+    }
+}
+
+/// Required fast-register count for each C9.3 scheduling operation.
+///
+/// Beside [`clock_request_len`] and for its reason: a malformed request is
+/// refused before it reaches the mechanism, and a zero-valued extra word is
+/// still malformed because request shape is part of the ABI.
+pub const fn scheduling_request_len(label: sel4::Word) -> Option<usize> {
+    use slime_proto::syscall_abi::scheduling_labels;
+    match label {
+        scheduling_labels::CLASS_READ => Some(0),
+        // A slot and a class id. The slot names the subject; the class id is
+        // checked against the declared vocabulary by the mechanism.
+        scheduling_labels::CLASS_PROMOTE => Some(2),
         _ => None,
     }
 }
@@ -1185,7 +1211,8 @@ mod tests {
     };
     use slime_proto::syscall_abi::{
         capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-        lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+        lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
+        supervision_labels,
     };
 
     /// Every declared operation routes to the mechanism that owns it. B61 moved
@@ -1296,12 +1323,13 @@ mod tests {
             // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, 40 until
             // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, 42 until `SPAWN_BUDGET`,
             // 43 until C10.1's `PRIVATE_MEMORY_GROW`, 44-48 until C9.1's clock
-            // service, and 49 until C9.2's `WAIT_SOURCES`. Moving one out of
+            // service, 49 until C9.2's `WAIT_SOURCES`, and 50-51 until C9.3's
+            // scheduling class. Moving one out of
             // this list is the whole change: a
             // number this test asserts routes nowhere and a number the contract
             // declares are the same fact stated twice, so assigning a label
             // must fail here first.
-            50,
+            52,
             sel4::Word::MAX,
         ] {
             assert_eq!(
@@ -1320,6 +1348,38 @@ mod tests {
         assert_eq!(clock_request_len(clock_labels::TIMER_CANCEL), Some(1));
         assert_eq!(clock_request_len(clock_labels::SIMULATED_ADVANCE), Some(1));
         assert_eq!(clock_request_len(lifecycle_labels::EXIT), None);
+    }
+
+    #[test]
+    fn scheduling_request_shapes_are_exact() {
+        assert_eq!(
+            scheduling_request_len(scheduling_labels::CLASS_READ),
+            Some(0)
+        );
+        // A slot and a class id, both required. A caller sending one word has
+        // named no class and must be refused rather than defaulted.
+        assert_eq!(
+            scheduling_request_len(scheduling_labels::CLASS_PROMOTE),
+            Some(2)
+        );
+        assert_eq!(scheduling_request_len(lifecycle_labels::EXIT), None);
+    }
+
+    /// C9.3's two operations reach the two services their authority stories
+    /// require: the self-scoped read is gated on `lifecycle`, because the band a
+    /// thread runs at is a property of being a task, and promotion is gated on
+    /// `supervision`, because it names its subject through a supervision
+    /// capability.
+    #[test]
+    fn scheduling_labels_route_to_their_declared_services() {
+        assert_eq!(
+            service_for_root_label(scheduling_labels::CLASS_READ),
+            Some(SERVICE_LIFECYCLE)
+        );
+        assert_eq!(
+            service_for_root_label(scheduling_labels::CLASS_PROMOTE),
+            Some(SERVICE_SUPERVISION)
+        );
     }
 
     /// The fixture directive shares the root endpoint but is not a component

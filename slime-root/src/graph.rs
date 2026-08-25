@@ -14,8 +14,8 @@ use crate::task::TaskId;
 use boot_contracts::generation::{
     RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BUFFER_CREATE, RIGHT_BUFFER_LOAN, RIGHT_BUFFER_MAP,
     RIGHT_BUFFER_WRITE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ,
-    RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN,
-    RIGHT_SUPERVISE, RIGHT_TRANSFER,
+    RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SCHEDULING_PROMOTE,
+    RIGHT_SEND, RIGHT_SPAWN, RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 
 /// Logical capability slots one task may hold.
@@ -58,7 +58,15 @@ macro_rules! rights_type {
 
 rights_type!(ExecutableRights, RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER);
 rights_type!(BufferFactoryRights, RIGHT_BUFFER_CREATE | RIGHT_TRANSFER);
-rights_type!(SupervisionRights, RIGHT_SUPERVISE | RIGHT_TRANSFER);
+// C9.3: a supervision handle is also where promotion authority rides. The
+// generation decides *which* handles carry the bit — the root sets it only when
+// the scheduling-class policy declares an edge from this spawner to this child —
+// so the right is on the capability the operation resolves rather than being a
+// name the operation looks up separately.
+rights_type!(
+    SupervisionRights,
+    RIGHT_SUPERVISE | RIGHT_SCHEDULING_PROMOTE | RIGHT_TRANSFER
+);
 rights_type!(BlockRights, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE);
 rights_type!(
     DirectoryRights,

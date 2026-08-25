@@ -200,6 +200,20 @@ from boot_contracts import (
     WAIT_SET_KIND_SUPERVISION,
     WAIT_SET_KIND_QOS_EVENT,
     WAIT_SET_DRAIN_SLOT_ABSENT,
+    SCHEDULING_CLASS_BAND,
+    SCHEDULING_CLASS_ENTRY,
+    SCHEDULING_CLASS_HEADER,
+    SCHEDULING_CLASS_HEADER_BYTES,
+    SCHEDULING_CLASS_BAND_BYTES,
+    SCHEDULING_CLASS_ENTRY_BYTES,
+    SCHEDULING_PROMOTION_ENTRY,
+    SCHEDULING_PROMOTION_ENTRY_BYTES,
+    SCHEDULING_CLASS_MAGIC,
+    SCHEDULING_CLASS_VERSION,
+    SCHEDULING_CLASS_MAX_CLASSES,
+    SCHEDULING_CLASS_MAX_INSTANCES,
+    SCHEDULING_CLASS_MAX_PROMOTIONS,
+    SCHEDULING_CLASS_ID_BY_MANIFEST_NAME,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -294,6 +308,14 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-private-memory.zti",
+    # C9.3: a declared scheduling class, its band mapping, and promotion
+    # authority over another component's class.
+    "sel4-scheduling-class": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-scheduling-class.zti",
     # C9.1: independently grantable monotonic, timer, and simulated clocks.
     "sel4-clock-authority": ROOT
     / "contracts"
@@ -1420,6 +1442,219 @@ def build_wait_set(manifest: dict) -> bytes:
         total_len,
     )
     return header + b"".join(WAIT_SET_ENTRY.pack(*entry) for entry in entries)
+
+
+def scheduling_class_instance_identity(name: str) -> bytes:
+    """Stable per-instance identity, matching boot_contracts::scheduling_class.
+
+    A distinct domain tag from the clock and wait-set folds, so an identity
+    minted for a clock holder or a wait-set waiter cannot be read as a
+    scheduling subject.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-scheduling-class-instance-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def validated_scheduling_class(manifest: dict) -> dict | None:
+    """Resolve the C9.3 class policy, refusing every contradiction here.
+
+    Returns `None` when the manifest declares no policy, and otherwise a
+    resolved view carrying the serialized wire records plus the per-instance
+    priorities `build_sel4_plan` writes into its `ScheduleRecord`s. The
+    priorities are returned rather than recomputed there so the band mapping is
+    read once: two readers of one mapping is how a class and a priority come to
+    disagree.
+
+    The contradiction rule is the milestone's, and it is refused at *build*
+    rather than resolved by precedence. An instance may declare a class, or a
+    priority, or both when they agree; declaring both when they disagree is a
+    manifest that states two different intentions, and silently preferring
+    either one would make the other authenticated fiction.
+    """
+    policy = manifest.get("schedulingClass")
+    if policy is None:
+        return None
+    bands = policy["bands"]
+    if not bands or len(bands) > SCHEDULING_CLASS_MAX_CLASSES:
+        fail("scheduling class: band count outside the declared bound")
+    priority_by_class: dict[int, int] = {}
+    seen_priorities: dict[int, str] = {}
+    for band in bands:
+        spelling = band["class"]
+        class_id = SCHEDULING_CLASS_ID_BY_MANIFEST_NAME.get(spelling)
+        if class_id is None:
+            fail(f"scheduling class: unknown class {spelling!r}")
+        if class_id in priority_by_class:
+            fail(f"scheduling class: duplicate band for {spelling}")
+        priority = band["priority"]
+        if (
+            not isinstance(priority, int)
+            or isinstance(priority, bool)
+            or not 0 <= priority <= DEFAULT_CHILD_PRIORITY
+        ):
+            fail(
+                f"scheduling class: band {spelling} priority outside "
+                f"0..={DEFAULT_CHILD_PRIORITY}; a child at or above the root's "
+                "priority can stall the service loop"
+            )
+        if priority in seen_priorities:
+            fail(
+                f"scheduling class: bands {seen_priorities[priority]} and {spelling} "
+                "share one priority, so their ordering cannot be observed"
+            )
+        seen_priorities[priority] = spelling
+        priority_by_class[class_id] = priority
+    instances = {entry["name"]: entry for entry in manifest["instances"]}
+    declared = policy["instances"]
+    if len(declared) > SCHEDULING_CLASS_MAX_INSTANCES:
+        fail("scheduling class: instance count exceeds the declared bound")
+    resolved: dict[str, dict] = {}
+    entries: list[tuple[bytes, int, int, int]] = []
+    for entry in declared:
+        name = entry["instance"]
+        if name in resolved:
+            fail(f"scheduling class: duplicate instance {name}")
+        if name not in instances:
+            fail(f"scheduling class: unknown instance {name}")
+        class_id = SCHEDULING_CLASS_ID_BY_MANIFEST_NAME.get(entry["class"])
+        if class_id is None:
+            fail(f"scheduling class: unknown class {entry['class']!r} for {name}")
+        worker_spelling = entry.get("workerClass", entry["class"])
+        worker_class_id = SCHEDULING_CLASS_ID_BY_MANIFEST_NAME.get(worker_spelling)
+        if worker_class_id is None:
+            fail(f"scheduling class: unknown workerClass {worker_spelling!r} for {name}")
+        for spelling, resolved_id in ((entry["class"], class_id), (worker_spelling, worker_class_id)):
+            if resolved_id not in priority_by_class:
+                fail(f"scheduling class: {name} names class {spelling} with no declared band")
+        priority = priority_by_class[class_id]
+        worker_priority = priority_by_class[worker_class_id]
+        # The contradiction check, on both threads. A manifest that declares a
+        # class *and* a priority states one intention twice; when the two
+        # numbers differ it states two, and no precedence rule makes that
+        # correct.
+        #
+        # `workerPriority` is compared against its *resolved* value, not the raw
+        # field: an absent `workerPriority` inherits the instance's `priority`
+        # (B48), so a manifest declaring `priority: 100` and `workerClass:
+        # foreground` does state a worker priority — by inheritance — and the
+        # class would otherwise silently override it (found by review).
+        instance = instances[name]
+        explicit_priority = instance.get("priority")
+        for field, explicit, declared_class, band_priority in (
+            ("priority", explicit_priority, entry["class"], priority),
+            (
+                "workerPriority",
+                instance.get("workerPriority", explicit_priority),
+                worker_spelling,
+                worker_priority,
+            ),
+        ):
+            if explicit is not None and explicit != band_priority:
+                fail(
+                    f"scheduling class: instance {name} declares {field}={explicit} and "
+                    f"class {declared_class} whose band is {band_priority}; a class and a "
+                    "priority that disagree are refused rather than resolved by precedence"
+                )
+        resolved[name] = {
+            "class_id": class_id,
+            "worker_class_id": worker_class_id,
+            "priority": priority,
+            "worker_priority": worker_priority,
+        }
+        entries.append(
+            (
+                scheduling_class_instance_identity(name),
+                class_id,
+                worker_class_id,
+                0,
+            )
+        )
+    promotions = policy["promotions"]
+    if len(promotions) > SCHEDULING_CLASS_MAX_PROMOTIONS:
+        fail("scheduling class: promotion count exceeds the declared bound")
+    promotion_records: list[tuple[bytes, bytes, int, int]] = []
+    seen_edges: set[tuple[str, str]] = set()
+    for promotion in promotions:
+        holder = promotion["holder"]
+        subject = promotion["subject"]
+        if holder not in instances:
+            fail(f"scheduling class: promotion holder {holder} is not an instance")
+        if subject not in instances:
+            fail(f"scheduling class: promotion subject {subject} is not an instance")
+        # "Never its own" is the milestone's exact wording, and this is where it
+        # becomes unrepresentable rather than merely refused at runtime.
+        if holder == subject:
+            fail(
+                f"scheduling class: {holder} may not hold promotion authority over itself; "
+                "no component can widen its own class"
+            )
+        if (holder, subject) in seen_edges:
+            fail(f"scheduling class: duplicate promotion edge {holder} -> {subject}")
+        seen_edges.add((holder, subject))
+        ceiling_id = SCHEDULING_CLASS_ID_BY_MANIFEST_NAME.get(promotion["ceiling"])
+        if ceiling_id is None or ceiling_id not in priority_by_class:
+            fail(
+                f"scheduling class: promotion {holder} -> {subject} names ceiling "
+                f"{promotion['ceiling']!r} with no declared band"
+            )
+        # The edge *is* the authority statement, so nothing further is required
+        # of the holder here. `slime-root` sets `RIGHT_SCHEDULING_PROMOTE` on the
+        # supervision handle it mints for a spawner exactly where this table
+        # declares an edge from that spawner to that child, so the right on the
+        # capability and the edge in this resource are one fact with one source.
+        # Requiring a separate `schedulingPromote` grant as well would make them
+        # two statements that can disagree, which is the shape B71 closed.
+        promotion_records.append(
+            (
+                scheduling_class_instance_identity(holder),
+                scheduling_class_instance_identity(subject),
+                priority_by_class[ceiling_id],
+                0,
+            )
+        )
+    entries.sort(key=lambda entry: entry[0])
+    promotion_records.sort(key=lambda entry: (entry[0], entry[1]))
+    return {
+        "bands": sorted(priority_by_class.items()),
+        "entries": entries,
+        "promotions": promotion_records,
+        "resolved": resolved,
+    }
+
+
+def build_scheduling_class(manifest: dict) -> bytes:
+    policy = validated_scheduling_class(manifest)
+    if policy is None:
+        fail("scheduling-class resource object declared without a schedulingClass policy")
+    bands = policy["bands"]
+    entries = policy["entries"]
+    promotions = policy["promotions"]
+    total_len = (
+        SCHEDULING_CLASS_HEADER_BYTES
+        + len(bands) * SCHEDULING_CLASS_BAND_BYTES
+        + len(entries) * SCHEDULING_CLASS_ENTRY_BYTES
+        + len(promotions) * SCHEDULING_PROMOTION_ENTRY_BYTES
+    )
+    header = SCHEDULING_CLASS_HEADER.pack(
+        SCHEDULING_CLASS_MAGIC,
+        SCHEDULING_CLASS_VERSION,
+        SCHEDULING_CLASS_HEADER_BYTES,
+        0,
+        len(bands),
+        len(entries),
+        len(promotions),
+        total_len,
+    )
+    return (
+        header
+        + b"".join(
+            SCHEDULING_CLASS_BAND.pack(class_id, priority, 0) for class_id, priority in bands
+        )
+        + b"".join(SCHEDULING_CLASS_ENTRY.pack(*entry) for entry in entries)
+        + b"".join(SCHEDULING_PROMOTION_ENTRY.pack(*entry) for entry in promotions)
+    )
 
 
 FABRIC_CONTRACT_KIND = {
@@ -3224,6 +3459,10 @@ def build_sel4_plan(
     fault_records = bytearray()
     spawn_records = bytearray()
     quota_records = bytearray()
+    # Resolved once for the whole plan: the band mapping is read here and
+    # nowhere else, so a class and the priority it names cannot come from two
+    # readers that disagree (C9.3).
+    scheduling_policy = validated_scheduling_class(manifest)
     object_index: dict[tuple[str, str], int] = {}
     grants_by_name = {grant["name"]: grant for grant in grants}
     executables_by_name = {entry["name"]: entry for entry in manifest["executables"]}
@@ -3337,6 +3576,16 @@ def build_sel4_plan(
                 f"instance {name}: workerPriority {worker_priority} outside "
                 f"0..={DEFAULT_CHILD_PRIORITY}"
             )
+        # C9.3: a declared class *is* the priority. `validated_scheduling_class`
+        # has already refused any instance whose class and explicit priority
+        # disagree, so this substitution cannot silently override a manifest
+        # statement -- it can only supply the number the class names. An
+        # instance the policy does not name keeps the resolution above, which is
+        # the declared default rather than a denial.
+        if scheduling_policy is not None and name in scheduling_policy["resolved"]:
+            declared_class = scheduling_policy["resolved"][name]
+            priority = declared_class["priority"]
+            worker_priority = declared_class["worker_priority"]
         schedule_records.extend(
             GENERATION_SCHEDULE.pack(
                 string_offset(f"{name}:schedule"),
@@ -4352,6 +4601,14 @@ def build_sel4_generation(
         payloads["wait-set"] = build_wait_set(manifest)
     elif declared_wait_set:
         fail("waitSet declared without a wait-set resource object")
+    if "scheduling-class" in object_ids:
+        payloads["scheduling-class"] = build_scheduling_class(manifest)
+    elif manifest.get("schedulingClass") is not None:
+        # A class policy nothing carries is a policy the root cannot read: it
+        # resolves the band mapping from the resource object, so a manifest
+        # declaring classes without the object would boot every instance at the
+        # default priority while claiming a policy.
+        fail("schedulingClass declared without a scheduling-class resource object")
     # C10.4: a component that cannot run without a private heap must be given
     # one, so the builder refuses the omission rather than shipping a generation
     # that boots into a dead service.

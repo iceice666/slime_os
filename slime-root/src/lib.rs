@@ -65,6 +65,7 @@ pub mod object_allocator;
 pub mod peer_endpoint;
 pub mod platform_timer;
 pub mod private_memory;
+pub mod scheduling;
 pub mod shared_buffer;
 pub mod supervision;
 pub mod task;

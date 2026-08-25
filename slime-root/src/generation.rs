@@ -13,6 +13,7 @@ use boot_contracts::generation::{
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
+use boot_contracts::scheduling_class::{self, SchedulingClass};
 use boot_contracts::target_profile::TargetProfile;
 use boot_contracts::wait_set::{self, WaitSet};
 // B59: the capability-rights vocabulary is generated from
@@ -95,6 +96,14 @@ pub enum GenerationError {
     /// never sees these, so a finer vocabulary would only be read by the marker
     /// the root prints, which names the failing entry itself.
     UnsatisfiableWaitSet,
+    /// The generation carries a scheduling-class policy that is malformed,
+    /// names an instance this generation does not declare, or grants a
+    /// promotion edge to a holder carrying no `schedulingPromote` right (C9.3).
+    ///
+    /// One variant on [`Self::UnsatisfiableClockAuthority`]'s precedent: every
+    /// case is the same decision — the declared policy cannot be honoured — and
+    /// the marker the root prints names the failing entry itself.
+    UnsatisfiableSchedulingClass,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -731,6 +740,89 @@ fn wait_set_admission(generation: &Generation<'_>) -> Result<Option<usize>, Gene
     Ok(Some(sources.entry_count()))
 }
 
+/// Locate the generation-authenticated scheduling-class resource, if declared.
+///
+/// First match wins including a malformed one, on [`clock_authority_object`]'s
+/// rule: continuing would make a component's priority band depend on object
+/// ordering, and could silently select a later, more permissive policy.
+///
+/// Public so the launch path resolves each thread's band from the object
+/// admission validated rather than locating the resource a second way — the
+/// second-lookup shape that let the boot-layout resource drift from the
+/// bindings it described (B71).
+pub fn scheduling_class_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<SchedulingClass<'a>, scheduling_class::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= scheduling_class::MAGIC.len()
+            && object.bytes[..scheduling_class::MAGIC.len()] == scheduling_class::MAGIC
+        {
+            return Some(SchedulingClass::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Validate a declared scheduling-class policy, reporting how many instances it
+/// names.
+///
+/// The decoder already owns the resource's internal consistency — bands
+/// ascending and distinct, no self-promotion edge, every ceiling naming a
+/// declared band. What this adds is the half only the generation knows: every
+/// identity the policy names must be an instance this generation declares, and
+/// every promotion holder must actually hold `schedulingPromote` on a grant it
+/// is the source of. Without the second rule a policy could declare an edge no
+/// operation can reach, which reads at runtime as a promotion that silently
+/// never applies.
+fn scheduling_class_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<usize>, GenerationError> {
+    let Some(policy) = scheduling_class_object(generation) else {
+        return Ok(None);
+    };
+    let policy = policy.map_err(|_| GenerationError::UnsatisfiableSchedulingClass)?;
+    let named = |identity: &[u8; 32]| -> Result<usize, GenerationError> {
+        for index in 0..generation.instance_count() {
+            let instance = generation
+                .instance(index)
+                .map_err(|_| GenerationError::UnsatisfiableSchedulingClass)?;
+            if scheduling_class::instance_identity(instance.name) == *identity {
+                return Ok(index);
+            }
+        }
+        Err(GenerationError::UnsatisfiableSchedulingClass)
+    };
+    for index in 0..policy.instance_count() {
+        let entry = policy
+            .assignment(index)
+            .ok_or(GenerationError::UnsatisfiableSchedulingClass)?;
+        named(&entry.subject_identity)?;
+    }
+    for index in 0..policy.promotion_count() {
+        let entry = policy
+            .promotion(index)
+            .ok_or(GenerationError::UnsatisfiableSchedulingClass)?;
+        let holder = named(&entry.holder_identity)?;
+        // The subject must be an instance this holder actually owns. That is the
+        // half only the generation knows, and it is what makes the edge
+        // reachable: the root mints the promotion bit onto the supervision
+        // handle a *spawner* receives for its child, so an edge naming a subject
+        // this holder does not own could never resolve to a capability and would
+        // read at runtime as a declared policy that silently never applies.
+        let subject = named(&entry.subject_identity)?;
+        let owner = generation
+            .instance(subject)
+            .map_err(|_| GenerationError::UnsatisfiableSchedulingClass)?
+            .owner;
+        if owner != boot_contracts::generation::InstanceOwner::Instance(holder) {
+            return Err(GenerationError::UnsatisfiableSchedulingClass);
+        }
+    }
+    Ok(Some(policy.instance_count()))
+}
+
 /// Whether this root can honour a declared private-memory budget (C10.2).
 ///
 /// Separated from the generation walk for the same reason
@@ -828,6 +920,13 @@ pub struct Admission {
     /// register, but only the second carries a resource whose contents a gate can
     /// check.
     pub wait_set_sources: Option<usize>,
+    /// Instances named by the authenticated scheduling-class resource, or `None`
+    /// when the generation declares no class policy at all (C9.3).
+    ///
+    /// `None` and `Some(0)` are distinguished on `wait_set_sources`' rule: both
+    /// leave every instance at the root's default priority, but only the second
+    /// carries a policy whose band mapping a gate can check.
+    pub scheduling_instances: Option<usize>,
 }
 
 impl Admission {
@@ -881,6 +980,10 @@ impl Admission {
         // clock authority above, because a timer source is valid only against
         // that same resource.
         let wait_set_sources = wait_set_admission(generation)?;
+        // C9.3: every instance a class policy names is declared here, and every
+        // promotion holder actually carries the right the operation is gated
+        // on. The resource's internal consistency is the decoder's.
+        let scheduling_instances = scheduling_class_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
@@ -954,6 +1057,7 @@ impl Admission {
             fabric_capability_slots: fabric.map_or(0, |shape| shape.capability_slots),
             private_memory_holders,
             wait_set_sources,
+            scheduling_instances,
         })
     }
 
