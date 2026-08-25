@@ -281,27 +281,40 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
-# CP9's published matrix is persisted contract data, so it decodes through the
-# contract rather than being trusted because this repository wrote it.
+# CP9's published matrix is a committed repository artifact, so it is checked
+# unconditionally: there is no state in which it is legitimately absent, and a
+# conditional check would let deleting it pass silently.
+#
+# Both halves are needed. The schema types every field as `Text`, so decoding
+# proves shape only; `component_sdk.read_matrix` additionally binds the three
+# files to one identity and enforces the closed vocabularies, the bounds, and the
+# immutable-commit rule the contract declares.
 matrix_path = ROOT / "sdk" / "compatibility-matrix.zti"
-if matrix_path.is_file():
-    matrix_environment = os.environ.copy()
-    matrix_environment["SLIME_COMPONENT_SDK_MATRIX_PATH"] = str(matrix_path)
-    decoded_matrix = subprocess.run(
-        [str(binary()), "run", str(COMPONENT_SDK_RELEASE_CONTRACT / "check-matrix.zt")],
-        cwd=ROOT,
-        env={**matrix_environment, "ZUTAI_STDLIB_ROOT": str(STDLIB)},
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+matrix_environment = os.environ.copy()
+matrix_environment["SLIME_COMPONENT_SDK_MATRIX_PATH"] = str(matrix_path)
+decoded_matrix = subprocess.run(
+    [str(binary()), "run", str(COMPONENT_SDK_RELEASE_CONTRACT / "check-matrix.zt")],
+    cwd=ROOT,
+    env={**matrix_environment, "ZUTAI_STDLIB_ROOT": str(STDLIB)},
+    check=False,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+if decoded_matrix.returncode != 0 or not decoded_matrix.stdout.startswith("#valid"):
+    raise SystemExit(
+        "published compatibility matrix did not decode as #valid:\n"
+        + decoded_matrix.stdout
+        + decoded_matrix.stderr
     )
-    if decoded_matrix.returncode != 0 or not decoded_matrix.stdout.startswith("#valid"):
-        raise SystemExit(
-            "published compatibility matrix did not decode as #valid:\n"
-            + decoded_matrix.stdout
-            + decoded_matrix.stderr
-        )
+_sys.path.insert(0, str(ROOT / "scripts" / "lib"))
+import component_sdk  # noqa: E402
+
+_matrix_table, _matrix_identity = component_sdk.read_matrix(matrix_path)
+print(
+    f"published compatibility matrix: {len(_matrix_table['rows'])} rows at "
+    f"{_matrix_identity[:16]}"
+)
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))

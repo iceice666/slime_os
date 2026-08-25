@@ -88,6 +88,18 @@ pub fn configure() {
     };
     if let Some(linker_script) = linker_script {
         let script = linker_script_dir(&manifest_dir).join(linker_script);
+        // Refused here rather than at link time. A wrong or stale
+        // `SLIME_COMPONENT_LINKER_DIR` otherwise surfaces either as a linker
+        // error far from its cause or, worse, as a component linked at the
+        // default base that the generation builder later refuses with "invalid
+        // component load layout" — the silent wrong answer this override exists
+        // to prevent.
+        assert!(
+            script.is_file(),
+            "component linker script {} not found; set SLIME_COMPONENT_LINKER_DIR \
+             to the directory holding it",
+            script.display()
+        );
         println!("cargo:rustc-link-arg=-T{}", script.display());
         println!("cargo:rerun-if-changed={}", script.display());
     }

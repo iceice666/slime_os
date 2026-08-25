@@ -84,6 +84,8 @@ the gates were green while the properties were unproven.
 | `just component_crate_split_check` | Pass: 58 component crates, allocator groups unchanged | Direct |
 | `just sel4_gate_control_check` | Pass: 39 gates reject 1518 mutated transcripts and layouts | Direct |
 | `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just ruff`, `just typos` | Pass | Direct |
+| Two-lens reviewer pass over the whole diff | 11 findings applied; each re-ran the affected gate. Two were host-dependent breakage invisible on this machine: the CP6/CP7 source mirrors omitted the linker scripts CP8 added to the export, and `host_path_needles` treated `tempfile.gettempdir()` as a leak, which is `/tmp` on Linux and appears in four tracked `deps/rust-sel4` files, so every export would have refused in CI | Direct |
+| The five gates, re-run after every applied finding | Pass | Direct |
 | RPi physical-board behavior | Not claimed. The RPi arm is host-side target qualification only | Not observed |
 | The SDK repository's branch protection and credential boundary | Not gate-provable: a GitHub setting rather than a repository artifact | Not observed |
 
@@ -130,6 +132,42 @@ the gates were green while the properties were unproven.
 - Rejected alternative: a generic host-path rewrite over the whole export, or
   hashing the prefix as-is and documenting the leak.
 
+- Decision: a compatibility row is identified by
+  `(sdkIdentity, productCommit, profile)`, never by `sdkCommit`.
+- Rationale: the exported-tree identity is reproducible from the recorded source
+  commit, which is the whole of CP6. A mirror commit depends on which repository
+  the export was published to, so a matrix keyed on it answers `unsupported` for
+  every real query the moment the publishing repository is not the one at hand —
+  which is exactly what the first published matrix did, since its rows named
+  commits of a temporary repository the gate deletes. `sdkCommit` stays in the
+  row as provenance.
+- Rejected alternative: publish the matrix only from a run against the real
+  hosted repository. That defers CP9 behind CP7's deferred hosting clause for a
+  property that does not need hosting to be true.
+
+- Decision: all three record files, and both matrix files, are bound to one
+  identity, and the semantic admission rules run on the *read* path.
+- Rationale: the `.zti` is what a consumer decodes and what the generated README
+  calls authoritative, but only the `.json` and `.identity` were cross-checked,
+  so a hand-written `.zti` naming another commit passed. Separately, the Zutai
+  schema types every matrix field as `Text`, so a re-identified matrix carrying
+  an invented status or a branch name where a commit belongs decoded as `#valid`
+  and then answered `supported` for a pairing nobody exercised.
+- Rejected alternative: trusting the write path, on the grounds that this
+  repository writes both files. The read path is the one a consumer runs, and
+  CP7's drift check only covers the in-tree copy.
+
+- Decision: an arm that mutates a byte inside the exported tree re-derives the
+  record before asserting a refusal.
+- Rationale: `treeIdentity` covers the archives, and the build entry point checks
+  the tree before the prefix. Three archive controls were therefore refused by
+  the *tree* check while claiming to exercise the archive hash, the tar reader,
+  and the truncation check — and because "identity" appears in the tree message,
+  the assertions passed. Re-sealing makes the tree consistent so the only thing
+  left that can refuse is the named property.
+- Rejected alternative: assert on the exit status alone. That is what made the
+  arms vacuous in the first place.
+
 - Decision: the release identity, not `treeIdentity`, is what a sensitivity
   control watches.
 - Rationale: a pin change moves what the record declares — the toolchain a
@@ -160,6 +198,11 @@ the gates were green while the properties were unproven.
       covers host tools, which its own comments say excludes `cmake`, `ninja`,
       and the kernel's Python generators. CP8 preserves that boundary rather than
       claiming a stronger closure.
+- [ ] Four of the five gates still build their own external consumer workspace
+      inline. The five-crate dependency list `EXPORT_CRATES` owns is restated in
+      each, so a sixth exported crate would leave four gates asserting "every SDK
+      crate resolved through the pin" over five. Debt rather than a defect, and
+      the same duplication one level up that CP6 was opened to remove.
 - [ ] CP10's operator-owned component-spec update still happens outside the
       consumer repository: `tools/sdk-update.py` reports the new content hash and
       an operator writes it into a `contracts/component-spec/v1` record here.

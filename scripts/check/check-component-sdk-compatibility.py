@@ -386,6 +386,38 @@ def build_and_boot(root: Path, sdk: Path, label: str) -> tuple[str, str]:
     return digest, generation["identity"].hex()
 
 
+def prove_forged_matrix_refused(root: Path, published: dict) -> None:
+    """A re-identified matrix carrying values the contract does not name is refused.
+
+    The read path is what a consumer or a later gate runs, and the Zutai schema
+    types every one of these fields as `Text`, so each forgery below decodes as
+    `#valid`. Re-signing the identity after the mutation is the point: without it
+    the identity check alone would catch them and the vocabularies would never be
+    consulted.
+    """
+    forgeries = (
+        ("an invented support status", "status", "definitely-not-a-status"),
+        ("an invented classification", "classification", "made-up"),
+        ("a branch where a commit belongs", "sdkCommit", "main"),
+        ("an unknown target profile", "profile", "aarch64-unknown-none"),
+    )
+    for index, (description, field, value) in enumerate(forgeries):
+        forged = copy.deepcopy(published)
+        forged["rows"][0][field] = value
+        path = root / f"forged-{index}" / "compatibility-matrix.zti"
+        component_sdk.write_matrix(path, forged)
+        try:
+            component_sdk.read_matrix(path)
+        except ComponentSdkError:
+            continue
+        fail(f"a re-identified matrix carrying {description} was accepted")
+    print(
+        f"component SDK compatibility: {len(forgeries)} re-identified matrix forgeries "
+        "were refused on the read path",
+        flush=True,
+    )
+
+
 def main() -> None:
     product_commit = component_sdk.source_commit(ROOT)
     with tempfile.TemporaryDirectory(prefix="slime-component-sdk-compat-") as temporary:
@@ -443,7 +475,7 @@ def main() -> None:
                 fail("a published row does not cite the boot gate that backs it")
             if not component_sdk.supported(
                 published,
-                sdk_commit=row["sdkCommit"],
+                sdk_identity=row["sdkIdentity"],
                 product_commit=row["productCommit"],
                 profile=row["profile"],
             ):
@@ -454,14 +486,14 @@ def main() -> None:
         # first SDK against a different product commit, and a synthetic future
         # SDK commit.
         untested = (
-            (first_commit, product_commit, RPI_PROFILE),
-            (first_commit, "0" * 40, QEMU_PROFILE),
-            ("1" * 40, product_commit, QEMU_PROFILE),
+            (first["treeIdentity"], product_commit, RPI_PROFILE),
+            (first["treeIdentity"], "0" * 40, QEMU_PROFILE),
+            ("1" * 64, product_commit, QEMU_PROFILE),
         )
-        for sdk_commit, other_product, profile in untested:
+        for sdk_identity, other_product, profile in untested:
             if component_sdk.supported(
                 published,
-                sdk_commit=sdk_commit,
+                sdk_identity=sdk_identity,
                 product_commit=other_product,
                 profile=profile,
             ):
@@ -471,13 +503,16 @@ def main() -> None:
         if len(matrix_json["rows"]) != 2:
             fail("the published matrix does not hold exactly the two evidenced rows")
 
+        prove_forged_matrix_refused(root, published)
+
     print(
         "component SDK compatibility check: two immutable releases were published and "
         f"classified (initial, compatible-feature); {len(contract.BREAKING_AXES)} scalar "
         f"and {len(contract.STRUCTURAL_AXES)} structural negative controls forced their "
         "expected classification, including equal crate versions across a changed "
         "syscall ABI; both published matrix rows are backed by a build plus a QEMU "
-        "component-graph boot, and three untested pairings reported unsupported"
+        "component-graph boot, three untested pairings reported unsupported, and four "
+        "re-identified forgeries were refused on the read path"
     )
 
 

@@ -178,6 +178,13 @@ ComponentSdkRelease :: type {
 -- which is normally but not necessarily `sourceCommit`: a later product commit
 -- re-exercising an earlier SDK release is exactly the cross-release pairing the
 -- matrix exists to record.
+--
+-- A pairing is identified by `(sdkIdentity, productCommit, profile)`, not by
+-- `sdkCommit`. The exported-tree identity is what CP6 makes reproducible --
+-- anyone holding the recorded source commit can re-derive it -- while a mirror
+-- commit depends on which repository the export was published to and cannot be
+-- resolved from a matrix alone. `sdkCommit` is retained as provenance, naming
+-- where the tested artifact was published, and is not what a query matches on.
 MatrixRow :: type {
   sdkVersion : Text;
   sdkCommit : Text;

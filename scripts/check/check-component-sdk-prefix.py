@@ -434,83 +434,137 @@ def prove_rpi_qualification(
     )
 
 
-def prove_malformed_archives_are_refused(root: Path, sdk: Path, record: dict) -> None:
-    """Corrupt, truncated, swapped, and mismatched archives, each refused."""
-    qemu = next(entry for entry in record["profiles"] if entry["profile"] == QEMU_PROFILE)
-    rpi = next(entry for entry in record["profiles"] if entry["profile"] == RPI_PROFILE)
-    original = (sdk / qemu["prefix"]["archive"]).read_bytes()
-    archive = sdk / qemu["prefix"]["archive"]
-    swapped = (sdk / rpi["prefix"]["archive"]).read_bytes()
+def reidentified_clone(root: Path, sdk: Path, label: str) -> Path:
+    """A copy of the SDK whose record is re-derived after a mutation.
 
-    # The corruption flips one bit at the archive's midpoint rather than zeroing a
-    # range: a tar carries long runs of zero padding, and an earlier version of
-    # this control overwrote 512 padding bytes with zeros, changed nothing, and so
-    # proved nothing. The mutation is asserted to differ below.
-    corrupt = bytearray(original)
-    corrupt[len(corrupt) // 2] ^= 0xFF
-    cases = (
-        ("corrupt", bytes(corrupt)),
-        ("truncated", original[: len(original) // 3]),
-        ("swapped-profile", swapped),
+    Without this, an archive control proves nothing about the archive. The
+    archives live inside the tree `treeIdentity` covers and `tools/sdk-build.py`
+    checks the tree before the prefix, so mutating an archive in place is refused
+    by the *tree* check — and "identity" appears in that message, so an assertion
+    looking for it passes while the archive hash, the tar reader, and the
+    truncation check are never reached. Re-deriving the record makes the tree
+    consistent again, so the only thing left that can refuse is the property the
+    control names.
+    """
+    clone = root / f"clone-{label}"
+    shutil.copytree(sdk, clone)
+    return clone
+
+
+def reseal(clone: Path) -> None:
+    """Recompute the tree identity and re-sign the record over the mutated tree."""
+    contract = component_sdk.default_contract
+    record = json.loads((clone / contract.NORMALIZED_FILE_NAME).read_text(encoding="utf-8"))
+    record["treeIdentity"] = component_sdk.tree_digest(
+        clone, exclude=tuple(contract.RECORD_FILE_NAMES)
     )
-    try:
-        for label, mutated in cases:
-            if mutated == original:
-                fail(f"the {label} mutation did not change the archive, so it proves nothing")
-            archive.write_bytes(mutated)
-            built = run(
-                [
-                    sys.executable,
-                    str(sdk / "tools" / "sdk-build.py"),
-                    "--profile",
-                    QEMU_PROFILE,
-                    "--verify-only",
-                    "--cache",
-                    str(root / f"cache-{label}"),
-                ],
-                cwd=sdk,
-                description=f"verify the {label} archive",
-                allow_failure=True,
-            )
-            if built.returncode == 0:
-                fail(f"the {label} prefix archive was accepted")
-            if "identity" not in built.stdout and "hash" not in built.stdout:
-                fail(f"the {label} refusal did not name the mismatch:\n{built.stdout}")
-    finally:
-        archive.write_bytes(original)
+    normalized = component_sdk.normalize(record)
+    identity = hashlib.sha256(contract.IDENTITY_DOMAIN + normalized).hexdigest()
+    (clone / contract.NORMALIZED_FILE_NAME).write_bytes(normalized)
+    (clone / contract.IDENTITY_FILE_NAME).write_text(identity + "\n", encoding="utf-8")
+    (clone / contract.RECORD_FILE_NAME).write_text(
+        component_sdk.zti(component_sdk.canonical(record)) + "\n", encoding="utf-8"
+    )
 
-    # A metadata mismatch: the archive is intact but the record disagrees with it.
-    # Refused by the same verification, which is what makes the record load-bearing
-    # rather than decorative.
-    normalized = json.loads((sdk / "component-sdk-release.json").read_text(encoding="utf-8"))
-    for entry in normalized["profiles"]:
-        if entry["profile"] == QEMU_PROFILE:
-            entry["prefix"]["archiveHash"] = "0" * 64
-    mismatched = component_sdk.normalize(normalized)
-    identity = hashlib.sha256(
-        component_sdk.default_contract.IDENTITY_DOMAIN + mismatched
-    ).hexdigest()
-    (sdk / "component-sdk-release.json").write_bytes(mismatched)
-    (sdk / "component-sdk-release.identity").write_text(identity + "\n", encoding="utf-8")
-    refused = run(
+
+def verify_only(root: Path, clone: Path, label: str) -> subprocess.CompletedProcess[str]:
+    return run(
         [
             sys.executable,
-            str(sdk / "tools" / "sdk-build.py"),
+            str(clone / "tools" / "sdk-build.py"),
             "--profile",
             QEMU_PROFILE,
             "--verify-only",
             "--cache",
-            str(root / "cache-mismatch"),
+            str(root / f"cache-{label}"),
         ],
-        cwd=sdk,
-        description="verify a metadata-mismatched release",
+        cwd=clone,
+        description=f"verify the {label} release",
         allow_failure=True,
     )
+
+
+def prove_malformed_archives_are_refused(root: Path, sdk: Path, record: dict) -> None:
+    """Corrupt, truncated, swapped, and mismatched archives, each refused.
+
+    Every arm runs against a re-sealed clone, so the refusal it observes is the
+    archive-specific one rather than the tree-identity check that would otherwise
+    fire first. Each expected message is asserted exactly.
+    """
+    qemu = next(entry for entry in record["profiles"] if entry["profile"] == QEMU_PROFILE)
+    rpi = next(entry for entry in record["profiles"] if entry["profile"] == RPI_PROFILE)
+    relative = qemu["prefix"]["archive"]
+    original = (sdk / relative).read_bytes()
+    swapped = (sdk / rpi["prefix"]["archive"]).read_bytes()
+
+    # One bit at the archive's midpoint, not a zeroed range: a tar carries long
+    # runs of zero padding, and an earlier version of this control overwrote 512
+    # padding bytes with zeros, changed nothing, and so proved nothing.
+    corrupt = bytearray(original)
+    corrupt[len(corrupt) // 2] ^= 0xFF
+    cases = (
+        ("corrupt", bytes(corrupt), "does not match its recorded hash"),
+        ("truncated", original[: len(original) // 3], "does not match its recorded hash"),
+        ("swapped-profile", swapped, "does not match its recorded hash"),
+    )
+    for label, mutated, expected in cases:
+        if mutated == original:
+            fail(f"the {label} mutation did not change the archive, so it proves nothing")
+        clone = reidentified_clone(root, sdk, label)
+        (clone / relative).write_bytes(mutated)
+        reseal(clone)
+        refused = verify_only(root, clone, label)
+        if refused.returncode == 0:
+            fail(f"the {label} prefix archive was accepted")
+        if expected not in refused.stdout:
+            fail(f"the {label} refusal did not name the archive mismatch:\n{refused.stdout}")
+        shutil.rmtree(clone)
+
+    # The same three mutations with the *recorded* archive hash updated too, so the
+    # archive matches its hash and the refusal must come from the tar reader or the
+    # extracted tree. This is what covers `verify_prefix`'s truncation and
+    # member checks, which the hash comparison above short-circuits.
+    for label, mutated in (("truncated-rehashed", original[: len(original) // 3]),):
+        clone = reidentified_clone(root, sdk, label)
+        (clone / relative).write_bytes(mutated)
+        contract = component_sdk.default_contract
+        rehashed = json.loads(
+            (clone / contract.NORMALIZED_FILE_NAME).read_text(encoding="utf-8")
+        )
+        for entry in rehashed["profiles"]:
+            if entry["profile"] == QEMU_PROFILE:
+                entry["prefix"]["archiveHash"] = hashlib.sha256(mutated).hexdigest()
+        (clone / contract.NORMALIZED_FILE_NAME).write_bytes(component_sdk.normalize(rehashed))
+        reseal(clone)
+        refused = verify_only(root, clone, label)
+        if refused.returncode == 0:
+            fail(f"the {label} prefix archive was accepted")
+        if "truncated" not in refused.stdout and "tar" not in refused.stdout:
+            fail(f"the {label} refusal did not name the archive damage:\n{refused.stdout}")
+        shutil.rmtree(clone)
+
+    # A metadata mismatch: the archive is intact but the record disagrees with it.
+    # The clone is *not* re-sealed after the hash edit, because the point is the
+    # record's own claim about the archive; the identity is re-signed so the tree
+    # check still passes.
+    clone = reidentified_clone(root, sdk, "mismatch")
+    contract = component_sdk.default_contract
+    mismatched = json.loads((clone / contract.NORMALIZED_FILE_NAME).read_text(encoding="utf-8"))
+    for entry in mismatched["profiles"]:
+        if entry["profile"] == QEMU_PROFILE:
+            entry["prefix"]["archiveHash"] = "0" * 64
+    (clone / contract.NORMALIZED_FILE_NAME).write_bytes(component_sdk.normalize(mismatched))
+    reseal(clone)
+    refused = verify_only(root, clone, "mismatch")
     if refused.returncode == 0:
         fail("a release whose record disagreed with its archive was accepted")
+    if "does not match its recorded hash" not in refused.stdout:
+        fail(f"the metadata-mismatch refusal did not name the archive:\n{refused.stdout}")
+    shutil.rmtree(clone)
     print(
-        "component SDK prefix: corrupt, truncated, swapped-profile, and "
-        "metadata-mismatched archives were each refused before Cargo ran",
+        "component SDK prefix: corrupt, truncated, swapped-profile, "
+        "truncated-but-rehashed, and metadata-mismatched archives were each refused "
+        "by the archive check itself",
         flush=True,
     )
 
@@ -545,7 +599,7 @@ def main() -> None:
         "target-qualified ELFs against each with SEL4_PREFIX poisoned and no reference "
         "to build/sel4-prefix*, the QEMU ELF booted the component graph, the RPi ELF "
         "was admitted only for bcm2712 while the QEMU-target ELF was refused by the "
-        "RPi build, and four malformed archives were refused before Cargo ran"
+        "RPi build, and five malformed archives were refused by the archive check itself"
     )
 
 

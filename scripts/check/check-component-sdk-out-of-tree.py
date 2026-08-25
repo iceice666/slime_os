@@ -71,28 +71,6 @@ def git(command: list[str], *, cwd: Path, description: str) -> str:
     return run(["git", *command], cwd=cwd, description=description).stdout.strip()
 
 
-def zti(value: object, indent: int = 0) -> str:
-    padding = " " * indent
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=True)
-    if isinstance(value, list):
-        if not value:
-            return "[]"
-        rows = "".join(f"{padding}  {zti(item, indent + 2)};\n" for item in value)
-        return "[\n" + rows + padding + "]"
-    if isinstance(value, dict):
-        rows = "".join(
-            f"{padding}  {key} = {zti(item, indent + 2)};\n"
-            for key, item in value.items()
-        )
-        return "{\n" + rows + padding + "}"
-    raise TypeError(type(value))
-
-
 def create_sdk(root: Path) -> tuple[Path, str]:
     """Export the repository-owned SDK and commit it as a pinnable repository.
 
@@ -528,7 +506,7 @@ def external_specs(root: Path, elves: dict[str, Path]) -> None:
                 "binary": f"cp5-{entry.name}",
                 "contentHash": hashlib.sha256(elves[entry.name].read_bytes()).hexdigest(),
             }
-        (root / f"{entry.name}.zti").write_text(zti(spec) + "\n", encoding="utf-8")
+        (root / f"{entry.name}.zti").write_text(component_sdk.zti(spec) + "\n", encoding="utf-8")
 
 
 def build_generation(output: Path, specs: Path, elves: dict[str, Path]) -> subprocess.CompletedProcess[str]:

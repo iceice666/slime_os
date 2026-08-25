@@ -241,14 +241,19 @@ def prove_refusals(root: Path, url: str) -> None:
     # A changed tree reusing a published version. Built by publishing a mutated
     # export under the same version through a second source mirror, which is the
     # only way to reach the "same version, different tree" arm.
+    #
+    # Every export input is derived from `component_sdk`'s own declarations
+    # rather than restated, so a newly exported path cannot leave this mirror
+    # silently incomplete — which it did once, when the linker scripts became an
+    # export input and a hand-written list did not know.
     mirror = root / "mutated-source"
     mirror.mkdir()
     for relative in (
-        "Cargo.toml",
-        "sel4/pins.toml",
-        "contracts",
-        *[path for path, _ in component_sdk.EXPORT_CRATES],
-        *component_sdk.VENDORED,
+        ("Cargo.toml", "sel4/pins.toml", "contracts")
+        + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
+        + component_sdk.VENDORED
+        + component_sdk.LINKER_SCRIPTS
+        + (component_sdk.TARGET_SPEC_SOURCE,)
     ):
         target = mirror / relative
         if target.exists():

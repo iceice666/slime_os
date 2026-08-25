@@ -100,16 +100,22 @@ def export(destination: Path, *, source: Path = ROOT, version: str = "1.0.0"):
 
 
 # Everything the exporter reads out of a source tree, plus the two product-only
-# files the sensitivity control perturbs. A mirror carries exactly this, so a
-# perturbation experiment runs against a tree the exporter can export and the
-# real checkout is never modified.
-MIRROR_PATHS = (
-    "Cargo.toml",
-    "sel4/pins.toml",
-    "contracts",
+# files the sensitivity control perturbs. Every export input is *derived* from
+# `component_sdk`'s own declarations rather than restated, so a new exported path
+# cannot leave the mirror silently incomplete -- which it did once, when the
+# linker scripts became an export input and this list did not know.
+PRODUCT_ONLY_PROBES = (
     "slime-root/src/main.rs",
     "contracts/generation/v1/fixtures/sel4-demo.zti",
-) + tuple(path for path, _ in component_sdk.EXPORT_CRATES) + component_sdk.VENDORED
+)
+MIRROR_PATHS = (
+    ("Cargo.toml", "sel4/pins.toml", "contracts")
+    + PRODUCT_ONLY_PROBES
+    + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
+    + component_sdk.VENDORED
+    + component_sdk.LINKER_SCRIPTS
+    + (component_sdk.TARGET_SPEC_SOURCE,)
+)
 
 
 def mirror(root: Path, name: str) -> Path:
@@ -382,7 +388,25 @@ def assert_metadata_boundary(checkout: Path, sdk: Path, revision: str) -> None:
 
 def build_external_component(root: Path, sdk: Path, checkout: Path) -> Path:
     target_dir = root / "external-target"
-    built = run(
+    verified = run(
+        [
+            sys.executable,
+            str(sdk / "tools" / "sdk-build.py"),
+            "--profile",
+            PROFILE,
+            "--verify-only",
+            "--cache",
+            str(root / "prefix-cache"),
+        ],
+        cwd=checkout,
+        description="verify the release record before building",
+    )
+    # The entry point must verify the record and the prefix before it builds
+    # anything. Asserted rather than assumed: a build that silently skipped
+    # verification would still produce an ELF and pass every check below.
+    if "verified" not in verified.stdout:
+        fail(f"the SDK build entry point did not report a verified release:\n{verified.stdout}")
+    run(
         [
             sys.executable,
             str(sdk / "tools" / "sdk-build.py"),
@@ -400,8 +424,6 @@ def build_external_component(root: Path, sdk: Path, checkout: Path) -> Path:
         cwd=checkout,
         description="build the external component through the SDK entry point",
     )
-    if "verified" not in built.stdout and built.stdout.strip():
-        pass
     elf = target_dir / "aarch64-sel4-minimal" / "release" / "console.elf"
     if not elf.is_file():
         fail("the SDK build entry point produced no console ELF")

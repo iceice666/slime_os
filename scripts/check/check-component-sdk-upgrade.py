@@ -354,6 +354,38 @@ def snapshot(checkout: Path) -> dict[str, bytes]:
     return state
 
 
+def snapshot_record(sdk: Path) -> dict[str, bytes]:
+    """The three record files, so a mutation arm can restore them exactly."""
+    contract = component_sdk.default_contract
+    return {name: (sdk / name).read_bytes() for name in contract.RECORD_FILE_NAMES}
+
+
+def restore_record(sdk: Path, sealed: dict[str, bytes]) -> None:
+    for name, content in sealed.items():
+        (sdk / name).write_bytes(content)
+
+
+def reseal(sdk: Path) -> None:
+    """Re-derive the tree identity and re-sign the record over a mutated tree.
+
+    Needed by any arm that mutates a byte inside the exported tree: the entry
+    point checks `treeIdentity` before anything else, so without re-sealing the
+    arm observes the tree check rather than the property it names.
+    """
+    contract = component_sdk.default_contract
+    record = json.loads((sdk / contract.NORMALIZED_FILE_NAME).read_text(encoding="utf-8"))
+    record["treeIdentity"] = component_sdk.tree_digest(
+        sdk, exclude=tuple(contract.RECORD_FILE_NAMES) + (".git",)
+    )
+    normalized = component_sdk.normalize(record)
+    identity = hashlib.sha256(contract.IDENTITY_DOMAIN + normalized).hexdigest()
+    (sdk / contract.NORMALIZED_FILE_NAME).write_bytes(normalized)
+    (sdk / contract.IDENTITY_FILE_NAME).write_text(identity + "\n", encoding="utf-8")
+    (sdk / contract.RECORD_FILE_NAME).write_text(
+        component_sdk.zti(component_sdk.canonical(record)) + "\n", encoding="utf-8"
+    )
+
+
 def prove_fault_injection(
     root: Path,
     checkout: Path,
@@ -380,22 +412,31 @@ def prove_fault_injection(
         fail("an update to a nonexistent SDK commit succeeded")
 
     # 2. Prefix verification: the archive the update would verify is corrupt.
+    #
     # One bit at the archive's midpoint, not a zeroed range: a tar carries long
-    # runs of zero padding, so overwriting a range with zeros can change nothing
-    # and prove nothing.
+    # runs of zero padding, so overwriting a range with zeros can change nothing.
+    # The record is then re-derived over the mutated tree, because the archive
+    # lives inside the tree `treeIdentity` covers and the entry point checks the
+    # tree first — without re-sealing, this arm would observe the tree check and
+    # the archive hash it names would never be reached.
     archive = second_sdk / "prefixes" / f"{PROFILE}.tar"
     original = archive.read_bytes()
     corrupt = bytearray(original)
     corrupt[len(corrupt) // 2] ^= 0xFF
     if bytes(corrupt) == original:
         fail("the prefix corruption changed nothing, so it proves nothing")
+    sealed = snapshot_record(second_sdk)
     archive.write_bytes(bytes(corrupt))
+    reseal(second_sdk)
     try:
         refused = update(checkout, second_sdk, root, url=url, commit=commit, allow_failure=True)
         if refused.returncode == 0:
             fail("an update against a corrupt prefix archive succeeded")
+        if "does not match its recorded hash" not in refused.stdout:
+            fail(f"the corrupt-prefix refusal did not name the archive:\n{refused.stdout}")
     finally:
         archive.write_bytes(original)
+        restore_record(second_sdk, sealed)
 
     # 3. Compile: the consumer's own source does not build.
     source = checkout / "component" / "src" / "main.rs"
