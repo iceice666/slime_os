@@ -156,6 +156,9 @@ mod boot_action {
     /// C9.2's bounded userspace wait set over one declared Notification.
     pub const WAIT_SET: u32 = 32;
 
+    /// C9.3's declared scheduling class and its promotion authority.
+    pub const SCHEDULING_CLASS: u32 = 33;
+
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
     // file matches on it. Renumbering a variant in the contract without
@@ -194,6 +197,7 @@ mod boot_action {
     const _: () = assert!(PRIVATE_MEMORY == BootAction::PrivateMemory.id());
     const _: () = assert!(CLOCK_AUTHORITY == BootAction::ClockAuthority.id());
     const _: () = assert!(WAIT_SET == BootAction::WaitSet.id());
+    const _: () = assert!(SCHEDULING_CLASS == BootAction::SchedulingClass.id());
 }
 
 /// Compose the graph the generation selected.
@@ -271,6 +275,14 @@ fn compose_declared_graph(startup_arg: u32) {
         // over would prove the wrong thing.
         action::WAIT_SET => {
             slime_rt::debug_write(b"[init] wait set plane is root-launched\n");
+            slime_rt::exit(0)
+        }
+        // C9.3's four probe instances are all root-autostart, and the controller
+        // spawns the subject it promotes itself — promotion authority must ride
+        // on a handle its own holder obtained, so init handing one over would
+        // prove the wrong thing. The same rule as the wait-set plane above.
+        action::SCHEDULING_CLASS => {
+            slime_rt::debug_write(b"[init] scheduling class plane is root-launched\n");
             slime_rt::exit(0)
         }
         action::CROSSING => {

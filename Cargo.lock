@@ -1105,6 +1105,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-scheduling-class-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-sel4-directory-probe"
 version = "0.1.0"
 dependencies = [

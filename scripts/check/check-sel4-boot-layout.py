@@ -121,6 +121,7 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     # notification through CP2 and spawns the peer it supervises, because a
     # supervision source must name a handle its own holder obtained.
     ("sel4-wait-set", "--wait-set-plane", "slime-sel4-wait-set.elf"),
+    ("sel4-scheduling-class", "--scheduling-class-plane", "slime-sel4-scheduling-class.elf"),
 )
 
 

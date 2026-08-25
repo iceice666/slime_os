@@ -133,6 +133,18 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # source, the undeclared instance registering nothing, terminal cleanup, and
     # the root-attributed supervision/clock installs plus the coalesced wake.
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
+    # C9.3: 25 markers over five causal chains and eight order-independent ones
+    # — the declared band mapping the root resolved and one line per band, a
+    # promotion applying within its ceiling, refused above it and refused to the
+    # unassignable `undeclared` name, the
+    # self-promotion refusal with the promoter's own class unchanged, the
+    # unnamed instance reading back as `undeclared` at the root's child priority
+    # rather than at any band, terminal cleanup, and each
+    # instance's root-attributed class cross-checked against the schedule record
+    # the builder wrote for the same thread. All four instances appear on both
+    # sides, including the one the policy does not name: that is the pair a
+    # review found disagreeing.
+    ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

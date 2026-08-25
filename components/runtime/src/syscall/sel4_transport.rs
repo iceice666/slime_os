@@ -26,7 +26,7 @@ use super::{
     CapabilityDisposition, ERR_INVALID_ARG, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
     MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SpawnGrant, capability_table_labels,
     capability_transfer_labels, clock_labels, directory_labels, lifecycle_labels,
-    shared_buffer_labels, spawn_labels, supervision_labels,
+    scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
 };
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word. Generated from `contracts/syscall-abi/v1`; the root decodes the same
@@ -1152,6 +1152,21 @@ pub fn simulated_time_read() -> i64 {
 
 pub fn simulated_time_advance(delta: u64) -> i64 {
     result_of(clock_labels::SIMULATED_ADVANCE, &[delta as Word])
+}
+
+/// C9.3's self-scoped class read. Zero operands: the instance is the badge's,
+/// so there is nothing to name. Primary is the class id, auxiliary the priority.
+pub fn scheduling_class_read() -> (i64, u64) {
+    pair_of(scheduling_labels::CLASS_READ, &[])
+}
+
+/// C9.3's promotion. `slot` is a supervision capability naming the subject, so
+/// no task identity crosses the wire (B42).
+pub fn scheduling_class_promote(slot: u32, class_id: u32) -> (i64, u64) {
+    pair_of(
+        scheduling_labels::CLASS_PROMOTE,
+        &[slot as Word, class_id as Word],
+    )
 }
 
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

@@ -1,0 +1,227 @@
+{
+  bootAction = "scheduling-class";
+  bootstrapInstance = "init";
+  clockAuthority = [
+    {
+      holder = "sched-foreground";
+      monotonicRead = false;
+      timerUse = true;
+      simulatedRead = false;
+      simulatedAdvance = false;
+      timerQuota = 2;
+      timerNotification = "sched-foreground-tick";
+      timerBadgeBit = 9;
+    };
+  ];
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "scheduling-class-probe";
+      object = "sha256:scheduling-class-probe";
+      role = "application";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "supervision-child";
+      object = "sha256:supervision-child";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 43;
+  grants = [
+    {
+      name = "sched-promotable-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "sched-controller";
+      target = "supervision-child";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "sched-foreground";
+      "sched-burner";
+      "sched-controller";
+      "sched-denied";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "scheduling-class-probe";
+      health = "required";
+      name = "sched-foreground";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "scheduling-class-probe";
+      health = "required";
+      name = "sched-burner";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "sched-promotable-executable";
+          slot = 2;
+        };
+      ];
+      dependencies = [];
+      executable = "scheduling-class-probe";
+      health = "required";
+      name = "sched-controller";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "scheduling-class-probe";
+      health = "required";
+      name = "sched-denied";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [];
+      dependencies = [
+        "sched-controller";
+      ];
+      executable = "supervision-child";
+      health = "optional";
+      name = "sched-promotable";
+      owner = "sched-controller";
+    };
+  ];
+  interfaceSchemas = [];
+  mintedBindings = [];
+  notificationBindings = [
+    {
+      grant = "sched-foreground-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "sched-foreground-tick";
+      holder = "sched-foreground";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  notificationGrants = [
+    {
+      name = "sched-foreground-tick";
+      source = "init";
+      target = "sched-foreground";
+    };
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:scheduling-class-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:supervision-child";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "clock-authority";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "scheduling-class";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  schedulingClass = {
+    bands = [
+      {
+        class = "foreground";
+        priority = 200;
+      };
+      {
+        class = "normal";
+        priority = 150;
+      };
+      {
+        class = "bestEffort";
+        priority = 100;
+      };
+    ];
+    instances = [
+      {
+        instance = "sched-foreground";
+        class = "foreground";
+      };
+      {
+        instance = "sched-burner";
+        class = "bestEffort";
+      };
+      {
+        instance = "sched-controller";
+        class = "normal";
+      };
+      {
+        instance = "sched-promotable";
+        class = "bestEffort";
+      };
+    ];
+    promotions = [
+      {
+        holder = "sched-controller";
+        subject = "sched-promotable";
+        ceiling = "normal";
+      };
+    ];
+  };
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

@@ -111,6 +111,8 @@ CLOCK_AUTHORITY_IMAGE = BUILD_ROOT / "slime-sel4-clock-authority.elf"
 CLOCK_AUTHORITY_MANIFEST = BUILD_ROOT / "slime-sel4-clock-authority.identity.json"
 WAIT_SET_IMAGE = BUILD_ROOT / "slime-sel4-wait-set.elf"
 WAIT_SET_MANIFEST = BUILD_ROOT / "slime-sel4-wait-set.identity.json"
+SCHEDULING_CLASS_IMAGE = BUILD_ROOT / "slime-sel4-scheduling-class.elf"
+SCHEDULING_CLASS_MANIFEST = BUILD_ROOT / "slime-sel4-scheduling-class.identity.json"
 CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
 CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
@@ -179,6 +181,7 @@ PRIVATE_MEMORY_VARIANT = "private-memory"
 CLOCK_AUTHORITY_VARIANT = "clock-authority"
 # C9.2's bounded userspace wait set over one declared Notification.
 WAIT_SET_VARIANT = "wait-set"
+SCHEDULING_CLASS_VARIANT = "scheduling-class"
 DEMO_VARIANT = "demo"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
@@ -234,6 +237,7 @@ VARIANT_MANIFESTS = {
     PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
     CLOCK_AUTHORITY_VARIANT: "sel4-clock-authority",
     WAIT_SET_VARIANT: "sel4-wait-set",
+    SCHEDULING_CLASS_VARIANT: "sel4-scheduling-class",
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
     QOS_VARIANT: "sel4-qos",
@@ -300,6 +304,7 @@ VARIANT_TARGET_DIRS = {
     PRIVATE_MEMORY_VARIANT: "root-private-memory",
     CLOCK_AUTHORITY_VARIANT: "root-clock-authority",
     WAIT_SET_VARIANT: "root-wait-set",
+    SCHEDULING_CLASS_VARIANT: "root-scheduling-class",
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
     QOS_VARIANT: "root-qos",
@@ -339,6 +344,7 @@ VARIANT_IMAGES = {
     PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
     CLOCK_AUTHORITY_VARIANT: (CLOCK_AUTHORITY_IMAGE, CLOCK_AUTHORITY_MANIFEST),
     WAIT_SET_VARIANT: (WAIT_SET_IMAGE, WAIT_SET_MANIFEST),
+    SCHEDULING_CLASS_VARIANT: (SCHEDULING_CLASS_IMAGE, SCHEDULING_CLASS_MANIFEST),
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
     QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
@@ -1358,6 +1364,11 @@ def main() -> None:
         help="embed the C9.2 wait-set generation, writing a separate image",
     )
     parser.add_argument(
+        "--scheduling-class-plane",
+        action="store_true",
+        help="embed the C9.3 scheduling-class generation, writing a separate image",
+    )
+    parser.add_argument(
         "--crossing-plane",
         action="store_true",
         help=(
@@ -1589,6 +1600,7 @@ def main() -> None:
             (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
             (CLOCK_AUTHORITY_VARIANT, arguments.clock_authority_plane),
             (WAIT_SET_VARIANT, arguments.wait_set_plane),
+            (SCHEDULING_CLASS_VARIANT, arguments.scheduling_class_plane),
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),

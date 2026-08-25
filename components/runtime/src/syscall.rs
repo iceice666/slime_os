@@ -31,7 +31,7 @@ pub use slime_proto::syscall_abi::{
 };
 use slime_proto::syscall_abi::{
     capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-    lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+    lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
 };
 
 /// Whether delegation consumes the source logical capability or retains it.
@@ -650,6 +650,19 @@ pub struct PrivateMemory {
     pub pages: usize,
 }
 
+/// A component's resolved scheduling class (C9.3).
+///
+/// `class_id` is the frozen `CLASS_*` numbering from
+/// `contracts/scheduling-class/v1`; `priority` is the seL4 TCB priority the
+/// generation's declared band mapping turned it into. Both travel because a
+/// component observing its own band should not have to know the mapping to make
+/// sense of the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchedulingClassInfo {
+    pub class_id: u32,
+    pub priority: u64,
+}
+
 /// Grow this task's private memory by `delta` pages, returning the region as it
 /// was *before* the growth (C10.1/C10.2).
 ///
@@ -721,6 +734,45 @@ pub fn simulated_time_advance(delta: u64) -> Result<u64, i64> {
     } else {
         Ok(result as u64)
     }
+}
+
+/// This component's declared scheduling class and the priority it runs at
+/// (C9.3).
+///
+/// Self-scoped and never refused for want of authority: every thread runs at
+/// some priority, so a component the generation names no class for is answered
+/// rather than refused. Its class id is then `undeclared` (0) and its priority
+/// is the root's own child default — not a band, because the generation placed
+/// it in none.
+pub fn scheduling_class_read() -> Result<SchedulingClassInfo, i64> {
+    let (result, priority) = transport::scheduling_class_read();
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(SchedulingClassInfo {
+        class_id: result as u32,
+        priority,
+    })
+}
+
+/// Set another component's scheduling class, naming it through a supervision
+/// capability this component holds (C9.3).
+///
+/// The request names a *class*, never a priority: the number applied comes from
+/// the generation's own declared band mapping. Authority is the `slot`'s
+/// supervision capability carrying `schedulingPromote` plus a generation-declared
+/// promotion edge whose ceiling admits the requested class. A caller naming
+/// itself is refused: promotion is authority over another component's class and
+/// never over your own.
+pub fn scheduling_class_promote(slot: u32, class_id: u32) -> Result<SchedulingClassInfo, i64> {
+    let (result, priority) = transport::scheduling_class_promote(slot, class_id);
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(SchedulingClassInfo {
+        class_id: result as u32,
+        priority,
+    })
 }
 
 /// Atomically swaps a directory namespace root after the new snapshot object
