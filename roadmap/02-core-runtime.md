@@ -764,9 +764,11 @@ by `sel4_fault_check`.
 
 ## C9: Robot runtime authority
 
-**Status:** In progress. Decomposed into C9.1–C9.6; C9.1, C9.2, and C9.3 are
-complete, so RP5's two named dependencies on this track are closed and scheduling
-class is declared, enforced, and non-self-wideable. C9.4–C9.6 are open.
+**Status:** In progress. Decomposed into C9.1–C9.6; C9.1 through C9.4 are
+complete, so RP5's two named dependencies are closed, scheduling class is
+declared and enforced, and a userspace supervisor restarts a failed component
+under generation-declared policy while the root gains none of it. C9.5 and C9.6
+are open.
 
 This track supplies the timing, execution, lifecycle, and observation contracts
 needed by robot and mixed interactive workloads. It does not promise hard
@@ -1000,66 +1002,64 @@ the architecture decision above.
 
 ### C9.4 — Lifecycle transitions and supervised restart
 
-**Status:** Not started.
+**Status:** Complete.
+**Delivered:** A versioned Zutai `lifecycle-policy/v1` generation resource
+declaring four things together, because none is a policy alone: the admitted
+transition graph with its declared entry and exhaustion states, the per-instance
+restart bound with growing backoff, the health dependencies that gate a start,
+and the parameter authority. `ComponentSpec.lifecycle`'s host-only state list is
+promoted into that graph — the same eight states in the same canonical order —
+and an advance no edge admits is refused by the root rather than by convention.
+Restart is a *userspace* supervisor: it observes each death, asks what the
+generation admits, waits the declared backoff on a real C9.1 timer, and spawns
+the replacement itself. The root's whole contribution is mechanism — it records
+why a task ended, charges the declared attempt, answers the instant a restart may
+proceed, and independently refuses an early spawn, an exhausted bound, and an
+unsatisfied dependency, so a supervisor that skips its own wait is denied rather
+than trusted. Attempt counts, parameter values, and the last terminal cause live
+on a per-*instance* row that outlives every task representing it, because
+`TaskId` is never reused and a per-task counter would reset on the very death it
+must bound; only the lifecycle state is per task, so a replacement re-derives it
+from the generation. Parameter state is an authority rather than a schema: read
+and write are separate declared bits over `(holder, subject)`, absence denies
+including reflexively, and a refusal for want of authority is distinguishable
+from an unset key. `RIGHT_LIFECYCLE_RESTART` (31), `RIGHT_PARAMETER_READ` (32),
+and `RIGHT_PARAMETER_WRITE` (33) ride on the supervision handle a spawner
+receives exactly where the policy declares the matching edge, so the right and
+the policy are one fact with one source. C9.4's fourth deliverable is closed by
+*deletion*: `Unhealthy` became a real cause recorded by the operation that
+observes it, while `Timeout` and `PeerLoss` — which no mechanism in this root can
+produce, there being no timeout and no closed-peer signal on a native Endpoint
+(B76) — were removed from `fault.rs` along with their event kinds and methods,
+and were deliberately given no contract cause id.
+**Exit condition (observed):** `just lifecycle_restart_check` boots generation 44
+and observes, in one transcript: the worker's first spawn refused
+`class=lifecycle-dependency` until its supervisor reaches the state the edge
+names; three restarts admitted at attempts 0/1/2 with the declared budget
+decreasing to zero and each backoff instant growing by the declared 512/256
+factor, the first of them refused `class=backoff-pending` when the supervisor
+spawns early; the fault, exit, and unhealthy causes distinguishable from both
+sides, with each replacement's behaviour selected by the cause it read back; one
+parameter write surviving all three restarts while every predecessor handle is
+refused and no task id ever aliases; the declared `normal` band and four-page
+quota installed once per incarnation, cross-checked against the builder's own
+schedule record; an undeclared transition refused without moving the state; and
+the attempt bound spending out into `state=Error` with the following spawn
+refused `class=lifecycle-exhausted`, closing
+`SLIME_GRAPH HEALTHY generation=44 required=4 live=0 completed=4 failed=0`. Two
+review rounds found seventeen issues — the first eight including a dead-surface
+P1 that had *widened* the very unreachable-declaration class this milestone was
+meant to close, the second nine against those fixes, among them a leaked task row
+on two spawn unwind paths, a marker printing a cause the root had not recorded,
+and two assertions comparing a value to itself — all applied.
+**Gates:** `just lifecycle_restart_check`, `just sel4_gate_control_check` (39
+gates, 1518 mutations), `just sel4_boot_layout_check` (30 plane layouts), `just
+contracts_check`, `just generation_check`, `just test_sel4_root` (183), `just
+test_host` (284)
+**Evidence:** [`devlog/2026-08-25-c9-4-supervised-restart/`](../devlog/2026-08-25-c9-4-supervised-restart/index.md)
 
-**Depends on:** C9.1 (backoff needs a clock), C9.3 (class must survive
-restart), and the root's existing termination observation in
-`slime-root/src/{fault,supervision}.rs`. Both C9 dependencies are now
-**complete**, so nothing on this track gates C9.4. C9.3 deliberately left it the
-restart-survival check: `SchedulingService::release` drops a dead task's row so a
-restarted instance re-derives its class from the generation rather than
-inheriting one, but that is a property of the code and not yet an observation.
-
-#### Deliverables
-
-- define lifecycle transitions, health dependencies, restart attempt bounds,
-  backoff policy, and parameter state as versioned Zutai schemas, promoting
-  `ComponentSpec.lifecycle`'s declarative state list into an admitted
-  transition graph;
-- implement restart as a userspace supervisor holding declared supervision
-  authority: it observes a termination, consults declared policy, and requests
-  a fresh spawn; the root gains no restart policy;
-- reissue every authority on restart — endpoints, mappings, buffers, timers,
-  device grants — so a restarted component cannot reach a predecessor's state,
-  and give the root the mechanism to prove staleness rather than assume it;
-- give `fault.rs`'s existing `Timeout`, `PeerLoss`, and `Unhealthy` terminal
-  states production callers, or delete them; they are currently dead public API
-  with no caller and no test — `fault.rs`'s four tests exercise `ipc_completed`,
-  `fault`, and `exit` only;
-- make parameter state an *authority*, not merely a schema: a component holding
-  no parameter grant cannot read or write another's parameters, which is what
-  C9.6's exit condition means by "parameter authority" and what the
-  pre-decomposition C9 gated in its first required check.
-
-#### Required checks
-
-- a component killed by fault, by exit, and by declared unhealthiness each
-  restarts under its declared policy, and the three are distinguishable;
-- restart attempts are bounded and backoff is observed against C9.1's clock,
-  not a spin count;
-- a restarted component cannot use any predecessor endpoint, mapping, buffer,
-  or timer, and an attempt is refused rather than ignored;
-- a component whose declared health dependency is down is not started, and is
-  started when the dependency recovers;
-- restart preserves declared scheduling class and private-memory quota;
-- exhausting the attempt bound leaves the graph in a declared terminal state
-  rather than restarting forever;
-- a component holding no parameter authority cannot read or write another
-  component's parameters, and its refusal is distinguishable from a missing key.
-
-#### Planned verification target
-
-```sh
-just lifecycle_restart_check
-```
-
-#### Exit condition
-
-A supervisor restarts a failed component under generation-declared attempt and
-backoff policy, the restarted instance holds entirely fresh authority and its
-original class and quota, stale predecessor capabilities are refused, parameter
-state is reachable only with declared parameter authority, and attempt
-exhaustion terminates deterministically.
+**Depends on:** C9.1 (backoff needs a clock) and C9.3 (class must survive
+restart), both complete. C9.3's deferred restart-survival check is closed here.
 
 ### C9.5 — Typed recording and deterministic replay
 
