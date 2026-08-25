@@ -764,8 +764,9 @@ by `sel4_fault_check`.
 
 ## C9: Robot runtime authority
 
-**Status:** In progress. Decomposed into C9.1–C9.6; C9.1 and C9.2 are complete,
-so RP5's two named dependencies on this track are closed. C9.3–C9.6 are open.
+**Status:** In progress. Decomposed into C9.1–C9.6; C9.1, C9.2, and C9.3 are
+complete, so RP5's two named dependencies on this track are closed and scheduling
+class is declared, enforced, and non-self-wideable. C9.4–C9.6 are open.
 
 This track supplies the timing, execution, lifecycle, and observation contracts
 needed by robot and mixed interactive workloads. It does not promise hard
@@ -952,49 +953,50 @@ mechanism.
 
 ### C9.3 — Declared scheduling class
 
-**Status:** Not started.
+**Status:** Complete.
+**Delivered:** A versioned Zutai `scheduling-class/v1` generation resource
+declaring three things together: the band mapping from each class —
+`foreground`, `normal`, `bestEffort` — to its exact seL4 TCB priority, the
+per-instance assignment, and the promotion edges naming who may change whose
+class. The mapping is manifest data rather than a constant compiled into the
+builder and a matching one in the root, which is the deliverable: the builder
+reads it **once** and substitutes the resulting priority into the v5
+`ScheduleRecord` it already emits, so a class *is* the priority and there is no
+second number for the two readers to disagree about. An instance declaring both
+a class and a disagreeing priority is refused at build — including a
+`workerPriority` that disagrees by inheritance — and the root re-derives what
+only the generation knows: every named identity is a declared instance, and every
+promotion subject is owned by its holder. "Never its own" is closed three ways —
+the decoder refuses a declared self-edge, `SchedulingService::promote` refuses a
+caller equal to its subject before any edge lookup, and the subject is named by a
+supervision capability the root mints only for a spawner, never for a task
+itself. `RIGHT_SCHEDULING_PROMOTE` (bit 30) rides on that handle exactly where
+the policy declares the edge, so the right and the edge are one fact with one
+source. An instance the policy does not name reads back as a distinct
+`undeclared` class at the root's own child priority — not as `normal`, because
+naming a band the thread is not in would make promoting it *to* that band look
+like a no-op while silently moving its priority. CPU quantity stays bounded by
+nothing: `budget_us`/`period_us` remain zero and undeclarable under B77.
+**Exit condition (observed):** `just scheduling_class_check` boots generation 43
+and observes, in one transcript, a `foreground` component making ordered progress
+*between two chunks of a `bestEffort` component's still-running 200M-iteration
+burn loop* on one vCPU — the burner then finishing, so the band orders CPU access
+rather than denying it — plus a declared promotion applying at its band, the same
+edge refused one band above its declared ceiling, `undeclared` refused as a
+target, a self-directed promotion refused with the promoter's own class unchanged,
+and an unnamed instance reading `undeclared` at 254 while refused all eight swept
+slots. Every `SLIME_SCHED class` line is cross-checked against the
+`SLIME_GRAPH schedule` record the builder wrote for the same thread, all four
+instances, which is the pair three review rounds found disagreeing. Restart
+survival is C9.4's to observe, so C9.3 closes without it.
+**Gates:** `just scheduling_class_check`, `just sel4_gate_control_check` (38
+gates, 1450 mutations), `just sel4_boot_layout_check` (29 plane layouts), `just
+contracts_check`, `just generation_check`, `just test_sel4_root` (170), `just
+test_host` (265)
+**Evidence:** [`devlog/2026-08-25-c9-3-declared-scheduling-class/`](../devlog/2026-08-25-c9-3-declared-scheduling-class/index.md)
 
 **Depends on:** B48's per-thread declared priority. Explicitly **not** MCS: see
 the architecture decision above.
-
-#### Deliverables
-
-- add a `SchedulingClass` to the component and generation contracts —
-  foreground, normal, best-effort — mapped to concrete TCB priorities, with the
-  mapping itself declared rather than compiled in;
-- admit class per instance and per supervision subtree, deny-by-default to
-  normal, and refuse a generation whose class assignment contradicts its
-  declared priorities rather than silently preferring one;
-- make dynamic promotion an explicit authority a component may hold over
-  *another* component's class, never its own, so no component can widen itself;
-- state in the contract that CPU quantity is not bounded by this mechanism, and
-  keep `budget_us`/`period_us` zero and undeclarable.
-
-#### Required checks
-
-- a best-effort workload saturating the CPU cannot prevent a foreground
-  component from being scheduled, observable as ordered progress markers;
-- a component cannot raise its own class through any operation, including one
-  it holds promotion authority for;
-- a generation whose declared class and declared priority disagree is refused
-  at build and at admission;
-- class survives a supervised restart rather than reverting to the default.
-  This one is observed by C9.4's gate, not C9.3's, because nothing restarts a
-  component until C9.4 exists; it is listed here so the property is owned by the
-  slice that defines class rather than discovered by the slice that restarts.
-
-#### Planned verification target
-
-```sh
-just scheduling_class_check
-```
-
-#### Exit condition
-
-A generation declares scheduling class per instance; a saturating best-effort
-workload cannot starve a declared foreground component, no component can widen
-its own class, and a class/priority contradiction is refused before boot.
-Restart survival is C9.4's to observe, so C9.3 closes without it.
 
 ### C9.4 — Lifecycle transitions and supervised restart
 
@@ -1002,7 +1004,11 @@ Restart survival is C9.4's to observe, so C9.3 closes without it.
 
 **Depends on:** C9.1 (backoff needs a clock), C9.3 (class must survive
 restart), and the root's existing termination observation in
-`slime-root/src/{fault,supervision}.rs`.
+`slime-root/src/{fault,supervision}.rs`. Both C9 dependencies are now
+**complete**, so nothing on this track gates C9.4. C9.3 deliberately left it the
+restart-survival check: `SchedulingService::release` drops a dead task's row so a
+restarted instance re-derives its class from the generation rather than
+inheriting one, but that is a property of the code and not yet an observation.
 
 #### Deliverables
 

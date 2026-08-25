@@ -330,3 +330,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-24 | [P4 Raspberry Pi 5 bring-up: a second seL4 platform, and the assurance it costs](2026-08-24-p4-rpi5-board-bringup/index.md) | Change | Verified | P4, RP3, P5, P5.1 |
 | 2026-08-24 | [C9.1: a root-brokered clock service, and the register wall it cannot cross](2026-08-24-c9-1-clock-authority/index.md) | Change | Verified | C9.1, C9 |
 | 2026-08-25 | [C9.2: one block, one badge word, and the map a waiter cannot compute](2026-08-25-c9-2-bounded-wait-sets/index.md) | Change | Verified | C9.2, C9, C9.1, C10.4, RP5, B23, B70, B76 |
+| 2026-08-25 | [C9.3: a class is a priority, and the band that names it](2026-08-25-c9-3-declared-scheduling-class/index.md) | Change | Verified | C9.3, C9, C9.1, C9.2, C9.4, B48, B71, B77 |
