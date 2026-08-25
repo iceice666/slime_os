@@ -32,7 +32,7 @@
 use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
-    generation, graph, ipc, launched, notification, object_allocator, peer_endpoint,
+    generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
     platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
     transfer_window, virtio_blk, wait_set,
 };
@@ -1236,6 +1236,7 @@ static mut NOTIFICATIONS: notification::NotificationTable = notification::Notifi
 static mut CLOCK_SERVICE: clock::ClockService = clock::ClockService::new();
 static mut WAIT_SET_SERVICE: wait_set::WaitSetService = wait_set::WaitSetService::new();
 static mut SCHEDULING_SERVICE: scheduling::SchedulingService = scheduling::SchedulingService::new();
+static mut LIFECYCLE_SERVICE: lifecycle::LifecycleService = lifecycle::LifecycleService::new();
 
 const MAX_CAPABILITY_EXPORTS: usize = 64;
 #[derive(Clone, Copy)]
@@ -1998,6 +1999,13 @@ fn launch_instance_graph(
         }
         None => None,
     };
+    let lifecycle_policy = match lifecycle::policy_object(generation) {
+        Some(Ok(policy)) => Some(policy),
+        Some(Err(error)) => {
+            fatal!("SLIME_LIFECYCLE FAIL admitted policy will not decode: {error:?}")
+        }
+        None => None,
+    };
 
     for instance_index in 0..generation.instance_count() {
         let instance = match generation.instance(instance_index) {
@@ -2511,6 +2519,74 @@ fn launch_instance_graph(
             );
         }
     }
+    // C9.4's declared state, installed for every launched instance on the same
+    // rule as its class above: recorded for every live task, including one the
+    // policy names nothing for, so the table answers about a live task rather
+    // than about whether it was ever declared.
+    unsafe { *ptr::addr_of_mut!(LIFECYCLE_SERVICE) = lifecycle::LifecycleService::new() };
+    let lifecycle_service = unsafe { &mut *ptr::addr_of_mut!(LIFECYCLE_SERVICE) };
+    for launched in launched_instances.iter() {
+        let state = match lifecycle_service.declare(
+            lifecycle_policy.as_ref(),
+            launched.task,
+            launched.instance,
+        ) {
+            Ok(state) => state,
+            Err(error) => fatal!(
+                "SLIME_LIFECYCLE FAIL state install task={} error={error:?}",
+                launched.task.0
+            ),
+        };
+        if lifecycle_policy.is_some() {
+            sel4::debug_println!(
+                "SLIME_LIFECYCLE state task={} instance={} state={} attempts={}",
+                launched.task.0,
+                generation
+                    .instance(launched.instance)
+                    .map_or("?", |instance| instance.name),
+                boot_contracts::lifecycle_policy::state_name(state),
+                lifecycle_service.attempts_remaining(
+                    lifecycle_policy.as_ref(),
+                    launched.instance,
+                    generation
+                ),
+            );
+        }
+    }
+    if let Some(policy) = lifecycle_policy.as_ref() {
+        // `admitted=` is the count *admission* resolved, printed beside the
+        // count the resource decodes to. Two producers of one number, exactly as
+        // C9.3's class marker is cross-checked against the `ScheduleRecord` the
+        // builder wrote: admission walks every restart row and proves its subject
+        // is owner-spawned, so a disagreement here means the policy the root
+        // validated is not the policy it is about to install (B71's shape).
+        let admitted = admission.lifecycle_restarts.unwrap_or(0);
+        if admitted != policy.restart_count() {
+            fatal!(
+                "SLIME_LIFECYCLE FAIL admission counted {admitted} restart policies, resource declares {}",
+                policy.restart_count()
+            )
+        }
+        sel4::debug_println!(
+            "SLIME_LIFECYCLE policy transitions={} restarts={} admitted={admitted} dependencies={} parameters={} initial={} terminal={}",
+            policy.transition_count(),
+            policy.restart_count(),
+            policy.dependency_count(),
+            policy.parameter_count(),
+            boot_contracts::lifecycle_policy::state_name(policy.initial_state()),
+            boot_contracts::lifecycle_policy::state_name(policy.terminal_state()),
+        );
+        for index in 0..policy.transition_count() {
+            let Some(edge) = policy.transition(index) else {
+                fatal!("SLIME_LIFECYCLE FAIL transition {index} is missing")
+            };
+            sel4::debug_println!(
+                "SLIME_LIFECYCLE edge from={} to={}",
+                boot_contracts::lifecycle_policy::state_name(edge.from_state),
+                boot_contracts::lifecycle_policy::state_name(edge.to_state),
+            );
+        }
+    }
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
     let table = bootstrap.and_then(|id| tasks.authority(id));
@@ -2684,6 +2760,8 @@ fn launch_instance_graph(
         wait_set_service,
         scheduling_service,
         scheduling_policy.as_ref(),
+        lifecycle_service,
+        lifecycle_policy.as_ref(),
         timer_adapter,
         allocator,
         scratch,
@@ -2815,6 +2893,8 @@ fn serve_instance_graph(
     wait_set_service: &mut wait_set::WaitSetService,
     scheduling_service: &mut scheduling::SchedulingService,
     scheduling_policy: Option<&boot_contracts::scheduling_class::SchedulingClass<'_>>,
+    lifecycle_service: &mut lifecycle::LifecycleService,
+    lifecycle_policy: Option<&boot_contracts::lifecycle_policy::LifecyclePolicy<'_>>,
     timer_adapter: &mut PhysicalTimerAdapter,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -2966,6 +3046,19 @@ fn serve_instance_graph(
             // that grows for the boot's lifetime is the shape a bounded root
             // should not have.
             scheduling_service.release(id);
+            // C9.4: record *why* this task ended before its per-task row goes,
+            // so `RESTART_ADMIT` can refuse a cause the policy does not name.
+            // The instance row survives; only the task state is released.
+            if let Some((instance, recorded)) =
+                lifecycle_service.record_termination(id, lifecycle::Terminal::Fault)
+            {
+                sel4::debug_println!(
+                    "SLIME_LIFECYCLE terminated task={} instance={instance} cause={}",
+                    id.0,
+                    recorded.name(),
+                );
+            }
+            lifecycle_service.release(id);
             reclaim_dead_task(buffers, allocator, id);
             windows.release(id);
             reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -3017,6 +3110,16 @@ fn serve_instance_graph(
                 id.0,
                 request.len,
                 ipc::scheduling_request_len(label),
+            );
+            ipc::reply(Response::error(IpcError::InvalidLength));
+            continue;
+        }
+        if ipc::lifecycle_request_len(label).is_some_and(|expected| request.len != expected) {
+            sel4::debug_println!(
+                "SLIME_LIFECYCLE malformed task={} label={label} words={} expected={:?}",
+                id.0,
+                request.len,
+                ipc::lifecycle_request_len(label),
             );
             ipc::reply(Response::error(IpcError::InvalidLength));
             continue;
@@ -3102,6 +3205,24 @@ fn serve_instance_graph(
                 // C9.3, on the fault path's rule: an orderly exit retires its
                 // class row too.
                 scheduling_service.release(id);
+                // C9.4, on the fault path's rule: an orderly exit is a terminal
+                // cause a restart policy may or may not name, and the two must
+                // be distinguishable rather than collapsed into "it died".
+                // The *recorded* cause is printed, not `Exit`: a component that
+                // declared itself unhealthy exits immediately afterwards, so this
+                // path runs for a death already recorded as `unhealthy`, and
+                // printing the argument would put a second, contradictory
+                // root-attributed line in the transcript (found by review).
+                if let Some((instance, recorded)) =
+                    lifecycle_service.record_termination(id, lifecycle::Terminal::Exit)
+                {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE terminated task={} instance={instance} cause={}",
+                        id.0,
+                        recorded.name(),
+                    );
+                }
+                lifecycle_service.release(id);
                 reclaim_dead_task(buffers, allocator, id);
                 windows.release(id);
                 reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -3129,6 +3250,9 @@ fn serve_instance_graph(
                     wait_set_service,
                     scheduling_service,
                     scheduling_policy,
+                    lifecycle_service,
+                    lifecycle_policy,
+                    timer_adapter,
                     allocator,
                     scratch,
                     endpoint,
@@ -3791,13 +3915,55 @@ fn serve_instance_graph(
                 ipc::reply(response);
             }
             lifecycle_labels::UNHEALTHY => {
-                let authorized = launched.instance_for_task(id).is_some_and(|index| {
+                // Two distinct meanings, and C9.4 separates them rather than
+                // widening either.
+                //
+                // The *generation* half is unchanged: only a required instance
+                // may mark this boot unhealthy, because that is a claim about
+                // the whole generation's fitness and it spends a boot attempt.
+                //
+                // The *component* half is new, and it is C9.4's third terminal
+                // cause. A component declaring itself broken is a cause a
+                // restart policy may or may not name, and it must be
+                // distinguishable from the plain exit that follows: the runtime's
+                // `unhealthy()` exits immediately afterwards, so without this the
+                // EXIT path would record `exit` and "it stopped" and "it said it
+                // was broken" would be one observation. First-writer-wins in
+                // `record_termination` makes this cause win over that exit.
+                //
+                // Recording it is scoped to a declared instance and nothing
+                // more, because it names only the caller's own fate — there is
+                // no subject operand and no peer to affect, exactly as
+                // `EXIT`'s status word has none.
+                let declared = launched.instance_for_task(id);
+                let outcome = declared.and_then(|_| {
+                    lifecycle_service.record_termination(id, lifecycle::Terminal::Unhealthy)
+                });
+                let recorded = outcome.is_some();
+                if let Some((instance, cause)) = outcome {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE unhealthy task={} instance={instance} cause={}",
+                        id.0,
+                        cause.name(),
+                    );
+                }
+                let boot_authorized = declared.is_some_and(|index| {
                     generation
                         .instance(index)
                         .is_ok_and(|instance| instance.health == InstanceHealth::Required)
                 });
-                let response = if !authorized {
-                    Response::error(IpcError::BadCapability)
+                let response = if !boot_authorized {
+                    // A non-required instance recorded its cause and marked no
+                    // boot: that is a success for what it asked, so answering an
+                    // error would make a restartable component's own declaration
+                    // read as a refusal. An instance the generation declares at
+                    // all is still required — an undeclared caller reaches
+                    // neither half and is refused.
+                    if recorded {
+                        Response::success(0, 0)
+                    } else {
+                        Response::error(IpcError::BadCapability)
+                    }
                 } else {
                     #[cfg(slime_boot_selector)]
                     {
@@ -3816,7 +3982,14 @@ fn serve_instance_graph(
                     }
                     #[cfg(not(slime_boot_selector))]
                     {
-                        Response::error(IpcError::InvalidOperation)
+                        // No selector to mark, but the cause is recorded, so this
+                        // is the same success a non-required caller gets rather
+                        // than the historical `-4`.
+                        if recorded {
+                            Response::success(0, 0)
+                        } else {
+                            Response::error(IpcError::InvalidOperation)
+                        }
                     }
                 };
                 ipc::reply(response);
@@ -3835,6 +4008,23 @@ fn serve_instance_graph(
                     scheduling_service,
                     scheduling_policy,
                     tasks,
+                    id,
+                    label,
+                    &words,
+                );
+                ipc::reply(response);
+            }
+            lifecycle_labels::STATE_READ
+            | lifecycle_labels::STATE_ADVANCE
+            | supervision_labels::RESTART_ADMIT
+            | supervision_labels::PARAMETER_READ
+            | supervision_labels::PARAMETER_WRITE => {
+                let response = serve_lifecycle_request(
+                    lifecycle_service,
+                    lifecycle_policy,
+                    generation,
+                    tasks,
+                    timer_adapter,
                     id,
                     label,
                     &words,
@@ -4725,6 +4915,9 @@ fn serve_spawn(
     wait_set_service: &mut wait_set::WaitSetService,
     scheduling_service: &mut scheduling::SchedulingService,
     scheduling_policy: Option<&boot_contracts::scheduling_class::SchedulingClass<'_>>,
+    lifecycle_service: &mut lifecycle::LifecycleService,
+    lifecycle_policy: Option<&boot_contracts::lifecycle_policy::LifecyclePolicy<'_>>,
+    timer_adapter: &mut PhysicalTimerAdapter,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -4809,6 +5002,56 @@ fn serve_spawn(
             id.0,
         );
         return Response::error(IpcError::DestinationSlotsExhausted);
+    }
+    // C9.4: exhaustion is terminal, so a spawn of an instance whose declared
+    // attempt bound is spent is refused here rather than only at admission. A
+    // supervisor that ignored its `RESTART_ADMIT` refusal and spawned anyway
+    // would otherwise restart forever, which is the exact behaviour the
+    // milestone's check forbids.
+    if lifecycle_service.is_exhausted(plan.instance) {
+        sel4::debug_println!(
+            "SLIME_GRAPH spawn refused task={} child={name} class=lifecycle-exhausted state={}",
+            id.0,
+            boot_contracts::lifecycle_policy::state_name(
+                lifecycle::LifecycleService::terminal_state(lifecycle_policy)
+            ),
+        );
+        return Response::error(IpcError::InvalidOperation);
+    }
+    // The declared backoff, enforced rather than trusted. `RESTART_ADMIT`
+    // answered an instant; a supervisor that skips its own wait and spawns early
+    // is refused by the same number it was given, so "backoff is observed
+    // against C9.1's clock" is a property of the mechanism rather than of the
+    // supervisor's loop.
+    //
+    // The refusal goes through `LifecycleError` so its status and its marker
+    // class have one source — the same pair every other lifecycle refusal uses —
+    // rather than being restated here beside the mechanism that decides it.
+    let backoff = match timer_adapter.monotonic_now() {
+        Ok(now) => lifecycle_service.restart_ready(plan.instance, now.0),
+        // The clock the reservation was measured against is unreadable, so the
+        // wait cannot be shown to have elapsed. Refused rather than admitted:
+        // proceeding would honour a backoff by assumption.
+        Err(_) => Err(lifecycle::LifecycleError::Malformed),
+    };
+    if let Err(error) = backoff {
+        sel4::debug_println!(
+            "SLIME_GRAPH spawn refused task={} child={name} class={}",
+            id.0,
+            lifecycle_error_class(error),
+        );
+        return Response::error(lifecycle_error_status(error));
+    }
+    // Declared health dependencies are evaluated on *every* start, unlike
+    // `Instance.dependencies`' one-shot autostart barrier: a replacement whose
+    // dependency has since left the state the edge names must wait for the same
+    // condition its predecessor was launched under.
+    if !lifecycle_service.dependencies_satisfied(lifecycle_policy, generation, plan.instance) {
+        sel4::debug_println!(
+            "SLIME_GRAPH spawn refused task={} child={name} class=lifecycle-dependency",
+            id.0,
+        );
+        return Response::error(IpcError::WouldBlock);
     }
 
     sel4::debug_println!(
@@ -4999,7 +5242,34 @@ fn serve_spawn(
             child_class.priority(),
         );
     }
-
+    // C9.4's declared lifecycle state, on the same rule and for the same reason:
+    // recorded before the child runs, from the same generation resource, so a
+    // spawned instance enters the graph's declared entry state rather than
+    // inheriting whatever its predecessor left. A restart is exactly this path,
+    // so this is also where a replacement's state is re-derived.
+    let child_state = match lifecycle_service.declare(lifecycle_policy, child, plan.instance) {
+        Ok(state) => state,
+        Err(error) => {
+            lifecycle_service.release(child);
+            scheduling_service.release(child);
+            wait_set_service.clear_task(child);
+            clock_service.clear_task(child);
+            release_child(tasks, windows, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn failed task={} component={name} error=LifecycleInstall({error:?})",
+                id.0
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+    };
+    if lifecycle_policy.is_some() {
+        sel4::debug_println!(
+            "SLIME_LIFECYCLE state task={} instance={name} state={} attempts={}",
+            child.0,
+            boot_contracts::lifecycle_policy::state_name(child_state),
+            lifecycle_service.attempts_remaining(lifecycle_policy, plan.instance, generation),
+        );
+    }
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
     // it can never learn the fate of, so the ordering is load-bearing rather
@@ -5019,6 +5289,29 @@ fn serve_spawn(
         let subject = boot_contracts::scheduling_class::instance_identity(name);
         holder.is_some_and(|holder| policy.promotion_ceiling(&holder, &subject).is_some())
     });
+    // C9.4 rides on the same handle, for C9.3's reason: the right on the
+    // capability and the edge in the resource are one fact with one source.
+    //
+    // `lifecycleRestart` is set where the policy declares a restart bound for
+    // *this child's instance*, because that is exactly the subject a supervisor
+    // may charge attempts against, and the root mints a handle only for a
+    // spawner over its own child — which is why admission refuses a restart bound
+    // on a root-autostart instance no handle could ever name.
+    //
+    // The parameter bits are set where the policy declares a parameter edge from
+    // this spawner's instance to this child's, and read and write are separately
+    // derived: a supervisor granted only read gets only read.
+    let holder_identity = launched
+        .instance_for_task(id)
+        .and_then(|instance| generation.instance(instance).ok())
+        .map(|instance| boot_contracts::lifecycle_policy::instance_identity(instance.name));
+    let subject_identity = boot_contracts::lifecycle_policy::instance_identity(name);
+    let restartable =
+        lifecycle_policy.is_some_and(|policy| policy.restart_for(&subject_identity).is_some());
+    let parameter_flags = lifecycle_policy
+        .zip(holder_identity)
+        .and_then(|(policy, holder)| policy.parameter_authority(&holder, &subject_identity))
+        .unwrap_or(0);
     let handle = tasks.authority_mut(id).and_then(|table| {
         let slot = table.free_slot_from(1)?;
         let rights = RIGHT_SUPERVISE
@@ -5031,6 +5324,21 @@ fn serve_spawn(
                 boot_contracts::generation::RIGHT_SCHEDULING_PROMOTE
             } else {
                 0
+            }
+            | if restartable {
+                boot_contracts::generation::RIGHT_LIFECYCLE_RESTART
+            } else {
+                0
+            }
+            | if parameter_flags & boot_contracts::lifecycle_policy::PARAMETER_READ != 0 {
+                boot_contracts::generation::RIGHT_PARAMETER_READ
+            } else {
+                0
+            }
+            | if parameter_flags & boot_contracts::lifecycle_policy::PARAMETER_WRITE != 0 {
+                boot_contracts::generation::RIGHT_PARAMETER_WRITE
+            } else {
+                0
             };
         let capability = graph::CapabilityEntry::supervision(child, rights)?;
         table.install(slot, capability).ok()?;
@@ -5039,6 +5347,7 @@ fn serve_spawn(
     let Some(handle) = handle else {
         // The parent's table is full. The copied child table can simply be
         // released; the parent's grants were never consumed.
+        lifecycle_service.release(child);
         scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
@@ -5054,6 +5363,11 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        // The lifecycle row goes with the class row, and omitting it leaks a
+        // `TaskRow` for a task that never ran — which `dependencies_satisfied`
+        // would later read as a live dependency, and which fills a fixed table
+        // for the boot's lifetime (found by review).
+        lifecycle_service.release(child);
         scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
@@ -5071,12 +5385,21 @@ fn serve_spawn(
         if let Some(table) = tasks.authority_mut(id) {
             table.drop_slot(handle);
         }
+        lifecycle_service.release(child);
         scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(tasks, windows, buffers, allocator, child);
         return Response::error(IpcError::BadCapability);
     }
+    // The satisfied restart reservation, cleared only now that the replacement
+    // is genuinely live. Cleared here rather than before activation, because a
+    // launch that unwinds must leave the reservation the attempt was charged
+    // against in place: discarding it early would let the next spawn skip a
+    // backoff the supervisor was already charged for (found by review). And
+    // cleared at all, rather than at admission, because the refusal above must
+    // hold until a replacement actually launches.
+    lifecycle_service.clear_restart_reservation(plan.instance);
     let supervision_grants = plan
         .granted
         .iter()
@@ -5469,6 +5792,308 @@ const fn scheduling_error_class(error: scheduling::SchedulingError) -> &'static 
         scheduling::SchedulingError::AboveCeiling => "above-ceiling",
         scheduling::SchedulingError::UnknownClass => "unknown-class",
         scheduling::SchedulingError::SchedParams => "sched-params",
+    }
+}
+
+/// Serve C9.4's lifecycle state, restart admission, and parameter authority.
+///
+/// `STATE_READ` is self-scoped and never refused for want of authority: the
+/// instance is the badge's, and an instance the policy does not name reads
+/// `undeclared` rather than an error, on `CLASS_READ`'s rule.
+///
+/// `STATE_ADVANCE` is self-scoped too, and takes no subject: moving another
+/// component's lifecycle state is authority no C9.4 field grants, so there is
+/// nothing to authorize beyond being the task whose state moves. What it *is*
+/// gated on is the graph — an edge the generation does not admit is refused.
+///
+/// The three supervision operations resolve their subject through a capability
+/// the *caller* holds, so no task identity crosses the wire (B42). Each is
+/// narrowed to its own right rather than to `RIGHT_SUPERVISE`, for the reason
+/// `CLASS_PROMOTE` is: a component may hold a supervision handle to observe a
+/// peer's death without thereby being able to restart it or read its
+/// configuration.
+#[allow(clippy::too_many_arguments)]
+fn serve_lifecycle_request(
+    service: &mut lifecycle::LifecycleService,
+    policy: Option<&boot_contracts::lifecycle_policy::LifecyclePolicy<'_>>,
+    generation: &Generation<'_>,
+    tasks: &TaskTable<MAX_TASKS>,
+    timer_adapter: &mut PhysicalTimerAdapter,
+    task: TaskId,
+    label: sel4::Word,
+    words: &[sel4::Word],
+) -> Response {
+    match label {
+        lifecycle_labels::STATE_READ => {
+            let state = service.state(task);
+            let instance = service.instance_of(task);
+            let remaining = instance.map_or(0, |instance| {
+                service.attempts_remaining(policy, instance, generation)
+            });
+            let cause = instance.map_or(0, |instance| service.terminal_id(instance));
+            sel4::debug_println!(
+                "SLIME_LIFECYCLE read task={} state={} attempts={remaining} cause={}",
+                task.0,
+                boot_contracts::lifecycle_policy::state_name(state),
+                boot_contracts::lifecycle_policy::cause_name(cause),
+            );
+            // The auxiliary word packs the remaining attempts low and the
+            // predecessor's terminal cause high, so a replacement learns both in
+            // one call without a second self-scoped operation.
+            Response::success(
+                state as i64,
+                sel4::Word::from(remaining) | (sel4::Word::from(cause) << 32),
+            )
+        }
+        lifecycle_labels::STATE_ADVANCE => {
+            let Ok(state_id) = u32::try_from(words[0]) else {
+                return Response::error(IpcError::InvalidOperation);
+            };
+            match service.advance(policy, task, state_id) {
+                Ok(state) => {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE advanced task={} state={}",
+                        task.0,
+                        boot_contracts::lifecycle_policy::state_name(state),
+                    );
+                    Response::success(state as i64, 0)
+                }
+                Err(error) => {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE refused task={} class={} detail={error:?}",
+                        task.0,
+                        lifecycle_error_class(error),
+                    );
+                    Response::error(lifecycle_error_status(error))
+                }
+            }
+        }
+        supervision_labels::RESTART_ADMIT => {
+            let Some((subject_task, subject_instance)) = resolve_lifecycle_subject(
+                tasks,
+                service,
+                task,
+                words[0],
+                boot_contracts::generation::RIGHT_LIFECYCLE_RESTART,
+                // The subject is dead by construction: the death is what this
+                // operation answers, so its task row is already released.
+                true,
+            ) else {
+                sel4::debug_println!(
+                    "SLIME_LIFECYCLE refused task={} class=undeclared detail=slot",
+                    task.0,
+                );
+                return Response::error(IpcError::BadCapability);
+            };
+            let Ok(now) = timer_adapter.monotonic_now() else {
+                sel4::debug_println!("SLIME_LIFECYCLE FAIL restart clock read task={}", task.0);
+                return Response::error(IpcError::InvalidOperation);
+            };
+            match service.admit_restart(policy, generation, subject_instance, now.0) {
+                Ok(admission) => {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE restart admitted task={} subject={} attempt={} remaining={} ready_at={}",
+                        task.0,
+                        subject_task.0,
+                        admission.attempt,
+                        admission.remaining,
+                        admission.ready_at,
+                    );
+                    Response::success(admission.remaining as i64, admission.ready_at)
+                }
+                Err(error) => {
+                    // An exhausted bound is the declared terminal state, and the
+                    // marker says so rather than only that a restart was
+                    // declined: the two read very differently to an operator.
+                    if error == lifecycle::LifecycleError::AttemptsExhausted {
+                        sel4::debug_println!(
+                            "SLIME_LIFECYCLE terminal task={} subject={} state={} attempts=exhausted",
+                            task.0,
+                            subject_task.0,
+                            boot_contracts::lifecycle_policy::state_name(
+                                lifecycle::LifecycleService::terminal_state(policy)
+                            ),
+                        );
+                    } else {
+                        sel4::debug_println!(
+                            "SLIME_LIFECYCLE restart refused task={} subject={} class={} detail={error:?}",
+                            task.0,
+                            subject_task.0,
+                            lifecycle_error_class(error),
+                        );
+                    }
+                    Response::error(lifecycle_error_status(error))
+                }
+            }
+        }
+        supervision_labels::PARAMETER_READ | supervision_labels::PARAMETER_WRITE => {
+            let write = label == supervision_labels::PARAMETER_WRITE;
+            let required = if write {
+                boot_contracts::generation::RIGHT_PARAMETER_WRITE
+            } else {
+                boot_contracts::generation::RIGHT_PARAMETER_READ
+            };
+            // `PARAMETER_SELF_SLOT` names the caller's own instance rather than a
+            // capability, and it is the only shape that reaches a *reflexive*
+            // parameter edge. Without it that edge would decode, admit, and be
+            // unreachable — a declared authority that silently never applies,
+            // which is the shape B71 closed. A component holds no supervision
+            // capability naming itself (the root mints one only for a spawner),
+            // so the sentinel is not a widening: the declared reflexive edge is
+            // still the whole authority, and its absence still denies.
+            let subject_instance = if words[0] == PARAMETER_SELF_SLOT {
+                match service.instance_of(task) {
+                    Some(instance) => instance,
+                    None => return Response::error(IpcError::InvalidOperation),
+                }
+            } else {
+                match resolve_lifecycle_subject(
+                    tasks, service, task, words[0], required,
+                    // A parameter operation acts on a live subject: writing
+                    // configuration for an instance whose task is gone would be
+                    // a write nothing reads until a restart that may never be
+                    // admitted.
+                    false,
+                ) {
+                    Some((_, instance)) => instance,
+                    None => {
+                        sel4::debug_println!(
+                            "SLIME_LIFECYCLE parameter refused task={} class=undeclared detail=slot",
+                            task.0,
+                        );
+                        return Response::error(IpcError::BadCapability);
+                    }
+                }
+            };
+            let Some(holder_instance) = service.instance_of(task) else {
+                return Response::error(IpcError::InvalidOperation);
+            };
+            let key = words[1];
+            let outcome = if write {
+                service.parameter_write(
+                    policy,
+                    generation,
+                    holder_instance,
+                    subject_instance,
+                    key,
+                    words[2],
+                )
+            } else {
+                service.parameter_read(policy, generation, holder_instance, subject_instance, key)
+            };
+            match outcome {
+                Ok(value) => {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE parameter task={} subject-instance={subject_instance} key={key} write={write} value={value}",
+                        task.0,
+                    );
+                    Response::success(value as i64, 0)
+                }
+                Err(error) => {
+                    sel4::debug_println!(
+                        "SLIME_LIFECYCLE parameter refused task={} subject-instance={subject_instance} key={key} class={} detail={error:?}",
+                        task.0,
+                        lifecycle_error_class(error),
+                    );
+                    Response::error(lifecycle_error_status(error))
+                }
+            }
+        }
+        _ => Response::error(IpcError::UnsupportedOperation),
+    }
+}
+
+/// Resolve a lifecycle subject from the caller's own supervision capability.
+///
+/// The subject's *instance* is what every C9.4 operation acts on — an attempt
+/// bound and a parameter table belong to a declaration, not to a task lifetime —
+/// but the capability names a `TaskId`.
+///
+/// `released` is what distinguishes the two callers, and it is load-bearing.
+/// `RESTART_ADMIT` names a subject that has *already died*, so its task row is
+/// gone by construction and the instance must come from the instance row that
+/// survived it. The parameter operations name a live subject, and admitting a
+/// released one there would let a holder write configuration for an instance
+/// whose task no longer exists — a write nothing would read until a restart the
+/// generation might never admit.
+fn resolve_lifecycle_subject(
+    tasks: &TaskTable<MAX_TASKS>,
+    service: &lifecycle::LifecycleService,
+    caller: TaskId,
+    slot: sel4::Word,
+    required: u64,
+    released: bool,
+) -> Option<(TaskId, usize)> {
+    let slot = u32::try_from(slot).ok()?;
+    let capability = tasks
+        .authority(caller)
+        .and_then(|table| table.resolve_supervision(slot, required).ok())?;
+    let instance = if released {
+        service.instance_of_any(capability.task)
+    } else {
+        service
+            .instance_of(capability.task)
+            .or_else(|| launched_instance_of(tasks, capability.task))
+    }?;
+    Some((capability.task, instance))
+}
+
+/// The declared instance a live task represents, read from the task table.
+fn launched_instance_of(tasks: &TaskTable<MAX_TASKS>, task: TaskId) -> Option<usize> {
+    tasks.get(task).and_then(|record| record.instance)
+}
+
+/// The `PARAMETER_READ`/`PARAMETER_WRITE` slot operand that names the caller's
+/// own instance.
+///
+/// `u32::MAX` because no capability table has that many slots — `graph::MAX_TASK_CAPS`
+/// bounds them far below — so the sentinel cannot collide with a real slot a
+/// component might hold. Declared here beside the operation that reads it, and
+/// documented in `docs/syscall-abi.md` as part of the operand contract.
+pub const PARAMETER_SELF_SLOT: sel4::Word = u32::MAX as sel4::Word;
+
+const fn lifecycle_error_status(error: lifecycle::LifecycleError) -> IpcError {
+    match error {
+        // Absent authority is `BadCapability`, on `CLASS_PROMOTE`'s rule: the
+        // caller's own table is what came up short.
+        lifecycle::LifecycleError::Undeclared | lifecycle::LifecycleError::NoParameterAuthority => {
+            IpcError::BadCapability
+        }
+        // A subject still live is `WouldBlock`, exactly as `SUPERVISION STATUS`
+        // answers for an outcome that has not happened yet: the request is
+        // well-formed and the answer is "not yet".
+        lifecycle::LifecycleError::StillLive => IpcError::WouldBlock,
+        // A full parameter table is a resource answer rather than an authority
+        // one, so it maps to the status a caller can act on by writing fewer
+        // keys — the same mapping a spawn's exhausted budget uses.
+        lifecycle::LifecycleError::ParameterTableFull => IpcError::DestinationSlotsExhausted,
+        // A pending backoff is `WouldBlock` on `StillLive`'s rule: the request is
+        // well-formed and the answer is "not yet". A caller that waits the
+        // instant `RESTART_ADMIT` answered and retries is admitted, so a
+        // permanent status here would read as a refusal it cannot recover from.
+        lifecycle::LifecycleError::BackoffPending => IpcError::WouldBlock,
+        lifecycle::LifecycleError::UnadmittedTransition
+        | lifecycle::LifecycleError::UnknownState
+        | lifecycle::LifecycleError::UnadmittedCause
+        | lifecycle::LifecycleError::AttemptsExhausted
+        | lifecycle::LifecycleError::UnknownParameter
+        | lifecycle::LifecycleError::Malformed => IpcError::InvalidOperation,
+    }
+}
+
+const fn lifecycle_error_class(error: lifecycle::LifecycleError) -> &'static str {
+    match error {
+        lifecycle::LifecycleError::Undeclared => "undeclared",
+        lifecycle::LifecycleError::Malformed => "malformed",
+        lifecycle::LifecycleError::UnadmittedTransition => "unadmitted-transition",
+        lifecycle::LifecycleError::UnknownState => "unknown-state",
+        lifecycle::LifecycleError::StillLive => "still-live",
+        lifecycle::LifecycleError::UnadmittedCause => "unadmitted-cause",
+        lifecycle::LifecycleError::AttemptsExhausted => "attempts-exhausted",
+        lifecycle::LifecycleError::BackoffPending => "backoff-pending",
+        lifecycle::LifecycleError::NoParameterAuthority => "no-parameter-authority",
+        lifecycle::LifecycleError::UnknownParameter => "unknown-parameter",
+        lifecycle::LifecycleError::ParameterTableFull => "parameter-table-full",
     }
 }
 

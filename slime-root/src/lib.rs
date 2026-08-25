@@ -60,6 +60,7 @@ pub mod generation;
 pub mod graph;
 pub mod ipc;
 pub mod launched;
+pub mod lifecycle;
 pub mod notification;
 pub mod object_allocator;
 pub mod peer_endpoint;

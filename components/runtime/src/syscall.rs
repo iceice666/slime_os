@@ -775,6 +775,125 @@ pub fn scheduling_class_promote(slot: u32, class_id: u32) -> Result<SchedulingCl
     })
 }
 
+/// A component's resolved lifecycle position (C9.4).
+///
+/// `state_id` is the frozen `STATE_*` numbering from
+/// `contracts/lifecycle-policy/v1`, or `undeclared` (0) for an instance the
+/// generation's policy does not name. `attempts_remaining` is how many further
+/// restarts the generation admits for this instance, and `predecessor_cause` is
+/// the frozen `CAUSE_*` id of how the previous task representing it ended — `0`
+/// on a first launch. All three travel together because a replacement deciding
+/// what to do needs to know both that it *is* a replacement and why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LifecycleStateInfo {
+    pub state_id: u32,
+    pub attempts_remaining: u32,
+    pub predecessor_cause: u32,
+}
+
+/// What one admitted restart is bounded by (C9.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestartAdmission {
+    /// Declared attempts still admitted after this one.
+    pub attempts_remaining: u32,
+    /// The monotonic instant before which the spawn is refused. Arm a C9.1
+    /// timer for it rather than spinning: the root refuses an early spawn with
+    /// the same number it answered here, so a supervisor that guesses is denied.
+    pub ready_at: u64,
+}
+
+/// The `slot` operand naming the caller's own instance in
+/// [`lifecycle_parameter_read`]/[`lifecycle_parameter_write`] (C9.4).
+///
+/// A component holds no supervision capability naming itself — the root mints one
+/// only for a spawner — so this sentinel is the only way to reach a *reflexive*
+/// parameter edge the generation declares. It confers nothing: the declared edge
+/// is still the whole authority, and a component the policy grants no reflexive
+/// edge is refused with it.
+pub const PARAMETER_SELF_SLOT: u32 = u32::MAX;
+
+/// This component's own lifecycle state, restart budget, and predecessor cause
+/// (C9.4).
+///
+/// Self-scoped and never refused for want of authority, on
+/// [`scheduling_class_read`]'s rule: an instance the generation's policy does not
+/// name reads `undeclared` rather than an error.
+pub fn lifecycle_state_read() -> Result<LifecycleStateInfo, i64> {
+    let (result, packed) = transport::lifecycle_state_read();
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(LifecycleStateInfo {
+        state_id: result as u32,
+        attempts_remaining: (packed & 0xffff_ffff) as u32,
+        predecessor_cause: (packed >> 32) as u32,
+    })
+}
+
+/// Advance this component's own lifecycle state along a declared edge (C9.4).
+///
+/// Takes no subject: moving another component's state is authority no C9.4 field
+/// grants. A transition the generation's graph does not admit is refused and
+/// leaves the current state untouched, so a component cannot walk out of its
+/// declared lifecycle by asking.
+pub fn lifecycle_state_advance(state_id: u32) -> Result<u32, i64> {
+    let result = transport::lifecycle_state_advance(state_id);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u32)
+    }
+}
+
+/// Ask the root to admit one restart of a dead subject, charging its declared
+/// attempt budget (C9.4).
+///
+/// `slot` is a supervision capability this component holds naming the subject,
+/// carrying `lifecycleRestart`. The root decides nothing about *whether* to
+/// restart: it charges the declared budget, answers the declared backoff, and
+/// refuses a cause the policy does not name or a bound already spent. The
+/// decision, the wait, and the spawn are this component's.
+pub fn lifecycle_restart_admit(slot: u32) -> Result<RestartAdmission, i64> {
+    let (result, ready_at) = transport::lifecycle_restart_admit(slot);
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(RestartAdmission {
+        attempts_remaining: result as u32,
+        ready_at,
+    })
+}
+
+/// Read one parameter of the subject `slot` names (C9.4).
+///
+/// Requires the `parameterRead` right on that handle *and* a generation-declared
+/// parameter edge from this holder to that subject. A refusal for want of
+/// authority and an unset key are distinguishable answers, so a caller can tell
+/// "I may not ask" from "there is no value".
+pub fn lifecycle_parameter_read(slot: u32, key: u64) -> Result<u64, i64> {
+    let result = transport::lifecycle_parameter_read(slot, key);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+
+/// Write one parameter of the subject `slot` names, answering the previous value
+/// (C9.4).
+///
+/// Requires `parameterWrite`; read authority does not imply it. Parameter state
+/// belongs to the declared instance rather than to a task, so a value written
+/// here is what a restarted instance is started with.
+pub fn lifecycle_parameter_write(slot: u32, key: u64, value: u64) -> Result<u64, i64> {
+    let result = transport::lifecycle_parameter_write(slot, key, value);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

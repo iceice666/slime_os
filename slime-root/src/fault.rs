@@ -245,13 +245,27 @@ fn normalize_vm_access(fault: &sel4::VmFault) -> AccessKind {
     }
 }
 
+/// How a supervised task ended.
+///
+/// Two variants, and the absence of others is deliberate. `Timeout`, `PeerLoss`,
+/// and `Unhealthy` lived here as public API with no constructor and no test from
+/// this table's introduction until C9.4 deleted them. Nothing in the root could
+/// produce any of the three: there was no timeout mechanism, a native seL4
+/// Endpoint has no closed-peer signal (which is why `IpcError` has no `PeerDead`
+/// either, per B76), and the `UNHEALTHY` operation drove the boot selector rather
+/// than this table.
+///
+/// C9.4's deliverable was to give them production callers *or* delete them, and
+/// the second was correct: a terminal state a mechanism can never reach reads as
+/// implemented capability to anyone auditing the supervision surface, which is
+/// the same failure mode as a dead guard. What C9.4 does need — a component
+/// declaring itself broken as a cause a restart policy can branch on — is
+/// `lifecycle::Terminal::Unhealthy`, recorded by the operation that observes it,
+/// rather than a variant of this legacy table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Termination {
     Exit(i64),
     Fault(FaultRecord),
-    Timeout,
-    PeerLoss,
-    Unhealthy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,9 +287,6 @@ pub enum LifecycleEventKind {
         status: i64,
     },
     Faulted(FaultRecord),
-    TimedOut,
-    PeerLost,
-    MarkedUnhealthy,
 }
 
 /// Generation-local lifecycle observation. `task` is assigned by the task
@@ -460,22 +471,6 @@ impl<const CAPACITY: usize> SupervisionTable<CAPACITY> {
             task,
             Termination::Fault(fault),
             LifecycleEventKind::Faulted(fault),
-        )
-    }
-
-    pub fn timeout(&mut self, task: TaskKey) -> Result<SupervisionTransition, FaultError> {
-        self.terminate(task, Termination::Timeout, LifecycleEventKind::TimedOut)
-    }
-
-    pub fn peer_lost(&mut self, task: TaskKey) -> Result<SupervisionTransition, FaultError> {
-        self.terminate(task, Termination::PeerLoss, LifecycleEventKind::PeerLost)
-    }
-
-    pub fn unhealthy(&mut self, task: TaskKey) -> Result<SupervisionTransition, FaultError> {
-        self.terminate(
-            task,
-            Termination::Unhealthy,
-            LifecycleEventKind::MarkedUnhealthy,
         )
     }
 

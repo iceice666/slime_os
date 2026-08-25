@@ -126,6 +126,22 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         // declared `schedulingPromote` right and the generation's promotion edge
         // are checked by the mechanism, exactly as C9.1 checks its own bits.
         scheduling_labels::CLASS_PROMOTE => Some(SERVICE_SUPERVISION),
+        // C9.4's lifecycle state. Self-scoped by badge and grants nothing, so
+        // both are gated on `lifecycle` for `CLASS_READ`'s reason: which state a
+        // component is in, and which state it moves to, are properties of being
+        // a task rather than of any grant. `STATE_ADVANCE` is a mutator and
+        // still belongs here, because it moves only the *caller's own* state --
+        // there is no subject operand to authorize.
+        lifecycle_labels::STATE_READ | lifecycle_labels::STATE_ADVANCE => Some(SERVICE_LIFECYCLE),
+        // C9.4's restart admission and parameter authority all name another
+        // component through a supervision capability, so they are gated on the
+        // supervision service that resolves such a slot. The declared
+        // `lifecycleRestart`/`parameterRead`/`parameterWrite` rights and the
+        // generation's own restart and parameter tables are checked by the
+        // mechanism, exactly as C9.3 checks its promotion edge.
+        supervision_labels::RESTART_ADMIT
+        | supervision_labels::PARAMETER_READ
+        | supervision_labels::PARAMETER_WRITE => Some(SERVICE_SUPERVISION),
         _ => None,
     }
 }
@@ -158,6 +174,29 @@ pub const fn scheduling_request_len(label: sel4::Word) -> Option<usize> {
         // A slot and a class id. The slot names the subject; the class id is
         // checked against the declared vocabulary by the mechanism.
         scheduling_labels::CLASS_PROMOTE => Some(2),
+        _ => None,
+    }
+}
+
+/// Required fast-register count for each C9.4 lifecycle operation.
+///
+/// Beside [`clock_request_len`] and [`scheduling_request_len`] and for their
+/// reason: a malformed request is refused before it reaches the mechanism, and a
+/// zero-valued extra word is still malformed because request shape is part of
+/// the ABI.
+pub const fn lifecycle_request_len(label: sel4::Word) -> Option<usize> {
+    use slime_proto::syscall_abi::{lifecycle_labels, supervision_labels};
+    match label {
+        lifecycle_labels::STATE_READ => Some(0),
+        // One state id. The caller names no subject: advancing another
+        // component's state is authority no C9.4 field grants.
+        lifecycle_labels::STATE_ADVANCE => Some(1),
+        // One supervision slot naming the dead subject.
+        supervision_labels::RESTART_ADMIT => Some(1),
+        // A slot and a key.
+        supervision_labels::PARAMETER_READ => Some(2),
+        // A slot, a key, and a value.
+        supervision_labels::PARAMETER_WRITE => Some(3),
         _ => None,
     }
 }
@@ -1323,13 +1362,13 @@ mod tests {
             // B70's `GRAPH_READ`, 39 until `GRAPH_ROUTE_INDEX`, 40 until
             // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, 42 until `SPAWN_BUDGET`,
             // 43 until C10.1's `PRIVATE_MEMORY_GROW`, 44-48 until C9.1's clock
-            // service, 49 until C9.2's `WAIT_SOURCES`, and 50-51 until C9.3's
-            // scheduling class. Moving one out of
-            // this list is the whole change: a
-            // number this test asserts routes nowhere and a number the contract
-            // declares are the same fact stated twice, so assigning a label
-            // must fail here first.
-            52,
+            // service, 49 until C9.2's `WAIT_SOURCES`, 50-51 until C9.3's
+            // scheduling class, and 52-56 until C9.4's lifecycle state and
+            // restart/parameter operations. Moving one out of this list is the
+            // whole change: a number this test asserts routes nowhere and a
+            // number the contract declares are the same fact stated twice, so
+            // assigning a label must fail here first.
+            57,
             sel4::Word::MAX,
         ] {
             assert_eq!(
@@ -1380,6 +1419,62 @@ mod tests {
             service_for_root_label(scheduling_labels::CLASS_PROMOTE),
             Some(SERVICE_SUPERVISION)
         );
+    }
+
+    #[test]
+    fn lifecycle_request_shapes_are_exact() {
+        use slime_proto::syscall_abi::supervision_labels;
+        assert_eq!(lifecycle_request_len(lifecycle_labels::STATE_READ), Some(0));
+        // One word, and it is the *target state*. A caller sending two has named
+        // something the operation does not accept — there is no subject operand,
+        // because advancing another component's state is authority no C9.4 field
+        // grants — so the extra word is refused rather than ignored.
+        assert_eq!(
+            lifecycle_request_len(lifecycle_labels::STATE_ADVANCE),
+            Some(1)
+        );
+        assert_eq!(
+            lifecycle_request_len(supervision_labels::RESTART_ADMIT),
+            Some(1)
+        );
+        assert_eq!(
+            lifecycle_request_len(supervision_labels::PARAMETER_READ),
+            Some(2)
+        );
+        assert_eq!(
+            lifecycle_request_len(supervision_labels::PARAMETER_WRITE),
+            Some(3)
+        );
+        // A label this table does not own reports no shape, so the dispatcher's
+        // length guard cannot accidentally bound an unrelated operation.
+        assert_eq!(lifecycle_request_len(lifecycle_labels::EXIT), None);
+        assert_eq!(
+            lifecycle_request_len(slime_proto::syscall_abi::scheduling_labels::CLASS_PROMOTE),
+            None
+        );
+    }
+
+    /// C9.4's five operations reach the two services their authority stories
+    /// require: both self-scoped state operations are gated on `lifecycle`,
+    /// because which state a component is in and which edge it takes are
+    /// properties of being a task, and the three that name another component
+    /// through a supervision capability are gated on `supervision`.
+    #[test]
+    fn lifecycle_labels_route_to_their_declared_services() {
+        use slime_proto::syscall_abi::supervision_labels;
+        for label in [
+            lifecycle_labels::STATE_READ,
+            lifecycle_labels::STATE_ADVANCE,
+        ] {
+            assert_eq!(service_for_root_label(label), Some(SERVICE_LIFECYCLE));
+        }
+        for label in [
+            supervision_labels::RESTART_ADMIT,
+            supervision_labels::PARAMETER_READ,
+            supervision_labels::PARAMETER_WRITE,
+        ] {
+            assert_eq!(service_for_root_label(label), Some(SERVICE_SUPERVISION));
+        }
     }
 
     /// The fixture directive shares the root endpoint but is not a component

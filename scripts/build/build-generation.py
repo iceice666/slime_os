@@ -214,6 +214,30 @@ from boot_contracts import (
     SCHEDULING_CLASS_MAX_INSTANCES,
     SCHEDULING_CLASS_MAX_PROMOTIONS,
     SCHEDULING_CLASS_ID_BY_MANIFEST_NAME,
+    LIFECYCLE_POLICY_HEADER,
+    LIFECYCLE_POLICY_HEADER_BYTES,
+    LIFECYCLE_POLICY_MAGIC,
+    LIFECYCLE_POLICY_VERSION,
+    LIFECYCLE_POLICY_MAX_TRANSITIONS,
+    LIFECYCLE_POLICY_MAX_INSTANCES,
+    LIFECYCLE_POLICY_MAX_DEPENDENCIES,
+    LIFECYCLE_POLICY_MAX_PARAMETER_GRANTS,
+    LIFECYCLE_POLICY_MAX_RESTART_ATTEMPTS,
+    LIFECYCLE_POLICY_MAX_BACKOFF_NS,
+    LIFECYCLE_POLICY_BACKOFF_FACTOR_SCALE,
+    LIFECYCLE_POLICY_MAX_BACKOFF_FACTOR,
+    LIFECYCLE_STATE_ID_BY_MANIFEST_NAME,
+    LIFECYCLE_CAUSE_ID_BY_MANIFEST_NAME,
+    LIFECYCLE_PARAMETER_READ,
+    LIFECYCLE_PARAMETER_WRITE,
+    LIFECYCLE_TRANSITION,
+    LIFECYCLE_TRANSITION_BYTES,
+    LIFECYCLE_RESTART,
+    LIFECYCLE_RESTART_BYTES,
+    LIFECYCLE_DEPENDENCY,
+    LIFECYCLE_DEPENDENCY_BYTES,
+    LIFECYCLE_PARAMETER_GRANT,
+    LIFECYCLE_PARAMETER_GRANT_BYTES,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -316,6 +340,15 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-scheduling-class.zti",
+    # C9.4: an admitted lifecycle transition graph, a supervised restart under a
+    # declared attempt bound and backoff, a health dependency, and parameter
+    # authority.
+    "sel4-lifecycle-restart": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-lifecycle-restart.zti",
     # C9.1: independently grantable monotonic, timer, and simulated clocks.
     "sel4-clock-authority": ROOT
     / "contracts"
@@ -1654,6 +1687,281 @@ def build_scheduling_class(manifest: dict) -> bytes:
         )
         + b"".join(SCHEDULING_CLASS_ENTRY.pack(*entry) for entry in entries)
         + b"".join(SCHEDULING_PROMOTION_ENTRY.pack(*entry) for entry in promotions)
+    )
+
+
+def lifecycle_instance_identity(name: str) -> bytes:
+    """Stable per-instance identity, matching boot_contracts::lifecycle_policy.
+
+    A distinct domain tag from the clock, wait-set, and scheduling folds, so an
+    identity minted for one of those cannot be read as a lifecycle subject.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-lifecycle-policy-instance-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def lifecycle_cause_mask(causes: list[str], where: str) -> int:
+    """Fold declared cause spellings into the contract's mask.
+
+    An empty list is refused rather than folded to zero: a restart policy that
+    can never fire reads as supervision while providing none, which is the same
+    dead-guard shape B76 removed.
+    """
+    if not causes:
+        fail(f"lifecycle policy: {where} declares no restart cause")
+    mask = 0
+    for spelling in causes:
+        cause_id = LIFECYCLE_CAUSE_ID_BY_MANIFEST_NAME.get(spelling)
+        if cause_id is None:
+            fail(f"lifecycle policy: {where} names unknown cause {spelling!r}")
+        bit = 1 << (cause_id - 1)
+        if mask & bit:
+            fail(f"lifecycle policy: {where} names cause {spelling} twice")
+        mask |= bit
+    return mask
+
+
+def validated_lifecycle_policy(manifest: dict) -> dict | None:
+    """Resolve the C9.4 lifecycle policy, refusing every contradiction here.
+
+    Returns `None` when the manifest declares no policy, and otherwise the
+    serialized wire rows. Every rule the decoder enforces on bytes is enforced
+    here on names, so a malformed policy fails with a manifest-level diagnostic
+    naming the instance rather than as a `DecodeError` on a boot.
+
+    Three refusals are the milestone's, rather than tidiness:
+
+    * A restart policy on an instance the manifest does not declare would name a
+      subject the root can never resolve, so the policy would read as supervision
+      that silently never applies.
+    * A restart policy without an admitted edge into the declared terminal state
+      makes "exhaustion leaves the graph in a declared terminal state" a claim
+      about a state the graph cannot reach.
+    * A health dependency whose dependency is not a declared instance, or which
+      names the subject itself, is a start condition that can never be satisfied.
+    """
+    policy = manifest.get("lifecyclePolicy")
+    if policy is None:
+        return None
+    instances = {entry["name"]: entry for entry in manifest["instances"]}
+
+    def state_id(spelling: str, where: str) -> int:
+        resolved = LIFECYCLE_STATE_ID_BY_MANIFEST_NAME.get(spelling)
+        if resolved is None:
+            fail(f"lifecycle policy: {where} names unknown state {spelling!r}")
+        return resolved
+
+    initial_state = state_id(policy["initialState"], "initialState")
+    terminal_state = state_id(policy["terminalState"], "terminalState")
+    if initial_state == terminal_state:
+        fail(
+            "lifecycle policy: initialState and terminalState are the same state, so "
+            "an exhausted instance would be indistinguishable from a fresh one"
+        )
+
+    declared_transitions = policy["transitions"]
+    if len(declared_transitions) > LIFECYCLE_POLICY_MAX_TRANSITIONS:
+        fail("lifecycle policy: transition count exceeds the declared bound")
+    transitions: list[tuple[int, int]] = []
+    seen_edges: set[tuple[int, int]] = set()
+    for edge in declared_transitions:
+        source = state_id(edge["from"], "a transition")
+        target = state_id(edge["to"], "a transition")
+        if source == target:
+            fail(
+                f"lifecycle policy: transition {edge['from']} -> {edge['to']} is a "
+                "self-edge, which would make an observed advance indistinguishable "
+                "from a no-op"
+            )
+        if (source, target) in seen_edges:
+            fail(f"lifecycle policy: duplicate transition {edge['from']} -> {edge['to']}")
+        seen_edges.add((source, target))
+        transitions.append((source, target))
+
+    declared_restarts = policy["restarts"]
+    if len(declared_restarts) > LIFECYCLE_POLICY_MAX_INSTANCES:
+        fail("lifecycle policy: restart policy count exceeds the declared bound")
+    restarts: list[tuple[bytes, int, int, int, int]] = []
+    seen_subjects: set[str] = set()
+    for entry in declared_restarts:
+        name = entry["instance"]
+        if name not in instances:
+            fail(f"lifecycle policy: restart policy names unknown instance {name}")
+        if name in seen_subjects:
+            fail(f"lifecycle policy: duplicate restart policy for {name}")
+        seen_subjects.add(name)
+        attempts = entry["attempts"]
+        if (
+            not isinstance(attempts, int)
+            or isinstance(attempts, bool)
+            or not 0 <= attempts <= LIFECYCLE_POLICY_MAX_RESTART_ATTEMPTS
+        ):
+            fail(
+                f"lifecycle policy: {name} declares attempts={attempts} outside "
+                f"0..={LIFECYCLE_POLICY_MAX_RESTART_ATTEMPTS}"
+            )
+        backoff_ns = entry["backoffNs"]
+        if (
+            not isinstance(backoff_ns, int)
+            or isinstance(backoff_ns, bool)
+            or not 0 <= backoff_ns <= LIFECYCLE_POLICY_MAX_BACKOFF_NS
+        ):
+            fail(
+                f"lifecycle policy: {name} declares backoffNs={backoff_ns} outside "
+                f"0..={LIFECYCLE_POLICY_MAX_BACKOFF_NS}"
+            )
+        factor = entry.get("backoffFactor", LIFECYCLE_POLICY_BACKOFF_FACTOR_SCALE)
+        if (
+            not isinstance(factor, int)
+            or isinstance(factor, bool)
+            or not LIFECYCLE_POLICY_BACKOFF_FACTOR_SCALE
+            <= factor
+            <= LIFECYCLE_POLICY_MAX_BACKOFF_FACTOR
+        ):
+            fail(
+                f"lifecycle policy: {name} declares backoffFactor={factor} outside "
+                f"{LIFECYCLE_POLICY_BACKOFF_FACTOR_SCALE}.."
+                f"={LIFECYCLE_POLICY_MAX_BACKOFF_FACTOR}; a factor below the scale "
+                "would shrink each successive delay"
+            )
+        restarts.append(
+            (
+                lifecycle_instance_identity(name),
+                attempts,
+                lifecycle_cause_mask(entry["causes"], name),
+                backoff_ns,
+                factor,
+            )
+        )
+    # The terminal state must be reachable, or exhaustion moves an instance
+    # somewhere the graph says it cannot go.
+    if restarts and not any(target == terminal_state for _, target in transitions):
+        fail(
+            f"lifecycle policy: {policy['terminalState']} is the declared terminal "
+            "state but no transition reaches it, so an exhausted instance could not "
+            "enter it"
+        )
+
+    declared_dependencies = policy["dependencies"]
+    if len(declared_dependencies) > LIFECYCLE_POLICY_MAX_DEPENDENCIES:
+        fail("lifecycle policy: dependency count exceeds the declared bound")
+    dependencies: list[tuple[bytes, bytes, int]] = []
+    seen_dependencies: set[tuple[str, str]] = set()
+    for entry in declared_dependencies:
+        subject = entry["instance"]
+        dependency = entry["dependency"]
+        for name in (subject, dependency):
+            if name not in instances:
+                fail(f"lifecycle policy: health dependency names unknown instance {name}")
+        if subject == dependency:
+            fail(
+                f"lifecycle policy: {subject} declares a health dependency on itself, "
+                "which is a start condition that can never be satisfied"
+            )
+        if (subject, dependency) in seen_dependencies:
+            fail(f"lifecycle policy: duplicate health dependency {subject} -> {dependency}")
+        seen_dependencies.add((subject, dependency))
+        dependencies.append(
+            (
+                lifecycle_instance_identity(subject),
+                lifecycle_instance_identity(dependency),
+                state_id(entry["requiredState"], f"{subject}'s health dependency"),
+            )
+        )
+
+    declared_parameters = policy["parameters"]
+    if len(declared_parameters) > LIFECYCLE_POLICY_MAX_PARAMETER_GRANTS:
+        fail("lifecycle policy: parameter grant count exceeds the declared bound")
+    parameters: list[tuple[bytes, bytes, int]] = []
+    seen_parameters: set[tuple[str, str]] = set()
+    for entry in declared_parameters:
+        holder = entry["holder"]
+        subject = entry["subject"]
+        for name in (holder, subject):
+            if name not in instances:
+                fail(f"lifecycle policy: parameter grant names unknown instance {name}")
+        if (holder, subject) in seen_parameters:
+            fail(f"lifecycle policy: duplicate parameter grant {holder} -> {subject}")
+        seen_parameters.add((holder, subject))
+        flags = 0
+        if entry["read"]:
+            flags |= LIFECYCLE_PARAMETER_READ
+        if entry["write"]:
+            flags |= LIFECYCLE_PARAMETER_WRITE
+        if flags == 0:
+            fail(
+                f"lifecycle policy: parameter grant {holder} -> {subject} carries "
+                "neither read nor write, so it declares authority with no content"
+            )
+        parameters.append(
+            (
+                lifecycle_instance_identity(holder),
+                lifecycle_instance_identity(subject),
+                flags,
+            )
+        )
+
+    transitions.sort()
+    restarts.sort(key=lambda entry: entry[0])
+    dependencies.sort(key=lambda entry: (entry[0], entry[1]))
+    parameters.sort(key=lambda entry: (entry[0], entry[1]))
+    return {
+        "initial_state": initial_state,
+        "terminal_state": terminal_state,
+        "transitions": transitions,
+        "restarts": restarts,
+        "dependencies": dependencies,
+        "parameters": parameters,
+    }
+
+
+def build_lifecycle_policy(manifest: dict) -> bytes:
+    policy = validated_lifecycle_policy(manifest)
+    if policy is None:
+        fail("lifecycle-policy resource object declared without a lifecyclePolicy")
+    transitions = policy["transitions"]
+    restarts = policy["restarts"]
+    dependencies = policy["dependencies"]
+    parameters = policy["parameters"]
+    total_len = (
+        LIFECYCLE_POLICY_HEADER_BYTES
+        + len(transitions) * LIFECYCLE_TRANSITION_BYTES
+        + len(restarts) * LIFECYCLE_RESTART_BYTES
+        + len(dependencies) * LIFECYCLE_DEPENDENCY_BYTES
+        + len(parameters) * LIFECYCLE_PARAMETER_GRANT_BYTES
+    )
+    header = LIFECYCLE_POLICY_HEADER.pack(
+        LIFECYCLE_POLICY_MAGIC,
+        LIFECYCLE_POLICY_VERSION,
+        LIFECYCLE_POLICY_HEADER_BYTES,
+        0,
+        policy["initial_state"],
+        policy["terminal_state"],
+        len(transitions),
+        len(restarts),
+        len(dependencies),
+        len(parameters),
+        total_len,
+    )
+    return (
+        header
+        + b"".join(
+            LIFECYCLE_TRANSITION.pack(source, target, 0) for source, target in transitions
+        )
+        + b"".join(
+            LIFECYCLE_RESTART.pack(identity, attempts, causes, backoff, factor, b"\0" * 12)
+            for identity, attempts, causes, backoff, factor in restarts
+        )
+        + b"".join(
+            LIFECYCLE_DEPENDENCY.pack(subject, dependency, state, 0)
+            for subject, dependency, state in dependencies
+        )
+        + b"".join(
+            LIFECYCLE_PARAMETER_GRANT.pack(holder, subject, flags, 0)
+            for holder, subject, flags in parameters
+        )
     )
 
 
@@ -4609,6 +4917,14 @@ def build_sel4_generation(
         # declaring classes without the object would boot every instance at the
         # default priority while claiming a policy.
         fail("schedulingClass declared without a scheduling-class resource object")
+    if "lifecycle-policy" in object_ids:
+        payloads["lifecycle-policy"] = build_lifecycle_policy(manifest)
+    elif manifest.get("lifecyclePolicy") is not None:
+        # A lifecycle policy nothing carries is a policy the root cannot read:
+        # every transition would be refused and every restart unadmitted while
+        # the manifest claimed a graph, which is exactly the "declared but never
+        # applied" shape B71 closed.
+        fail("lifecyclePolicy declared without a lifecycle-policy resource object")
     # C10.4: a component that cannot run without a private heap must be given
     # one, so the builder refuses the omission rather than shipping a generation
     # that boots into a dead service.

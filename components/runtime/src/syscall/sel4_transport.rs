@@ -1169,6 +1169,44 @@ pub fn scheduling_class_promote(slot: u32, class_id: u32) -> (i64, u64) {
     )
 }
 
+/// C9.4's self-scoped state read. Zero operands: the instance is the badge's.
+/// Primary is the state id; auxiliary packs the remaining restart attempts low
+/// and the predecessor's terminal cause high.
+pub fn lifecycle_state_read() -> (i64, u64) {
+    pair_of(lifecycle_labels::STATE_READ, &[])
+}
+
+/// C9.4's self-scoped state advance. One operand, and it is the *target state* —
+/// there is no subject, because advancing another component's state is authority
+/// no C9.4 field grants.
+pub fn lifecycle_state_advance(state_id: u32) -> i64 {
+    result_of(lifecycle_labels::STATE_ADVANCE, &[state_id as Word])
+}
+
+/// C9.4's restart admission. `slot` is a supervision capability naming the dead
+/// subject, so no task identity crosses the wire (B42). Primary is the attempts
+/// remaining; auxiliary is the instant the restart may proceed.
+pub fn lifecycle_restart_admit(slot: u32) -> (i64, u64) {
+    pair_of(supervision_labels::RESTART_ADMIT, &[slot as Word])
+}
+
+/// C9.4's parameter read. `slot` names the subject through a supervision
+/// capability; `key` is the parameter key.
+pub fn lifecycle_parameter_read(slot: u32, key: u64) -> i64 {
+    result_of(
+        supervision_labels::PARAMETER_READ,
+        &[slot as Word, key as Word],
+    )
+}
+
+/// C9.4's parameter write, answering the previous value.
+pub fn lifecycle_parameter_write(slot: u32, key: u64, value: u64) -> i64 {
+    result_of(
+        supervision_labels::PARAMETER_WRITE,
+        &[slot as Word, key as Word, value as Word],
+    )
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

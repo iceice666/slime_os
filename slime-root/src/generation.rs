@@ -12,6 +12,7 @@ use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
+use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
 use boot_contracts::scheduling_class::{self, SchedulingClass};
 use boot_contracts::target_profile::TargetProfile;
@@ -104,6 +105,14 @@ pub enum GenerationError {
     /// case is the same decision — the declared policy cannot be honoured — and
     /// the marker the root prints names the failing entry itself.
     UnsatisfiableSchedulingClass,
+    /// The generation carries a lifecycle policy that is malformed, names an
+    /// instance this generation does not declare, or declares a restart or
+    /// parameter edge no capability could reach (C9.4).
+    ///
+    /// One variant on [`Self::UnsatisfiableClockAuthority`]'s precedent, for its
+    /// reason: every case is the same decision, and the marker the root prints
+    /// names the failing entry itself.
+    UnsatisfiableLifecyclePolicy,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -823,6 +832,127 @@ fn scheduling_class_admission(
     Ok(Some(policy.instance_count()))
 }
 
+/// Locate the generation-authenticated lifecycle-policy resource, if declared.
+///
+/// First match wins including a malformed one, on [`scheduling_class_object`]'s
+/// rule: continuing would make a component's restart bound depend on object
+/// ordering, and could silently select a later, more permissive policy.
+///
+/// Public so the launch and service paths resolve the policy the admission
+/// validated rather than locating the resource a second way — the second-lookup
+/// shape that let the boot-layout resource drift from the bindings it described
+/// (B71).
+pub fn lifecycle_policy_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<LifecyclePolicy<'a>, lifecycle_policy::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= lifecycle_policy::MAGIC.len()
+            && object.bytes[..lifecycle_policy::MAGIC.len()] == lifecycle_policy::MAGIC
+        {
+            return Some(LifecyclePolicy::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Validate a declared lifecycle policy, reporting how many restart bounds it
+/// declares.
+///
+/// The decoder owns the resource's internal consistency — the transition graph's
+/// order and endpoints, the attempt ceiling, the cause vocabulary, the backoff
+/// range, the parameter flags. What this adds is the half only the generation
+/// knows, and each of the three rules closes a "declared but unreachable" gap:
+///
+/// * every identity the policy names is an instance this generation declares, so
+///   no row can name a subject the root could never resolve;
+/// * every restart subject is *owned* by some declared instance, because the
+///   `lifecycleRestart` right rides on the supervision handle a spawner receives
+///   for its own child. A root-autostart instance has no such holder, so a
+///   restart bound on one could never be charged through `RESTART_ADMIT` and
+///   would read at runtime as supervision that silently never applies — exactly
+///   the shape C9.3's promotion-ownership rule refuses;
+/// * every health dependency's dependency is a declared instance, so a start
+///   cannot wait on a state nothing can ever be in.
+fn lifecycle_policy_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<usize>, GenerationError> {
+    let Some(policy) = lifecycle_policy_object(generation) else {
+        return Ok(None);
+    };
+    let policy = policy.map_err(|_| GenerationError::UnsatisfiableLifecyclePolicy)?;
+    let named = |identity: &[u8; 32]| -> Result<usize, GenerationError> {
+        for index in 0..generation.instance_count() {
+            let instance = generation
+                .instance(index)
+                .map_err(|_| GenerationError::UnsatisfiableLifecyclePolicy)?;
+            if lifecycle_policy::instance_identity(instance.name) == *identity {
+                return Ok(index);
+            }
+        }
+        Err(GenerationError::UnsatisfiableLifecyclePolicy)
+    };
+    // Tallied here rather than returned as `policy.restart_count()`, and the
+    // difference is the whole value of the number. A count read straight off the
+    // resource would make the startup cross-check compare the decode to itself
+    // (found by review); this counts the subjects admission *proved* are
+    // owner-spawned, which is a fact only the generation's ownership forest
+    // establishes. A disagreement with the resource's own count then means a
+    // restart row was skipped, which is the drift B71 closed.
+    let mut admitted_restarts = 0usize;
+    for index in 0..policy.restart_count() {
+        let entry = policy
+            .restart(index)
+            .ok_or(GenerationError::UnsatisfiableLifecyclePolicy)?;
+        let subject = named(&entry.subject_identity)?;
+        // A restart bound is charged through a supervision handle, and the root
+        // mints one only for a spawner over its own child. An instance the root
+        // itself autostarts has no such holder anywhere in the graph.
+        if !matches!(
+            generation
+                .instance(subject)
+                .map_err(|_| GenerationError::UnsatisfiableLifecyclePolicy)?
+                .owner,
+            boot_contracts::generation::InstanceOwner::Instance(_)
+        ) {
+            return Err(GenerationError::UnsatisfiableLifecyclePolicy);
+        }
+        admitted_restarts += 1;
+    }
+    for index in 0..policy.dependency_count() {
+        let entry = policy
+            .dependency(index)
+            .ok_or(GenerationError::UnsatisfiableLifecyclePolicy)?;
+        let subject = named(&entry.subject_identity)?;
+        named(&entry.dependency_identity)?;
+        // A dependency gates a *start*, and the only start it can gate is a
+        // `SPAWN`: the root's own autostart path evaluates `Instance.dependencies`
+        // — a one-shot activation barrier — and not this table. So an edge whose
+        // subject the root autostarts would decode, admit, and never be
+        // evaluated, which reads as a start condition the graph honours while the
+        // subject launches regardless. The same rule the restart bound above
+        // enforces, for the same reason (found by review).
+        if !matches!(
+            generation
+                .instance(subject)
+                .map_err(|_| GenerationError::UnsatisfiableLifecyclePolicy)?
+                .owner,
+            boot_contracts::generation::InstanceOwner::Instance(_)
+        ) {
+            return Err(GenerationError::UnsatisfiableLifecyclePolicy);
+        }
+    }
+    for index in 0..policy.parameter_count() {
+        let entry = policy
+            .parameter(index)
+            .ok_or(GenerationError::UnsatisfiableLifecyclePolicy)?;
+        named(&entry.holder_identity)?;
+        named(&entry.subject_identity)?;
+    }
+    Ok(Some(admitted_restarts))
+}
+
 /// Whether this root can honour a declared private-memory budget (C10.2).
 ///
 /// Separated from the generation walk for the same reason
@@ -927,6 +1057,16 @@ pub struct Admission {
     /// leave every instance at the root's default priority, but only the second
     /// carries a policy whose band mapping a gate can check.
     pub scheduling_instances: Option<usize>,
+    /// Instances the authenticated lifecycle policy declares a restart bound
+    /// for, or `None` when the generation declares no lifecycle policy at all
+    /// (C9.4).
+    ///
+    /// `None` and `Some(0)` are distinguished on `scheduling_instances`' rule: a
+    /// policy declaring a transition graph but no restart bound is a real
+    /// composition — nothing restarts, but every transition is still admitted —
+    /// and it is not the same as carrying no policy, where every transition is
+    /// refused too.
+    pub lifecycle_restarts: Option<usize>,
 }
 
 impl Admission {
@@ -984,6 +1124,11 @@ impl Admission {
         // promotion holder actually carries the right the operation is gated
         // on. The resource's internal consistency is the decoder's.
         let scheduling_instances = scheduling_class_admission(generation)?;
+        // C9.4: every identity the lifecycle policy names is a declared
+        // instance, every restart subject is reachable by a supervisor that
+        // could hold its handle, and every parameter edge names two declared
+        // instances. The graph's internal consistency is the decoder's.
+        let lifecycle_restarts = lifecycle_policy_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
@@ -1058,6 +1203,7 @@ impl Admission {
             private_memory_holders,
             wait_set_sources,
             scheduling_instances,
+            lifecycle_restarts,
         })
     }
 

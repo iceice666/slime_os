@@ -181,6 +181,16 @@ scheduling_class_check: sel4_pin_check
 wait_set_check: sel4_pin_check
     python3 scripts/check/check-sel4-wait-set-plane.py
 
+
+# C9.4: a userspace supervisor restarts a component under its declared attempt
+# bound and growing backoff. The fault, exit, and unhealthy causes are
+# distinguishable from both sides, every predecessor handle is refused while the
+# declared configuration survives, an undeclared transition is refused without
+# moving the state, and exhausting the bound leaves the instance in the declared
+# terminal state with its next spawn refused.
+lifecycle_restart_check: sel4_pin_check
+    python3 scripts/check/check-sel4-lifecycle-restart-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across
@@ -1101,7 +1111,7 @@ test_sel4_root:
     # `clear_task` answers about a live task rather than about whether it was
     # ever declared), and the per-waiter supervision ceiling is the contract's
     # own source ceiling rather than a second number this module picked.
-    expected=170
+    expected=183
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
@@ -1136,7 +1146,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 18 modules"
+    echo "slime-root host tests: $actual/$expected across 19 modules"
 
 # Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 ruff:
