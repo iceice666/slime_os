@@ -1088,6 +1088,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-replay-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-sample-lender"
 version = "0.1.0"
 dependencies = [

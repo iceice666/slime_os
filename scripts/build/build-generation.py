@@ -117,6 +117,7 @@ from boot_contracts import (
     GENERATION_OBJECT,
     GENERATION_RIGHT_ALL,
     GENERATION_RIGHT_BY_MANIFEST_NAME,
+    GENERATION_RIGHT_UNRECORDED,
     GENERATION_RIGHT_TRANSFER,
     GENERATION_STATE,
     GENERATION_PROCESS,
@@ -238,6 +239,18 @@ from boot_contracts import (
     LIFECYCLE_DEPENDENCY_BYTES,
     LIFECYCLE_PARAMETER_GRANT,
     LIFECYCLE_PARAMETER_GRANT_BYTES,
+    RECORDING_POLICY_ENTRY,
+    RECORDING_POLICY_ENTRY_BYTES,
+    RECORDING_POLICY_FLAG_DETERMINISTIC,
+    RECORDING_POLICY_HEADER,
+    RECORDING_POLICY_HEADER_BYTES,
+    RECORDING_POLICY_MAGIC,
+    RECORDING_POLICY_MAX_INSTANCES,
+    RECORDING_POLICY_MAX_RECORD_CAPACITY,
+    RECORDING_POLICY_ROLE_BY_MANIFEST_NAME,
+    RECORDING_POLICY_ROLE_RECORD,
+    RECORDING_POLICY_ROLE_REPLAY,
+    RECORDING_POLICY_VERSION,
     MAX_NORMALIZED_SCHEMAS,
     MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
     NORMALIZED_SCHEMAS_ENTRY,
@@ -349,6 +362,14 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-lifecycle-restart.zti",
+    # C9.5: a recorded run and a deterministic replay of it, plus a component
+    # whose unrecorded grant makes a determinism claim inadmissible.
+    "sel4-replay": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-replay.zti",
     # C9.1: independently grantable monotonic, timer, and simulated clocks.
     "sel4-clock-authority": ROOT
     / "contracts"
@@ -1963,6 +1984,242 @@ def build_lifecycle_policy(manifest: dict) -> bytes:
             for holder, subject, flags in parameters
         )
     )
+
+def recording_instance_identity(name: str) -> bytes:
+    """Stable per-instance identity, matching boot_contracts::recording_policy.
+
+    Its own domain tag, so an identity minted for a clock holder, a wait-set
+    waiter, a scheduling subject, or a lifecycle instance cannot authenticate as
+    a recording participant.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-recording-policy-instance-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def recording_stream_identity(name: str) -> int:
+    """Stable per-stream identity, matching boot_contracts::recording_policy.
+
+    A separate fold from the instance identity because a stream name and an
+    instance name may coincide, and folding both the same way would let one
+    authenticate as the other.
+    """
+    encoded = name.encode("utf-8")
+    digest = sha256(b"slime-recording-policy-stream-v1" + struct.pack("<H", len(encoded)) + encoded)
+    return int.from_bytes(digest[:8], "little")
+
+
+def recording_stream_grant_identity(name: str) -> int:
+    """Stable per-grant identity, matching boot_contracts::recording_policy.
+
+    Its own domain tag for the stream fold's reason, and it matters more here:
+    this identity names a *grant* whose rights the determinism check subtracts, so
+    a stream name folding to the same eight bytes would exempt whichever grant
+    collided with it.
+    """
+    encoded = name.encode("utf-8")
+    digest = sha256(
+        b"slime-recording-policy-stream-grant-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+    return int.from_bytes(digest[:8], "little")
+
+
+def instance_held_rights(manifest: dict) -> dict[str, dict[str, int]]:
+    """The rights each instance holds, per grant name, from the generation's own
+    tables.
+
+    Keyed by grant name rather than summed, because the C9.5 determinism check
+    subtracts one *named* grant — the one a replayer's recording arrives over —
+    and a pre-summed mask could not express that exception.
+
+    Read from each instance's own `bindings` rather than by comparing a grant's
+    `target` to the instance. The two differ: an executable capability's target is
+    an executable, so a target comparison drops every executable grant a component
+    is bound, and a deterministic instance bound `spawn` would pass unexamined
+    (found by review). `slime-root` derives the same set from the encoded bindings
+    under `grant_applies_to_instance`, so both readers ask the same question.
+
+    Minted bindings are included because the root installs those as authority too.
+    """
+    grants = {grant["name"]: grant for grant in manifest["grants"]}
+    held: dict[str, dict[str, int]] = {entry["name"]: {} for entry in manifest["instances"]}
+    for instance in manifest["instances"]:
+        name = instance["name"]
+        for binding in instance.get("bindings") or []:
+            grant = grants.get(binding["grant"])
+            if grant is None:
+                fail(f"recording policy: {name} binds unknown grant {binding['grant']}")
+            mask = 0
+            for right in grant["rights"]:
+                if right not in RIGHT:
+                    fail(f"recording policy: grant {grant['name']} names unknown right {right}")
+                mask |= RIGHT[right]
+            held[name][grant["name"]] = held[name].get(grant["name"], 0) | mask
+    for minted in manifest.get("mintedBindings", []):
+        holder = minted.get("holder")
+        if holder not in held:
+            continue
+        mask = 0
+        for right in minted["rights"]:
+            if right not in RIGHT:
+                fail(
+                    f"recording policy: minted binding {minted['name']} names unknown "
+                    f"right {right}"
+                )
+            mask |= RIGHT[right]
+        held[holder][minted["name"]] = held[holder].get(minted["name"], 0) | mask
+    return held
+
+
+def unrecorded_right_names(mask: int) -> list[str]:
+    """The manifest spellings of every unrecorded right in `mask`.
+
+    Used only for the refusal message. The decision is the mask test; this turns
+    it back into names so a build failure says which authority made the
+    determinism claim inadmissible rather than printing a bit pattern.
+    """
+    return sorted(
+        name for name, bit in RIGHT.items() if bit & mask & GENERATION_RIGHT_UNRECORDED
+    )
+
+
+def validated_recording(manifest: dict) -> list[tuple[bytes, int, int, int, int, bytes]] | None:
+    """Resolve the C9.5 recording table, refusing every contradiction here.
+
+    Returns `None` when the manifest declares no table, and otherwise the wire
+    rows in the contract's canonical order. Every rule the decoder enforces on
+    bytes is enforced here on names, so a malformed table fails naming the
+    instance rather than as a `DecodeError` on a boot.
+
+    The refusal C9.5 asks for is the last one below, and it is a *join*: the
+    determinism claim comes from this table, the grants come from the generation's
+    own grant and minted-binding tables, and the verdict comes from the
+    `determinism` classification each right carries in
+    `contracts/generation/v5`, folded there into `GENERATION_RIGHT_UNRECORDED`.
+    No single one of the three could refuse it.
+
+    The classification needs no completeness check here: it is a required field
+    on every right rather than a list beside them, so a right added without one
+    fails to type-check and its bit lands in exactly one class by construction.
+    """
+    declarations = manifest.get("recording")
+    if declarations is None:
+        return None
+    if len(declarations) > RECORDING_POLICY_MAX_INSTANCES:
+        fail("recording policy: entry count exceeds the declared bound")
+    instances = {entry["name"] for entry in manifest["instances"]}
+    held = instance_held_rights(manifest)
+    entries: list[tuple[bytes, int, int, int, int, bytes]] = []
+    seen_instances: set[str] = set()
+    streams: dict[str, dict[str, object]] = {}
+    for declaration in declarations:
+        name = declaration["instance"]
+        if name not in instances:
+            fail(f"recording policy: unknown instance {name}")
+        if name in seen_instances:
+            fail(
+                f"recording policy: {name} is declared twice; an instance recording "
+                "and replaying at once has no meaning"
+            )
+        seen_instances.add(name)
+        stream = declaration["stream"]
+        role = RECORDING_POLICY_ROLE_BY_MANIFEST_NAME.get(declaration["role"])
+        if role is None:
+            fail(f"recording policy: {name} declares unknown role {declaration['role']!r}")
+        capacity = declaration["recordCapacity"]
+        if (
+            not isinstance(capacity, int)
+            or isinstance(capacity, bool)
+            or not 1 <= capacity <= RECORDING_POLICY_MAX_RECORD_CAPACITY
+        ):
+            fail(
+                f"recording policy: {name} declares recordCapacity={capacity} outside "
+                f"1..={RECORDING_POLICY_MAX_RECORD_CAPACITY}"
+            )
+        tracked = streams.setdefault(stream, {"capacity": capacity, "roles": []})
+        if tracked["capacity"] != capacity:
+            fail(
+                f"recording policy: stream {stream} is declared with two record "
+                "capacities; one recording has one length"
+            )
+        tracked["roles"].append((name, role))
+        # `streamGrant` is the declared exception to the determinism join, so it
+        # is validated as strictly as the claim it excuses: only a replayer may
+        # name one, it must be a grant this instance is actually bound, and its
+        # rights are subtracted from nothing else.
+        stream_grant = declaration.get("streamGrant")
+        if stream_grant is not None and role != RECORDING_POLICY_ROLE_REPLAY:
+            fail(
+                f"recording policy: {name} declares a streamGrant without replaying; a "
+                "recorder writes its stream, and writing is not an unrecorded source"
+            )
+        if stream_grant is not None and stream_grant not in held[name]:
+            fail(
+                f"recording policy: {name} declares streamGrant {stream_grant}, which it "
+                "is not bound; an exemption naming nothing would excuse whichever "
+                "authority the composition meant it to cover"
+            )
+        deterministic = declaration["deterministic"]
+        if not isinstance(deterministic, bool):
+            fail(f"recording policy: {name} declares a non-boolean deterministic flag")
+        if deterministic:
+            examined = 0
+            for grant_name, mask in held[name].items():
+                if grant_name == stream_grant:
+                    continue
+                examined |= mask
+            unrecorded = unrecorded_right_names(examined)
+            if unrecorded:
+                fail(
+                    f"recording policy: {name} is declared deterministic while holding "
+                    + ", ".join(unrecorded)
+                    + ", which contracts/generation/v5 classifies as an unrecorded "
+                    "nondeterminism source; a replay of this component would read live "
+                    "state no recording captured"
+                )
+        entries.append(
+            (
+                recording_instance_identity(name),
+                recording_stream_identity(stream),
+                recording_stream_grant_identity(stream_grant) if stream_grant else 0,
+                role,
+                RECORDING_POLICY_FLAG_DETERMINISTIC if deterministic else 0,
+                capacity,
+                b"\0" * 4,
+            )
+        )
+    for stream, tracked in streams.items():
+        roles = tracked["roles"]
+        recorders = [name for name, role in roles if role == RECORDING_POLICY_ROLE_RECORD]
+        replayers = [name for name, role in roles if role == RECORDING_POLICY_ROLE_REPLAY]
+        if len(recorders) != 1 or len(replayers) != 1:
+            fail(
+                f"recording policy: stream {stream} declares {len(recorders)} recorders "
+                f"and {len(replayers)} replayers; a stream is exactly one of each, or "
+                "the artifact has two writers or is compared against itself"
+            )
+    # `instance_identity` strictly ascending is the canonical encoding the decoder
+    # requires — strictly, because one entry per instance is the API's promise —
+    # so a reordered or duplicated resource fails structurally.
+    entries.sort(key=lambda entry: entry[0])
+    return entries
+
+
+def build_recording_policy(manifest: dict) -> bytes:
+    entries = validated_recording(manifest)
+    if entries is None:
+        fail("recording-policy resource object declared without a recording table")
+    total_len = RECORDING_POLICY_HEADER_BYTES + len(entries) * RECORDING_POLICY_ENTRY_BYTES
+    header = RECORDING_POLICY_HEADER.pack(
+        RECORDING_POLICY_MAGIC,
+        RECORDING_POLICY_VERSION,
+        RECORDING_POLICY_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
+    return header + b"".join(RECORDING_POLICY_ENTRY.pack(*entry) for entry in entries)
 
 
 FABRIC_CONTRACT_KIND = {
@@ -4925,6 +5182,15 @@ def build_sel4_generation(
         # the manifest claimed a graph, which is exactly the "declared but never
         # applied" shape B71 closed.
         fail("lifecyclePolicy declared without a lifecycle-policy resource object")
+    if "recording-policy" in object_ids:
+        payloads["recording-policy"] = build_recording_policy(manifest)
+    elif manifest.get("recording") is not None:
+        # A recording table nothing carries is the same shape one level up: the
+        # root reads the determinism declaration from the resource object, so a
+        # manifest declaring a deterministic instance without the object would
+        # boot with no determinism claim admitted while asserting one, and the
+        # unrecorded-source refusal would never run.
+        fail("recording declared without a recording-policy resource object")
     # C10.4: a component that cannot run without a private heap must be given
     # one, so the builder refuses the omission rather than shipping a generation
     # that boots into a dead service.

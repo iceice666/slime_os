@@ -162,6 +162,25 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # and the unset-key refusal that must stay distinguishable from an authority
     # one — all of which interleave with component output and so fix no order.
     ("sel4_lifecycle_restart_plane", "check/check-sel4-lifecycle-restart-plane.py", 55),
+    # C9.5: 26 markers — 23 over seven causal chains plus three order-independent
+    # ones. The chains are the recorded run capturing every declared input and
+    # deriving its outputs (4); the three refusals a replayer applies before
+    # exposing a single input, which is what "refused rather than partially
+    # replayed" means (4); the deterministic replay reproducing the recorded
+    # outputs, with its replayed inputs printed so the agreement is checkable
+    # rather than asserted (5); the unrecorded-source holder carrying no
+    # determinism claim (3); the deny-by-default answer to an instance the
+    # resource omits (2); the terminal close (2); and the runtime authority gate
+    # (3), where the recorder genuinely offers a capability carrying an unrecorded
+    # right, the root refuses the deterministic receiver's import of it naming the
+    # rights, and the receiver observes that refusal rather than a widened table —
+    # which is what keeps the determinism claim true after launch rather than only
+    # at it. The order-independent three
+    # are the root's own clock-authority installs for the recorder and the
+    # replayer — the recorder holds the plane's only clock, so the replayer's
+    # zeroes are what make its answers the recording's rather than the hardware's
+    # — and the observer that pairs the second stream.
+    ("sel4_replay_plane", "check/check-sel4-replay-plane.py", 26),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

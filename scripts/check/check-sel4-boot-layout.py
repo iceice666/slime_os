@@ -127,6 +127,10 @@ PLANES: tuple[tuple[str, str, str], ...] = (
         "--lifecycle-restart-plane",
         "slime-sel4-lifecycle-restart.elf",
     ),
+    # C9.5. Init holds nothing here either: the recorder and replayer hold their
+    # declared endpoint and factory directly, on the same rule as the two planes
+    # above.
+    ("sel4-replay", "--replay-plane", "slime-sel4-replay.elf"),
 )
 
 

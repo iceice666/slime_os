@@ -1,0 +1,276 @@
+{
+  bootAction = "replay";
+  bootstrapInstance = "init";
+  clockAuthority = [
+    {
+      holder = "replay-recorder";
+      monotonicRead = true;
+      timerUse = true;
+      simulatedRead = true;
+      simulatedAdvance = true;
+      timerQuota = 2;
+      timerNotification = "replay-recorder-tick";
+      timerBadgeBit = 9;
+    };
+  ];
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "replay-probe";
+      object = "sha256:replay-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 45;
+  grants = [
+    {
+      name = "replay-stream-channel";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "replay-recorder";
+      target = "replay-replayer";
+      transferable = true;
+    };
+    {
+      name = "replay-recorder-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "replay-recorder";
+      transferable = false;
+    };
+    {
+      name = "replay-unrecorded-storage";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+      ];
+      source = "init";
+      target = "replay-unrecorded";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "replay-recorder";
+      "replay-replayer";
+      "replay-unrecorded";
+      "replay-unnamed";
+      "replay-observer";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "replay-stream-channel";
+          slot = 0;
+        };
+        {
+          grant = "replay-recorder-shared-buffer-factory";
+          slot = 1;
+        };
+      ];
+      dependencies = [];
+      executable = "replay-probe";
+      health = "required";
+      name = "replay-recorder";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "replay-stream-channel";
+          slot = 0;
+        };
+      ];
+      dependencies = [];
+      executable = "replay-probe";
+      health = "required";
+      name = "replay-replayer";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "replay-unrecorded-storage";
+          slot = 3;
+        };
+      ];
+      dependencies = [];
+      executable = "replay-probe";
+      health = "required";
+      name = "replay-unrecorded";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "replay-probe";
+      health = "required";
+      name = "replay-unnamed";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "replay-probe";
+      health = "required";
+      name = "replay-observer";
+      owner = "root";
+    };
+  ];
+  interfaceSchemas = [];
+  lifecyclePolicy = {
+    initialState = "Initialize";
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+    ];
+    restarts = [];
+    dependencies = [];
+    parameters = [];
+  };
+  mintedBindings = [];
+  notificationBindings = [
+    {
+      grant = "replay-recorder-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "replay-recorder-tick";
+      holder = "replay-recorder";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  notificationGrants = [
+    {
+      name = "replay-recorder-tick";
+      source = "init";
+      target = "replay-recorder";
+    };
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:replay-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "clock-authority";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "recording-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "lifecycle-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  recording = [
+    {
+      instance = "replay-recorder";
+      stream = "replay-stream";
+      role = "record";
+      deterministic = false;
+      recordCapacity = 16;
+    };
+    {
+      instance = "replay-replayer";
+      stream = "replay-stream";
+      streamGrant = "replay-stream-channel";
+      role = "replay";
+      deterministic = true;
+      recordCapacity = 16;
+    };
+    {
+      instance = "replay-unrecorded";
+      stream = "replay-unrecorded-stream";
+      role = "record";
+      deterministic = false;
+      recordCapacity = 8;
+    };
+    {
+      instance = "replay-observer";
+      stream = "replay-unrecorded-stream";
+      role = "replay";
+      deterministic = false;
+      recordCapacity = 8;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 2;
+      holder = "replay-recorder";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+    {
+      bufferCount = 1;
+      bytePages = 2;
+      holder = "replay-replayer";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

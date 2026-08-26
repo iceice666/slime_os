@@ -191,6 +191,18 @@ wait_set_check: sel4_pin_check
 lifecycle_restart_check: sel4_pin_check
     python3 scripts/check/check-sel4-lifecycle-restart-plane.py
 
+
+# C9.5: a recorded run and a deterministic replay of it. The recorder captures
+# its own clock reads, timer expiry, and lifecycle transition and derives typed
+# outputs from them; the replayer answers every input from the recording rather
+# than the live source, recomputes the outputs, and compares them field by field.
+# Two boots of one image must produce identical declared traces. A truncated,
+# reordered, or over-capacity stream is refused whole rather than partially
+# replayed, and a component holding a right the generation classifies as an
+# unrecorded nondeterminism source carries no determinism claim.
+replay_check: sel4_pin_check
+    python3 scripts/check/check-sel4-replay-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across

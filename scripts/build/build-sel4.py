@@ -115,6 +115,8 @@ SCHEDULING_CLASS_IMAGE = BUILD_ROOT / "slime-sel4-scheduling-class.elf"
 SCHEDULING_CLASS_MANIFEST = BUILD_ROOT / "slime-sel4-scheduling-class.identity.json"
 LIFECYCLE_RESTART_IMAGE = BUILD_ROOT / "slime-sel4-lifecycle-restart.elf"
 LIFECYCLE_RESTART_MANIFEST = BUILD_ROOT / "slime-sel4-lifecycle-restart.identity.json"
+REPLAY_IMAGE = BUILD_ROOT / "slime-sel4-replay.elf"
+REPLAY_MANIFEST = BUILD_ROOT / "slime-sel4-replay.identity.json"
 CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
 CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
@@ -185,6 +187,7 @@ CLOCK_AUTHORITY_VARIANT = "clock-authority"
 WAIT_SET_VARIANT = "wait-set"
 SCHEDULING_CLASS_VARIANT = "scheduling-class"
 LIFECYCLE_RESTART_VARIANT = "lifecycle-restart"
+REPLAY_VARIANT = "replay"
 DEMO_VARIANT = "demo"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
@@ -242,6 +245,7 @@ VARIANT_MANIFESTS = {
     WAIT_SET_VARIANT: "sel4-wait-set",
     SCHEDULING_CLASS_VARIANT: "sel4-scheduling-class",
     LIFECYCLE_RESTART_VARIANT: "sel4-lifecycle-restart",
+    REPLAY_VARIANT: "sel4-replay",
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
     QOS_VARIANT: "sel4-qos",
@@ -310,6 +314,7 @@ VARIANT_TARGET_DIRS = {
     WAIT_SET_VARIANT: "root-wait-set",
     SCHEDULING_CLASS_VARIANT: "root-scheduling-class",
     LIFECYCLE_RESTART_VARIANT: "root-lifecycle-restart",
+    REPLAY_VARIANT: "root-replay",
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
     QOS_VARIANT: "root-qos",
@@ -351,6 +356,7 @@ VARIANT_IMAGES = {
     WAIT_SET_VARIANT: (WAIT_SET_IMAGE, WAIT_SET_MANIFEST),
     SCHEDULING_CLASS_VARIANT: (SCHEDULING_CLASS_IMAGE, SCHEDULING_CLASS_MANIFEST),
     LIFECYCLE_RESTART_VARIANT: (LIFECYCLE_RESTART_IMAGE, LIFECYCLE_RESTART_MANIFEST),
+    REPLAY_VARIANT: (REPLAY_IMAGE, REPLAY_MANIFEST),
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
     QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
@@ -1380,6 +1386,11 @@ def main() -> None:
         help="embed the C9.4 lifecycle-restart generation, writing a separate image",
     )
     parser.add_argument(
+        "--replay-plane",
+        action="store_true",
+        help="embed the C9.5 recording/replay generation, writing a separate image",
+    )
+    parser.add_argument(
         "--crossing-plane",
         action="store_true",
         help=(
@@ -1613,6 +1624,7 @@ def main() -> None:
             (WAIT_SET_VARIANT, arguments.wait_set_plane),
             (SCHEDULING_CLASS_VARIANT, arguments.scheduling_class_plane),
             (LIFECYCLE_RESTART_VARIANT, arguments.lifecycle_restart_plane),
+            (REPLAY_VARIANT, arguments.replay_plane),
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),
