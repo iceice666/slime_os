@@ -17,7 +17,15 @@ pub const KIND_INTERPOSITION: u32 = 7;
 pub const KIND_DENIAL: u32 = 8;
 pub const KIND_FAULT: u32 = 9;
 pub const KIND_RESOURCE: u32 = 10;
-pub const MAX_KIND: u32 = 10;
+
+/// C9.5's recording families. Three inputs a deterministic component
+/// observed -- a clock read, a timer expiry, a lifecycle transition -- and
+/// the typed outputs the deterministic claim is made about.
+pub const KIND_CLOCK_READ: u32 = 11;
+pub const KIND_TIMER_EXPIRY: u32 = 12;
+pub const KIND_LIFECYCLE: u32 = 13;
+pub const KIND_OUTPUT: u32 = 14;
+pub const MAX_KIND: u32 = 14;
 
 /// Which count a `resource` record carries. A bare number is not evidence
 /// unless the reader knows what was counted.
@@ -46,6 +54,20 @@ pub const MAX_RESOURCE_COUNTER: u32 = 15;
 pub const GRAPH_VIEW_ANSWERED: u32 = 1;
 pub const GRAPH_HOP_TRAVERSED: u32 = 2;
 pub const MAX_GRAPH_EVENT: u32 = 2;
+
+/// Which clock answered a C9.5 `clockRead` record. A monotonic read and a
+/// simulated read are different determinism claims, so the recording
+/// distinguishes them rather than carrying a bare instant.
+pub const CLOCK_MONOTONIC: u32 = 1;
+pub const CLOCK_SIMULATED: u32 = 2;
+pub const MAX_CLOCK_SOURCE: u32 = 2;
+
+/// Ceilings on a `lifecycle` record's declared state id and an `output`
+/// record's channel ordinal. The first must agree with
+/// `contracts/lifecycle-policy/v1`'s state count, which `boot-contracts`
+/// asserts at compile time.
+pub const MAX_LIFECYCLE_STATE: u32 = 8;
+pub const MAX_OUTPUT_CHANNEL: u32 = 8;
 
 /// The declared total tie order at one simulated instant: data, then
 /// acknowledgement, then peer death, then the clock advance that closes it.

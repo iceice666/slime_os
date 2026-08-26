@@ -28,6 +28,10 @@ Protocol :: type {
   kindDenial : Int;
   kindFault : Int;
   kindResource : Int;
+  kindClockRead : Int;
+  kindTimerExpiry : Int;
+  kindLifecycle : Int;
+  kindOutput : Int;
   maxKind : Int;
   resourceFrames : Int;
   resourceOperations : Int;
@@ -48,6 +52,11 @@ Protocol :: type {
   graphViewAnswered : Int;
   graphHopTraversed : Int;
   maxGraphEvent : Int;
+  clockMonotonic : Int;
+  clockSimulated : Int;
+  maxClockSource : Int;
+  maxLifecycleState : Int;
+  maxOutputChannel : Int;
   orderData : Int;
   orderAck : Int;
   orderPeerDeath : Int;
@@ -188,6 +197,14 @@ rustBindings :: Protocol -> Text
     w.u32Const "KIND_DENIAL" p.kindDenial;
     w.u32Const "KIND_FAULT" p.kindFault;
     w.u32Const "KIND_RESOURCE" p.kindResource;
+    "\n";
+    "/// C9.5's recording families. Three inputs a deterministic component\n";
+    "/// observed -- a clock read, a timer expiry, a lifecycle transition -- and\n";
+    "/// the typed outputs the deterministic claim is made about.\n";
+    w.u32Const "KIND_CLOCK_READ" p.kindClockRead;
+    w.u32Const "KIND_TIMER_EXPIRY" p.kindTimerExpiry;
+    w.u32Const "KIND_LIFECYCLE" p.kindLifecycle;
+    w.u32Const "KIND_OUTPUT" p.kindOutput;
     w.u32Const "MAX_KIND" p.maxKind;
     "\n";
     "/// Which count a `resource` record carries. A bare number is not evidence\n";
@@ -217,6 +234,20 @@ rustBindings :: Protocol -> Text
     w.u32Const "GRAPH_VIEW_ANSWERED" p.graphViewAnswered;
     w.u32Const "GRAPH_HOP_TRAVERSED" p.graphHopTraversed;
     w.u32Const "MAX_GRAPH_EVENT" p.maxGraphEvent;
+    "\n";
+    "/// Which clock answered a C9.5 `clockRead` record. A monotonic read and a\n";
+    "/// simulated read are different determinism claims, so the recording\n";
+    "/// distinguishes them rather than carrying a bare instant.\n";
+    w.u32Const "CLOCK_MONOTONIC" p.clockMonotonic;
+    w.u32Const "CLOCK_SIMULATED" p.clockSimulated;
+    w.u32Const "MAX_CLOCK_SOURCE" p.maxClockSource;
+    "\n";
+    "/// Ceilings on a `lifecycle` record's declared state id and an `output`\n";
+    "/// record's channel ordinal. The first must agree with\n";
+    "/// `contracts/lifecycle-policy/v1`'s state count, which `boot-contracts`\n";
+    "/// asserts at compile time.\n";
+    w.u32Const "MAX_LIFECYCLE_STATE" p.maxLifecycleState;
+    w.u32Const "MAX_OUTPUT_CHANNEL" p.maxOutputChannel;
     "\n";
     "/// The declared total tie order at one simulated instant: data, then\n";
     "/// acknowledgement, then peer death, then the clock advance that closes it.\n";
@@ -250,7 +281,7 @@ rustBindings :: Protocol -> Text
 boundsValid :: Protocol -> Bool
   = p => p.terminalReserve > 0
     && p.maxTraceDepth > p.terminalReserve
-    && p.maxKind == p.kindResource
+    && p.maxKind == p.kindOutput
     && p.maxOrderClass == p.orderTime
     && p.knownFlags == p.flagTerminal + p.flagDropped
     && p.maxOverflow == p.overflowSaturate
@@ -299,6 +330,15 @@ pythonBindings :: Protocol -> Text
     "FABRIC_TRACE_RESOURCE_CAPABILITY_SLOTS = "; n.toText p.resourceCapabilitySlots; "\n";
     "FABRIC_TRACE_RESOURCE_COMPLETE = "; n.toText p.resourceComplete; "\n";
     "FABRIC_TRACE_MAX_RESOURCE_COUNTER = "; n.toText p.maxResourceCounter; "\n";
+    "FABRIC_TRACE_KIND_CLOCK_READ = "; n.toText p.kindClockRead; "\n";
+    "FABRIC_TRACE_KIND_TIMER_EXPIRY = "; n.toText p.kindTimerExpiry; "\n";
+    "FABRIC_TRACE_KIND_LIFECYCLE = "; n.toText p.kindLifecycle; "\n";
+    "FABRIC_TRACE_KIND_OUTPUT = "; n.toText p.kindOutput; "\n";
+    "FABRIC_TRACE_CLOCK_MONOTONIC = "; n.toText p.clockMonotonic; "\n";
+    "FABRIC_TRACE_CLOCK_SIMULATED = "; n.toText p.clockSimulated; "\n";
+    "FABRIC_TRACE_MAX_CLOCK_SOURCE = "; n.toText p.maxClockSource; "\n";
+    "FABRIC_TRACE_MAX_LIFECYCLE_STATE = "; n.toText p.maxLifecycleState; "\n";
+    "FABRIC_TRACE_MAX_OUTPUT_CHANNEL = "; n.toText p.maxOutputChannel; "\n";
   };
 
 render :: Protocol -> { rust : Text; python : Text; }

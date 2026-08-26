@@ -340,6 +340,42 @@ LifecyclePolicy :: type {
   parameters : List LifecycleParameterGrant;
 };
 
+-- One instance's declared C9.5 participation in a recording stream.
+--
+-- `stream` names the recording; exactly one `record` entry and one `replay`
+-- entry must name each stream, because a stream with two recorders has two
+-- writers for one artifact and a stream with two replayers compares one
+-- recording against itself.
+--
+-- `deterministic` is the claim C9.5 constrains, and declaring it is not
+-- sufficient to hold it: the builder joins this entry against the grants the
+-- generation gives this instance and refuses the manifest when any of them names
+-- an unrecorded nondeterminism source, per the `determinism` classification each
+-- right carries in `contracts/generation/v5`. A recorder that is not itself
+-- deterministic is a real case — capturing inputs faithfully is not the same as
+-- being reproducible — so the flag is per entry rather than per stream.
+--
+-- `streamGrant` names the grant the recording itself arrives over, and only a
+-- `replay` entry may declare one. It is the declared exception to that join:
+-- every authority carrying bytes into a component is an unrecorded source,
+-- `recv` included, so a replayer needs one such grant to receive the very
+-- recording it replays and would otherwise be refused for holding it. The
+-- builder and the root each subtract exactly this grant's rights and check
+-- everything else unchanged. Declared rather than inferred, because inferring
+-- which of a component's endpoints carries its recording means guessing, and a
+-- wrong guess exempts a live input.
+--
+-- `recordCapacity` is records, not bytes, and both ends of a stream must declare
+-- the same number: one recording has one length.
+RecordingEntry :: type {
+  instance : Text;
+  stream : Text;
+  streamGrant? : Text;
+  role : Text;
+  deterministic : Bool;
+  recordCapacity : Int;
+};
+
 -- One named full-graph profile override. Profiles may replace only an exact
 -- participant's interposition chain; every other authority and policy field
 -- remains fixed by the base graph.
@@ -484,6 +520,11 @@ GenerationManifest :: type {
   -- component can reach any parameter — which is what every generation before
   -- C9.4 did, stated rather than inferred.
   lifecyclePolicy? : LifecyclePolicy;
+  -- Optional C9.5 recording table. Absent and empty both mean no instance is
+  -- declared deterministic and no recording stream exists, so nothing is
+  -- recorded and nothing replays — the deny-by-default answer, and what every
+  -- generation before C9.5 did.
+  recording? : List RecordingEntry;
   objects : List Object;
   executables : List Executable;
   instances : List Instance;
@@ -530,6 +571,7 @@ FromData @LifecycleRestartPolicy :: derive
 FromData @LifecycleHealthDependency :: derive
 FromData @LifecycleParameterGrant :: derive
 FromData @LifecyclePolicy :: derive
+FromData @RecordingEntry :: derive
 FromData @GenerationManifest :: derive
 
 decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
@@ -554,6 +596,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   LifecycleHealthDependency =;
   LifecycleParameterGrant =;
   LifecyclePolicy =;
+  RecordingEntry =;
   FabricProfileInterposition =;
   FabricProfile =;
   CapabilityGrant =;

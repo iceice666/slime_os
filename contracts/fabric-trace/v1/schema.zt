@@ -32,9 +32,24 @@ formatVersion :: Int = 1;
 recordLen :: Int = 64;
 magic :: Int = 1163084372; -- `TRCT`
 
--- Trace families. Each names one evidence class C8.11 requires; a record whose
--- `kind` is outside this set is rejected rather than skipped, so a future
--- family cannot be silently dropped by an older reader.
+-- Trace families. Each names one evidence class C8.11 or C9.5 requires; a
+-- record whose `kind` is outside this set is rejected rather than skipped, so a
+-- future family cannot be silently dropped by an older reader.
+--
+-- Kinds 1-10 are C8.11's fabric evidence. Kinds 11-14 are C9.5's recording
+-- families, and they live here rather than in a second format for the reason
+-- the header gives: the sink is a bounded array of equal-width slots and the
+-- declared total order compares `now_ns`/`order_class` *across* families. A
+-- recording that carried clock reads in one format and route traffic in another
+-- could not order the two against each other, and C9.5's deliverable is one
+-- trace covering "declared fabric routes, clock reads, timer expiries, and
+-- lifecycle transitions" — so those must be four kinds of one record, not two
+-- records of two formats.
+--
+-- The three input families and the one output family are separated because
+-- replay consumes the first three and *produces* the last. A record a replayer
+-- reads and a record it emits sharing one kind would make the comparison
+-- circular: the artifact would contain its own expected value.
 kindSchema :: Int = 1;
 kindRoute :: Int = 2;
 kindQos :: Int = 3;
@@ -45,7 +60,27 @@ kindInterposition :: Int = 7;
 kindDenial :: Int = 8;
 kindFault :: Int = 9;
 kindResource :: Int = 10;
-maxKind :: Int = 10;
+-- C9.5. One monotonic or simulated clock read the recorded component observed.
+-- `correlation` carries the value the clock answered, because the *answer* is
+-- the nondeterminism being captured: replaying a clock read means returning the
+-- recorded value rather than asking the root again.
+kindClockRead :: Int = 11;
+-- C9.5. One timer expiry delivered to the recorded component. `correlation`
+-- carries the opaque timer identity the root assigned, so a replay resolves
+-- which armed timer fired rather than assuming one outstanding. The identity is
+-- opaque and reserves no value: `docs/syscall-abi.md` documents `TIMER_ARM`'s
+-- result as "an opaque timer id; zero is valid", and the root does assign zero
+-- to a holder's first timer.
+kindTimerExpiry :: Int = 12;
+-- C9.5. One admitted lifecycle transition. `event` carries the
+-- `lifecycle-policy/v1` state id reached, which is the closed vocabulary both
+-- readers already share.
+kindLifecycle :: Int = 13;
+-- C9.5. One typed output the component produced. This is the family the
+-- deterministic claim is made *about*: two boots replaying one recording must
+-- produce byte-identical records of this kind, in this order.
+kindOutput :: Int = 14;
+maxKind :: Int = 14;
 
 -- Which count a `resource` record carries. C8.11 records resource *high-water*
 -- evidence, and a bare number is not evidence unless the reader knows what was
@@ -175,6 +210,42 @@ graphViewAnswered :: Int = 1;
 graphHopTraversed :: Int = 2;
 maxGraphEvent :: Int = 2;
 
+-- What a C9.5 `clockRead` record's `event` names: which clock answered.
+--
+-- Schema-owned for the resource counters' reason, and load-bearing beyond
+-- naming: a monotonic read and a simulated read are *different* determinism
+-- claims. The simulated clock is deterministic by construction — it only moves
+-- when a declared advancer moves it — while the monotonic counter is the
+-- hardware's, so a recording that did not distinguish them would let a
+-- component replay a hardware read as though it were reproducible.
+clockMonotonic :: Int = 1;
+clockSimulated :: Int = 2;
+maxClockSource :: Int = 2;
+
+-- Structural ceiling on a `lifecycle` record's `event`, which carries a
+-- `contracts/lifecycle-policy/v1` state id.
+--
+-- Pinned here rather than imported because Zutai contracts do not import each
+-- other's schemas, and a *smaller* number would silently refuse a state the
+-- policy admits. It is therefore the policy's own state count, and the agreement
+-- is checked by a `slime-proto` integration test rather than a compile-time
+-- assert: `boot-contracts` holds the lifecycle constant and `slime-proto` holds
+-- this one, and `boot-contracts` does not depend on `slime-proto`, so no single
+-- crate can see both at compile time. `slime-proto`'s dev-dependency on
+-- `boot-contracts` can, which is where the check lives.
+maxLifecycleState :: Int = 8;
+
+-- Output channels one recorded component may produce, as a `KIND_OUTPUT`
+-- record's `event`.
+--
+-- Bounded because the replay comparison is over this space: an unbounded
+-- ordinal would make a corrupted event indistinguishable from a new output
+-- channel, and the comparison would silently widen instead of failing. Eight
+-- is `lifecycle-policy/v1`'s per-instance parameter ceiling, for the same
+-- reason: a component with more distinct typed output channels than that is
+-- declaring a data plane, which is what C8's routes are for.
+maxOutputChannel :: Int = 8;
+
 -- The declared total tie order across everything observable at one instant.
 orderData :: Int = 1;
 orderAck :: Int = 2;
@@ -262,6 +333,10 @@ format ::= {
   kindDenial =;
   kindFault =;
   kindResource =;
+  kindClockRead =;
+  kindTimerExpiry =;
+  kindLifecycle =;
+  kindOutput =;
   maxKind =;
   resourceFrames =;
   resourceOperations =;
@@ -282,6 +357,11 @@ format ::= {
   graphViewAnswered =;
   graphHopTraversed =;
   maxGraphEvent =;
+  clockMonotonic =;
+  clockSimulated =;
+  maxClockSource =;
+  maxLifecycleState =;
+  maxOutputChannel =;
   orderData =;
   orderAck =;
   orderPeerDeath =;

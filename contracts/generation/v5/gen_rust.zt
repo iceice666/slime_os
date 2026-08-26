@@ -12,8 +12,9 @@ l ::= import stdlib.list;
 -- One named capability-rights bit. Mirrors the schema's `RightBit` so the
 -- renderer can emit both the individual `RIGHT_*` constants and their union
 -- without either side restating a bit position. `manifest` is the `.zti` grant
--- spelling, empty for rights a manifest cannot name directly.
-RightBit :: type { name : Text; bit : Int; manifest : Text; };
+-- spelling, empty for rights a manifest cannot name directly. `determinism` is
+-- C9.5's classification: `recorded`, `unrecorded`, or `neutral`.
+RightBit :: type { name : Text; bit : Int; manifest : Text; determinism : Text; };
 
 -- `RIGHT_ALL` as the union of the declared bits. A bit-width mask would admit
 -- the gaps in the numbering (B57); a fold over the vocabulary cannot. Bits are
@@ -24,6 +25,28 @@ rightsMask :: List RightBit -> Int
   = bits => l.sum (map rightValue bits);
 
 manifestNamed :: RightBit -> Bool = bit => bit.manifest != "";
+
+-- The two C9.5 masks. Emitted as folds over the one classified vocabulary so a
+-- right cannot be classified here and unclassified there: adding a right without
+-- a `determinism` value does not type-check, and its bit then lands in exactly
+-- one of these masks by construction.
+--
+-- `neutral` gets no mask. Nothing checks it — a deterministic component is
+-- refused for holding an *unrecorded* right, never admitted for holding a
+-- neutral one — so a third constant would be a value with no reader, and the
+-- validity check below already proves the three classes partition the table.
+recordedRight :: RightBit -> Bool = bit => bit.determinism == "recorded";
+unrecordedRight :: RightBit -> Bool = bit => bit.determinism == "unrecorded";
+neutralRight :: RightBit -> Bool = bit => bit.determinism == "neutral";
+
+classifiedRight :: RightBit -> Bool
+  = bit => recordedRight bit || unrecordedRight bit || neutralRight bit;
+
+allClassified :: List RightBit -> Bool
+  = bits => match bits {
+    | {;} => true;
+    | { bit; ...rest } => classifiedRight bit && allClassified rest;
+  };
 
 pythonRightConst :: RightBit -> Text
   = bit => w.join { "GENERATION_RIGHT_"; bit.name; " = "; n.toText (rightValue bit); "\n"; };
@@ -180,6 +203,8 @@ pythonBindings :: Format -> Text
     "GENERATION_RIGHT_BY_MANIFEST_NAME = {\n";
     w.join (map pythonManifestRight (filter manifestNamed format.rightBits));
     "}\n";
+    "GENERATION_RIGHT_RECORDED = "; n.toText (rightsMask (filter recordedRight format.rightBits)); "\n";
+    "GENERATION_RIGHT_UNRECORDED = "; n.toText (rightsMask (filter unrecordedRight format.rightBits)); "\n";
   };
 
 rustBindings :: Format -> Text
@@ -255,6 +280,18 @@ rustBindings :: Format -> Text
     r.u32Const "SERVICE_CLOCK" 10;
     r.join (map rustRightConst format.rightBits);
     r.u64Const "RIGHT_ALL" (rightsMask format.rightBits);
+    "\n/// C9.5's nondeterminism classification, as masks over the same\n";
+    "/// `rightBits` table `RIGHT_*` comes from.\n";
+    "///\n";
+    "/// `RIGHT_RECORDED` names the sources the recording captures, so a\n";
+    "/// deterministic component may hold them; `RIGHT_UNRECORDED` names the\n";
+    "/// sources no mechanism captures, so a component holding one cannot be\n";
+    "/// declared deterministic. Every declared right is in exactly one class,\n";
+    "/// including the neutral remainder these two masks exclude -- the renderer\n";
+    "/// refuses to emit otherwise, so a right added without a classification is\n";
+    "/// a build failure rather than a source silently treated as harmless.\n";
+    r.u64Const "RIGHT_RECORDED" (rightsMask (filter recordedRight format.rightBits));
+    r.u64Const "RIGHT_UNRECORDED" (rightsMask (filter unrecordedRight format.rightBits));
     "\n/// The rights bit a generation manifest spells `name`, or `None`.\n";
     "///\n";
     "/// Generated from the same `rightBits` table as `RIGHT_*` and the builder's\n";
@@ -271,7 +308,7 @@ rustBindings :: Format -> Text
   };
 
 render :: Format -> { python : Text; rust : Text; }
-  = format => if w.recordsValid (records format)
+  = format => if w.recordsValid (records format) && allClassified format.rightBits
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_GENERATION_SCHEMA"; rust = "INVALID_GENERATION_SCHEMA"; };
 

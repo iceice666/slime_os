@@ -322,6 +322,31 @@ operations :: List Operation = {
   operation "supervision" "RESTART_ADMIT" 54;
   operation "supervision" "PARAMETER_READ" 55;
   operation "supervision" "PARAMETER_WRITE" 56;
+  -- C9.5's declared recording participation. Self-scoped by badge exactly as
+  -- `WAIT_SOURCES` is: the request carries no operand at all, so a component
+  -- reads its own recording entry and only its own. The reply is three facts --
+  -- the entry's role, the record capacity it may consume, and whether the
+  -- generation claims it deterministic -- which is what a recorder needs to size
+  -- its sink and a replayer needs to bound its input before it maps anything.
+  --
+  -- The declared *stream identity* is deliberately not among them. It is the
+  -- generation's join key between two participants rather than a handle, so
+  -- answering it would name a peer relationship the caller holds no capability
+  -- over; the stream itself travels over the grant the generation declares for
+  -- it, whose authority is that capability.
+  --
+  -- Gated on `lifecycle` for `WAIT_SOURCES`' reason, and the same deny-by-default
+  -- shape: whether a component is *claimed* deterministic is a property of being
+  -- that instance rather than of any grant, and an instance the resource does not
+  -- name is answered a zero role rather than refused. That answer discloses
+  -- nothing about a peer -- it says only "this generation declares no recording
+  -- for me" -- and it is what makes a component able to run unchanged in a
+  -- generation that records it and one that does not.
+  --
+  -- It grants nothing. The recording stream itself travels over a declared
+  -- shared buffer between the two participants; this operation only reports what
+  -- the generation already decided about the caller.
+  operation "lifecycle" "RECORDING_SOURCES" 57;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

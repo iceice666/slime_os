@@ -71,45 +71,92 @@ maxObjectPayloadBytes :: Int = 8388608;
 -- name-to-bit table and the root's constants from being two hand-synchronized
 -- copies. `TRANSFER` carries no manifest spelling: a grant declares it through
 -- `transferable`, not by naming a right.
-RightBit :: type { name : Text; bit : Int; manifest : Text; };
+--
+-- `determinism` is C9.5's classification of the right as a nondeterminism
+-- source, and it lives on the bit rather than in `contracts/recording-policy/v1`
+-- for one reason: totality. C9.5 refuses a generation that declares a component
+-- deterministic while granting it an unrecorded source, and that refusal is only
+-- sound if *every* right has been classified. A separate list could be partial,
+-- and the failure would be silent -- a right nobody classified would be treated
+-- as harmless, and the first component granted it would be certified
+-- deterministic on a table that never considered it. A field cannot be partial:
+-- a right added without a class does not type-check.
+--
+-- The three classes are:
+--
+-- * `recorded` -- a nondeterminism source the C9.5 recording captures, so a
+--   deterministic holder replays from the recording rather than the live source;
+-- * `unrecorded` -- a nondeterminism source with no recording mechanism, so a
+--   holder cannot be declared deterministic;
+-- * `neutral` -- not a nondeterminism source: nothing enters the component
+--   through it.
+--
+-- The distinction is *what enters the component*, not what it can affect, which
+-- is why `send` is neutral and `recv` is recorded though both name one endpoint,
+-- and why `parameterWrite` is neutral while `parameterRead` is recorded.
+RightBit :: type { name : Text; bit : Int; manifest : Text; determinism : Text; };
 
-right :: Text -> Int -> Text -> RightBit
-  = name bit manifest => { name = name; bit = bit; manifest = manifest; };
+right :: Text -> Int -> Text -> Text -> RightBit
+  = name bit manifest determinism =>
+    { name = name; bit = bit; manifest = manifest; determinism = determinism; };
 
 rightBits :: List RightBit = {
-  right "SEND" 0 "send";
-  right "RECV" 1 "recv";
-  right "TRANSFER" 2 "";
-  right "EXEC" 3 "exec";
-  right "MAP_MMIO" 4 "mapMmio";
-  right "DMA_PIN" 5 "dmaPin";
-  right "DMA_RELEASE" 6 "dmaRelease";
-  right "IRQ_ACK" 7 "irqAck";
-  right "BUFFER_WRITE" 8 "bufferWrite";
-  right "BUFFER_MAP" 9 "bufferMap";
-  right "BLOCK_READ" 10 "blockRead";
-  right "BLOCK_WRITE" 11 "blockWrite";
-  right "STORE_READ" 12 "storeRead";
-  right "STORE_WRITE" 13 "storeWrite";
-  right "HEALTH_CONFIRM" 14 "healthConfirm";
-  right "BOOT_UPDATE" 15 "bootUpdate";
-  right "SPAWN" 16 "spawn";
-  right "SUPERVISE" 18 "supervise";
-  right "DIRECTORY_READ" 19 "directoryRead";
-  right "DIRECTORY_WRITE" 20 "directoryWrite";
-  right "DIRECTORY_LIST" 21 "directoryList";
-  right "DIRECTORY_DERIVE" 22 "directoryDerive";
-  right "INPUT_READ" 23 "inputRead";
-  right "BUFFER_CREATE" 24 "bufferCreate";
-  right "BUFFER_LOAN" 25 "bufferLoan";
-  right "CLOCK_MONOTONIC_READ" 26 "clockMonotonicRead";
-  right "CLOCK_TIMER_USE" 27 "clockTimerUse";
-  right "CLOCK_SIMULATED_READ" 28 "clockSimulatedRead";
-  right "CLOCK_SIMULATED_ADVANCE" 29 "clockSimulatedAdvance";
-  right "SCHEDULING_PROMOTE" 30 "schedulingPromote";
-  right "LIFECYCLE_RESTART" 31 "lifecycleRestart";
-  right "PARAMETER_READ" 32 "parameterRead";
-  right "PARAMETER_WRITE" 33 "parameterWrite";
+  -- `send` gates `seL4_Call` as well as `seL4_Send`
+  -- (`docs/capability-matrix.md`), and a call's *reply* is arbitrary bytes the
+  -- peer chose, so this admits state despite its name.
+  right "SEND" 0 "send" "unrecorded";
+  -- Received message bytes and any capability they carry.
+  right "RECV" 1 "recv" "unrecorded";
+  -- Transfer moves a capability the holder already has; it reads nothing in.
+  right "TRANSFER" 2 "" "neutral";
+  right "EXEC" 3 "exec" "neutral";
+  -- Device registers, pinned DMA memory, and interrupt arrival are all live
+  -- hardware state this repository has no mechanism to capture or reproduce.
+  right "MAP_MMIO" 4 "mapMmio" "unrecorded";
+  right "DMA_PIN" 5 "dmaPin" "unrecorded";
+  right "DMA_RELEASE" 6 "dmaRelease" "unrecorded";
+  right "IRQ_ACK" 7 "irqAck" "unrecorded";
+  right "BUFFER_WRITE" 8 "bufferWrite" "neutral";
+  right "BUFFER_MAP" 9 "bufferMap" "neutral";
+  right "BLOCK_READ" 10 "blockRead" "unrecorded";
+  right "BLOCK_WRITE" 11 "blockWrite" "unrecorded";
+  right "STORE_READ" 12 "storeRead" "unrecorded";
+  right "STORE_WRITE" 13 "storeWrite" "unrecorded";
+  right "HEALTH_CONFIRM" 14 "healthConfirm" "neutral";
+  right "BOOT_UPDATE" 15 "bootUpdate" "unrecorded";
+  -- A spawn's outcome depends on the root's live allocator rather than on
+  -- anything a recording holds.
+  right "SPAWN" 16 "spawn" "unrecorded";
+  -- A supervision handle answers a peer's termination *kind and detail*, and
+  -- C9.5's lifecycle record carries only the holder's own state id. Unrecorded
+  -- until a record carries the whole `supervision_status` answer.
+  right "SUPERVISE" 18 "supervise" "unrecorded";
+  right "DIRECTORY_READ" 19 "directoryRead" "unrecorded";
+  right "DIRECTORY_WRITE" 20 "directoryWrite" "unrecorded";
+  right "DIRECTORY_LIST" 21 "directoryList" "unrecorded";
+  right "DIRECTORY_DERIVE" 22 "directoryDerive" "unrecorded";
+  right "INPUT_READ" 23 "inputRead" "unrecorded";
+  right "BUFFER_CREATE" 24 "bufferCreate" "neutral";
+  -- Mapping a loan reads bytes a peer wrote, and no record carries them.
+  right "BUFFER_LOAN" 25 "bufferLoan" "unrecorded";
+  -- The three the C9.5 recorder genuinely captures: a monotonic read, a
+  -- simulated read, and a timer expiry each have a `fabric-trace/v1` family
+  -- carrying the exact value the root answered, and `Replay` returns that value
+  -- instead of asking again.
+  right "CLOCK_MONOTONIC_READ" 26 "clockMonotonicRead" "recorded";
+  right "CLOCK_TIMER_USE" 27 "clockTimerUse" "recorded";
+  right "CLOCK_SIMULATED_READ" 28 "clockSimulatedRead" "recorded";
+  -- `SIMULATED_ADVANCE` answers the value *before* the advance, which depends on
+  -- every other declared advancer's interleaving, so it admits state.
+  right "CLOCK_SIMULATED_ADVANCE" 29 "clockSimulatedAdvance" "unrecorded";
+  -- `CLASS_PROMOTE` answers the subject's resulting class and priority, and may
+  -- be refused from live policy state.
+  right "SCHEDULING_PROMOTE" 30 "schedulingPromote" "unrecorded";
+  -- `RESTART_ADMIT` answers a live attempt budget and a backoff instant.
+  right "LIFECYCLE_RESTART" 31 "lifecycleRestart" "unrecorded";
+  -- A parameter read answers a value another authorized holder can change.
+  right "PARAMETER_READ" 32 "parameterRead" "unrecorded";
+  right "PARAMETER_WRITE" 33 "parameterWrite" "neutral";
 };
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };

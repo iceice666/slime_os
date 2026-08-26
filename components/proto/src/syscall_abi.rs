@@ -20,6 +20,7 @@ pub mod lifecycle_labels {
     pub const WAIT_SOURCES: u64 = 49;
     pub const STATE_READ: u64 = 52;
     pub const STATE_ADVANCE: u64 = 53;
+    pub const RECORDING_SOURCES: u64 = 57;
 }
 
 pub mod spawn_labels {

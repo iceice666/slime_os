@@ -145,6 +145,16 @@ Semantics not visible in the table:
   nameable by a transfer (`capability_kind` in `slime-root/src/main.rs`). No
   other kind can move; an `Executable` or a factory reaches a child as a spawn
   grant or a declared binding, never as a transfer.
+- C9.5 narrows `CAPABILITY IMPORT` for one class of receiver, and only that one:
+  an import carrying a right `contracts/generation/v5` classifies `unrecorded` is
+  refused when the generation's recording resource declares the receiver
+  *deterministic*. Admission certifies that claim against the authority a
+  generation declares at launch, so without this an import could widen the
+  instance past what any recording captures and the claim would stay
+  authenticated while ceasing to be true. A receiver with no determinism claim —
+  every component in every generation before C9.5 — is unaffected, and the
+  refusal is on the import rather than the export because the export installs
+  nothing.
 - The 64-byte `capability-transfer/v1` descriptor is opaque to the root:
   `route_identity` and `direction` are bytes a userspace fabric uses to bind the
   move to a declared edge, and `FLAG_RETAIN_TRANSFER` is the descriptor's own

@@ -73,6 +73,11 @@ GENERATORS = (
         "lifecycle_policy.rs",
     ),
     (
+        ROOT / "contracts" / "recording-policy" / "v1" / "schema.zt",
+        "recording_policy.py",
+        "recording_policy.rs",
+    ),
+    (
         ROOT / "contracts" / "fabric-graph" / "v1" / "schema.zt",
         "fabric_graph.py",
         "fabric_graph.rs",

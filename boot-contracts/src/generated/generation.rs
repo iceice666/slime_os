@@ -103,6 +103,19 @@ pub const RIGHT_PARAMETER_READ: u64 = 4294967296;
 pub const RIGHT_PARAMETER_WRITE: u64 = 8589934592;
 pub const RIGHT_ALL: u64 = 17179738111;
 
+/// C9.5's nondeterminism classification, as masks over the same
+/// `rightBits` table `RIGHT_*` comes from.
+///
+/// `RIGHT_RECORDED` names the sources the recording captures, so a
+/// deterministic component may hold them; `RIGHT_UNRECORDED` names the
+/// sources no mechanism captures, so a component holding one cannot be
+/// declared deterministic. Every declared right is in exactly one class,
+/// including the neutral remainder these two masks exclude -- the renderer
+/// refuses to emit otherwise, so a right added without a classification is
+/// a build failure rather than a source silently treated as harmless.
+pub const RIGHT_RECORDED: u64 = 469762048;
+pub const RIGHT_UNRECORDED: u64 = 8103247091;
+
 /// The rights bit a generation manifest spells `name`, or `None`.
 ///
 /// Generated from the same `rightBits` table as `RIGHT_*` and the builder's
