@@ -5,10 +5,13 @@ on:
     branches: [main, develop]
   pull_request:
 
-# A superseded run is wasted arm64 capacity, and these gates are long.
+# A superseded run is wasted arm64 capacity, and these gates are long. This
+# cancels on branch pushes too, not just pull requests: without that, a new
+# push queues behind the previous run's slowest job (Miri, ~22 minutes) and
+# creates no jobs at all until it finishes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
