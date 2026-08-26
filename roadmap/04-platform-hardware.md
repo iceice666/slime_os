@@ -1,21 +1,21 @@
 # Platform hardware
 
-**Purpose:** Preserve the deferred Framework daily-driver hardware plan through typed, capability-routed services, deterministic QEMU/host checks, explicit DMA and storage safety gates, and reproducible physical evidence.
+**Purpose:** Preserve the deferred x86-64 Framework daily-driver qualification plan: bind the common [Native I/O substrate](11-io-substrate.md) to the target's firmware and buses, implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
 
 **Status:** Deferred relative to the Raspberry Pi 5 ROS 2 two-node demo. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
 
-**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6-style networking for the later external ROS wire profile, while the first RPi5 demo consumes a target-specific bounded stream/network path declared in the [RPi5 demo track](09-rpi5-ros2-demo.md) rather than H6 itself.
+**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 shared buffers and C9 scheduling/restart authority; the architecture-neutral [Native I/O substrate](11-io-substrate.md); and [Architecture portability](07-architecture-portability.md), especially P1's x86/platform source boundary. The common I/O track owns queue/epoch/lease semantics, hardware-resource capability classes, userspace virtio reference drivers, `LinkDevice`, and exact-destination network services. H owns only the Framework bindings, drivers, containment, promotion policy, and physical evidence.
 
-The Hardware track promotes hardware in two distinct steps: deterministic mechanism and fault handling under QEMU first, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
+The Hardware track promotes each Framework path in two distinct steps: deterministic device/service logic under host or QEMU checks, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs AMD-IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
 
-This track qualifies the named x86-64 Framework platform if and when Framework daily-driver work resumes. It does not own Raspberry Pi 5, generic ARM, or RISC-V support, and its ACPI, PCI, APIC, AMD-IOMMU, xHCI, NVMe, and firmware evidence must not become requirements for another architecture profile. Raspberry Pi 5 is admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
+This track qualifies one named x86-64 Framework platform. It does not own the portable I/O ABI, Raspberry Pi 5, generic Arm, or RISC-V support. ACPI, PCI BDF/BAR, APIC routes, AMD-IOMMU aliases, xHCI/NVMe identities, firmware methods, and physical observations remain Framework profile data and must not become universal Slime contracts. Raspberry Pi 5 is admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
 
 Sequencing:
 
 - H1 inventories the actual Framework firmware and device topology; later drivers consume that evidence rather than guessed BDFs, interrupt routes, or protocols.
-- P1 precedes H2 so x86 trap, page-table, interrupt, timer, and firmware details are already separated from shared capability semantics. H2 then gates every Framework userspace hardware driver. H3 proves xHCI, USB, and HID logic under QEMU; H4 adds AMD-IOMMU containment and promotes USB HID on the Framework.
-- H5 and H6 consume H4 and may proceed in parallel. H7 consumes H4 plus H5's disposable external-media path.
-- H8 may proceed after H2 because it uses the boot GOP framebuffer; H9 consumes the H1 ACPI inventory. H10 consumes every device service that must quiesce and resume.
+- IO0–IO2 establish the common queue/lease/resource ABI and userspace virtio-blk proof. H2 then binds IO1 to the Framework PCI/ACPI/APIC profile and gates every Framework userspace hardware driver. H3 implements xHCI, USB, and HID over the common substrate under deterministic checks; H4 adds AMD-IOMMU containment and promotes USB HID on the Framework.
+- H5 and H6 consume H4 and the common block/network services and may proceed in parallel. H7 consumes H4, IO2, and H5's disposable external-media path.
+- H8 may proceed after IO0/IO1 and H2 because it uses the boot GOP framebuffer; H9 consumes the H1 ACPI inventory. H10 consumes every device service that must quiesce and resume.
 - H11 and H12 are independent once their buses, input/audio/network services, and resume hooks exist. H13 consumes H4, H8, and H10. H14 is the integrated acceptance slice and consumes all preceding slices.
 
 ### H1: Framework evidence harness and hardware inventory
@@ -40,51 +40,51 @@ Planned verification target: `just framework_inventory_check`. The target is int
 
 Exit condition: the repository contains reproducible evidence for the target Framework's actual controller topology and the current keyboard failure is localized to a named initialization stage.
 
-### H2: Userspace driver authority ABI
+### H2: Framework PCI binding for userspace drivers
 
 **Status:** Not started.
 
-H2 consumes [C7's generation-v3 and shared-sample foundation](02-core-runtime.md#c7-bounded-resource-and-shared-sample-plane) and [P1's x86-64 architecture boundary](07-architecture-portability.md#p1-x86-64-architecture-boundary-extraction). C7 owns the deterministic v2-to-v3 migration, `u64` rights, retained-v2 decoding, and the general `SharedBufferFactory` create/map/release quotas; P1 prevents trap, page-table, interrupt-controller, and timer details from leaking into this ABI; H2 owns the Framework/x86 PCI-facing MMIO, DMA, IRQ, supervision, and rollback integration every later driver in this track consumes.
+H2 consumes [IO1's hardware resource authority](11-io-substrate.md#io1--hardware-resource-authority-and-dma-accounts), [H1's observed inventory](#h1-framework-evidence-harness-and-hardware-inventory), and [P1's x86-64 architecture/platform boundary](07-architecture-portability.md#p1-x86-64-architecture-boundary-extraction). IO1 owns the portable device/MMIO/interrupt/DMA capability classes, quotas, restart/reclamation rules, and separation between shared buffers and DMA mappings. H2 owns their concrete Framework PCI/ACPI/APIC binding and the target-qualified failure/rollback behavior every later Framework driver consumes.
 
 Deliverables:
 
-- consume C7's generation v3 `u64` rights and deterministic builder migration without changing v2 meanings; stage-0 continues to decode retained v2 known-good generations during the rollback window;
-- expose bounded operations for mapping only the granted PCI function's validated BAR ranges, allocating/mapping/releasing charged DMA buffers, waiting for and acknowledging only the granted interrupt, and using C7's bounded shared buffers;
-- make DMA, IRQ, and MMIO explicit named capabilities with hard per-driver quotas in the generation, and apply C7's shared-buffer quotas to driver IPC; remove the six ungated device-right exceptions from the capability matrix as their gates land;
-- supervise driver components so timeout, fault, peer loss, and reset are reported without terminating unrelated services; driver restart receives fresh mappings and cannot reuse stale DMA or IRQ authority;
-- declare every new driver IPC protocol schema-first under `contracts/`; clients see typed device services, never ambient PCI enumeration or raw global MMIO.
-- keep shared driver-service semantics expressed as capabilities, bounded mappings, DMA accounts, interrupt events, and typed endpoints; PCI BDFs, ACPI routes, APIC vectors, and AMD-IOMMU identifiers remain fields of the Framework profile rather than universal architecture contracts.
+- project H1's validated PCI functions, BAR ranges, interrupt routes, and device identities into bounded Framework profile resources that IO1 can construct without ambient PCI enumeration;
+- bind one granted PCI function to its exact MMIO subranges, APIC interrupt source, DMA account, shared-data endpoints, and supervision handle; deny undeclared functions and resources before mapping or binding;
+- keep PCI BDFs, BAR attributes, ACPI routes, APIC vectors, and later AMD-IOMMU aliases in the Framework profile while exposing only IO1's architecture-neutral resource capabilities to driver code;
+- define the Framework trusted-DMA bring-up profile explicitly: before H4, only deterministic QEMU fixtures or read-only physical probes on approved disposable paths may enable DMA-capable drivers, and no such run claims containment;
+- integrate driver restart and generation rollback with the Framework profile so every new instance receives freshly constructed resources and a fresh IO0 epoch, never stale MMIO, IRQ, or DMA authority;
+- remove the six ungated device-right exceptions from the capability matrix as the corresponding IO1/H2 gates land; device protocols remain schema-first and userspace-owned.
 
 Required checks:
 
-- an ungranted component cannot enumerate PCI functions, map a BAR, allocate DMA memory, receive or acknowledge an interrupt, or map another component's buffer;
-- BAR offsets, mapping lengths, DMA page counts, outstanding requests, interrupt queues, and shared-buffer totals are bounded before allocation or mapping;
-- a driver cannot program DMA outside buffers in its account at the software boundary, and reclamation remains impossible while a request is outstanding;
-- C7 proves that v2 and v3 artifacts are byte-deterministic for fixed normalized input and rejects unknown versions and rights bits; H2 proves that rollback to a retained v2 generation still boots with hardware authority failing closed;
-- driver failure revokes its mappings and returns charged resources before a supervised restart.
-- the P1 source-boundary guard rejects new x86 privileged mechanisms outside admitted architecture/platform files, while H2 tests may explicitly exercise the Framework PCI profile;
+- a driver granted one Framework PCI function cannot enumerate or map another function, BAR, interrupt route, or DMA account;
+- malformed or conflicting MCFG/ACPI/PCI/BAR/interrupt profile data fails before any mapping, interrupt binding, or bus mastering;
+- exact BAR offsets, mapping lengths, access modes, interrupt acknowledgements, and DMA/account bounds are validated by IO1 and cannot be widened by Framework profile data;
+- restart, rollback, and wrong-profile admission revoke the old bindings, return every charge, create a fresh epoch, and leave hardware authority unavailable when the retained generation lacks the new resource classes;
+- the P1 source-boundary guard rejects new x86 privileged mechanisms outside admitted architecture/platform files, while H2 tests may exercise the Framework PCI profile explicitly;
+- ordinary service clients see only typed semantic capabilities and never PCI identities, MMIO mappings, APIC vectors, DMA addresses, or global device enumeration.
 
 Planned verification target:
 
 ```sh
-just driver_abi_check
+just framework_driver_binding_check
 ```
 
-Exit condition: a manifest-declared userspace driver can access exactly one PCI function, bounded DMA buffers, its interrupts, and typed service endpoints without ambient hardware authority, while C7's generation and shared-buffer checks remain satisfied.
+Exit condition: one manifest-declared Framework userspace driver is bound to exactly one validated PCI function and its IO1 MMIO/DMA/interrupt resources, restart/rollback fails closed with fresh authority, and no Framework identifier leaks into the portable I/O ABI.
 
 ### H3: xHCI, USB core, and HID under QEMU
 
 **Status:** Not started.
 
-This slice proves the USB implementation before physical DMA promotion. It does not yet claim safe Framework xHCI operation.
+This slice implements the Framework xHCI/USB/HID stack over IO0/IO1 and the H2 PCI binding before physical DMA promotion. It proves the device-specific logic and transport-independent seat service under deterministic checks; it does not yet claim safe Framework xHCI operation.
 
 Deliverables:
 
-- implement a userspace xHCI driver over the H2 ABI with bounded command, event, and transfer rings and explicit controller reset/timeout handling;
-- implement root-hub and bounded hub enumeration, descriptor validation, address/configuration selection, endpoint lifecycle, disconnect cancellation, and per-device identities derived from topology plus validated descriptors;
+- implement a userspace xHCI driver over IO0 request/completion, lease, epoch, and cancellation rules plus H2-bound IO1 resources, with bounded command, event, and transfer rings and explicit controller reset/timeout handling;
+- implement root-hub and bounded hub enumeration, descriptor validation, address/configuration selection, endpoint lifecycle, disconnect cancellation, and per-device incarnation identities so reconnect cannot satisfy an old transfer;
 - implement USB HID keyboard and pointer boot protocols, key rollover bounds, press/release events, and hotplug;
 - route i8042 and USB HID through one versioned seat/input service so Dango and later compositor clients do not depend on the physical transport;
-- keep physical xHCI bus mastering disabled until H4 supplies an IOMMU domain.
+- keep xHCI commands, descriptors, endpoint policy, and HID semantics out of IO0/IO1 and `slime-root`, and keep physical xHCI bus mastering disabled until H4 supplies an IOMMU domain.
 
 Required checks:
 
@@ -109,7 +109,7 @@ Exit condition: QEMU xHCI keyboard and pointer input survive malformed devices, 
 Deliverables:
 
 - parse the target's ACPI IVRS data with strict bounds and identify the AMD IOMMU and device aliases from H1 evidence;
-- create one IOMMU domain per DMA-capable driver, map only its live H2 DMA buffers with the requested direction, invalidate translations before reuse, and enable PCI bus mastering only after the domain is active;
+- create one IOMMU domain per DMA-capable driver, map only its live IO1 DMA mappings for IO0 buffer leases with the requested direction, invalidate translations before reuse, and enable PCI bus mastering only after the domain is active;
 - report IOMMU faults with device identity, access type, and bounded address detail; quarantine the offending driver and complete its supervision handle with a distinct failure;
 - boot the Framework xHCI driver inside an enforced domain and bring up the actual built-in or attached USB keyboard identified by H1;
 - retain an emergency removable image that does not enable bus mastering and can reproduce the inventory report if IOMMU setup fails.
@@ -137,11 +137,11 @@ Exit condition: the Framework has observable keyboard input through the common s
 
 Deliverables:
 
-- implement one standards-based USB mass-storage transport proven by the target test device, with bounded command/data/status phases, sense decoding, timeout, reset, and surprise-removal handling;
-- expose USB media through the existing block protocol so filesystem, object-store, recovery, and generation services receive no transport-specific authority;
+- implement one standards-based USB mass-storage transport proven by the target test device, with bounded command/data/status phases, sense decoding, timeout, reset, surprise-removal handling, and IO0 terminal request/lease behavior;
+- expose USB media through [IO2's `BlockDevice` contract](11-io-substrate.md#io2--userspace-virtio-blk-and-asynchronous-blockdevice-plane) so filesystem, object-store, recovery, and generation services receive no USB-specific authority;
 - identify media by USB topology plus validated device identity and render an operator-visible distinction between removable test media and the internal NVMe;
-- require an exact BlockDevice capability for all reads and writes; default Framework generations grant removable media read-only and grant writes only to an explicitly selected disposable device;
-- make removal during an outstanding write fail the request and preserve the last committed filesystem/object-store root.
+- require an exact `BlockDevice` capability for all reads and writes; default Framework generations grant removable media read-only and grant writes only to an explicitly selected disposable device;
+- make removal during an outstanding write settle the IO0 request, release its lease/DMA mapping, return a structured block error, and preserve the last committed filesystem/object-store root.
 
 Required checks:
 
@@ -159,36 +159,36 @@ just usb_storage_check
 
 Exit condition: Slime OS has a capability-selected disposable physical storage target suitable for destructive reliability work without granting internal NVMe write authority.
 
-### H6: Network service, USB Ethernet, and destination authority
+### H6: Framework USB Ethernet qualification
 
 **Status:** Not started.
 
-H6 enables the later broader [ROS R1](03-ros2-compatibility.md#r1-broader-ros-2-topic-wire-profile). It is not the owner of the first [R0](03-ros2-compatibility.md#r0-minimal-raspberry-pi-5-zenoh-ros-2-topic-profile) demo path: that path still needs bounded stream/datagram authority, but the target-specific minimum lives in the RPi5 demo track rather than the deferred Framework hardware track. H6's deterministic virtio-net backend remains the x86-64 reference QEMU profile for later external ROS wire work.
+H6 consumes [IO3's `LinkDevice`](11-io-substrate.md#io3--userspace-virtio-net-and-linkdevice-validation), [IO4's network service and exact destination authority](11-io-substrate.md#io4--network-service-and-exact-destination-authority), H1's observed USB descriptors, H3's USB bus, and H4 containment. IO4—not H6—owns the link/IP/DNS/UDP/TCP protocols, `NetworkDestination`, socket/resource bounds, and deterministic virtio-net reference backend. H6 qualifies one Framework USB-Ethernet backend and its physical failure envelope.
 
 Deliverables:
 
-- declare versioned link, IP, DNS, UDP, TCP, and network-service protocols under `contracts/`, with a deterministic virtio-net QEMU backend and one Framework USB-Ethernet backend selected from H1 descriptors;
-- implement bounded Ethernet, ARP/NDP, IPv4/IPv6, ICMP, DHCP/SLAAC, UDP, TCP, and exact-name DNS resolution sufficient for native update and diagnostic clients;
-- add a `NetworkDestination` object in generation v3 identifying transport, exact IP address or exact DNS name, and port, with distinct CONNECT, SEND, RECV, and LISTEN rights; wildcard destinations are not admitted in the Hardware track;
-- keep DNS authority inside the network service: resolving an exact declared name does not grant the requesting component arbitrary resolver or raw-packet access;
-- account socket count, queued bytes, retransmission state, and per-destination traffic against bounded manifest data.
+- select one USB-Ethernet class/device from H1 evidence and implement its bounded USB transport as an IO3 `LinkDevice` backend without changing IO4's client ABI;
+- run the backend inside the H4 AMD-IOMMU domain, with IO0 request/lease epochs across unplug, USB reset, driver crash, and re-enumeration;
+- obtain link state and DHCP/SLAAC configuration through IO4, then reach only exact generation-declared destinations; the driver receives no DNS, socket, or ROS policy;
+- record Framework link identity, address assignment, allowed endpoint, unplug/replug behavior, driver restart, IOMMU state, and storage-integrity evidence;
+- after R1/R2 deterministic conformance passes, run a dedicated wired Framework ↔ 64-bit Raspberry Pi 4/5 peer fixture with the same pinned upstream probes, packet capture, link/peer restart behavior, and Framework storage-integrity evidence; this proves the Pi only as an external peer, not as a Slime-supported board.
 
 Required checks:
 
-- a component granted one destination connects only to that exact name/address, transport, and port; alternate address, port, DNS name, raw packet, and listen attempts fail closed;
-- malformed frames, DHCP options, DNS messages, fragmented packets, TCP options, retransmission exhaustion, and peer loss do not exceed bounds or wedge unrelated connections;
-- the manifest and authority-diff tooling enumerate every reachable destination;
-- QEMU transfers deterministic data to an allowed endpoint while a simultaneous denied endpoint receives no packet;
-- the Framework obtains a lease/address through USB Ethernet and reaches one declared endpoint after link unplug/replug and after a driver restart.
-- after R1/R2 deterministic container conformance passes, a dedicated wired Framework ↔ 64-bit Raspberry Pi 4/5 fixture runs the same pinned upstream probes under the admitted `rmw_zenoh` peer build, records packet capture and link/peer restart behavior, and preserves Framework storage integrity; this supplements but never replaces the R1/R2 QEMU gates and proves the Pi only as an external peer, not as a Slime-supported board.
+- malformed descriptors/frames, short transfers, RX exhaustion, TX saturation, unplug, USB reset, and driver crash stay within IO0/IO3 bounds and return every DMA/lease charge;
+- replacing or moving the USB adapter changes its declared device identity and cannot silently inherit the old backend authority;
+- the Framework obtains a lease/address, reaches one IO4-declared endpoint, and emits no packet to a simultaneous denied endpoint;
+- unplug/replug and supervised restart create fresh device/link epochs, reject stale completions/connections, and restore only the destinations still declared by the generation;
+- the USB-Ethernet driver cannot resolve names, open sockets, listen, or access raw packets outside the `LinkDevice` operations it serves;
+- pre/post internal-NVMe comparison evidence remains identical throughout the physical run.
 
 Planned verification target:
 
 ```sh
-just network_check
+just framework_usb_ethernet_check
 ```
 
-Exit condition: native components have useful wired networking while the generation, not ambient socket access, determines every reachable destination.
+Exit condition: the Framework reaches one exact IO4 destination through a physically observed, H4-contained USB-Ethernet `LinkDevice` that survives unplug and supervised restart without widening network authority or modifying internal storage.
 
 ### H7: Native NVMe reliability and internal-storage promotion
 
@@ -196,7 +196,7 @@ Exit condition: native components have useful wired networking while the generat
 
 Deliverables:
 
-- move the native NVMe transport behind the H2 userspace driver ABI and H4 IOMMU domain while preserving the common block protocol;
+- implement the target NVMe transport over IO0 request/lease/completion semantics, H2-bound IO1 resources, H4's IOMMU domain, and IO2's common `BlockDevice` contract;
 - add bounded interrupt-driven read, write, flush, timeout, abort/reset, and reinitialization paths for the exact target controller and namespace;
 - exercise destructive native-NVMe tests only with a dedicated replaceable NVMe installed for testing; the personal internal device is absent during those tests;
 - validate flush ordering, forced reset, abrupt power loss, torn metadata, malformed GPT/object-store/generation/BootState records, and recovery across the M5 commit boundaries;
@@ -226,10 +226,10 @@ Exit condition: internal NVMe writes are enabled only after deterministic and ph
 Deliverables:
 
 - move visible output from the global debug stream to a userspace compositor holding the sole framebuffer capability; retain serial as diagnostics rather than the interactive UI path;
-- declare versioned surface, damage, presentation, seat-focus, clipboard, and dialog protocols; clients render only into bounded shared buffers and cannot map the physical framebuffer;
+- declare versioned surface, damage, presentation, seat-focus, clipboard, and dialog protocols; clients render only into IO0-bounded shared-buffer leases and cannot map the physical framebuffer;
 - implement software composition, double buffering, damage tracking, cursor rendering, focus, keyboard/pointer routing, and a terminal surface hosting the native Dango session;
-- render the M6 powerbox as a compositor-owned modal dialog while preserving its user-gesture capability mint and cancellation semantics;
-- make display dimensions, pixel format, surface count, buffer bytes, damage rectangles, and event queues explicit bounds.
+- render the M6 powerbox as a compositor-owned modal dialog while preserving its user-gesture capability mint and IO0 cancellation semantics;
+- make display dimensions, pixel format, surface count, buffer bytes, damage rectangles, and event queues explicit bounds; display semantics remain H8-specific rather than generic I/O opcodes.
 
 Required checks:
 
@@ -307,11 +307,11 @@ Exit condition: the Framework repeatedly suspends and resumes through a checked,
 
 ### H11: I2C touchpad and audio service
 
-**Status:** Not started. Touchpad and audio are independent implementations and may proceed in parallel after their H2/H9 bus and resource descriptions are available.
+**Status:** Not started. Touchpad and audio are independent implementations and may proceed in parallel after their H2/H9 bus and resource descriptions and the applicable IO0/IO1 contracts are available.
 
 Touchpad deliverables and checks:
 
-- implement the Framework's firmware-described I2C controller and HID-over-I2C touchpad path with bounded reports, interrupt handling, reset, and resume;
+- implement the Framework's firmware-described I2C controller and HID-over-I2C touchpad path with bounded reports, interrupt handling, IO0 epochs/cancellation, reset, and resume;
 - route pointer contacts through the common seat service; gesture recognition, acceleration, palm rejection, and tap policy live in userspace;
 - reject malformed descriptors/reports and prove an ungranted component cannot read raw contacts or inject pointer events;
 - physically verify pointer movement, click, two-finger scroll, palm rejection, hot reset, and resume.
@@ -319,8 +319,8 @@ Touchpad deliverables and checks:
 Audio deliverables and checks:
 
 - select the HDA or ACP route from observed hardware/codec evidence rather than implementing an unused backend by assumption;
-- declare a versioned PCM service with bounded shared rings, playback/capture stream capabilities, volume/mute control, device routing, underrun/overrun reporting, and resume;
-- give the mixer sole hardware authority; clients cannot map audio DMA or read microphone samples without an explicit capture grant;
+- declare a versioned PCM service with bounded shared rings, playback/capture stream capabilities, volume/mute control, device routing, underrun/overrun reporting, and resume; reuse IO0 queue/lease/Notification mechanics without treating PCM periods as generic device opcodes;
+- give the mixer sole hardware authority through H2-bound IO1 resources; clients cannot map audio DMA or read microphone samples without an explicit capture grant;
 - verify deterministic virtual-backend mixing, client fault isolation, bounded latency, underrun recovery, speaker/headphone output, microphone capture, mute indication, and repeated suspend/resume on the Framework.
 
 Planned verification targets:
@@ -339,7 +339,7 @@ Exit condition: the Framework has daily-usable touchpad input and capability-iso
 Deliverables:
 
 - package required device firmware as content-addressed, release-authorized generation objects; drivers never search a global firmware path;
-- implement the MT7925/RZ717 Wi-Fi path inside an H4 IOMMU domain and attach it as another backend to the H6 network service;
+- implement the MT7925/RZ717 Wi-Fi path inside an H4 IOMMU domain and attach it as another IO3 `LinkDevice` backend to the IO4 network service;
 - support scan, association, WPA2/WPA3 personal authentication, reconnect, regulatory constraints, and suspend/resume with bounded stations, frames, retries, and key material lifetime;
 - accept Wi-Fi credentials through an explicit interactive service and keep them scoped to the network service; [A2](06-authority-trust.md) generalizes non-readable and revocable secrets rather than being bypassed here;
 - implement the combo device's observed Bluetooth transport, bounded HCI, pairing state, and the HID and audio profiles required for keyboard/pointer and headset use through the existing input/audio services.
@@ -367,9 +367,9 @@ Exit condition: the Framework has capability-preserving wireless networking and 
 
 Deliverables:
 
-- package Radeon firmware as release-authorized generation objects and run the display driver with exact PCI, interrupt, buffer, and IOMMU authority;
+- package Radeon firmware as release-authorized generation objects and run the display driver with H2-bound PCI/interrupt authority, IO1 DMA mappings, and H4 IOMMU containment;
 - take over the internal panel from GOP, set its validated native mode, page-flip compositor buffers, control the hardware cursor, recover from display/GPU faults, and restore the panel after suspend;
-- accelerate compositor-owned copy, fill, scaling, and composition operations while retaining the H8 software renderer as the correctness oracle and fallback;
+- accelerate compositor-owned copy, fill, scaling, and composition operations while retaining the H8 software renderer as the correctness oracle and fallback; reuse IO0 queue/lease/completion mechanics where appropriate without making GPU commands generic;
 - keep command submission private to the compositor/display service in the Hardware track; general application or compute queues and accelerator authority remain [A3](06-authority-trust.md) scope;
 - integrate panel brightness and thermal limits with H9 without moving policy into the driver.
 
@@ -419,7 +419,7 @@ Exit condition: the Framework target sustains the complete native daily-driver w
 
 ## Hardware track verification stack
 
-Every permanent change runs the narrowest QEMU or host-side scenario exercising its new behavior. Every physical promotion additionally records a removable-media Framework run; QEMU evidence alone cannot complete a hardware slice. The repository gates remain mandatory:
+Every permanent H change runs the narrowest deterministic device/service scenario and the applicable IO gate. Every physical promotion additionally records a removable-media Framework run; QEMU or IO evidence alone cannot complete an H slice. The repository gates remain mandatory:
 
 ```sh
 just contracts_check
@@ -436,11 +436,11 @@ Planned slice targets:
 
 ```sh
 just framework_inventory_check
-just driver_abi_check
+just framework_driver_binding_check
 just usb_hid_check
 just iommu_check
 just usb_storage_check
-just network_check
+just framework_usb_ethernet_check
 just storage_reliability_check
 just compositor_check
 just platform_service_check
@@ -455,14 +455,14 @@ just daily_driver_check
 
 ## Hardware track definition of done
 
-The Hardware track is complete only when all of the following are observed on the target Framework and backed by the deterministic checks above:
+The Hardware track is complete only when all of the following are observed on the target Framework and backed by the deterministic IO and device checks above:
 
-- every DMA-capable physical driver runs in an AMD-IOMMU domain that maps only its live generation-declared buffers, with fault isolation and supervised restart;
+- every DMA-capable physical driver consumes IO1 resources bound by H2 and runs in an H4 AMD-IOMMU domain that maps only its live IO0 leases, with fault isolation and supervised restart;
 - the built-in or attached keyboard, touchpad, pointer, display, audio, USB storage, USB Ethernet, Wi-Fi, and Bluetooth paths are usable through typed services rather than ambient hardware access;
-- applications receive input, display surfaces, audio streams, files, and network destinations only through explicit capabilities; the manifest can answer which component can reach which device or remote endpoint;
-- internal NVMe writes have passed the [M5.7](01-foundations.md) and H7 bounds, reset, flush, interruption, malformed-metadata, device-identity, rollback, and recovery gates on disposable hardware before promotion on the target device;
-- the compositor and Radeon driver survive client faults, driver reset, and suspend/resume with a software-rendered fallback;
+- applications receive input, display surfaces, audio streams, files, and IO4 network destinations only through explicit capabilities; the manifest can answer which component can reach which device or remote endpoint;
+- internal NVMe writes have passed the [M5.7](01-foundations.md), IO2, and H7 bounds, reset, flush, interruption, malformed-metadata, device-identity, rollback, and recovery gates on disposable hardware before promotion on the target device;
+- the compositor and Radeon driver survive client faults, stale completions, driver reset, and suspend/resume with a software-rendered fallback;
 - battery, charger, brightness, lid, and thermal state are observable, controls are explicitly authorized, and userspace owns policy;
-- suspend/resume repeatedly quiesces and restores storage, IOMMU, USB, input, display, network, wireless, and audio without stale DMA authority or BootState corruption;
+- suspend/resume repeatedly quiesces and restores storage, IOMMU, USB, input, display, network, wireless, and audio with fresh mappings/epochs and without BootState corruption;
 - per-component resource and energy accounting is visible and bounded, without silently introducing the [C9 scheduling-authority](02-core-runtime.md#c9-robot-runtime-authority) or [A1 revocation](06-authority-trust.md) models;
 - the integrated physical qualification run completes with no unauthorized internal-storage modification, no unbounded resource growth, and a signed removable recovery path that remains bootable.

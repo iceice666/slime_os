@@ -15,7 +15,7 @@ This track intentionally does **not** claim full ROS 2 compatibility, arbitrary 
 - The transport family is generation data. `contracts/rpi5-ros2-demo/v2` names it through a closed discriminator plus one optional profile record per admitted family, so replacing Zenoh with DDSI-RTPS — or the reverse — is a fixture change, not a contract migration. A userspace transport that could only be swapped by rewriting the acceptance contract would not be replaceable.
 - R0 uses static generation-declared peers, fixed endpoints, fixed key expressions, and one admitted message type. Arbitrary LAN discovery, Zenoh routers, gossip or multicast scouting, liveliness tokens, transport security, multiple middleware vendors, services/actions, and unmodified existing ROS packages are later milestones.
 - ROS node names, topic names, types, parameters, executors, QoS policy, and graph metadata stay in userspace. The kernel remains unaware of ROS and middleware concepts.
-- Stream, datagram, or network authority is explicit generation data. A loopback endpoint, TCP port, multicast group, or peer locator grants no authority unless the generation names it, and no component in the demo graph holds router, gossip, scouting, or discovery authority at all.
+- Stream, datagram, or network authority is explicit generation data supplied through the [Native I/O substrate](11-io-substrate.md). A loopback endpoint, TCP port, multicast group, or peer locator grants no authority unless the generation names it, and no component in the demo graph holds router, gossip, scouting, or discovery authority at all.
 - QEMU AArch64 evidence is required to de-risk architecture work, but a physical Raspberry Pi 5 run is the only exit evidence for board support.
 - Storage starts from reproducible removable media with no claim of internal-device writes. Any persistent state used by the demo is generation-declared and rollbackable.
 
@@ -26,7 +26,7 @@ This track intentionally does **not** claim full ROS 2 compatibility, arbitrary 
 3. RP2 proves the architecture-neutral capability, component, and generation semantics on `aarch64-sel4-qemu-virt`, where upstream seL4 supplies the privileged mechanism.
 4. RP3 promotes the minimum physical Raspberry Pi 5 boot path: firmware handoff, serial, memory map, timer, interrupt controller, and device tree.
 5. RP4 replays the two-component C7/C8 data path on Arm and then on the board.
-6. RP5 adds the minimum node runtime plus stream/network envelope needed to host the ROS 2 node route.
+6. RP5 consumes IO0/IO4 and adds only the minimum node-runtime integration needed to host the ROS 2 route.
 7. RP6 implements the minimal transport topic profile and packages the two ROS 2 nodes on the Slime component model.
 8. RP7 records the first complete physical middleware-backed data-transfer demo.
 9. RP8 makes the demo repeatable and bounded enough to serve as the new roadmap baseline.
@@ -230,12 +230,12 @@ Before the transport and ROS layers are introduced, two isolated components — 
 
 **Status:** Not started.
 
-**Depends on:** RP4, C10's private memory (complete), and the subset of clock/timer and datagram/network service required by R0. The clock/timer and executor halves are [C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority) and [C9.2](02-core-runtime.md#c92--bounded-userspace-wait-sets-and-executors), **both complete**; RP5 needed those two slices, not the whole C9 track, so nothing on the C9 side gates it now.
+**Depends on:** RP4, C10's private memory (complete), [IO0](11-io-substrate.md#io0--queue-identity-and-buffer-lease-contract), and [IO4](11-io-substrate.md#io4--network-service-and-exact-destination-authority). The clock/timer and executor halves are [C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority) and [C9.2](02-core-runtime.md#c92--bounded-userspace-wait-sets-and-executors), **both complete**; RP5 needed those two slices, not the whole C9 track.
 
 ### Deliverables
 
 - provide the minimum allocator, startup, argument/configuration, clock/timer, logging, executor/wait-set, and lifecycle hooks required by the two ROS 2 nodes and the minimal transport runtime;
-- provide the exact bounded byte-stream path the transport needs — for Zenoh Profile 0, one TCP link carrying length-prefixed batches — without granting raw packets or wildcard destinations;
+- consume the exact IO4 bounded byte-stream path the transport needs — for Zenoh Profile 0, one TCP connection carrying length-prefixed batches — without granting raw packets, arbitrary DNS, listen authority, or wildcard destinations;
 - package node and session configuration as deterministic generation data rather than environment variables, global paths, package indexes, or host filesystem state;
 - map every needed clock, parameter, filesystem/object, graph, session, endpoint, and logging operation to an explicit capability or a stable structured denial;
 - bound heap pages, executor queues, timers, log bytes, parameter bytes, transport receive queues, publisher/subscriber history, batches, retries, and outstanding messages before activation;
@@ -248,7 +248,7 @@ The envelope must stay within the mechanisms this repository already has, and bo
 - a node can allocate, initialize, spin, publish/subscribe through the transport runtime, log, and exit within its declared resource budget;
 - missing clock, route, session, endpoint, stream/network, parameter, file, or logging authority fails with a named error rather than fallback state;
 - an allocation, receive queue, batch buffer, or retry beyond the declared quota leaves the node/runtime alive enough to report the failure when the selected API permits it;
-- two node instances receive distinct endpoint, session, publisher/subscriber, and resource authority on restart and cannot reuse stale handles.
+- two node instances receive distinct endpoint, session, publisher/subscriber, IO request/connection epochs, and resource authority on restart and cannot reuse stale handles or completions.
 
 ### Planned verification target
 
@@ -361,6 +361,6 @@ The Raspberry Pi 5 two-node ROS 2 demo is repeatable, bounded, and reviewable: n
 
 - R1/R2 broaden the minimal R0 transport path into external peer, service, and action compatibility after RP8 unless explicitly reprioritized. R1's peer target is a pinned `rmw_zenoh` build, which R0's key expression, type hash, and message attachment are already shaped for.
 - R3 existing unmodified ROS workloads resume only after deciding whether the demo route should become a broader compatibility route.
-- Framework H1–H14 daily-driver work is deferred; its completed safety lessons still apply to physical evidence and storage boundaries.
+- Framework H1–H14 daily-driver work is deferred and consumes the common IO substrate rather than owning a parallel one; its physical-evidence and storage-safety rules still apply to Framework claims.
 - RV64 and distributed-authority work are deferred until the RPi5 ROS 2 demo is stable.
 - Native development/on-device build work may resume after RP8, with the demo as a target workload for build and live-update validation.

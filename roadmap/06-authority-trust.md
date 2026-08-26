@@ -4,7 +4,7 @@
 
 **Status:** Planned; A1–A5 are not implemented.
 
-**Dependencies:** Completed generation, state-binding, BootState, recovery, typed-channel, capability, and supervision foundations in [Foundations](01-foundations.md); runtime resource accounting, grant introspection, cross-machine sync, and **C9 scheduling authority** in [Core runtime](02-core-runtime.md); physical networking, accelerator, IOMMU, and Framework TPM enablement in [Platform hardware](04-platform-hardware.md). Foreign personalities consume these mechanisms through [Foreign workloads](05-foreign-workloads.md). ROS 2 interoperability remains separately owned by [ROS 2 compatibility](03-ros2-compatibility.md).
+**Dependencies:** Completed generation, state-binding, BootState, recovery, typed-channel, capability, and supervision foundations in [Foundations](01-foundations.md); runtime resource accounting, grant introspection, cross-machine sync, and **C9 scheduling authority** in [Core runtime](02-core-runtime.md); common queue/buffer/DMA/network mechanisms in the [Native I/O substrate](11-io-substrate.md); and physical accelerator, IOMMU, TPM, and target-backend enablement in [Platform hardware](04-platform-hardware.md). Foreign personalities consume these mechanisms through [Foreign workloads](05-foreign-workloads.md). ROS 2 interoperability remains separately owned by [ROS 2 compatibility](03-ros2-compatibility.md).
 
 ## Composite authority boundary
 
@@ -72,14 +72,14 @@ A scoped credential is usable but neither readable nor recordable: a USE-only ho
 
 **Status:** Planned; not implemented.
 
-**Dependencies:** Platform-hardware accelerator bring-up and IOMMU-enforced DMA in [Platform hardware](04-platform-hardware.md); SharedBuffer handoff; generation manifests; entry-9 grant introspection in [Core runtime](02-core-runtime.md); and [C9.3](02-core-runtime.md#c93--declared-scheduling-class) wherever queue ordering or preemption uses scheduling authority. Entry-25's conserved `ResourceAccount` is *not* available from Core runtime: C9 disclaims conserved CPU accounts while the pinned kernel is built `KernelIsMCS OFF`, so A3's compute budget must pick a unit it can actually charge — tokens, work items, or queue time per window — rather than inheriting a general account model. The existing `storage_cap_check` pattern is the rights-gating template, not evidence that accelerator authority exists. Source: [direction 28](../docs/directions/28-accelerator-objects.md).
+**Dependencies:** IO0 queue/lease/completion semantics and IO1 DMA authority from the [Native I/O substrate](11-io-substrate.md); platform-hardware accelerator bring-up and IOMMU-enforced DMA in [Platform hardware](04-platform-hardware.md); generation manifests; entry-9 grant introspection in [Core runtime](02-core-runtime.md); and [C9.3](02-core-runtime.md#c93--declared-scheduling-class) wherever queue ordering or preemption uses scheduling authority. Entry-25's conserved `ResourceAccount` is *not* available from Core runtime: C9 disclaims conserved CPU accounts while the pinned kernel is built `KernelIsMCS OFF`, so A3's compute budget must pick a unit it can actually charge — tokens, work items, or queue time per window — rather than inheriting a general account model. The existing storage-capability pattern is the rights-gating template, not proof that a GPU queue exists.
 
 ### Deliverables
 
 - An `Accelerator` object representing one compute device or queue class, with SUBMIT separated from queue creation, firmware loading, mode control, and any preemption authority.
 - Generation-declared, deterministically bounded compute budgets expressed as tokens, work items, queue time per window, or a selected resource-account quantity. The chosen unit, accounting window, reset behavior, and exhaustion response must be manifest-defined and auditable.
 - Structured rejection or throttling at budget exhaustion. Accelerator budget controls quantity; Core C9 owns scheduling class, ordering, and any authority to preempt.
-- IOMMU-constrained accelerator DMA limited to SharedBuffers the submitting component holds, with no parallel or ambient buffer-transfer mechanism.
+- IOMMU-constrained accelerator DMA limited to IO1 mappings of SharedBuffers the submitting component holds, with IO0 leases retaining those buffers through completion and no parallel or ambient buffer-transfer mechanism.
 - A capability-matrix row for the object and every right, landing with the driver and mechanism.
 - Manifest/grant-graph visibility for every component holding accelerator authority.
 
@@ -126,7 +126,7 @@ On the Framework target, reflashing an older generation fails stage-0 verificati
 
 **Status:** Planned; not implemented.
 
-**Dependencies:** A1 derivation-tree revocation; cross-machine sync; H6 networking from [Platform hardware](04-platform-hardware.md); typed channels and entry-7 membrane/interposition machinery from [Core runtime](02-core-runtime.md). A5 is authority transport and is independent of the ROS 2 R1/R2 DDSI-RTPS typed-data interoperability work in [ROS 2 compatibility](03-ros2-compatibility.md). Source: [direction 10](../docs/directions/10-distributed-capabilities.md).
+**Dependencies:** A1 derivation-tree revocation; cross-machine sync; IO4 networking and exact destination authority from the [Native I/O substrate](11-io-substrate.md); a target-qualified physical link backend where required; typed channels and entry-7 membrane/interposition machinery from [Core runtime](02-core-runtime.md). A5 is authority transport and is independent of the ROS 2 R1/R2 typed-data interoperability work in [ROS 2 compatibility](03-ros2-compatibility.md). Source: [direction 10](../docs/directions/10-distributed-capabilities.md).
 
 ### Deliverables
 

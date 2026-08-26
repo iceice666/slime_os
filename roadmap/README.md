@@ -18,6 +18,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [Component platform](10-component-platform.md) | **CP0–CP10 complete**, closing 2026-08-25 across CP6–CP10: `contracts/component-sdk-release/v1` describes an export, `scripts/lib/component_sdk.py` is the only thing that produces one, publication exports a detached checkout of the commit it records so a mirror commit regenerates byte-for-byte, each release ships a content-addressed seL4 prefix per target profile so an external build reads nothing under `slime_os/build/`, two real releases are classified against each other with every published matrix row backed by a build plus the boot that observed it, and a template consumer upgrades, boots, survives five injected failures, and reproduces the previous ELF and generation byte-for-byte on rollback | CP7's hosted-publication clause: every arm ran against a local clone of the canonical repository, so the first hosted commit needs the recorded source commit on `origin` and a release key outside this repository |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0, RP1, and RP2 complete. RP2 closed 2026-08-20 with `sel4-demo.zti`, the first generation carrying the C7 data path, the C8 route graph, and the product component graph together, plus the rollback and wrong-target arms it owed the demo; RP3–RP8 planned | RP3's Raspberry Pi 5 serial boot, deferred with P4 on a working USB-UART adapter |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5. P4's build path landed 2026-08-24: `bcm2712` is a second reproducible seL4 build platform with its own pinned artifact hashes, a forked `rust-sel4` supplying the loader platform upstream lacked, and a flat `kernel8.img` builder, all behind `just sel4_rpi5_image_check`/`just rpi5_media_check` | P4's board boot, **deferred on hardware**: artifacts and `just rpi5_boot_check` are ready and fail closed; the USB-UART adapter on hand emits nothing, and the debug UART is seL4's only console (it ships no display driver) |
+| [Native I/O substrate](11-io-substrate.md) | Not started; IO0–IO4 planned | IO0 fixes request/epoch/lease/queue semantics; IO1 grants bounded hardware resources; IO2 and IO3 prove userspace virtio-blk/net; IO4 owns exact-destination networking |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal Zenoh topic profile is first; broader external compatibility follows after the RPi5 demo path. The transport family is generation data, so it can be replaced without a new contract format |
 | [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |
@@ -33,7 +34,7 @@ The active lane is now the [RPi5 ROS 2 demo track](09-rpi5-ros2-demo.md). Work s
 3. **AArch64 QEMU boot:** closed. P5 established the profile on `aarch64-sel4-qemu-virt`, where seL4 owns EL1/EL0 transitions, the MMU, exceptions, timers, interrupts, and UART; RP2 closed the demo-scoped remainder on 2026-08-20 — one generation exercising the component-launch and data path together, plus rollback and wrong-target rejection on that same profile, all observed by `just sel4_demo_check`.
 4. **Raspberry Pi 5 physical boot:** build the `bcm2712` seL4 kernel/loader from the existing pins and platform config, bring up serial logging, the interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
 5. **Two-component data path on Arm:** run two isolated components — authored and built entirely outside this repository against the [Component platform track](10-component-platform.md)'s CP5 out-of-tree SDK — exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
-6. **Node and transport envelope:** provide only the allocator, startup, clock/timer, executor, bounded stream/network path, and packaging surface needed by the pinned ROS 2 transport profile.
+6. **Node and transport envelope:** consume the IO0/IO4 queue, stream/network, and exact-destination mechanisms, then provide only the allocator, startup, clock/timer, executor, and packaging surface needed by the pinned ROS 2 transport profile.
 7. **Minimal transport topic profile:** implement the fixed session, publisher/subscriber, key expression, classic CDR payload, message attachment, static declaration, and QoS subset for two nodes without introducing ambient discovery, a router, POSIX paths, or wildcard network authority.
 8. **Observed demo:** record the Raspberry Pi 5 run where one node publishes middleware-backed topic data and the other receives it, with bounded semantic/wire evidence and failure markers.
 9. **Hardening:** repeat the run, inject denial/restart/resource cases, and make the narrow RPi5 gates stable before resuming broader tracks.
@@ -55,6 +56,11 @@ flowchart TD
     P4["P4 Raspberry Pi 5 qualification"]
     C9["C9 robot runtime authority\nC9.1–C9.6"]
     C10["C10 private component memory\ncomplete"]
+    IO0["IO0 queue, epoch, lease"]
+    IO1["IO1 hardware resource authority"]
+    IO2["IO2 userspace virtio-blk"]
+    IO3["IO3 userspace virtio-net + LinkDevice"]
+    IO4["IO4 network + destination authority"]
     CP0["CP0 component-spec/v1\ncomplete"]
     CP1["CP1 system-spec/v1 + generation derivation\ncomplete"]
     CP2["CP2 runtime binding resolution"]
@@ -108,12 +114,20 @@ flowchart TD
     C8 --> C9
     P5 --> C9
     C10 --> RP5
+    C7 --> IO0
+    C9 --> IO0
+    P5 --> IO1
+    IO0 --> IO1 --> IO2 --> IO3 --> IO4
+    IO4 --> RP5
     C9 -.->|clock/timer, wait sets| RP5
-    R0 --> RP6
+    IO4 --> R0 --> RP6
     X1 -.->|only if chosen| RP6
     RP8 --> R1 --> R2
+    IO4 --> R1
     P2 -.->|later| RV64
     Foundations -.->|later| Framework
+    IO2 -.->|block substrate| Framework
+    IO4 -.->|network substrate| Framework
 ```
 
 ## RPi5 ROS 2 demo boundary
@@ -131,12 +145,12 @@ The demo is intentionally narrower than “full ROS 2 support”:
 
 Every track preserves these rules:
 
-1. Privileged mechanism only: seL4 owns scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, and timers; `slime-root` owns the dynamic mechanism above them — generation admission, task construction and reclamation, bounded object allocation, shared buffers, and fault supervision. Neither owns policy.
-2. Device, filesystem, generation, graph, discovery, QoS policy, health, activation, rollback, and ROS node policy live in userspace services.
-3. Authority is carried by explicit capabilities. There are no ambient executable paths, storage handles, working directories, streams, network destinations, discovery domains, or environment state.
+1. Privileged mechanism only: seL4 owns scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, and timers; `slime-root` owns the dynamic mechanism above them — generation admission, task/resource construction and reclamation, bounded object allocation, shared buffers, explicit hardware-resource grants, and fault supervision. Neither owns device semantics or policy.
+2. Device, filesystem, generation, graph, discovery, QoS policy, health, activation, rollback, and ROS node policy live in userspace services. Drivers consume explicit hardware capabilities and expose typed semantic capabilities; shared queues, leases, completions, Notifications, and WaitSets do not create a generic device protocol.
+3. Authority is carried by explicit capabilities. There are no ambient executable paths, storage handles, device enumeration, DMA addresses, working directories, streams, network destinations, discovery domains, or environment state.
 4. New object kinds or rights update `../docs/capability-matrix.md`, and new or renumbered operations update `../docs/syscall-abi.md`, in the same change, and ship with a real gate. Both are now gated rather than trusted: the rights vocabulary and the operation-label table are declared in `../contracts/` and generated, and `just contracts_check` fails when `syscall-abi.md` does not document every declared label (B57, B59).
-5. New IPC, ROS profile, demo trace, and persistent protocols are schema-first under `../contracts/`; generated or validated bindings cannot disagree on layout.
-6. Generation, storage, protocol, queue, retry, history, payload, and demo evidence data are deterministic, versioned, bounded, integrity checked, and rejected when malformed or unsupported.
+5. New IPC, I/O, ROS profile, demo trace, and persistent protocols are schema-first under `../contracts/`; generated or validated bindings cannot disagree on layout. Device-specific requests remain separate protocols and never become variants of one universal opcode.
+6. Generation, storage, protocol, queue, request epoch, lease, retry, history, payload, and demo evidence data are deterministic, versioned, bounded, integrity checked, and rejected when malformed, stale, or unsupported.
 7. Activation never overwrites the running generation in place, and a failed pending generation cannot consume the last selectable boot root. A generation in a superseded wire format counts as failed: the root refuses it (`UnsupportedVersion`, distinct from `BadMagic`) rather than migrating it, and the selector spends the pending attempt before decoding, so an undecodable candidate rolls back to known-good within its declared attempts instead of retrying forever. Format bumps are therefore *not* rollback-compatible by migration — they are rollback-*safe* by refusal, which `just sel4_boot_selection_check` observes (B64). Superseded `contracts/generation/vN` schemas are retained as format history and type-checked, never generated from.
 8. A QEMU pass cannot complete a physical Raspberry Pi 5 or Framework milestone.
 9. Every executable generation names one exact admitted target profile; stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
@@ -148,7 +162,7 @@ Every track preserves these rules:
 
 ### RPi5 ROS 2 two-node demo release
 
-Requires RP0–RP8. The release must boot a target-qualified Slime OS generation from reproducible Raspberry Pi 5 media, run two local ROS 2 nodes under the selected generation-declared transport route, move bounded topic data from publisher to subscriber, emit deterministic semantic and wire evidence of the exchange, and preserve the capability/component/generation invariants above. QEMU evidence and host checks support the claim but do not replace the physical board run.
+Requires RP0–RP8 and the IO slices RP5 consumes. The release must boot a target-qualified Slime OS generation from reproducible Raspberry Pi 5 media, run two local ROS 2 nodes under the selected generation-declared transport route, move bounded topic data from publisher to subscriber, emit deterministic semantic and wire evidence of the exchange, and preserve the capability/component/generation invariants above. QEMU evidence and host checks support the claim but do not replace the physical board run.
 
 ### AArch64 native architecture release
 
@@ -156,11 +170,11 @@ Requires P0, P1, and P2. It is a prerequisite for the RPi5 demo path but is not 
 
 ### ROS-interoperable external wire release
 
-Requires the minimal RPi5 demo path to be stable unless explicitly reprioritized, then R1 and R2 with their deterministic peer fixtures. R0 proves the minimum topic path; R1/R2 broaden it to external `rmw_zenoh` peers, services, and actions.
+Requires the minimal RPi5 demo path and IO4 to be stable unless explicitly reprioritized, then R1 and R2 with their deterministic peer fixtures. R0 proves the minimum topic path; R1/R2 broaden it to external `rmw_zenoh` peers, services, and actions.
 
 ### Framework daily-driver release
 
-Deferred. It still requires the Framework H1–H14 evidence if resumed, but it is no longer on the near-term critical path.
+Deferred. It still requires the Framework H1–H14 evidence plus the common IO slices each H milestone consumes, but it is no longer on the near-term critical path.
 
 ### Existing-workload release
 

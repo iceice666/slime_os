@@ -21,8 +21,8 @@ A profile name identifies a complete executable and platform contract, not only 
 
 ## Boundaries
 
-- Capability semantics, object identities, rights, channels, generation selection, BootState, release authorization, rollback, Zutai protocols, C7 shared samples, C8 typed routes, and ROS local/wire profiles remain architecture-neutral.
-- Trap frames, context switching, privilege transitions, page tables, TLB operations, interrupt controllers, timers, idle instructions, debug transports, QEMU exit paths, firmware handoff, device-tree parsing, and early boot mappings are architecture-specific mechanisms.
+- Capability semantics, object identities, rights, channels, generation selection, BootState, release authorization, rollback, Zutai protocols, C7 shared samples, C8 typed routes, IO queue/epoch/lease rules, hardware-resource capability classes, semantic block/link/network services, and ROS local/wire profiles remain architecture-neutral.
+- Trap frames, context switching, privilege transitions, page tables, TLB operations, interrupt controllers, timers, idle instructions, debug transports, QEMU exit paths, firmware handoff, device-tree/ACPI parsing, concrete MMIO addresses, PCI BDF/BAR data, interrupt routes, IOMMU/SMMU identifiers, and early boot mappings are architecture- or platform-specific mechanisms/data.
 - The generation `target` remains the signed complete platform profile. Release metadata continues to bind the exact target.
 - Kernel, component, and ROS node executables are built and authenticated per target. Architecture-neutral resource objects may be shared when their schemas and identities are byte-identical; executable objects are never assumed portable across targets.
 - A logical syscall operation has one semantic contract, error model, bounds, and rights checks. Each architecture has an explicit calling convention and trap instruction; register layouts are not serialized as a cross-architecture ABI.
@@ -296,7 +296,7 @@ The cheap unblock is a different USB-UART adapter.
 - build the `bcm2712` upstream seL4 kernel and loader image from the existing pins and platform configuration, alongside the current `sel4/config/qemu-arm-virt.cmake`, and pin its artifact hashes the same way;
 - source the board's memory map, UART, GIC, and timer facts from seL4's BootInfo and its platform configuration rather than from any Slime-side board table;
 - record reproducible removable-media images, generation/release identities, firmware and board identities, normalized device tree/topology, serial evidence, storage-integrity boundaries, and every granted device capability;
-- qualify DMA, storage writes, networking, sensors, and actuators only through their owning demo or hardware milestones; a CPU boot does not promote an untested peripheral;
+- qualify DMA, storage writes, networking, sensors, and actuators only through their owning IO, demo, or hardware milestones; a CPU boot does not promote an untested peripheral or backend;
 - replay the AArch64 QEMU semantic corpus on the board where physically meaningful, labeling hardware-only differences instead of hiding them;
 - provide the board evidence consumed by RP3, RP4, RP7, and RP8.
 
@@ -693,6 +693,8 @@ in-memory one `boot-contracts` already has.
 
 **M5.7 is out of scope for all three.** NVMe is a different transport and its
 exit condition additionally requires an observed physical Framework boot.
+
+**Forward ownership:** P5.4.2's completed device/MMIO/IRQ/DMA and root-owned virtio-blk work remains the historical evidence that restored the seL4 storage planes. Generalizing those mechanisms, moving the driver to a supervised component, and defining future block/link/network substrate contracts now belongs to [IO0–IO4](11-io-substrate.md); this note does not reinterpret P5's observed result.
 
 #### Exit condition
 

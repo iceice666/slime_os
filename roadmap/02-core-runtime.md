@@ -24,8 +24,8 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 2. C8 consumes C7's bounded sample plane.
 3. C9 consumes C8 plus P5's timer, interrupt, context-switch, and idle mechanisms. It is decomposed into C9.1–C9.6, sequenced so each slice's evidence is the next one's precondition: clock authority, then wait sets over it, then class, then restart, then replay, then the composed workload.
 4. C10 consumed C7's per-holder quota and accounting pattern only; it did not consume C8 or C9, and closed 2026-08-24.
-5. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
-6. ROS R1 consumes C8 and H6 networking; it does not block C9, and its initial wire-conformance gate does not require a physical-board boot.
+5. IO0/IO1 consume C7's generation-v3 shared-buffer/loan foundation, C9.2's bounded WaitSets, C9.4's restart/reclamation behavior, and P1/P5's architecture boundary to define the common userspace-driver substrate. Framework H2 consumes IO1 rather than owning a second driver ABI.
+6. ROS R0/R1 consume C8 plus IO4 networking and exact destination authority; they do not block C9, and their initial wire-conformance gates do not require a physical-board boot.
 
 ## C7: Bounded resource and shared-sample plane
 

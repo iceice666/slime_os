@@ -417,6 +417,7 @@ Continue with the [roadmap index](README.md) and the current demo-first track be
 
 - [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md)
 - [Core runtime](02-core-runtime.md)
+- [Native I/O substrate](11-io-substrate.md)
 - [ROS 2 compatibility](03-ros2-compatibility.md)
 - [Platform and hardware](04-platform-hardware.md)
 - [Foreign workloads](05-foreign-workloads.md)
