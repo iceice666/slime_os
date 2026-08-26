@@ -336,7 +336,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-25 | [CP6–CP10: one exporter, one published mirror, and a consumer that can roll back](2026-08-25-cp6-cp10-component-sdk-releases/index.md) | Change | Verified | CP6, CP7, CP8, CP9, CP10, CP5 |
 | 2026-08-26 | [C9.5: recorded means captured, and the one grant that carries the recording](2026-08-26-c9-5-typed-recording-replay/index.md) | Change | Verified | C9.5, C9, C9.1, C9.2, C9.4, C8.11, C8.15, B23, B57, B70, B71 |
 | 2026-08-26 | [C9.6: a robot workload that survives its own restart, on the mechanisms C9 shipped](2026-08-26-c9-6-robot-workload-composition/index.md) | Change | Verified | C9.6, C9, C9.1, C9.2, C9.3, C9.4, C9.5, C8.10, C8.15, B70, B75, B76 |
-| 2026-08-26 | [CP7 hosted publication hardening: one atomic release and one credential](2026-08-26-cp7-hosted-publication-hardening/index.md) | Change | Verified | CP7 |
+| 2026-08-26 | [CP7's hosted publication: one atomic release, one credential, and the first hosted commits](2026-08-26-cp7-hosted-publication-hardening/index.md) | Change | Verified | CP7 |
 | 2026-08-26 | [Planning IO0–IO4: one portable substrate, with Framework qualification left in H](2026-08-26-io-substrate-track/index.md) | Decision | Proposed | IO0, IO1, IO2, IO3, IO4, H2, H3, H4, H5, H6, H7, H8, H11, H12, H13, RP5, R0, R1, X1, X2, A3, A5, C7, C9.2, C9.4, P1, P4, P5.4.2, M5.7 |
 | 2026-08-26 | [God-file modularization by runtime ownership](2026-08-26-god-file-modularization/index.md) | Change | Verified | none |
 | 2026-08-26 | [Obsolete stage0 and custom-kernel handoff retirement](2026-08-26-stage0-retirement/index.md) | Change | Verified | P5, P5.4.final |
