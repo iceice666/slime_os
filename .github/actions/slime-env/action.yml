@@ -42,22 +42,67 @@ runs:
           keep-env-derivations = true
           keep-outputs = true
 
-    # `~/.rustup` rides along with the store because the dev shell's hook
-    # installs both pinned toolchains on first entry; without it every job
-    # re-downloads two nightlies before running a single check.
+    # `~/.rustup` and `~/.cargo` ride along with the store. The dev shell's
+    # hook installs both pinned toolchains on first entry, and the seL4 build
+    # is deliberately `--offline`, so without these every job re-downloads two
+    # nightlies and then fails to resolve a dependency.
     - uses: nix-community/cache-nix-action@v7
       with:
         primary-key: >-
           slime-${{ runner.os }}-${{ runner.arch }}-${{
-            hashFiles('flake.lock', 'flake.nix', 'sel4/pins.toml', 'rust-toolchain.toml')
+            hashFiles('flake.lock', 'flake.nix', 'sel4/pins.toml',
+                      'rust-toolchain.toml', '**/Cargo.lock')
           }}
         restore-prefixes-first-match: slime-${{ runner.os }}-${{ runner.arch }}-
         gc-max-store-size-linux: 5G
         paths: |
           ~/.rustup
+          ~/.cargo/registry
+          ~/.cargo/git
 
     # Realize the shell and run its toolchain hook once, so a later step's
     # failure is the gate's failure rather than an environment download.
     - name: Enter the dev shell
       shell: bash
       run: nix develop --command just --version
+
+    # `build-sel4.py` builds every crate `--locked --offline`, deliberately: a
+    # build that may reach the network is not the pinned build the observed
+    # prefix hashes describe. Populating the cargo cache is therefore the
+    # environment's job.
+    - name: Fetch pinned crates
+      shell: bash
+      run: |
+        set -euo pipefail
+        toolchain="$(nix develop --command python3 -c \
+          "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
+        # Our own workspaces: three of them, each with its own lockfile,
+        # because `cargo fetch` resolves one manifest at a time.
+        for manifest in Cargo.toml slime-root/child/Cargo.toml deps/rust-sel4/Cargo.toml; do
+          echo "::group::cargo fetch $manifest"
+          nix develop --command cargo fetch --locked --manifest-path "$manifest"
+          RUSTUP_TOOLCHAIN="$toolchain" \
+            nix develop --command cargo fetch --locked --manifest-path "$manifest"
+          echo "::endgroup::"
+        done
+        # And the standard library's own workspace, which is the one that
+        # actually broke: `-Z build-std` compiles `sysroot` from `rust-src`,
+        # and that workspace pulls crates.io dependencies of its own
+        # (`unwinding`, `compiler_builtins`, ...) which no manifest above
+        # names. Fetching only our lockfiles left the child build resolving
+        # `unwinding` offline against an empty cache.
+        for tc in "$toolchain" ""; do
+          sysroot="$(RUSTUP_TOOLCHAIN="$tc" nix develop --command rustc --print sysroot | tail -1)"
+          library="$sysroot/lib/rustlib/src/rust/library"
+          # Absent unless `rust-src` is installed for that toolchain; the dev
+          # shell's hook installs it for both, so a miss is worth reporting
+          # rather than skipping silently.
+          if [ ! -f "$library/Cargo.toml" ]; then
+            echo "no rust-src library workspace at $library" >&2
+            exit 1
+          fi
+          echo "::group::cargo fetch rust-src (${tc:-default})"
+          RUSTUP_TOOLCHAIN="$tc" \
+            nix develop --command cargo fetch --locked --manifest-path "$library/Cargo.toml"
+          echo "::endgroup::"
+        done
