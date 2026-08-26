@@ -67,5 +67,7 @@ model in 64 lines.
 - [Capabilities](capabilities.md) — what a grant actually conveys.
 - [Channels](channels.md) — how components talk.
 - [Generations](generations.md) — where the declarations come from.
+- [Add a component](../getting-started/05-add-a-component.md) — the procedural
+  path from an in-tree crate to a composed, authorized, QEMU-observed instance.
 - ABI detail: [`../syscall-abi.md`](../syscall-abi.md), including the child
   CSpace layout.

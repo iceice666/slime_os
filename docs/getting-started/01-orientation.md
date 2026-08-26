@@ -60,3 +60,5 @@ Two habits distinguish this repository; adopting them early saves friction:
 2. [Boot walkthrough](03-boot-walkthrough.md) — understand what you saw.
 3. The five concept pages, in table order above.
 4. [Your first change](04-first-change.md) — the workflow, end to end.
+5. [Add a component](05-add-a-component.md) — take new code through
+   declaration, composition, authority, and QEMU evidence.

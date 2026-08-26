@@ -90,3 +90,9 @@ Then the record-keeping, which is not optional ceremony here:
 
 `AGENTS.md` carries the full statement of these rules; this page is the
 tour, that file is the law.
+
+## Next
+
+This page changes existing behavior. To add a new component end to end — crate,
+declaration, composition, authority, launch policy, and observed QEMU behavior —
+continue with [Add a component](05-add-a-component.md).

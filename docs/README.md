@@ -17,6 +17,8 @@ first-class concepts, current status, and non-goals. Then:
    the verification gates consume that serial record.
 4. [Your first change](getting-started/04-first-change.md) — the workflow end
    to end: routing, gates, contracts, devlog.
+5. [Add a component](getting-started/05-add-a-component.md) — create the crate,
+   declare it, compose it, grant authority, and prove it under QEMU.
 
 ## Concepts
 
