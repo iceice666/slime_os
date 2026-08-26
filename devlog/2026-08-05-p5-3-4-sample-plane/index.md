@@ -235,7 +235,7 @@ too, and only a live-child count recovers.
   transcript, captured 2026-08-05 from `build/slime-sel4-sample.elf` as built by
   `just sel4_sample_check`. Frozen; corrections are appended, never edited in.
 - Fixture rationale:
-  [`contracts/generation/v1/fixtures/sel4-sample.md`](../../contracts/generation/v1/fixtures/sel4-sample.md).
+  [`contracts/generation-manifest/v1/compositions/sel4-sample.md`](../../contracts/generation-manifest/v1/compositions/sel4-sample.md).
 
 ### Fault injection
 
@@ -260,3 +260,7 @@ nothing in P5.3.3 exposed it, because no spawned child had ever allocated.
 The fifth reproduces the state the code was in when review found it, and the
 recovery arm catches it — which is the evidence that the arm is worth its line
 rather than a restatement of the refusal above it.
+
+## Corrections
+
+- **2026-08-26:** This entry's fixture link now names `contracts/generation-manifest/v1/compositions/`; only the path moved, so the manifest bytes and every conclusion above are unchanged.

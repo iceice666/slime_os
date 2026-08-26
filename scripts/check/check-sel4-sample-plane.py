@@ -3,7 +3,7 @@
 """P5.3.4 gate: the C7 sample plane, composed on seL4.
 
 Boots `build/slime-sel4-sample.elf` -- the image whose root task embeds the
-sample-plane generation, `contracts/generation/v1/fixtures/sel4-sample.zti` --
+sample-plane generation, `contracts/generation-manifest/v1/compositions/sel4-sample.zti` --
 and asserts P5.3's exit condition:
 
     Two components exchange and return a payload larger than the
@@ -31,14 +31,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-sample.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-sample.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-sample.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-sample.zti"
 IMAGE_VARIANT = "sample"
 
 BOOT_TIMEOUT_SECONDS = 180

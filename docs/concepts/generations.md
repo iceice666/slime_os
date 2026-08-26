@@ -75,7 +75,7 @@ with the generation that owns it.
   and `just generation_check`; run both for any generation-format or builder
   change.
 - Grants, slots, and budgets for a component come from the fixtures under
-  `contracts/generation/v1/fixtures/` — change authority there, not in
+  `contracts/generation-manifest/v1/fixtures/` — change authority there, not in
   component code, and expect the boot-layout gate to show the diff.
 - Retired format versions keep their directories as decodable history for
   the bounded rollback window; deleting one is a format decision, not a

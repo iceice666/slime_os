@@ -11,9 +11,8 @@ import subprocess
 import sys
 from zutai_cli import STDLIB, binary
 
-from harness import ROOT
+from harness import GENERATION_CONTRACT, ROOT
 
-GENERATION_CONTRACT = ROOT / "contracts" / "generation" / "v1"
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-block-bindings.py"
 COMPONENT_CONTRACT = ROOT / "contracts" / "component" / "v1"

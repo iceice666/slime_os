@@ -604,7 +604,7 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
     # and one granted no pages cannot create any. Mapping without creating is
     # ordinary: `fabric-subscriber` maps loaned pages it never allocated, which
     # is exactly what `sharedBufferBudget` grants it in
-    # `contracts/generation/v1/fixtures/valid.zti`. So the rule is between pages
+    # `contracts/generation-manifest/v1/fixtures/valid.zti`. So the rule is between pages
     # and buffers, not between mappings and buffers.
     if resource["bufferCount"] and not resource["bufferBytePages"]:
         _fail("runtime.resource: buffers declared with no page allowance")

@@ -6,7 +6,7 @@
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
-**Motivating gap (confirmed 2026-08-17):** every one of `components/bins`'s 52 `[[bin]]` entries (`components/bins/Cargo.toml`, `autobins = false`) compiles against four files `components/bins/build.rs` privately generates from `contracts/generation/v1/fixtures/*.zti` by ad hoc string parsing, through three generator functions (`generate_boot_layout` at lines 57–66, `generate_command_profile` at lines 68–175 emitting both `command_profile.rs` and `dango_profile.rs`, `generate_fabric_profile` at lines 177–197) and `include!`s directly into component source at 19 sites across 17 files (confirmed at `components/bins/src/bin/spawn-service.rs:32`, `init.rs:37,118`, `fabric-publisher.rs:50`, and fourteen further files). `scripts/build/build-generation.py` builds every component with one command, `cargo build --release --target <profile> -p slime-components --bin <name> ...` (confirmed at lines 2413–2461), with no parameter accepting a component built anywhere else. The root-side admission path (`slime-root/src/generation.rs`, `child_vspace.rs`) needs no change to admit a new component; every blocker is in the host build pipeline and the single-crate `[[bin]]` design.
+**Motivating gap (confirmed 2026-08-17):** every one of `components/bins`'s 52 `[[bin]]` entries (`components/bins/Cargo.toml`, `autobins = false`) compiles against four files `components/bins/build.rs` privately generates from `contracts/generation-manifest/v1/fixtures/*.zti` by ad hoc string parsing, through three generator functions (`generate_boot_layout` at lines 57–66, `generate_command_profile` at lines 68–175 emitting both `command_profile.rs` and `dango_profile.rs`, `generate_fabric_profile` at lines 177–197) and `include!`s directly into component source at 19 sites across 17 files (confirmed at `components/bins/src/bin/spawn-service.rs:32`, `init.rs:37,118`, `fabric-publisher.rs:50`, and fourteen further files). `scripts/build/build-generation.py` builds every component with one command, `cargo build --release --target <profile> -p slime-components --bin <name> ...` (confirmed at lines 2413–2461), with no parameter accepting a component built anywhere else. The root-side admission path (`slime-root/src/generation.rs`, `child_vspace.rs`) needs no change to admit a new component; every blocker is in the host build pipeline and the single-crate `[[bin]]` design.
 
 ## Boundaries
 
@@ -37,7 +37,7 @@
 
 **Status:** Complete.
 
-**Delivered:** `contracts/component-spec/v1` declares a bounded, closed-vocabulary `ComponentSpec` covering the twelve sections `spec/requirement-document-v0.6.md` §2.1 names, with 42 records — one per component `contracts/generation/v1/fixtures/valid.zti` declares — each cross-checked field by field against that manifest and its fabric graph, and each identified by `contracts/interface-schema/v1`'s own normalization convention rather than a second one.
+**Delivered:** `contracts/component-spec/v1` declares a bounded, closed-vocabulary `ComponentSpec` covering the twelve sections `spec/requirement-document-v0.6.md` §2.1 names, with 42 records — one per component `contracts/generation-manifest/v1/fixtures/valid.zti` declares — each cross-checked field by field against that manifest and its fabric graph, and each identified by `contracts/interface-schema/v1`'s own normalization convention rather than a second one.
 
 **Exit condition (observed):** `just component_spec_check` validates all 42 records against the 4 declared interfaces and the reference generation, refusing 37 named malformations with stable identities, and reports the two components the repository declares but ships no implementation for (`generation-list`, `storage-store-probe`); `just contracts_check` type-checks the new contract and its generated bindings.
 
@@ -49,9 +49,9 @@
 
 **Status:** Complete.
 
-**Delivered:** `contracts/system-spec/v1` declares a composition — its components, authority edges, notifications, fabric graph, and boot profiles — and `scripts/generate/generate-generation-from-spec.py` derives a `contracts/generation/v1` manifest's `executables`, `instances`, `objects`, `sharedBufferBudget`, and `health.requiredInstances` from it plus the CP0 component corpus. Reaching byte equivalence required sorting `declared_spawn_grant_counts`, whose raw-manifest-order output reached `init`'s compiled `FABRIC_MINTED_GRANTS` and so made instance order change a component ELF.
+**Delivered:** `contracts/system-spec/v1` declares a composition — its components, authority edges, notifications, fabric graph, and boot profiles — and `scripts/generate/generate-generation-from-spec.py` derives a `contracts/generation-manifest/v1` manifest's `executables`, `instances`, `objects`, `sharedBufferBudget`, and `health.requiredInstances` from it plus the CP0 component corpus. Reaching byte equivalence required sorting `declared_spawn_grant_counts`, whose raw-manifest-order output reached `init`'s compiled `FABRIC_MINTED_GRANTS` and so made instance order change a component ELF.
 
-**Exit condition (observed):** `contracts/generation/v1/fixtures/valid.zti` and `sel4-channel.zti` are generator output, regenerate byte-identically under `--check`, and reproduce the frozen pre-CP1 baselines; building `sel4-channel` from the derived fixture yields byte-identical `generation.bin` and `boot-store.bin`, and `sel4_channel_check`, `sel4_component_graph_check`, `sel4_boot_check`, `sel4_generation_check`, `sel4_dango_check`, and `sel4_boot_layout_check` (25 plane layouts) all pass on QEMU.
+**Exit condition (observed):** `contracts/generation-manifest/v1/fixtures/valid.zti` and `sel4-channel.zti` are generator output, regenerate byte-identically under `--check`, and reproduce the frozen pre-CP1 baselines; building `sel4-channel` from the derived fixture yields byte-identical `generation.bin` and `boot-store.bin`, and `sel4_channel_check`, `sel4_component_graph_check`, `sel4_boot_check`, `sel4_generation_check`, `sel4_dango_check`, and `sel4_boot_layout_check` (25 plane layouts) all pass on QEMU.
 
 **Gates:** `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_check`, `just sel4_generation_check`.
 
@@ -121,7 +121,7 @@ no answer.
 and "the executable this command name spawns" are graph-shape facts a
 kind/rights query cannot distinguish, not properties of one capability;
 resolving them needs a binding to carry a stable logical role, which is a
-`contracts/generation/v1` format change. `init`'s remaining ~134 boot-layout
+`contracts/generation-manifest/v1` format change. `init`'s remaining ~134 boot-layout
 constants (of 136; 2 migrated) are the same fabric-profile-shaped question as
 `fabric_profile`'s 46 non-slot constants — the `fabric_profile` sites are a
 distinct case: 46 of its 64 constants are graph facts (route tables, QoS depths,

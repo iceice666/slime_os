@@ -26,6 +26,14 @@ CHECK_SCRIPTS = SCRIPTS / "check"
 GENERATE_SCRIPTS = SCRIPTS / "generate"
 LIB_SCRIPTS = SCRIPTS / "lib"
 
+# The generation-manifest contract. `fixtures/` holds the two schema-conformance
+# fixtures `check-valid.zt` and `check-invalid.zt` decode; `compositions/` holds
+# the product and plane manifests `build-generation.py` encodes. Separate from
+# `contracts/generation/v{2..5}`, which is the boot-time *binary* format.
+GENERATION_CONTRACT = ROOT / "contracts" / "generation-manifest" / "v1"
+GENERATION_FIXTURES = GENERATION_CONTRACT / "fixtures"
+GENERATION_COMPOSITIONS = GENERATION_CONTRACT / "compositions"
+
 
 # Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
 # loudly instead of hanging the check forever.

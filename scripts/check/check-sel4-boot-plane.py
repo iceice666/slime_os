@@ -35,14 +35,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-boot.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-boot.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-boot.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-boot.zti"
 IMAGE_VARIANT = "boot"
 BOOT_TIMEOUT_SECONDS = 300
 # How long the transcript may go silent after the healthy record before the

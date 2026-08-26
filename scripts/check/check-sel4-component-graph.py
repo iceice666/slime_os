@@ -30,7 +30,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_CONTRACT, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -133,7 +133,7 @@ COMPATIBILITY_SOURCE_ROOTS = (
 COMPATIBILITY_SOURCE_FILES = (
     ROOT / "scripts" / "build" / "build-generation.py",
     ROOT / "scripts" / "check" / "check-generation.py",
-    ROOT / "contracts" / "generation" / "v1" / "schema.zt",
+    GENERATION_CONTRACT / "schema.zt",
     ROOT / "contracts" / "generation" / "v5" / "schema.zt",
     ROOT / "contracts" / "generation" / "v5" / "gen_rust.zt",
     ROOT / "boot-contracts" / "src" / "generation.rs",

@@ -183,7 +183,7 @@ Semantics not visible in the table:
   `SharedBufferTable::loan`, and a released creator's pages and buffer charge
   stay retained until the final single-return loan settles.
 - The reference generation declares that budget in practice, not only in
-  principle: `contracts/generation/v1/fixtures/valid.zti` carries a
+  principle: `contracts/generation-manifest/v1/fixtures/valid.zti` carries a
   `shared-buffer-budget` `KIND_RESOURCE` object with eleven holder quotas and
   seven `bufferCreate` grants. The grant authorizes the operation and the budget
   bounds it: a component with a grant but no budget entry still allocates

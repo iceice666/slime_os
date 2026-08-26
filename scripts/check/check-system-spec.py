@@ -3,7 +3,7 @@
 """CP1 system-specification and generation-derivation gate.
 
 Validates every `contracts/system-spec/v1/systems/*.zti` against the component
-specs it references, derives a `contracts/generation/v1` manifest from each, and
+specs it references, derives a `contracts/generation-manifest/v1` manifest from each, and
 requires the derived manifest to be semantically identical to the committed
 fixture it replaces — same components, same authority, same graph, same resolved
 slots, same admitted bytes.
@@ -34,10 +34,10 @@ from component_spec import admit_specs, interface_catalogue
 from harness import ROOT, load_script
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
-    GENERATION_FIXTURES,
     SystemSpecError,
     compile_system,
     derive_manifest,
+    derived_manifest_path,
     system_paths,
 )
 from zutai_cli import STDLIB, binary
@@ -350,7 +350,7 @@ for name, system in sorted(systems.items()):
 #     true against a fixture nobody could reproduce, and the fixtures would drift
 #     back into hand-edited text one edit at a time.
 for name, system in sorted(systems.items()):
-    fixture = GENERATION_FIXTURES / DERIVED_FIXTURES[name]
+    fixture = derived_manifest_path(DERIVED_FIXTURES[name])
     rendered = zti(derive_manifest(system)) + "\n"
     if fixture.read_text(encoding="utf-8") != rendered:
         fail(
@@ -363,7 +363,7 @@ for name, system in sorted(systems.items()):
     if normalized(derive_manifest(system)) != normalized(derive_manifest(system)):
         fail(f"{name}: two derivations of one system spec disagree")
 
-# 3. Every derived manifest is a real `contracts/generation/v1` record: written
+# 3. Every derived manifest is a real `contracts/generation-manifest/v1` record: written
 #    out, it decodes under the generation schema. A derivation that produced a
 #    shape the manifest contract rejects would pass every check above.
 with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary:

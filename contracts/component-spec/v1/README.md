@@ -8,7 +8,7 @@ normative shape, `components/*.zti` is the corpus, and
 ## Why this exists
 
 Before CP0 the repository had no component-level specification at all.
-`contracts/generation/v1/schema.zt`'s `Executable`/`Instance` pair was the only
+`contracts/generation-manifest/v1/schema.zt`'s `Executable`/`Instance` pair was the only
 description of a component anywhere, so "what this component is" and "how this
 generation composes it" were the same hand-authored text — the coupling
 [B70](../../../roadmap/00-backlog.md) opens. `contracts/component/v2`'s
@@ -37,7 +37,7 @@ Three choices are worth stating outright:
   the manifest that composes it cannot disagree on what kind of thing the
   component is.
 - **QoS is reused, not redefined.** `QosPolicy` is
-  `contracts/generation/v1/schema.zt`'s `FabricParticipant` QoS fields spelled
+  `contracts/generation-manifest/v1/schema.zt`'s `FabricParticipant` QoS fields spelled
   identically, carrying the same closed value sets and the same two agreement
   rules the generation builder enforces (`retained` durability needs a retained
   depth; `manual` liveliness needs a lease). Two vocabularies could only be
@@ -62,7 +62,7 @@ when any field's content does.
 ## Two components are declared without an implementation
 
 `generation-list` and `storage-store-probe` are declared in
-`contracts/generation/v1/fixtures/valid.zti`, in every
+`contracts/generation-manifest/v1/fixtures/valid.zti`, in every
 `contracts/boot-layout/v1/fixtures/*.layout`, and (for `generation-list`) in
 `components/lib/src/default_fabric_profile.rs`, but no `[[bin]]` target or
 source file exists for either. Both were deleted as unreachable clients of
@@ -122,7 +122,7 @@ enforces is grounded in real repository state rather than in a literal:
   generation module rather than a component.
 
 The gate also cross-checks each record against
-`contracts/generation/v1/fixtures/valid.zti` field by field: type, owner, health,
+`contracts/generation-manifest/v1/fixtures/valid.zti` field by field: type, owner, health,
 dependencies, spawn budget, stack bytes, extra threads, shared-buffer budget,
 target, `provides`/`requires` derived from the manifest's `grants[]`, and every
 fabric route role with its exact QoS values. The fabric projection runs both

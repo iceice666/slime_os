@@ -1,6 +1,6 @@
 # Generation manifest format 1
 
-This directory defines the first typed cross-project contract between Zutai and Slime OS. `schema.zt` is the normative host-side structural schema. The fixtures prove that the pinned Zutai compiler accepts the supported shape and rejects a structural mismatch.
+This directory defines the first typed cross-project contract between Zutai and Slime OS. `schema.zt` is the normative host-side manifest source schema; `contracts/generation/v{2..5}` separately owns the boot-time binary format. The fixtures prove that the pinned Zutai compiler accepts the supported shape and rejects a structural mismatch.
 
 Format 1 describes:
 
@@ -49,20 +49,24 @@ These checks belong to the builder because successful structural decoding must n
 - Optional fields may be added only when old readers can safely ignore them; the boot decoder may enforce a stricter rule than Zutai's host-side record decoder.
 - Manifest identity is computed from a canonical future binary encoding, not from source `.zti` bytes.
 
-## Fixtures
+## Fixtures and compositions
 
-- `fixtures/valid.zti` is the minimal vertical-slice generation: init, console, Dango, sysinfo, and an `echo-agent` stub that pins the agent abstraction to the same channel, capability, and structured-termination contracts without a language model.
+- `fixtures/` holds only `valid.zti` and `invalid.zti`, the schema-conformance records decoded by `check-valid.zt` and `check-invalid.zt`.
+- `compositions/` holds the 36 product and plane manifests selected by `scripts/build/build-generation.py` through `SLIME_SEL4_MANIFEST`, plus their `.md` rationale siblings.
+- `fixtures/valid.zti` is the reference vertical-slice generation: init, console, Dango, sysinfo, and an `echo-agent` stub that pins the agent abstraction to the same channel, capability, and structured-termination contracts without a language model.
 - `fixtures/invalid.zti` uses text where `formatVersion` requires an integer.
 - `check-valid.zt` must evaluate to `#valid`.
 - `check-invalid.zt` must evaluate to `#invalid` with a `formatVersion` decode path.
+
+This directory boundary is deliberate: `generation-manifest/v1` is the manifest source contract, while `contracts/generation/v{2..5}` is the boot-time binary format history.
 
 Run validation with the Zutai compiler pinned by the repository submodule:
 
 ```sh
 ZUTAI_STDLIB_ROOT="$PWD/deps/zutai/stdlib" \
   cargo run --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli -- \
-  run contracts/generation/v1/check-valid.zt
+  run contracts/generation-manifest/v1/check-valid.zt
 ZUTAI_STDLIB_ROOT="$PWD/deps/zutai/stdlib" \
   cargo run --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli -- \
-  run contracts/generation/v1/check-invalid.zt
+  run contracts/generation-manifest/v1/check-invalid.zt
 ```

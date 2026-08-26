@@ -340,3 +340,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-26 | [Planning IO0–IO4: one portable substrate, with Framework qualification left in H](2026-08-26-io-substrate-track/index.md) | Decision | Proposed | IO0, IO1, IO2, IO3, IO4, H2, H3, H4, H5, H6, H7, H8, H11, H12, H13, RP5, R0, R1, X1, X2, A3, A5, C7, C9.2, C9.4, P1, P4, P5.4.2, M5.7 |
 | 2026-08-26 | [God-file modularization by runtime ownership](2026-08-26-god-file-modularization/index.md) | Change | Verified | none |
 | 2026-08-26 | [Obsolete stage0 and custom-kernel handoff retirement](2026-08-26-stage0-retirement/index.md) | Change | Verified | P5, P5.4.final |
+| 2026-08-26 | [Generation manifest source contract separated from boot wire versions](2026-08-26-generation-manifest-contract-split/index.md) | Change | Verified | CP1 |

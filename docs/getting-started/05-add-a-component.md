@@ -30,16 +30,16 @@ adding its launch-context behavior.
 | Buildable in-tree code | `components/bins/<name>/` | Cargo can produce a component ELF. Nothing runs yet. |
 | A component declaration | `contracts/component-spec/v1/components/<name>.zti` | The repository can validate the component's identity, requirements, compatibility, and evidence. Nothing runs yet. |
 | A system-spec-derived composition | [`contracts/system-spec/v1/systems/*.zti`](../../contracts/system-spec/v1/systems/) | A system spec selects components, placement, authority, budgets, and graph records from which a generation fixture is derived. |
-| A direct seL4 plane composition | [`contracts/generation/v1/fixtures/sel4-*.zti`](../../contracts/generation/v1/fixtures/) | The owning seL4 fixture directly declares its executable, instance, authority, and policy. |
+| A direct seL4 plane composition | [`contracts/generation-manifest/v1/compositions/sel4-*.zti`](../../contracts/generation-manifest/v1/compositions/) | The owning seL4 composition directly declares its executable, instance, authority, and policy. |
 
 The current derivation boundary is deliberately narrow:
 
 - `contracts/system-spec/v1/systems/reference.zti` derives
-  `contracts/generation/v1/fixtures/valid.zti`.
+  `contracts/generation-manifest/v1/fixtures/valid.zti`.
 - `contracts/system-spec/v1/systems/sel4-channel.zti` derives
-  `contracts/generation/v1/fixtures/sel4-channel.zti`.
+  `contracts/generation-manifest/v1/compositions/sel4-channel.zti`.
 - The default product builder still reads
-  `contracts/generation/v1/fixtures/sel4.zti` directly.
+  `contracts/generation-manifest/v1/compositions/sel4.zti` directly.
 
 Therefore, editing `reference.zti` alone does **not** change `just run`. Before
 editing a composition, determine whether its fixture is system-spec-derived or
@@ -210,7 +210,7 @@ not patch it afterward.
 ### Path B: directly owned seL4 plane
 
 For a plane not listed in the derivation map, edit its owning
-`contracts/generation/v1/fixtures/sel4-*.zti` directly. The default product is
+`contracts/generation-manifest/v1/compositions/sel4-*.zti` directly. The default product is
 this path: `just run` consumes `sel4.zti` through the product builder.
 
 ### Facts every composition must cover

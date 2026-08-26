@@ -50,7 +50,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
 from sel4_gate_markers import (  # noqa: E402
     chains_from_gate,
     marker_count,
@@ -63,7 +63,7 @@ IMAGE = ROOT / "build" / "slime-sel4-private-memory.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-private-memory.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-private-memory.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory.zti"
 IMAGE_VARIANT = "private-memory"
 TIMEOUT = 240
 

@@ -7,15 +7,15 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURES = ROOT / "contracts" / "generation" / "v1" / "fixtures"
+COMPOSITIONS = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions"
 EXPECTED_WRITERS = {
-    "sel4-filesystem.zti": "sel4-filesystem-service",
-    "sel4-generation.zti": "sel4-generation-manager",
-    "sel4-recovery.zti": "sel4-recovery-probe",
-    "sel4-rollback.zti": "sel4-rollback-probe",
-    "sel4-storage.zti": "sel4-storage-probe",
-    "sel4-store.zti": "sel4-store-probe",
-    "sel4-transfer.zti": "sel4-transfer-probe",
+    "sel4-filesystem.zti": {"sel4-filesystem-service"},
+    "sel4-generation.zti": {"sel4-generation-manager", "sel4-generation-manager-idle"},
+    "sel4-recovery.zti": {"sel4-recovery-probe", "sel4-recovery-probe-idle"},
+    "sel4-rollback.zti": {"sel4-rollback-probe", "sel4-rollback-probe-idle"},
+    "sel4-storage.zti": {"sel4-storage-probe", "sel4-storage-probe-idle"},
+    "sel4-store.zti": {"sel4-store-probe", "sel4-store-probe-idle"},
+    "sel4-transfer.zti": {"sel4-transfer-probe", "sel4-transfer-probe-idle"},
 }
 GRANT = re.compile(r"\{(?P<body>.*?)\};", re.DOTALL)
 TARGET = re.compile(r'target\s*=\s*"([^"]+)"')
@@ -42,16 +42,14 @@ def writers(path: Path) -> list[str]:
 
 
 def main() -> None:
-    actual: dict[str, str] = {}
-    for path in sorted(FIXTURES.glob("sel4*.zti")):
-        holders = writers(path)
-        if len(holders) > 1:
-            fail(f"{path.relative_to(ROOT)} grants blockWrite to multiple holders: {holders}")
+    actual: dict[str, set[str]] = {}
+    for path in sorted(COMPOSITIONS.glob("sel4*.zti")):
+        holders = set(writers(path))
         if holders:
-            actual[path.name] = holders[0]
+            actual[path.name] = holders
     if actual != EXPECTED_WRITERS:
-        missing = sorted(set(EXPECTED_WRITERS.items()) - set(actual.items()))
-        added = sorted(set(actual.items()) - set(EXPECTED_WRITERS.items()))
+        missing = {name: holders for name, holders in EXPECTED_WRITERS.items() if actual.get(name) != holders}
+        added = {name: holders for name, holders in actual.items() if EXPECTED_WRITERS.get(name) != holders}
         fail(f"storage-write authority drift; missing={missing}, added={added}")
     print(f"framework authority check: {len(actual)} product fixtures grant blockWrite only to approved service owners")
 

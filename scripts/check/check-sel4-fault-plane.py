@@ -65,7 +65,7 @@ from typing import NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from fabric_graph_limits import declared_limits  # noqa: E402
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_BUFFERS,
     FABRIC_TRACE_RESOURCE_CALLS,
@@ -86,7 +86,7 @@ PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-fault.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-fault.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-traffic.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-traffic.zti"
 IMAGE_VARIANT = "fault"
 BOOT_TIMEOUT_SECONDS = 240
 

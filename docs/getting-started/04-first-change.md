@@ -58,7 +58,7 @@ edit `contracts/<name>/vN/schema.zt`, regenerate with the matching
 `@generated`. See [contracts](../concepts/contracts.md).
 
 **Authority: grants, slots, budgets** — these live in the generation
-fixtures (`contracts/generation/v1/fixtures/`), not in component code.
+fixtures (`contracts/generation-manifest/v1/fixtures/`), not in component code.
 Expect `just sel4_boot_layout_check` to show the layout diff; bless it only
 when the diff is the change you meant. New rights or operations update
 [`../capability-matrix.md`](../capability-matrix.md) /

@@ -138,7 +138,7 @@ the generation.
 
 Stack size comes from the header. The builder uses `DEFAULT_STACK_BYTES`
 (16 KiB, four pages) unless the generation manifest's component entry sets
-the optional `stackBytes` field (`contracts/generation/v1`), which must be a
+the optional `stackBytes` field (`contracts/generation-manifest/v1`), which must be a
 positive page multiple within the 1 MiB bound. Declaring resource
 requirements in-source (e.g. via a note section the builder reads) is left
 to a later format version.

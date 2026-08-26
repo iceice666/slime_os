@@ -37,7 +37,7 @@ from boot_contracts import (
     TARGET_PROFILES_BY_NAME,
     sha256,
 )
-from harness import ROOT, load_script
+from harness import GENERATION_FIXTURES, ROOT, load_script
 from release_trust import build_release
 from zutai_cli import STDLIB, binary
 
@@ -52,7 +52,7 @@ EXPECTED_PROFILES = {
 }
 UNKNOWN_TARGET = "unknown-architecture-profile"
 NEUTRAL_RESOURCE = b"architecture-neutral-resource-v1"
-MANIFEST = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+MANIFEST = GENERATION_FIXTURES / "valid.zti"
 
 
 def fail(message: str) -> None:

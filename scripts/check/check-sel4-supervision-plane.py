@@ -4,7 +4,7 @@
 
 Boots `build/slime-sel4-supervision.elf` -- the image whose root task embeds the
 supervision-plane generation,
-`contracts/generation/v1/fixtures/sel4-supervision.zti` -- and asserts ordered
+`contracts/generation-manifest/v1/compositions/sel4-supervision.zti` -- and asserts ordered
 markers for backlog B16's exit condition: *a graph that creates more than
 `MAX_RECORDS` tasks over its lifetime still answers `supervision_status`
 correctly for every live handle.*
@@ -54,14 +54,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-supervision.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-supervision.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-supervision.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-supervision.zti"
 IMAGE_VARIANT = "supervision"
 
 BOOT_TIMEOUT_SECONDS = 180

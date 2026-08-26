@@ -270,7 +270,7 @@ on the wire and the gate simply did not look. It does now.
   transcript, captured 2026-08-05 from `build/slime-sel4-spawn.elf` as built by
   `just sel4_spawn_check`. Frozen; corrections are appended below, never edited
   in.
-- Fixture rationale: [`contracts/generation/v1/fixtures/sel4-spawn.md`](../../contracts/generation/v1/fixtures/sel4-spawn.md).
+- Fixture rationale: [`contracts/generation-manifest/v1/compositions/sel4-spawn.md`](../../contracts/generation-manifest/v1/compositions/sel4-spawn.md).
 
 ### Fault injection
 
@@ -301,3 +301,7 @@ This is the third slice running where fault injection found something the gate
 could not. It is not a coincidence: a gate written alongside a feature tends to
 assert the paths the feature takes, and the paths it does not take are exactly
 where the untested code is.
+
+## Corrections
+
+- **2026-08-26:** This entry's fixture link now names `contracts/generation-manifest/v1/compositions/`; only the path moved, so the manifest bytes and every conclusion above are unchanged.

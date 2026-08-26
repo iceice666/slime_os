@@ -118,7 +118,7 @@ from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_int
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
 
-from harness import ROOT
+from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT
 from generation_resources import (
     build_clock_authority,
     build_lifecycle_policy,
@@ -271,12 +271,12 @@ def __getattr__(name: str):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
 
 
-SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+SOURCE = GENERATION_FIXTURES / "valid.zti"
 # P5.2: the `aarch64-sel4-qemu-virt` graph is a sibling manifest rather than a
 # boot profile of `valid.zti`, because `resolve_boot_profile` narrows by
 # subtraction and naming a component in a new profile would drop it from
 # `default`, changing the frozen product generation. See `sel4.md` beside it.
-SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
+SEL4_SOURCE = GENERATION_COMPOSITIONS / "sel4.zti"
 SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
 # P4's physical target. It builds the same seL4 manifests from the same graph
 # declarations; only the profile every executable is admitted for differs, so
@@ -290,233 +290,63 @@ SEL4_MANIFESTS = {
     "sel4": SEL4_SOURCE,
     # RP2: the demo-scoped slice — one generation that both launches the
     # product component graph and runs the bounded data path.
-    "sel4-demo": ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-demo.zti",
-    "sel4-channel": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-channel.zti",
-    "sel4-loan": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-loan.zti",
-    "sel4-spawn": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-spawn.zti",
-    "sel4-sample": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-sample.zti",
-    "sel4-stream": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-stream.zti",
-    "sel4-supervision": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-supervision.zti",
-    "sel4-reclamation": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-reclamation.zti",
+    "sel4-demo": GENERATION_COMPOSITIONS / "sel4-demo.zti",
+    "sel4-channel": GENERATION_COMPOSITIONS / "sel4-channel.zti",
+    "sel4-loan": GENERATION_COMPOSITIONS / "sel4-loan.zti",
+    "sel4-spawn": GENERATION_COMPOSITIONS / "sel4-spawn.zti",
+    "sel4-sample": GENERATION_COMPOSITIONS / "sel4-sample.zti",
+    "sel4-stream": GENERATION_COMPOSITIONS / "sel4-stream.zti",
+    "sel4-supervision": GENERATION_COMPOSITIONS / "sel4-supervision.zti",
+    "sel4-reclamation": GENERATION_COMPOSITIONS / "sel4-reclamation.zti",
     # C10.2: one executable declared twice, as a granted holder and an omitted
     # one, against a generation-declared private-memory budget.
-    "sel4-private-memory": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-private-memory.zti",
+    "sel4-private-memory": GENERATION_COMPOSITIONS / "sel4-private-memory.zti",
     # C9.3: a declared scheduling class, its band mapping, and promotion
     # authority over another component's class.
-    "sel4-scheduling-class": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-scheduling-class.zti",
+    "sel4-scheduling-class": GENERATION_COMPOSITIONS / "sel4-scheduling-class.zti",
     # C9.4: an admitted lifecycle transition graph, a supervised restart under a
     # declared attempt bound and backoff, a health dependency, and parameter
     # authority.
-    "sel4-lifecycle-restart": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-lifecycle-restart.zti",
+    "sel4-lifecycle-restart": GENERATION_COMPOSITIONS / "sel4-lifecycle-restart.zti",
     # C9.5: a recorded run and a deterministic replay of it, plus a component
     # whose unrecorded grant makes a determinism claim inadmissible.
-    "sel4-replay": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-replay.zti",
+    "sel4-replay": GENERATION_COMPOSITIONS / "sel4-replay.zti",
     # C9.6: a sensor -> controller -> actuator graph over the native fabric,
     # under declared best-effort CPU contention and an injected controller
     # restart.
-    "sel4-robot-runtime": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-robot-runtime.zti",
+    "sel4-robot-runtime": GENERATION_COMPOSITIONS / "sel4-robot-runtime.zti",
     # C9.1: independently grantable monotonic, timer, and simulated clocks.
-    "sel4-clock-authority": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-clock-authority.zti",
+    "sel4-clock-authority": GENERATION_COMPOSITIONS / "sel4-clock-authority.zti",
     # C9.2: a bounded userspace wait set over one declared Notification.
-    "sel4-wait-set": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-wait-set.zti",
-    "sel4-crossing": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-crossing.zti",
-    "sel4-call": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-call.zti",
-    "sel4-qos": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-qos.zti",
+    "sel4-wait-set": GENERATION_COMPOSITIONS / "sel4-wait-set.zti",
+    "sel4-crossing": GENERATION_COMPOSITIONS / "sel4-crossing.zti",
+    "sel4-call": GENERATION_COMPOSITIONS / "sel4-call.zti",
+    "sel4-qos": GENERATION_COMPOSITIONS / "sel4-qos.zti",
     # 48 instances: the admitted ceiling, so the graph that boots is the
     # largest one admission will accept (B49).
-    "sel4-stress": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-stress.zti",
-    "sel4-operation": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-operation.zti",
-    "sel4-visibility": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-visibility.zti",
-    "sel4-boot": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-boot.zti",
-    "sel4-traffic": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-traffic.zti",
-    "sel4-matrix": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-matrix.zti",
+    "sel4-stress": GENERATION_COMPOSITIONS / "sel4-stress.zti",
+    "sel4-operation": GENERATION_COMPOSITIONS / "sel4-operation.zti",
+    "sel4-visibility": GENERATION_COMPOSITIONS / "sel4-visibility.zti",
+    "sel4-boot": GENERATION_COMPOSITIONS / "sel4-boot.zti",
+    "sel4-traffic": GENERATION_COMPOSITIONS / "sel4-traffic.zti",
+    "sel4-matrix": GENERATION_COMPOSITIONS / "sel4-matrix.zti",
     # C8.12's negative arm shares this manifest (B62): one `telemetry-alt`
     # publisher is weakened to BEST_EFFORT against its RELIABLE subscriber
     # through a declared per-variant QoS override, rather than by a second
     # 1069-line copy. The builder emits the incompatible graph — pairwise QoS is
     # not a shape property — and `slime-root` refuses it at admission, which is
     # where that rule lives.
-    "sel4-storage": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-storage.zti",
-    "sel4-store": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-store.zti",
-    "sel4-rollback": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-rollback.zti",
-    "sel4-recovery": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-recovery.zti",
-    "sel4-generation": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-generation.zti",
-    "sel4-directory": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-directory.zti",
-    "sel4-filesystem": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-filesystem.zti",
-    "sel4-dango": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-dango.zti",
-    "sel4-input": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-input.zti",
-    "sel4-powerbox": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-powerbox.zti",
-    "sel4-transfer": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-transfer.zti",
+    "sel4-storage": GENERATION_COMPOSITIONS / "sel4-storage.zti",
+    "sel4-store": GENERATION_COMPOSITIONS / "sel4-store.zti",
+    "sel4-rollback": GENERATION_COMPOSITIONS / "sel4-rollback.zti",
+    "sel4-recovery": GENERATION_COMPOSITIONS / "sel4-recovery.zti",
+    "sel4-generation": GENERATION_COMPOSITIONS / "sel4-generation.zti",
+    "sel4-directory": GENERATION_COMPOSITIONS / "sel4-directory.zti",
+    "sel4-filesystem": GENERATION_COMPOSITIONS / "sel4-filesystem.zti",
+    "sel4-dango": GENERATION_COMPOSITIONS / "sel4-dango.zti",
+    "sel4-input": GENERATION_COMPOSITIONS / "sel4-input.zti",
+    "sel4-powerbox": GENERATION_COMPOSITIONS / "sel4-powerbox.zti",
+    "sel4-transfer": GENERATION_COMPOSITIONS / "sel4-transfer.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"

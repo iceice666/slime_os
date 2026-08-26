@@ -22,7 +22,7 @@ const SUPERVISION_LOOP_CHILDREN: u32 = 49;
 /// `MAX_RECORDS` can hold at once, and answer correctly for every live handle.
 ///
 /// Only reachable for the authenticated `supervision` action declared by
-/// `contracts/generation/v1/fixtures/sel4-supervision.zti`.
+/// `contracts/generation-manifest/v1/compositions/sel4-supervision.zti`.
 ///
 /// This is backlog B16's exit condition. Before the fix, `Terminations` never
 /// reclaimed, so the 33rd child's outcome was dropped silently and its parent

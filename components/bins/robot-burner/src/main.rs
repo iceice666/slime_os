@@ -5,7 +5,7 @@
 //! under.
 //!
 //! One instance, declared `bestEffort` by
-//! `contracts/generation/v1/fixtures/sel4-robot-runtime.zti`'s
+//! `contracts/generation-manifest/v1/compositions/sel4-robot-runtime.zti`'s
 //! `schedulingClass`. It exists so the milestone's first required check — "the
 //! graph runs to completion under contention with declared scheduling order
 //! preserved" — is observed against a real runnable competitor rather than

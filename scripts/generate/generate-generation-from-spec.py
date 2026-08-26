@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Derive `contracts/generation/v1` fixtures from their `system-spec` sources.
+"""Derive `contracts/generation-manifest/v1` fixtures from their `system-spec` sources.
 
 CP1's deliverable: the manifest sections that were hand-authored in parallel with
 the component model are now generated from it. `--check` fails on drift, so a
@@ -28,9 +28,9 @@ from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
 from system_spec import (
     DERIVED_GENERATION_FIXTURES as DERIVED_FIXTURES,
-    GENERATION_FIXTURES,
     compile_system,
     derive_manifest,
+    derived_manifest_path,
     system_paths,
 )
 
@@ -69,7 +69,7 @@ def render() -> dict[Path, str]:
                 "check-system-spec.py's DERIVED_FIXTURES"
             )
         system = compile_system(path, components=components)
-        outputs[GENERATION_FIXTURES / fixture] = zti(derive_manifest(system)) + "\n"
+        outputs[derived_manifest_path(fixture)] = zti(derive_manifest(system)) + "\n"
     return outputs
 
 

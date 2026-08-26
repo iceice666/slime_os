@@ -4,7 +4,7 @@
 
 Boots `build/slime-sel4-crossing.elf` -- the image whose root task embeds the
 channel-crossing generation,
-`contracts/generation/v1/fixtures/sel4-crossing.zti` -- and asserts ordered
+`contracts/generation-manifest/v1/compositions/sel4-crossing.zti` -- and asserts ordered
 markers for backlog B22's exit condition: *a graph that mints more than
 `MAX_CHANNELS` channels over its lifetime still sends and receives correctly on
 every live channel.*
@@ -58,14 +58,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-crossing.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-crossing.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-crossing.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-crossing.zti"
 IMAGE_VARIANT = "crossing"
 
 BOOT_TIMEOUT_SECONDS = 180

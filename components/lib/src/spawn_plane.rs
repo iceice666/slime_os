@@ -25,7 +25,7 @@ fn fail_spawn(reason: &[u8]) -> ! {
 /// observe termination through a supervision handle.
 ///
 /// Only reachable for the authenticated `spawn` action declared by
-/// `contracts/generation/v1/fixtures/sel4-spawn.zti`; see the `.md` beside it.
+/// `contracts/generation-manifest/v1/compositions/sel4-spawn.zti`; see the `.md` beside it.
 ///
 /// The two children are `console` and `sysinfo`, both **unmodified** — the same
 /// binaries the x86 oracle runs. That is the milestone's claim: a component

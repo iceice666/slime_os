@@ -49,21 +49,21 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-matrix.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-matrix.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-matrix.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-matrix.zti"
 IMAGE_VARIANT = "matrix"
 BOOT_TIMEOUT_SECONDS = 240
 # C8.12's negative arm: the same graph with one incompatible QoS pair, which
 # `slime-root` must refuse before any component launches.
 UNSATISFIABLE_IMAGE = ROOT / "build" / "slime-sel4-matrix-unsatisfiable.elf"
 UNSATISFIABLE_FIXTURE = (
-    ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-matrix.zti"
+    GENERATION_COMPOSITIONS / "sel4-matrix.zti"
 )
 # The root's own refusal marker for a graph it cannot satisfy.
 UNSATISFIABLE_REFUSAL = r"SLIME_ROOT FATAL generation admission rejected: UnsatisfiableFabricGraph"

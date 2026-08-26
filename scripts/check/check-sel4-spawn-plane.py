@@ -3,7 +3,7 @@
 """P5.3.3 gate: a component constructs children on seL4 and supervises them.
 
 Boots `build/slime-sel4-spawn.elf` -- the image whose root task embeds the
-spawn-plane generation, `contracts/generation/v1/fixtures/sel4-spawn.zti` --
+spawn-plane generation, `contracts/generation-manifest/v1/compositions/sel4-spawn.zti` --
 and asserts ordered markers for P5.3.3's exit condition:
 
 1. a component spawns a child from a grant-resolved executable;
@@ -47,14 +47,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-spawn.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-spawn.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-spawn.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-spawn.zti"
 IMAGE_VARIANT = "spawn"
 
 BOOT_TIMEOUT_SECONDS = 120

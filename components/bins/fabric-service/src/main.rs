@@ -973,7 +973,7 @@ fn boot_graph() {
 /// stream traffic instead of parking.
 ///
 /// Only reachable for the authenticated `traffic` action declared by
-/// `contracts/generation/v1/fixtures/sel4-traffic.zti`, which is `sel4-boot.zti`
+/// `contracts/generation-manifest/v1/compositions/sel4-traffic.zti`, which is `sel4-boot.zti`
 /// with `bootAction` and `generation` changed plus the additional grants real
 /// traffic needs (§ the fixture's own history).
 ///

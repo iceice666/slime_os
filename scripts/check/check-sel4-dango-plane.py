@@ -37,13 +37,13 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 IMAGE = ROOT / "build" / "slime-sel4-dango.elf"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-dango.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-dango.zti"
 BOOT_TIMEOUT_SECONDS = 300
 
 # Markers whose presence is required but whose position is not, because they

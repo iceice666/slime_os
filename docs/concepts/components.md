@@ -48,7 +48,7 @@ component has:
   through `src/main.rs`. Shared helpers are in `components/lib`; the syscall
   surface is `components/runtime` (`slime_rt`).
 - Authority: the matching generation fixture under
-  `contracts/generation/v1/fixtures/` declares the instance's grants and slot
+  `contracts/generation-manifest/v1/fixtures/` declares the instance's grants and slot
   layout. A component binary alone never determines its own authority —
   inspect the fixture and the generated boot-layout before reasoning about
   slots.

@@ -180,6 +180,10 @@ SLIME_GRAPH loans served=4 loans=0 mappings=0 regions=0 transit=0 orphans=0 alia
 ## Artifacts and provenance
 
 - Raw transcript: [`loan-plane-boot.log`](loan-plane-boot.log)
-- Fixture rationale: [`contracts/generation/v1/fixtures/sel4-loan.md`](../../contracts/generation/v1/fixtures/sel4-loan.md)
+- Fixture rationale: [`contracts/generation-manifest/v1/compositions/sel4-loan.md`](../../contracts/generation-manifest/v1/compositions/sel4-loan.md)
 - Related roadmap item: [P5.3.2](../../roadmap/07-architecture-portability.md)
 - Preceding slice: [`devlog/2026-08-04-p5-3-1-channel-plane/`](../2026-08-04-p5-3-1-channel-plane/index.md)
+
+## Corrections
+
+- **2026-08-26:** This entry's fixture link now names `contracts/generation-manifest/v1/compositions/`; only the path moved, so the manifest bytes and every conclusion above are unchanged.

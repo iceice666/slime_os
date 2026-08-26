@@ -158,8 +158,8 @@ and the gate re-run.
 ## Artifacts and provenance
 
 - Generation fixture: `sel4-fabric.zti` and its rationale `sel4-fabric.md`,
-  both superseded by [`sel4-stream.zti`](../../contracts/generation/v1/fixtures/sel4-stream.zti)
-  and [`sel4-stream.md`](../../contracts/generation/v1/fixtures/sel4-stream.md)
+  both superseded by [`sel4-stream.zti`](../../contracts/generation-manifest/v1/compositions/sel4-stream.zti)
+  and [`sel4-stream.md`](../../contracts/generation-manifest/v1/compositions/sel4-stream.md)
 - Gate: `check-sel4-fabric-plane.py`, superseded by
   [`check-sel4-stream-plane.py`](../../scripts/check/check-sel4-stream-plane.py).
   The retired gate's module doc recorded the B17 coverage gap and both withdrawn
@@ -201,3 +201,4 @@ it was written.
   one to resolve and the originals were deleted. That is the only edit made
   below the correction line, and it changes no claim: the prose naming the old
   artifacts is left exactly as written.
+- **2026-08-26:** This entry's fixture links now name `contracts/generation-manifest/v1/compositions/`; only the paths moved, so the manifest bytes and every conclusion above are unchanged.

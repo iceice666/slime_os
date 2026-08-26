@@ -255,5 +255,9 @@ than fixed here.
 ## Artifacts and provenance
 
 - Raw transcript: [`channel-plane-boot.log`](channel-plane-boot.log)
-- Fixture rationale: [`contracts/generation/v1/fixtures/sel4-channel.md`](../../contracts/generation/v1/fixtures/sel4-channel.md)
+- Fixture rationale: [`contracts/generation-manifest/v1/compositions/sel4-channel.md`](../../contracts/generation-manifest/v1/compositions/sel4-channel.md)
 - Related roadmap item: [P5.3.1](../../roadmap/07-architecture-portability.md)
+
+## Corrections
+
+- **2026-08-26:** This entry's fixture link now names `contracts/generation-manifest/v1/compositions/`; only the path moved, so the manifest bytes and every conclusion above are unchanged.

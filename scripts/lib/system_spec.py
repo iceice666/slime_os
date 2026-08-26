@@ -1,7 +1,7 @@
 """CP1 system-specification compiler and generation derivation.
 
 Decodes `contracts/system-spec/v1/systems/*.zti`, validates it against the
-component specs it references, and derives a `contracts/generation/v1`
+component specs it references, and derives a `contracts/generation-manifest/v1`
 `GenerationManifest` from the pair.
 
 The derivation is the point of the milestone, so what it derives rather than
@@ -42,16 +42,15 @@ from types import ModuleType
 
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
-from harness import ROOT, load_script
+from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
 from zutai_cli import STDLIB, binary
 
 CONTRACT_ROOT = ROOT / "contracts" / "system-spec" / "v1"
 CHECKER = CONTRACT_ROOT / "check.zt"
 SYSTEM_ROOT = CONTRACT_ROOT / "systems"
-GENERATION_FIXTURES = ROOT / "contracts" / "generation" / "v1" / "fixtures"
 INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interfaces"
 
-# Which committed `contracts/generation/v1` fixture each system spec derives.
+# Which committed `contracts/generation-manifest/v1` fixture each system spec derives.
 #
 # CP1 converts the reference manifest and the smallest seL4 manifest; converting
 # the remaining `sel4-*.zti` fixtures is deferred follow-on work. An explicit
@@ -63,6 +62,17 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-channel": "sel4-channel.zti",
 }
 
+def derived_manifest_path(fixture: str) -> Path:
+    """Where a derived manifest is committed.
+
+    The two schema-conformance fixtures live in `fixtures/`; every plane
+    composition lives in `compositions/`. The derivation table names bare
+    filenames because `check-system-spec.py` also uses them to find the frozen
+    `contracts/system-spec/v1/baselines/` copy, which is a flat directory.
+    """
+    root = GENERATION_FIXTURES if fixture in {"valid.zti", "invalid.zti"} else GENERATION_COMPOSITIONS
+    return root / fixture
+
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 
 _builder = load_script("system_spec_generation_builder", "build/build-generation.py")
@@ -70,7 +80,7 @@ _builder = load_script("system_spec_generation_builder", "build/build-generation
 # the builder, which already imports the generated `target_profile` bindings and
 # is the module that refuses an unknown target or an unsupported source format.
 _TARGET_PROFILES = _builder.TARGET_PROFILES_BY_NAME
-# `contracts/generation/v1/schema.zt` is format 1 and `build-generation.py`
+# `contracts/generation-manifest/v1/schema.zt` is format 1 and `build-generation.py`
 # refuses anything else at load time; a system spec produces that format or it
 # produces something the builder will not read.
 _GENERATION_SOURCE_FORMAT = 1
@@ -619,7 +629,7 @@ def derive_bindings(grants: list[dict], admitted: set[str]) -> dict[str, set[str
 
 
 def derive_manifest(system: CompiledSystem) -> dict:
-    """The `contracts/generation/v1` manifest this system spec describes."""
+    """The `contracts/generation-manifest/v1` manifest this system spec describes."""
     spec, components = system.spec, system.components
     admitted = set(spec["components"])
     placements = {entry["component"]: entry for entry in spec["placements"]}

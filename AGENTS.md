@@ -26,7 +26,7 @@ Route work by ownership before searching for a symbol. Read the named module roo
 
 | Change | Canonical starting point | Follow-on files |
 | --- | --- | --- |
-| Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`, generation grants in `contracts/generation/v1/fixtures/sel4-*.zti` |
+| Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`, generation grants in `contracts/generation-manifest/v1/compositions/sel4-*.zti` |
 | Native endpoint IPC, message bounds, endpoint lifetime | `slime-root/src/peer_endpoint.rs` | `slime-root/src/{ipc,notification}.rs`, `components/runtime/src/syscall/sel4_transport.rs` |
 | Tasks, spawn, supervision, termination, reclamation | `slime-root/src/task.rs` | `slime-root/src/{main,child_vspace,fault,supervision}.rs` |
 | Syscall argument validation and rights gates | `slime-root/src/ipc.rs` | owner modules in `slime-root/src/`, wrappers in `components/runtime/src/syscall.rs` |
@@ -34,7 +34,7 @@ Route work by ownership before searching for a symbol. Read the named module roo
 | Shared-buffer allocation, mapping, loan, accounting | `slime-root/src/shared_buffer.rs` | `slime-root/src/{buffer_adapter,transfer_window,ipc}.rs` |
 | Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, manifest fixtures below |
 | Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
-| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation/v1/fixtures/sel4-*.zti`, `components/build-support/src/lib.rs` |
+| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation-manifest/v1/compositions/sel4-*.zti`, `components/build-support/src/lib.rs` |
 | Component image format/loading | `contracts/component/v1/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs` |
 | Userspace component behavior | `components/bins/<component>/src/main.rs` | shared helpers in `components/lib/src/*.rs`; the crate's own `components/bins/<component>/Cargo.toml` |
 | Userspace syscall ABI | `components/runtime/src/syscall.rs` | seL4 transport in `components/runtime/src/syscall/sel4_transport.rs`, root implementation in `slime-root/src/ipc.rs` |
@@ -51,12 +51,12 @@ Route work by ownership before searching for a symbol. Read the named module roo
 
 ### Generated-code rule
 
-Files beginning with `@generated` and files under `boot-contracts/src/generated/` are outputs, not sources. Change the matching `contracts/.../schema.zt` or `gen_rust.zt`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen`. `components/build-support` separately generates the build-time command tables from `contracts/generation/v1/fixtures/valid.zti` into each consuming crate's `OUT_DIR`, and copies the per-plane fabric profile the host builder renders.
+Files beginning with `@generated` and files under `boot-contracts/src/generated/` are outputs, not sources. Change the matching `contracts/.../schema.zt` or `gen_rust.zt`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen`. `components/build-support` separately generates the build-time command tables from `contracts/generation-manifest/v1/fixtures/valid.zti` into each consuming crate's `OUT_DIR`, and copies the per-plane fabric profile the host builder renders.
 
 ### Navigation traps
 
 - `slime-root/src/lib.rs` exposes the mechanism modules host tests compile; the product binary in `slime-root/src/main.rs` links those same modules.
-- A component's capability slot layout is established by grants in the matching `contracts/generation/v1/fixtures/sel4-*.zti` and generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority.
+- A component's capability slot layout is established by grants in the matching `contracts/generation-manifest/v1/compositions/sel4-*.zti` and generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority.
 - `scripts/check/` contains end-to-end QEMU assertions and expected serial markers; it is verification code, not the implementation of the behavior it checks.
 
 ## Commands

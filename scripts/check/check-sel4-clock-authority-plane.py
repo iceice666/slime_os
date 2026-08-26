@@ -15,7 +15,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
@@ -24,7 +24,7 @@ IMAGE = ROOT / "build" / "slime-sel4-clock-authority.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-clock-authority.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-clock-authority.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-clock-authority.zti"
 IMAGE_VARIANT = "clock-authority"
 TIMEOUT = 240
 

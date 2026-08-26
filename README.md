@@ -152,7 +152,7 @@ The language may consume Zutai-generated syscall and IPC bindings but may not de
 
 ## Component and generation boundary
 
-The stable cross-project artifact is the versioned, deterministic generation manifest. The built format is v5, defined by `contracts/generation/v1/schema.zt` and decoded by `boot-contracts/src/generation.rs`; retained v2 generations still decode for the bounded rollback window. Its logical content is:
+The stable cross-project artifact is the versioned, deterministic generation manifest. Its host-side manifest source schema is `contracts/generation-manifest/v1/schema.zt`; the built wire format is v5, defined by `contracts/generation/v5/schema.zt` and decoded by `boot-contracts/src/generation.rs`. Retained v2 generations still decode for the bounded rollback window. Its logical content is:
 
 ```text
 GenerationManifest

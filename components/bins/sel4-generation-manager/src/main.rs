@@ -9,7 +9,7 @@
 //! the management service by the manifest, and a component that wants to stage
 //! or roll back a generation must ask.
 //!
-//! Five operations over `contracts/generation/v1`: LIST, INSPECT, STAGE,
+//! Five operations over `contracts/generation-manifest/v1`: LIST, INSPECT, STAGE,
 //! SELECT, ROLLBACK. The first two are read-only; the last three are BootState
 //! transitions, committed older-slot-first exactly as the rollback plane does,
 //! because it is the same on-disk structure and the same invariant — no

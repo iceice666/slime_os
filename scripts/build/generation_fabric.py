@@ -31,11 +31,11 @@ from boot_contracts import (
 )
 from fabric_trace_contract import FABRIC_TRACE_MAX_DEPTH, FABRIC_TRACE_OVERFLOW_SATURATE, FABRIC_TRACE_TERMINAL_RESERVE
 from generation_resources import validated_shared_buffer_quotas
-from harness import ROOT
+from harness import GENERATION_FIXTURES, ROOT
 from zutai_cli import STDLIB, binary
 
 PAGE_SIZE = 4096
-SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+SOURCE = GENERATION_FIXTURES / "valid.zti"
 SEL4_TARGET_PROFILES = ("aarch64-sel4-qemu-virt", "aarch64-rpi5")
 
 def fail(message: str) -> None:

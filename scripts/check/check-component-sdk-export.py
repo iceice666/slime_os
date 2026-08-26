@@ -106,7 +106,7 @@ def export(destination: Path, *, source: Path = ROOT, version: str = "1.0.0"):
 # linker scripts became an export input and this list did not know.
 PRODUCT_ONLY_PROBES = (
     "slime-root/src/main.rs",
-    "contracts/generation/v1/fixtures/sel4-demo.zti",
+    "contracts/generation-manifest/v1/compositions/sel4-demo.zti",
 )
 MIRROR_PATHS = (
     ("Cargo.toml", "sel4/pins.toml", "contracts")
@@ -203,7 +203,7 @@ def prove_identity_sensitivity(root: Path, tree_baseline: str, release_baseline:
         ("sel4/pins.toml", retoolchain, True, True),
         ("slime-root/src/main.rs", append(b"\n// CP6 product-only probe.\n"), False, False),
         (
-            "contracts/generation/v1/fixtures/sel4-demo.zti",
+            "contracts/generation-manifest/v1/compositions/sel4-demo.zti",
             append(b"\n-- CP6 product-only probe.\n"),
             False,
             False,

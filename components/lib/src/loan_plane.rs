@@ -21,7 +21,7 @@ use super::{RIGHT_TRANSFER, console_send_slot, resolve_buffer_factory, resolve_e
 /// Drive the P5.3.2 loan plane, as the lender.
 ///
 /// Only reachable for the authenticated `loan` action declared by
-/// `contracts/generation/v1/fixtures/sel4-loan.zti`; see the `.md` beside it.
+/// `contracts/generation-manifest/v1/compositions/sel4-loan.zti`; see the `.md` beside it.
 ///
 /// This is `sample-lender`'s shape, and deliberately not `sample-lender`
 /// itself: that component is spawned by init on x86 and receives its peer

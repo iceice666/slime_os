@@ -6,7 +6,7 @@
 -- a component spec describes a component, a system spec composes instances of
 -- them into a generation.
 --
--- The point is that `contracts/generation/v1`'s `executables`, `instances`,
+-- The point is that `contracts/generation-manifest/v1`'s `executables`, `instances`,
 -- `objects`, `sharedBufferBudget`, and `health.requiredInstances` sections stop
 -- being hand-authored: `scripts/generate/generate-generation-from-spec.py`
 -- derives them from this record plus the referenced component specs. What
@@ -16,9 +16,9 @@
 --
 -- This is not a wire format. Nothing serializes a `SystemSpec`; the generation
 -- manifest it produces is what the builder encodes, and
--- `contracts/generation/v1` still owns that boundary.
+-- `contracts/generation-manifest/v1` still owns that boundary.
 
--- One authority edge. Identical in shape to `contracts/generation/v1`'s
+-- One authority edge. Identical in shape to `contracts/generation-manifest/v1`'s
 -- `CapabilityGrant`, because it *is* that record: the generator copies it
 -- through rather than translating, so there is no second grant vocabulary to
 -- keep in step.
@@ -36,7 +36,7 @@ SystemGrant :: type {
   transferable : Bool;
 };
 
--- One statically created notification, as `contracts/generation/v1`'s
+-- One statically created notification, as `contracts/generation-manifest/v1`'s
 -- `NotificationGrant`. Stream rings declare two — ready flows producer to
 -- consumer, credit flows back — but not every stream participant gets a ring
 -- (`fabric-observer` has none), so the set is declared rather than derived from
@@ -108,7 +108,7 @@ ImageSize :: type {
   bytes : Int;
 };
 
--- One persisted state binding, as `contracts/generation/v1`'s `StateBinding`.
+-- One persisted state binding, as `contracts/generation-manifest/v1`'s `StateBinding`.
 -- Which state a component owns is arguably a component fact, but its schema
 -- version and retention policy are what *this* system admits, so the whole
 -- record is declared here rather than split across two contracts.
@@ -119,7 +119,7 @@ SystemState :: type {
   policy : Text;
 };
 
--- QoS and route shape are `contracts/generation/v1`'s `FabricParticipant` and
+-- QoS and route shape are `contracts/generation-manifest/v1`'s `FabricParticipant` and
 -- `FabricRoute`, reproduced field for field. CP1 deliberately does not define a
 -- second graph representation: the generator copies these records into the
 -- manifest's `fabricGraph`, so the fabric contract has exactly one shape and
@@ -188,7 +188,7 @@ SystemFabricGraph :: type {
   profiles : List SystemFabricProfile;
 };
 
--- One named boot composition, as `contracts/generation/v1`'s `BootProfile`.
+-- One named boot composition, as `contracts/generation-manifest/v1`'s `BootProfile`.
 SystemBootProfile :: type {
   name : Text;
   fabricProfile : Text;
@@ -297,7 +297,7 @@ FromData @SystemSpec :: derive
 formatVersion :: Int = 1;
 identityDomain :: Text = "slime-system-spec-v1:";
 
--- Bounds. `maxComponents` is `contracts/generation/v1`'s admitted-instance
+-- Bounds. `maxComponents` is `contracts/generation-manifest/v1`'s admitted-instance
 -- ceiling; the rest mirror the manifest limits the builder already enforces, so
 -- a system spec cannot describe a generation the builder would refuse.
 maxComponents :: Int = 48;

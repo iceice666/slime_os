@@ -4,7 +4,7 @@
 seL4 Endpoint.
 
 Boots `build/slime-sel4-channel.elf` -- the image whose root task embeds the
-channel-plane generation, `contracts/generation/v1/fixtures/sel4-channel.zti` --
+channel-plane generation, `contracts/generation-manifest/v1/compositions/sel4-channel.zti` --
 and asserts ordered evidence that root installs the statically attenuated
 Endpoint capabilities before activation, the blocking send completes only
 after its receiver runs and accepts the exact payload, both components complete

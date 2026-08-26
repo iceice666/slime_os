@@ -43,14 +43,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE_SCRIPT = ROOT / "scripts" / "build" / "build-store-fixture.py"
 IMAGE = ROOT / "build" / "slime-sel4-transfer.elf"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-transfer.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-transfer.zti"
 BOOT_TIMEOUT_SECONDS = 240
 
 # The receiver's BootState slots, partition-relative.

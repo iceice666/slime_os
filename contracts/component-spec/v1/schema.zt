@@ -2,7 +2,7 @@
 --
 -- A `ComponentSpec` is the component-level source of truth `spec/requirement-document-v0.6.md`
 -- section 2.1 describes, expressed as inert Zutai data and independent of any
--- one generation manifest. Today `contracts/generation/v1`'s
+-- one generation manifest. Today `contracts/generation-manifest/v1`'s
 -- `Executable`/`Instance` pair is the only place a component is described at
 -- all, so "what a component is" and "how one generation composes it" are the
 -- same text (B70). This contract separates them: a spec describes the
@@ -12,7 +12,7 @@
 -- CP1's job, and resolving a component's slots at runtime rather than at
 -- compile time is CP2's. Nothing here is a wire format: no record is
 -- serialized into a generation, so the boot-time encoding stays owned by
--- `contracts/generation/v1`.
+-- `contracts/generation-manifest/v1`.
 --
 -- The authoritative identity of a spec is SHA-256 over `identityDomain`
 -- followed by the normalized, sorted-key, whitespace-free, ASCII-escaped UTF-8
@@ -48,7 +48,7 @@ InterfaceReference :: type {
 
 -- Requested/offered QoS for one interface entry.
 --
--- These are `contracts/generation/v1/schema.zt`'s `FabricParticipant` QoS
+-- These are `contracts/generation-manifest/v1/schema.zt`'s `FabricParticipant` QoS
 -- fields, spelled identically and carrying the same closed value sets, rather
 -- than a second QoS vocabulary. A component's declared policy and the graph's
 -- declared policy must be comparable field by field; two vocabularies could
@@ -167,7 +167,7 @@ TestSpecification :: type {
 -- component workspace), `external` (an artifact admitted by CP4's host-side
 -- path), or `undeclared` (this repository declares the component but ships no
 -- implementation for it). `undeclared` exists because two components in
--- `contracts/generation/v1/fixtures/valid.zti` are exactly that today:
+-- `contracts/generation-manifest/v1/fixtures/valid.zti` are exactly that today:
 -- `generation-list` and `storage-store-probe` were deleted as unreachable
 -- clients of retired syscalls (see `devlog/2026-08-10-b44-policy-labels-deleted/`
 -- and `devlog/2026-08-10-b43-block-service-endpoint/`) while their manifest,
@@ -242,7 +242,7 @@ identityDomain :: Text = "slime-component-spec-v1:";
 -- the same terms as every other contract here: a spec corpus is host-side
 -- input, and host-side input that is not bounded is unbounded input.
 --
--- `maxSpecs` is `contracts/generation/v1`'s admitted instance ceiling
+-- `maxSpecs` is `contracts/generation-manifest/v1`'s admitted instance ceiling
 -- (`MAX_ADMITTED_INSTANCES = 48`): a corpus larger than the number of
 -- instances a generation can admit cannot be fully composed anyway.
 maxSpecs :: Int = 48;

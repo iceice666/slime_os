@@ -4,7 +4,7 @@
 generation declared.
 
 Boots `build/slime-sel4-loan.elf` -- the image whose root task embeds the
-loan-plane generation, `contracts/generation/v1/fixtures/sel4-loan.zti` -- and
+loan-plane generation, `contracts/generation-manifest/v1/compositions/sel4-loan.zti` -- and
 asserts ordered markers for each half of P5.3.2's exit condition:
 
 1. a component loans a sealed subrange to a receiver named by capability, and
@@ -39,7 +39,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -507,7 +507,7 @@ def check_transcript(transcript: str) -> None:
 
 
 
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-loan.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-loan.zti"
 
 # The one ceiling this file needs by value rather than by comparison: the four
 # quota probes are written against `init`'s limits, so a fixture edit that

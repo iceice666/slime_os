@@ -50,10 +50,9 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_ORDER_TIME,
     FABRIC_TRACE_RESOURCE_COMPLETE,
 )
-from harness import ROOT, load_script  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, ROOT, load_script  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 
-FIXTURES = ROOT / "contracts" / "generation" / "v1" / "fixtures"
 
 # One entry per timed worker: the plane gate that owns booting it, the worker name
 # its trace lines carry, and the fixture whose declared `traceDepth` the running
@@ -179,7 +178,7 @@ def declared_depth(fixture: str) -> int:
     gate agree with itself instead of with the generation, which is the
     disagreement worth catching.
     """
-    text = (FIXTURES / f"{fixture}.zti").read_text(encoding="utf-8")
+    text = (GENERATION_COMPOSITIONS / f"{fixture}.zti").read_text(encoding="utf-8")
     match = re.search(r"^\s*traceDepth = (\d+);", text, re.MULTILINE)
     if match is None:
         fail(f"{fixture}.zti declares no traceDepth")

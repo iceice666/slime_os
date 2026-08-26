@@ -15,7 +15,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_integer, profile_text, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_integer, profile_text, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
@@ -24,7 +24,7 @@ IMAGE = ROOT / "build" / "slime-sel4-lifecycle-restart.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-lifecycle-restart.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-lifecycle-restart.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-lifecycle-restart.zti"
 IMAGE_VARIANT = "lifecycle-restart"
 GENERATION = 44
 TIMEOUT = 300

@@ -3,7 +3,7 @@
 """RP2 gate: the demo-scoped AArch64 product vertical slice.
 
 Boots `build/slime-sel4-demo.elf` -- the image whose root task embeds
-`contracts/generation/v1/fixtures/sel4-demo.zti` -- and asserts RP2's exit
+`contracts/generation-manifest/v1/compositions/sel4-demo.zti` -- and asserts RP2's exit
 condition on the `aarch64-sel4-qemu-virt` profile:
 
     One demo-scoped AArch64 generation runs the Slime component model and the
@@ -77,7 +77,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -88,7 +88,7 @@ SELECTOR_MANIFEST = ROOT / "build" / "slime-sel4-boot-selection.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
 STORE_FIXTURE = ROOT / "scripts" / "build" / "build-store-fixture.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-demo.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-demo.zti"
 IMAGE_VARIANT = "demo"
 MANIFEST_NAME = "sel4-demo"
 

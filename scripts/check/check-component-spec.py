@@ -36,10 +36,10 @@ from component_spec import (
     workspace_binaries,
 )
 from boot_contracts import PRIVATE_MEMORY_ROOT_REGION_PAGES
-from harness import ROOT, load_script
+from harness import GENERATION_FIXTURES, ROOT, load_script
 from zutai_cli import STDLIB, binary
 
-GENERATION_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+GENERATION_SOURCE = GENERATION_FIXTURES / "valid.zti"
 BUILDER = load_script("component_spec_check_builder", "build/build-generation.py")
 
 

@@ -100,7 +100,7 @@ Every executable byte in the future demo generation is admitted for one exact AA
 **Status:** Complete.
 
 **Delivered:** A `demo` boot action and
-`contracts/generation/v1/fixtures/sel4-demo.zti` — the first generation that
+`contracts/generation-manifest/v1/compositions/sel4-demo.zti` — the first generation that
 carries the C7 bounded data path, the C8 stream route graph, *and* the product
 component graph together, so "the component-launch and data path under one
 demo-scoped generation" is a property of one admitted manifest rather than an

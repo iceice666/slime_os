@@ -16,7 +16,7 @@ from typing import NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from fabric_trace_contract import FABRIC_TRACE_RECORD_LEN  # noqa: E402
-from harness import sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
@@ -25,7 +25,7 @@ IMAGE = ROOT / "build" / "slime-sel4-replay.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-replay.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-replay.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-replay.zti"
 IMAGE_VARIANT = "replay"
 GENERATION = 45
 TIMEOUT = 300

@@ -3,7 +3,7 @@
 """P5.5.2 gate: the full C8.4 stream plane, unmodified, on seL4.
 
 Boots `build/slime-sel4-stream.elf` -- the image whose root task embeds the
-stream-plane generation, `contracts/generation/v1/fixtures/sel4-stream.zti` --
+stream-plane generation, `contracts/generation-manifest/v1/compositions/sel4-stream.zti` --
 and asserts P5.5.2's exit condition:
 
     `fabric-service` and every stream participant run on seL4 with no seL4
@@ -65,14 +65,14 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-stream.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-stream.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-stream.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-stream.zti"
 IMAGE_VARIANT = "stream"
 
 BOOT_TIMEOUT_SECONDS = 180

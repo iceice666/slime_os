@@ -36,13 +36,13 @@ from sel4_gate_markers import match_marker_contract  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-qos.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-qos.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-qos.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-qos.zti"
 IMAGE_VARIANT = "qos"
 SPAWN_PATTERN = re.compile(
     r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "

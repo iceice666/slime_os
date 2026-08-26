@@ -19,7 +19,7 @@ the authoritative detail.
 3. **`slime-root`**, the initial task, with two payloads compiled in: the
    **generation** (the deterministic manifest declaring every executable,
    instance, grant, and budget — built by `scripts/build/build-generation.py`
-   from `contracts/generation/v1/fixtures/`) and a small native child fixture
+   from `contracts/generation-manifest/v1/fixtures/`) and a small native child fixture
    used by the verification boot.
 
 There is no disk and no loader search path: every byte the system will ever

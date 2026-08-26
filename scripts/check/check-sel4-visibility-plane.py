@@ -52,7 +52,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 from fabric_visibility_contract import (  # noqa: E402
     VISIBILITY_QOS_MAGIC,
     VISIBILITY_QOS_RECORD,
@@ -66,7 +66,7 @@ PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-visibility.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-visibility.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-visibility.zti"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-visibility.zti"
 VIEW_FIXTURE = (
     ROOT / "contracts" / "fabric-visibility" / "v1" / "fixtures" / "sel4-visibility.view"
 )

@@ -3,7 +3,7 @@ use super::*;
 /// Drive the P5.4.9 full-graph boot: every C8 role in one generation.
 ///
 /// Only reachable for the authenticated `boot` action declared by
-/// `contracts/generation/v1/fixtures/sel4-boot.zti`. Every participant reads
+/// `contracts/generation-manifest/v1/compositions/sel4-boot.zti`. Every participant reads
 /// the same generation-derived action from its generated profile.
 ///
 /// **Every control endpoint is placed by the generation, not by init.** Each is
@@ -120,7 +120,7 @@ pub(super) fn drive_boot_plane() -> ! {
 /// worker's real scenario at once instead of parking.
 ///
 /// Only reachable for the authenticated `traffic` action declared by
-/// `contracts/generation/v1/fixtures/sel4-traffic.zti`, which is
+/// `contracts/generation-manifest/v1/compositions/sel4-traffic.zti`, which is
 /// `sel4-boot.zti` with `bootAction`/`generation` changed plus the additional
 /// grants real traffic needs that the parked boot scenario never exercised:
 /// call-plane phase-barrier edges, an operation-plane restart-release edge,
@@ -423,7 +423,7 @@ pub(super) fn drive_stream_plane(_qos: bool) {
 /// one `ParameterCall` route.
 ///
 /// Only reachable for the authenticated `call` action declared by
-/// `contracts/generation/v1/fixtures/sel4-call.zti`.
+/// `contracts/generation-manifest/v1/compositions/sel4-call.zti`.
 ///
 /// **Why the generation declares these controls rather than init minting them.**
 /// An earlier version had init mint all five and hand out the halves at spawn,
@@ -454,7 +454,7 @@ pub(super) fn drive_call_plane() {
 /// plus client A's private `nav-backup` route.
 ///
 /// Only reachable for the authenticated `operation` action declared by
-/// `contracts/generation/v1/fixtures/sel4-operation.zti`; broker and participants
+/// `contracts/generation-manifest/v1/compositions/sel4-operation.zti`; broker and participants
 /// read the same generated profile while only this composition differs.
 ///
 /// **Why the generation declares the control channels.** `drive_call_plane`'s
@@ -482,7 +482,7 @@ pub(super) fn drive_operation_plane() {
 /// telemetry subscriber's chain.
 ///
 /// Only reachable for the authenticated `visibility` action declared by
-/// `contracts/generation/v1/fixtures/sel4-visibility.zti`; broker and participants
+/// `contracts/generation-manifest/v1/compositions/sel4-visibility.zti`; broker and participants
 /// read the same generated profile while only this composition differs.
 ///
 /// This is `drive_stream_plane`'s shape with two differences, both consequences
@@ -574,7 +574,7 @@ pub(super) fn drive_robot_runtime_plane() {
 /// exercised together against one graph.
 ///
 /// Only reachable for the authenticated `matrix` action declared by
-/// `contracts/generation/v1/fixtures/sel4-matrix.zti`.
+/// `contracts/generation-manifest/v1/compositions/sel4-matrix.zti`.
 ///
 /// The composition is `launch_fabric_graph`'s, with three differences the
 /// milestone forces rather than choices made here:

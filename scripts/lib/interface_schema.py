@@ -11,11 +11,11 @@ from types import ModuleType
 from typing import Callable
 
 import interface_schema_contract as default_contract
-from harness import ROOT
+from harness import GENERATION_FIXTURES, ROOT
 from zutai_cli import STDLIB, binary
 
 CHECKER = ROOT / "contracts" / "interface-schema" / "v1" / "check.zt"
-GENERATION_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+GENERATION_SOURCE = GENERATION_FIXTURES / "valid.zti"
 INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interfaces"
 _ALLOWED_WIDTHS = (1, 2, 4, 8)
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
