@@ -284,12 +284,27 @@ impl PeerEndpointTable {
         Some((entry.object, side, entry.rights & RIGHT_TRANSFER != 0))
     }
 
+    /// The peer this holder's control edge names, and whether the grant
+    /// carries `RIGHT_TRANSFER`.
+    ///
+    /// `launched` alone cannot answer this for a dynamically spawned pair:
+    /// `LaunchedInstances` is populated only by the boot-time root-autostart
+    /// staging pass (`main.rs`'s one `launched_instances.record` call site),
+    /// so a task that reached this edge via `spawn()` — as every C9.6
+    /// participant does — is invisible to it on both ends. `tasks` is
+    /// authoritative for every live task regardless of how it was
+    /// constructed: `construct_child` records `Some(plan.instance)` on the
+    /// spawn path exactly as the boot path does, so a live-task scan finds
+    /// what `launched` cannot. Tried second, not instead: the boot-time table
+    /// answers a root-autostart peer without walking the task table, so the
+    /// common case pays no extra cost.
     pub fn receiver_for(
         &self,
         generation: &Generation<'_>,
         sender_instance: usize,
         declared_slot: u32,
         launched: &LaunchedInstances,
+        tasks: &TaskTable<MAX_TASKS>,
     ) -> Option<(TaskId, bool)> {
         let instance = generation.instance(sender_instance).ok()?;
         let binding = (0..instance.binding_count())
@@ -307,10 +322,13 @@ impl PeerEndpointTable {
         } else {
             return None;
         };
-        Some((
-            launched.task_for_instance(receiver)?,
-            entry.rights & RIGHT_TRANSFER != 0,
-        ))
+        let task = launched.task_for_instance(receiver).or_else(|| {
+            tasks
+                .tasks()
+                .find(|task| task.instance == Some(receiver))
+                .map(|task| task.id)
+        })?;
+        Some((task, entry.rights & RIGHT_TRANSFER != 0))
     }
 }
 impl Default for PeerEndpointTable {

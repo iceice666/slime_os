@@ -199,6 +199,10 @@ pub enum BootAction {
     /// replay of it, and a component whose unrecorded grant makes a
     /// determinism claim inadmissible.
     Replay = 35,
+    /// C9.6's robot workload composition: a sensor -> controller -> actuator
+    /// graph over the native fabric, exercised under declared best-effort CPU
+    /// contention and an injected controller restart.
+    RobotRuntime = 36,
 }
 
 impl BootAction {
@@ -256,6 +260,7 @@ impl BootAction {
         Self::SchedulingClass,
         Self::LifecycleRestart,
         Self::Replay,
+        Self::RobotRuntime,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -304,6 +309,7 @@ impl BootAction {
                 Self::SchedulingClass => Self::SchedulingClass.id(),
                 Self::LifecycleRestart => Self::LifecycleRestart.id(),
                 Self::Replay => Self::Replay.id(),
+                Self::RobotRuntime => Self::RobotRuntime.id(),
             };
             declared == id
         })
@@ -346,6 +352,7 @@ impl BootAction {
             "scheduling-class" => Self::SchedulingClass,
             "lifecycle-restart" => Self::LifecycleRestart,
             "replay" => Self::Replay,
+            "robot-runtime" => Self::RobotRuntime,
             _ => return None,
         })
     }
@@ -2812,7 +2819,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 35] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 36] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2848,6 +2855,7 @@ mod tests {
         (BootAction::SchedulingClass, 33),
         (BootAction::LifecycleRestart, 34),
         (BootAction::Replay, 35),
+        (BootAction::RobotRuntime, 36),
     ];
 
     #[test]

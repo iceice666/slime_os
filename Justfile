@@ -203,6 +203,18 @@ lifecycle_restart_check: sel4_pin_check
 replay_check: sel4_pin_check
     python3 scripts/check/check-sel4-replay-plane.py
 
+# C9.6: a simulated sensor -> controller -> actuator graph over the native
+# fabric, exercising timer, stream, call, lifecycle, restart, and contention
+# paths at once. The graph must run to completion under a declared best-effort
+# CPU load with the declared scheduling order preserved; an injected controller
+# restart must be bounded, reissue the controller's fabric authority, and let the
+# graph resume; and deadline miss, timer expiry, liveliness loss, fault, peer
+# loss, and cancellation must stay distinct at the userspace boundary. Asserted
+# the way C8.15 asserts its parent close: one composition, both schedules,
+# compared semantically rather than by marker presence alone.
+robot_runtime_check: sel4_pin_check
+    python3 scripts/check/check-sel4-robot-runtime-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across

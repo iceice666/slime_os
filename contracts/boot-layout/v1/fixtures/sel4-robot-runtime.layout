@@ -1,0 +1,8 @@
+[layout] path=init slots=6 max=64
+[layout] 1 executable fabric-service 0x10008
+[layout] 2 executable fabric-call-worker 0x10008
+[layout] 3 executable robot-sensor 0x10008
+[layout] 4 executable robot-actuator 0x10008
+[layout] 5 executable robot-clock 0x10008
+[layout] 7 shared-buffer-factory - 0x1000000
+[layout] end

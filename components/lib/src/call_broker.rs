@@ -47,24 +47,26 @@ const fn pending_terminals_per_client(in_flight: usize) -> usize {
 }
 
 const MAX_PENDING_TERMINALS_PER_CLIENT: usize = pending_terminals_per_client(MAX_CALLS);
+/// Storage stays at the structural two-client ceiling while admission follows
+/// the authenticated graph. A one-client composition therefore leaves capacity
+/// unused rather than compiling a second broker shape, which is the existing
+/// B70/CP2 convention for every graph-sized table.
 const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * CLIENTS;
-/// Client slots this broker serves. The generation declares two clients on the
-/// call route, and a client replaced at runtime reuses its slot, so this bounds
-/// the park set rather than the number of components that ever hold a role.
+/// Maximum client roles this broker can serve. A generation may declare fewer;
+/// `None` entries in the wiring are ordinary absent roles, not dead peers.
 const CLIENTS: usize = 2;
 /// Index of the server's handle in `supervision`, after the per-client handles.
 const SERVER_SUPERVISION: usize = CLIENTS;
 /// Index of the clock's handle in `supervision`.
 ///
-/// A handle of its own rather than a reuse of the server's: `fabric-call-time`
-/// is a separately declared instance with its own executable and its own
-/// control edge, so the server's termination says nothing about the clock's. It
-/// used to be read through `SERVER_SUPERVISION`, which meant a clock that
-/// exited while the server lived was observed by nothing and this broker's exit
-/// predicate -- the sole trace-flush site -- waited forever (B76).
+/// A handle of its own rather than a reuse of the server's: the clock is a
+/// separately declared instance with its own executable and control edge, so
+/// the server's termination says nothing about it. Reusing the server handle
+/// made an independently exiting clock unobservable and wedged trace flush
+/// (B76).
 const CLOCK_SUPERVISION: usize = CLIENTS + 1;
-/// Supervision handles this broker holds: one per client, then the server, then
-/// the clock.
+/// Supervision handles this broker holds: optional per-client entries, then the
+/// required server and clock handles.
 const SUPERVISION_HANDLES: usize = CLIENTS + 2;
 /// The one route this broker carries, as the graph names it. The literal was
 /// already spelled twice in `verify_graph`; naming it once keeps the identity
@@ -220,13 +222,41 @@ fn claim_call_tables() -> CallTables {
 pub struct Broker {
     buffer_factory_slot: u32,
     clients: [Option<u32>; CLIENTS],
+    client_identities: [Option<&'static [u8]>; CLIENTS],
+    server_identity: &'static [u8],
+    wake_name: &'static [u8],
     server_slot: Option<u32>,
     time_control: u32,
-    supervision: [u32; SUPERVISION_HANDLES],
+    /// Optional only for clients; the server and clock entries are mandatory
+    /// because retirement and time closure depend on observing their deaths
+    /// (B76).
+    ///
+    /// A generation-declared endpoint is owned by the generation, not by one
+    /// task incarnation: root reinstalls a minted copy into a replacement task
+    /// during spawn. The broker's half therefore remains valid across a
+    /// client's supervised restart while the replacement resumes receiving on
+    /// the same object. Requiring the broker to hold that client's supervision
+    /// binding was rejected because only the supervised instance's owner can
+    /// mint it; a broker outside that spawn relation cannot be given the handle
+    /// and the dynamically spawned participant would become undeclarable.
+    supervision: [Option<u32>; SUPERVISION_HANDLES],
+    /// Per-client fallback retirement signal, for a client whose supervision
+    /// entry is `None`.
+    ///
+    /// The restartable robot controller has no supervision handle this broker
+    /// can hold (its owner is a different component, and only that owner may
+    /// mint one), so `reclaim_dead_clients` has nothing to poll for it and its
+    /// slot would never clear -- wedging `run`'s exit predicate forever, since
+    /// a generation-owned endpoint remains valid and `Some` across every
+    /// replacement. This is the alternative: an explicit notification the
+    /// client's *owner* signals once it has concluded no replacement will ever
+    /// come, which is a fact only the owner holds. `None` for a client that
+    /// does carry supervision, since that death is already observable.
+    retirement: [Option<u32>; CLIENTS],
     /// The two tables [`claim_call_tables`] hands out, borrowed rather than
     /// owned so this value stays small enough to be returned by value.
     calls: &'static mut [Call; MAX_CALLS],
-    high_water: [u64; 2],
+    high_water: [u64; CLIENTS],
     /// The most calls this broker has ever held live at once.
     ///
     /// C8.11 records resource *high-water* evidence, which is a fact about the
@@ -328,12 +358,22 @@ impl Broker {
     /// No longer `const`: the declared limits are read from the root at run
     /// time, and the two storage tables come from [`claim_call_tables`] rather
     /// than being materialized inline.
+    /// Client supervision is optional because a generation-owned endpoint
+    /// survives replacement of a dynamically spawned client; supplying a
+    /// client handle without its endpoint is still rejected. Server and clock
+    /// supervision remain mandatory because their observed deaths drive server
+    /// retirement and time-plane closure (B76).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         buffer_factory_slot: u32,
-        clients: [u32; CLIENTS],
+        clients: [Option<u32>; CLIENTS],
+        client_identities: [Option<&'static [u8]>; CLIENTS],
         server_slot: u32,
+        server_identity: &'static [u8],
         time_control: u32,
-        supervision: [u32; SUPERVISION_HANDLES],
+        supervision: [Option<u32>; SUPERVISION_HANDLES],
+        retirement: [Option<u32>; CLIENTS],
+        wake_name: &'static [u8],
         limits: RuntimeLimits,
     ) -> Self {
         let max_calls = usize::try_from(limits.max_in_flight_calls)
@@ -360,15 +400,38 @@ impl Broker {
         let trace_depth = limits
             .trace_sink_depth()
             .unwrap_or_else(|| fail(b"graph declares a trace depth outside the contract"));
+        for index in 0..CLIENTS {
+            if clients[index].is_some() != client_identities[index].is_some()
+                || supervision[index].is_some() && clients[index].is_none()
+                || retirement[index].is_some() && clients[index].is_none()
+                || retirement[index].is_some() && supervision[index].is_some()
+            {
+                fail(b"call client wiring is incomplete");
+            }
+        }
+        if supervision[SERVER_SUPERVISION].is_none() {
+            fail(b"call server supervision missing");
+        }
+        if supervision[CLOCK_SUPERVISION].is_none() {
+            fail(b"call time supervision missing");
+        }
         let tables = claim_call_tables();
         Self {
             buffer_factory_slot,
-            clients: [Some(clients[0]), Some(clients[1])],
+            // Slots and identities are parallel on purpose: the hot path reads
+            // only compact slot Options, while graph verification reads only
+            // names. Pairing them would make every dispatch carry an unused
+            // fat pointer; construction checks that presence agrees instead.
+            clients,
+            client_identities,
+            server_identity,
+            wake_name,
             server_slot: Some(server_slot),
             time_control,
             supervision,
+            retirement,
             calls: tables.calls,
-            high_water: [0; 2],
+            high_water: [0; CLIENTS],
             peak_calls: 0,
             peak_buffers: 0,
             peak_retries: 0,
@@ -496,6 +559,7 @@ impl Broker {
                 .iter()
                 .all(|call| call.phase == Phase::Free)
                 && self.pending_terminals.iter().all(Option::is_none)
+                && self.clients.iter().all(Option::is_none)
                 && self.server_slot.is_none()
                 && self.time_closed
             {
@@ -570,20 +634,27 @@ impl Broker {
             // while the supervision handle that reports the death is only read
             // by a later sweep. Yielding keeps the sweeps coming.
             // Resolved through the root rather than compiled in (CP2/B70): the
-            // broker waits on the same grant name its four peers signal, and the
-            // per-holder answer is what gives each side its own slot. A graph
-            // declaring no wake object resolves to nothing, which is the same
-            // "yield instead of parking" case the sentinel used to mark.
-            let wake = slime_rt::resolve_binding(b"notification:fabric-service-parameters-ready");
-            // Once both clients and the server are gone, the clock is the only
-            // peer left who could ever signal this notification again -- and its
-            // own death is exactly the fact that produces no signal (B76). Every
-            // earlier state is safe to park in: some live peer still owes this
-            // broker a signal before its next send, including the clock's own
-            // next advance if it has one. Parking here instead would wait on a
-            // wake that can only ever arrive from a task that no longer exists.
+            // hosting composition supplies the full resolve name for the wake
+            // object its peers signal. A graph declaring no such object keeps
+            // the existing "yield instead of parking" behavior.
+            let wake = slime_rt::resolve_binding(self.wake_name);
+            // A declared client without supervision remains `Some` across task
+            // replacement: root reinstalls its generation-owned endpoint, so
+            // neither the exit predicate nor this wake decision may call it
+            // gone. It also cannot count as an *observable* live wake producer,
+            // however. If the supervised server is gone and only handle-less
+            // clients remain, yielding keeps `pump_time` polling the mandatory
+            // clock handle instead of parking on a wake that may never arrive.
+            // Once time is closed, parking is safe: only a replacement client
+            // can make progress, and that replacement signals this wake before
+            // sending. Unused ceiling slots remain absent throughout (B70/CP2,
+            // B76).
             let clock_unobservable_while_parked = !self.time_closed
-                && self.clients.iter().all(Option::is_none)
+                && self
+                    .clients
+                    .iter()
+                    .zip(self.supervision.iter())
+                    .all(|(client, supervision)| client.is_none() || supervision.is_none())
                 && self.server_slot.is_none();
             if owed
                 || self.server_call.is_some()
@@ -656,13 +727,18 @@ impl Broker {
                 })
                 .count()
         };
-        let declared_clients: [&[u8]; CLIENTS] = [b"fabric-call-client", b"fabric-call-client-b"];
-        for component in declared_clients {
+        for component in self.client_identities.iter().flatten().copied() {
             if declared(component, DIRECTION_CLIENT) != 1 {
+                slime_rt::debug_write(b"[fabric] call client graph declaration: ");
+                slime_rt::debug_write(component);
+                slime_rt::debug_write(b"\n");
                 fail(b"call client graph declaration");
             }
         }
-        if declared(b"fabric-call-server", DIRECTION_SERVER) != 1 {
+        if declared(self.server_identity, DIRECTION_SERVER) != 1 {
+            slime_rt::debug_write(b"[fabric] call server graph declaration: ");
+            slime_rt::debug_write(self.server_identity);
+            slime_rt::debug_write(b"\n");
             fail(b"call server graph declaration");
         }
         // The deadline every admission and retry arms against, resolved from
@@ -672,7 +748,15 @@ impl Broker {
         self.declared_deadline_ns = rows
             .iter()
             .filter(|row| {
-                row.route_index == route_index as u32 && row.direction == DIRECTION_CLIENT
+                row.route_index == route_index as u32
+                    && row.direction == DIRECTION_CLIENT
+                    && self.client_identities.iter().flatten().any(|component| {
+                        row.component_identity
+                            == boot_contracts::fabric_graph::component_identity(
+                                core::str::from_utf8(component)
+                                    .unwrap_or_else(|_| fail(b"component name is not utf-8")),
+                            )
+                    })
             })
             .map(|row| row.qos.deadline_ns)
             .min()
@@ -1161,9 +1245,11 @@ impl Broker {
                 mut descriptor,
             } => {
                 descriptor.sequence = call.server_request_id;
+                let supervision = self.supervision[SERVER_SUPERVISION]
+                    .unwrap_or_else(|| fail(b"call server supervision missing"));
                 let loan = match slime_rt::shared_buffer_loan(
                     buffer_slot,
-                    self.supervision[SERVER_SUPERVISION],
+                    supervision,
                     0,
                     descriptor.length,
                     false,
@@ -1489,8 +1575,9 @@ impl Broker {
             // `try_send` reports nothing about delivery, so this claims none:
             // the record stays until its client acks.
             ERR_SUCCESS => false,
-            // No `ERR_PEER_DEAD` arm: a dead client is reclaimed from its
-            // supervision handle in `reclaim_dead_clients` (B76).
+            // No `ERR_PEER_DEAD` arm: supervised clients are reclaimed by
+            // `reclaim_dead_clients`; a handle-less client's generation-owned
+            // endpoint remains valid across replacement (B76).
             _ => fail(b"reply delivery"),
         }
     }
@@ -1502,7 +1589,12 @@ impl Broker {
         buffer_slot: u32,
     ) {
         let client = self.calls[index].client_slot;
-        let supervision = self.supervision[self.calls[index].client_index as usize];
+        // A shared-buffer loan must name the receiver's supervision binding;
+        // substituting another task's handle would mis-address authority. C9.6's
+        // handle-less robot controller is inline-only, so this refuses an
+        // unreachable payload shape explicitly rather than fabricating a loan.
+        let supervision = self.supervision[self.calls[index].client_index as usize]
+            .unwrap_or_else(|| fail(b"shared reply client supervision unavailable"));
         let loan = match slime_rt::shared_buffer_loan(
             buffer_slot,
             supervision,
@@ -1542,8 +1634,9 @@ impl Broker {
                     descriptor,
                 };
             }
-            // No `ERR_PEER_DEAD` arm: a dead client is reclaimed from its
-            // supervision handle in `reclaim_dead_clients` (B76).
+            // No `ERR_PEER_DEAD` arm: supervised clients are reclaimed by
+            // `reclaim_dead_clients`; a handle-less client's endpoint survives
+            // replacement (B76).
             _ => fail(b"shared reply delivery"),
         }
     }
@@ -1563,7 +1656,12 @@ impl Broker {
                     buffer_slot,
                     mut descriptor,
                 } => {
-                    let supervision = self.supervision[call.client_index as usize];
+                    // Retrying cannot relax the receiver binding: a handle-less
+                    // client still cannot be addressed by a shared loan. C9.6's
+                    // controller is inline-only, so reaching this state is a
+                    // contract violation rather than a recoverable stall.
+                    let supervision = self.supervision[call.client_index as usize]
+                        .unwrap_or_else(|| fail(b"shared reply client supervision unavailable"));
                     let loan = match slime_rt::shared_buffer_loan(
                         buffer_slot,
                         supervision,
@@ -1639,7 +1737,9 @@ impl Broker {
                 // is broken -- an ungranted or malformed slot -- which is a
                 // composition defect, not a death; `observe_server_death` fails
                 // loudly on the same condition and this should not disagree.
-                match slime_rt::supervision_status(self.supervision[CLOCK_SUPERVISION]) {
+                let supervision = self.supervision[CLOCK_SUPERVISION]
+                    .unwrap_or_else(|| fail(b"call time supervision missing"));
+                match slime_rt::supervision_status(supervision) {
                     Ok(None) => return false,
                     Ok(Some(_)) => {}
                     Err(_) => fail(b"call time supervision"),
@@ -1735,7 +1835,9 @@ impl Broker {
         if self.server_death_reported {
             return false;
         }
-        match slime_rt::supervision_status(self.supervision[SERVER_SUPERVISION]) {
+        let supervision = self.supervision[SERVER_SUPERVISION]
+            .unwrap_or_else(|| fail(b"call server supervision missing"));
+        match slime_rt::supervision_status(supervision) {
             Ok(None) => false,
             Ok(Some(_)) => {
                 self.server_death_reported = true;
@@ -1893,39 +1995,50 @@ impl Broker {
         }
     }
 
-    /// Drop terminals owed to a client that has exited.
+    /// Drop terminals owed to an observably dead client.
     ///
     /// A terminal is only retired when its client acks it, which is what makes
-    /// delivery a fact rather than a guess. A client that exits first can never
-    /// ack, so those records would be offered for ever and the broker would
-    /// outlive a finished graph. Supervision is the only thing that separates
-    /// "not reading yet" from "gone".
+    /// delivery a fact rather than a guess. A supervised client that exits
+    /// first can never ack, so those records would be offered for ever and the
+    /// broker would outlive a finished graph. Its handle is the only thing that
+    /// separates "not reading yet" from "gone".
+    ///
+    /// A handle-less client without a retirement signal must be skipped, not
+    /// reclaimed: root may be between task incarnations while the
+    /// generation-owned endpoint remains valid for the replacement. Treating
+    /// absence of observation as termination would retire live terminals and
+    /// drop replies. A handle-less client *with* a retirement signal is
+    /// retired the moment that signal fires, which its owner raises only once
+    /// it has concluded no replacement will ever come.
     fn reclaim_dead_clients(&mut self) -> bool {
         let mut progressed = false;
         for client in 0..CLIENTS {
-            if matches!(
-                slime_rt::supervision_status(self.supervision[client]),
-                Ok(None)
-            ) {
+            let Some(slot) = self.clients[client] else {
+                continue;
+            };
+            let dead = match (self.supervision[client], self.retirement[client]) {
+                (Some(supervision), _) => match slime_rt::supervision_status(supervision) {
+                    Ok(None) => false,
+                    Ok(Some(_)) => true,
+                    Err(_) => fail(b"client supervision"),
+                },
+                (None, Some(retirement)) => {
+                    matches!(slime_rt::notification_poll(retirement), Ok(Some(_)))
+                }
+                (None, None) => false,
+            };
+            if !dead {
                 continue;
             }
-            for index in 0..self.active_call_count() {
-                if matches!(
-                    self.calls[index].phase,
-                    Phase::PendingTerminal | Phase::ForwardingReply
-                ) && self.calls[index].client_index as usize == client
-                {
-                    settle_payload(self.calls[index].payload);
-                    self.calls[index] = Call::EMPTY;
-                    progressed = true;
+            self.clients[client] = None;
+            self.reclaim_client(slot);
+            let _ = slime_rt::cap_drop(slot);
+            for pending in self.pending_terminals.iter_mut() {
+                if pending.is_some_and(|call| call.client_index as usize == client) {
+                    *pending = None;
                 }
             }
-            for slot in self.pending_terminals.iter_mut() {
-                if slot.is_some_and(|call| call.client_index as usize == client) {
-                    *slot = None;
-                    progressed = true;
-                }
-            }
+            progressed = true;
         }
         if progressed {
             slime_rt::debug_write(b"[fabric] terminal delivery abandoned\n");

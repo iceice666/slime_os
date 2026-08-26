@@ -76,7 +76,7 @@ use boot_contracts::fabric_graph::{
 };
 use boot_contracts::stream_history::{HistoryEntry, StreamHistory};
 use slime_proto::capability_transfer::{
-    CAPABILITY_TRANSFER_MAGIC, FLAG_RETAIN_TRANSFER, FORMAT_VERSION,
+    CAPABILITY_TRANSFER_MAGIC, FABRIC_REQUEST_MAGIC, FLAG_RETAIN_TRANSFER, FORMAT_VERSION,
     OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN, TRANSFER_LEN, WireCapabilityTransfer,
     WireFabricRequest,
 };
@@ -328,13 +328,22 @@ struct Client {
 /// One provisioned publisher-to-fabric ring. The publisher owns `head`; this
 /// service owns `tail` and drains until the ring itself says empty.
 struct Publisher {
+    /// Identity authenticated by `control_slot`. Kept on the role so a fresh
+    /// request can replace only this participant rather than disturbing every
+    /// edge on its route.
+    component: &'static [u8],
     control_slot: u32,
     ring_base: u64,
+    /// Fabric-owned ring buffer and the outstanding participant loan. A
+    /// replacement must settle both before minting another role or each restart
+    /// consumes one more frame-table/buffer-budget charge.
+    buffer_slot: u32,
+    loan_id: u64,
     ring_slots: usize,
     ready_slot: u32,
     credit_slot: u32,
     route: usize,
-    supervision_slot: u32,
+    supervision_slot: Option<u32>,
     finished: bool,
     /// Set when the publisher exited without ending its route. C8.5 requires
     /// peer death to stay distinguishable from an orderly end, and a native
@@ -361,13 +370,19 @@ struct Publisher {
 /// descriptors remain structured direct-control messages on `control_slot`;
 /// ordinary samples never use that endpoint.
 struct Subscriber {
+    /// Identity authenticated by `control_slot`; see [`Publisher::component`].
+    component: &'static [u8],
     control_slot: u32,
     ring_base: u64,
+    /// Fabric-owned ring buffer and the outstanding participant loan. See the
+    /// publisher fields for why both identities are retained.
+    buffer_slot: u32,
+    loan_id: u64,
     ring_slots: usize,
     ready_slot: u32,
     credit_slot: u32,
     route: usize,
-    supervision_slot: u32,
+    supervision_slot: Option<u32>,
     history: StreamHistory,
     in_flight: usize,
     ended: bool,
@@ -742,7 +757,15 @@ fn main(_startup_arg: u32) {
     provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] every declared stream edge provisioned\n");
 
-    broker(&type_tags, publishers, subscribers, frames, &limits);
+    broker(
+        &routes,
+        &mut clients,
+        &type_tags,
+        publishers,
+        subscribers,
+        frames,
+        &limits,
+    );
     // Outlive every participant holding one of this component's rings. Exiting
     // first reclaims the fabric's shared-buffer charges, and a loan mapping
     // torn out from under a task still executing against it faults that task —
@@ -774,18 +797,22 @@ fn run_call_plane() {
     let controls = request_response_controls(CALL_PLANE);
     call_broker::Broker::new(
         buffer_factory_slot(),
-        controls.clients,
+        [Some(controls.clients[0]), Some(controls.clients[1])],
+        [Some(CALL_PLANE[0]), Some(CALL_PLANE[1])],
         controls.server,
+        CALL_PLANE[2],
         controls.time,
         // Client A, client B, server, then the clock's own handle: a separately
         // declared instance whose exit the server's handle does not report
         // (B76).
         [
-            supervision_slot_for(b"fabric-call-client"),
-            supervision_slot_for(b"fabric-call-client-b"),
-            supervision_slot_for(b"fabric-call-server"),
-            supervision_slot_for(b"fabric-call-time"),
+            Some(supervision_slot_for(b"fabric-call-client")),
+            Some(supervision_slot_for(b"fabric-call-client-b")),
+            Some(supervision_slot_for(b"fabric-call-server")),
+            Some(supervision_slot_for(b"fabric-call-time")),
         ],
+        [None, None],
+        b"notification:fabric-service-parameters-ready",
         load_runtime_limits(),
     )
     .run();
@@ -848,12 +875,16 @@ fn run_operation_plane() {
 fn await_participants(publishers: &[Option<Publisher>], subscribers: &[Option<Subscriber>]) {
     let slots = publishers
         .iter()
-        .filter_map(|entry| entry.as_ref().map(|publisher| publisher.supervision_slot))
-        .chain(
-            subscribers
-                .iter()
-                .filter_map(|entry| entry.as_ref().map(|subscriber| subscriber.supervision_slot)),
-        );
+        .filter_map(|entry| {
+            entry
+                .as_ref()
+                .and_then(|publisher| publisher.supervision_slot)
+        })
+        .chain(subscribers.iter().filter_map(|entry| {
+            entry
+                .as_ref()
+                .and_then(|subscriber| subscriber.supervision_slot)
+        }));
     for supervision in slots {
         while let Ok(None) = slime_rt::supervision_status(supervision) {
             slime_rt::yield_now();
@@ -993,7 +1024,15 @@ fn traffic_graph() {
     provision(&mut clients, &routes, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] traffic: every declared stream edge provisioned\n");
 
-    broker(&type_tags, publishers, subscribers, frames, &limits);
+    broker(
+        &routes,
+        &mut clients,
+        &type_tags,
+        publishers,
+        subscribers,
+        frames,
+        &limits,
+    );
     // Neither the proxy nor the observer ever contacts this broker under
     // `"traffic"` (both parked above without requesting a role), so neither
     // dies either; waiting on either here would hang forever on a task the
@@ -1082,7 +1121,7 @@ pub(crate) fn control_slot_of(component: &[u8]) -> Option<u32> {
 /// Nothing positional survives: each entry resolves its own slot, so a
 /// composition that adds, drops, or reorders a control edge needs no change
 /// here and cannot shift another participant's authority.
-const STREAM_CONTROL_ROSTER: [&[u8]; 8] = [
+const STREAM_CONTROL_ROSTER: [&[u8]; 10] = [
     b"fabric-publisher",
     b"fabric-subscriber",
     b"fabric-intruder",
@@ -1091,6 +1130,13 @@ const STREAM_CONTROL_ROSTER: [&[u8]; 8] = [
     b"fabric-observer",
     b"fabric-probe",
     b"fabric-proxy",
+    // C9.6's robot graph: the sensor publishes and the controller subscribes on
+    // the same declared `telemetry` route the C8 planes use. Adding a role here
+    // changes no other composition — an entry is registered only if the root
+    // resolves its control grant for *this* instance, so every generation that
+    // names neither continues to see the same eight.
+    b"robot-sensor",
+    b"robot-controller",
 ];
 pub(crate) const MAX_STREAM_CONTROLS: usize = STREAM_CONTROL_ROSTER.len();
 
@@ -1228,12 +1274,52 @@ fn provision(
                     row,
                     publishers,
                     subscribers,
+                    false,
                 );
             }
         }
         if !progressed {
             slime_rt::yield_now();
         }
+    }
+}
+
+/// Receiver authority for a provisioned ring.
+///
+/// The ordinary planes use the supervision handle init granted this broker.
+/// C9.6 cannot: `robot-controller-supervision` is minted by and held by
+/// `robot-supervisor`, and `validate_supervision_binding_names` rejects a handle
+/// minted by any owner other than the supervised instance's owner. The rejected
+/// alternative was therefore a second fabric-held supervision binding; it is
+/// not expressible without lying about ownership.
+///
+/// A declared endpoint is the honest alternative the root permits. Its loan
+/// receiver lookup follows the endpoint's peer through `LaunchedInstances`, so
+/// after `PEER_ENDPOINTS.install_instance` installs the generation-owned object
+/// into a replacement, this same broker slot names the replacement task rather
+/// than the predecessor. The grant must carry `RIGHT_TRANSFER`, because a loan
+/// crosses authority; the robot fixture therefore must declare
+/// `robot-controller-control` with `transferable = true`.
+fn ring_receiver_slot(component: &'static [u8], control_slot: u32) -> u32 {
+    if component == b"robot-controller"
+        && slime_components::generation_composition::is(BootAction::RobotRuntime)
+    {
+        control_slot
+    } else {
+        supervision_slot_for(component)
+    }
+}
+
+/// Supervision is also the liveness proof for blocking control events and final
+/// teardown. The restartable controller's handle is intentionally absent from
+/// this holder, so its role uses ring/control observations instead.
+fn role_supervision_slot(component: &'static [u8]) -> Option<u32> {
+    if component == b"robot-controller"
+        && slime_components::generation_composition::is(BootAction::RobotRuntime)
+    {
+        None
+    } else {
+        Some(supervision_slot_for(component))
     }
 }
 
@@ -1248,6 +1334,7 @@ fn provision_edge(
     row: &slime_components::fabric_self_view::Row,
     publishers: &mut [Option<Publisher>],
     subscribers: &mut [Option<Subscriber>],
+    reprovisioned: bool,
 ) {
     // Direction, QoS, and KEEP_LAST depth all come off the one graph row this
     // edge was selected by (B70/CP2). They were three lookups into two
@@ -1291,9 +1378,9 @@ fn provision_edge(
     // stays the region's owner and accountable holder, and the participant
     // gets a receiver-bound reference over the declared range. Writable
     // because the two peers advance disjoint header fields of one ring.
-    let loan =
-        slime_rt::shared_buffer_loan(buffer.slot, supervision_slot_for(component), 0, PAGE, true)
-            .unwrap_or_else(|_| fail(b"stream ring loan"));
+    let receiver_slot = ring_receiver_slot(component, control_slot);
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, receiver_slot, 0, PAGE, true)
+        .unwrap_or_else(|_| fail(b"stream ring loan"));
     let descriptor = WireCapabilityTransfer {
         magic: CAPABILITY_TRANSFER_MAGIC,
         version: FORMAT_VERSION,
@@ -1323,13 +1410,16 @@ fn provision_edge(
                 .position(Option::is_none)
                 .unwrap_or_else(|| fail(b"publisher table exhausted"));
             publishers[free] = Some(Publisher {
+                component,
                 control_slot,
                 ring_base,
+                buffer_slot: buffer.slot,
+                loan_id: loan.id,
                 ring_slots,
                 ready_slot,
                 credit_slot,
                 route: route_index,
-                supervision_slot: supervision_slot_for(component),
+                supervision_slot: role_supervision_slot(component),
                 finished: false,
                 died: false,
                 terminated: false,
@@ -1346,13 +1436,16 @@ fn provision_edge(
                 .position(Option::is_none)
                 .unwrap_or_else(|| fail(b"subscriber table exhausted"));
             subscribers[free] = Some(Subscriber {
+                component,
                 control_slot,
                 ring_base,
+                buffer_slot: buffer.slot,
+                loan_id: loan.id,
                 ring_slots,
                 ready_slot,
                 credit_slot,
                 route: route_index,
-                supervision_slot: supervision_slot_for(component),
+                supervision_slot: role_supervision_slot(component),
                 history: StreamHistory::new(ring_slots)
                     .unwrap_or_else(|| fail(b"declared history depth")),
                 in_flight: 0,
@@ -1370,7 +1463,11 @@ fn provision_edge(
         _ => unreachable!(),
     }
     refresh_matches(route_index, publishers, subscribers);
-    slime_rt::debug_write(b"[fabric] provisioned ");
+    slime_rt::debug_write(if reprovisioned {
+        b"[fabric] reprovisioned "
+    } else {
+        b"[fabric] provisioned "
+    });
     slime_rt::debug_write(component);
     slime_rt::debug_write(b" ");
     slime_rt::debug_write(ROUTE_NAMES[route_index].as_bytes());
@@ -1381,6 +1478,284 @@ fn provision_edge(
     });
 }
 
+/// Everything the stale incarnation's subscriber role had not yet delivered to
+/// its consumer, keyed by route: whatever the fabric had already written into
+/// the ring but the dead task never consumed, followed by whatever was still
+/// queued waiting to be written.
+///
+/// The ring's remaining contents are drained through this broker's own
+/// writer-side mapping of the same shared buffer — the dead task's reader-side
+/// mapping died with it, so this is the only live view left — and re-admitted
+/// into fresh frames the same way `pump_publisher` admits a new sample, so the
+/// replacement's fresh ring is populated by the ordinary `deliver` path rather
+/// than a second copy of that logic. Drained entries are pushed ahead of
+/// whatever `history` still queued: `history` names samples admitted but not
+/// yet written to the ring, so it is strictly newer than anything the ring
+/// already held.
+///
+/// Without this, a restart mid-stream would silently drop every sample the
+/// fabric had already handed to the dead incarnation's ring but that
+/// incarnation had not yet read — which is exactly what let the publisher's
+/// already-`finished` record convince `announce_end` the route was drained
+/// while the replacement's fresh, empty ring still had nothing to show it.
+fn salvage_stale_subscriber(
+    component: &'static [u8],
+    now_ns: u64,
+    publishers: &[Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
+) -> [Option<StreamHistory>; ROUTE_COUNT] {
+    let mut preserved = [None; ROUTE_COUNT];
+    for subscriber in subscribers
+        .iter_mut()
+        .flatten()
+        .filter(|subscriber| subscriber.component == component)
+    {
+        let route = subscriber.route;
+        let mut salvaged = StreamHistory::new(subscriber.history.depth())
+            .unwrap_or_else(|| fail(b"declared history depth"));
+        let publisher_index = publishers
+            .iter()
+            .position(|entry| {
+                entry
+                    .as_ref()
+                    .is_some_and(|publisher| publisher.route == route)
+            })
+            .unwrap_or_else(|| fail(b"salvaged ring has no publisher"))
+            as u32;
+        let type_identity = route_type_tag(route);
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(subscriber.ring_base as *mut u8, PAGE as usize)
+        };
+        let mut ring = Ring::attach(bytes, type_identity, subscriber.ring_slots)
+            .unwrap_or_else(|_| fail(b"salvage ring attach"));
+        let mut sequence = 0u64;
+        // Reserve the destination *before* consuming. `Ring::consume` advances
+        // the shared tail, so checking for a free frame afterwards would already
+        // have destroyed the sample it then failed to keep -- and `consume` bumps
+        // no loss counter, so the drop would also be unaccounted. Reserving first
+        // means an exhausted frame table leaves the remaining samples in the
+        // ring, where they are counted as lost below rather than silently
+        // discarded.
+        while let Some(free) = frames.iter().position(|frame| frame.refs == 0) {
+            let mut payload = [0u8; MAX_INLINE_BYTES];
+            let (length, last) = match ring.consume(&mut payload) {
+                Ok(value) => value,
+                Err(RingError::Empty) => break,
+                Err(_) => fail(b"salvage ring consume"),
+            };
+            sequence += 1;
+            frames[free] = Frame {
+                refs: 1,
+                sequence,
+                type_identity,
+                flags: if last { FLAG_LAST } else { 0 },
+                payload,
+                payload_len: length,
+                buffer_slot: None,
+                buffer_len: 0,
+                admitted_ns: now_ns,
+            };
+            if let Some(evicted) = salvaged.push(HistoryEntry {
+                sequence,
+                publisher: publisher_index,
+                slot: free as u32,
+                inline: true,
+            }) {
+                release_frame(evicted.slot as usize, frames);
+            }
+        }
+        while let Some(entry) = subscriber.history.pop() {
+            if let Some(evicted) = salvaged.push(entry) {
+                release_frame(evicted.slot as usize, frames);
+            }
+        }
+        // Anything still in the old ring dies with it, and the stale
+        // subscriber's own pending report would die with the record it lived on.
+        // Both are re-attributed to the replacement's history, so a salvage that
+        // could not keep everything still reports a gap rather than presenting a
+        // truncated stream as complete.
+        let mut abandoned = 0u64;
+        let mut payload = [0u8; MAX_INLINE_BYTES];
+        while ring.consume(&mut payload).is_ok() {
+            abandoned = abandoned.saturating_add(1);
+        }
+        salvaged.note_loss(abandoned, subscriber.history.take_loss());
+        preserved[route] = Some(salvaged);
+    }
+    preserved
+}
+
+/// Poll the restartable composition's already-provisioned control endpoints for
+/// a replacement task's fresh role request.
+///
+/// This must remain non-blocking. A blocking receive on any quiet participant
+/// would wedge the broker before it could sweep publishers, acknowledgements,
+/// or the other control endpoints. `ERR_WOULDBLOCK` therefore preserves the
+/// broker's existing `progressed`/yield discipline.
+fn reprovision_participants(
+    clients: &[Option<Client>],
+    routes: &[[u8; 32]; ROUTE_COUNT],
+    graph_rows: &[slime_components::fabric_self_view::Row],
+    now_ns: u64,
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
+) -> bool {
+    let mut progressed = false;
+    for client in clients
+        .iter()
+        .flatten()
+        .filter(|client| client.answered && client.component == b"robot-controller")
+    {
+        let mut message = [0u8; MAX_MSG];
+        let mut received = [0u64; MAX_CAPS_PER_MSG];
+        let length = match slime_rt::recv(client.control_slot, &mut message, &mut received) {
+            ERR_WOULDBLOCK => continue,
+            error if error < 0 => fail(b"reprovision control recv"),
+            length => length as usize,
+        };
+        release_received(&received);
+        let Some(request) = WireFabricRequest::decode(&message[..length.min(MAX_MSG)]) else {
+            continue;
+        };
+        if length != REQUEST_LEN
+            || request.magic != FABRIC_REQUEST_MAGIC
+            || !valid_fabric_request(&request)
+        {
+            continue;
+        }
+
+        // Authority remains the generation row selected by the authenticated
+        // endpoint; request fields are not allowed to choose a different role.
+        let _ = (request.direction, request.type_identity, request.route_name);
+        let preserved =
+            salvage_stale_subscriber(client.component, now_ns, publishers, subscribers, frames);
+        reclaim_component(client.component, publishers, subscribers, frames);
+        let identity = boot_contracts::fabric_graph::component_identity(
+            core::str::from_utf8(client.component)
+                .unwrap_or_else(|_| fail(b"component name is not utf-8")),
+        );
+        for row in graph_rows
+            .iter()
+            .filter(|row| row.component_identity == identity)
+        {
+            let Some(route) = local_route_index(row.route_index) else {
+                continue;
+            };
+            provision_edge(
+                client.component,
+                client.control_slot,
+                &routes[route],
+                route,
+                row,
+                publishers,
+                subscribers,
+                true,
+            );
+            // Hand the preserved backlog to the freshly-provisioned role: the
+            // publisher side is unaware a restart happened at all, so nothing
+            // else will ever re-admit these samples.
+            if let Some(history) = preserved[route]
+                && let Some(subscriber) = subscribers.iter_mut().flatten().find(|subscriber| {
+                    subscriber.component == client.component && subscriber.route == route
+                })
+            {
+                subscriber.history = history;
+            }
+        }
+        progressed = true;
+    }
+    progressed
+}
+
+/// Reclaim every resource held by one stale stream role before replacing it.
+///
+/// The buffer must be unmapped, its outstanding participant loan revoked, and
+/// every history reference released before the table slot is reused. Leaking
+/// any one of them would not fail visibly at the first restart: it would surface
+/// as a shared-buffer quota refusal on the second restart, and C10.4's frame
+/// evidence would describe resources the plane no longer has a live user for.
+fn reclaim_component(
+    component: &'static [u8],
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
+) {
+    let mut affected_routes = 0u32;
+    for entry in publishers.iter_mut() {
+        if entry
+            .as_ref()
+            .is_none_or(|publisher| publisher.component != component)
+        {
+            continue;
+        }
+        let mut publisher = entry.take().expect("matched publisher");
+        affected_routes |= 1u32 << publisher.route;
+        while let Some(retained) = publisher.retained.pop() {
+            release_frame(retained.slot as usize, frames);
+        }
+        let _ = slime_rt::shared_buffer_unmap(publisher.buffer_slot, publisher.ring_base);
+        let _ = slime_rt::shared_buffer_revoke(publisher.buffer_slot, publisher.loan_id);
+        let _ = slime_rt::shared_buffer_release(publisher.buffer_slot);
+    }
+    for entry in subscribers.iter_mut() {
+        if entry
+            .as_ref()
+            .is_none_or(|subscriber| subscriber.component != component)
+        {
+            continue;
+        }
+        let mut subscriber = entry.take().expect("matched subscriber");
+        affected_routes |= 1u32 << subscriber.route;
+        while let Some(queued) = subscriber.history.pop() {
+            release_frame(queued.slot as usize, frames);
+        }
+        let _ = slime_rt::shared_buffer_unmap(subscriber.buffer_slot, subscriber.ring_base);
+        let _ = slime_rt::shared_buffer_revoke(subscriber.buffer_slot, subscriber.loan_id);
+        let _ = slime_rt::shared_buffer_release(subscriber.buffer_slot);
+    }
+    for route in 0..ROUTE_COUNT {
+        if affected_routes & (1u32 << route) != 0 {
+            refresh_matches(route, publishers, subscribers);
+        }
+    }
+}
+
+/// Roles without a supervision handle have no dead-task capability for
+/// `await_participants` to wait on. Once their terminal ring is drained, reclaim
+/// them here so the broker neither waits on the predecessor nor exits while the
+/// replacement still holds a live ring.
+fn reclaim_unobserved_participants(
+    publishers: &mut [Option<Publisher>],
+    subscribers: &mut [Option<Subscriber>],
+    frames: &mut [Frame],
+) {
+    let mut components = [None; MAX_STREAM_CONTROLS];
+    let mut count = 0usize;
+    for component in publishers
+        .iter()
+        .filter_map(|entry| entry.as_ref())
+        .filter(|publisher| publisher.supervision_slot.is_none() && publisher.finished)
+        .map(|publisher| publisher.component)
+        .chain(
+            subscribers
+                .iter()
+                .filter_map(|entry| entry.as_ref())
+                .filter(|subscriber| subscriber.supervision_slot.is_none() && subscriber.ended)
+                .map(|subscriber| subscriber.component),
+        )
+    {
+        if !components[..count].contains(&Some(component)) {
+            components[count] = Some(component);
+            count += 1;
+        }
+    }
+    for component in components[..count].iter().flatten() {
+        reclaim_component(component, publishers, subscribers, frames);
+    }
+}
+
 /// C8.4 brokering loop: move samples from every live publisher to every matched
 /// subscriber, bounded by each subscriber's declared KEEP_LAST depth.
 ///
@@ -1389,6 +1764,8 @@ fn provision_edge(
 /// whole set. The loop retires a source before parking again, so no dead
 /// endpoint is ever left in the wait set to spin on.
 fn broker(
+    routes: &[[u8; 32]; ROUTE_COUNT],
+    clients: &mut [Option<Client>],
     type_tags: &[u64; ROUTE_COUNT],
     publishers: &mut [Option<Publisher>],
     subscribers: &mut [Option<Subscriber>],
@@ -1408,6 +1785,19 @@ fn broker(
     // once: the composition cannot change under a running graph, and every
     // reader below sits on the dispatch loop.
     let traffic_plane = slime_components::generation_composition::is(BootAction::Traffic);
+    // Re-provisioning is a property of the one composition that declares a
+    // restartable stream participant, not a new ambient fabric capability.
+    // Keeping the gate here means stream/qos/boot/traffic/matrix/visibility
+    // retain literally their previous sweep even if a peer sends another role
+    // request on a control endpoint.
+    let restartable_plane = slime_components::generation_composition::is(BootAction::RobotRuntime);
+    let mut graph_rows = slime_components::fabric_self_view::EMPTY_ROWS;
+    let graph_row_count = if restartable_plane {
+        slime_components::fabric_self_view::rows(&mut graph_rows)
+            .unwrap_or_else(|_| fail(b"fabric graph read did not complete"))
+    } else {
+        0
+    };
     // The most frames and buffer-backed frames this run ever held. Sampled per
     // sweep, because the count that matters is an occupancy: reading it after
     // `release_retained` has drained every frame reports the residue of
@@ -1504,6 +1894,17 @@ fn broker(
     }
     loop {
         let mut progressed = false;
+        if restartable_plane {
+            progressed |= reprovision_participants(
+                clients,
+                routes,
+                &graph_rows[..graph_row_count],
+                now_ns,
+                publishers,
+                subscribers,
+                frames,
+            );
+        }
         for index in 0..publishers.len() {
             if publishers[index]
                 .as_ref()
@@ -1578,13 +1979,13 @@ fn broker(
             if publisher.finished || publisher.died {
                 continue;
             }
+            let Some(supervision_slot) = publisher.supervision_slot else {
+                continue;
+            };
             if !publisher.terminated {
                 // `Ok(None)` is "still running"; a terminated peer reports its
                 // termination kind, which is the observation this needs.
-                if matches!(
-                    slime_rt::supervision_status(publisher.supervision_slot),
-                    Ok(None)
-                ) {
+                if matches!(slime_rt::supervision_status(supervision_slot), Ok(None)) {
                     continue;
                 }
                 publisher.terminated = true;
@@ -1707,6 +2108,7 @@ fn broker(
             .all(|subscriber| subscriber.ended)
             && (!qos_check() || time_dead)
         {
+            reclaim_unobserved_participants(publishers, subscribers, frames);
             release_retained(publishers, frames);
             // The post-drain occupancy, read once, before any record is
             // written. One observation decides both of this counter's records:
@@ -2326,7 +2728,9 @@ fn deliver(
     if let Some(buffer_slot) = frames[frame].buffer_slot {
         let loan = match slime_rt::shared_buffer_loan(
             buffer_slot,
-            subscriber.supervision_slot,
+            subscriber
+                .supervision_slot
+                .unwrap_or(subscriber.control_slot),
             0,
             frames[frame].buffer_len,
             false,
@@ -2465,11 +2869,24 @@ fn announce_end(
     // means it can no longer be waiting. The broker's own loop supplies the
     // retry, so this never spins.
     let _ = slime_rt::try_send(subscriber.control_slot, &event.encode(), &[]);
-    if matches!(
-        slime_rt::supervision_status(subscriber.supervision_slot),
-        Ok(None)
-    ) {
-        return false;
+    if let Some(supervision_slot) = subscriber.supervision_slot {
+        if matches!(slime_rt::supervision_status(supervision_slot), Ok(None)) {
+            return false;
+        }
+    } else {
+        // The restartable controller's owner is another component, so this
+        // broker cannot hold its supervision handle. Its BEST_EFFORT ring is
+        // safe to retire only after the receiver advanced the shared tail past
+        // every sample; doing so earlier could reclaim the mapping under the
+        // live replacement.
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(subscriber.ring_base as *mut u8, PAGE as usize)
+        };
+        let ring = Ring::attach(bytes, type_tags[route], subscriber.ring_slots)
+            .unwrap_or_else(|_| fail(b"subscriber ring attach"));
+        if ring.occupancy() != 0 {
+            return false;
+        }
     }
     subscriber.ended = true;
     true
@@ -2916,7 +3333,7 @@ fn route_type_tag(route: usize) -> u64 {
 /// cutover. `false` therefore means "this subscriber is gone", not "try later".
 fn send_qos_event(
     slot: u32,
-    supervision_slot: u32,
+    supervision_slot: Option<u32>,
     event: u32,
     sequence: u64,
     value: u64,
@@ -2924,7 +3341,14 @@ fn send_qos_event(
     type_identity: u64,
 ) -> bool {
     // `Ok(None)` is "still running". Anything else means the peer has
-    // terminated and no send to it can ever rendezvous.
+    // terminated and no send to it can ever rendezvous. A composition-owned
+    // restartable role may instead be endpoint-bound because its supervisor is
+    // another task. It deliberately skips blocking QoS records: without a
+    // supervision observation there is no safe proof that a send can
+    // rendezvous, and blocking the broker here would wedge the whole plane.
+    let Some(supervision_slot) = supervision_slot else {
+        return false;
+    };
     if !matches!(slime_rt::supervision_status(supervision_slot), Ok(None)) {
         return false;
     }

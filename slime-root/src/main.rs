@@ -6312,6 +6312,7 @@ fn serve_capability_export(
         sender_instance,
         carrier,
         launched,
+        tasks,
     ) else {
         return Response::error(IpcError::BadCapability);
     };
@@ -6819,7 +6820,13 @@ fn serve_buffer_loan(
         {
             Some(capability.task)
         }
-        None => launched.instance_for_task(id).and_then(|sender_instance| {
+        // `id` names a live task regardless of how it was constructed, so its
+        // own instance is read from `tasks` directly rather than from
+        // `launched.instance_for_task`, which only ever recorded root-autostart
+        // instances (`main.rs`'s one `launched_instances.record` call site,
+        // in the boot-time staging pass). A dynamically spawned sender —
+        // every C9.6 fabric worker — is invisible to that table on both ends.
+        None => tasks.get(id).and_then(|task| task.instance).and_then(|sender_instance| {
             // The endpoint namespace is disjoint from the logical-authority
             // table. Resolve a declared endpoint only when no logical
             // capability occupies the same relative number; otherwise a
@@ -6831,6 +6838,7 @@ fn serve_buffer_loan(
                 sender_instance,
                 receiver_slot,
                 launched,
+                tasks,
             );
             match resolved {
                 Some((receiver, true)) => Some(receiver),

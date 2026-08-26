@@ -370,6 +370,15 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-replay.zti",
+    # C9.6: a sensor -> controller -> actuator graph over the native fabric,
+    # under declared best-effort CPU contention and an injected controller
+    # restart.
+    "sel4-robot-runtime": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-robot-runtime.zti",
     # C9.1: independently grantable monotonic, timer, and simulated clocks.
     "sel4-clock-authority": ROOT
     / "contracts"

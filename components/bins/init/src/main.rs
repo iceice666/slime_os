@@ -166,6 +166,8 @@ mod boot_action {
     /// C9.5's typed recording and deterministic replay.
     pub const REPLAY: u32 = 35;
 
+    /// C9.6's robot workload composition.
+    pub const ROBOT_RUNTIME: u32 = 36;
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
     // file matches on it. Renumbering a variant in the contract without
@@ -207,6 +209,7 @@ mod boot_action {
     const _: () = assert!(SCHEDULING_CLASS == BootAction::SchedulingClass.id());
     const _: () = assert!(LIFECYCLE_RESTART == BootAction::LifecycleRestart.id());
     const _: () = assert!(REPLAY == BootAction::Replay.id());
+    const _: () = assert!(ROBOT_RUNTIME == BootAction::RobotRuntime.id());
 }
 
 /// Compose the graph the generation selected.
@@ -309,6 +312,16 @@ fn compose_declared_graph(startup_arg: u32) {
         // handing one over would prove the wrong thing.
         action::REPLAY => {
             slime_rt::debug_write(b"[init] replay plane is root-launched\n");
+            slime_rt::exit(0)
+        }
+        // `fabric-service` and `fabric-call-worker` must hold supervision
+        // handles over their own dependents (`drive_robot_runtime_plane`'s
+        // header explains why root-autostart cannot supply one), so init
+        // spawns them and their subjects itself; `robot-supervisor` and
+        // `robot-burner` need no capability from init and are root-autostart.
+        action::ROBOT_RUNTIME => {
+            drive_robot_runtime_plane();
+            slime_rt::debug_write(b"[init] robot runtime plane complete\n");
             slime_rt::exit(0)
         }
         action::CROSSING => {
@@ -1403,6 +1416,76 @@ fn drive_operation_plane() {
 ///   reads in the order the broker will answer them.
 fn drive_visibility_plane() {
     launch_fabric_graph(b"visibility", b" fabric spawned\n");
+}
+
+/// Drive C9.6's robot workload: spawn every dynamically constructed
+/// participant, in the one order the mechanism requires, and hand each
+/// broker the supervision handle it needs over its own dependents.
+///
+/// **Why this plane cannot be root-launched, unlike C9.1-C9.5's planes.**
+/// Every prior C9 plane's participants held their declared authority directly
+/// and needed no capability *from* another participant, so every instance
+/// could be root-autostart and init could exit immediately. `fabric-service`
+/// and `fabric-call-worker` are different: they must hold a *supervision*
+/// handle over `robot-sensor` and over `robot-actuator`/`robot-clock`
+/// respectively, to bind each ring's loan to its receiver and to observe peer
+/// death. A supervision handle exists only as the result of a `spawn()` call —
+/// there is no boot-time mechanism that hands one root-autostart instance
+/// authority over another — so the subjects must be spawned, and the same
+/// spawner must then mint that handle into the holder it spawns next.
+///
+/// **Spawn order is load-bearing**, for exactly that reason: `robot-sensor`
+/// before `fabric-service`, and `robot-actuator`/`robot-clock` before
+/// `fabric-call-worker`. `robot-supervisor` and `robot-burner` need no
+/// capability from init at all — the first receives its authority over
+/// `robot-controller` from a self-sourced grant the generation installs
+/// directly at its own (root-autostart) construction, and the second needs
+/// none — so both are declared root-autostart instead and this function never
+/// names them.
+///
+/// `robot-controller` is spawned by neither: it is `robot-supervisor`'s own
+/// dependent, restarted under the declared lifecycle policy, and no capability
+/// it holds can cross through init.
+fn drive_robot_runtime_plane() {
+    let sensor = spawn_boot(b"executable:robot-sensor");
+    let actuator = spawn_boot(b"executable:robot-actuator");
+    let clock = spawn_boot(b"executable:robot-clock");
+    slime_rt::debug_write(b"[init] robot runtime sensors spawned\n");
+
+    let fabric = spawn_boot_with(
+        b"executable:fabric-service",
+        &[
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
+            grant(sensor, RIGHT_SUPERVISE),
+        ],
+    );
+    let call_worker = spawn_boot_with(
+        b"executable:fabric-call-worker",
+        &[
+            grant(resolve_own_buffer_factory(), RIGHT_BUFFER_CREATE),
+            grant(actuator, RIGHT_SUPERVISE),
+            grant(clock, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] robot runtime brokers spawned\n");
+
+    // `robot-supervisor` and `robot-burner` run independently of everything
+    // spawned here: both are root-autostart, so the root constructed them
+    // before this function ran, and their completion is tracked by the
+    // generation's own required-instance health rather than by this wait.
+    //
+    // Init does not `wait_clean` here, unlike the C8 fabric planes: those
+    // planes' participants share one undeclared default priority band with
+    // each other, strictly below init's, so init spinning a busy `yield_now`
+    // loop still lets that one band run. This plane declares participants
+    // across foreground/normal/bestEffort, and the burner's whole claim is
+    // that a foreground band's *blocking* wait — never a spin — is what lets
+    // it run at all; a spinning waiter one band above everything only adds a
+    // second thread the scheduler must service, at init's own high priority,
+    // for no observable benefit. Init's job was placing the graph's authority;
+    // the graph's own completion is what `SLIME_GRAPH HEALTHY` reports,
+    // independent of whether init is still watching.
+    let _ = (sensor, actuator, clock, fabric, call_worker);
 }
 
 /// Drive the C8.12 matrix plane: matching, filtered visibility, and denial

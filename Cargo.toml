@@ -348,3 +348,33 @@ debug = false
 opt-level = "s"
 codegen-units = 1
 debug = false
+
+[profile.release.package.slime-component-robot-sensor]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-robot-controller]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-robot-actuator]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-robot-supervisor]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-robot-burner]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-robot-clock]
+opt-level = "s"
+codegen-units = 1
+debug = false

@@ -117,6 +117,8 @@ LIFECYCLE_RESTART_IMAGE = BUILD_ROOT / "slime-sel4-lifecycle-restart.elf"
 LIFECYCLE_RESTART_MANIFEST = BUILD_ROOT / "slime-sel4-lifecycle-restart.identity.json"
 REPLAY_IMAGE = BUILD_ROOT / "slime-sel4-replay.elf"
 REPLAY_MANIFEST = BUILD_ROOT / "slime-sel4-replay.identity.json"
+ROBOT_RUNTIME_IMAGE = BUILD_ROOT / "slime-sel4-robot-runtime.elf"
+ROBOT_RUNTIME_MANIFEST = BUILD_ROOT / "slime-sel4-robot-runtime.identity.json"
 CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
 CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
@@ -188,6 +190,7 @@ WAIT_SET_VARIANT = "wait-set"
 SCHEDULING_CLASS_VARIANT = "scheduling-class"
 LIFECYCLE_RESTART_VARIANT = "lifecycle-restart"
 REPLAY_VARIANT = "replay"
+ROBOT_RUNTIME_VARIANT = "robot-runtime"
 DEMO_VARIANT = "demo"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
@@ -246,6 +249,7 @@ VARIANT_MANIFESTS = {
     SCHEDULING_CLASS_VARIANT: "sel4-scheduling-class",
     LIFECYCLE_RESTART_VARIANT: "sel4-lifecycle-restart",
     REPLAY_VARIANT: "sel4-replay",
+    ROBOT_RUNTIME_VARIANT: "sel4-robot-runtime",
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
     QOS_VARIANT: "sel4-qos",
@@ -315,6 +319,7 @@ VARIANT_TARGET_DIRS = {
     SCHEDULING_CLASS_VARIANT: "root-scheduling-class",
     LIFECYCLE_RESTART_VARIANT: "root-lifecycle-restart",
     REPLAY_VARIANT: "root-replay",
+    ROBOT_RUNTIME_VARIANT: "root-robot-runtime",
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
     QOS_VARIANT: "root-qos",
@@ -357,6 +362,7 @@ VARIANT_IMAGES = {
     SCHEDULING_CLASS_VARIANT: (SCHEDULING_CLASS_IMAGE, SCHEDULING_CLASS_MANIFEST),
     LIFECYCLE_RESTART_VARIANT: (LIFECYCLE_RESTART_IMAGE, LIFECYCLE_RESTART_MANIFEST),
     REPLAY_VARIANT: (REPLAY_IMAGE, REPLAY_MANIFEST),
+    ROBOT_RUNTIME_VARIANT: (ROBOT_RUNTIME_IMAGE, ROBOT_RUNTIME_MANIFEST),
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
     QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
@@ -1398,6 +1404,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--robot-runtime-plane",
+        action="store_true",
+        help="embed the C9.6 robot-workload generation, writing a separate image",
+    )
+    parser.add_argument(
         "--call-plane",
         action="store_true",
         help="embed the bounded-call generation (C8.6), writing a separate image",
@@ -1625,6 +1636,7 @@ def main() -> None:
             (SCHEDULING_CLASS_VARIANT, arguments.scheduling_class_plane),
             (LIFECYCLE_RESTART_VARIANT, arguments.lifecycle_restart_plane),
             (REPLAY_VARIANT, arguments.replay_plane),
+            (ROBOT_RUNTIME_VARIANT, arguments.robot_runtime_plane),
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),

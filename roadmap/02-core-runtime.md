@@ -764,13 +764,15 @@ by `sel4_fault_check`.
 
 ## C9: Robot runtime authority
 
-**Status:** In progress. Decomposed into C9.1–C9.6; C9.1 through C9.5 are
-complete, so RP5's two named dependencies are closed, scheduling class is
-declared and enforced, a userspace supervisor restarts a failed component under
-generation-declared policy while the root gains none of it, and a component the
-generation declares deterministic replays a recorded trace to byte-identical
-typed outputs while every authority no recorder captures is refused that claim.
-C9.6 is open.
+**Status:** Complete. Decomposed into C9.1–C9.6; all six are closed. RP5's two
+named dependencies are closed, scheduling class is declared and enforced, a
+userspace supervisor restarts a failed component under generation-declared
+policy while the root gains none of it, a component the generation declares
+deterministic replays a recorded trace to byte-identical typed outputs while
+every authority no recorder captures is refused that claim, and a sensor →
+controller → actuator graph runs to completion under declared contention and
+survives an injected controller restart with its fabric authority reissued, the
+whole composition asserted by a two-boot semantic trace comparison.
 
 This track supplies the timing, execution, lifecycle, and observation contracts
 needed by robot and mixed interactive workloads. It does not promise hard
@@ -1126,44 +1128,50 @@ C8.11's trace contract, all complete.
 
 ### C9.6 — Robot workload composition
 
-**Status:** Not started.
+**Status:** Complete.
+
+**Delivered:** A simulated sensor → controller → actuator graph on the
+`sel4-robot-runtime` plane (generation 46, `bootAction="robot-runtime"`), with
+the controller as a novel dual-contract-kind participant — a stream subscriber
+on `telemetry` and a call client on `parameters`, each reaching its broker
+through a separate generation-declared control endpoint. Six new components
+(`robot-sensor`, `robot-controller`, `robot-actuator`, `robot-supervisor`,
+`robot-burner`, `robot-clock`) compose C9.1's clock authority, C9.2's bounded
+wait sets, C9.3's declared scheduling class, and C9.4's lifecycle policy into
+one workload that runs to completion under a declared best-effort CPU load and
+survives an injected controller fault with its fabric authority reissued to the
+replacement. `components/lib/src/call_broker.rs` gained the `retirement`
+notification mechanism that makes `Broker::run`'s every-client-absent exit
+predicate reachable on a plane whose only client is a restartable,
+generation-owned endpoint, and `components/bins/fabric-service/src/main.rs`
+gained `salvage_stale_subscriber`, which drains a dead subscriber's ring
+through the broker's own writer-side mapping before reclaim so a restart
+mid-stream drops no sample the fabric had already handed to the dead
+incarnation. `fabric-call-worker`'s one fixed positional slot layout became a
+`Composition` struct dispatched on `BootAction`, restoring the C8.10 boot
+plane's `fabric-call-worker` arm the refactor had dropped.
+
+**Exit condition (observed):** `just robot_runtime_check` boots the plane twice
+over one composition and compares the declared semantic traces field by field,
+the same discipline C8.15 applied to the aggregate schedules. The graph reaches
+`SLIME_GRAPH HEALTHY generation=46 required=8 live=0 completed=8 failed=0` with
+the sensor's four ticks and terminal sample consumed, the controller's command
+scale (read back from instance-owned parameter state) surviving the restart in
+the *data*, deadline miss, cancellation, rejection, and the orderly stream end
+each observed as a distinct outcome, and the declared `bestEffort` burner
+bracketing the supervisor's terminal marker between two of its own chunks. The
+semantic corpus is architecture-neutral: no GIC identifier, AArch64 register
+frame, or physical address appears in a C9 contract or trace record.
+
+**Gates:** `just robot_runtime_check`, `just sel4_boot_check`,
+`just sel4_call_check`, `just sel4_traffic_check`,
+`just sel4_fabric_aggregate_check`, `just sel4_gate_control_check`,
+`just sel4_boot_layout_check`, `just contracts_check`, `just generation_check`,
+`just test_sel4_root`, `just test_host`.
+
+**Evidence:** [`devlog/2026-08-26-c9-6-robot-workload-composition/`](../devlog/2026-08-26-c9-6-robot-workload-composition/index.md)
 
 **Depends on:** C9.1–C9.5.
-
-#### Deliverables
-
-- build a simulated sensor → controller → actuator graph over the native
-  fabric, with no privileged special-casing, exercising timer, stream, call,
-  lifecycle, restart, and contention paths;
-- run it under CPU contention from a declared best-effort load and an injected
-  controller restart;
-- assert the composed envelope the way C8.15 does: one composition, both
-  schedules, compared semantically rather than by marker presence alone.
-
-#### Required checks
-
-- the graph runs to completion under contention with declared scheduling order
-  preserved;
-- an injected controller restart is bounded, reissues authority, and the graph
-  resumes;
-- deadline miss, timer expiry, liveliness loss, fault, peer loss, and
-  cancellation remain distinct at the userspace boundary;
-- the semantic corpus is architecture-neutral: no GIC identifier, AArch64
-  register frame, or physical address appears in a C9 contract or trace record.
-
-#### Planned verification target
-
-```sh
-just robot_runtime_check
-```
-
-#### Exit condition
-
-A simulated sensor/controller/actuator graph runs through the native fabric with
-explicit time, scheduling, lifecycle, and parameter authority; under CPU
-contention and an injected component restart it remains bounded, preserves the
-declared scheduling order, restores fresh authority, and reproduces its typed
-outputs from a complete recorded input trace.
 
 ## C10: Bounded private component memory
 

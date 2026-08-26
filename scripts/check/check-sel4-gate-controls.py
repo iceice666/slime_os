@@ -181,6 +181,20 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # zeroes are what make its answers the recording's rather than the hardware's
     # — and the observer that pairs the second stream.
     ("sel4_replay_plane", "check/check-sel4-replay-plane.py", 26),
+    # C9.6. 45 required markers over twelve causal chains plus three
+    # order-independent ones: the declared bands installed before traffic (3),
+    # the sensor's role and first tick (3), the dependency-gated controller
+    # launch and its seeded configuration (4), the chain carrying data before the
+    # restart (5), the injected fault through to reissued fabric authority (6),
+    # the resumed graph (3), the orderly stream end (2), the cancellation (2),
+    # the refusal, which is a settlement rather than a deadline miss (2), the
+    # deadline settling an unanswered command *after* an advance that must not
+    # settle it and *before* the server may exit (6), the attempt bound spent
+    # (3), and the terminal close (3). The order-independent three are the
+    # clock's own end — its exit is what lets the call broker close at all — and
+    # the root's clock-authority installs for the two timer holders, without
+    # which a cadence or a backoff could be any wake at all.
+    ("sel4_robot_runtime_plane", "check/check-sel4-robot-runtime-plane.py", 45),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
     # RP2. 29 markers over five causal chains: the generation's declared shape,

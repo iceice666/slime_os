@@ -117,6 +117,39 @@ impl StreamHistory {
         Some(report)
     }
 
+    /// Attribute losses this ring did not itself evict.
+    ///
+    /// Exists for one caller: a restart salvaging a dead subscriber's backlog
+    /// into a replacement's history. Samples still in the abandoned ring, and
+    /// the dead record's own untaken report, would otherwise vanish with the
+    /// record they lived on — leaving a truncated stream indistinguishable from
+    /// a complete one. `inherited` is a previously taken `(count, oldest)`
+    /// report being carried forward; `abandoned` is a count with no sequence of
+    /// its own, so it only establishes `oldest_lost` when nothing older is
+    /// already recorded.
+    pub fn note_loss(&mut self, abandoned: u64, inherited: Option<(u64, u64)>) {
+        if let Some((count, oldest)) = inherited {
+            if self.lost == 0 || oldest < self.oldest_lost {
+                self.oldest_lost = oldest;
+            }
+            self.lost = self.lost.saturating_add(count);
+        }
+        if abandoned == 0 {
+            return;
+        }
+        if self.lost == 0 {
+            // No sequence is known for a sample abandoned unread, so the newest
+            // salvaged sequence is the closest true lower bound available.
+            self.oldest_lost = if self.len == 0 {
+                0
+            } else {
+                let newest = (self.head + self.len - 1) % self.depth;
+                self.entries[newest].map_or(0, |entry| entry.sequence)
+            };
+        }
+        self.lost = self.lost.saturating_add(abandoned);
+    }
+
     /// Admit `entry`, evicting and returning the oldest sample when the ring is
     /// already at its declared depth. The evicted entry is returned so the
     /// caller can release whatever backing storage it named; the loss counter
@@ -254,5 +287,36 @@ mod tests {
         assert_eq!(history.pop(), Some(entry(4)));
         assert_eq!(history.pop(), Some(entry(5)));
         assert!(history.is_empty());
+    }
+
+    /// A salvaged history reports the backlog it could not keep. Without this a
+    /// restart that dropped samples would present a truncated stream as a
+    /// complete one, which is the failure the salvage path exists to prevent.
+    #[test]
+    fn salvage_attributes_abandoned_samples_and_inherited_loss() {
+        let mut history = StreamHistory::new(2).expect("depth");
+        history.push(entry(7));
+        history.push(entry(8));
+        // Two samples the frame table had no room for, and nothing inherited.
+        history.note_loss(2, None);
+        // The newest salvaged sequence is the lower bound for an unread sample.
+        assert_eq!(history.take_loss(), Some((2, 8)));
+
+        // An inherited report keeps its own, older sequence.
+        let mut history = StreamHistory::new(2).expect("depth");
+        history.push(entry(7));
+        history.note_loss(1, Some((5, 2)));
+        assert_eq!(history.take_loss(), Some((6, 2)));
+    }
+
+    /// Salvaging a fully-kept backlog reports nothing: a restart that lost no
+    /// sample must not manufacture a gap.
+    #[test]
+    fn salvage_without_abandonment_reports_no_loss() {
+        let mut history = StreamHistory::new(2).expect("depth");
+        history.push(entry(3));
+        history.note_loss(0, None);
+        assert_eq!(history.lost(), 0);
+        assert_eq!(history.take_loss(), None);
     }
 }

@@ -131,6 +131,14 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     # declared endpoint and factory directly, on the same rule as the two planes
     # above.
     ("sel4-replay", "--replay-plane", "slime-sel4-replay.elf"),
+    # C9.6. Init holds seven executables and its own factory here, and nothing
+    # else: every participant including both brokers is root-autostart, and the
+    # one spawn in the plane is the supervisor's over the controller it restarts.
+    (
+        "sel4-robot-runtime",
+        "--robot-runtime-plane",
+        "slime-sel4-robot-runtime.elf",
+    ),
 )
 
 
