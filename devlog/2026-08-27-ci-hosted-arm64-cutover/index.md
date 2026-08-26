@@ -5,7 +5,7 @@
 | Date | 2026-08-27 |
 | Kind | Defect |
 | Status | Verified |
-| Scope | `.github/workflows/ci.yml`, `.github/actions/slime-env/action.yml`, `Justfile` (`lint_sel4_root`) |
+| Scope | `.github/workflows/ci.yml`, `.github/actions/slime-env/action.yml`, `Justfile` (`lint_sel4_root`), `scripts/lib/release_trust.py` |
 | Roadmap | B78 |
 | Gates | `just lint_sel4_root`, `just test_sel4_root`, `just contracts_check`, `just component_spec_check`, `just bootstate_trace_check`, `just release_trust_check`, `just x86_portability_check`, `just framework_safety_check`, `just sel4_gate_control_check`, `just devlog_check` |
 | Trigger | Every CI run since `84c75f5` red or never-starting; runs 32987525467 and 32990305002 observed |
@@ -13,7 +13,8 @@
 
 ## Summary
 
-Three independent defects made CI structurally incapable of passing. The
+Three independent defects made CI structurally incapable of passing, and
+fixing them exposed four more that only a clean machine can observe. The
 `contracts` job ran `just contracts_check`, which since `84c75f5` builds all 36
 seL4 manifests and reads the wire magic out of the bytes — a build that needs
 `build/sel4-prefix` and `LIBCLANG_PATH`, neither of which an ordinary runner
@@ -23,9 +24,9 @@ runners, so it sat `queued` forever and no run ever concluded. Separately,
 `lint_sel4_root` looked for the root child ELF at a path that stopped being
 written at `0dd7d0c`; it resolved only on a checkout still holding a
 pre-`0dd7d0c` build, so the gate would have refused on any clean machine even
-had a runner existed. All three are fixed: the prefix-dependent gates now run
-on GitHub's free `ubuntu-24.04-arm` runners inside this repository's own Nix
-dev shell, and the child path is platform-qualified.
+had a runner existed. The prefix-dependent gates now run on GitHub's free
+`ubuntu-24.04-arm` runners inside this repository's own Nix dev shell, and run
+33002668719 is green across all ten jobs.
 
 ## Observable symptom
 
@@ -83,9 +84,11 @@ produced no error anywhere except on a machine without the old artifact.
 | `Justfile` | `lint_sel4_root`'s `child_elf` is platform-qualified to `build/sel4-cargo/qemu-arm-virt/child/...` | The gate's precondition names the path the builder writes, on any checkout |
 | `.github/workflows/ci.yml` | `sel4_builder` deleted; `sel4_product`, `sel4_rollback`, `sel4_contracts` run on `ubuntu-24.04-arm` and build the prefix before consuming it | Every gate runs on a runner that exists and can satisfy it |
 | `.github/workflows/ci.yml` | `contracts_check`/`component_spec_check` moved off `ubuntu-latest`; the tree-only gates split into `docs_gates` | A job's runner matches what its gates actually need |
-| `.github/actions/slime-env/action.yml` | New composite action: checkout, optional disk reclamation, Nix install, store + `~/.rustup` cache, dev-shell realization | One definition of "the supported environment", shared by every heavy job |
-| `.github/workflows/ci.yml` | `timeout-minutes` on all nine jobs; `concurrency` cancels superseded PR runs | A stalled build or wedged QEMU fails visibly instead of holding a runner |
-| `.github/workflows/ci.yml` | Node-20 actions bumped (`checkout@v7`, `setup-just@v4`, `ruff-action@v4`) | The deprecation warnings on every job are gone |
+| `.github/actions/slime-env/action.yml` | New composite action: Nix install, store + `~/.rustup` + `~/.cargo` cache, dev-shell realization, and the offline prefetch below | One definition of "the supported environment", shared by every heavy job |
+| `.github/actions/slime-env/action.yml` | Prefetches this repository's three lockfiles *and* the toolchains' `rust-src` library workspace | `--locked --offline` builds resolve on a machine with no cargo cache |
+| `scripts/lib/release_trust.py` | Narrows the fixture private keys to `0600` before invoking `ssh-keygen` | The release gates run from a clean clone, where git cannot carry the mode |
+| `.github/workflows/ci.yml` | `timeout-minutes` on all ten jobs, sized from observed cold runs; `concurrency` cancels superseded runs on pushes as well as pull requests | A stalled build fails visibly, and a new push does not queue behind the previous run's slowest job |
+| `.github/workflows/ci.yml` | Node-20 actions bumped (`checkout@v7`, `setup-just@v4`, `ruff-action@v4.1.0`) | The deprecation warnings on every job are gone |
 
 Nix is installed with `nixbuild/nix-quick-install-action` and the store cached
 with `nix-community/cache-nix-action`, both upstream CppNix tooling.
@@ -98,6 +101,8 @@ with `nix-community/cache-nix-action`, both upstream CppNix tooling.
 | A per-platform output path goes stale again | `lint_sel4_root` refuses rather than linting a different configuration | `no root child ELF at <path>` |
 | A job hangs instead of failing | `timeout-minutes` on every job | The job is cancelled at its bound |
 | Toolchain drift reaches a downstream gate | `sel4_qemu_image_check` re-checks `[observed_prefix]` hashes at the top of each seL4 job | Pin-check failure in the first step |
+| A fixture whose usability depends on state git cannot carry | The permission narrowing lives in `release_trust.py`, so any consumer of those keys inherits it | `ssh-keygen ... exit status 255` |
+| An offline build gains a dependency the prefetch does not cover | The prefetch fails loudly when a `rust-src` workspace is absent rather than skipping it | `no matching package named '<crate>' found` under `--offline` |
 
 ## Verification
 
@@ -112,9 +117,23 @@ with `nix-community/cache-nix-action`, both upstream CppNix tooling.
 | `just x86_portability_check`, `just framework_safety_check`, `just sel4_gate_control_check` | All passed with no prefix present, confirming the `docs_gates` grouping | Direct |
 | `just devlog_check` | `228 entries, 228 indexed` | Direct |
 | `actionlint .github/workflows/ci.yml` | Clean | Direct |
+| CI run 33002668719 (`45a482c`) | All ten jobs green, including the three arm64 seL4 jobs | Direct |
 
-Every timing above is from `aarch64-darwin` with a warm cache; the hosted
-arm64 runner builds cold, which is what the 90-minute bounds are sized for.
+Local timings are from `aarch64-darwin` with a warm cache. The hosted arm64
+numbers are cold and observed: 8m, 25m, and 28m.
+
+Reaching that green run took four further defects, each fixed at its source:
+
+| Defect | Root cause | Fix |
+|---|---|---|
+| All three arm64 jobs: `Can't find 'action.yml'` | A local composite action is resolved from the checked-out tree, so it cannot perform its own checkout | Checkout moved to each caller |
+| `ruff-action@v4` unresolvable | The action publishes no floating `v4` tag, unlike its `v3.6` | Pinned `v4.1.0` |
+| Child build: `no matching package named 'unwinding'` under `--offline` | `unwinding` is a dependency of the *sysroot* workspace `-Z build-std` compiles from `rust-src`, not of any manifest here; prefetching our three lockfiles could not satisfy it | Prefetch the toolchain's `lib/rustlib/src/rust/library/Cargo.toml` too |
+| `ssh-keygen -y` exit 255 on the release keys | git tracks only the execute bit, so `0600` fixture keys materialize `0644` on a clean clone and ssh-keygen refuses them | `release_trust.py` narrows the mode before use |
+
+The last two are the interesting ones: both passed on every developer machine
+for the same reason — a warm cargo cache, and file modes surviving from when
+the keys were generated — so neither was observable without a clean checkout.
 
 ## Decisions
 
@@ -128,11 +147,14 @@ arm64 runner builds cold, which is what the 90-minute bounds are sized for.
   the job skips when no runner is registered. It makes CI green without making
   it cover anything, which is worse than the visible failure.
 - Decision: split the seL4 work across three jobs rather than one.
-  Rationale: the hosted runner has bounded disk, and each generation build
-  writes its own cargo target directory; locally the 36-manifest set occupies
-  14 GB and `build/sel4-cargo` 41 GB. Three jobs also run concurrently.
-  Rejected alternative: one job running every gate, which serializes ~10
-  minutes of warm work into a much longer cold run against one disk budget.
+  Rationale: they run concurrently, so the suite's critical path is the
+  slowest job (28m) rather than their sum (61m), and a failure names the
+  subsystem that broke. Disk was the original reason and turned out not to be
+  one: the runner reports 119 GB free, against the ~14 GB the hosted-runner
+  documentation quotes, so the reclamation step written for that budget is
+  deleted.
+  Rejected alternative: one job running every gate, which triples the critical
+  path and makes every failure report the same job name.
 - Decision: keep `check-generation-v5.py` building rather than reading
   `formatVersion`.
   Rationale: the check exists precisely because the declared field is not the
@@ -140,15 +162,13 @@ arm64 runner builds cold, which is what the 90-minute bounds are sized for.
 
 ## Open risks and follow-ups
 
-- [ ] Cold-build wall time on the hosted arm64 runner is unmeasured. The
-  90-minute bounds are estimates from warm local runs plus a full kernel and
-  component build; the first green run supplies the real number and the bounds
-  should be tightened to it.
-- [ ] Disk headroom on `ubuntu-24.04-arm` is unverified against a full
-  `contracts_check`. `free-disk` reclaims ~10 GB of unused SDKs, and the job
-  builds one platform rather than all of `build/`, but if it exhausts the disk
-  the manifest set needs splitting across jobs or `CARGO_TARGET_DIR` reuse
-  across manifests.
+- [x] Cold-build wall time, now observed on run 33002668719: `sel4_product`
+  8m, `sel4_contracts` 25m, `sel4_rollback` 28m. The 90-minute placeholders
+  are retuned to 30/60/60 against those numbers.
+- [x] Disk headroom, now observed: `df -h /` on the arm64 runner reports 145G
+  total with 119G available before any build, not the ~14G the hosted-runner
+  documentation quotes. The SDK-reclamation step was written for the wrong
+  number and is deleted.
 - [ ] `just deny`, `just machete`, `just ruff`, and `just typos` still run
   through their upstream actions rather than the Justfile targets, so the
   versions CI uses are not the dev shell's.

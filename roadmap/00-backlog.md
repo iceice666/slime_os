@@ -69,11 +69,9 @@ manifests and so needs `build/sel4-prefix`, failing every run; the
 for and queued forever; and `lint_sel4_root` named a root child ELF path
 `0dd7d0c` stopped writing, so it resolved only on a checkout holding a stale
 artifact.
-**Exit condition (observed):** the prefix-dependent gates run on hosted
-`ubuntu-24.04-arm` inside the repository's Nix dev shell and build the prefix
-before consuming it, every job carries a `timeout-minutes` bound, and
-`lint_sel4_root` passed against the platform-qualified path alone with the
-stale directory removed.
+**Exit condition (observed):** CI run 33002668719 is green across all ten
+jobs, including the three hosted `ubuntu-24.04-arm` jobs that build the seL4
+prefix inside the repository's Nix dev shell before consuming it.
 **Evidence:** [`devlog/2026-08-27-ci-hosted-arm64-cutover/`](../devlog/2026-08-27-ci-hosted-arm64-cutover/index.md)
 
 ### B77 — `budget_us`/`period_us` are authenticated but unvalidated and unread

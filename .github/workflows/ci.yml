@@ -149,10 +149,9 @@ jobs:
   sel4_product:
     name: Pinned seL4 image, lint, and root tests
     runs-on: ubuntu-24.04-arm
-    # A full cold build is the kernel, the root task, its child, the loader,
-    # and every component crate. The bound exists so a wedged QEMU or a stalled
-    # build fails visibly instead of occupying a runner until the 6h ceiling.
-    timeout-minutes: 90
+    # Observed cold: 8 minutes. The bound catches a wedged QEMU or a stalled
+    # build, so it is roughly triple the observation rather than a guess.
+    timeout-minutes: 30
     steps:
       # Before `slime-env`: a local action is resolved from the checked-out
       # tree, so the tree must exist first.
@@ -160,8 +159,6 @@ jobs:
         with:
           submodules: recursive
       - uses: ./.github/actions/slime-env
-        with:
-          free-disk: "true"
       # Produces `build/sel4-prefix` and the platform-qualified root child ELF
       # every later step in this job consumes. It also re-checks the pinned
       # artifact hashes, so toolchain drift fails here rather than downstream.
@@ -172,16 +169,14 @@ jobs:
   sel4_rollback:
     name: Rollback, release trust, and BootState trace
     runs-on: ubuntu-24.04-arm
-    # Boots the rollback plane under QEMU, so it is bounded by real guest time
-    # rather than by compilation alone.
-    timeout-minutes: 90
+    # Observed cold: 28 minutes, most of it real guest time across the
+    # rollback plane's boots plus `release_trust_check`'s own contract pass.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: ./.github/actions/slime-env
-        with:
-          free-disk: "true"
       - run: nix develop --command just sel4_qemu_image_check
       # Both gates depend on `sel4_rollback_check`, which boots the rollback
       # plane; `release_trust_check` additionally re-runs `contracts_check`.
@@ -194,15 +189,14 @@ jobs:
     name: Contracts and component specs
     runs-on: ubuntu-24.04-arm
     # `contracts_check` builds all 36 seL4 manifests through the generation
-    # builder, each into its own cargo target directory.
-    timeout-minutes: 90
+    # builder, each into its own cargo target directory. Observed cold: 25
+    # minutes.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: ./.github/actions/slime-env
-        with:
-          free-disk: "true"
       # Not an ordinary-runner job, despite the name: `contracts_check` runs
       # `check-generation-v5.py`, which builds every seL4 manifest and reads
       # the magic out of the bytes rather than trusting the manifest's declared
