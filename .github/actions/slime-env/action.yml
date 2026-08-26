@@ -1,9 +1,10 @@
 name: Slime environment
 description: >
-  Check out the pinned tree and make this repository's Nix dev shell available,
-  so a workflow step runs the same `just` target against the same tool versions
-  a developer does.
+  Make this repository's Nix dev shell available, so a workflow step runs the
+  same `just` target against the same tool versions a developer does.
 
+  The caller must run `actions/checkout` first: a local action is resolved from
+  the checked-out tree, so this action cannot check out the tree it lives in.
 inputs:
   free-disk:
     description: >
@@ -16,10 +17,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v7
-      with:
-        submodules: recursive
-
     - name: Reclaim runner disk
       if: inputs.free-disk == 'true'
       shell: bash

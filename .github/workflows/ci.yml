@@ -109,7 +109,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/ruff-action@v4
+      # Pinned exactly: this action publishes no floating `v4` tag.
+      - uses: astral-sh/ruff-action@v4.1.0
         with:
           args: check scripts/
       - uses: crate-ci/typos@v1
@@ -150,6 +151,11 @@ jobs:
     # build fails visibly instead of occupying a runner until the 6h ceiling.
     timeout-minutes: 90
     steps:
+      # Before `slime-env`: a local action is resolved from the checked-out
+      # tree, so the tree must exist first.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
       - uses: ./.github/actions/slime-env
         with:
           free-disk: "true"
@@ -167,6 +173,9 @@ jobs:
     # rather than by compilation alone.
     timeout-minutes: 90
     steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
       - uses: ./.github/actions/slime-env
         with:
           free-disk: "true"
@@ -185,6 +194,9 @@ jobs:
     # builder, each into its own cargo target directory.
     timeout-minutes: 90
     steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
       - uses: ./.github/actions/slime-env
         with:
           free-disk: "true"
