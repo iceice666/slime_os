@@ -59,6 +59,23 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B78 — CI could not pass: a prefix gate on a prefixless runner, a job with no runner, and a stale child path
+
+**Status:** Resolved 2026-08-27. **Class:** Defect (three independent breakages
+that together made the suite structurally incapable of concluding).
+**Was:** `contracts_check` ran on an ordinary runner but builds all 36 seL4
+manifests and so needs `build/sel4-prefix`, failing every run; the
+`sel4_builder` job requested a `self-hosted` label the repository has no runner
+for and queued forever; and `lint_sel4_root` named a root child ELF path
+`0dd7d0c` stopped writing, so it resolved only on a checkout holding a stale
+artifact.
+**Exit condition (observed):** the prefix-dependent gates run on hosted
+`ubuntu-24.04-arm` inside the repository's Nix dev shell and build the prefix
+before consuming it, every job carries a `timeout-minutes` bound, and
+`lint_sel4_root` passed against the platform-qualified path alone with the
+stale directory removed.
+**Evidence:** [`devlog/2026-08-27-ci-hosted-arm64-cutover/`](../devlog/2026-08-27-ci-hosted-arm64-cutover/index.md)
+
 ### B77 — `budget_us`/`period_us` are authenticated but unvalidated and unread
 
 **Status:** Resolved 2026-08-24. **Class:** Debt (authenticated wire fields no

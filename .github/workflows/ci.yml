@@ -2,55 +2,50 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
+
+# A superseded run is wasted arm64 capacity, and these gates are long.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # === Jobs that need neither the seL4 prefix nor Nix ===
+  #
+  # These run on the ordinary x64 runner with a plain toolchain, because
+  # nothing they check compiles against libsel4.
+
   lint:
-    name: Format and clippy
+    name: Format and host clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly-2026-05-26
           components: clippy,rustfmt,rust-src
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v4
       - run: just fmt_check_all
-      # Host-capable cutover crates stay on the ordinary runner. The seL4
-      # target crates additionally run against the pinned product prefix below.
+      # Host-capable cutover crates only. The seL4 target crates need the
+      # pinned prefix and run in `sel4_product` below.
       - run: just lint_boot_contracts lint_components_host
-
-  sel4_builder:
-    name: Pinned seL4 lint and root tests
-    runs-on: [self-hosted, linux, sel4-builder]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: extractions/setup-just@v2
-      # The labelled builder is provisioned through this repository's pinned
-      # Nix shell; build the exact prefix/child artifacts before consuming them.
-      - run: nix develop --command just sel4_qemu_image_check
-      - run: nix develop --command just lint_sel4_root
-      - run: nix develop --command just test_sel4_root
-      - run: nix develop --command just release_trust_check
-      - run: nix develop --command just bootstate_trace_check
 
   sel4_pins:
     name: seL4 pins
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: extractions/setup-just@v2
       # Static pin validation only: submodule commits and origins, the seL4
       # release, both Rust toolchain pins, the root target spec bytes, and the
       # qemu-arm-virt kernel configuration. `--skip-host-tools` drops the
@@ -61,61 +56,43 @@ jobs:
   test_host:
     name: Host tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly-2026-05-26
           components: rust-src
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v4
       - run: just test_host
 
   miri:
     name: Miri (boot-contracts, slime-proto)
     runs-on: ubuntu-latest
+    # Observed at 22 minutes on this runner; the bound catches a hang, not a
+    # slow run.
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly-2026-05-26
           components: miri,rust-src
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v4
       - run: just miri
-
-  contracts:
-    name: Contracts and devlog
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: nightly-2026-05-26
-          components: rust-src
-      - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v2
-      - run: just contracts_check
-      - run: just component_spec_check
-      - run: just x86_portability_check
-      - run: just framework_safety_check
-      - run: just devlog_check
-      # No build and no QEMU: it drives each seL4 gate's own marker table with
-      # transcripts that are wrong in one specific way, so it runs anywhere the
-      # checkers import.
-      - run: just sel4_gate_control_check
 
   deps:
     name: cargo-deny and machete
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -129,9 +106,93 @@ jobs:
   scripts:
     name: ruff and typos
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
+      - uses: actions/checkout@v7
+      - uses: astral-sh/ruff-action@v4
         with:
           args: check scripts/
       - uses: crate-ci/typos@v1
+
+  docs_gates:
+    name: Devlog, portability, and gate controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: extractions/setup-just@v4
+      # Every gate here reads the tree and nothing else: no seL4 prefix, no
+      # cargo build, no QEMU. `sel4_gate_control_check` drives each seL4 gate's
+      # own marker table with transcripts that are wrong in one specific way,
+      # so it runs anywhere the checkers import.
+      - run: just x86_portability_check
+      - run: just framework_safety_check
+      - run: just devlog_check
+      - run: just sel4_gate_control_check
+
+  # === Jobs that need the installed seL4 prefix ===
+  #
+  # `aarch64-sel4-qemu-virt` is an AArch64 target and every gate below either
+  # cross-compiles for it or boots it under QEMU, so these run on the arm64
+  # runner: it is the native architecture for this product, and free for public
+  # repositories. They enter this repository's own Nix dev shell, which is the
+  # only supported environment — `sel4/pins.toml` binds the kernel hashes to
+  # the exact cross toolchain, CMake, Ninja, and Python generators that shell
+  # provides, so building outside it reports as toolchain drift.
+
+  sel4_product:
+    name: Pinned seL4 image, lint, and root tests
+    runs-on: ubuntu-24.04-arm
+    # A full cold build is the kernel, the root task, its child, the loader,
+    # and every component crate. The bound exists so a wedged QEMU or a stalled
+    # build fails visibly instead of occupying a runner until the 6h ceiling.
+    timeout-minutes: 90
+    steps:
+      - uses: ./.github/actions/slime-env
+        with:
+          free-disk: "true"
+      # Produces `build/sel4-prefix` and the platform-qualified root child ELF
+      # every later step in this job consumes. It also re-checks the pinned
+      # artifact hashes, so toolchain drift fails here rather than downstream.
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command just lint_sel4_root
+      - run: nix develop --command just test_sel4_root
+
+  sel4_rollback:
+    name: Rollback, release trust, and BootState trace
+    runs-on: ubuntu-24.04-arm
+    # Boots the rollback plane under QEMU, so it is bounded by real guest time
+    # rather than by compilation alone.
+    timeout-minutes: 90
+    steps:
+      - uses: ./.github/actions/slime-env
+        with:
+          free-disk: "true"
+      - run: nix develop --command just sel4_qemu_image_check
+      # Both gates depend on `sel4_rollback_check`, which boots the rollback
+      # plane; `release_trust_check` additionally re-runs `contracts_check`.
+      # `just` resolves each dependency once per invocation, so naming the two
+      # leaf gates is what runs the plane, not a third explicit step.
+      - run: nix develop --command just bootstate_trace_check
+      - run: nix develop --command just release_trust_check
+
+  sel4_contracts:
+    name: Contracts and component specs
+    runs-on: ubuntu-24.04-arm
+    # `contracts_check` builds all 36 seL4 manifests through the generation
+    # builder, each into its own cargo target directory.
+    timeout-minutes: 90
+    steps:
+      - uses: ./.github/actions/slime-env
+        with:
+          free-disk: "true"
+      # Not an ordinary-runner job, despite the name: `contracts_check` runs
+      # `check-generation-v5.py`, which builds every seL4 manifest and reads
+      # the magic out of the bytes rather than trusting the manifest's declared
+      # `formatVersion`. That build compiles component crates against libsel4,
+      # so it needs the installed prefix and the dev shell's `LIBCLANG_PATH`.
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command just contracts_check
+      - run: nix develop --command just component_spec_check

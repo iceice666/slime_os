@@ -983,7 +983,12 @@ lint_sel4_root clippy_flags='-D warnings':
         echo "lint_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    child_elf="$PWD/build/sel4-cargo/child/aarch64-sel4-minimal/release/slime-root-child.elf"
+    # Platform-qualified since `0dd7d0c` gave the builder a second platform:
+    # `build-sel4.py` writes each platform's child under
+    # `build/sel4-cargo/<platform>/child/`. The unqualified path this named
+    # before only resolved on a checkout still holding a pre-`0dd7d0c` build,
+    # so the gate passed locally and refused on any clean tree.
+    child_elf="$PWD/build/sel4-cargo/qemu-arm-virt/child/aarch64-sel4-minimal/release/slime-root-child.elf"
     if [ ! -f "$child_elf" ]; then
         echo "lint_sel4_root: no root child ELF at $child_elf; run 'just sel4_qemu_image_check' first" >&2
         exit 1
