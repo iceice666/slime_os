@@ -764,11 +764,13 @@ by `sel4_fault_check`.
 
 ## C9: Robot runtime authority
 
-**Status:** In progress. Decomposed into C9.1–C9.6; C9.1 through C9.4 are
+**Status:** In progress. Decomposed into C9.1–C9.6; C9.1 through C9.5 are
 complete, so RP5's two named dependencies are closed, scheduling class is
-declared and enforced, and a userspace supervisor restarts a failed component
-under generation-declared policy while the root gains none of it. C9.5 and C9.6
-are open.
+declared and enforced, a userspace supervisor restarts a failed component under
+generation-declared policy while the root gains none of it, and a component the
+generation declares deterministic replays a recorded trace to byte-identical
+typed outputs while every authority no recorder captures is refused that claim.
+C9.6 is open.
 
 This track supplies the timing, execution, lifecycle, and observation contracts
 needed by robot and mixed interactive workloads. It does not promise hard
@@ -1063,43 +1065,64 @@ restart), both complete. C9.3's deferred restart-survival check is closed here.
 
 ### C9.5 — Typed recording and deterministic replay
 
-**Status:** Not started.
+**Status:** Complete.
+**Delivered:** Four new `fabric-trace/v1` kinds — `clockRead`, `timerExpiry`,
+`lifecycle`, `output` — rather than a second trace format, because the sink is an
+array of equal-width slots and the declared total order compares `now_ns` across
+families: a recording carrying clock reads in one format and route traffic in
+another could not order the two against each other. `slime-proto`'s
+`recording_stream` is the bounded machine over them, in fixed arrays with no
+allocation, and it validates a stream *whole* before exposing one input — a
+replayer that consumed nine of ten records and then hit a malformed tenth has
+already produced output nobody can compare. The classification is the milestone's
+load-bearing half and it lives on the *right*: every entry in
+`contracts/generation/v5`'s `rightBits` carries a required `determinism` field,
+the renderer refuses to emit an unclassified one, and it folds them into generated
+`RIGHT_RECORDED`/`RIGHT_UNRECORDED` masks. A separate list could have been partial
+and the gap would have been silent — a new authority nobody classified would read
+as harmless, and the first component granted it would be certified deterministic
+against a table that never considered it. `recorded` means *this recorder captures
+it*, which is exactly the three clock reads; every byte-carrying authority is
+unrecorded, `send` included, because it gates `seL4_Call` and a call's reply is
+state the peer chose. That leaves one circularity, resolved by declaration rather
+than by weakening: a replayer needs one unrecorded authority to *receive* the
+recording it replays, so `recording-policy/v1` names that one grant and both
+readers subtract exactly it. The refusal is made twice independently — the builder
+over manifest names, `slime-root` over the encoded binding table under the same
+`grant_applies_to_instance` rule launch uses — and once more at runtime, because
+admission certifies authority at launch while `CAPABILITY IMPORT` could widen it
+afterwards, leaving a claim authenticated and no longer true.
+**Exit condition (observed):** `just replay_check` boots generation 45 twice over
+one image and compares the declared traces: a recorder captures a monotonic read,
+a timer expiry, two simulated reads around a declared advance, and a lifecycle
+transition, derives two typed outputs from the simulated pair, and streams the
+recording one record per message; the deterministic replayer — holding no clock at
+all, so a live read is refused rather than silently agreeing — answers every input
+from the recording, recomputes both outputs, and matches field by field, with both
+boots byte-identical on every output, both recorded reads, the replayed transition,
+and the timer identity. The hardware instant is recorded and range-checked but
+kept out of the comparison because it is an input rather than an output: two boots
+reading one counter identically would mean the clock had stopped. Truncated,
+reordered, and over-capacity streams are each refused whole before an input is
+exposed; a deterministic instance's import of an endpoint carrying `recv` is
+refused by the root (`SLIME_RECORD refused import ... class=unrecorded-source`);
+and `replay-unrecorded`, holding `blockRead`, carries no claim — flipping its
+fixture to `deterministic = true` fails the build naming the right, as does
+dropping the replayer's declared stream grant, naming a grant it is not bound, or
+a recorder claiming an exemption it cannot need. Four review lenses found
+seventeen issues, among them a determinism claim that survived runtime capability
+import, five rights classified `recorded` with no recorder, a rights join that
+silently dropped every executable grant, a terminal-flagged record of any resource
+counter opening a stream, and a refused replay step that still advanced its cursor
+— all applied, each pinned by a host test or a marker.
+**Gates:** `just replay_check`, `just sel4_gate_control_check` (40 gates, 1556
+mutations), `just sel4_boot_layout_check` (31 plane layouts), `just
+contracts_check`, `just generation_check`, `just test_sel4_root` (183), `just
+test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`,
+`just deny`, `just machete`
 
-**Depends on:** C9.1's clock authority, C9.2's deterministic dispatch order,
-and C8.11's trace contract.
-
-#### Deliverables
-
-- record declared fabric routes, clock reads, timer expiries, and lifecycle
-  transitions as a typed bounded trace, reusing C8.11's record shape rather
-  than a second trace format;
-- classify every nondeterminism source as capability-recorded or excluded from
-  the deterministic claim, and refuse a generation that declares a component
-  deterministic while granting it an unrecorded source;
-- replay a recorded trace into a component and compare its typed outputs
-  field by field, following C8.15's semantic-comparison pattern;
-- bound recorded trace bytes before allocation.
-
-#### Required checks
-
-- a deterministic component replays a recorded trace to byte-identical typed
-  outputs across two boots;
-- a component granted an unrecorded nondeterminism source cannot be declared
-  deterministic;
-- a truncated or reordered trace is refused rather than partially replayed;
-- the trace ceiling is refused structurally.
-
-#### Planned verification target
-
-```sh
-just replay_check
-```
-
-#### Exit condition
-
-A component declared deterministic reproduces identical typed outputs from a
-complete recorded trace of its routes, clock reads, and lifecycle transitions,
-and a generation granting it unrecorded nondeterminism is refused.
+**Depends on:** C9.1's clock authority, C9.2's deterministic dispatch order, and
+C8.11's trace contract, all complete.
 
 ### C9.6 — Robot workload composition
 
