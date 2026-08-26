@@ -48,11 +48,26 @@ KEY_DIR = ROOT / "contracts" / "release" / "v1" / "test-keys"
 KEY_PATHS = tuple(KEY_DIR / f"key{index}" for index in range(1, 4))
 
 
+def _require_private_key_mode(path: Path) -> None:
+    """`ssh-keygen` refuses a private key any group or other can read.
+
+    Git tracks only the execute bit, so a fresh checkout materializes these
+    fixtures as `0644` and every `ssh-keygen` call exits 255 -- which is how
+    the release-trust gates failed on CI while passing on developer machines
+    that still had the modes from when the keys were generated. Narrowing the
+    mode here rather than at each call site keeps the fixture usable from a
+    clean clone without weakening what `ssh-keygen` enforces.
+    """
+    if path.stat().st_mode & 0o077:
+        path.chmod(0o600)
+
+
 def sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
 
 def ssh_public_key(path: Path) -> bytes:
+    _require_private_key_mode(path)
     public = subprocess.run(
         ["ssh-keygen", "-y", "-f", str(path)], check=True, text=True, stdout=subprocess.PIPE
     ).stdout.split()
@@ -81,6 +96,7 @@ def ssh_signed_payload(payload: bytes) -> bytes:
 
 
 def ssh_signature(path: Path, payload: bytes) -> bytes:
+    _require_private_key_mode(path)
     work = Path("/tmp/slime-release-signing.bin")
     signature_path = work.with_suffix(".bin.sig")
     work.write_bytes(payload)
