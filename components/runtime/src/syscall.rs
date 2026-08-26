@@ -25,6 +25,9 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
 // from `contracts/syscall-abi/v1/schema.zt`. `slime-root` consumes the same
 // module, so a renumbering cannot desync the two crates -- which it has done
 // before, silently garbling keystrokes (see `slime-root/src/console.rs`).
+/// C9.5's role vocabulary, decoded from the same contract the resource is
+/// encoded against rather than restated here as three integers.
+pub use boot_contracts::recording_policy::Role as RecordingRole;
 pub use slime_proto::syscall_abi::{
     ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
     MAX_CAPS_PER_MSG, MAX_MSG,
@@ -892,6 +895,68 @@ pub fn lifecycle_parameter_write(slot: u32, key: u64, value: u64) -> Result<u64,
     } else {
         Ok(result as u64)
     }
+}
+/// This component's declared C9.5 recording participation.
+///
+/// `role` is the decoded `recording-policy/v1` role, or `None` for an instance
+/// the generation's recording resource does not name. `record_capacity` is
+/// records, so the stream is at most
+/// `record_capacity * boot_contracts::recording_policy::RECORD_BYTES` bytes —
+/// the bound a replayer sizes its input by *before* mapping anything.
+///
+/// The declared stream identity is deliberately absent: it is the generation's
+/// join key between the two participants rather than a handle, and the authority
+/// over the bytes is the shared-buffer capability the two ends hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordingParticipation {
+    pub role: Option<RecordingRole>,
+    pub record_capacity: u32,
+    pub deterministic: bool,
+}
+
+impl RecordingParticipation {
+    /// This participation's stream bound, in bytes.
+    ///
+    /// Zero for an unnamed instance, which has no stream at all rather than an
+    /// empty one.
+    pub const fn stream_bytes(&self) -> usize {
+        match self.role {
+            Some(_) => {
+                self.record_capacity as usize * boot_contracts::recording_policy::RECORD_BYTES
+            }
+            None => 0,
+        }
+    }
+}
+
+/// This component's own recording role, bound, and determinism claim (C9.5).
+///
+/// Self-scoped and never refused for want of authority, on
+/// [`lifecycle_state_read`]'s rule: an instance the resource does not name reads
+/// `None` rather than an error, which is what lets one component image run in a
+/// generation that records it and one that does not.
+///
+/// A role outside the contract's vocabulary is `Err(ERR_INVALID_ARG)` rather
+/// than silently treated as unnamed: the root answers from a decoded resource,
+/// so an unrecognized role means this image and that generation disagree about
+/// the format, which a component must not paper over.
+pub fn recording_participation() -> Result<RecordingParticipation, i64> {
+    let (result, packed) = transport::recording_sources();
+    if result < 0 {
+        return Err(result);
+    }
+    let role = match result as u32 {
+        0 => None,
+        id => match RecordingRole::from_id(id) {
+            Some(role) => Some(role),
+            None => return Err(ERR_INVALID_ARG),
+        },
+    };
+    Ok(RecordingParticipation {
+        role,
+        record_capacity: (packed & 0xffff_ffff) as u32,
+        deterministic: packed >> 32 != 0,
+    })
 }
 
 /// Atomically swaps a directory namespace root after the new snapshot object

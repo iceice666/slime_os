@@ -163,6 +163,9 @@ mod boot_action {
     /// dependencies, and parameter authority.
     pub const LIFECYCLE_RESTART: u32 = 34;
 
+    /// C9.5's typed recording and deterministic replay.
+    pub const REPLAY: u32 = 35;
+
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
     // file matches on it. Renumbering a variant in the contract without
@@ -203,6 +206,7 @@ mod boot_action {
     const _: () = assert!(WAIT_SET == BootAction::WaitSet.id());
     const _: () = assert!(SCHEDULING_CLASS == BootAction::SchedulingClass.id());
     const _: () = assert!(LIFECYCLE_RESTART == BootAction::LifecycleRestart.id());
+    const _: () = assert!(REPLAY == BootAction::Replay.id());
 }
 
 /// Compose the graph the generation selected.
@@ -296,6 +300,15 @@ fn compose_declared_graph(startup_arg: u32) {
         // the wrong thing. The same rule as the two planes above.
         action::LIFECYCLE_RESTART => {
             slime_rt::debug_write(b"[init] lifecycle restart plane is root-launched\n");
+            slime_rt::exit(0)
+        }
+        // C9.5's five probe instances are all root-autostart, and the recorder
+        // and replayer hold their declared endpoint and buffer factory directly.
+        // The same rule as the three planes above: authority a plane asserts
+        // about must ride on the handle its own holder was granted, so init
+        // handing one over would prove the wrong thing.
+        action::REPLAY => {
+            slime_rt::debug_write(b"[init] replay plane is root-launched\n");
             slime_rt::exit(0)
         }
         action::CROSSING => {

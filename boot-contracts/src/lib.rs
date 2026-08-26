@@ -25,6 +25,7 @@ pub mod normalized_interface_schemas;
 #[cfg(feature = "gpt")]
 pub mod object_store;
 pub mod private_memory_budget;
+pub mod recording_policy;
 pub mod recovery;
 pub mod release;
 pub mod scheduling_class;

@@ -195,6 +195,10 @@ pub enum BootAction {
     /// C9.4's lifecycle transition graph, supervised restart, health
     /// dependencies, and parameter authority.
     LifecycleRestart = 34,
+    /// C9.5's typed recording and deterministic replay: a recorded run, a
+    /// replay of it, and a component whose unrecorded grant makes a
+    /// determinism claim inadmissible.
+    Replay = 35,
 }
 
 impl BootAction {
@@ -251,6 +255,7 @@ impl BootAction {
         Self::WaitSet,
         Self::SchedulingClass,
         Self::LifecycleRestart,
+        Self::Replay,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -298,6 +303,7 @@ impl BootAction {
                 Self::WaitSet => Self::WaitSet.id(),
                 Self::SchedulingClass => Self::SchedulingClass.id(),
                 Self::LifecycleRestart => Self::LifecycleRestart.id(),
+                Self::Replay => Self::Replay.id(),
             };
             declared == id
         })
@@ -339,6 +345,7 @@ impl BootAction {
             "wait-set" => Self::WaitSet,
             "scheduling-class" => Self::SchedulingClass,
             "lifecycle-restart" => Self::LifecycleRestart,
+            "replay" => Self::Replay,
             _ => return None,
         })
     }
@@ -2725,6 +2732,50 @@ mod tests {
             assert!(!capability_rights_valid(kind, 1 << 17));
         }
     }
+    /// C9.5's two determinism masks partition the rights vocabulary.
+    ///
+    /// The `determinism` field is required on every right, so the renderer cannot
+    /// emit an unclassified one — but a *renderer* bug could still fold a bit into
+    /// both masks or neither, and either would silently weaken the refusal:
+    /// overlap makes the classification self-contradictory, and a gap makes an
+    /// authority nobody classified look harmless. Pinning the partition here means
+    /// a regeneration that broke it fails a host test rather than admitting a
+    /// deterministic component that reads live state.
+    #[test]
+    fn the_determinism_masks_partition_every_declared_right() {
+        // No right is both recorded and unrecorded.
+        assert_eq!(RIGHT_RECORDED & RIGHT_UNRECORDED, 0);
+        // Neither mask names a bit outside the vocabulary, including the gap at 17.
+        assert_eq!((RIGHT_RECORDED | RIGHT_UNRECORDED) & !RIGHT_ALL, 0);
+        // The neutral remainder is exactly what the two masks leave, and it is
+        // nonempty: `send`-style outputs exist, so a run where every right had
+        // become a source would mean the classification had collapsed.
+        let neutral = RIGHT_ALL & !(RIGHT_RECORDED | RIGHT_UNRECORDED);
+        assert_ne!(neutral, 0);
+        assert_eq!(RIGHT_RECORDED | RIGHT_UNRECORDED | neutral, RIGHT_ALL);
+        // The three clock reads are the only recorded sources, because they are
+        // the only ones the C9.5 recorder has a family for. A right joining this
+        // mask without a matching record would be certified against nothing.
+        assert_eq!(
+            RIGHT_RECORDED,
+            RIGHT_CLOCK_MONOTONIC_READ | RIGHT_CLOCK_TIMER_USE | RIGHT_CLOCK_SIMULATED_READ
+        );
+        // And every byte-carrying authority is unrecorded, `send` included: it
+        // gates `seL4_Call`, whose reply is state the peer chose.
+        for right in [
+            RIGHT_SEND,
+            RIGHT_RECV,
+            RIGHT_BUFFER_LOAN,
+            RIGHT_BLOCK_READ,
+            RIGHT_STORE_READ,
+            RIGHT_DIRECTORY_READ,
+            RIGHT_INPUT_READ,
+            RIGHT_PARAMETER_READ,
+            RIGHT_SUPERVISE,
+        ] {
+            assert_ne!(right & RIGHT_UNRECORDED, 0, "{right:#x} must be unrecorded");
+        }
+    }
 
     #[test]
     fn dependency_cycle_reachable_beyond_probe_is_rejected() {
@@ -2761,7 +2812,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 34] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 35] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2796,6 +2847,7 @@ mod tests {
         (BootAction::WaitSet, 32),
         (BootAction::SchedulingClass, 33),
         (BootAction::LifecycleRestart, 34),
+        (BootAction::Replay, 35),
     ];
 
     #[test]

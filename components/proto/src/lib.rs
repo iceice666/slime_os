@@ -16,6 +16,7 @@ pub mod fs;
 pub mod generation;
 pub mod interface_schema;
 pub mod powerbox;
+pub mod recording_stream;
 pub mod ring;
 pub mod sample_descriptor;
 pub mod spawn;
@@ -837,6 +838,83 @@ pub fn valid_trace_record(value: &fabric_trace::WireTraceRecord) -> bool {
                 && value.status == 0
                 && value.event != 0
                 && value.event <= MAX_RESOURCE_COUNTER
+        }
+        // C9.5's recording families. Each names the one field carrying its
+        // captured value and zeroes the rest, on `KIND_RESOURCE`'s rule: a
+        // recording is only replayable if every field a family does not use is
+        // fixed, or two runs would differ on bytes neither of them meant.
+        //
+        // All four carry `flags == 0`, and that is load-bearing rather than
+        // tidy. Both declared flags belong to the sink's own accounting —
+        // `terminal` marks the record that says a stream ended and `dropped` the
+        // one that counts refusals — and both are `KIND_RESOURCE` facts. A
+        // recording family carrying `terminal` would make the end of a replayed
+        // stream ambiguous, which is exactly the truncated-versus-complete
+        // distinction C9.5's third required check rests on.
+        //
+        // None of the four names a route edge. A recorded clock read, timer
+        // expiry, or lifecycle transition is an event on the *component*, not on
+        // an edge, and an output is the component's own product. Recorded route
+        // traffic keeps using `KIND_ROUTE`/`KIND_QOS`, which already carry the
+        // identity — so C9.5 adds families for the three sources that had none
+        // rather than a second way to say "route".
+        //
+        // A clock read carries the value the clock answered in `correlation`,
+        // and that value may legitimately be zero: the first read of a simulated
+        // clock answers zero, and refusing it would make the recording of a
+        // deterministic clock's own starting instant unrepresentable.
+        // `event` distinguishes which clock answered, so the two reads are never
+        // confused, and it is bounded because an unnamed clock is not evidence.
+        KIND_CLOCK_READ => {
+            value.flags == 0
+                && value.route_identity == 0
+                && value.status == 0
+                && value.high_water == 0
+                && value.event != 0
+                && value.event <= MAX_CLOCK_SOURCE
+        }
+        // A timer expiry names the timer that fired, in `correlation`.
+        //
+        // Zero is admitted, and that is not laxity: `CLOCK TIMER ARM` documents
+        // its primary result as "an opaque timer id; zero is valid", and the root
+        // does assign it — the first timer a holder arms on this plane is id 0.
+        // An earlier revision here required a nonzero identity on the theory that
+        // zero names no timer, and it refused the first real expiry the recorder
+        // observed. The identity is opaque, so no value is reserved, and the
+        // record's meaning comes from its kind rather than from its payload being
+        // nonzero.
+        KIND_TIMER_EXPIRY => {
+            value.flags == 0
+                && value.route_identity == 0
+                && value.status == 0
+                && value.event == 0
+                && value.high_water == 0
+        }
+        // A lifecycle transition names the state it reached in `event`, from
+        // `lifecycle-policy/v1`'s closed vocabulary. Bounded here against that
+        // contract's own ceiling rather than by convention, and nonzero because
+        // `undeclared` is an answer rather than a transition.
+        KIND_LIFECYCLE => {
+            value.flags == 0
+                && value.route_identity == 0
+                && value.correlation == 0
+                && value.status == 0
+                && value.high_water == 0
+                && value.event != 0
+                && value.event <= MAX_LIFECYCLE_STATE
+        }
+        // A typed output carries its value in `correlation` and which output it
+        // is in `event`. This is the family two boots are compared on, so it
+        // holds the tightest rule: `status` and `high_water` are fixed, and the
+        // output ordinal is bounded, because a comparison over an unbounded
+        // event space could not tell a new output from a corrupted one.
+        KIND_OUTPUT => {
+            value.flags == 0
+                && value.route_identity == 0
+                && value.status == 0
+                && value.high_water == 0
+                && value.event != 0
+                && value.event <= MAX_OUTPUT_CHANNEL
         }
         _ => false,
     }

@@ -310,6 +310,14 @@ fn kind_name(kind: u32) -> &'static [u8] {
         fabric_trace::KIND_DENIAL => b"denial",
         fabric_trace::KIND_FAULT => b"fault",
         fabric_trace::KIND_RESOURCE => b"resource",
+        // C9.5's recording families. Named here rather than left as `unknown`
+        // because the gate reads these lines: an unnamed kind would make every
+        // recorded clock read and every replayed output compare equal to each
+        // other, which is exactly the comparison C9.5 rests on.
+        fabric_trace::KIND_CLOCK_READ => b"clock-read",
+        fabric_trace::KIND_TIMER_EXPIRY => b"timer-expiry",
+        fabric_trace::KIND_LIFECYCLE => b"lifecycle",
+        fabric_trace::KIND_OUTPUT => b"output",
         _ => b"unknown",
     }
 }

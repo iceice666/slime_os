@@ -66,6 +66,14 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         // deny-by-default answer rather than a refusal — it has no source to
         // register, and an empty answer discloses nothing about a peer.
         lifecycle_labels::WAIT_SOURCES => Some(SERVICE_LIFECYCLE),
+        // C9.5's declared recording participation. Lifecycle for `WAIT_SOURCES`'
+        // reason: whether the generation *claims* this instance deterministic is
+        // a property of being that instance, not of any grant, and an instance
+        // the recording resource does not name is answered a zero role rather
+        // than refused — the deny-by-default answer, which discloses nothing
+        // about a peer and lets one image run in a generation that records it
+        // and one that does not.
+        lifecycle_labels::RECORDING_SOURCES => Some(SERVICE_LIFECYCLE),
         // B70's boot action. Lifecycle rather than the capability table, though
         // the label sits in that table's namespace, because the service is the
         // *authority gate* and this operation needs the one every instance
@@ -197,6 +205,9 @@ pub const fn lifecycle_request_len(label: sel4::Word) -> Option<usize> {
         supervision_labels::PARAMETER_READ => Some(2),
         // A slot, a key, and a value.
         supervision_labels::PARAMETER_WRITE => Some(3),
+        // No operand at all: the caller is the badge, and naming another
+        // instance's recording participation is authority no C9.5 field grants.
+        lifecycle_labels::RECORDING_SOURCES => Some(0),
         _ => None,
     }
 }
@@ -1229,6 +1240,43 @@ pub fn read_wait_sources(
     }
     Some(written / WAIT_SOURCE_ROW_BYTES)
 }
+/// The caller's own C9.5 recording participation: its role, its declared record
+/// capacity, and whether the generation claims it deterministic.
+///
+/// Self-scoped on [`read_wait_sources`]' rule, and the same reason: the entry
+/// answered is the one whose `instance_identity` is this instance's, so a
+/// component learns what the generation declares *about it* and nothing about a
+/// peer.
+///
+/// The stream identity is not returned, and its absence is the authority
+/// boundary rather than an omission. It is the generation's join key between two
+/// participants, so answering it would name a peer relationship the caller holds
+/// no capability over; what a participant needs is its own role and its own
+/// bound, both of which are here. The stream the two ends actually share travels
+/// as a declared shared buffer, whose authority is the buffer capability.
+///
+/// `None` covers both "the generation embeds no recording resource" and "it
+/// names no entry for this instance", and here — unlike `read_wait_sources` —
+/// they are deliberately *not* distinguished: both mean the caller makes no
+/// determinism claim and has no stream, which is one answer rather than two. The
+/// wait-set split exists because a waiter can act differently on an empty table
+/// than on an absent one; a recording participant cannot.
+pub fn read_recording_entry(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+) -> Option<(u32, u32, bool)> {
+    let Some(Ok(policy)) = crate::generation::recording_policy_object(generation) else {
+        return None;
+    };
+    let name = generation.instance(instance).ok()?.name;
+    let identity = boot_contracts::recording_policy::instance_identity(name);
+    let entry = policy.entry_for(&identity)?;
+    Some((
+        entry.role.id(),
+        u32::try_from(entry.record_capacity).ok()?,
+        entry.deterministic,
+    ))
+}
 
 /// The bounds `resolve_binding_slot` applies before it looks anything up.
 ///
@@ -1324,6 +1372,10 @@ mod tests {
             (clock_labels::TIMER_CANCEL, SERVICE_CLOCK),
             (clock_labels::SIMULATED_READ, SERVICE_CLOCK),
             (clock_labels::SIMULATED_ADVANCE, SERVICE_CLOCK),
+            // C9.5's recording participation, gated on lifecycle for
+            // `WAIT_SOURCES`' reason: whether the generation claims this instance
+            // deterministic is a property of being that instance, not of a grant.
+            (lifecycle_labels::RECORDING_SOURCES, SERVICE_LIFECYCLE),
         ] {
             assert_eq!(
                 service_for_root_label(label),
@@ -1363,12 +1415,13 @@ mod tests {
             // `BOOT_ACTION`, 41 until `GRAPH_QUERY`, 42 until `SPAWN_BUDGET`,
             // 43 until C10.1's `PRIVATE_MEMORY_GROW`, 44-48 until C9.1's clock
             // service, 49 until C9.2's `WAIT_SOURCES`, 50-51 until C9.3's
-            // scheduling class, and 52-56 until C9.4's lifecycle state and
-            // restart/parameter operations. Moving one out of this list is the
-            // whole change: a number this test asserts routes nowhere and a
-            // number the contract declares are the same fact stated twice, so
-            // assigning a label must fail here first.
-            57,
+            // scheduling class, 52-56 until C9.4's lifecycle state and
+            // restart/parameter operations, and 57 until C9.5's
+            // `RECORDING_SOURCES`. Moving one out of this list is the whole
+            // change: a number this test asserts routes nowhere and a number the
+            // contract declares are the same fact stated twice, so assigning a
+            // label must fail here first.
+            58,
             sel4::Word::MAX,
         ] {
             assert_eq!(
@@ -1444,6 +1497,14 @@ mod tests {
         assert_eq!(
             lifecycle_request_len(supervision_labels::PARAMETER_WRITE),
             Some(3)
+        );
+        // C9.5's read takes no operand at all: the caller is the badge, and
+        // naming another instance's recording participation is authority no C9.5
+        // field grants. A caller sending one word is refused rather than having
+        // it ignored, because request shape is part of the ABI.
+        assert_eq!(
+            lifecycle_request_len(lifecycle_labels::RECORDING_SOURCES),
+            Some(0)
         );
         // A label this table does not own reports no shape, so the dispatcher's
         // length guard cannot accidentally bound an unrelated operation.

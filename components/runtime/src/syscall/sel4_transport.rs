@@ -1206,6 +1206,13 @@ pub fn lifecycle_parameter_write(slot: u32, key: u64, value: u64) -> i64 {
         &[slot as Word, key as Word, value as Word],
     )
 }
+/// C9.5's self-scoped recording participation. No operand: the caller is the
+/// badge, and naming another instance's participation is authority no C9.5 field
+/// grants. Primary is the role; auxiliary packs the record capacity low and the
+/// deterministic flag in bit 32.
+pub fn recording_sources() -> (i64, u64) {
+    pair_of(lifecycle_labels::RECORDING_SOURCES, &[])
+}
 
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];

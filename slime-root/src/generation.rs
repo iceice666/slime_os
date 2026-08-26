@@ -14,6 +14,7 @@ use boot_contracts::generation::{
 };
 use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
+use boot_contracts::recording_policy::{self, RecordingPolicy};
 use boot_contracts::scheduling_class::{self, SchedulingClass};
 use boot_contracts::target_profile::TargetProfile;
 use boot_contracts::wait_set::{self, WaitSet};
@@ -113,6 +114,15 @@ pub enum GenerationError {
     /// reason: every case is the same decision, and the marker the root prints
     /// names the failing entry itself.
     UnsatisfiableLifecyclePolicy,
+    /// The generation carries a recording resource that is malformed, names an
+    /// instance this generation does not declare, or claims a component is
+    /// deterministic while granting it an unrecorded nondeterminism source
+    /// (C9.5).
+    ///
+    /// One variant on [`Self::UnsatisfiableClockAuthority`]'s precedent, for its
+    /// reason: every case is the same decision, and the marker the root prints
+    /// names the failing entry itself.
+    UnsatisfiableRecordingPolicy,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -952,6 +962,183 @@ fn lifecycle_policy_admission(
     }
     Ok(Some(admitted_restarts))
 }
+/// The generation's C9.5 recording resource, if it declares one.
+///
+/// First match by magic, and a malformed first match is *returned* rather than
+/// skipped: continuing to a later valid object would let object order select
+/// which determinism policy applies (B71).
+pub fn recording_policy_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<RecordingPolicy<'a>, recording_policy::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= recording_policy::MAGIC.len()
+            && object.bytes[..recording_policy::MAGIC.len()] == recording_policy::MAGIC
+        {
+            return Some(RecordingPolicy::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Every right `instance` holds at launch, excluding the one grant its recording
+/// stream travels over.
+///
+/// Derived from the instance's own *bindings* under
+/// [`Generation::grant_applies_to_instance`] — the same rule
+/// [`bound_authority`] and the launch path use — rather than by comparing
+/// `grant.target` to the instance. The two differ: an executable capability's
+/// target is an `Executable`, so a target comparison silently drops every
+/// executable grant a component is bound, and a deterministic instance bound
+/// `spawn` would have been admitted (found by review). Minted bindings are read
+/// alongside because the root installs those as authority too.
+///
+/// `exempt_grant` is the declared stream grant from `recording-policy/v1`, and
+/// subtracting it is what makes the determinism claim expressible at all: every
+/// authority carrying bytes into a component is an unrecorded source, `recv`
+/// included, so a replayer needs exactly one to receive the recording it
+/// replays. One named edge is excused and every other authority is checked
+/// unchanged, which is a declared exception rather than a hole.
+fn instance_held_rights(
+    generation: &Generation<'_>,
+    instance: usize,
+    exempt_grant: Option<u64>,
+) -> Result<u64, GenerationError> {
+    let record = generation
+        .instance(instance)
+        .map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?;
+    let mut held = 0u64;
+    for index in 0..record.binding_count() {
+        let InstanceBinding { grant, .. } = generation
+            .binding(record, index)
+            .map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?;
+        let grant = generation
+            .grant(grant)
+            .map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?;
+        if !generation.grant_applies_to_instance(grant, instance) {
+            continue;
+        }
+        if exempt_grant
+            .is_some_and(|exempt| recording_policy::stream_grant_identity(grant.name) == exempt)
+        {
+            continue;
+        }
+        held |= grant.rights;
+    }
+    for index in 0..generation.minted_binding_count() {
+        let minted = generation
+            .minted_binding(index)
+            .map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?;
+        if minted.holder != instance {
+            continue;
+        }
+        if exempt_grant
+            .is_some_and(|exempt| recording_policy::stream_grant_identity(minted.name) == exempt)
+        {
+            continue;
+        }
+        held |= minted.rights;
+    }
+    Ok(held)
+}
+
+/// Validate a declared recording resource, reporting how many entries it
+/// declares.
+///
+/// The decoder owns the resource's internal consistency — its order, its role
+/// vocabulary, its capacity ceiling, and the one-recorder-one-replayer pairing
+/// of every stream. What this adds is the half only the generation knows, and it
+/// is C9.5's second required check:
+///
+/// * every identity the resource names is an instance this generation declares,
+///   so no entry can name a participant the root could never resolve;
+/// * an entry claiming `deterministic` is refused when the generation grants
+///   that instance any right whose declared `determinism` class is `unrecorded`.
+///
+/// The second rule is re-derived here rather than trusted from the builder, and
+/// that is deliberate: the builder computes it over manifest names, this
+/// computes it over the *encoded* grant table the root will actually install
+/// from, and both read the same generated `RIGHT_UNRECORDED` mask. A generation
+/// hand-edited between build and boot to add an unrecorded grant is refused
+/// here, which is what makes the claim a property of the admitted generation
+/// rather than of the tool that wrote it.
+///
+/// Refusal is at admission rather than at replay because a component that got
+/// half way through a replay before discovering its inputs were never captured
+/// has already produced output nobody can compare.
+fn recording_policy_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<usize>, GenerationError> {
+    let Some(policy) = recording_policy_object(generation) else {
+        return Ok(None);
+    };
+    let policy = policy.map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?;
+    for index in 0..policy.entry_count() {
+        let entry = policy
+            .entry(index)
+            .ok_or(GenerationError::UnsatisfiableRecordingPolicy)?;
+        let mut named = None;
+        for candidate in 0..generation.instance_count() {
+            let instance = generation
+                .instance(candidate)
+                .map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?;
+            if recording_policy::instance_identity(instance.name) == entry.instance_identity {
+                named = Some(candidate);
+                break;
+            }
+        }
+        let Some(instance) = named else {
+            return Err(GenerationError::UnsatisfiableRecordingPolicy);
+        };
+        // A declared stream grant must be a grant this instance is actually
+        // bound, or the exemption would name nothing and silently excuse
+        // whichever authority the composition intended it to cover.
+        if let Some(exempt) = entry.stream_grant_identity {
+            let bound = (0..generation
+                .instance(instance)
+                .map_err(|_| GenerationError::UnsatisfiableRecordingPolicy)?
+                .binding_count())
+                .filter_map(|index| {
+                    let record = generation.instance(instance).ok()?;
+                    let InstanceBinding { grant, .. } = generation.binding(record, index).ok()?;
+                    generation.grant(grant).ok()
+                })
+                .any(|grant| recording_policy::stream_grant_identity(grant.name) == exempt);
+            if !bound {
+                return Err(GenerationError::UnsatisfiableRecordingPolicy);
+            }
+        }
+        if entry.deterministic
+            && instance_held_rights(generation, instance, entry.stream_grant_identity)?
+                & boot_contracts::generation::RIGHT_UNRECORDED
+                != 0
+        {
+            return Err(GenerationError::UnsatisfiableRecordingPolicy);
+        }
+    }
+    Ok(Some(policy.entry_count()))
+}
+/// Whether the generation's recording resource claims `instance` deterministic.
+///
+/// The runtime half of [`recording_policy_admission`]'s refusal. Admission
+/// certifies the claim against the authority a generation *declares*; this lets a
+/// path that would hand the instance more authority ask whether the claim exists,
+/// so the certification stays true after launch rather than only at it.
+///
+/// Absence answers `false` at every step — no resource, an undecodable one, an
+/// unnamed instance, or a named one carrying no claim — because none of those is
+/// a determinism claim, and a path that widens authority must not be blocked by
+/// a resource it cannot read.
+pub fn recording_declares_deterministic(generation: &Generation<'_>, instance: usize) -> bool {
+    let Some(Ok(policy)) = recording_policy_object(generation) else {
+        return false;
+    };
+    let Ok(record) = generation.instance(instance) else {
+        return false;
+    };
+    policy.is_deterministic(&recording_policy::instance_identity(record.name))
+}
 
 /// Whether this root can honour a declared private-memory budget (C10.2).
 ///
@@ -1067,6 +1254,13 @@ pub struct Admission {
     /// and it is not the same as carrying no policy, where every transition is
     /// refused too.
     pub lifecycle_restarts: Option<usize>,
+    /// Participants the authenticated recording resource names, or `None` when
+    /// the generation declares no recording at all (C9.5).
+    ///
+    /// `None` and `Some(0)` are distinguished on `lifecycle_restarts`' rule:
+    /// neither admits a determinism claim, but only the second carries a resource
+    /// whose declared streams and capacities a gate can check.
+    pub recording_entries: Option<usize>,
 }
 
 impl Admission {
@@ -1129,6 +1323,13 @@ impl Admission {
         // could hold its handle, and every parameter edge names two declared
         // instances. The graph's internal consistency is the decoder's.
         let lifecycle_restarts = lifecycle_policy_admission(generation)?;
+        // C9.5: every identity the recording resource names is a declared
+        // instance, and no instance it claims deterministic holds a right this
+        // generation classifies as an unrecorded nondeterminism source. Computed
+        // over the encoded grant table rather than trusted from the builder, so a
+        // generation edited after build is refused here too. The resource's
+        // stream pairing and capacity ceiling are the decoder's.
+        let recording_entries = recording_policy_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
@@ -1204,6 +1405,7 @@ impl Admission {
             wait_set_sources,
             scheduling_instances,
             lifecycle_restarts,
+            recording_entries,
         })
     }
 

@@ -3548,6 +3548,48 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // C9.5's declared recording participation, answered only about the
+            // caller itself.
+            //
+            // In registers rather than through the transfer window, unlike
+            // `WAIT_SOURCES` above: a waiter has a *table* of sources, while an
+            // instance has at most one recording entry, and its four reportable
+            // facts fit in two words. The stream identity is deliberately not
+            // among them — it is the generation's join key, and answering it
+            // would tell a caller about a peer it may not name.
+            //
+            // Never refused for want of authority. An instance the resource does
+            // not name is answered role `0`, which is what lets one component
+            // image run in a generation that records it and one that does not.
+            lifecycle_labels::RECORDING_SOURCES => {
+                let response = match ipc::read_recording_entry(generation, instance) {
+                    Some((role, capacity, deterministic)) => {
+                        sel4::debug_println!(
+                            "SLIME_RECORD entry task={} instance={} role={role} capacity={capacity} deterministic={}",
+                            id.0,
+                            generation
+                                .instance(instance)
+                                .map_or("?", |instance| instance.name),
+                            deterministic as u8,
+                        );
+                        Response::success(
+                            i64::from(role),
+                            u64::from(capacity) | (u64::from(deterministic) << 32),
+                        )
+                    }
+                    None => {
+                        sel4::debug_println!(
+                            "SLIME_RECORD entry absent task={} instance={}",
+                            id.0,
+                            generation
+                                .instance(instance)
+                                .map_or("?", |instance| instance.name),
+                        );
+                        Response::success(0, 0)
+                    }
+                };
+                ipc::reply(response);
+            }
             // The graph index for a route the caller names by identity (B70).
             capability_table_labels::GRAPH_ROUTE_INDEX => {
                 let response = match words.get(1).copied() {
@@ -3724,7 +3766,9 @@ fn serve_instance_graph(
                 ));
             }
             capability_transfer_labels::IMPORT => {
-                ipc::reply(serve_capability_import(allocator, tasks, id, &words));
+                ipc::reply(serve_capability_import(
+                    allocator, tasks, generation, instance, id, &words,
+                ));
             }
             capability_transfer_labels::EXPORT_CANCEL => {
                 ipc::reply(serve_capability_cancel(allocator, tasks, id, &words));
@@ -6489,9 +6533,30 @@ fn serve_capability_finalize(
     Response::success(0, 0)
 }
 
+/// Install one finalized export into the receiver's own authority table.
+///
+/// C9.5 adds the `receiver_instance` gate, and it closes a real hole rather than
+/// restating admission. Admission certifies a deterministic instance against the
+/// grants and minted bindings the *generation* declares, which is every authority
+/// it holds at launch — but not every authority it can come to hold. A
+/// transferable capability exported by a peer and imported here would land in the
+/// receiver's table without the recording policy ever being consulted, so a
+/// component the generation certified deterministic could acquire, say,
+/// `directoryRead` at runtime and then read live state no record captures. The
+/// determinism claim would still be authenticated and would no longer be true.
+///
+/// So the same mask admission uses is applied to the arriving capability: an
+/// import carrying any right classified `unrecorded` is refused for a receiver
+/// the recording resource declares deterministic. The refusal is on the *import*
+/// rather than the export, because the export names a receiver but installs
+/// nothing, and it is the installation that would widen the claim. A receiver
+/// with no determinism claim is unaffected, which is every component in every
+/// generation before C9.5.
 fn serve_capability_import(
     allocator: &mut ObjectAllocator,
     tasks: &mut TaskTable<MAX_TASKS>,
+    generation: &Generation<'_>,
+    receiver_instance: usize,
     receiver: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
 ) -> Response {
@@ -6522,6 +6587,21 @@ fn serve_capability_import(
         return Response::error(IpcError::BadCapability);
     };
     if export.receiver != receiver || !export.finalized {
+        return Response::error(IpcError::BadCapability);
+    }
+    // The C9.5 gate, before the capability reaches the receiver's table. An
+    // import that would widen a deterministic instance's authority past what
+    // any recording can capture is refused, so the claim admission certified
+    // stays true for the whole life of the task rather than only at launch.
+    if generation::recording_declares_deterministic(generation, receiver_instance)
+        && export.capability.rights_bits() & boot_contracts::generation::RIGHT_UNRECORDED != 0
+    {
+        sel4::debug_println!(
+            "SLIME_RECORD refused import task={} kind={} rights={:#x} class=unrecorded-source",
+            receiver.0,
+            export.capability.kind_name(),
+            export.capability.rights_bits(),
+        );
         return Response::error(IpcError::BadCapability);
     }
     let Some(table) = tasks.authority_mut(receiver) else {
