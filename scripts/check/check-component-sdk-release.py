@@ -138,6 +138,47 @@ def canonical_remote(root: Path) -> str:
     return str(bare)
 
 
+def prove_atomic_publication(root: Path) -> None:
+    """A refused tag must leave neither half of the release published.
+
+    The hook rejects only release tags. Two separate pushes would therefore
+    publish the branch first and fail second; one atomic push refuses both refs.
+    """
+    bare = root / "atomic-refusal.git"
+    run(
+        ["git", "init", "--quiet", "--bare", "--initial-branch", BRANCH, str(bare)],
+        cwd=root,
+        description="create the atomic-publication remote",
+    )
+    hook = bare / "hooks" / "pre-receive"
+    hook.write_text(
+        "#!/bin/sh\n"
+        "while read old new ref; do\n"
+        '    case "$ref" in\n'
+        "        refs/tags/sdk-v*) exit 1 ;;\n"
+        "    esac\n"
+        "done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+    refused = publish(str(bare), version="9.9.9", extra=("--push",), allow_failure=True)
+    if refused.returncode == 0:
+        fail("publication succeeded despite the remote refusing its release tag")
+    refs = run(
+        ["git", "for-each-ref", "--format=%(refname)"],
+        cwd=bare,
+        description="inspect the refused atomic publication",
+    ).stdout.split()
+    if refs:
+        fail(f"a refused release tag left partial remote refs: {refs}")
+    print(
+        "component SDK release: a refused release tag left no generated branch commit",
+        flush=True,
+    )
+
+
 def clone(url: str, destination: Path) -> Path:
     run(
         ["git", "clone", "--quiet", "--branch", BRANCH, url, str(destination)],
@@ -600,6 +641,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="slime-component-sdk-release-") as temporary:
         root = Path(temporary)
         url = canonical_remote(root)
+        prove_atomic_publication(root)
         commit, record = prove_first_publication(root, url)
         prove_idempotence(root, url, commit)
         prove_refusals(root, url)

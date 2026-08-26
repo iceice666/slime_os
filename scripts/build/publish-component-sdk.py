@@ -402,15 +402,21 @@ def main() -> None:
             description="create the immutable release tag",
         )
         if arguments.push:
+            # The generated commit and its immutable release tag are one
+            # publication. A split push can leave a branch commit without its
+            # tag; the idempotence check would then see the tree as published
+            # and refuse to repair that partial release on a retry.
             run(
-                ["git", "push", "origin", f"HEAD:{arguments.branch}"],
+                [
+                    "git",
+                    "push",
+                    "--atomic",
+                    "origin",
+                    f"HEAD:{arguments.branch}",
+                    tag,
+                ],
                 cwd=clone_root,
-                description="push the generated commit",
-            )
-            run(
-                ["git", "push", "origin", tag],
-                cwd=clone_root,
-                description="push the release tag",
+                description="atomically push the generated commit and release tag",
             )
         print(
             f"component SDK publication: {arguments.version} -> {sdk_commit} ({tag})"

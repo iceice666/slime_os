@@ -336,3 +336,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-25 | [CP6–CP10: one exporter, one published mirror, and a consumer that can roll back](2026-08-25-cp6-cp10-component-sdk-releases/index.md) | Change | Verified | CP6, CP7, CP8, CP9, CP10, CP5 |
 | 2026-08-26 | [C9.5: recorded means captured, and the one grant that carries the recording](2026-08-26-c9-5-typed-recording-replay/index.md) | Change | Verified | C9.5, C9, C9.1, C9.2, C9.4, C8.11, C8.15, B23, B57, B70, B71 |
 | 2026-08-26 | [C9.6: a robot workload that survives its own restart, on the mechanisms C9 shipped](2026-08-26-c9-6-robot-workload-composition/index.md) | Change | Verified | C9.6, C9, C9.1, C9.2, C9.3, C9.4, C9.5, C8.10, C8.15, B70, B75, B76 |
+| 2026-08-26 | [CP7 hosted publication hardening: one atomic release and one credential](2026-08-26-cp7-hosted-publication-hardening/index.md) | Change | Verified | CP7 |
