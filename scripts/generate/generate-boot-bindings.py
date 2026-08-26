@@ -41,7 +41,6 @@ GENERATORS = (
     (ROOT / "contracts" / "recovery" / "v1" / "schema.zt", "recovery.py", "recovery.rs"),
     (ROOT / "contracts" / "transfer" / "v1" / "schema.zt", "transfer.py", "transfer.rs"),
     (ROOT / "contracts" / "store" / "disk" / "v1" / "schema.zt", "store_disk.py", "store_disk.rs"),
-    (ROOT / "contracts" / "handoff" / "v1" / "schema.zt", "handoff.py", "handoff.rs"),
     (
         ROOT / "contracts" / "shared-buffer-budget" / "v1" / "schema.zt",
         "shared_buffer_budget.py",

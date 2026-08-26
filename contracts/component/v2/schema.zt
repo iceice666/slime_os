@@ -175,10 +175,10 @@ imageFormat ::= {
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [
     root := env.get caps.env "SLIME_COMPONENT_BINDINGS_ROOT" ?? ".";
-    -- The boot path reads the same header to answer "which target is this
-    -- image for?" before stage-0 copies a generation, so the constants are
-    -- rendered into boot-contracts as well. One schema, two consumers, no
-    -- second hand-maintained copy of the layout.
+    -- The immutable seL4 selector and root admission read the same header to
+    -- answer "which target is this image for?", so the constants are rendered
+    -- into boot-contracts as well. One schema, two consumers, no second
+    -- hand-maintained copy of the layout.
     bootRoot := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? root;
     bindings := gen.render imageFormat;
     rustPath := t.join "" { root; "/components/proto/src/component.rs"; };

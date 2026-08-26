@@ -147,13 +147,13 @@
 
 **Depends on:** M5.4 and the earlier generation contract.
 
-**Delivered:** A new deterministic boot-time generation version encoding target, parent, dependencies, state bindings, health policy, and real kernel identity; explicit count/length bounds; canonical serialization; two fixed-size versioned `BootState` slots; older-slot-first updates; and immutable stage-0 selection and full kernel-bearing generation verification.
+**Delivered:** A deterministic boot-time generation version encoding target, parent, dependencies, state bindings, health policy, and retained kernel identity compatibility; explicit count/length bounds; canonical serialization; two fixed-size versioned `BootState` slots; older-slot-first updates; and immutable disk-backed seL4 selection with complete generation, signed-release, and boot-bundle verification.
 
 **Required checks:** Require byte-identical artifacts from normalized inputs; reject unknown versions/flags, excessive counts, oversized strings, broken parents, and bad checksums; execute nothing before verification; retain selection through one interrupted or invalid slot.
 
 **Verification target:** `just generation_check`.
 
-**Exit condition:** Stage-0 deterministically selects and verifies a complete kernel-bearing generation from redundant persistent metadata.
+**Exit condition:** The immutable disk-backed seL4 selector deterministically selects and verifies a complete generation from redundant persistent metadata before `slime-root` admits and launches its component graph.
 
 ### M5.6a — Checked BootState transition model
 
@@ -161,7 +161,7 @@
 
 **Depends on:** M5.5.
 
-**Delivered:** `contracts/bootstate/model/bootstate.zt`, modeling both slots, older-slot-first commits, the six transition rules, and interruption witnesses. `SelectableBootRootExists` preserves a bootable root; `PendingAttemptConsumedBeforeTransfer` requires durable decrement before transfer. The nine concrete witnesses cover pending metadata, slot writes A/B, pending commit, attempt commit, health promotion, rollback update, state snapshot, and garbage collection.
+**Delivered:** `contracts/bootstate/model/bootstate.zt`, modeling both slots, older-slot-first commits, the six transition rules, and interruption witnesses. `SelectableBootRootExists` preserves a bootable root; the historically named `PendingAttemptConsumedBeforeTransfer` invariant requires durable decrement before candidate bytes are read, decoded, or launched. The nine concrete witnesses cover pending metadata, slot writes A/B, pending commit, attempt commit, health promotion, rollback update, state snapshot, and garbage collection.
 
 **Required checks:** Exhaust the bounded interleavings and ensure a deliberate skipped-attempt mutation fails.
 
@@ -189,9 +189,9 @@
 
 **Depends on:** M5.6a and M5.6b; their semantics are the implementation contract.
 
-**Delivered behavior:** With no pending generation, boot known-good. With pending attempts, durably decrement before transfer. Only the capability-authorized generation-management service may confirm the currently running pending generation. Confirmation promotes it atomically and retains the prior known-good rollback root. Failure, reboot, or exhaustion returns to known-good. No transition overwrites the only valid slot. State policies and GC honor every root modeled by M5.6b, and rollback is idempotent.
+**Delivered behavior:** With no pending generation, boot known-good. With pending attempts, durably decrement before candidate bytes are read, decoded, or launched. Only the capability-authorized generation-management service may confirm the currently running pending generation. Confirmation promotes it atomically and retains the prior known-good rollback root. Failure, reboot, or exhaustion returns to known-good. No transition overwrites the only valid slot. State policies and GC honor every root modeled by M5.6b, and rollback is idempotent.
 
-**Required checks:** Inject interruption before pending metadata, during either slot write, after pending commit, after attempt commit/before transfer, during promotion, rollback update, state snapshot, and GC. Every reboot selects either pending with the correct reduced attempt count or verified known-good, never zero roots. Distinguish component exit, fault, timeout, peer loss, and explicit unhealthy status; deny health confirmation to unprivileged components.
+**Required checks:** Inject interruption before pending metadata, during either slot write, after pending commit, after attempt commit/before candidate read, during promotion, rollback update, state snapshot, and GC. Every reboot selects either pending with the correct reduced attempt count or verified known-good, never zero roots. Distinguish component exit, fault, timeout, peer loss, and explicit unhealthy status; deny health confirmation to unprivileged components.
 
 **Verification target:** `just rollback_check` (including the observed `2 → 1 → 0` failing-pending sequence), which now resolves to `just sel4_rollback_check`; state and GC behavior is exercised by the same plane, since `kernel/tests/generation_manager.rs` was deleted with the custom kernel.
 
@@ -203,9 +203,9 @@
 
 **Depends on:** M5.6a, M5.6b, and M5.6.
 
-**Delivered:** Bounded version-1 durable-transition records at stage-0 attempt commits and exhausted-known-good selection, validated against the checked models. The schema pins a worst-case-tested 640-byte line bound.
+**Delivered:** Bounded version-1 durable-transition records emitted by the seL4 rollback plane's generation-management component and validated against the checked models. The schema retains `BootKnownGood` and `BootExhaustedKnownGood` as compatibility vocabulary, but the current immutable selector does not emit them. The schema pins a worst-case-tested 640-byte line bound.
 
-**Required checks:** Accept every rollback scenario trace; reject transfer before durable decrement, mismatched action/commit or sequence boundaries, wrong-root promotion/collection, and any unbounded instrumentation dependency.
+**Required checks:** Accept every rollback scenario trace; reject attempt consumption that is not durable before candidate execution, mismatched action/commit or sequence boundaries, wrong-root promotion/collection, and any unbounded instrumentation dependency.
 
 **Verification target:** `just bootstate_trace_check`.
 
@@ -233,13 +233,13 @@
 
 **Depends on:** M5.5–M5.6c.
 
-**Delivered:** Bounded deterministic detached metadata; pinned 2-of-3 Ed25519 authorization; dual-threshold consecutive trust-root rotation; target, parent, sequence, kernel, and authority-manifest binding; staging without sequence advance; advance only after health promotion; and retained local known-good rollback.
+**Delivered:** Bounded deterministic detached metadata; pinned 2-of-3 Ed25519 authorization; dual-threshold consecutive trust-root rotation; target, parent, sequence, generation, authority-manifest, and boot-bundle binding; staging without sequence advance; advance only after health promotion; and retained local known-good rollback.
 
 **Required checks:** Reject insufficient threshold, missing/duplicate/malformed/excessive signatures, wrong target, stale releases, skipped rotation, or broken old/new-root continuity; preserve the accepted sequence after failed pending boots and preserve the explicit rollback root after promotion.
 
 **Verification target:** `just release_trust_check`.
 
-**Exit condition:** Stage-0 and generation management accept only authorized releases while retaining automatic local rollback.
+**Exit condition:** The immutable seL4 selector/root admission and generation management accept only authorized releases while retaining automatic local rollback.
 
 **Scope limit:** This evidence does not establish trusted-time freeze protection, UEFI Secure Boot, TPM sealing, or resistance to rollback of an entire physical disk image.
 
@@ -282,7 +282,7 @@ Slice checks, including all existing target names:
 - `just release_trust_check`
 - `just recovery_check`
 
-M5 closes only after M5.7's physical observation. At that point all executable content must verify before execution; staging must preserve running/known-good; attempts must commit before transfer; confirmation must apply only to the running pending generation; interruption must preserve a valid slot; checked traces must match the state/GC models; failure must return to known-good; GC must preserve every retained root; every state policy must have upgrade/rollback evidence; read/write authority must be explicit; malformed metadata must fail before out-of-bounds I/O or execution; releases and recovery must preserve local rollback and capability isolation; and the Framework storage-aware observation must show no unauthorized internal-NVMe write.
+M5 closes only after M5.7's physical observation. At that point all executable content must verify before execution; staging must preserve running/known-good; attempts must commit before candidate bytes are read, decoded, or launched; confirmation must apply only to the running pending generation; interruption must preserve a valid slot; checked traces must match the state/GC models; failure must return to known-good; GC must preserve every retained root; every state policy must have upgrade/rollback evidence; read/write authority must be explicit; malformed metadata must fail before out-of-bounds I/O or execution; releases and recovery must preserve local rollback and capability isolation; and the Framework storage-aware observation must show no unauthorized internal-NVMe write.
 
 ## M6 — Native interactive environment
 
@@ -384,7 +384,7 @@ M5 closes only after M5.7's physical observation. At that point all executable c
 
 **Delivered:** A deterministic versioned transfer manifest; closure construction respecting state policy (`preserve` and `snapshotBeforeUpgrade` travel, `ephemeral` does not, `immutable` travels read-only); content-identity set-difference transfer; receiver-side closure/release verification; and ordinary pending-attempt/health-confirm activation. QEMU uses a second attachable virtio block disk; networking is outside this slice.
 
-**Required checks:** Produce byte-identical manifests; fail incomplete closure or authorization mismatch before transfer of control and without consuming an attempt; promote only after health confirmation; leave every ungranted device byte-identical.
+**Required checks:** Produce byte-identical manifests; fail incomplete closure or authorization mismatch before staging pending BootState and without consuming an attempt; promote only after health confirmation; leave every ungranted device byte-identical.
 
 **Verification target:** `just transfer_check`.
 

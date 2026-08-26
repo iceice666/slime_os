@@ -5,7 +5,7 @@
 // components link this crate with **no allocator at all** — declaring
 // `extern crate alloc` unconditionally fails every component binary with "no
 // global memory allocator found". Callers that want GPT validation opt in and
-// bring their own allocator, as stage0 already does.
+// bring their own allocator.
 #[cfg(feature = "gpt")]
 extern crate alloc;
 
@@ -18,7 +18,6 @@ pub mod fabric_graph;
 pub mod generation;
 #[cfg(feature = "gpt")]
 pub mod gpt;
-pub mod handoff;
 pub mod kernel_image;
 pub mod lifecycle_policy;
 pub mod normalized_interface_schemas;

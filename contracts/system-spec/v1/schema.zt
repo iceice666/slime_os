@@ -241,8 +241,8 @@ SystemSpec :: type {
   -- compose into both `valid.zti` (x86_64-qemu-virtio) and `sel4-channel.zti`
   -- (aarch64-sel4-qemu-virt), so a component spec's environment records the
   -- reference generation it was authored against rather than an exclusive
-  -- claim. Per-image target qualification is stage-0's, through
-  -- `contracts/component/v2`'s header, and is already gated there.
+  -- claim. Per-image target qualification belongs to immutable selector/root
+  -- admission through `contracts/component/v2`'s header and is gated there.
   targetRequirement : Text;
   bootAction : Text;
   bootstrapInstance : Text;

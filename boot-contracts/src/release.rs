@@ -406,8 +406,8 @@ mod tests {
         }
     }
 
-    /// One signed release naming a parent, a target, and a kernel digest. The
-    /// signature area stays zeroed: `decode` requires the tail past
+    /// One signed release naming a parent, a target, and a generation digest.
+    /// The signature area stays zeroed: `decode` requires the tail past
     /// `signature_count` entries to be zero, and a count of zero means all of
     /// it. Signature *verification* is behind `release-crypto` and is not what
     /// this corpus covers.

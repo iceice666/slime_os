@@ -95,7 +95,7 @@ Parameter :: type {
 -- What this component needs from the platform to run at all.
 --
 -- `executionEnvironment` is a `contracts/target-profile/v1` profile name, so a
--- spec is target-qualified by the same table stage-0 admits images against.
+-- spec is target-qualified by the same table executable admission uses.
 -- `resource` fields mirror the manifest's declared per-component ceilings, and
 -- `devices` names capability kinds that are device authority rather than
 -- component-to-component authority.

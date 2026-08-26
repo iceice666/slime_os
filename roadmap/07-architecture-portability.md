@@ -43,7 +43,7 @@ A profile name identifies a complete executable and platform contract, not only 
 
 **Status:** Complete.
 **Delivered:** Versioned Zutai component-image and kernel-image revisions carrying an explicit architecture identifier, ABI identifier, ISA/profile flags, and page-profile identifier; bounded decoding of existing x86 artifacts preserved for the rollback window; generation target, release target, and every executable validated as one compatible set before execution; one semantic syscall table with per-architecture calling-convention documents for x86-64 `int 0x80`, AArch64 `svc`, and RV64 `ecall`.
-**Exit condition (observed):** A generation and its release identify one exact target profile; stage-0 rejects every mismatched kernel, component, or node executable before mapping it, retained x86 rollback artifacts keep their old meaning, and deterministic builders emit only profile-valid authenticated artifacts.
+**Exit condition (observed):** A generation and its release identify one exact target profile; executable admission rejects every mismatched kernel, component, or node artifact before mapping it, retained x86 rollback artifacts keep their old meaning, and deterministic builders emit only profile-valid authenticated artifacts.
 **Gates:** `just architecture_contract_check`
 **Evidence:** [`devlog/2026-08-02-p0-architecture-contracts/`](../devlog/2026-08-02-p0-architecture-contracts/index.md)
 
@@ -186,14 +186,14 @@ The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated
 
 ## P3: RV64 QEMU vertical slice
 
-**Status:** Deferred until after the Raspberry Pi 5 ROS 2 demo stabilizes. Rescoped by P5: this is no longer a custom-kernel port. seL4 supports RV64 upstream, so the S-mode kernel, Sv39 translation tables, trap decoding, `ecall` entry, context switching, interrupt controller, and timer are all upstream mechanism to configure and pin, not Slime code to write. What remains Slime's is the target profile, the stage-0/loader route, and replaying the semantic corpus.
+**Status:** Deferred until after the Raspberry Pi 5 ROS 2 demo stabilizes. Rescoped by P5: this is no longer a custom-kernel port. seL4 supports RV64 upstream, so the S-mode kernel, Sv39 translation tables, trap decoding, `ecall` entry, context switching, interrupt controller, and timer are upstream mechanism to configure and pin, not Slime code to write. What remains Slime's is the exact target profile, the pinned kernel-loader route, immutable selector/root admission, and replaying the semantic corpus.
 
 **Depends on:** P5, and P4 for the precedent of qualifying a second seL4 platform.
 
 ### Deliverables
 
 - pin one QEMU `virt` machine version, firmware/loader route, RV64 ISA baseline, interrupt controller, timer, UART, and virtio device set, and add the matching upstream seL4 kernel configuration and pinned artifact hashes alongside the existing `sel4/config/qemu-arm-virt.cmake`;
-- add the RV64 target profile to P0's architecture/ABI/page-profile contract and its `ecall` calling-convention document, so a generation names it and stage-0 rejects AArch64 and retained x86 artifacts before mapping executable bytes;
+- add the RV64 target profile to P0's architecture/ABI/page-profile contract and its `ecall` calling-convention document, so a generation names it and immutable root admission rejects AArch64 and retained x86 artifacts before mapping executable bytes;
 - build `slime-root` and the component images for the RV64 seL4 target, confirming the root's mechanism modules carry no AArch64 assumption outside the admitted boundary;
 - replay the same isolation, B2 wait/wake, C7 sample-plane, generation, and rollback acceptance corpus the AArch64 seL4 gates run.
 

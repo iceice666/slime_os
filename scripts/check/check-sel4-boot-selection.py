@@ -400,7 +400,7 @@ def main() -> None:
         root_build = (ROOT / "slime-root/build.rs").read_text(encoding="utf-8")
         if "if variant == BOOT_SELECTION_VARIANT" not in build_source \
                 or 'root_environment["SLIME_BOOT_SELECTOR"] = "1"' not in build_source \
-                or "package_image(payload_tool, loader, root_elf, image)" not in build_source \
+                or "package_image(payload_tool, loader, root_elf, image, platform)" not in build_source \
                 or 'if std::env::var("SLIME_BOOT_SELECTOR").as_deref() != Ok("1")' not in root_build:
             fail("selector build does not structurally exclude embedded generation bytes")
 

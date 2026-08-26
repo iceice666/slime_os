@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """M5.6c BootState model-implementation conformance check.
 
-Boots the rollback power-cut scenario, collects the durable BootState
-transition traces stage-0 and the generation-management service emit, and
-validates each finite trace against the checked M5.6a/M5.6b state machines in
+Boots the seL4 rollback power-cut scenario, collects the durable BootState
+transition traces emitted by its generation-management component, and validates
+each finite trace against the checked M5.6a/M5.6b state machines in
 `contracts/bootstate/model/`.
 
 Two conformance layers, neither a re-transcription of the model:
 
   * Abstract legality is decided by `zutai model-check` over the real typed
     `bootstate.zt` transition system. A record's durable post-state is accepted
-    only when it is reachable in the model; a record that transfers control
-    before the attempt decrement is durable has no reachable state and is
-    rejected.
+    only when it is reachable in the model; a record that reads, decodes, or
+    launches candidate bytes before the attempt decrement is durable has no
+    reachable state and is rejected.
   * Concrete root binding maps the abstract roots the model does not carry onto
     the on-disk BootState identities. A promotion or collection against the
     wrong root is rejected here.
@@ -429,7 +429,7 @@ def main() -> None:
     records, final = run_scenario()
     check_trace_chain(records, final, oracle)
 
-    # An attempt that transfers before the decrement is durable is unreachable.
+    # Reading, decoding, or launching before the decrement is durable is unreachable.
     consume = next(record for record in records if record["action"] == "consume-attempt")
     stalled = dict(consume)
     stalled["attempts_after"] = stalled["attempts_before"]

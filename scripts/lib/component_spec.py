@@ -699,8 +699,8 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         _fail("compatibility.resource must be 'atMost': a resource requirement is a ceiling")
     if compatibility["runtime"] != contract.CONSTRAINT_EXACT:
         _fail(
-            "compatibility.runtime must be 'exact': stage-0 admits a target profile by "
-            "equality, not containment"
+            "compatibility.runtime must be 'exact': executable admission compares "
+            "target profiles by equality, not containment"
         )
     # A component with no policy cannot be QoS-constrained, and one with policy
     # must be: an unconstrained policy is policy nothing enforces.

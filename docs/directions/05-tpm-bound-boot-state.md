@@ -6,7 +6,7 @@
 | Route | hardware; secondary: updates |
 | Depends on | M5.6 BootState (complete); [Authority A4](../../roadmap/06-authority-trust.md) owns the TPM driver and attestation work, with physical evidence depending on the Hardware H track |
 | Enables | rollback resurrection resistance on physical media; remote attestation of running generation identity |
-| Now | Retained design: NVRAM layout, counter/sealed-data design, and the stage-0 verification flow feed Authority A4. |
+| Now | Retained design: NVRAM layout, counter/sealed-data design, and the immutable selector verification flow feed Authority A4. |
 
 ## Motivation
 
@@ -23,11 +23,13 @@ hash X".
 ## What exists today
 
 - M5.6 (complete) defines the semantics to protect: attempt counters
-  consumed durably before transfer, known-good identity updated only on
-  health confirmation, and M5.6a's checked invariants
-  (`SelectableBootRootExists`, `PendingAttemptConsumedBeforeTransfer`).
-- Stage-0 (M5.5, complete) already hash-verifies the generation before
-  transfer — the TPM check slots into the same pre-transfer gate.
+  consumed durably before candidate bytes are read, decoded, or launched,
+  known-good identity updated only on health confirmation, and M5.6a's
+  checked invariants (`SelectableBootRootExists`,
+  `PendingAttemptConsumedBeforeTransfer`).
+- The immutable disk-backed seL4 selector already verifies the generation,
+  signed release, and boot-bundle identity before root admission; the TPM
+  check slots into the same pre-candidate-read gate.
 - [Authority A4](../../roadmap/06-authority-trust.md) owns the TPM driver and
   attestation implementation. M5.9 (complete) covers the adjacent case of
   BootState reconstruction when slots are unusable; A4 must preserve its
@@ -37,8 +39,8 @@ hash X".
 
 The TPM holds the monotonic facts the disk cannot be trusted to keep:
 the attempt counter (or its epoch) and the known-good generation hash.
-Stage-0's flow gains a verification step: the on-disk BootState must
-agree with the TPM-held values — a disk image rolled back to before a
+The immutable selector's flow gains a verification step: the on-disk BootState
+must agree with the TPM-held values — a disk image rolled back to before a
 known-bad promotion fails because the TPM's view has moved on.
 
 The failure matrix needs the same rigor M5.6a gave the disk-only
@@ -69,13 +71,13 @@ entry does not claim.
 
 ## Exit-condition sketch
 
-On the Framework target, reflashing an older generation image fails
-stage-0 verification against TPM-held counters.
+On the Framework target, reflashing an older generation image fails immutable-
+selector verification against TPM-held counters.
 
 ## Probe guidance
 
 Paper: the NVRAM/counter layout, the four-cell disk×TPM desync matrix
-with per-cell policy, and the stage-0 flow amendment — checked against
-M5.6a's invariants so the binding cannot violate
+with per-cell policy, and the immutable-selector flow amendment — checked
+against M5.6a's invariants so the binding cannot violate
 `SelectableBootRootExists`. The note also scopes whether a virtual TPM
 keeps QEMU as the verification platform.

@@ -39,7 +39,7 @@ Slime OS owns:
 - generation construction, authority diff/classification, release authorization, live/boot activation, health, and rollback;
 - conformance fixtures proving that a producer cannot bypass target, ABI, W^X, bounds, or authority rules.
 
-The handoff is therefore producer-neutral:
+The producer boundary is therefore neutral:
 
 ```text
 normalized source closure
@@ -137,7 +137,7 @@ A pinned compiler for the new language directly emits a byte-deterministic targe
 - complete the deterministic-component authority rule: C9 Clock authority and an object-specific Entropy authority are explicit; a manifest-declared deterministic builder receives neither real source and cannot receive one later through capability transfer; a seeded fixture is a distinct declared input rather than ambient randomness;
 - charge memory, task count, shared-buffer pages, private-memory pages, scratch bytes, output bytes, diagnostic bytes, and child count to a manifest-declared build account, with structured exhaustion and full cleanup on exit, fault, timeout, cancellation, or supervisor restart. CPU is bounded as elapsed wall-clock time against a declared deadline rather than as a conserved account, because the pinned kernel is built `KernelIsMCS OFF` and has no budget to charge;
 - key caching on the entire normalized input closure, never a mutable path or timestamp; validate a cached object's digest and producer contract before reuse;
-- emit detached provenance binding source, toolchain, target, parameters, builder identity, and outputs. Stage-0 does not parse provenance, and provenance never grants release authorization;
+- emit detached provenance binding source, toolchain, target, parameters, builder identity, and outputs. The immutable selector does not parse provenance, and provenance never grants release authorization;
 - support the new language compiler as the first native build component while keeping the request/result protocol language-neutral for later Rust or other admitted toolchains.
 
 ### Required checks
@@ -208,7 +208,7 @@ Within one QEMU boot, a user edits new-language source, compiles it on-device, a
 - compute the affected component closure and start replacements side-by-side with fresh endpoints, buffers, timers, mappings, device handles, supervision, and resource accounts; source components cannot retain or transfer stale authority into replacements;
 - route long-lived services through C8/interposition endpoints, perform bounded readiness and in-flight drain, atomically commit route ownership, and terminate the old closure only after the new closure is healthy;
 - keep the old closure and routes authoritative until commit. Any pre-commit fault/timeout/cancellation aborts the replacement and leaves unrelated components and the old service live; post-commit health failure follows a bounded reverse cutover while the old closure is retained;
-- persist the new generation as ordinary pending BootState before live cutover, but do not promote it to known-good solely from a live userspace switch. The next boot still exercises stage-0/bootstrap pending health before M5.6 promotion; power loss at any live-cutover boundary boots either verified known-good or the intact pending generation, never a persisted hybrid graph;
+- persist the new generation as ordinary pending BootState before live cutover, but do not promote it to known-good solely from a live userspace switch. The next boot still exercises immutable selector/root pending admission and health before M5.6 promotion; power loss at any live-cutover boundary boots either verified known-good or the intact pending generation, never a persisted hybrid graph;
 - report booted-generation identity, live userspace-generation identity, cutover state, and pending/known-good status distinctly so an observer cannot mistake a live-qualified graph for a boot-qualified generation.
 
 ### Required checks
@@ -240,7 +240,7 @@ A release-authorized generation differing only in one live-compatible component 
 
 - run a userspace generation builder over normalized Zutai system intent and sealed component/resource objects, producing the same bounded canonical generation, closure, object identities, target binding, state policies, grants, health policy, and detached release subject as the host builder;
 - expose Dango build, inspect, test, authority-diff, stage, live-switch, next-boot select, and rollback operations through explicit service capabilities rather than global commands with ambient boot/store authority;
-- keep ephemeral test and installation distinct: D4 may test an unsigned image, but D5 live switch and M6 next-boot selection require a complete M5.8-authorized release; no developer mode silently weakens stage-0;
+- keep ephemeral test and installation distinct: D4 may test an unsigned image, but D5 live switch and M6 next-boot selection require a complete M5.8-authorized release; no developer mode silently weakens immutable selector/root admission;
 - make the initial local authorization workflow import valid detached release metadata for the exact generation identity. On-device private-key custody is not introduced here and may later consume A2/A4 without blocking deterministic local builds;
 - select D5 only when its exact compatibility classifier accepts the generation; otherwise report reboot-required and use the ordinary pending-attempt path without mutating the running graph;
 - store and transfer only content identities missing from the destination closure, preserving state policies and source/toolchain/build-provenance objects only when the generation declares them retained;

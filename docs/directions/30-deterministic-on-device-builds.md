@@ -17,9 +17,9 @@ manifest-declared deterministic component (consuming
 outputs are content-addressed objects; the object store deduplicates
 build products naturally, and rebuilding the running system on-device
 reproduces the host build byte-identically. "Builds are pure functions"
-becomes enforceable inside the OS, and stage-0 verification applies to
-locally built generations unchanged — the system cannot distinguish a
-generation by where it was built.
+becomes enforceable inside the OS, and immutable selector/root verification
+applies to locally built generations unchanged — the system cannot distinguish
+a generation by where it was built.
 
 ## What exists today
 

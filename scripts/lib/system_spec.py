@@ -199,11 +199,11 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     # an exclusive claim, and CP0's corpus is authored against `valid.zti`.
     #
     # What *is* enforced is that the target exists in the profile table, checked
-    # above. Per-image target qualification is stage-0's job and is already
-    # gated: `contracts/component/v2`'s header carries architecture, ABI, page
-    # profile, and required features, and admission compares them by equality
-    # before mapping executable bytes. Restating a weaker version of that here
-    # would be a second authority on it, and a wrong one.
+    # above. Per-image target qualification belongs to immutable selector/root
+    # admission and is already gated: `contracts/component/v2`'s header carries
+    # architecture, ABI, page profile, and required features, and admission
+    # compares them by equality before mapping executable bytes. Restating a
+    # weaker version here would be a second authority on it, and a wrong one.
 
     if spec["bootstrapInstance"] not in admitted:
         _fail(f"bootstrapInstance: {spec['bootstrapInstance']!r} is not an admitted component")

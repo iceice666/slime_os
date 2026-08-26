@@ -167,7 +167,7 @@ impl TargetProfile {
 }
 
 /// `str::eq` is not const-friendly across all toolchains here and this runs in
-/// `no_std` stage-0 code; compare bytes directly.
+/// allocation-free `no_std` admission code; compare bytes directly.
 fn str_eq(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
     if left.len() != right.len() {

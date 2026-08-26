@@ -98,20 +98,20 @@ Compute submission is a rights-gated, budgeted, IOMMU-contained capability: unpr
 
 **Status:** Planned; not implemented.
 
-**Dependencies:** Completed M5.6 BootState semantics and checked invariants, including `SelectableBootRootExists` and `PendingAttemptConsumedBeforeTransfer`; completed M5.9 recovery and reconstruction; stage-0 generation hash verification; and a bounded Framework-class TPM driver from [Platform hardware](04-platform-hardware.md). Source: [direction 05](../docs/directions/05-tpm-bound-boot-state.md).
+**Dependencies:** Completed M5.6 BootState semantics and checked invariants, including `SelectableBootRootExists` and `PendingAttemptConsumedBeforeTransfer`; completed M5.9 recovery and reconstruction; immutable selector generation/release verification; and a bounded Framework-class TPM driver from [Platform hardware](04-platform-hardware.md). Source: [direction 05](../docs/directions/05-tpm-bound-boot-state.md).
 
 ### Deliverables
 
 - A bounded TPM driver sufficient for monotonic counters and NVRAM-sealed values; this does not claim general measured boot.
-- TPM binding for the attempt counter or epoch and known-good generation hash. On-disk BootState must agree with TPM-held facts at stage-0's pre-transfer gate.
+- TPM binding for the attempt counter or epoch and known-good generation hash. On-disk BootState must agree with TPM-held facts at the immutable selector's pre-candidate-read gate.
 - A checked disk×TPM desynchronization matrix with explicit policy for every cell: disk newer than TPM routes only through M5.9 recovery; TPM newer than disk is the resurrection case and fails closed; cleared or unavailable TPM cannot silently bypass policy and must never brick a healthy disk.
 - Recovery/reconstruction rules for restoring or rebinding TPM state without violating `SelectableBootRootExists` or `PendingAttemptConsumedBeforeTransfer`.
 - Attestation limited to the read direction needed here: a TPM quote of the bound running-generation identity, sufficient for a remote verifier to distinguish generations.
-- An explicit evidence split. Framework hardware is required for the physical trust exit. QEMU checks may cover the transition model and stage-0 logic; a virtual TPM may be added only if selected explicitly, and QEMU evidence must never be presented as physical TPM evidence.
+- An explicit evidence split. Framework hardware is required for the physical trust exit. QEMU checks may cover the transition model and immutable selector logic; a virtual TPM may be added only if selected explicitly, and QEMU evidence must never be presented as physical TPM evidence.
 
 ### Required checks
 
-- Reflashing an older generation image fails stage-0 verification against TPM-held counters.
+- Reflashing an older generation image fails immutable-selector verification against TPM-held counters.
 - A cleared or unavailable TPM fails open only through the explicit M5.9 recovery path and never bricks a healthy disk.
 - Every desync-matrix cell resolves to its declared policy without leaving zero bootable roots.
 - The checked flow continues to satisfy `SelectableBootRootExists` and `PendingAttemptConsumedBeforeTransfer`.
@@ -120,7 +120,7 @@ Compute submission is a rights-gated, budgeted, IOMMU-contained capability: unpr
 
 ### Exit condition
 
-On the Framework target, reflashing an older generation fails stage-0 verification against TPM-held counters, a cleared TPM cannot brick a healthy disk, and the running generation identity is remotely attestable—all without violating `SelectableBootRootExists`. QEMU or virtual-TPM evidence alone does not satisfy this exit.
+On the Framework target, reflashing an older generation fails immutable-selector verification against TPM-held counters, a cleared TPM cannot brick a healthy disk, and the running generation identity is remotely attestable—all without violating `SelectableBootRootExists`. QEMU or virtual-TPM evidence alone does not satisfy this exit.
 
 ## A5 — Distributed capabilities
 

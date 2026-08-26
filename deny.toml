@@ -1,8 +1,8 @@
 # cargo-deny configuration — `just deny`.
 #
-# The stage0/kernel trust chain depends on ed25519-dalek / curve25519-dalek /
-# sha2; a vulnerable or substituted crypto crate undermines verified boot, so
-# advisories and source pinning are the sections that matter most here.
+# The signed-release and immutable-selector trust chain depends on
+# ed25519-dalek / curve25519-dalek / sha2; a vulnerable or substituted crypto
+# crate undermines verified boot, so advisories and source pinning matter most.
 
 [graph]
 all-features = true

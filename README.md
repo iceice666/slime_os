@@ -65,7 +65,7 @@ POSIX and Linux compatibility may exist later as userspace personalities or isol
 
 seL4 16.0.0 is pinned in `sel4/pins.toml` and configured by `sel4/config/qemu-arm-virt.cmake`. The machine is `qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m 2048M`, with virtio block devices attached by the gates that need them.
 
-The five admitted target profiles are declared in `contracts/target-profile/v1/schema.zt`. Two build an image today: `aarch64-sel4-qemu-virt` (id 5), the automated product target, and `aarch64-rpi5` (id 3), P4's physical board, built by `just sel4_rpi5_image_check` from `sel4/config/bcm2712-rpi5.cmake` into its own prefix with its own pinned artifact hashes. `x86_64-qemu-virtio` (id 1) is the retained pre-P0 identity that the bounded rollback window must still decode, and `aarch64-qemu-virt` and `riscv64-qemu-virt` are declared but unbuilt. Every generation names exactly one profile, and stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
+The five admitted target profiles are declared in `contracts/target-profile/v1/schema.zt`. Two build an image today: `aarch64-sel4-qemu-virt` (id 5), the automated product target, and `aarch64-rpi5` (id 3), P4's physical board, built by `just sel4_rpi5_image_check` from `sel4/config/bcm2712-rpi5.cmake` into its own prefix with its own pinned artifact hashes. `x86_64-qemu-virtio` (id 1) is the retained pre-P0 identity that the bounded rollback window must still decode, and `aarch64-qemu-virt` and `riscv64-qemu-virt` are declared but unbuilt. Every generation names exactly one profile; the immutable selector and root admission reject architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
 
 ### Tier 1: named physical targets
 
@@ -253,9 +253,8 @@ Work is selected demo-first: the [RPi5 ROS 2 demo track](roadmap/09-rpi5-ros2-de
 Cargo.toml       Root Rust workspace and shared build profiles
 sel4/            Upstream seL4 pins (`pins.toml`) and per-platform CMake configuration
 slime-root/      The seL4 root task: generation admission, tasks, allocation, shared buffers, IPC, supervision
-stage0/          UEFI stage-0 loader (x86-64 and AArch64 targets; unused by the seL4 product boot)
 components/      Rust no_std userspace components (`bins`), the syscall runtime (`runtime`), and generated protocols (`proto`)
-boot-contracts/  Shared Rust boot, generation, storage, recovery, and handoff contract decoders
+boot-contracts/  Shared Rust boot, generation, storage, recovery, and admission contract decoders
 contracts/       Versioned Zutai schemas for every persisted, IPC, and boot format, plus generation fixtures
 scripts/         Host tooling grouped as build/, check/, generate/, and lib/
 tools/           Developer-facing helpers such as LLDB attachment

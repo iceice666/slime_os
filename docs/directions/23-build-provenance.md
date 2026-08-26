@@ -15,9 +15,9 @@ naming the source revision, builder identity and version, build type,
 normalized parameters, resolved dependency digests, and resulting
 generation identity. Release signatures (M5.8) answer *who authorized
 deployment*; provenance separately answers *how the bytes were
-produced*. The two questions have different consumers: stage-0 enforces
-authorization, while provenance supports rebuilding ("does a rebuild
-from the named inputs reproduce this identity?") and incident response
+produced*. The two questions have different consumers: immutable selector/root
+admission enforces authorization, while provenance supports rebuilding ("does
+a rebuild from the named inputs reproduce this identity?") and incident response
 ("which generations were built with the compromised dependency?").
 
 ## What exists today
@@ -42,8 +42,8 @@ The attestation is a deterministic, versioned, detached document —
 same format discipline as the generation itself — binding: source
 revision, builder identity and version, build type, normalized
 parameters, resolved dependency digests, and the resulting generation
-identity. Detached means stage-0 never parses it; verification is a
-host-side act by developers, auditors, or CI.
+identity. Detached means the immutable selector never parses it; verification
+is a host-side act by developers, auditors, or CI.
 
 Verification has two directions. Consistency: the attestation's subject
 matches the generation identity, and any alteration of inputs,

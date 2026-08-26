@@ -29,7 +29,7 @@ pythonBindings :: Format -> Text = format => w.join {
 };
 
 -- Schema-owned scalars + layout-derived offsets shared with
--- boot-contracts/src/bootstate.rs and the boot-store decoders in stage0 and the
+-- boot-contracts/src/bootstate.rs, the immutable seL4 boot selector, and the
 -- userspace generation-management components. The transition/encode/decode
 -- machinery stays hand-written in those modules; every layout constant comes
 -- from this contract.

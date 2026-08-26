@@ -34,10 +34,10 @@ with (exported as `CROSS_COMPILER_PREFIX`), a Python with the seL4 kernel
 generators' modules, and `rustup`. On first entry its hook installs the two
 pinned Rust toolchains:
 
-- the workspace toolchain (declared in `flake.nix`), used by host crates,
-  components, and stage-0;
-- the rust-sel4 toolchain (declared in `sel4/pins.toml [rust_sel4]`), used
-  only to build the root task, its child, and the kernel loader.
+- the workspace toolchain (declared in `flake.nix`), used by host crates and
+  components;
+- the rust-sel4 toolchain (declared in `sel4/pins.toml [rust_sel4]`), used to
+  build the root task, its child, and the kernel loader.
 
 Working outside the shell is possible but unsupported: you would have to
 reproduce each of those pins by hand, and the pin check will still hold you

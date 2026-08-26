@@ -11,7 +11,8 @@
 //! The sequence walked here is the oracle's `2 → 1 → 0`:
 //!
 //! * stage a pending generation with two attempts;
-//! * consume one attempt durably (`2 → 1`), as a boot before transfer must;
+//! * consume one attempt durably (`2 → 1`) before candidate bytes can be read,
+//!   decoded, or launched;
 //! * consume the last (`1 → 0`);
 //! * find the pending exhausted, and roll back to the known-good root;
 //! * confirm rollback is idempotent — a second rollback is a no-op, not an
@@ -23,10 +24,9 @@
 //! running identity, and promotion with a stale release sequence, are both
 //! refused.
 //!
-//! Kernel-resident in the oracle: `generation_service::rollback_reply` performs
-//! the transition and `persist_transition` writes the alternate slot. Here the
-//! root mediates sectors and the transition model is
-//! `boot_contracts::bootstate`, which is the same code stage-0 selects with.
+//! The root mediates sectors and the userspace generation-management component
+//! applies `boot_contracts::bootstate`, the same transition model used by the
+//! immutable disk-backed seL4 selector.
 
 extern crate alloc;
 
@@ -124,8 +124,8 @@ fn main(_startup_arg: u32) {
     report(b"staged", &live.state);
 
     // Consume all attempts durably, one commit each. This is the model's
-    // `3 → 2 → 1 → 0`, and durability is the point: a boot that transferred
-    // before the decrement was committed could retry forever.
+    // `3 → 2 → 1 → 0`, and durability is the point: reading, decoding, or
+    // launching candidate bytes first could retry forever after a power cut.
     for expected in [2u32, 1, 0] {
         let before = live;
         let consumed = before
@@ -285,7 +285,7 @@ impl StateSlots {
         let encoded = state.encode().map_err(|_| ())?;
         io.write_sector(self.lba(slot), &encoded).map_err(|_| ())?;
         // Flushed before the caller treats the transition as durable. M5.6's
-        // "decrement before transfer" is a claim about this flush.
+        // attempt-consumption guarantee is a claim about this flush.
         io.flush().map_err(|_| ())
     }
 

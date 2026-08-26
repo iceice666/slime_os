@@ -1,9 +1,9 @@
 //! Bounded, versioned BootState transition-trace records (M5.6c).
 //!
-//! Stage-0 and the generation-management service emit one canonical line per
-//! durable BootState transition so the conformance checker
-//! (`scripts/check/check-bootstate-trace.py`) can validate each finite trace against
-//! the checked M5.6a/M5.6b state machines in `contracts/bootstate/model/`.
+//! The seL4 rollback plane's generation-management component emits one
+//! canonical line per durable BootState transition so the conformance checker
+//! (`scripts/check/check-bootstate-trace.py`) can validate each finite trace
+//! against the checked M5.6a/M5.6b state machines in `contracts/bootstate/model/`.
 //!
 //! The format is deliberately fixed-width and allocation-free: rendering never
 //! touches the heap or a device, and a record maps 1:1 onto exactly one model
@@ -20,14 +20,17 @@ include!("generated/bootstate_trace.rs");
 /// rejection tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// Stage-0 durably decremented the pending attempt before transfer.
+    /// The rollback plane durably decremented the pending attempt before
+    /// candidate bytes were read, decoded, or launched.
     ConsumeAttempt,
-    /// The generation-management service promoted the running pending
+    /// The generation-management component promoted the running pending
     /// generation to known-good, retaining the previous known-good root.
     Promotion,
-    /// Booted the known-good generation with no pending present.
+    /// Version-1 compatibility vocabulary for selecting known-good directly;
+    /// the current immutable selector does not emit this trace action.
     BootKnownGood,
-    /// Booted the known-good generation after pending attempts were exhausted.
+    /// Version-1 compatibility vocabulary for selecting known-good after
+    /// exhaustion; the current immutable selector does not emit this action.
     BootExhaustedKnownGood,
     /// Generation service durably selected a validated staged generation.
     StagePending,

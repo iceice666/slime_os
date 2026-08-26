@@ -58,14 +58,14 @@ insert-failure rollback paths are uncovered.
 **Status:** Complete.
 **Delivered:** Generation format v3 with `u64` rights, built byte-identical
 across two builds; retained v2 generations still decode, keep their signed
-release authorized, and pass the stage-0 admission chain. The grandfathered
-`RIGHT_MAP` name was replaced with the object-specific `bufferMap` manifest
-key (backlog B7, resolved).
+release authorized, and pass the retained compatibility admission chain. The
+grandfathered `RIGHT_MAP` name was replaced with the object-specific `bufferMap`
+manifest key (backlog B7, resolved).
 **Exit condition (observed):** A v3 generation built from normalized input
 is byte-identical across two builds, boots the existing vertical slice with
 `u64` rights, and a retained v2 known-good artifact still decodes, keeps its
-signed release authorized, and passes the stage-0 admission chain; an
-unsupported version and an unknown rights bit both fail closed. The v2 arm
+signed release authorized, and passes the retained compatibility admission
+chain; an unsupported version and an unknown rights bit both fail closed. The v2 arm
 is proven to admission, not to a completed boot: no v2 artifact exists to
 boot, because the builder has only ever emitted v3 and each generation
 embeds the kernel it runs, so a v2 rollback would execute its own v2-era

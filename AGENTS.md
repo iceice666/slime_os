@@ -75,7 +75,7 @@ Use the Justfile targets from the repository root:
 - `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
 - `just devlog_check` — validate devlog structure, front matter, gates, and links.
 - `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
-- `just lint_all` — run clippy with warnings denied for components, stage0, boot-contracts, and seL4 product crates.
+- `just lint_all` — run clippy with warnings denied for components, boot-contracts, and seL4 product crates.
 - `just deny` — dependency advisories, bans, licenses, and source pinning.
 - `just machete` — unused-dependency scan of workspace crates.
 - `just miri` — UB check of host-testable crates.
@@ -96,7 +96,7 @@ Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `inde
 
 ## Development rules
 
-- **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, handoff structures — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
+- **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, and boot records — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
 - Prefer small, direct changes over new abstractions.
 - Keep mechanism in `slime-root`; component policy belongs in userspace components.
 - Preserve the capability/component/generation model. Do not add ambient authority, global executable paths, or implicit environment assumptions.
@@ -109,5 +109,4 @@ Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `inde
 - For root or userspace behavior changes, run the narrowest seL4 QEMU path that exercises the changed behavior.
 - For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
 - For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing.
-- Stage-0 denies `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, and `clippy::indexing_slicing` at the crate level; every fallible step there must return a `BootError`.
 - For documentation-only changes, state that no runtime tests were run.

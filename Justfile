@@ -505,12 +505,11 @@ fmt_check:
 # because neither shortcut works: there is no `components/Cargo.toml` — the
 # component crates are members of the *root* workspace through the
 # `components/bins/*` glob — so `cargo fmt --all` from here resolves the root
-# manifest and would also format `slime-root` and `stage0`, duplicating
-# `fmt_sel4_root`/`fmt_stage0` and making this recipe's name a lie. And unlike
-# `cargo build`/`clippy`, `cargo fmt` accepts neither a `-p` glob ("package
-# `slime-component-*` is not a member of the workspace") nor `--exclude`
-# ("unexpected argument"). Deriving the list keeps a new component crate from
-# having to edit this recipe.
+# manifest and would also format `slime-root`, duplicating `fmt_sel4_root` and
+# making this recipe's name a lie. And unlike `cargo build`/`clippy`, `cargo fmt`
+# accepts neither a `-p` glob ("package `slime-component-*` is not a member of
+# the workspace") nor `--exclude` ("unexpected argument"). Deriving the list
+# keeps a new component crate from having to edit this recipe.
 [private]
 _component_packages:
     @cd components && cargo metadata --format-version 1 --no-deps \
@@ -522,11 +521,6 @@ fmt_components:
 fmt_check_components:
     cd components && cargo fmt $(just _component_packages) --check
 
-fmt_stage0:
-    cd stage0 && cargo fmt
-
-fmt_check_stage0:
-    cd stage0 && cargo fmt -- --check
 
 fmt_boot_contracts:
     cd boot-contracts && cargo fmt
@@ -962,13 +956,6 @@ rollback_check: sel4_rollback_check
 lint: lint_all
 
 
-# Both stage-0 targets. The AArch64 loader is behind `cfg(target_arch)`, so
-# linting only the x86 target leaves its ~450 lines — including the crate-level
-# no-panic, no-unwrap, no-indexing denials this crate depends on — entirely
-# unchecked.
-lint_stage0:
-    cd stage0 && cargo clippy --target x86_64-unknown-uefi -- -D warnings
-    cd stage0 && cargo clippy --target aarch64-unknown-uefi -- -D warnings
 
 lint_boot_contracts:
     cd boot-contracts && cargo clippy --all-features -- -D warnings
@@ -1064,7 +1051,7 @@ lint_sel4_root clippy_flags='-D warnings':
     done <<< "$groups"
 
 # Every surviving workspace crate plus the seL4 product crates.
-lint_all: lint_stage0 lint_boot_contracts lint_components_host lint_sel4_root
+lint_all: lint_boot_contracts lint_components_host lint_sel4_root
 
 # Historical component lint identifiers now resolve to the product lint.
 lint_components: lint_sel4_root
@@ -1078,7 +1065,7 @@ deny:
 
 # Unused-dependency scan; scoped to surviving workspace crates.
 machete:
-    cargo-machete boot-contracts components slime-root stage0
+    cargo-machete boot-contracts components slime-root
 
 # UB check for the host-testable crates, on the actual host triple. Components
 # has a bare-metal default target, so both invocations override it explicitly.

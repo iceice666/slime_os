@@ -44,7 +44,6 @@ BOOTSTATE_TRACE_CONTRACT = ROOT / "contracts" / "bootstate" / "trace" / "v1"
 RECOVERY_CONTRACT = ROOT / "contracts" / "recovery" / "v1"
 TRANSFER_CONTRACT = ROOT / "contracts" / "transfer" / "v1"
 STORE_DISK_CONTRACT = ROOT / "contracts" / "store" / "disk" / "v1"
-HANDOFF_CONTRACT = ROOT / "contracts" / "handoff" / "v1"
 RELEASE_CONTRACT = ROOT / "contracts" / "release" / "v1"
 SHARED_BUFFER_BUDGET_CONTRACT = ROOT / "contracts" / "shared-buffer-budget" / "v1"
 SAMPLE_DESCRIPTOR_CONTRACT = ROOT / "contracts" / "sample-descriptor" / "v1"
@@ -340,7 +339,6 @@ for contract in (
     BOOTSTATE_TRACE_CONTRACT,
     RECOVERY_CONTRACT,
     STORE_DISK_CONTRACT,
-    HANDOFF_CONTRACT,
     RELEASE_CONTRACT,
     SHARED_BUFFER_BUDGET_CONTRACT,
     FABRIC_GRAPH_CONTRACT,

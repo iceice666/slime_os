@@ -19,14 +19,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly-2026-05-26
-          targets: aarch64-unknown-uefi,x86_64-unknown-uefi
           components: clippy,rustfmt,rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just fmt_check_all
       # Host-capable cutover crates stay on the ordinary runner. The seL4
       # target crates additionally run against the pinned product prefix below.
-      - run: just lint_stage0 lint_boot_contracts lint_components_host
+      - run: just lint_boot_contracts lint_components_host
 
   sel4_builder:
     name: Pinned seL4 lint and root tests
@@ -125,7 +124,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-machete
-      - run: cargo-machete boot-contracts components slime-root stage0
+      - run: cargo-machete boot-contracts components slime-root
 
   scripts:
     name: ruff and typos

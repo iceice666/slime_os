@@ -207,9 +207,9 @@ pub enum SelectionError {
 /// what the second slot is for. Two valid slots at the same sequence that are
 /// not byte-identical is a hard reject rather than a coin flip.
 ///
-/// Lives here rather than in `stage0` because it is not stage-0's rule: the
-/// generation-management component applies the same one, and `stage0` pulls in
-/// `uefi`, so a component could not have reached it there.
+/// Lives here because slot selection is shared mechanism: the immutable
+/// disk-backed seL4 selector and userspace generation-management components
+/// apply the same rule.
 pub fn select_bootstate(
     a: &[u8; SLOT_BYTES],
     b: &[u8; SLOT_BYTES],
@@ -356,8 +356,8 @@ mod tests {
         assert_eq!(rolled_back.rollback_pending(), Ok(rolled_back));
     }
 
-    /// Slot selection, which moved here from `stage0` so a component could
-    /// apply the same rule. It had no tests there.
+    /// Slot selection shared by the immutable seL4 selector and userspace
+    /// generation-management components.
     mod selection {
         use super::*;
 

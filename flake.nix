@@ -20,8 +20,8 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          # Workspace host crates and stage0 use this toolchain. The seL4 root,
-          # child, and loader use the independent pin in `sel4/pins.toml`.
+          # Workspace host crates use this toolchain. The seL4 root, child,
+          # and loader use the independent pin in `sel4/pins.toml`.
           rustToolchain = "nightly-2026-05-26";
           sel4Pins = builtins.fromTOML (builtins.readFile ./sel4/pins.toml);
           sel4RustToolchain = sel4Pins.rust_sel4.toolchain;
@@ -31,8 +31,6 @@
           # `nix develop` actually installs. They must agree.
           rustTargets = [
             "x86_64-unknown-none"
-            "x86_64-unknown-uefi"
-            "aarch64-unknown-uefi"
           ];
           # The exact GNU AArch64 cross toolchain the pinned seL4 kernel and
           # kernel loader are built with (`CROSS_COMPILER_PREFIX`, `CC`).

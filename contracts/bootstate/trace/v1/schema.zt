@@ -1,7 +1,7 @@
 -- Slime OS BootState transition-trace record, version 1 (M5.6c).
 --
--- A trace record is emitted by stage-0 and the generation-management service
--- at each durable BootState transition and validated against the checked
+-- The seL4 rollback plane's generation-management component emits a trace
+-- record at each durable BootState transition, validated against the checked
 -- M5.6a/M5.6b state machines in `contracts/bootstate/model`. The record is
 -- deliberately bounded and fixed-field so trace instrumentation cannot become
 -- a new unbounded boot dependency.
@@ -19,6 +19,8 @@ actionConsumeAttempt :: Int = 0;
 actionPromotion :: Int = 1;
 actionBootKnownGood :: Int = 2;
 actionBootExhaustedKnownGood :: Int = 3;
+-- `BootKnownGood` and `BootExhaustedKnownGood` remain version-1 compatibility
+-- vocabulary; the current immutable selector does not emit either action.
 actionStagePending :: Int = 4;
 actionRollback :: Int = 5;
 

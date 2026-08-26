@@ -1,9 +1,9 @@
 //! Component-image admission (`contracts/component/v2`).
 //!
-//! This module owns the byte-level contract shared by stage-0 and `slime-root`:
-//! revision and target qualification, canonical header fields, declared stack
-//! bounds, native-ELF wrapper shape, and the retained segment-table rules that
-//! survive the custom loader's retirement.
+//! This module owns the byte-level contract shared by the immutable seL4
+//! selector, `slime-root` admission, and component loading: revision and target
+//! qualification, canonical header fields, declared stack bounds, native-ELF
+//! wrapper shape, and retained segment-table compatibility rules.
 //!
 //! A retained v1 image is not architecture-neutral. It is an
 //! `x86_64-qemu-virtio` image whose target was implied by the only builder that

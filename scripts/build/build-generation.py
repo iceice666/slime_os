@@ -280,8 +280,8 @@ SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
 SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
 # P4's physical target. It builds the same seL4 manifests from the same graph
 # declarations; only the profile every executable is admitted for differs, so
-# `manifest["target"]` is rewritten to it and stage-0 refuses QEMU-qualified
-# components on the board and board-qualified ones under QEMU.
+# `manifest["target"]` is rewritten and immutable root admission refuses QEMU-
+# qualified components on the board and board-qualified ones under QEMU.
 SEL4_BOARD_TARGET_PROFILE = "aarch64-rpi5"
 SEL4_TARGET_PROFILES = (SEL4_TARGET_PROFILE, SEL4_BOARD_TARGET_PROFILE)
 # Additional seL4 manifests carry distinct authenticated boot actions and

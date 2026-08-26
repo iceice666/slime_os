@@ -16,8 +16,8 @@ capability grants and state policy — not dotfile reconstruction. The
 delta versus conventional migration is that authority and state
 semantics travel with the bytes: the receiving machine gets the same
 component graph, the same grant closure, and the same five state
-policies, verified by the same stage-0, rather than a best-effort copy
-of files.
+policies, verified by the same immutable selector/root admission path,
+rather than a best-effort copy of files.
 
 ## What exists today
 
@@ -64,8 +64,8 @@ attempt is consumed.
   checkable?
 - Do transferred generations keep their parent chain intact, or is the
   receiver's chain rebased (with what rollback implications)?
-- Which failures consume a boot attempt — closure and authorization
-  checks must all be pre-transfer-of-control.
+- Which failures consume a boot attempt — closure and authorization checks
+  must finish before pending selection mutates durable BootState.
 
 ## Exit-condition sketch
 

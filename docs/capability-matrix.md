@@ -292,7 +292,7 @@ observe the graph returning to zero live tasks.
 
 | Candidate object | Candidate rights | Trigger | Open questions |
 | --- | --- | --- | --- |
-| Generation-update authority as an object | possibly STAGE_PENDING | a generation service that must not hold raw block write | Boundary between userspace staging and immutable stage-0 slot writes, now that management is entirely a component over `Block` |
+| Generation-update authority as an object | possibly STAGE_PENDING | a generation service that must not hold raw block write | Boundary between userspace staging and immutable selector-owned slot writes, now that management is entirely a component over `Block` |
 | NetworkDestination | CONNECT / SEND / RECV / LISTEN | the RPi5 transport route ([RP5](../roadmap/09-rpi5-ros2-demo.md)) and [Hardware H6](../roadmap/04-platform-hardware.md) | Object shape: (protocol, address, port) declared in the generation? |
 | Device/IRQ authority for userspace drivers | MAP_MMIO / DMA_PIN / IRQ_ACK | a driver outside the root ([H1](../roadmap/04-platform-hardware.md)) | Whether these are Slime kinds at all or thin wrappers over seL4's own frame and IRQ handler capabilities |
 | EnergyAccount | READ? | [Hardware H track](../roadmap/04-platform-hardware.md) | Whether accounting is authority at all or read-only telemetry |

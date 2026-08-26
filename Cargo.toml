@@ -8,7 +8,6 @@ members = [
     "components/proto",
     "components/runtime",
     "slime-root",
-    "stage0",
 ]
 
 # Inherited by every member via `[lints] workspace = true`. Only lints the
