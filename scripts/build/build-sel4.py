@@ -1011,6 +1011,12 @@ def build_application(
 
     root_environment = environment.copy()
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
+    if platform is QEMU_ARM_VIRT and variant == GRAPH_VARIANT:
+        # Temporary interactive product path: the root polls QEMU virt's PL011
+        # RX FIFO and feeds those bytes through the existing input capability.
+        # Plane images keep deterministic scripts, and physical targets do not
+        # compile a QEMU address into their root task.
+        root_environment["SLIME_QEMU_KEYBOARD"] = "1"
     if variant == BOOT_SELECTION_VARIANT:
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"

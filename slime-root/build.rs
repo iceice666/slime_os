@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_SELECTOR");
     println!("cargo:rerun-if-env-changed=SLIME_ROOT_FIXTURE");
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_BUNDLE_IDENTITY");
+    println!("cargo:rerun-if-env-changed=SLIME_QEMU_KEYBOARD");
     println!("cargo::rustc-check-cfg=cfg(slime_boot_selector)");
     println!("cargo::rustc-check-cfg=cfg(slime_b38_force_unwind)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_missing)");
@@ -16,6 +17,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_type)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_rights)");
     println!("cargo::rustc-check-cfg=cfg(slime_root_fixture)");
+    println!("cargo::rustc-check-cfg=cfg(slime_qemu_keyboard)");
     if std::env::var("SLIME_BOOT_SELECTOR").as_deref() == Ok("1") {
         let identity = std::env::var("SLIME_BOOT_BUNDLE_IDENTITY")
             .expect("selector build requires SLIME_BOOT_BUNDLE_IDENTITY");
@@ -27,6 +29,9 @@ fn main() {
     }
     if std::env::var("SLIME_ROOT_FIXTURE").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=slime_root_fixture");
+    }
+    if std::env::var("SLIME_QEMU_KEYBOARD").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=slime_qemu_keyboard");
     }
     if std::env::var("SLIME_BOOT_SELECTOR").as_deref() != Ok("1")
         && let Ok(path) = std::env::var("SLIME_GENERATION")

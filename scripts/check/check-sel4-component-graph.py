@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 from pathlib import Path
 from typing import NoReturn
@@ -41,9 +42,11 @@ BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 BOOT_TIMEOUT_SECONDS = 120
 
 # The product generation carries Slisp beside console and spawn-service.
-# Init launches all three and stays alive supervising them. The root first
-# certifies all required instances live; Slisp's first `WouldBlock` input result
-# is the terminal proof that startup completed and the shell entered residence.
+# Init launches all three and stays alive supervising them. After the first
+# `WouldBlock` marker and a short startup-drain interval, this gate sends one
+# expression through QEMU serial stdin with a pause between bytes. That forces
+# the FIFO empty between keystrokes and catches diagnostics redrawn in the
+# middle of a command without racing one-time service startup logs.
 TERMINAL_MARKER = r"\[slisp\] resident input wait"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
@@ -92,6 +95,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("the product identified the Slisp shell", r"Slisp"),
     ("Slisp displayed its prompt", r"slisp> "),
     ("Slisp entered resident input wait", TERMINAL_MARKER),
+    ("Slisp received uninterrupted QEMU serial input", r"\(\+ 1 1\)\n=> 2"),
 )
 
 # Component-spec evidence literal: startup scheduling may print this after the
@@ -254,13 +258,14 @@ def boot(profile: dict[str, object]) -> str:
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
     terminal = re.compile(TERMINAL_MARKER)
+    result = re.compile(r"=> 2")
     failures = re.compile("|".join(FAILURE_MARKERS))
     lines: list[str] = []
     try:
         process = subprocess.Popen(
             command,
             cwd=ROOT,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -268,15 +273,27 @@ def boot(profile: dict[str, object]) -> str:
         )
     except OSError as error:
         fail(f"cannot run QEMU: {error}")
+    assert process.stdin is not None
     # A wedged guest emits nothing, so the deadline cannot live in the read
     # loop; a watchdog kills QEMU, which closes the pipe and ends the loop.
     watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
     watchdog.start()
+    sent_expression = False
     try:
         assert process.stdout is not None
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
-            if terminal.search(line) or failures.search(line):
+            if failures.search(line):
+                break
+            if not sent_expression and terminal.search(line):
+                time.sleep(0.5)
+                for character in "(+ 1 1)\n":
+                    process.stdin.write(character)
+                    process.stdin.flush()
+                    time.sleep(0.05)
+                sent_expression = True
+                continue
+            if sent_expression and result.search(line):
                 break
     finally:
         timed_out = not watchdog.is_alive()
@@ -288,9 +305,9 @@ def boot(profile: dict[str, object]) -> str:
             process.kill()
             process.wait()
     transcript = "\n".join(lines)
-    if timed_out and terminal.search(transcript) is None:
+    if timed_out and result.search(transcript) is None:
         report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
+        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without evaluating keyboard input")
     return transcript
 
 
@@ -408,8 +425,8 @@ def main() -> None:
     check_transcript(boot(profile))
     print(
         "seL4 component graph check: init launched console, spawn-service, and "
-        "Slisp with generation-declared authority; all four required product "
-        "instances remained live and the supervisor certified the resident graph"
+        "Slisp with generation-declared authority; QEMU serial input evaluated "
+        "without repeated wait diagnostics; all four required instances remained live"
     )
 
 

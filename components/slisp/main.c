@@ -14,9 +14,14 @@ static size_t text_len(const char *text)
     return len;
 }
 
+static void write_bytes(const uint8_t *bytes, size_t len)
+{
+    slime_debug_write(bytes, len);
+}
+
 static void write_text(const char *text)
 {
-    slime_debug_write((const uint8_t *)text, text_len(text));
+    write_bytes((const uint8_t *)text, text_len(text));
 }
 
 static void evaluate_line(char *line)
@@ -39,16 +44,16 @@ void slime_component_main(uint32_t startup_arg)
     char line[LINE_BYTES];
     size_t used = 0;
     (void)startup_arg;
-    int resident_wait_reported = 0;
+    int resident_wait_observed = 0;
     slisp_session_reset();
     write_text("Slisp\nslisp> ");
     for (;;) {
         SlimeInputEvent event;
         int64_t status = slime_input_read(INPUT_SLOT, &event);
         if (status == SLIME_ERR_WOULDBLOCK) {
-            if (!resident_wait_reported) {
-                write_text("[slisp] resident input wait\n");
-                resident_wait_reported = 1;
+            if (!resident_wait_observed) {
+                write_text("\n[slisp] resident input wait\nslisp> ");
+                resident_wait_observed = 1;
             }
             __asm__ volatile("yield");
             continue;
@@ -57,7 +62,6 @@ void slime_component_main(uint32_t startup_arg)
             write_text("! input\n");
             slime_exit(1);
         }
-        resident_wait_reported = 0;
         if (!event.pressed) {
             continue;
         }
@@ -68,6 +72,7 @@ void slime_component_main(uint32_t startup_arg)
         if (event.code == 2U) {
             if (used != 0) {
                 --used;
+                write_text("\b \b");
             }
             continue;
         }
@@ -84,11 +89,14 @@ void slime_component_main(uint32_t startup_arg)
         if (event.code == 9U) {
             if (used + 1 < sizeof(line)) {
                 line[used++] = ' ';
+                write_text(" ");
             }
             continue;
         }
         if ((event.code & 0x100U) != 0 && used + 1 < sizeof(line)) {
-            line[used++] = (char)(event.code & 0xffU);
+            char character = (char)(event.code & 0xffU);
+            line[used++] = character;
+            write_bytes((const uint8_t *)&character, 1U);
         }
     }
 }

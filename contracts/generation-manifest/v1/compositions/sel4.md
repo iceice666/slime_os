@@ -42,10 +42,12 @@ shared-buffer mechanisms this first resident product graph uses. The graph is:
 | `sysinfo` | spawned application; reports its launch context |
 | `echo-agent` | spawned application; echoes its launch context |
 
-The product input source is intentionally empty until a hardware input driver
-supplies events. Empty input reports `WouldBlock`, so Slisp remains at its prompt
-instead of treating boot as a completed scripted session. The component-graph
-gate terminates on Slisp's first blocked input wait after the root certifies that
+The QEMU product build temporarily maps the `virt` machine's PL011 receive FIFO
+inside `slime-root` and presents its bytes through Slisp's existing input
+capability. An empty FIFO still reports `WouldBlock`, so Slisp remains resident
+at its prompt; deterministic input planes keep their scripted source, and
+physical targets do not compile the QEMU address. The component-graph gate
+terminates on Slisp's first blocked input wait after the root certifies that
 `init`, `console`, `spawn-service`, and `slisp` are all live and supervised.
 
 Deferred components and the plane each waits on are recorded in

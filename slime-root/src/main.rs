@@ -113,7 +113,7 @@ macro_rules! fatal {
 }
 mod graph_runtime;
 #[cfg(not(slime_root_fixture))]
-use graph_runtime::{RootEndpoints, launch_instance_graph};
+use graph_runtime::{RootEndpoints, RuntimeDevices, launch_instance_graph};
 use graph_runtime::{private_memory_cause, probe_devices};
 
 /// The generation this root task admits and launches.
@@ -239,6 +239,13 @@ static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// its own address while the main dispatcher may be mapping another into
 /// [`FREE_PAGE`], and one shared virtual address cannot hold both.
 static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing window for QEMU `virt`'s temporary PL011 input driver.
+///
+/// Claimed before the virtio scan: device-untyped retype is monotonic within a
+/// region, and PL011 (`0x0900_0000`) precedes virtio (`0x0a00_0000`).
+#[cfg(slime_qemu_keyboard)]
+static mut QEMU_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
 /// non-alias probe. Separate from the loader scratch page: the proof needs both
@@ -659,6 +666,30 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         2 * GRANULE_SIZE,
     );
 
+    #[cfg(slime_qemu_keyboard)]
+    let qemu_input = {
+        let uart_addr = ptr::addr_of!(QEMU_UART_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
+            fatal!("QEMU keyboard page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            uart_addr,
+            device::QEMU_PL011_PADDR,
+        ) {
+            Ok(registers) => registers,
+            Err(error) => fatal!("QEMU keyboard UART unavailable: {error:?}"),
+        };
+        sel4::debug_println!(
+            "SLIME_ROOT QEMU keyboard ready uart={:#x}",
+            device::QEMU_PL011_PADDR,
+        );
+        Some(device::Pl011Input::new(registers))
+    };
+    #[cfg(not(slime_qemu_keyboard))]
+    let qemu_input = None;
+
     // ---- device phase (P5.4.2a) ----
     //
     // Not conditional on a generation flag: the probe reports what BootInfo and
@@ -813,8 +844,11 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 service: service_endpoint,
                 console: console_endpoint,
             },
-            &mut timer_adapter,
-            &mut block_devices,
+            RuntimeDevices {
+                timer: &mut timer_adapter,
+                blocks: &mut block_devices,
+                input: qemu_input,
+            },
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );

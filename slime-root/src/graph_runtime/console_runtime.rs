@@ -87,6 +87,7 @@ pub(super) struct ConsoleTables<'a> {
     pub(super) windows: &'a WindowTable<MAX_WINDOW_ENTRIES>,
     pub(super) tasks: &'a TaskTable<MAX_TASKS>,
     pub(super) script: &'static [u8],
+    pub(super) input: Option<device::Pl011Input>,
     pub(super) devices: &'a mut BlockDevices,
     pub(super) namespaces: &'a mut directory::Namespaces,
     pub(super) scopes: &'a directory::ScopeTable,
@@ -102,6 +103,7 @@ pub(super) fn start_console_dispatcher(
         windows,
         tasks,
         script,
+        input,
         devices,
         namespaces,
         scopes,
@@ -111,6 +113,11 @@ pub(super) fn start_console_dispatcher(
         Ok(scratch) => scratch,
         Err(error) => fatal!("console scratch unavailable: {error:?}"),
     };
+    let input_source = match input {
+        Some(uart) => console::ScriptedInput::new(script).with_pl011(uart),
+        None => console::ScriptedInput::new(script),
+    };
+
     let tcb = match allocator.allocate_fixed::<sel4::cap_type::Tcb>() {
         Ok(slot) => slot.cap(),
         Err(error) => fatal!("console TCB unavailable: {error:?}"),
@@ -122,9 +129,9 @@ pub(super) fn start_console_dispatcher(
     // reference taken to either static.
     let context = unsafe {
         let slot = &mut *ptr::addr_of_mut!(CONSOLE_CONTEXT);
-        let input = &mut *ptr::addr_of_mut!(CONSOLE_INPUT);
-        *input = Some(console::ScriptedInput::new(script));
-        let input = match input.as_mut() {
+        let input_slot = &mut *ptr::addr_of_mut!(CONSOLE_INPUT);
+        *input_slot = Some(input_source);
+        let input = match input_slot.as_mut() {
             Some(input) => ptr::addr_of_mut!(*input),
             None => fatal!("console input unset"),
         };
