@@ -59,6 +59,13 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B80 — Clean RPi5 builds lacked the `aarch64-unknown-none` Rust target
+
+**Status:** Resolved 2026-08-27. **Class:** Defect (clean-shell target inventory omission).
+**Was:** `just sel4_rpi5_image_check` built and verified the board kernel prefix, then failed with Cargo `E0463` because clean Nix shells installed no `aarch64-unknown-none` `core` for generation components.
+**Exit condition (observed):** The repository toolchain and Nix shell target inventories installed `aarch64-unknown-none`, and the replacement hosted two-profile build completed the RPi5 arm.
+**Evidence:** [`devlog/2026-08-27-b80-rpi5-rust-target/`](../devlog/2026-08-27-b80-rpi5-rust-target/index.md)
+
 ### B79 — Default seL4 builds omitted the resident external Slisp ELF
 
 **Status:** Resolved 2026-08-27. **Class:** Defect (clean-checkout product build regression).
