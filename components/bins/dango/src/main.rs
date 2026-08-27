@@ -28,6 +28,7 @@ const CWD_ROOT_SLOT: u32 = 3;
 /// Preinstalled sender paired with echo-agent's declared stdin endpoint.
 const STDIN_SEND_SLOT: u32 = 4;
 const SHARED_BUFFER_FACTORY_SLOT: u32 = 5;
+const PRODUCT_BANNER: &[u8] = b"\n========================================\n               Slime OS\n             Dango shell\n========================================\n";
 // A free page-aligned user address, borrowed only for the startup self-check.
 const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0005_0000_0000;
 
@@ -134,12 +135,24 @@ fn main(_startup_arg: u32) {
         fail(b"shared-buffer quota probe");
     }
     let session = Session::resolve();
+    match generation_composition::boot_action() {
+        Some(BootAction::Product) => console(PRODUCT_BANNER),
+        Some(_) => {}
+        None => fail(b"the root did not answer which composition this session is"),
+    }
     let mut line = [0u8; MAX_LINE_BYTES];
     let mut len = 0;
     console(b"dango> ");
+    let mut resident_wait_reported = false;
     loop {
         match slime_rt::input_read(INPUT_SLOT) {
-            Ok(None) => slime_rt::yield_now(),
+            Ok(None) => {
+                if !resident_wait_reported {
+                    slime_rt::debug_write(b"[dango] resident input wait\n");
+                    resident_wait_reported = true;
+                }
+                slime_rt::yield_now();
+            }
             Err(_) => fail(b"input read"),
             Ok(Some(event)) if !event.pressed => {}
             Ok(Some(event)) => match event.key {

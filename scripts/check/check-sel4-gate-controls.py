@@ -86,7 +86,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # reporting it found none, paired with two failure markers that make "and
     # therefore every component is denied" an assertion rather than an
     # inference.
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 31),
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 23),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),

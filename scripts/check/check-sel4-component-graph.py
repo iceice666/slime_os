@@ -40,18 +40,16 @@ BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 
 BOOT_TIMEOUT_SECONDS = 120
 
-# The v5 generation carries five executable catalogue entries and five instance
-# declarations, but root owns and autostarts only init. Init spawns console and
-# spawn-service, drives their scenario, explicitly shuts them down, and observes
-# their termination through supervision before completing itself.
-TERMINAL_MARKER = (
-    r"SLIME_GRAPH HEALTHY generation=1 required=3 live=0 completed=3 failed=0"
-)
+# The v5 product generation carries dango beside console and spawn-service.
+# Init launches all three and stays alive supervising them. The root first
+# certifies all required instances live; dango's first `WouldBlock` input result
+# is the terminal proof that startup completed and the shell entered residence.
+TERMINAL_MARKER = r"\[dango\] resident input wait"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
-    ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=5 instances=5 grants=\d+ "),
+    ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=6 instances=6 grants=\d+ "),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
-    ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=5 instances=5 slimecm=0 elf=5 unrecognized=0"),
+    ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=6 instances=6 slimecm=0 elf=6 unrecognized=0"),
     # C10.2: this generation declares no `privateMemoryBudget` at all, which is
     # the case 22 of the 33 fixtures are in and which the private-memory plane
     # cannot state — that plane exists precisely to carry a budget. `declared=0`
@@ -63,16 +61,8 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "the generation declares no private-memory budget",
         r"SLIME_MEM budget holders=0 declared=0",
     ),
-    ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=7 bindings=7 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
-    ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=5 slimecm=0 wrong_target=0 unrecognized=0"),
-    (
-        "console's generation-owned Endpoint was installed",
-        r"SLIME_GRAPH endpoint grant=console-output producer_instance=0 consumer_instance=2",
-    ),
-    (
-        "spawn-service's generation-owned Endpoint was installed",
-        r"SLIME_GRAPH endpoint grant=spawn-service-rpc producer_instance=3 consumer_instance=2",
-    ),
+    ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=6 bindings=6 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
+    ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=6 slimecm=0 wrong_target=0 unrecognized=0"),
     ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
     ("init began the declared graph", r"\[init\] launching component graph"),
     ("init authorized console through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0"),
@@ -87,27 +77,18 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
     ),
     ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1"),
-    ("spawn-service reached its service loop", r"\[spawn-service\] ready"),
-    ("spawn-service allocated against its quota", r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1"),
-    ("the shared-buffer lifecycle became live", r"\[spawn-service\] shared-buffer quota live"),
-    ("spawn-service received explicit shutdown", r"\[spawn-service\] shutdown received"),
-    ("spawn-service completed its protocol", r"\[spawn-service\] complete"),
-    ("spawn-service exited cleanly", r"SLIME_GRAPH component exit task=2 status=0"),
-    ("console received explicit shutdown", r"\[console\] channel close received"),
-    ("console completed its protocol", r"\[console\] channel plane complete"),
-    ("console exited cleanly", r"SLIME_GRAPH component exit task=1 status=0"),
-    (
-        "init observed both service terminations through supervision",
-        r"\[init\] component services completed",
-    ),
-    ("init completed the causal launch", r"\[init\] spawn graph launched"),
-    ("init completed cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
-    ("every task arena was reclaimed", r"SLIME_GRAPH tasks reclaimed live=0 slots=[1-9]\d*"),
-    (
-        "no task-owned native authority or root export ticket leaked",
-        r"SLIME_GRAPH native task_caps=0 exports=0 tickets=0",
-    ),
-    ("the supervisor certified the graph", TERMINAL_MARKER),
+    ("the supervisor certified the live graph", r"SLIME_GRAPH healthy generation=1 instances=[0-9a-f]{16} required=4 live=4 idle=4 failed=0"),
+    ("init kept the product graph resident", r"\[init\] product services resident"),
+    ("the product printed the Slime OS banner", r"Slime OS"),
+    ("the product identified the Dango shell", r"Dango shell"),
+    ("dango displayed its prompt", r"dango> "),
+    ("dango entered resident input wait", TERMINAL_MARKER),
+)
+
+EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"\[spawn-service\] ready",
+    r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1",
+    r"\[spawn-service\] shared-buffer quota live",
 )
 
 # B50 is a repository-wide cutover. Guard every surviving implementation source
@@ -375,6 +356,10 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    for pattern in EXPECTED_UNORDERED:
+        if re.search(pattern, transcript) is None:
+            report_transcript(transcript)
+            fail(f"missing unordered marker: {pattern}")
     # Each task's window is its own region, which is the property the pinned
     # addresses used to carry before component code size made them brittle. Two
     # tasks bound at one base would mean one staging area serving both, and a
@@ -390,7 +375,7 @@ def check_transcript(transcript: str) -> None:
 
     terminals = re.findall(TERMINAL_MARKER, transcript)
     if len(terminals) != 1:
-        fail(f"expected exactly one healthy supervisor terminal, saw {len(terminals)}")
+        fail(f"expected exactly one resident input-wait marker, saw {len(terminals)}")
 
 
 def main() -> None:
@@ -415,10 +400,9 @@ def main() -> None:
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
-        "seL4 component graph check: init launched the two required services with "
-        "native Endpoint authority, the services exercised their bounded operation "
-        "surface and completed explicit supervised shutdown, and no task-owned "
-        "native/root resource leaked"
+        "seL4 component graph check: init launched console, spawn-service, and "
+        "dango with generation-declared authority; all four required product "
+        "instances remained live and the supervisor certified the resident graph"
     )
 
 

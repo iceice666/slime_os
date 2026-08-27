@@ -27,6 +27,16 @@
       spawnBudget = 8;
     };
     {
+      commandProfile = [
+        "echo";
+        "sysinfo";
+      ];
+      name = "dango";
+      object = "sha256:dango";
+      role = "application";
+      spawnBudget = 8;
+    };
+    {
       commandProfile = [];
       name = "sysinfo";
       object = "sha256:sysinfo";
@@ -67,15 +77,15 @@
       transferable = false;
     };
     {
-      name = "console-output";
-      capabilityKind = "endpoint";
+      name = "init-dango";
+      capabilityKind = "executable";
       rights = [
-        "send";
-        "recv";
+        "exec";
+        "spawn";
       ];
       source = "init";
-      target = "console";
-      transferable = true;
+      target = "dango";
+      transferable = false;
     };
     {
       name = "spawn-service-rpc";
@@ -84,9 +94,9 @@
         "send";
         "recv";
       ];
-      source = "init";
+      source = "dango";
       target = "spawn-service";
-      transferable = true;
+      transferable = false;
     };
     {
       name = "spawn-service-sysinfo";
@@ -120,6 +130,47 @@
       target = "spawn-service";
       transferable = false;
     };
+    {
+      name = "dango-console-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "dango";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "dango-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "dango";
+      target = "dango";
+      transferable = false;
+    };
+    {
+      name = "dango-a-input";
+      capabilityKind = "input";
+      rights = [
+        "inputRead";
+      ];
+      source = "dango";
+      target = "dango";
+      transferable = false;
+    };
+    {
+      name = "dango-cwd-root";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "dango";
+      target = "dango";
+      transferable = false;
+    };
   ];
   health = {
     bootAttempts = 3;
@@ -127,6 +178,7 @@
       "console";
       "init";
       "spawn-service";
+      "dango";
     ];
   };
   instances = [
@@ -136,10 +188,6 @@
         {
           grant = "init-console";
           slot = 1;
-        };
-        {
-          grant = "console-output";
-          slot = 2;
         };
         {
           grant = "init-spawn-service";
@@ -154,12 +202,12 @@
           slot = 7;
         };
         {
-          grant = "spawn-service-rpc";
-          slot = 13;
-        };
-        {
           grant = "spawn-service-shared-buffer-factory";
           slot = 8;
+        };
+        {
+          grant = "init-dango";
+          slot = 9;
         };
       ];
       dependencies = [];
@@ -172,7 +220,7 @@
       autostart = true;
       bindings = [
         {
-          grant = "console-output";
+          grant = "dango-console-rpc";
           slot = 0;
         };
       ];
@@ -210,6 +258,39 @@
       executable = "spawn-service";
       health = "required";
       name = "spawn-service";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "spawn-service-rpc";
+          slot = 0;
+        };
+        {
+          grant = "dango-console-rpc";
+          slot = 1;
+        };
+        {
+          grant = "dango-a-input";
+          slot = 2;
+        };
+        {
+          grant = "dango-cwd-root";
+          slot = 3;
+        };
+        {
+          grant = "dango-shared-buffer-factory";
+          slot = 5;
+        };
+      ];
+      dependencies = [
+        "console";
+        "spawn-service";
+      ];
+      executable = "dango";
+      health = "required";
+      name = "dango";
       owner = "init";
     };
     {
@@ -254,6 +335,11 @@
       size = 65536;
     };
     {
+      id = "sha256:dango";
+      kind = "component";
+      size = 65536;
+    };
+    {
       id = "sha256:sysinfo";
       kind = "component";
       size = 65536;
@@ -281,6 +367,13 @@
       holder = "spawn-service";
       loanCount = 1;
       mappingCount = 2;
+    };
+    {
+      bufferCount = 2;
+      bytePages = 8;
+      holder = "dango";
+      loanCount = 2;
+      mappingCount = 4;
     };
   ];
   state = [

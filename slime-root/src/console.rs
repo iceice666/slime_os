@@ -114,6 +114,11 @@ pub struct ConsoleContext {
 /// queue: the root launches every declared component, so two copies of a
 /// console component run and both read input. One cursor would let the
 /// root-launched copy drain the script before the spawned one asked.
+///
+/// An empty byte slice is the product's live input source until a hardware
+/// driver supplies events: it returns `WouldBlock` rather than manufacturing
+/// Escape, so a post-boot session stays resident. A non-empty slice is a
+/// finite test script and still ends with Escape once consumed.
 pub struct ScriptedInput {
     bytes: &'static [u8],
     cursors: [usize; MAX_TASKS],
@@ -127,8 +132,8 @@ impl ScriptedInput {
         }
     }
 
-    /// The next key for `task`, or the escape byte once its script is spent —
-    /// an exhausted session ends the reader rather than blocking it forever.
+    /// The next key for `task`. Empty sources block; finite non-empty scripts
+    /// end with Escape so their test session terminates deterministically.
     fn next_event(&mut self, task: TaskId) -> Option<u64> {
         let cursor = self.cursors.get_mut(task.0 as usize)?;
         match self.bytes.get(*cursor).copied() {
@@ -136,6 +141,7 @@ impl ScriptedInput {
                 *cursor += 1;
                 Some(encode_key(byte))
             }
+            None if self.bytes.is_empty() => None,
             None => Some(encode_key(0x1b)),
         }
     }
@@ -320,8 +326,6 @@ fn serve_input_read<const TASKS: usize>(
     }
     match input.next_event(id) {
         Some(event) => Response::success(0, event),
-        // Only a task id past the cursor table, which cannot happen for a task
-        // this dispatcher is serving.
         None => Response::error(IpcError::WouldBlock),
     }
 }

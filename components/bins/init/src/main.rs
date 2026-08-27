@@ -132,20 +132,6 @@ fn main(startup_arg: u32) {
     compose_declared_graph(startup_arg);
     slime_rt::debug_write(b"[init] launching component graph\n");
 
-    // The product graph the seL4 `product` generation declares: console,
-    // spawn-service, and the two executables spawn-service may launch. Both are
-    // resolved through the root rather than compiled in (CP2/B70), correct only
-    // since B71 made the boot-layout resource derive from the same
-    // `InstanceBinding` records the root places from.
-    //
-    // The filesystem, storage, and generation-command branches that stood here
-    // were deleted with the constants they tested: the generations reaching this
-    // body are `sel4.zti` and — since RP2 — `sel4-demo.zti`, and between them
-    // they declare `console`, `spawn-service`, `sysinfo`, `echo-agent`, `init`,
-    // and the demo's own data-path and fabric components, none of which those
-    // branches named. Every branch was therefore dead on this kernel, and the
-    // seL4 planes that do exercise those components reach them through their own
-    // `bootAction` instead.
     let console_executable =
         slime_rt::resolve_binding(b"executable:console").unwrap_or_else(|_| slime_rt::exit(1));
     let component_console = slime_rt::spawn(console_executable, &CONSOLE_CAPS)
@@ -156,6 +142,16 @@ fn main(startup_arg: u32) {
     let component_spawn_service = slime_rt::spawn(spawn_service_executable, &spawn_service_caps())
         .unwrap_or_else(|_| slime_rt::exit(1))
         .supervision_slot;
+
+    if startup_arg == boot_contracts::generation::BootAction::Product.id() {
+        let dango_executable =
+            slime_rt::resolve_binding(b"executable:dango").unwrap_or_else(|_| slime_rt::exit(1));
+        let component_dango = slime_rt::spawn(dango_executable, &[])
+            .unwrap_or_else(|_| slime_rt::exit(1))
+            .supervision_slot;
+        slime_rt::debug_write(b"[init] product services resident\n");
+        supervise_resident(&[component_console, component_spawn_service, component_dango]);
+    }
 
     let shutdown = slime_proto::spawn::WireSpawnRequest {
         magic: slime_proto::spawn::SPAWN_MAGIC,
@@ -184,6 +180,21 @@ fn main(startup_arg: u32) {
     slime_rt::debug_write(b"[init] component services completed\n");
     slime_rt::debug_write(b"[init] spawn graph launched\n");
     slime_rt::exit(0);
+}
+
+fn supervise_resident(handles: &[u32]) -> ! {
+    loop {
+        for handle in handles {
+            if slime_rt::supervision_status(*handle)
+                .unwrap_or_else(|_| slime_rt::exit(1))
+                .is_some()
+            {
+                slime_rt::debug_write(b"[init] resident service terminated\n");
+                slime_rt::exit(1);
+            }
+        }
+        slime_rt::yield_now();
+    }
 }
 
 /// One boot-layout executable slot, resolved through the root by name.

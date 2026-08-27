@@ -28,47 +28,38 @@ narrower generation rather than adding a mode to the first. Every seL4 plane
 fixture in this directory follows the same rule, which is why they are per-scenario
 siblings rather than profiles of one graph.
 
-## Why these five components
+## Why these six components
 
-`slime-root` mediates the task, IPC, supervision, and shared-buffer planes. It
-deliberately does **not** own the storage, directory, input,
-generation-management, or recovery planes: the cutover deleted the universal
-operation dispatcher, so what a root mechanism answers is now a *declared
-service* per instance (`Generation::instance_has_service`), and no service
-discriminant exists for those planes on this graph. A request naming one is
-refused as `class=undeclared` rather than routed to a handler that does not
-exist.
-
-A component invoking one of those cannot run here yet, so declaring it would
-promise authority the root cannot honour. These five are exactly the components
-whose entire operation surface the root answers:
+`slime-root` mediates the task, IPC, supervision, input, directory, and
+shared-buffer mechanisms this first resident product graph uses. The graph is:
 
 | Component | Role |
 | --- | --- |
-| `init` | bootstrap; spawns the graph and wires its channels |
-| `console` | drains a channel to the debug log |
-| `spawn-service` | spawns declared executables with role capabilities |
+| `init` | bootstrap; launches the resident services and supervises them |
+| `console` | receives dango output on a native endpoint |
+| `spawn-service` | spawns the two commands named by the shell profile |
+| `dango` | resident shell; waits for input and submits commands |
 | `sysinfo` | spawned application; reports its launch context |
 | `echo-agent` | spawned application; echoes its launch context |
 
+The product input source is intentionally empty until a hardware input driver
+supplies events. Empty input reports `WouldBlock`, so dango remains at its prompt
+instead of treating boot as a completed scripted session. The component-graph
+gate terminates on the root's live-health certificate: `init`, `console`,
+`spawn-service`, and `dango` are all still live and supervised.
+
 Deferred components and the plane each waits on are recorded in
-`roadmap/07-architecture-portability.md` under P5.2.
+`roadmap/07-architecture-portability.md`.
 
-## Two deliberate differences from `valid.zti`
 
-- **`console-output` is retargeted.** In `valid.zti` the channel's producer is
-  `dango`, which this profile does not declare. `spawn-service` is the component
-  that reports here, so the grant is retargeted rather than dropped; the right
-  is unchanged, so `console` still holds exactly a receive end.
-- **`kernelObject` names a payload that is never mapped.** seL4 is the kernel,
-  pinned and built separately under `sel4/pins.toml`. The object is declared
-  because the generation format requires exactly one and the root task re-checks
-  that closure at admission — but nothing loads it.
+## Authority path
 
-## What makes the grant claim behavioural
+`init` receives executable authority for `console`, `spawn-service`, and
+`dango`. It launches them and retains their supervision handles. Native
+generation-owned endpoints connect dango to console and spawn-service; dango
+also receives its declared input, directory, and shared-buffer authority.
 
-`init` does not spawn `sysinfo` and `echo-agent`. It grants their executables to
-`spawn-service` (`exec | spawn`), which spawns them with role capabilities. So
-"launches its declared components with their declared grants" is observable —
-`spawn-service` can start exactly the two executables the generation names, and
-nothing else — rather than a self-report.
+`spawn-service` receives executable grants for `sysinfo` and `echo-agent`, so a
+shell command still resolves through the generation's command profile and can
+start exactly those two executables. The resident product does not infer command
+authority from the executable catalogue.
