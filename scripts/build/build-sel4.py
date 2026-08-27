@@ -1024,7 +1024,11 @@ def build_application(
     else:
         manifest = VARIANT_MANIFESTS.get(variant, "sel4")
         generation_environment = None
-        if variant == GRAPH_VARIANT and component_spec_root is None and not external_components:
+        if (
+            variant in (FIXTURE_VARIANT, GRAPH_VARIANT)
+            and component_spec_root is None
+            and not external_components
+        ):
             slisp_elf, slisp_digest = build_product_slisp()
             generation_environment = dict(os.environ)
             generation_environment["SLIME_PRODUCT_SLISP_SHA256"] = slisp_digest
