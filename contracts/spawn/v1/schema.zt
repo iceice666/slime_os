@@ -19,6 +19,7 @@ maxGrants :: Int = 1;
 maxCommandBytes :: Int = 16;
 requestFlagWait :: Int = 1;
 requestFlagShutdown :: Int = 2;
+requestFlagDetached :: Int = 4;
 capabilityRoleWorkingDirectory :: Int = 1;
 capabilityRoleStdin :: Int = 2;
 capabilityRoleStdout :: Int = 4;
@@ -91,6 +92,7 @@ format ::= {
   maxGrants =;
   requestFlagWait =;
   requestFlagShutdown =;
+  requestFlagDetached =;
   maxCommandBytes =;
   capabilityRoleWorkingDirectory =;
   capabilityRoleStdin =;
@@ -107,8 +109,10 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
   = caps => [
     root := env.get caps.env "SLIME_SPAWN_BINDINGS_ROOT" ?? ".";
     bindings := gen.render format;
-    path := t.join "" { root; "/components/proto/src/spawn.rs"; };
-    fs.writeAll caps.write path bindings.rust
+    rustPath := t.join "" { root; "/components/proto/src/spawn.rs"; };
+    cPath := t.join "" { root; "/components/runtime/include/slime/spawn.h"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write cPath bindings.c
   ];
 
 main

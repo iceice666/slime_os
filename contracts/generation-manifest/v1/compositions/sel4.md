@@ -61,7 +61,9 @@ Deferred components and the plane each waits on are recorded in
 generation-owned endpoints connect Slisp to console and spawn-service; Slisp
 also receives its declared input authority.
 
-`spawn-service` receives executable grants for `sysinfo` and `echo-agent`, so a
-shell command still resolves through the generation's command profile and can
-start exactly those two executables. The resident product does not infer command
-authority from the executable catalogue.
+`spawn-service` receives executable grants for `sysinfo` and `echo-agent`, plus
+one generation-owned launch-context endpoint for each command. A shell command
+therefore resolves through the generation's command profile, starts exactly one
+of those two executables, and delivers its bounded `spawn/v1` request on slot 0.
+The resident product does not infer command authority or communication paths
+from the executable catalogue.

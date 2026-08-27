@@ -56,5 +56,26 @@ int main(void)
         }
     }
     puts("Slisp session: persistent define passed");
+    {
+        char output[128];
+        SlispEffect effect;
+        if (slisp_session_prepare("sysinfo", &effect, output, sizeof(output)) != SLISP_OK
+            || effect.kind != SLISP_EFFECT_SPAWN
+            || strcmp(effect.command, "sysinfo") != 0
+            || slisp_session_prepare(
+                   "(spawn (quote echo))", &effect, output, sizeof(output))
+                != SLISP_OK
+            || effect.kind != SLISP_EFFECT_SPAWN
+            || strcmp(effect.command, "echo") != 0
+            || slisp_session_prepare("(spawn sysinfo)", &effect, output, sizeof(output))
+                != SLISP_ERR_TYPE
+            || slisp_session_prepare("(+ answer 2)", &effect, output, sizeof(output)) != SLISP_OK
+            || effect.kind != SLISP_EFFECT_NONE
+            || strcmp(output, "42") != 0) {
+            fputs("effect selection failed\n", stderr);
+            return 1;
+        }
+    }
+    puts("Slisp effects: spawn selection passed");
     return 0;
 }

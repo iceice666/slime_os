@@ -23,6 +23,12 @@ void slime_component_main(uint32_t startup_arg);
 
 void slime_debug_write(const uint8_t *bytes, size_t len);
 int64_t slime_input_read(uint32_t slot, SlimeInputEvent *event);
+int64_t slime_endpoint_exchange(
+    uint32_t slot,
+    const uint8_t *request,
+    size_t request_len,
+    uint8_t *reply,
+    size_t reply_capacity);
 void slime_exit(int64_t status) __attribute__((noreturn));
 
 #ifdef __cplusplus

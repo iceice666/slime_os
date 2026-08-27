@@ -17,15 +17,18 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 GENERATOR = ROOT / "contracts" / "spawn" / "v1" / "schema.zt"
-OUTPUT = ROOT / "components" / "proto" / "src" / "spawn.rs"
+RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "spawn.rs"
+C_OUTPUT = ROOT / "components" / "runtime" / "include" / "slime" / "spawn.h"
 INVALID_SCHEMA = "INVALID_SPAWN_SCHEMA"
 
 
-def render() -> str:
+def render() -> tuple[str, str]:
     with tempfile.TemporaryDirectory(prefix="slime-spawn-bindings-") as temporary:
         staging = Path(temporary)
-        staged = staging / "components" / "proto" / "src" / "spawn.rs"
-        staged.parent.mkdir(parents=True)
+        staged_rust = staging / RUST_OUTPUT.relative_to(ROOT)
+        staged_c = staging / C_OUTPUT.relative_to(ROOT)
+        staged_rust.parent.mkdir(parents=True)
+        staged_c.parent.mkdir(parents=True)
         environment = os.environ.copy()
         environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
         environment["SLIME_SPAWN_BINDINGS_ROOT"] = str(staging)
@@ -42,12 +45,13 @@ def render() -> str:
             sys.stderr.write(process.stdout)
             sys.stderr.write(process.stderr)
             raise SystemExit(process.returncode)
-        if not staged.exists():
-            raise SystemExit("spawn generator did not write bindings")
-        generated = staged.read_text(encoding="utf-8")
-        if INVALID_SCHEMA in generated:
+        if not staged_rust.exists() or not staged_c.exists():
+            raise SystemExit("spawn generator did not write both bindings")
+        generated_rust = staged_rust.read_text(encoding="utf-8")
+        generated_c = staged_c.read_text(encoding="utf-8")
+        if INVALID_SCHEMA in generated_rust or INVALID_SCHEMA in generated_c:
             raise SystemExit("spawn schema reflection/layout validation failed")
-        return generated
+        return generated_rust, generated_c
 
 
 def format_rust(source: str) -> str:
@@ -77,14 +81,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
-    generated = format_rust(render())
+    generated_rust, generated_c = render()
+    generated_rust = format_rust(generated_rust)
+    outputs = ((RUST_OUTPUT, generated_rust), (C_OUTPUT, generated_c))
     if arguments.check:
-        if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != generated:
-            raise SystemExit("generated spawn bindings are stale; run `just spawn_gen`")
+        for output, generated in outputs:
+            if not output.exists() or output.read_text(encoding="utf-8") != generated:
+                raise SystemExit("generated spawn bindings are stale; run `just spawn_gen`")
         print("Spawn protocol bindings are current")
         return
-    write_atomic(OUTPUT, generated)
-    print(f"Generated {OUTPUT.relative_to(ROOT)}")
+    for output, generated in outputs:
+        write_atomic(output, generated)
+        print(f"Generated {output.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

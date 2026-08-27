@@ -131,13 +131,14 @@ pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {
             && request.grant_rights == 0
             && request.reserved.iter().all(|byte| *byte == 0);
     }
-    request.flags == 0
+    (request.flags == 0 || request.flags == spawn::REQUEST_FLAG_DETACHED)
         && request.command_len > 0
         && request.command_len as usize <= spawn::MAX_COMMAND_BYTES
         && request.argument_count as usize <= spawn::MAX_ARGUMENTS
         && request.environment_count as usize <= spawn::MAX_ENVIRONMENT
         && packed_fields_valid(&request.arguments, request.argument_count as usize)
         && packed_fields_valid(&request.environment, request.environment_count as usize)
+        && (request.flags != spawn::REQUEST_FLAG_DETACHED || request.client_budget == 0)
 }
 
 fn packed_fields_valid<const N: usize>(bytes: &[u8; N], count: usize) -> bool {

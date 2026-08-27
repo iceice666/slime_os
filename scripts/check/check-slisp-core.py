@@ -140,10 +140,10 @@ def run_host_vectors(output: Path) -> None:
     result = subprocess.run([str(output)], cwd=ROOT, capture_output=True, text=True, check=False)
     if result.returncode != 0 or result.stdout.strip() != (
         "Slisp core: 15 behavior vectors passed\n"
-        "Slisp session: persistent define passed"
+        "Slisp session: persistent define passed\n"
+        "Slisp effects: spawn selection passed"
     ):
-        fail(f"host vectors failed: {result.stdout}{result.stderr}")
-
+        fail(f"host behavior vectors failed: {result.stderr.strip() or result.stdout.strip()}")
 
 def build() -> None:
     with tempfile.TemporaryDirectory(prefix="slisp-core-check-") as temporary:

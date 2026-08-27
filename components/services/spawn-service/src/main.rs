@@ -4,8 +4,8 @@
 use slime_proto::{
     capability_transfer::OBJECT_KIND_SUPERVISION,
     spawn::{
-        CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY, REQUEST_FLAG_SHUTDOWN,
-        REQUEST_FLAG_WAIT, REQUEST_LEN, WireSpawnReply, WireSpawnRequest,
+        CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY, REQUEST_FLAG_DETACHED,
+        REQUEST_FLAG_SHUTDOWN, REQUEST_FLAG_WAIT, REQUEST_LEN, WireSpawnReply, WireSpawnRequest,
     },
     valid_spawn_request,
 };
@@ -77,6 +77,7 @@ const COMMAND_CONTEXT_SUFFIX: &[u8] = b"-context";
 struct LiveChild {
     supervision_slot: u32,
     termination: Option<Termination>,
+    detached: bool,
 }
 
 fn main(_startup_arg: u32) {
@@ -257,11 +258,14 @@ fn handle_inner(
             live[slot] = Some(LiveChild {
                 supervision_slot: spawned.supervision_slot,
                 termination: None,
+                detached: request.flags == REQUEST_FLAG_DETACHED,
             });
-            (
-                reply(STATUS_OK, spawned.supervision_slot),
-                Some(spawned.supervision_slot),
-            )
+            let transfer = if request.flags == REQUEST_FLAG_DETACHED {
+                None
+            } else {
+                Some(spawned.supervision_slot)
+            };
+            (reply(STATUS_OK, spawned.supervision_slot), transfer)
         }
         // A root refusal is this service's failure to deliver an authorized
         // spawn, not a refusal of the request. The distinct status keeps the
@@ -300,7 +304,12 @@ fn command_binding(command: &[u8], suffix: &[u8]) -> Option<u32> {
 }
 
 fn send_context(slot: u32, request: &WireSpawnRequest) -> Result<(), i64> {
-    let encoded = request.encode();
+    let context = WireSpawnRequest {
+        flags: 0,
+        client_budget: 0,
+        ..*request
+    };
+    let encoded = context.encode();
     loop {
         match slime_rt::send(slot, &encoded, &[]) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
@@ -330,7 +339,8 @@ fn valid_request(request: &WireSpawnRequest, claimed: Option<u32>, budget: usize
     const SUPPORTED_ROLES: u8 = CAPABILITY_ROLE_WORKING_DIRECTORY | CAPABILITY_ROLE_STDIN;
     let wants_directory = request.capability_roles & CAPABILITY_ROLE_WORKING_DIRECTORY != 0;
     valid_spawn_request(request)
-        && usize::from(request.client_budget) == budget
+        && (usize::from(request.client_budget) == budget
+            || (request.flags == REQUEST_FLAG_DETACHED && request.client_budget == 0))
         && request.capability_roles & !SUPPORTED_ROLES == 0
         && request.reserved.iter().all(|byte| *byte == 0)
         && request.grant_rights == 0
@@ -377,14 +387,32 @@ fn termination_reply(handle: u32, termination: Termination) -> WireSpawnReply {
 }
 
 fn reap(live: &mut [Option<LiveChild>; MAX_LIVE_CHILDREN]) {
-    for child in live.iter_mut().flatten() {
-        if child.termination.is_some() {
+    for child in live.iter_mut() {
+        let Some(current) = *child else {
+            continue;
+        };
+        if current.termination.is_some() {
+            if current.detached {
+                *child = None;
+            }
             continue;
         }
-        match slime_rt::supervision_status(child.supervision_slot) {
+        match slime_rt::supervision_status(current.supervision_slot) {
             Ok(None) => {}
-            Ok(Some(termination)) => child.termination = Some(termination),
-            Err(_) => child.termination = Some(Termination::PeerLoss),
+            Ok(Some(_)) if current.detached => *child = None,
+            Ok(Some(termination)) => {
+                *child = Some(LiveChild {
+                    termination: Some(termination),
+                    ..current
+                });
+            }
+            Err(_) if current.detached => *child = None,
+            Err(_) => {
+                *child = Some(LiveChild {
+                    termination: Some(Termination::PeerLoss),
+                    ..current
+                });
+            }
         }
     }
 }
