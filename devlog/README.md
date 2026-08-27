@@ -351,3 +351,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [Slisp bounded reader and lexical evaluator](2026-08-27-slisp-core/index.md) | Change | Verified | none |
 | 2026-08-27 | [Slisp replaces Dango in the resident product graph](2026-08-27-slisp-product-cutover/index.md) | Change | Verified | P5.2, P5.4.3, P5.4, M6.4, D1, D2, D3, D4, D5 |
 | 2026-08-27 | [Temporary QEMU keyboard input reaches the resident Slisp shell](2026-08-27-qemu-slisp-keyboard/index.md) | Change | Verified | P5.2, H3 |
+| 2026-08-27 | [B79: the default seL4 build lost its external Slisp input](2026-08-27-b79-default-sel4-build/index.md) | Defect | Verified | B79, P5.2 |

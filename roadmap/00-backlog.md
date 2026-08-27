@@ -59,6 +59,13 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B79 — Default seL4 builds omitted the resident external Slisp ELF
+
+**Status:** Resolved 2026-08-27. **Class:** Defect (clean-checkout product build regression).
+**Was:** `just sel4_qemu_image_check` failed before packaging because the shared resident manifest required `slisp-external`, but only the explicit graph variant built and supplied it; fixing that exposed an untyped keyboard-disabled `None` in the fixture cfg.
+**Exit condition (observed):** The default QEMU image build supplied and admitted Slisp, compiled the fixture root, and wrote `build/slime-sel4.elf` plus its identity manifest.
+**Evidence:** [`devlog/2026-08-27-b79-default-sel4-build/`](../devlog/2026-08-27-b79-default-sel4-build/index.md)
+
 ### B78 — CI could not pass: a prefix gate on a prefixless runner, a job with no runner, and a stale child path
 
 **Status:** Resolved 2026-08-27. **Class:** Defect (three independent breakages

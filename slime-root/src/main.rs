@@ -666,7 +666,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         2 * GRANULE_SIZE,
     );
 
-    #[cfg(slime_qemu_keyboard)]
+    #[cfg(all(slime_qemu_keyboard, not(slime_root_fixture)))]
     let qemu_input = {
         let uart_addr = ptr::addr_of!(QEMU_UART_PAGE) as usize;
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
@@ -687,8 +687,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         );
         Some(device::Pl011Input::new(registers))
     };
-    #[cfg(not(slime_qemu_keyboard))]
-    let qemu_input = None;
+    #[cfg(all(not(slime_qemu_keyboard), not(slime_root_fixture)))]
+    let qemu_input: Option<device::Pl011Input> = None;
 
     // ---- device phase (P5.4.2a) ----
     //
