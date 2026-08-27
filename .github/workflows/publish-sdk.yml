@@ -1,0 +1,108 @@
+name: Publish component SDK
+
+# Manual only: this workflow pushes a signed, immutable release to the
+# canonical iceice666/slime_os-component_sdk repository from the m3air
+# release runner, so it must never run from a pull_request or an ordinary
+# push.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SDK release version (MAJOR.MINOR.PATCH)"
+        required: true
+        type: string
+      profiles:
+        description: "Target profiles to publish"
+        required: true
+        type: choice
+        options:
+          - qemu-only
+          - qemu+rpi5
+        default: qemu+rpi5
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-sdk-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Builds the seL4 prefixes the release records. Runs on the free, arm64
+  # GitHub-hosted runner rather than m3air: m3air has no Nix or cross
+  # toolchain installed, and provisioning one there is out of scope for a
+  # release runner that only needs to hold the SDK signing and push keys.
+  build-prefixes:
+    name: Build seL4 prefixes
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/slime-env
+      - run: nix develop --command just sel4_qemu_image_check
+      - if: ${{ inputs.profiles == 'qemu+rpi5' }}
+        run: nix develop --command just sel4_rpi5_image_check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sel4-prefixes
+          path: |
+            build/sel4-prefix
+            build/sel4-rpi5-prefix
+          if-no-files-found: warn
+          retention-days: 1
+
+  # The only job that touches the release credentials. Gated by the
+  # "release" environment's required reviewer in addition to
+  # workflow_dispatch's existing write-access restriction.
+  publish:
+    name: Publish and verify
+    needs: build-prefixes
+    runs-on: [self-hosted, m3air]
+    environment: release
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v4
+        with:
+          name: sel4-prefixes
+          path: build
+      - name: Publish the SDK release
+        env:
+          GIT_SSH_COMMAND: >-
+            ssh -i /Users/iceice666/.config/slime-release/sdk-push-ed25519
+            -o IdentitiesOnly=yes
+          PROFILE_FLAGS: >-
+            ${{ inputs.profiles == 'qemu+rpi5' && '--profile aarch64-sel4-qemu-virt --profile aarch64-rpi5' || '--profile aarch64-sel4-qemu-virt' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/build/publish-component-sdk.py \
+            --version "${{ inputs.version }}" \
+            --source-commit "${{ github.sha }}" \
+            --sdk-url git@github.com-slime-sdk-release:iceice666/slime_os-component_sdk.git \
+            --sdk-repository https://github.com/iceice666/slime_os-component_sdk \
+            --branch generated \
+            $PROFILE_FLAGS \
+            --signing-key /Users/iceice666/.config/slime-release/sdk-tag-ed25519 \
+            --push
+      - name: Verify the publication outcome
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/sdk-verify
+          git clone --quiet --branch generated \
+            https://github.com/iceice666/slime_os-component_sdk /tmp/sdk-verify
+          cd /tmp/sdk-verify
+          git fetch --quiet --tags
+          latest_tag="$(git describe --tags --abbrev=0)"
+          echo "latest hosted tag: $latest_tag"
+          git \
+            -c gpg.format=ssh \
+            -c gpg.ssh.allowedSignersFile=/Users/iceice666/.config/slime-release/allowed-signers \
+            verify-tag "$latest_tag"
+          rm -rf /tmp/sdk-verify
