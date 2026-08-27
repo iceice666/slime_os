@@ -353,6 +353,7 @@ SEL4_MANIFESTS = {
 # making corpus-wide checks pretend a Rust workspace package can build them.
 SEL4_EXTERNAL_MANIFESTS = {
     "sel4-c-runtime": GENERATION_COMPOSITIONS / "sel4-c-runtime.zti",
+    "sel4-slisp": GENERATION_COMPOSITIONS / "sel4-slisp.zti",
 }
 SEL4_SELECTABLE_MANIFESTS = SEL4_MANIFESTS | SEL4_EXTERNAL_MANIFESTS
 COMPONENTS_TARGET_DIR = Path(

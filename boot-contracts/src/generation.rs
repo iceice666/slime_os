@@ -206,6 +206,8 @@ pub enum BootAction {
     /// Language-neutral runtime proof: one independently compiled C component
     /// invokes generated console and lifecycle ABI operations.
     CRuntime = 37,
+    /// Minimal pure S-expression language core implemented outside Rust.
+    Slisp = 38,
 }
 
 impl BootAction {
@@ -265,6 +267,7 @@ impl BootAction {
         Self::Replay,
         Self::RobotRuntime,
         Self::CRuntime,
+        Self::Slisp,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -315,6 +318,7 @@ impl BootAction {
                 Self::Replay => Self::Replay.id(),
                 Self::RobotRuntime => Self::RobotRuntime.id(),
                 Self::CRuntime => Self::CRuntime.id(),
+                Self::Slisp => Self::Slisp.id(),
             };
             declared == id
         })
@@ -359,6 +363,7 @@ impl BootAction {
             "replay" => Self::Replay,
             "robot-runtime" => Self::RobotRuntime,
             "c-runtime" => Self::CRuntime,
+            "slisp" => Self::Slisp,
             _ => return None,
         })
     }
@@ -2911,7 +2916,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 37] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 38] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -2949,6 +2954,7 @@ mod tests {
         (BootAction::Replay, 35),
         (BootAction::RobotRuntime, 36),
         (BootAction::CRuntime, 37),
+        (BootAction::Slisp, 38),
     ];
 
     #[test]
@@ -3021,6 +3027,7 @@ mod tests {
             ("matrix", BootAction::Matrix),
             ("demo", BootAction::Demo),
             ("c-runtime", BootAction::CRuntime),
+            ("slisp", BootAction::Slisp),
         ] {
             assert_eq!(BootAction::parse(spelling), Some(expected));
         }

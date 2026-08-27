@@ -49,6 +49,37 @@ void slime_debug_write(const uint8_t *bytes, size_t len)
     }
 }
 
+int64_t slime_input_read(uint32_t slot, SlimeInputEvent *event)
+{
+    seL4_Word badge = SLIME_CONSOLE_SERVICE_SLOT;
+    seL4_Word mr0 = slot;
+    seL4_Word mr1 = 0;
+    seL4_Word mr2 = 0;
+    seL4_Word mr3 = 0;
+    seL4_MessageInfo_t info = seL4_MessageInfo_new(SLIME_CONSOLE_LABEL_INPUT_READ, 0, 0, 1);
+    seL4_Word reply_info = info.words[0];
+    arm_sys_send_recv(
+        seL4_SysCall,
+        SLIME_CONSOLE_SERVICE_SLOT,
+        &badge,
+        info.words[0],
+        &reply_info,
+        &mr0,
+        &mr1,
+        &mr2,
+        &mr3,
+        0);
+    if ((int64_t)mr0 < 0) {
+        return (int64_t)mr0;
+    }
+    if (event == NULL) {
+        return SLIME_ERR_INVALID_ARG;
+    }
+    event->code = (uint32_t)mr1;
+    event->pressed = (uint8_t)(mr1 >> 32 != 0);
+    return SLIME_ERR_SUCCESS;
+}
+
 void slime_exit(int64_t status)
 {
     seL4_Word mr0 = (seL4_Word)status;

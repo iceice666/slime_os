@@ -29,6 +29,9 @@ pub(super) const fn input_script(generation: u64) -> &'static [u8] {
         // The powerbox plane: the oracle's generation-9 session — a newline to
         // confirm the selection, then escape.
         32 => b"\n\x1b",
+        // The Slisp plane: persistent definition, lexical use, structural
+        // refusal, then Escape to close the bounded session.
+        43 => b"(define answer 40)\n(+ answer 2)\n(+ 1)\n\x1b",
         _ => b"",
     }
 }

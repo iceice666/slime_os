@@ -348,3 +348,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [Justfile split by responsibility with parsed gate metadata](2026-08-27-justfile-responsibility-split/index.md) | Change | Verified | none |
 | 2026-08-27 | [Component crates grouped by lifecycle responsibility](2026-08-27-component-responsibility-hierarchy/index.md) | Change | Verified | none |
 | 2026-08-27 | [Language-neutral component ABI and freestanding C proof](2026-08-27-language-neutral-component-abi/index.md) | Change | Verified | none |
+| 2026-08-27 | [Slisp bounded reader and lexical evaluator](2026-08-27-slisp-core/index.md) | Change | Verified | none |

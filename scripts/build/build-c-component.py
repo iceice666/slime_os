@@ -32,14 +32,15 @@ def run(command: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build one freestanding C Slime component")
-    parser.add_argument("source", type=Path)
+    parser.add_argument("source", type=Path, nargs="+")
     parser.add_argument("output", type=Path)
     parser.add_argument("--cc", default=os.environ.get("CC", "clang"))
     arguments = parser.parse_args()
-    source = arguments.source.resolve()
+    sources = [source.resolve() for source in arguments.source]
     output = arguments.output.resolve()
-    if not source.is_file():
-        raise SystemExit(f"missing component source: {source}")
+    for source in sources:
+        if not source.is_file():
+            raise SystemExit(f"missing component source: {source}")
     if not SEL4_INCLUDE.is_dir():
         raise SystemExit("missing build/sel4-prefix; run `just sel4_qemu_image_check` first")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +49,7 @@ def main() -> None:
         include_flags = ["-isystem", str(SEL4_INCLUDE), "-I", str(INCLUDE)]
         runtime_object = staging / "runtime.o"
         start_object = staging / "start.o"
-        component_object = staging / "component.o"
+        component_objects = [staging / f"component-{index}.o" for index in range(len(sources))]
         run(
             [
                 arguments.cc,
@@ -70,18 +71,19 @@ def main() -> None:
                 str(start_object),
             ]
         )
-        run(
-            [
-                arguments.cc,
-                *COMMON_FLAGS,
-                *include_flags,
-                "-Os",
-                "-c",
-                str(source),
-                "-o",
-                str(component_object),
-            ]
-        )
+        for source, component_object in zip(sources, component_objects, strict=True):
+            run(
+                [
+                    arguments.cc,
+                    *COMMON_FLAGS,
+                    *include_flags,
+                    "-Os",
+                    "-c",
+                    str(source),
+                    "-o",
+                    str(component_object),
+                ]
+            )
         run(
             [
                 arguments.cc,
@@ -91,7 +93,7 @@ def main() -> None:
                 "-Wl,--build-id=none",
                 str(start_object),
                 str(runtime_object),
-                str(component_object),
+                *[str(component_object) for component_object in component_objects],
                 "-o",
                 str(output),
             ]
