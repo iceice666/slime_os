@@ -11,6 +11,7 @@ from harness import ROOT
 COMPONENT_ROOT = ROOT / "components"
 COMPONENT_CATEGORIES = ("system", "services", "applications", "testkit")
 COMPONENT_CRATE_ROOTS = tuple(COMPONENT_ROOT / category for category in COMPONENT_CATEGORIES)
+BUILD_C_COMPONENT = ROOT / "scripts" / "build" / "build-c-component.py"
 
 
 @lru_cache(maxsize=1)
@@ -47,3 +48,29 @@ def crate_path(name: str) -> Path:
 def source_path(name: str) -> Path:
     """Return one component's Rust entry point."""
     return crate_path(name) / "src" / "main.rs"
+
+
+def build_product_slisp(destination: Path) -> Path:
+    """Build the content-bound product Slisp ELF for a generation fixture."""
+    import subprocess
+    import sys
+
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(BUILD_C_COMPONENT),
+            str(COMPONENT_ROOT / "slisp" / "slisp.c"),
+            str(COMPONENT_ROOT / "slisp" / "main.c"),
+            str(destination),
+        ],
+        cwd=ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if process.returncode != 0:
+        raise SystemExit(f"product Slisp build failed:\n{process.stdout}")
+    if not destination.is_file():
+        raise SystemExit(f"product Slisp build produced no {destination}")
+    return destination

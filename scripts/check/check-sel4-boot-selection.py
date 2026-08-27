@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import NoReturn
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "lib"))
+
+from component_paths import build_product_slisp  # noqa: E402
+
 BUILD = ROOT / "scripts/build/build-sel4.py"
 GENERATOR = ROOT / "scripts/build/build-generation.py"
 FIXTURE = ROOT / "scripts/build/build-store-fixture.py"
@@ -37,7 +41,9 @@ def run(command: list[str], environment: dict[str, str] | None = None) -> None:
         fail(f"command failed ({process.returncode}): {' '.join(command)}")
 
 
-def build_generation(output: Path, number: int, bundle: str, *, failing: bool = False) -> Path:
+def build_generation(
+    output: Path, number: int, bundle: str, slisp: Path, *, failing: bool = False
+) -> Path:
     environment = dict(os.environ)
     environment.update(
         SLIME_TARGET_PROFILE="aarch64-sel4-qemu-virt",
@@ -47,7 +53,16 @@ def build_generation(output: Path, number: int, bundle: str, *, failing: bool = 
     )
     if failing:
         environment["SLIME_BOOT_SELECTION_FAIL"] = "1"
-    run([sys.executable, str(GENERATOR), str(output)], environment)
+    run(
+        [
+            sys.executable,
+            str(GENERATOR),
+            "--external-component",
+            f"slisp-external={slisp}",
+            str(output),
+        ],
+        environment,
+    )
     generation = output / "generation.bin"
     if not generation.is_file():
         fail(f"generation builder omitted {generation}")
@@ -325,9 +340,10 @@ def main() -> None:
     assert_oversize_rejected(bundle)
     with tempfile.TemporaryDirectory(prefix="slime-b35-") as temporary:
         work = Path(temporary)
-        known_good = build_generation(work / "a", 1, bundle)
-        failing = build_generation(work / "bad", 99, bundle, failing=True)
-        healthy = build_generation(work / "good", 2, bundle)
+        slisp = build_product_slisp(work / "slisp.elf")
+        known_good = build_generation(work / "a", 1, bundle, slisp)
+        failing = build_generation(work / "bad", 99, bundle, slisp, failing=True)
+        healthy = build_generation(work / "good", 2, bundle, slisp)
         # Measured on the generations this run just built, so the check does not
         # depend on what a previous run left in `build/`.
         assert_ceiling_holds_every_generation(ceiling, [known_good, failing, healthy])

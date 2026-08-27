@@ -31,7 +31,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
-from component_paths import source_path  # noqa: E402
+from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
 import component_sdk_release_contract as contract  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
@@ -251,7 +251,7 @@ def prove_negative_controls(first: dict, second: dict) -> None:
     )
 
 
-def build_and_boot(root: Path, sdk: Path, label: str) -> tuple[str, str]:
+def build_and_boot(root: Path, sdk: Path, slisp: Path, label: str) -> tuple[str, str]:
     """Build an external component from one SDK clone and boot its generation.
 
     This is what a matrix row is allowed to cite. A row without it would be a
@@ -358,6 +358,8 @@ def build_and_boot(root: Path, sdk: Path, label: str) -> tuple[str, str]:
             str(specs),
             "--external-component",
             f"{EXTERNAL_IMPLEMENTATION}={elf}",
+            "--external-component",
+            f"slisp-external={slisp}",
             str(output),
         ],
         cwd=ROOT,
@@ -425,13 +427,18 @@ def main() -> None:
         root = Path(temporary)
         url = canonical_remote(root)
         first, second, first_commit, second_commit = prove_two_real_releases(root, url)
+        slisp = build_product_slisp(root / "slisp.elf")
         prove_negative_controls(first, second)
 
         # Every row's evidence, observed now rather than asserted. The prior
         # release's row is retained only because its external fixture still
         # builds, enters a generation, and boots against this product commit.
-        first_elf, first_generation = build_and_boot(root, root / "release-1", "release-1")
-        second_elf, second_generation = build_and_boot(root, root / "release-2", "release-2")
+        first_elf, first_generation = build_and_boot(
+            root, root / "release-1", slisp, "release-1"
+        )
+        second_elf, second_generation = build_and_boot(
+            root, root / "release-2", slisp, "release-2"
+        )
         if first_elf == second_elf:
             fail("both releases produced one ELF, so the two rows are one observation")
 

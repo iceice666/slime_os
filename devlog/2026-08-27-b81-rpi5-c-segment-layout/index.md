@@ -4,8 +4,8 @@
 |---|---|
 | Date | 2026-08-27 |
 | Kind | Defect |
-| Status | Fixed |
-| Scope | `components/runtime/c/component-aarch64.ld`, `contracts/component-spec/v1/components/slisp.zti`, `scripts/check/check-release-trust.py`, `just sel4_rpi5_image_check`, SDK publication workflow runs 33063988008 and 33065116457 |
+| Status | Verified |
+| Scope | `components/runtime/c/component-aarch64.ld`, `contracts/component-spec/v1/components/slisp.zti`, `scripts/check/check-release-trust.py`, `scripts/check/check-external-component-admission.py`, `just sel4_rpi5_image_check`, SDK publication workflow runs 33063988008, 33065116457, and 33072132822 |
 | Roadmap | B81, P4 |
 | Gates | `just sel4_rpi5_image_check`, `just contracts_check`, `just release_trust_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
 | Trigger | The replacement two-profile SDK publication run advanced past the clean-shell Rust target fix and failed while wrapping the product Slisp ELF for the RPi5 generation |
@@ -44,6 +44,7 @@ The freestanding C linker now declares its three load segments explicitly: execu
 | `components/runtime/c/component-aarch64.ld` | Collect GOT inputs in `.data`; declare explicit RX, R, and RW `PT_LOAD` headers; assign BSS to the RW header | Freestanding C program headers and permissions are deterministic across host LLD variants, and every load starts on a target page boundary |
 | `contracts/component-spec/v1/components/slisp.zti` | Updated the external implementation digest to the explicit-PHDR ELF bytes | The content-bound component specification admits exactly the linker output the product and contract gates build |
 | `scripts/check/check-release-trust.py` | Builds the product Slisp fixture and supplies its explicit external-component mapping when constructing the default seL4 generation | The release-trust gate exercises the content-bound product manifest rather than relying on an undeclared placeholder external image |
+| `scripts/lib/component_paths.py`, product-manifest checks | Centralized construction of the content-bound Slisp fixture and supplied it to every direct `sel4` generation caller in the external-admission, SDK export/release/prefix/compatibility/upgrade, and boot-selection paths | Direct host checks cannot fail on an unrelated missing resident Slisp mapping before reaching the behavior they claim to exercise |
 
 ## Regression guards
 
@@ -51,7 +52,7 @@ The freestanding C linker now declares its three load segments explicitly: execu
 |---|---|---|
 | Clang or LLD emits a non-page-aligned orphan load again | `just sel4_rpi5_image_check` and exact RPi `component_image` admission | `invalid or overlapping segment` before generation signing |
 | The layout change breaks native QEMU C components | Hosted two-profile SDK build and existing C/Slisp component gates | QEMU image construction, component admission, or boot marker failure |
-| A host gate builds the content-bound `sel4` manifest without its external Slisp artifact | `just release_trust_check` builds Slisp and passes `slisp-external=<ELF>` | `missing external component ELF mapping(s): ['slisp-external']` |
+| A host gate builds the content-bound `sel4` manifest without its external Slisp artifact | Shared `build_product_slisp()` plus explicit `slisp-external=<ELF>` arguments in every direct product-manifest caller | `missing external component ELF mapping(s): ['slisp-external']` |
 | Repository checks regress | `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` | Any named check fails |
 
 ## Verification
@@ -70,7 +71,12 @@ The freestanding C linker now declares its three load segments explicitly: execu
 | PR #8 `Rollback, release trust, and BootState trace` rerun | Reproduced after the digest repair: contract checks passed, then `release_trust_check` failed because its direct default-manifest build supplied no `slisp-external` mapping | Direct |
 | `nix develop --command just release_trust_check` after fixture repair | Pass: durable rollback QEMU scenario, signed release checks, and trust-root rotation all passed with the content-bound Slisp fixture | Direct |
 | `nix develop --command just ruff` after fixture repair | Pass | Direct |
-| Replacement hosted two-profile SDK publication run with explicit `PHDRS` | Pending after merge | Not observed |
+| `nix develop --command just component_sdk_release_check` before the full fixture repair | Reproduced a newly unmasked direct caller: `external_component_admission_check` omitted `slisp-external` while testing its independent external console | Direct |
+| `nix develop --command just external_component_admission_check` after its initial fixture repair | Pass: independently built console plus product Slisp were mapped, the mixed generation was signed and booted, and hash/ELF mutations were refused before signing | Direct |
+| `nix develop --command just component_sdk_upgrade_check` after repairing every direct product-manifest caller | Pass: CP4–CP10 completed; QEMU and RPi prefix admission, two compatibility-row boots, upgrade, injected failures, and byte-identical rollback all used the content-bound Slisp fixture | Direct |
+| `nix develop --command just sel4_boot_selection_check` after fixture repair | Pass: three product generations carried explicit Slisp bytes; fresh-QEMU attempt persistence, rollback, stale-wire refusal, and health promotion completed | Direct |
+| `nix develop --command just ruff`, `just fmt_check_all`, `just lint_all`, `just devlog_check`, and `just typos` after the complete fixture repair | Pass | Direct |
+| GitHub Actions run 33072132822 | Pass: clean hosted Linux built both QEMU and RPi5 images, uploaded both prefixes, and the protected `m3air` job published signed SDK 2.0.0 containing both profile archives | Direct |
 
 ## Decisions
 
@@ -80,12 +86,12 @@ The freestanding C linker now declares its three load segments explicitly: execu
 
 ## Open risks and follow-ups
 
-- [ ] The explicit-PHDR repair needs a hosted two-profile publication run after merge.
+- [x] Hosted two-profile run 33072132822 admitted the explicit-PHDR Slisp ELF and completed signed publication after merge.
 
 ## Artifacts and provenance
 
 - Focused report: this entry.
-- Raw transcript: [initial segment failure 33063988008](https://github.com/iceice666/slime_os/actions/runs/33063988008), [host-dependent first fix 33065116457](https://github.com/iceice666/slime_os/actions/runs/33065116457).
+- Raw transcript: [initial segment failure 33063988008](https://github.com/iceice666/slime_os/actions/runs/33063988008), [host-dependent first fix 33065116457](https://github.com/iceice666/slime_os/actions/runs/33065116457), [successful two-profile publication 33072132822](https://github.com/iceice666/slime_os/actions/runs/33072132822).
 - Serial/debugger/model output: none; generation construction failed before packaging or boot.
 - Related roadmap item: [P4](../../roadmap/07-architecture-portability.md#p4--raspberry-pi-5-board-bring-up).
 - Predecessor: [`devlog/2026-08-27-b80-rpi5-rust-target/`](../2026-08-27-b80-rpi5-rust-target/index.md)

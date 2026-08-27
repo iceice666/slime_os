@@ -35,7 +35,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
-from component_paths import source_path  # noqa: E402
+from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
@@ -451,7 +451,7 @@ def prove_reverse_drift(root: Path, url: str) -> None:
     )
 
 
-def prove_hosted_build_and_boot(root: Path, url: str) -> dict:
+def prove_hosted_build_and_boot(root: Path, url: str, slisp: Path) -> dict:
     """A fresh clone of the published commit builds and boots a component."""
     clone_root = clone(url, root / "consumer-sdk")
     record = component_sdk.load_record(clone_root)
@@ -579,6 +579,8 @@ def prove_hosted_build_and_boot(root: Path, url: str) -> dict:
             str(specs),
             "--external-component",
             f"{EXTERNAL_IMPLEMENTATION}={elf}",
+            "--external-component",
+            f"slisp-external={slisp}",
             str(output),
         ],
         cwd=ROOT,
@@ -642,12 +644,13 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="slime-component-sdk-release-") as temporary:
         root = Path(temporary)
         url = canonical_remote(root)
+        slisp = build_product_slisp(root / "slisp.elf")
         prove_atomic_publication(root)
         commit, record = prove_first_publication(root, url)
         prove_idempotence(root, url, commit)
         prove_refusals(root, url)
         prove_reverse_drift(root, url)
-        prove_hosted_build_and_boot(root, url)
+        prove_hosted_build_and_boot(root, url, slisp)
         prove_deletion_is_harmless(root)
 
     print(

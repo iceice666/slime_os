@@ -17,9 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
-from component_paths import crate_path  # noqa: E402
+from component_paths import build_product_slisp, crate_path  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
+
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 GRAPH_CHECK = ROOT / "scripts" / "check" / "check-sel4-component-graph.py"
 
@@ -186,7 +187,12 @@ def external_specs(root: Path, digest: str) -> None:
         (root / f"{entry.name}.zti").write_text(zti(spec) + "\n", encoding="utf-8")
 
 
-def build(output: Path, specs: Path, elf: Path) -> subprocess.CompletedProcess[str]:
+def build(
+    output: Path,
+    specs: Path,
+    elf: Path,
+    slisp: Path,
+) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
     environment["SLIME_SEL4_MANIFEST"] = "sel4"
@@ -198,6 +204,8 @@ def build(output: Path, specs: Path, elf: Path) -> subprocess.CompletedProcess[s
             str(specs),
             "--external-component",
             f"console-external={elf}",
+            "--external-component",
+            f"slisp-external={slisp}",
             str(output),
         ],
         cwd=ROOT,
@@ -222,9 +230,16 @@ def malformed_external(
     return specs, elf
 
 
-def refused_before_signing(root: Path, label: str, specs: Path, elf: Path, marker: str) -> None:
+def refused_before_signing(
+    root: Path,
+    label: str,
+    specs: Path,
+    elf: Path,
+    slisp: Path,
+    marker: str,
+) -> None:
     output = root / f"{label}-build"
-    refused = build(output, specs, elf)
+    refused = build(output, specs, elf, slisp)
     if refused.returncode == 0 or marker not in refused.stdout:
         fail(f"{label} external ELF was not refused before generation signing:\n{refused.stdout}")
     if (output / "generation.bin").exists() or (output / "boot-store.bin").exists():
@@ -235,6 +250,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="slime-external-component-") as temporary:
         root = Path(temporary)
         external_elf = build_isolated_console(root)
+        slisp = build_product_slisp(root / "slisp.elf")
         elf = external_elf.read_bytes()
         digest = hashlib.sha256(elf).hexdigest()
         workspace_console = (
@@ -253,7 +269,7 @@ def main() -> None:
         specs.mkdir()
         external_specs(specs, digest)
 
-        mixed = build(root / "mixed", specs, external_elf)
+        mixed = build(root / "mixed", specs, external_elf, slisp)
         if mixed.returncode != 0:
             fail(f"mixed-source build failed:\n{mixed.stdout}")
         marker = "implementation=console-external provider=external"
@@ -309,9 +325,10 @@ def main() -> None:
             (ROOT / "build" / "slime-sel4-graph.identity.json").read_text(encoding="utf-8")
         )
         embedded = manifest.get("generation")
-        if not isinstance(embedded, dict) or embedded.get("identity") != checked_generation[
-            "identity"
-        ].hex():
+        if (
+            not isinstance(embedded, dict)
+            or embedded.get("identity") != checked_generation["identity"].hex()
+        ):
             fail("seL4 image did not record the release-verified mixed generation identity")
         boot = subprocess.run(
             [sys.executable, str(GRAPH_CHECK), "--no-build"],
@@ -327,7 +344,7 @@ def main() -> None:
 
         wrong_hash = root / "wrong-hash.elf"
         wrong_hash.write_bytes(elf + b"\0")
-        refused_hash = build(root / "wrong-hash", specs, wrong_hash)
+        refused_hash = build(root / "wrong-hash", specs, wrong_hash, slisp)
         if refused_hash.returncode == 0 or "does not match declared" not in refused_hash.stdout:
             fail("external bytes whose content hash disagreed were not refused")
 
@@ -376,7 +393,7 @@ def main() -> None:
             ),
         ):
             malformed_specs, malformed_elf = malformed_external(root, elf, label, mutate)
-            refused_before_signing(root, label, malformed_specs, malformed_elf, marker)
+            refused_before_signing(root, label, malformed_specs, malformed_elf, slisp, marker)
 
     print(
         "external component admission check: one independently built external ELF "
@@ -384,6 +401,7 @@ def main() -> None:
         "component-graph gate, and reported by source; hash-mismatched and structurally "
         "invalid external ELFs were refused before signing"
     )
+
 
 if __name__ == "__main__":
     main()
