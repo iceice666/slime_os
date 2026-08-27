@@ -60,6 +60,8 @@
               with pkgs;
               [
                 gcc
+                llvmPackages.clang
+                llvmPackages.lld
                 just
                 lldb
                 qemu
@@ -99,6 +101,11 @@
             # wrapper's `bin/` by store path makes every host run the same
             # compiler driver and the same assembler (B21).
             CROSS_COMPILER_PREFIX = "${crossCC}/bin/${crossCC.targetPrefix}";
+
+            # Freestanding C components use Clang's target driver and LLD.
+            # Do not inherit mkShell's ambient CC: on Linux it is GCC, which
+            # rejects `--target=aarch64-none-elf` before compiling anything.
+            SLIME_COMPONENT_CC = "${pkgs.llvmPackages.clang}/bin/clang";
 
             RUSTUP_TOOLCHAIN = rustToolchain;
 

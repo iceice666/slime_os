@@ -34,7 +34,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build one freestanding C Slime component")
     parser.add_argument("source", type=Path, nargs="+")
     parser.add_argument("output", type=Path)
-    parser.add_argument("--cc", default=os.environ.get("CC", "clang"))
+    parser.add_argument(
+        "--cc",
+        default=os.environ.get("SLIME_COMPONENT_CC", "clang"),
+        help="Clang-compatible compiler for the aarch64-none-elf target",
+    )
     arguments = parser.parse_args()
     sources = [source.resolve() for source in arguments.source]
     output = arguments.output.resolve()
