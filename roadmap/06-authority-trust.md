@@ -12,6 +12,37 @@ The earlier combined plan grouped revocation, scheduling class, and secrets. Thi
 
 The composite release boundary still requires all three mechanisms: a component cannot claim an ungranted scheduling class, every capability-matrix amendment lands with its gate, foreground ordering survives contention, grants can be revoked, and scoped secrets remain usable without becoming readable or recordable.
 
+## A0 — Checked capability rights algebra
+
+**Status:** Complete 2026-08-27. The bounded model, single-sourced vocabulary,
+enforcement partition, and must-fail mutations are guarded by
+`just capability_rights_model_check` and `just contracts_check`. Source and
+probe measurements: [direction 24](../docs/directions/24-rights-algebra-model.md).
+
+### Delivered
+
+- `contracts/capability-rights/model/capability-rights.zt` models `derive`,
+  `spawnGrant`, `export`, `finalize`, `import`, and `cancel` over a bounded
+  four-class rights abstraction.
+- Seven safety properties cover narrow-only delegation, transfer authority,
+  declared-edge confinement, kind validity, transfer uniqueness, and the weaker
+  authority-closure corollary. Six independent mutations must each produce the
+  named counterexample.
+- `contracts/generation/v5/vocab/rights.zt` is the one source of `rightBits`.
+  Host tests partition all 33 names against `capability_rights_valid` and the
+  root's `rights_type!` masks, including the root-only supervision rights and
+  eight named-but-ungated legacy rights.
+- Any change to `rightBits`, `capability_rights_valid`, or a `rights_type!`
+  `VALID` mask must land with the resulting model and capability-matrix updates.
+
+### Exit condition
+
+A bounded model of the six authority operations checks seven named properties,
+six must-fail mutations fail closed, and the single-sourced rights vocabulary is
+pinned against real manifest and runtime enforcement. The original manifest
+authority-closure formulation is not the theorem: the probe showed it cannot be
+both non-vacuous and true under honest transfer.
+
 ## A1 — Revocation and leases
 
 **Status:** Planned; not implemented.

@@ -2739,6 +2739,92 @@ mod tests {
             assert!(!capability_rights_valid(kind, 1 << 17));
         }
     }
+
+    /// The schema's named rights divide between manifest-declarable capability
+    /// rights and rights that `capability_rights_valid` deliberately rejects.
+    /// The rejected class contains root-minted supervision policy rights, clock
+    /// resource-table authorities, and declared-but-ungated legacy rights. A
+    /// right moving between classes must move here and in
+    /// `docs/capability-matrix.md` in the same change. This test is scoped to
+    /// `capability_rights_valid`; other decoder fields have their own masks.
+    #[test]
+    fn declared_rights_partition_into_manifest_declarable_and_root_only() {
+        const BASELINES: [(CapabilityKind, Rights); 9] = [
+            (CapabilityKind::Endpoint, RIGHT_SEND | RIGHT_RECV),
+            (CapabilityKind::Executable, RIGHT_EXEC | RIGHT_SPAWN),
+            (CapabilityKind::SharedBufferFactory, RIGHT_BUFFER_CREATE),
+            (CapabilityKind::Block, RIGHT_BLOCK_READ),
+            (CapabilityKind::Directory, RIGHT_DIRECTORY_READ),
+            (CapabilityKind::Input, RIGHT_INPUT_READ),
+            (CapabilityKind::Supervision, RIGHT_SUPERVISE),
+            (CapabilityKind::SharedBuffer, RIGHT_BUFFER_WRITE),
+            (CapabilityKind::Loan, RIGHT_BUFFER_MAP),
+        ];
+        const MANIFEST_DECLARABLE: [Rights; 17] = [
+            RIGHT_SEND,
+            RIGHT_RECV,
+            RIGHT_TRANSFER,
+            RIGHT_EXEC,
+            RIGHT_SPAWN,
+            RIGHT_SUPERVISE,
+            RIGHT_BLOCK_READ,
+            RIGHT_BLOCK_WRITE,
+            RIGHT_BUFFER_WRITE,
+            RIGHT_BUFFER_MAP,
+            RIGHT_BUFFER_CREATE,
+            RIGHT_BUFFER_LOAN,
+            RIGHT_DIRECTORY_READ,
+            RIGHT_DIRECTORY_WRITE,
+            RIGHT_DIRECTORY_LIST,
+            RIGHT_DIRECTORY_DERIVE,
+            RIGHT_INPUT_READ,
+        ];
+        const NOT_MANIFEST_DECLARABLE: [Rights; 16] = [
+            RIGHT_SCHEDULING_PROMOTE,
+            RIGHT_LIFECYCLE_RESTART,
+            RIGHT_PARAMETER_READ,
+            RIGHT_PARAMETER_WRITE,
+            RIGHT_CLOCK_MONOTONIC_READ,
+            RIGHT_CLOCK_TIMER_USE,
+            RIGHT_CLOCK_SIMULATED_READ,
+            RIGHT_CLOCK_SIMULATED_ADVANCE,
+            RIGHT_MAP_MMIO,
+            RIGHT_DMA_PIN,
+            RIGHT_DMA_RELEASE,
+            RIGHT_IRQ_ACK,
+            RIGHT_STORE_READ,
+            RIGHT_STORE_WRITE,
+            RIGHT_HEALTH_CONFIRM,
+            RIGHT_BOOT_UPDATE,
+        ];
+
+        for (kind, baseline) in BASELINES {
+            assert!(capability_rights_valid(kind, baseline));
+        }
+        for right in MANIFEST_DECLARABLE {
+            assert!(
+                BASELINES
+                    .iter()
+                    .any(|(kind, baseline)| { capability_rights_valid(*kind, *baseline | right) })
+            );
+        }
+        for right in NOT_MANIFEST_DECLARABLE {
+            assert!(
+                BASELINES
+                    .iter()
+                    .all(|(kind, baseline)| { !capability_rights_valid(*kind, *baseline | right) })
+            );
+        }
+
+        let manifest_union = MANIFEST_DECLARABLE
+            .iter()
+            .fold(0, |accumulator, right| accumulator | right);
+        let rejected_union = NOT_MANIFEST_DECLARABLE
+            .iter()
+            .fold(0, |accumulator, right| accumulator | right);
+        assert_eq!(manifest_union & rejected_union, 0);
+        assert_eq!(manifest_union | rejected_union, RIGHT_ALL);
+    }
     /// C9.5's two determinism masks partition the rights vocabulary.
     ///
     /// The `determinism` field is required on every right, so the renderer cannot

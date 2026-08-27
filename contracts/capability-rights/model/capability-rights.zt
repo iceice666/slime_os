@@ -1,0 +1,281 @@
+-- A bounded model of capability derivation and consuming transfer. Three
+-- components share one object: #c1 initially holds it, #c2 is the only target
+-- named by a declared edge, and #c3 is a third party no edge names. Four
+-- symbolic rights stand for equivalence classes in the real 33-name vocabulary:
+-- #transfer is RIGHT_TRANSFER's meta-right role; #narrowA and #narrowB are two
+-- independently narrowable rights, with #narrowA also required by the kind;
+-- #foreign belongs to another object kind and exists only to expose kind-blind
+-- derivation.
+--
+-- Four rights are deliberate. Measurements for this transition system grew by
+-- about 6.3x per added right: 3 rights took 0.55 s, 4 took 3.1 s, 5 took 19 s,
+-- and 6 took 121 s, extrapolating to roughly eight hours at 9. Exhaustively
+-- enumerating the real 33 rights is infeasible. The properties below are closed
+-- under the four equivalence classes; that abstraction claim is documented, not
+-- machine-checked. A refinement proof is outside direction 24's probe scope.
+--
+-- The real vocabulary is still single-sourced in genv5_rights.rights, and host
+-- tests pin every canonical right against capability_rights_valid and the
+-- runtime rights_type! masks. This model deliberately does not import those 33
+-- names: its four rights are equivalence classes, not a second vocabulary copy.
+-- Importing the canonical list while modelling only four names would obscure
+-- rather than strengthen that boundary.
+--
+-- derive and spawnGrant are both non-consuming narrow-only copies. They differ
+-- only in whose table receives the copy, matching serve_supervision_derive in
+-- graph_runtime/services/policy.rs and preflight_spawn_grants in
+-- graph_runtime/services/spawn.rs, so they share one narrowing rule under two
+-- action labels.
+--
+-- NoAuthorityWidening is a corollary, not the load-bearing theorem. A
+-- per-component declared-rights closure fails under honest transfer after 243
+-- states; unioning every declared right is vacuous; and the edge-scoped closure
+-- used here cannot detect widening derive because a source allowed to delegate
+-- its full rights already puts those rights in the target's closure. The real
+-- theorems are the per-operation conservation laws. Their relational evidence
+-- is carried in ceiling, sourceTransferable, declaredEdge, and
+-- installedAtTarget because #violates expectations can name state safety
+-- properties, not actionSafety properties.
+--
+-- Abstraction gaps: export always consumes and does not model retain=true; the
+-- descriptor and native-endpoint ticket movement between export and import is
+-- collapsed; and Endpoint transferability lives in PeerEndpointTable rather
+-- than its rights bits, represented here by a grant retaining or narrowing away
+-- #transfer.
+
+l ::= import stdlib.list;
+
+Comp :: type { #c1; #c2; #c3; };
+Obj :: type { #o1; };
+Right :: type { #transfer; #narrowA; #narrowB; #foreign; };
+
+Grant :: type { holder : Comp; object : Obj; rights : List Right; ceiling : List Right; };
+Pending :: type {
+  source : Comp;
+  target : Comp;
+  object : Obj;
+  rights : List Right;
+  ceiling : List Right;
+  sourceTransferable : Bool;
+  declaredEdge : Bool;
+  finalized : Bool;
+  installedAtTarget : Bool;
+};
+State :: type { grants : List Grant; pending : Pending?; };
+Transition :: type { action : Text; state : State; };
+Safety :: type { name : Text; holds : State -> Bool; };
+Reachability :: type { name : Text; reached : State -> Bool; };
+Model :: type { initial : List State; next : State -> List Transition; safety : List Safety; reachability : List Reachability; };
+Expectation :: type { #safe; #violates : { property : Text; }; };
+Scenario :: type { name : Text; model : Model; expect : Expectation; };
+Faults :: type {
+  -- Derive may pick any kind-valid rights set instead of a source subset.
+  wideningDerive : Bool;
+  -- Export may stage any kind-valid rights set instead of a source subset.
+  wideningTransfer : Bool;
+  -- Export may start from a source that has narrowed away #transfer.
+  skipTransferRightCheck : Bool;
+  -- Derive may attach #foreign, a right belonging to another kind.
+  kindBlindDerive : Bool;
+  -- Finalize installs at the target while leaving the pending record live.
+  duplicateOnFinalize : Bool;
+  -- Export and spawnGrant may name any component, not only an edge target.
+  undeclaredEdge : Bool;
+};
+
+rTransfer :: Right = #transfer;
+rNarrowA :: Right = #narrowA;
+rNarrowB :: Right = #narrowB;
+rForeign :: Right = #foreign;
+comps :: List Comp = { #c1; #c2; #c3; };
+rights :: List Right = { rTransfer; rNarrowA; rNarrowB; rForeign; };
+
+member :: <A> A -> List A -> Bool = v xs => l.any (\x. x == v) xs;
+subset :: <A> List A -> List A -> Bool = xs ys => l.all (\x. member x ys) xs;
+insertR :: Right -> List Right -> List Right
+  = v xs => if member v xs then xs else l.append xs (l.singleton v);
+growSubsets :: List (List Right) -> Right -> List (List Right)
+  = acc r => l.append acc (l.map (\s. insertR r s) acc);
+subsetsOf :: List Right -> List (List Right)
+  = xs => l.fold growSubsets (l.singleton (l.empty ())) xs;
+nonEmptySubsets :: List Right -> List (List Right)
+  = xs => l.filter (\s. l.length s > 0) (subsetsOf xs);
+
+allowedMask :: List Right = { rTransfer; rNarrowA; rNarrowB; };
+requiredRight :: Right = rNarrowA;
+rightsValidForKind :: List Right -> Bool
+  = rs => l.length rs > 0 && subset rs allowedMask && member requiredRight rs;
+kindBlindSubsets :: List Right -> List (List Right)
+  = held => l.filter (\s. subset s (insertR rForeign held)) (nonEmptySubsets rights);
+
+edgeTargets :: Comp -> List Comp
+  = c => match c { | #c1 => { #c2; }; | #c2 => l.empty (); | #c3 => l.empty (); };
+allowedTargets :: Faults -> Comp -> List Comp
+  = f c => if f.undeclaredEdge then l.filter (\t. not (t == c)) comps else edgeTargets c;
+edgeDeclared :: Comp -> Comp -> Bool
+  = source target => member target (edgeTargets source);
+
+sameSlot :: Grant -> Grant -> Bool
+  = a b => a.holder == b.holder && a.object == b.object;
+addGrant :: Grant -> List Grant -> List Grant
+  = g gs => l.append (l.filter (\x. not (sameSlot x g)) gs) (l.singleton g);
+removeGrant :: Grant -> List Grant -> List Grant
+  = g gs => l.filter (\x. not (sameSlot x g)) gs;
+validSubsetsWithin :: List Right -> List (List Right)
+  = held => l.filter rightsValidForKind (l.filter (\s. subset s held) (nonEmptySubsets rights));
+validAnySubsets :: List (List Right)
+  = l.filter rightsValidForKind (nonEmptySubsets rights);
+derivationsOf :: Faults -> Grant -> List (List Right)
+  = f g => cond {
+      f.wideningDerive => validAnySubsets;
+      f.kindBlindDerive => kindBlindSubsets g.rights;
+      _ => validSubsetsWithin g.rights;
+    };
+exportChoicesOf :: Faults -> Grant -> List (List Right)
+  = f g => if f.wideningTransfer then validAnySubsets else validSubsetsWithin g.rights;
+
+copyOne :: Faults -> Text -> State -> Grant -> Comp -> List Transition
+  = f action state g target => l.map (\r. { action = action; state = state with { grants = addGrant { holder = target; object = g.object; rights = r; ceiling = g.rights; } state.grants; }; }) (derivationsOf f g);
+deriveGrants :: Faults -> State -> List Transition
+  = f state => l.flatten (l.map (\g. copyOne f "derive" state g g.holder) state.grants);
+spawnTargets :: Faults -> State -> Grant -> List Transition
+  = f state g => l.flatten (l.map (copyOne f "spawnGrant" state g) (allowedTargets f g.holder));
+spawnGrants :: Faults -> State -> List Transition
+  = f state => l.flatten (l.map (spawnTargets f state) state.grants);
+
+somePending :: Pending -> Pending?
+  = p => #some (p);
+transferable :: Grant -> Bool
+  = g => member rTransfer g.rights;
+stagedFor :: Grant -> Comp -> List Right -> Pending
+  = g t r => {
+      source = g.holder;
+      target = t;
+      object = g.object;
+      rights = r;
+      ceiling = g.rights;
+      sourceTransferable = transferable g;
+      declaredEdge = edgeDeclared g.holder t;
+      finalized = false;
+      installedAtTarget = false;
+    };
+exportTo :: Faults -> State -> Grant -> Comp -> List Transition
+  = f state g t => l.map (\r. { action = "export"; state = { grants = removeGrant g state.grants; pending = somePending (stagedFor g t r); }; }) (exportChoicesOf f g);
+exportOne :: Faults -> State -> Grant -> List Transition
+  = f state g => l.flatten (l.map (exportTo f state g) (allowedTargets f g.holder));
+exportEligible :: Faults -> Grant -> Bool
+  = f g => f.skipTransferRightCheck || transferable g;
+exportCap :: Faults -> State -> List Transition
+  = f state => match state.pending {
+      | #some (_p) => l.empty ();
+      | #none => l.flatten (l.map (exportOne f state) (l.filter (exportEligible f) state.grants));
+    };
+
+installedGrant :: Pending -> Grant
+  = p => { holder = p.target; object = p.object; rights = p.rights; ceiling = p.ceiling; };
+restoredGrant :: Pending -> Grant
+  = p => { holder = p.source; object = p.object; rights = p.rights; ceiling = p.ceiling; };
+finalizeCap :: Faults -> State -> List Transition
+  = f state => match state.pending {
+      | #none => l.empty ();
+      | #some (p) => if p.finalized then l.empty () else if f.duplicateOnFinalize then l.singleton { action = "finalize"; state = { grants = addGrant (installedGrant p) state.grants; pending = somePending (p with { finalized = true; installedAtTarget = true; }); }; } else l.singleton { action = "finalize"; state = state with { pending = somePending (p with { finalized = true; }); }; };
+    };
+importCap :: State -> List Transition
+  = state => match state.pending {
+      | #none => l.empty ();
+      | #some (p) => if not p.finalized then l.empty () else l.singleton { action = "import"; state = { grants = addGrant (installedGrant p) state.grants; pending = #none; }; };
+    };
+cancelCap :: State -> List Transition
+  = state => match state.pending {
+      | #none => l.empty ();
+      | #some (p) => if p.finalized then l.empty () else l.singleton { action = "cancel"; state = { grants = addGrant (restoredGrant p) state.grants; pending = #none; }; };
+    };
+
+nextFor :: Faults -> State -> List Transition
+  = f state => l.flatten { deriveGrants f state; spawnGrants f state; exportCap f state; finalizeCap f state; importCap state; cancelCap state; };
+
+declared :: Comp -> List Right
+  = c => match c { | #c1 => allowedMask; | #c2 => l.empty (); | #c3 => l.empty (); };
+inboundDelegatable :: Comp -> List Right
+  = c => l.fold (\acc source. if edgeDeclared source c then l.append acc (declared source) else acc) (l.empty ()) comps;
+manifestClosure :: Comp -> List Right
+  = c => l.append (declared c) (inboundDelegatable c);
+grantWithinClosure :: Grant -> Bool
+  = g => subset g.rights (manifestClosure g.holder);
+noAuthorityWidening :: State -> Bool
+  = state => l.all grantWithinClosure state.grants;
+withinCeiling :: Grant -> Bool
+  = g => subset g.rights g.ceiling;
+deriveOnlyNarrows :: State -> Bool
+  = state => l.all withinCeiling state.grants;
+transferOnlyNarrows :: State -> Bool
+  = state => match state.pending { | #none => true; | #some (p) => subset p.rights p.ceiling; };
+transferRequiresTransferRight :: State -> Bool
+  = state => match state.pending { | #none => true; | #some (p) => p.sourceTransferable; };
+transferFollowsDeclaredEdge :: State -> Bool
+  = state => match state.pending { | #none => true; | #some (p) => p.declaredEdge; };
+noTransferDuplication :: State -> Bool
+  = state => match state.pending { | #none => true; | #some (p) => not p.installedAtTarget; };
+grantKindValid :: Grant -> Bool
+  = g => rightsValidForKind g.rights;
+rightsValidForKindHolds :: State -> Bool
+  = state => l.all grantKindValid state.grants
+      && match state.pending { | #none => true; | #some (p) => rightsValidForKind p.rights; };
+
+isMoved :: Grant -> Bool
+  = g => g.holder == #c2;
+movedReached :: State -> Bool
+  = state => l.any isMoved state.grants;
+isSourceRestored :: Grant -> Bool
+  = g => g.holder == #c1;
+cancelRestored :: State -> Bool
+  = state => match state.pending { | #none => l.any isSourceRestored state.grants; | #some (_p) => false; };
+finalizedPending :: State -> Bool
+  = state => match state.pending { | #none => false; | #some (p) => p.finalized; };
+isNarrowedGrant :: Grant -> Bool
+  = g => l.length g.rights < l.length g.ceiling;
+narrowedHolding :: State -> Bool
+  = state => l.any isNarrowedGrant state.grants;
+
+initialFor :: Faults -> State
+  = _f => { grants = { { holder = #c1; object = #o1; rights = allowedMask; ceiling = allowedMask; }; }; pending = #none; };
+
+noFaults :: Faults = { wideningDerive = false; wideningTransfer = false; skipTransferRightCheck = false; kindBlindDerive = false; duplicateOnFinalize = false; undeclaredEdge = false; };
+wideDerive :: Faults = noFaults with { wideningDerive = true; };
+wideTransfer :: Faults = noFaults with { wideningTransfer = true; };
+skipTransferRight :: Faults = noFaults with { skipTransferRightCheck = true; };
+kindBlindDeriveFaults :: Faults = noFaults with { kindBlindDerive = true; };
+duplicateFinalize :: Faults = noFaults with { duplicateOnFinalize = true; };
+undeclaredEdgeFaults :: Faults = noFaults with { undeclaredEdge = true; };
+
+rightsModel :: Faults -> Model
+  = f => {
+      initial = { initialFor f; };
+      next = nextFor f;
+      safety = {
+        { name = "DeriveOnlyNarrows"; holds = deriveOnlyNarrows; };
+        { name = "TransferOnlyNarrows"; holds = transferOnlyNarrows; };
+        { name = "TransferRequiresTransferRight"; holds = transferRequiresTransferRight; };
+        { name = "TransferFollowsDeclaredEdge"; holds = transferFollowsDeclaredEdge; };
+        { name = "RightsValidForKind"; holds = rightsValidForKindHolds; };
+        { name = "NoTransferDuplication"; holds = noTransferDuplication; };
+        { name = "NoAuthorityWidening"; holds = noAuthorityWidening; };
+      };
+      reachability = {
+        { name = "moved"; reached = movedReached; };
+        { name = "cancel-restored"; reached = cancelRestored; };
+        { name = "finalized"; reached = finalizedPending; };
+        { name = "narrowed"; reached = narrowedHolding; };
+      };
+    };
+
+scenarios :: List Scenario = {
+  { name = "main"; model = rightsModel noFaults; expect = #safe; };
+  { name = "widening-derive"; model = rightsModel wideDerive; expect = #violates { property = "DeriveOnlyNarrows"; }; };
+  { name = "widening-transfer"; model = rightsModel wideTransfer; expect = #violates { property = "TransferOnlyNarrows"; }; };
+  { name = "transfer-without-right"; model = rightsModel skipTransferRight; expect = #violates { property = "TransferRequiresTransferRight"; }; };
+  { name = "kind-blind-derive"; model = rightsModel kindBlindDeriveFaults; expect = #violates { property = "RightsValidForKind"; }; };
+  { name = "duplicate-on-finalize"; model = rightsModel duplicateFinalize; expect = #violates { property = "NoTransferDuplication"; }; };
+  { name = "undeclared-edge"; model = rightsModel undeclaredEdgeFaults; expect = #violates { property = "TransferFollowsDeclaredEdge"; }; };
+};
+{ scenarios =; }

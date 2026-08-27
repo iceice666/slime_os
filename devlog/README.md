@@ -342,3 +342,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-26 | [Obsolete stage0 and custom-kernel handoff retirement](2026-08-26-stage0-retirement/index.md) | Change | Verified | P5, P5.4.final |
 | 2026-08-26 | [Generation manifest source contract separated from boot wire versions](2026-08-26-generation-manifest-contract-split/index.md) | Change | Verified | CP1 |
 | 2026-08-27 | [CI: a gate that could not run, a job that could not start, and a path that only resolved on one machine](2026-08-27-ci-hosted-arm64-cutover/index.md) | Defect | Verified | B78 |
+| 2026-08-27 | [Direction 24: capability rights as conservation laws, not a vacuous closure](2026-08-27-capability-rights-model/index.md) | Change | Verified | A0 |

@@ -59,7 +59,7 @@ Promoted entries collapse to a pointer row in the index below; the canonical
 | 21 | Signed generation release metadata | promoted → M5.8 | — |
 | 22 | Recovery, scrub, and BootState reconstruction | promoted → M5.9 | — |
 | 23 | Generation build-provenance attestations | promoted → [Native development D3/D7](../../roadmap/08-native-development.md) | updates |
-| 24 | [Checked model of the capability rights algebra](24-rights-algebra-model.md) | **probing** | authority |
+| 24 | [Checked model of the capability rights algebra](24-rights-algebra-model.md) | promoted → [Authority A0](../../roadmap/06-authority-trust.md#a0--checked-capability-rights-algebra) (design retained) | authority |
 | 25 | [Resource accounts as capabilities](25-resource-accounts.md) | parked | lifecycle |
 | 26 | [Hermetic generation testing](26-hermetic-testing.md) | parked | determinism |
 | 27 | [Policy-carrying generations](27-policy-carrying-generations.md) | parked | authority |

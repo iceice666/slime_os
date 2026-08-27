@@ -5,5 +5,6 @@
   modules = [];
   dependencies = [
     { alias = "wire"; path = "_shared"; };
+    { alias = "genv5_rights"; path = "generation/v5/vocab"; };
   ];
 }

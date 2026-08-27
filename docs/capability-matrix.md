@@ -113,15 +113,28 @@ disclose no more: that table describes exactly that component's CSpace. The
 `mintedBindings` for the caller's own holder index, which is the same disclosure
 bound in two further separate tables.
 
-Bits 4–7 and 12–15 are unassigned. The retired custom kernel spent them on
-`PciFunction`, `DmaMemory`, `Irq`, `ObjectStore`, and `GenerationControl` object
-kinds; those kinds and their syscalls were deleted with that kernel. Their
-mechanisms live where they belong now: sectors behind a `Block` capability, and
-the object store, generation management, rollback, and recovery entirely in
-userspace components over that capability
+Bits 4–7 and 12–15 are declared and named in the canonical schema, with the
+manifest spellings `mapMmio`, `dmaPin`, `dmaRelease`, `irqAck`, `storeRead`,
+`storeWrite`, `healthConfirm`, and `bootUpdate`; all eight are inside
+`RIGHT_ALL`. No `CapabilityKind` allowed mask admits any of them, so
+`capability_rights_valid` rejects them for every manifest grant or minted
+binding, and no runtime `rights_type!` can carry one. They are named but ungated:
+the one shape Grammar rule 2 forbids for a new right, and a condition these bits
+predate.
+
+`MAP_MMIO`, `DMA_PIN`, and `IRQ_ACK` correspond to the Horizon row “Device/IRQ
+authority for userspace drivers.” `DMA_RELEASE`, `STORE_READ`, `STORE_WRITE`,
+`HEALTH_CONFIRM`, and `BOOT_UPDATE` are residue of the retired custom kernel's
+`ObjectStore` and `GenerationControl` kinds. Those mechanisms now live in
+userspace components over a `Block` capability
 (`components/bins/sel4-{store,generation-manager,rollback,recovery}-*/src/main.rs`,
-`boot-contracts/src/object_store.rs`). Reassign the bits deliberately; do not
-assume they still mean what a pre-cutover document says.
+`boot-contracts/src/object_store.rs`).
+
+`boot-contracts`'s
+`declared_rights_partition_into_manifest_declarable_and_root_only` pins this
+`capability_rights_valid` partition. Wiring one of these bits to a capability
+kind fails that test until this matrix is updated with it. Reassign the bits
+deliberately; do not assume they still mean what a pre-cutover document says.
 
 Semantics not visible in the table:
 

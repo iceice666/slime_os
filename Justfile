@@ -620,6 +620,13 @@ bootstate_model_check:
     cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
     ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/bootstate/model/bootstate.zt
 
+# Exhaustively check the bounded capability-rights algebra: narrow-only derive
+# and spawn delegation, the consuming export/finalize/import/cancel path, and
+# six mutations that must each produce a counterexample.
+capability_rights_model_check:
+    cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+    ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/capability-rights/model/capability-rights.zt
+
 # The custom-kernel persistence gates were superseded by the userspace seL4
 # planes. These aliases keep historical devlog gate identifiers resolvable.
 bootstate_trace_check: bootstate_model_check sel4_rollback_check
@@ -651,7 +658,7 @@ rpi5_ros2_demo_contract_v2_check:
     python3 scripts/check/check-rpi5-ros2-demo-contract-v2.py
 
 # Validate the pinned generation manifest schema and fixtures.
-contracts_check: bootstate_model_check
+contracts_check: bootstate_model_check capability_rights_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py
@@ -1175,7 +1182,9 @@ test_sel4_root:
     # `clear_task` answers about a live task rather than about whether it was
     # ever declared), and the per-waiter supervision ceiling is the contract's
     # own source ceiling rather than a second number this module picked.
-    expected=183
+    # Direction 24: 183 -> 184. `graph` gains the capability-rights partition
+    # test for root-only supervision rights and declared-but-ungated rights.
+    expected=184
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

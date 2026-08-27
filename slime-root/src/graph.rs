@@ -501,13 +501,44 @@ impl Default for AuthorityTable {
 mod tests {
     use super::{
         AuthorityTable, CapabilityEntry, MAX_TASK_CAPS, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
+        RIGHT_LIFECYCLE_RESTART, RIGHT_PARAMETER_READ, RIGHT_PARAMETER_WRITE,
+        RIGHT_SCHEDULING_PROMOTE, RIGHT_SUPERVISE,
     };
     use crate::ipc::IpcError;
+    use crate::task::TaskId;
+    use boot_contracts::generation::{
+        RIGHT_BOOT_UPDATE, RIGHT_DMA_PIN, RIGHT_DMA_RELEASE, RIGHT_HEALTH_CONFIRM, RIGHT_IRQ_ACK,
+        RIGHT_MAP_MMIO, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
+    };
 
     #[test]
     fn typed_rights_refuse_cross_kind_bits() {
         assert!(CapabilityEntry::block(0, RIGHT_BLOCK_READ).is_some());
         assert!(CapabilityEntry::block(0, RIGHT_BLOCK_READ | (1 << 23)).is_none());
+    }
+
+    #[test]
+    fn supervision_carries_the_root_only_rights_no_manifest_can_declare() {
+        let root_only = RIGHT_SUPERVISE
+            | RIGHT_SCHEDULING_PROMOTE
+            | RIGHT_LIFECYCLE_RESTART
+            | RIGHT_PARAMETER_READ
+            | RIGHT_PARAMETER_WRITE;
+        assert!(CapabilityEntry::supervision(TaskId(0), root_only).is_some());
+
+        for dead in [
+            RIGHT_MAP_MMIO,
+            RIGHT_DMA_PIN,
+            RIGHT_DMA_RELEASE,
+            RIGHT_IRQ_ACK,
+            RIGHT_STORE_READ,
+            RIGHT_STORE_WRITE,
+            RIGHT_HEALTH_CONFIRM,
+            RIGHT_BOOT_UPDATE,
+        ] {
+            assert!(CapabilityEntry::supervision(TaskId(0), RIGHT_SUPERVISE | dead).is_none());
+            assert!(CapabilityEntry::block(0, RIGHT_BLOCK_READ | dead).is_none());
+        }
     }
 
     #[test]
