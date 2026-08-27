@@ -8,7 +8,7 @@
   implementation = {
     provider = "external";
     binary = "slisp-external";
-    contentHash = "58021dc8341de8f48b05cd38e5d7584d227a1f2a8a2c48257f1628cf4d88aad2";
+    contentHash = "e7b4ed89051f94171188c1d214e0c285d69da4a27559fef64bd5a5f232fb1567";
   };
   provides = [];
   requires = [

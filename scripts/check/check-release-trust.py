@@ -17,6 +17,7 @@ from pathlib import Path
 from harness import ROOT, load_script
 
 BUILD = ROOT / "scripts" / "build" / "build-generation.py"
+BUILD_COMPONENT = ROOT / "scripts" / "build" / "build-c-component.py"
 WORK = Path("/tmp/slime-os-release-trust")
 
 CHECK = load_script("check_generation", "check/check-generation.py")
@@ -48,9 +49,28 @@ def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> s
 def build(name: str) -> tuple[Path, Path]:
     output = WORK / name
     shutil.rmtree(output, ignore_errors=True)
+    WORK.mkdir(parents=True, exist_ok=True)
+    slisp = WORK / "slisp.elf"
+    run(
+        [
+            sys.executable,
+            str(BUILD_COMPONENT),
+            str(ROOT / "components" / "slisp" / "slisp.c"),
+            str(ROOT / "components" / "slisp" / "main.c"),
+            str(slisp),
+        ]
+    )
     environment = os.environ.copy()
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
-    run([str(BUILD), str(output)], environment=environment)
+    run(
+        [
+            str(BUILD),
+            "--external-component",
+            f"slisp-external={slisp}",
+            str(output),
+        ],
+        environment=environment,
+    )
     return output / "generation.bin", output / "boot-store.bin"
 
 
