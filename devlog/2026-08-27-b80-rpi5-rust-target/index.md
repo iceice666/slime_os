@@ -57,7 +57,7 @@ The development shell's explicit target list overrode the target inventory Cargo
 | `nix develop --command rustup target list --installed` | Pass: listed `aarch64-unknown-none` under the pinned workspace nightly | Direct |
 | `nix flake check --no-build` and `just sel4_pin_check` | Pass on Darwin; the flake evaluated the local shell and the pin contract remained valid | Direct |
 | `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` | Pass | Direct |
-| Replacement two-profile SDK publication run | Pending after merge | Not observed |
+| GitHub Actions run 33063988008 | Pass for B80: the hosted RPi5 arm compiled the root child and generation components with `aarch64-unknown-none`, then exposed the independent B81 Slisp segment-layout defect | Direct |
 
 ## Decisions
 
@@ -67,12 +67,12 @@ The development shell's explicit target list overrode the target inventory Cargo
 
 ## Open risks and follow-ups
 
-- [ ] The two-profile SDK publication must be redispatched after this change reaches `main`.
+- [x] Run 33063988008 confirmed the clean hosted shell carried `aarch64-unknown-none`; the later B81 linker-layout failure is tracked separately.
 
 ## Artifacts and provenance
 
 - Focused report: this entry.
-- Raw transcript: [GitHub Actions run 33063272940](https://github.com/iceice666/slime_os/actions/runs/33063272940).
+- Raw transcript: [missing-target run 33063272940](https://github.com/iceice666/slime_os/actions/runs/33063272940), [post-fix run 33063988008](https://github.com/iceice666/slime_os/actions/runs/33063988008).
 - Serial/debugger/model output: none; construction failed before packaging or boot.
 - Related roadmap item: [P4](../../roadmap/07-architecture-portability.md#p4--raspberry-pi-5-board-bring-up).
 - Predecessor: [`devlog/2026-08-27-b79-default-sel4-build/`](../2026-08-27-b79-default-sel4-build/index.md)

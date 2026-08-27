@@ -9,7 +9,7 @@ SECTIONS
     . = ALIGN(4096);
     .rodata : { *(.rodata) *(.rodata.*) }
     . = ALIGN(4096);
-    .data : { *(.data) *(.data.*) }
+    .data : { *(.data) *(.data.*) *(.got) *(.got.*) }
     . = ALIGN(4096);
     .bss : { *(.bss) *(.bss.*) *(COMMON) }
     . = ALIGN(4096);
