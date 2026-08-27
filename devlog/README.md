@@ -355,3 +355,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [B80: the hosted RPi5 prefix build lacked its Rust target](2026-08-27-b80-rpi5-rust-target/index.md) | Defect | Verified | B80, P4 |
 | 2026-08-27 | [B81: the freestanding C linker emitted an unaligned writable segment](2026-08-27-b81-rpi5-c-segment-layout/index.md) | Defect | Verified | B81, P4 |
 | 2026-08-27 | [m3air becomes the credential-isolated SDK publication runner](2026-08-27-m3air-sdk-runner/index.md) | Change | Verified | CP7 |
+| 2026-08-27 | [Two hand-written SHA-256 implementations replaced by one RustCrypto facade](2026-08-27-sha256-rustcrypto-facade/index.md) | Change | Verified | none |

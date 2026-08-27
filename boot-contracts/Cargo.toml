@@ -12,6 +12,11 @@ gpt = []
 
 [dependencies]
 ed25519-dalek = { version = "2.2.0", default-features = false, optional = true }
+# `sha256` is a facade over RustCrypto's implementation rather than a
+# hand-written compression function. Not optional -- `boot_contracts::sha256`
+# is used unconditionally by every contract module. `default-features = false`
+# keeps `std` off; the crate links into component binaries with no allocator.
+sha2 = { version = "0.10.9", default-features = false }
 
 # `verify_release` calls `apply_rotation` and `verify_ed25519`, both behind
 # `release-crypto`. Without this it is auto-discovered and built with default

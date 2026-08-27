@@ -20,7 +20,6 @@ mod private_heap;
 /// meaningful under the name of the thing they probe.
 #[cfg(feature = "private-heap")]
 pub mod private_heap_probe;
-mod sha256;
 mod syscall;
 
 mod runtime;
@@ -33,7 +32,9 @@ pub mod wait_set;
 pub use heap::{BumpHeap, HEAP_BYTES, heap_used};
 #[cfg(feature = "private-heap")]
 pub use private_heap::{GROWTH_PAGES, PrivateHeap, PrivateHeapStats, private_heap_stats};
-pub use sha256::sha256;
+// One SHA-256 in the workspace: `boot_contracts::sha256` is a facade over
+// RustCrypto's `sha2`, and this crate already links `boot-contracts`.
+pub use boot_contracts::sha256::digest as sha256;
 pub use syscall::{
     BufferLoan, BufferOccupancy, CapabilityDisposition, DIRECTORY_ROOT_BYTES, ERR_BAD_CAP,
     ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, InputEvent,
