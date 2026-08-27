@@ -42,6 +42,7 @@ The freestanding C linker now declares its three load segments explicitly: execu
 | Area | Change | Restored invariant |
 |---|---|---|
 | `components/runtime/c/component-aarch64.ld` | Collect GOT inputs in `.data`; declare explicit RX, R, and RW `PT_LOAD` headers; assign BSS to the RW header | Freestanding C program headers and permissions are deterministic across host LLD variants, and every load starts on a target page boundary |
+| `contracts/component-spec/v1/components/slisp.zti` | Updated the external implementation digest to the explicit-PHDR ELF bytes | The content-bound component specification admits exactly the linker output the product and contract gates build |
 
 ## Regression guards
 
@@ -62,6 +63,8 @@ The freestanding C linker now declares its three load segments explicitly: execu
 | `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` after explicit `PHDRS` | Pass | Direct |
 | `nix develop --command just sel4_rpi5_image_check` after explicit `PHDRS` | Pass on Darwin: built generation `97b99209a8ed840874ff8cd0ae031bb9d61f7e9265118b60849a2a9deea66711` and wrote the RPi5 ELF plus identity manifest | Direct |
 | GitHub Actions run 33065116457 | Reproduced cross-host gap: QEMU passed; Linux RPi5 still refused Slisp after the Darwin-only GOT repair | Direct |
+| PR #8 CI jobs `Contracts and component specs` and `Rollback, release trust, and BootState trace` | Reproduced: both reached shared `contracts_check` and rejected the old Slisp digest against rebuilt SHA-256 `e7b4ed89051f94171188c1d214e0c285d69da4a27559fef64bd5a5f232fb1567` | Direct |
+| `nix develop --command just contracts_check` after digest update | Pass: all 35 seL4 manifests encoded generation v5 and the full contract aggregate passed | Direct |
 | Replacement hosted two-profile SDK publication run with explicit `PHDRS` | Pending after merge | Not observed |
 
 ## Decisions
