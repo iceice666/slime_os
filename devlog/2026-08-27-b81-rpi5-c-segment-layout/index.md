@@ -5,9 +5,9 @@
 | Date | 2026-08-27 |
 | Kind | Defect |
 | Status | Fixed |
-| Scope | `components/runtime/c/component-aarch64.ld`, `just sel4_rpi5_image_check`, SDK publication workflow runs 33063988008 and 33065116457 |
+| Scope | `components/runtime/c/component-aarch64.ld`, `contracts/component-spec/v1/components/slisp.zti`, `scripts/check/check-release-trust.py`, `just sel4_rpi5_image_check`, SDK publication workflow runs 33063988008 and 33065116457 |
 | Roadmap | B81, P4 |
-| Gates | `just sel4_rpi5_image_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
+| Gates | `just sel4_rpi5_image_check`, `just contracts_check`, `just release_trust_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
 | Trigger | The replacement two-profile SDK publication run advanced past the clean-shell Rust target fix and failed while wrapping the product Slisp ELF for the RPi5 generation |
 | Baseline | The QEMU seL4 profile carries native ELF images and therefore admitted the same Slisp bytes by their own program headers; the RPi5 profile converts fixed-base ELF segments into the component-image v2 segment table and requires every load segment to begin on a page boundary |
 
@@ -43,6 +43,7 @@ The freestanding C linker now declares its three load segments explicitly: execu
 |---|---|---|
 | `components/runtime/c/component-aarch64.ld` | Collect GOT inputs in `.data`; declare explicit RX, R, and RW `PT_LOAD` headers; assign BSS to the RW header | Freestanding C program headers and permissions are deterministic across host LLD variants, and every load starts on a target page boundary |
 | `contracts/component-spec/v1/components/slisp.zti` | Updated the external implementation digest to the explicit-PHDR ELF bytes | The content-bound component specification admits exactly the linker output the product and contract gates build |
+| `scripts/check/check-release-trust.py` | Builds the product Slisp fixture and supplies its explicit external-component mapping when constructing the default seL4 generation | The release-trust gate exercises the content-bound product manifest rather than relying on an undeclared placeholder external image |
 
 ## Regression guards
 
@@ -50,6 +51,7 @@ The freestanding C linker now declares its three load segments explicitly: execu
 |---|---|---|
 | Clang or LLD emits a non-page-aligned orphan load again | `just sel4_rpi5_image_check` and exact RPi `component_image` admission | `invalid or overlapping segment` before generation signing |
 | The layout change breaks native QEMU C components | Hosted two-profile SDK build and existing C/Slisp component gates | QEMU image construction, component admission, or boot marker failure |
+| A host gate builds the content-bound `sel4` manifest without its external Slisp artifact | `just release_trust_check` builds Slisp and passes `slisp-external=<ELF>` | `missing external component ELF mapping(s): ['slisp-external']` |
 | Repository checks regress | `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` | Any named check fails |
 
 ## Verification
@@ -65,6 +67,9 @@ The freestanding C linker now declares its three load segments explicitly: execu
 | GitHub Actions run 33065116457 | Reproduced cross-host gap: QEMU passed; Linux RPi5 still refused Slisp after the Darwin-only GOT repair | Direct |
 | PR #8 CI jobs `Contracts and component specs` and `Rollback, release trust, and BootState trace` | Reproduced: both reached shared `contracts_check` and rejected the old Slisp digest against rebuilt SHA-256 `e7b4ed89051f94171188c1d214e0c285d69da4a27559fef64bd5a5f232fb1567` | Direct |
 | `nix develop --command just contracts_check` after digest update | Pass: all 35 seL4 manifests encoded generation v5 and the full contract aggregate passed | Direct |
+| PR #8 `Rollback, release trust, and BootState trace` rerun | Reproduced after the digest repair: contract checks passed, then `release_trust_check` failed because its direct default-manifest build supplied no `slisp-external` mapping | Direct |
+| `nix develop --command just release_trust_check` after fixture repair | Pass: durable rollback QEMU scenario, signed release checks, and trust-root rotation all passed with the content-bound Slisp fixture | Direct |
+| `nix develop --command just ruff` after fixture repair | Pass | Direct |
 | Replacement hosted two-profile SDK publication run with explicit `PHDRS` | Pending after merge | Not observed |
 
 ## Decisions
