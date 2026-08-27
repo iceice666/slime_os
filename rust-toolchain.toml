@@ -8,5 +8,6 @@ channel = "nightly-2026-05-26"
 # Keep this list in sync with `rustTargets` in flake.nix.
 targets = [
     "x86_64-unknown-none",
+    "aarch64-unknown-none",
 ]
 components = ["clippy", "rustfmt", "llvm-tools-preview", "rust-src", "miri"]

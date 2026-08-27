@@ -31,6 +31,7 @@
           # `nix develop` actually installs. They must agree.
           rustTargets = [
             "x86_64-unknown-none"
+            "aarch64-unknown-none"
           ];
           # The exact GNU AArch64 cross toolchain the pinned seL4 kernel and
           # kernel loader are built with (`CROSS_COMPILER_PREFIX`, `CC`).
