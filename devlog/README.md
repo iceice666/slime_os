@@ -353,3 +353,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [Temporary QEMU keyboard input reaches the resident Slisp shell](2026-08-27-qemu-slisp-keyboard/index.md) | Change | Verified | P5.2, H3 |
 | 2026-08-27 | [B79: the default seL4 build lost its external Slisp input](2026-08-27-b79-default-sel4-build/index.md) | Defect | Verified | B79, P5.2 |
 | 2026-08-27 | [B80: the hosted RPi5 prefix build lacked its Rust target](2026-08-27-b80-rpi5-rust-target/index.md) | Defect | Verified | B80, P4 |
+| 2026-08-27 | [B81: the freestanding C linker emitted an unaligned writable segment](2026-08-27-b81-rpi5-c-segment-layout/index.md) | Defect | Fixed | B81, P4 |

@@ -24,7 +24,14 @@ full and says why.
 
 ## Open
 
-(none)
+### B81 — Freestanding C components emitted an unaligned writable load segment
+
+**Status:** Open. **Class:** Defect (linker orphan-section layout).
+**Problem:** `just sel4_rpi5_image_check` built the complete board prefix and component set, then refused the product Slisp ELF because LLD placed its orphan `.got` in a writable `PT_LOAD` beginning at non-page-aligned `0x403180`.
+**Evidence:** GitHub Actions run 33063988008 failed at `slisp: invalid or overlapping segment`; local `objdump -p build/slisp-product.elf` identified the unaligned load.
+**Proposed fix:** Collect `.got` and `.got.*` in the page-aligned `.data` output section and retain the existing component-image admission checks.
+**Exit condition:** A clean hosted `just sel4_rpi5_image_check` constructs and packages the RPi5 image with the repaired Slisp ELF.
+
 
 ## Deferred follow-ups
 
@@ -59,11 +66,12 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+
 ### B80 — Clean RPi5 builds lacked the `aarch64-unknown-none` Rust target
 
 **Status:** Resolved 2026-08-27. **Class:** Defect (clean-shell target inventory omission).
 **Was:** `just sel4_rpi5_image_check` built and verified the board kernel prefix, then failed with Cargo `E0463` because clean Nix shells installed no `aarch64-unknown-none` `core` for generation components.
-**Exit condition (observed):** The repository toolchain and Nix shell target inventories installed `aarch64-unknown-none`, and the replacement hosted two-profile build completed the RPi5 arm.
+**Exit condition (observed):** The repository toolchain and Nix shell target inventories installed `aarch64-unknown-none`, and replacement hosted run 33063988008 compiled the RPi5 generation components past the prior missing-`core` failure.
 **Evidence:** [`devlog/2026-08-27-b80-rpi5-rust-target/`](../devlog/2026-08-27-b80-rpi5-rust-target/index.md)
 
 ### B79 — Default seL4 builds omitted the resident external Slisp ELF
