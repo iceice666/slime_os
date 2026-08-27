@@ -108,20 +108,20 @@ pub struct ConsoleContext {
     pub scopes: *const crate::directory::ScopeTable,
 }
 
-/// The scripted key source, owned by this thread (B41).
+/// The terminal key source owned by this thread (B41).
 ///
-/// Per-task cursors, because the script is a *session* rather than a shared
+/// Per-task cursors, because a script is a *session* rather than a shared
 /// queue: the root launches every declared component, so two copies of a
 /// console component run and both read input. One cursor would let the
 /// root-launched copy drain the script before the spawned one asked.
 ///
-/// An empty byte slice is the product's live input source until a hardware
-/// driver supplies events: it returns `WouldBlock` rather than manufacturing
-/// Escape, so a post-boot session stays resident. A non-empty slice is a
-/// finite test script and still ends with Escape once consumed.
+/// An empty byte slice ordinarily reports `WouldBlock`. The QEMU product build
+/// may additionally attach its polling PL011 receive path; deterministic plane
+/// scripts remain per-task and take precedence over that live source.
 pub struct ScriptedInput {
     bytes: &'static [u8],
     cursors: [usize; MAX_TASKS],
+    uart: Option<crate::device::Pl011Input>,
 }
 
 impl ScriptedInput {
@@ -129,21 +129,45 @@ impl ScriptedInput {
         Self {
             bytes,
             cursors: [0; MAX_TASKS],
+            uart: None,
         }
     }
 
-    /// The next key for `task`. Empty sources block; finite non-empty scripts
-    /// end with Escape so their test session terminates deterministically.
+    pub fn with_pl011(mut self, uart: crate::device::Pl011Input) -> Self {
+        self.uart = Some(uart);
+        self
+    }
+
+    /// The next key for `task`. Finite non-empty scripts end with Escape so
+    /// their test session terminates deterministically; an attached UART is a
+    /// live queue and remains empty as `WouldBlock`.
     fn next_event(&mut self, task: TaskId) -> Option<u64> {
         let cursor = self.cursors.get_mut(task.0 as usize)?;
-        match self.bytes.get(*cursor).copied() {
-            Some(byte) => {
-                *cursor += 1;
-                Some(encode_key(byte))
-            }
-            None if self.bytes.is_empty() => None,
-            None => Some(encode_key(0x1b)),
+        if !self.bytes.is_empty() {
+            return match self.bytes.get(*cursor).copied() {
+                Some(byte) => {
+                    *cursor += 1;
+                    Some(encode_key(byte))
+                }
+                None => Some(encode_key(0x1b)),
+            };
         }
+        self.uart
+            .as_ref()?
+            .poll_byte()
+            .map(normalize_terminal_byte)
+            .map(encode_key)
+    }
+}
+
+/// QEMU's stdio serial backend sends Enter as carriage return and terminals
+/// commonly send Delete for Backspace. Slisp's input ABI names newline and
+/// backspace explicitly, so normalize those host encodings at the driver edge.
+const fn normalize_terminal_byte(byte: u8) -> u8 {
+    match byte {
+        b'\r' => b'\n',
+        0x7f => 0x08,
+        byte => byte,
     }
 }
 

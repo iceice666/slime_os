@@ -4,10 +4,10 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "An interactive line-editing shell that reads key events and spawns declared commands through the spawn service.";
+  purpose = "Retired Dango shell identity retained only for the frozen CP1 reference baseline.";
   implementation = {
-    provider = "workspace";
-    binary = "dango";
+    provider = "undeclared";
+    binary = "";
     contentHash = "";
   };
   provides = [
@@ -68,9 +68,9 @@
     qos = "none";
   };
   test = {
-    testCondition = "the sel4_dango_check gate boots a generation declaring dango";
-    expectedResult = "dango reaches its declared behavior under that gate";
-    passFailCriteria = "[init] dango plane complete";
-    requiredTestEnvironment = "sel4_dango_check";
+    testCondition = "the component_spec_check gate validates the retired Dango reference contract";
+    expectedResult = "Dango remains structurally declared but has no implementation provider";
+    passFailCriteria = "declared-without-implementation set";
+    requiredTestEnvironment = "component_spec_check";
   };
 }

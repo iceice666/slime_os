@@ -59,7 +59,6 @@ SEL4_RESOLVER_STEMS = {
     "sel4-generation",
     "sel4-directory",
     "sel4-filesystem",
-    "sel4-dango",
     "sel4-input",
     "sel4-powerbox",
     "sel4-transfer",

@@ -36,7 +36,8 @@ use slime_proto::syscall_abi::{GRANT_RECORD_BYTES, GRANT_RIGHTS_OFFSET, GRANT_SL
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
 /// null and every other slot belongs to the generation's declared grants; this
 /// module addresses neither.
-pub const ROOT_SERVICE_SLOT: sel4::CPtrBits = 1;
+pub const ROOT_SERVICE_SLOT: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::ROOT_SERVICE_SLOT as sel4::CPtrBits;
 
 /// The child CSpace slot holding the badged console/debug endpoint (B41).
 ///
@@ -44,15 +45,15 @@ pub const ROOT_SERVICE_SLOT: sel4::CPtrBits = 1;
 /// thread, so console traffic neither queues behind lifecycle traffic nor
 /// shares its fault domain. Above every slot a generation grant can name:
 /// grant slots are the component's own numbering and start at 0.
-pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits = 32;
+pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::CONSOLE_SERVICE_SLOT as sel4::CPtrBits;
 
-/// Console-endpoint message labels. One endpoint carries both kinds because
-/// one root thread serves them; the label says which (B41).
-const CONSOLE_LABEL_WRITE: u64 = 0;
-const CONSOLE_LABEL_INPUT_READ: u64 = 1;
-const CONSOLE_LABEL_BLOCK_TRANSACT: u64 = 2;
-const CONSOLE_LABEL_DIRECTORY_INSPECT: u64 = 3;
-const CONSOLE_LABEL_DIRECTORY_COMMIT: u64 = 4;
+use boot_contracts::component_runtime_abi::console_labels::{
+    BLOCK_TRANSACT as CONSOLE_LABEL_BLOCK_TRANSACT,
+    DIRECTORY_COMMIT as CONSOLE_LABEL_DIRECTORY_COMMIT,
+    DIRECTORY_INSPECT as CONSOLE_LABEL_DIRECTORY_INSPECT, INPUT_READ as CONSOLE_LABEL_INPUT_READ,
+    WRITE as CONSOLE_LABEL_WRITE,
+};
 
 /// Bytes of the immutable directory root in an inspect reply frame.
 const DIRECTORY_ROOT_BYTES: usize = 32;
@@ -67,20 +68,24 @@ fn root_service() -> cap::Endpoint {
 }
 
 /// Fixed child-CNode regions shared with `slime-root`'s native-capability ABI.
-const NATIVE_ENDPOINT_BASE: u32 = 33;
-const NATIVE_TRANSFER_ENDPOINT_BASE: u32 = 5;
+const NATIVE_ENDPOINT_BASE: u32 = boot_contracts::component_runtime_abi::NATIVE_ENDPOINT_BASE;
+const NATIVE_TRANSFER_ENDPOINT_BASE: u32 =
+    boot_contracts::component_runtime_abi::TRANSFERRED_ENDPOINT_BASE;
 /// Marks a received Endpoint handle. The decoded slot is accepted only inside
 /// the dedicated transfer region, so callers cannot turn an arbitrary CPtr
 /// into endpoint authority by setting the tag.
-const TRANSFERRED_ENDPOINT_HANDLE_TAG: u32 = 1 << 31;
+const TRANSFERRED_ENDPOINT_HANDLE_TAG: u32 =
+    boot_contracts::component_runtime_abi::TRANSFERRED_ENDPOINT_HANDLE_TAG;
 const TRANSFERRED_ENDPOINT_HANDLE_BASE: u32 = NATIVE_TRANSFER_ENDPOINT_BASE;
 const TRANSFERRED_ENDPOINT_HANDLE_LIMIT: u32 = NATIVE_ENDPOINT_BASE;
-const NATIVE_NOTIFICATION_BASE: u32 = 64;
-const NATIVE_TOKEN_BASE: u32 = 95;
-const NATIVE_REGION_SLOTS: u32 = 31;
-const NATIVE_RECEIVE_SLOT: u32 = 127;
-const CHILD_CNODE_SLOT: u32 = 4;
-const CHILD_CNODE_SIZE_BITS: usize = 7;
+const NATIVE_NOTIFICATION_BASE: u32 =
+    boot_contracts::component_runtime_abi::NATIVE_NOTIFICATION_BASE;
+const NATIVE_TOKEN_BASE: u32 = boot_contracts::component_runtime_abi::NATIVE_AUTHORITY_BASE;
+const NATIVE_REGION_SLOTS: u32 = boot_contracts::component_runtime_abi::NATIVE_REGION_SLOTS;
+const NATIVE_RECEIVE_SLOT: u32 = boot_contracts::component_runtime_abi::NATIVE_RECEIVE_SLOT;
+const CHILD_CNODE_SLOT: u32 = boot_contracts::component_runtime_abi::CHILD_CNODE_SLOT;
+const CHILD_CNODE_SIZE_BITS: usize =
+    boot_contracts::component_runtime_abi::CHILD_CNODE_SIZE_BITS as usize;
 fn native_endpoint(slot: u32) -> Result<cap::Endpoint, i64> {
     let absolute = if slot & TRANSFERRED_ENDPOINT_HANDLE_TAG != 0 {
         let transferred = slot & !TRANSFERRED_ENDPOINT_HANDLE_TAG;

@@ -343,11 +343,18 @@ SEL4_MANIFESTS = {
     "sel4-generation": GENERATION_COMPOSITIONS / "sel4-generation.zti",
     "sel4-directory": GENERATION_COMPOSITIONS / "sel4-directory.zti",
     "sel4-filesystem": GENERATION_COMPOSITIONS / "sel4-filesystem.zti",
-    "sel4-dango": GENERATION_COMPOSITIONS / "sel4-dango.zti",
     "sel4-input": GENERATION_COMPOSITIONS / "sel4-input.zti",
     "sel4-powerbox": GENERATION_COMPOSITIONS / "sel4-powerbox.zti",
     "sel4-transfer": GENERATION_COMPOSITIONS / "sel4-transfer.zti",
 }
+# These manifests require an explicitly supplied non-workspace ELF and matching
+# component-spec corpus. Keep them selectable by the product builder without
+# making corpus-wide checks pretend a Rust workspace package can build them.
+SEL4_EXTERNAL_MANIFESTS = {
+    "sel4-c-runtime": GENERATION_COMPOSITIONS / "sel4-c-runtime.zti",
+    "sel4-slisp": GENERATION_COMPOSITIONS / "sel4-slisp.zti",
+}
+SEL4_SELECTABLE_MANIFESTS = SEL4_MANIFESTS | SEL4_EXTERNAL_MANIFESTS
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
@@ -579,6 +586,8 @@ def parse_external_components(values: list[str]) -> dict[str, Path]:
     return mappings
 
 
+
+
 def component_specs_for_manifest(
     manifest: dict, component_spec_root: Path | None = None
 ) -> dict[str, dict]:
@@ -623,6 +632,12 @@ def resolve_component_sources(
     specs = component_specs_for_manifest(manifest, component_spec_root)
 
     manifest_names = {executable["name"] for executable in manifest["executables"]}
+    product_slisp_digest = os.environ.get("SLIME_PRODUCT_SLISP_SHA256")
+    slisp_spec = specs.get("slisp")
+    if product_slisp_digest is not None:
+        if slisp_spec is None or slisp_spec["implementation"]["provider"] != "external":
+            fail("SLIME_PRODUCT_SLISP_SHA256 requires an external Slisp component spec")
+        slisp_spec["implementation"]["contentHash"] = product_slisp_digest
     workspace = manifest_names - set(specs)
     expected_external: set[str] = set()
     for executable_name, spec in specs.items():
@@ -660,7 +675,7 @@ def manifest_source() -> Path:
     """
     if os.environ.get("SLIME_TARGET_PROFILE") in SEL4_TARGET_PROFILES:
         name = os.environ.get("SLIME_SEL4_MANIFEST", "sel4")
-        source = SEL4_MANIFESTS.get(name)
+        source = SEL4_SELECTABLE_MANIFESTS.get(name)
         if source is None:
             fail(f"unknown seL4 manifest {name!r}")
         return source
@@ -886,10 +901,9 @@ def build_rust_components(
     # plane across 29 fixtures is a real cost, and grouping keeps it at today's.
     invocations: list[list[str]] = []
     if is_json_target(target_profile):
-        # No command-profile manifest is exported: `spawn-service` and `dango`
-        # resolve their commands, launch contexts, request endpoint, and spawn
-        # budget from the authenticated generation at runtime (B70), so nothing
-        # in a component build reads a fixture any more.
+        # No command-profile manifest is exported: `spawn-service` resolves its
+        # command bindings, launch contexts, request endpoint, and spawn budget
+        # from the authenticated generation at runtime (B70).
         # Build exactly the components this generation declares, rather than
         # every component crate. The fabric components are compiled against a
         # generated C8 profile this target has no graph for, so building them
@@ -2408,11 +2422,15 @@ def build_sel4_generation(
     component_specs, workspace_binaries = resolve_component_sources(
         manifest, external_components, component_spec_root
     )
-    built = build_rust_components(
-        manifest["generation"],
-        target_profile,
-        candidate_identity=None,
-        components=workspace_binaries,
+    built = (
+        build_rust_components(
+            manifest["generation"],
+            target_profile,
+            candidate_identity=None,
+            components=workspace_binaries,
+        )
+        if workspace_binaries
+        else None
     )
     payloads: dict[str, bytes] = {}
     object_ids = {object_["id"] for object_ in manifest["objects"]}
@@ -2530,12 +2548,16 @@ def build_sel4_generation(
         if specification is None:
             binary_name = executable["name"]
             provider = "workspace-fixture"
+            if built is None:
+                fail(f"executable {executable['name']!r}: workspace build was not run")
             elf = component_executable(built, binary_name, target_profile)
         else:
             implementation = specification["implementation"]
             binary_name = implementation["binary"]
             provider = implementation["provider"]
             if provider == component_spec_contract.PROVIDER_WORKSPACE:
+                if built is None:
+                    fail(f"executable {executable['name']!r}: workspace build was not run")
                 elf = component_executable(built, binary_name, target_profile)
             else:
                 elf = external_components[binary_name]

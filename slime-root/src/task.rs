@@ -54,32 +54,43 @@ pub const MAX_TASKS: usize = 48;
 /// Slots in a child CNode for fixed authority, declared native endpoints,
 /// notifications, transferable-authority mirrors, and the receive slot.
 /// Seven bits provide the required 128-slot CSpace.
-pub const CHILD_CNODE_SIZE_BITS: usize = 7;
+pub const CHILD_CNODE_SIZE_BITS: usize =
+    boot_contracts::component_runtime_abi::CHILD_CNODE_SIZE_BITS as usize;
 
 /// Child CSpace slot holding the badged root service endpoint.
-pub const CHILD_SLOT_SERVICE: sel4::CPtrBits = 1;
+pub const CHILD_SLOT_SERVICE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::ROOT_SERVICE_SLOT as sel4::CPtrBits;
 /// Child CSpace slot holding the task's own TCB, when supervised.
-pub const CHILD_SLOT_TCB: sel4::CPtrBits = 2;
+pub const CHILD_SLOT_TCB: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::TCB_SLOT as sel4::CPtrBits;
 /// Child CSpace slot holding the task's badged fault-handler endpoint.
-pub const CHILD_SLOT_FAULT: sel4::CPtrBits = 3;
+pub const CHILD_SLOT_FAULT: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::FAULT_SLOT as sel4::CPtrBits;
 /// Child CSpace slot holding the root capability for that CSpace.
-pub const CHILD_SLOT_CNODE: sel4::CPtrBits = 4;
+pub const CHILD_SLOT_CNODE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::CHILD_CNODE_SLOT as sel4::CPtrBits;
 /// Child CSpace slot holding the badged console/debug endpoint (B41).
 ///
 /// Above every slot a generation grant can name: grant slots are the
 /// component's own numbering and start at 0, so a low fixed slot would collide
 /// with declared authority in every migrated fixture.
-pub const CHILD_SLOT_CONSOLE: sel4::CPtrBits = 32;
+pub const CHILD_SLOT_CONSOLE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::CONSOLE_SERVICE_SLOT as sel4::CPtrBits;
 /// First child CSpace slot holding a declared native endpoint.
-pub const CHILD_SLOT_ENDPOINT_BASE: sel4::CPtrBits = 33;
+pub const CHILD_SLOT_ENDPOINT_BASE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::NATIVE_ENDPOINT_BASE as sel4::CPtrBits;
 /// First child CSpace slot holding a declared Notification capability.
-pub const CHILD_SLOT_NOTIFICATION_BASE: sel4::CPtrBits = 64;
+pub const CHILD_SLOT_NOTIFICATION_BASE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::NATIVE_NOTIFICATION_BASE as sel4::CPtrBits;
 /// First child CSpace slot holding a badged logical-authority mirror.
-pub const CHILD_SLOT_AUTHORITY_BASE: sel4::CPtrBits = 95;
+pub const CHILD_SLOT_AUTHORITY_BASE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::NATIVE_AUTHORITY_BASE as sel4::CPtrBits;
 /// Slot where native endpoint receive deposits its sole transferred capability.
-pub const CHILD_SLOT_RECEIVE: sel4::CPtrBits = 127;
+pub const CHILD_SLOT_RECEIVE: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::NATIVE_RECEIVE_SLOT as sel4::CPtrBits;
 /// Number of slots in each declared native/mirror region.
-pub const CHILD_NATIVE_REGION_SLOTS: sel4::CPtrBits = 31;
+pub const CHILD_NATIVE_REGION_SLOTS: sel4::CPtrBits =
+    boot_contracts::component_runtime_abi::NATIVE_REGION_SLOTS as sel4::CPtrBits;
 
 /// Destination slots in a child's CSpace, resolved from the admitted plan.
 ///

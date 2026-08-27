@@ -1,0 +1,90 @@
+-- Slime OS language-neutral component runtime ABI, version 1.
+--
+-- This contract is the startup and transport surface a component runtime must
+-- implement before it can invoke a Slime service. It contains only values that
+-- cross the root/component boundary or locate root-installed capabilities and
+-- mappings in a child process. Language libraries may expose richer APIs, but
+-- they must derive these constants rather than restating them.
+--
+-- The root maps each thread's IPC buffer at the first page boundary after the
+-- ELF image, and its transfer window one page later. Subsequent threads repeat
+-- that pair. The child CSpace layout is fixed because the root installs these
+-- capabilities before the component runs and the component must address them by
+-- raw seL4 CPtr.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_bindings.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+
+wordBytes :: Int = 8;
+granuleBytes :: Int = 4096;
+maxThreads :: Int = 2;
+fastRegisters :: Int = 4;
+inlineBytes :: Int = 16;
+minimumTransferWindowBytes :: Int = 4096;
+
+-- Transfer descriptor bit fields: payload length, capability count, carrier,
+-- then the thread index in the high 32 bits.
+descriptorLengthShift :: Int = 0;
+descriptorLengthBits :: Int = 16;
+descriptorCapsShift :: Int = 16;
+descriptorCapsBits :: Int = 8;
+descriptorFormShift :: Int = 24;
+descriptorFormBits :: Int = 8;
+descriptorThreadShift :: Int = 32;
+descriptorFormInline :: Int = 0;
+descriptorFormWindow :: Int = 1;
+
+-- Fixed child CSpace layout.
+childCnodeSizeBits :: Int = 7;
+rootServiceSlot :: Int = 1;
+tcbSlot :: Int = 2;
+faultSlot :: Int = 3;
+childCnodeSlot :: Int = 4;
+transferredEndpointBase :: Int = 5;
+consoleServiceSlot :: Int = 32;
+nativeEndpointBase :: Int = 33;
+nativeNotificationBase :: Int = 64;
+nativeAuthorityBase :: Int = 95;
+nativeRegionSlots :: Int = 31;
+nativeReceiveSlot :: Int = 127;
+transferredEndpointHandleTag :: Int = 2147483648;
+
+ConsoleOperation :: type { name : Text; label : Int; };
+consoleOperation :: Text -> Int -> ConsoleOperation
+  = name label => { name = name; label = label; };
+
+consoleOperations :: List ConsoleOperation = {
+  consoleOperation "WRITE" 0;
+  consoleOperation "INPUT_READ" 1;
+  consoleOperation "BLOCK_TRANSACT" 2;
+  consoleOperation "DIRECTORY_INSPECT" 3;
+  consoleOperation "DIRECTORY_COMMIT" 4;
+};
+
+abi ::= {
+  formatVersion =;
+  wordBytes =; granuleBytes =; maxThreads =; fastRegisters =; inlineBytes =;
+  minimumTransferWindowBytes =;
+  descriptorLengthShift =; descriptorLengthBits =;
+  descriptorCapsShift =; descriptorCapsBits =;
+  descriptorFormShift =; descriptorFormBits =; descriptorThreadShift =;
+  descriptorFormInline =; descriptorFormWindow =;
+  childCnodeSizeBits =; rootServiceSlot =; tcbSlot =; faultSlot =;
+  childCnodeSlot =; transferredEndpointBase =; consoleServiceSlot =;
+  nativeEndpointBase =; nativeNotificationBase =; nativeAuthorityBase =;
+  nativeRegionSlots =; nativeReceiveSlot =; transferredEndpointHandleTag =;
+  consoleOperations =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_COMPONENT_RUNTIME_ABI_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render abi;
+    fs.writeAll caps.write (t.join "" { root; "/component_runtime_abi.rs"; }) bindings.rust;
+    fs.writeAll caps.write (t.join "" { root; "/component_runtime_abi.h"; }) bindings.c
+  ];
+main

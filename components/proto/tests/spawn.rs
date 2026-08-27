@@ -1,7 +1,7 @@
 use slime_proto::{
     spawn::{
-        CAPABILITY_ROLE_STDOUT, FORMAT_VERSION, REPLY_LEN, REQUEST_LEN, SPAWN_MAGIC,
-        WireSpawnReply, WireSpawnRequest,
+        CAPABILITY_ROLE_STDOUT, FORMAT_VERSION, REPLY_LEN, REQUEST_FLAG_DETACHED, REQUEST_LEN,
+        SPAWN_MAGIC, WireSpawnReply, WireSpawnRequest,
     },
     valid_spawn_reply, valid_spawn_request,
 };
@@ -94,5 +94,29 @@ fn request_validation_rejects_unknown_versions_and_bounds() {
         environment_count: 1,
         environment: [6, b'K', b'=', b'V', 0, 0, 0, 1],
         ..base
+    }));
+}
+
+#[test]
+fn detached_launch_requires_service_owned_budget() {
+    let request = WireSpawnRequest {
+        magic: SPAWN_MAGIC,
+        version: FORMAT_VERSION,
+        flags: REQUEST_FLAG_DETACHED,
+        command_len: 7,
+        argument_count: 0,
+        environment_count: 0,
+        capability_roles: 0,
+        client_budget: 0,
+        command: *b"sysinfo\0\0\0\0\0\0\0\0\0",
+        arguments: [0; 8],
+        environment: [0; 8],
+        grant_rights: 0,
+        reserved: [0; 6],
+    };
+    assert!(valid_spawn_request(&request));
+    assert!(!valid_spawn_request(&WireSpawnRequest {
+        client_budget: 1,
+        ..request
     }));
 }

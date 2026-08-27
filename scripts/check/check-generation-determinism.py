@@ -22,13 +22,13 @@ def fail(message: str) -> None:
     raise SystemExit(f"generation determinism check: {message}")
 
 
-def build(output: Path, target_dir: Path) -> None:
+def build(output: Path, target_dir: Path, slisp: Path) -> None:
     environment = os.environ.copy()
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
     environment["SLIME_SEL4_MANIFEST"] = "sel4"
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     process = subprocess.run(
-        [str(BUILD), str(output)],
+        [str(BUILD), "--external-component", f"slisp-external={slisp}", str(output)],
         cwd=ROOT,
         env=environment,
         check=False,
@@ -176,10 +176,24 @@ def undeclarable_cpu_budget_refused(generation: bytes, scratch: Path) -> int:
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="slime-generation-determinism-") as directory:
         root = Path(directory)
+        slisp = root / "slisp.elf"
+        process = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "build" / "build-c-component.py"),
+                str(ROOT / "components" / "slisp" / "slisp.c"),
+                str(ROOT / "components" / "slisp" / "main.c"),
+                str(slisp),
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        if process.returncode != 0:
+            fail("the product Slisp component failed to build")
         first = root / "first"
         second = root / "second"
-        build(first, root / "target-first")
-        build(second, root / "target-second")
+        build(first, root / "target-first", slisp)
+        build(second, root / "target-second", slisp)
         generation = compare(first, second, "generation.bin")
         first_generation_one = (first / "generation-1.bin").read_bytes()
         second_generation_one = (second / "generation-1.bin").read_bytes()

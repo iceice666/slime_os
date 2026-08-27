@@ -29,8 +29,8 @@ const KERNEL_OBJECT_TCB: u32 = 3;
 const KERNEL_OBJECT_ENDPOINT: u32 = 5;
 /// Kernel-object kind discriminant for a notification.
 const KERNEL_OBJECT_NOTIFICATION: u32 = 7;
-const ROOT_SERVICE_SLOT: usize = 1;
-const CONSOLE_SERVICE_SLOT: usize = 32;
+const ROOT_SERVICE_SLOT: usize = crate::component_runtime_abi::ROOT_SERVICE_SLOT as usize;
+const CONSOLE_SERVICE_SLOT: usize = crate::component_runtime_abi::CONSOLE_SERVICE_SLOT as usize;
 const SERVICE_SEND_RIGHT: Rights = 1;
 
 fn service_for_capability(kind: CapabilityKind) -> Option<u32> {
@@ -153,7 +153,6 @@ pub enum BootAction {
     Call = 3,
     Channel = 4,
     Crossing = 5,
-    Dango = 6,
     Directory = 7,
     Filesystem = 8,
     Generation = 9,
@@ -203,6 +202,11 @@ pub enum BootAction {
     /// graph over the native fabric, exercised under declared best-effort CPU
     /// contention and an injected controller restart.
     RobotRuntime = 36,
+    /// Language-neutral runtime proof: one independently compiled C component
+    /// invokes generated console and lifecycle ABI operations.
+    CRuntime = 37,
+    /// Minimal pure S-expression language core implemented outside Rust.
+    Slisp = 38,
 }
 
 impl BootAction {
@@ -230,7 +234,6 @@ impl BootAction {
         Self::Call,
         Self::Channel,
         Self::Crossing,
-        Self::Dango,
         Self::Directory,
         Self::Filesystem,
         Self::Generation,
@@ -261,6 +264,8 @@ impl BootAction {
         Self::LifecycleRestart,
         Self::Replay,
         Self::RobotRuntime,
+        Self::CRuntime,
+        Self::Slisp,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -279,7 +284,6 @@ impl BootAction {
                 Self::Call => Self::Call.id(),
                 Self::Channel => Self::Channel.id(),
                 Self::Crossing => Self::Crossing.id(),
-                Self::Dango => Self::Dango.id(),
                 Self::Directory => Self::Directory.id(),
                 Self::Filesystem => Self::Filesystem.id(),
                 Self::Generation => Self::Generation.id(),
@@ -310,6 +314,8 @@ impl BootAction {
                 Self::LifecycleRestart => Self::LifecycleRestart.id(),
                 Self::Replay => Self::Replay.id(),
                 Self::RobotRuntime => Self::RobotRuntime.id(),
+                Self::CRuntime => Self::CRuntime.id(),
+                Self::Slisp => Self::Slisp.id(),
             };
             declared == id
         })
@@ -322,7 +328,6 @@ impl BootAction {
             "call" => Self::Call,
             "channel" => Self::Channel,
             "crossing" => Self::Crossing,
-            "dango" => Self::Dango,
             "directory" => Self::Directory,
             "filesystem" => Self::Filesystem,
             "generation" => Self::Generation,
@@ -353,6 +358,8 @@ impl BootAction {
             "lifecycle-restart" => Self::LifecycleRestart,
             "replay" => Self::Replay,
             "robot-runtime" => Self::RobotRuntime,
+            "c-runtime" => Self::CRuntime,
+            "slisp" => Self::Slisp,
             _ => return None,
         })
     }
@@ -2905,13 +2912,12 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 36] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 37] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
         (BootAction::Channel, 4),
         (BootAction::Crossing, 5),
-        (BootAction::Dango, 6),
         (BootAction::Directory, 7),
         (BootAction::Filesystem, 8),
         (BootAction::Generation, 9),
@@ -2942,6 +2948,8 @@ mod tests {
         (BootAction::LifecycleRestart, 34),
         (BootAction::Replay, 35),
         (BootAction::RobotRuntime, 36),
+        (BootAction::CRuntime, 37),
+        (BootAction::Slisp, 38),
     ];
 
     #[test]
@@ -3013,6 +3021,8 @@ mod tests {
             ("visibility", BootAction::Visibility),
             ("matrix", BootAction::Matrix),
             ("demo", BootAction::Demo),
+            ("c-runtime", BootAction::CRuntime),
+            ("slisp", BootAction::Slisp),
         ] {
             assert_eq!(BootAction::parse(spelling), Some(expected));
         }

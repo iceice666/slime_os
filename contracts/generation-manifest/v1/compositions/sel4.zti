@@ -27,14 +27,11 @@
       spawnBudget = 8;
     };
     {
-      commandProfile = [
-        "echo";
-        "sysinfo";
-      ];
-      name = "dango";
-      object = "sha256:dango";
+      commandProfile = [];
+      name = "slisp";
+      object = "sha256:slisp";
       role = "application";
-      spawnBudget = 8;
+      spawnBudget = 0;
     };
     {
       commandProfile = [];
@@ -77,14 +74,14 @@
       transferable = false;
     };
     {
-      name = "init-dango";
+      name = "init-slisp";
       capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
       ];
       source = "init";
-      target = "dango";
+      target = "slisp";
       transferable = false;
     };
     {
@@ -94,7 +91,7 @@
         "send";
         "recv";
       ];
-      source = "dango";
+      source = "slisp";
       target = "spawn-service";
       transferable = false;
     };
@@ -121,6 +118,28 @@
       transferable = false;
     };
     {
+      name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
       name = "spawn-service-shared-buffer-factory";
       capabilityKind = "sharedBufferFactory";
       rights = [
@@ -131,44 +150,24 @@
       transferable = false;
     };
     {
-      name = "dango-console-rpc";
+      name = "slisp-console-rpc";
       capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
-      source = "dango";
+      source = "slisp";
       target = "console";
       transferable = false;
     };
     {
-      name = "dango-shared-buffer-factory";
-      capabilityKind = "sharedBufferFactory";
-      rights = [
-        "bufferCreate";
-      ];
-      source = "dango";
-      target = "dango";
-      transferable = false;
-    };
-    {
-      name = "dango-a-input";
+      name = "slisp-input";
       capabilityKind = "input";
       rights = [
         "inputRead";
       ];
-      source = "dango";
-      target = "dango";
-      transferable = false;
-    };
-    {
-      name = "dango-cwd-root";
-      capabilityKind = "directory";
-      rights = [
-        "directoryRead";
-      ];
-      source = "dango";
-      target = "dango";
+      source = "slisp";
+      target = "slisp";
       transferable = false;
     };
   ];
@@ -178,7 +177,7 @@
       "console";
       "init";
       "spawn-service";
-      "dango";
+      "slisp";
     ];
   };
   instances = [
@@ -206,7 +205,7 @@
           slot = 8;
         };
         {
-          grant = "init-dango";
+          grant = "init-slisp";
           slot = 9;
         };
       ];
@@ -220,7 +219,7 @@
       autostart = true;
       bindings = [
         {
-          grant = "dango-console-rpc";
+          grant = "slisp-console-rpc";
           slot = 0;
         };
       ];
@@ -248,8 +247,16 @@
           slot = 2;
         };
         {
+          grant = "spawn-service-sysinfo-context";
+          slot = 3;
+        };
+        {
           grant = "spawn-service-shared-buffer-factory";
           slot = 4;
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 5;
         };
       ];
       dependencies = [
@@ -264,38 +271,35 @@
       autostart = true;
       bindings = [
         {
-          grant = "spawn-service-rpc";
+          grant = "slisp-console-rpc";
           slot = 0;
         };
         {
-          grant = "dango-console-rpc";
+          grant = "slisp-input";
           slot = 1;
         };
         {
-          grant = "dango-a-input";
+          grant = "spawn-service-rpc";
           slot = 2;
-        };
-        {
-          grant = "dango-cwd-root";
-          slot = 3;
-        };
-        {
-          grant = "dango-shared-buffer-factory";
-          slot = 5;
         };
       ];
       dependencies = [
         "console";
         "spawn-service";
       ];
-      executable = "dango";
+      executable = "slisp";
       health = "required";
-      name = "dango";
+      name = "slisp";
       owner = "init";
     };
     {
       autostart = false;
-      bindings = [];
+      bindings = [
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 0;
+        };
+      ];
       dependencies = [
         "spawn-service";
       ];
@@ -306,7 +310,12 @@
     };
     {
       autostart = false;
-      bindings = [];
+      bindings = [
+        {
+          grant = "spawn-service-echo-context";
+          slot = 0;
+        };
+      ];
       dependencies = [
         "spawn-service";
       ];
@@ -335,9 +344,9 @@
       size = 65536;
     };
     {
-      id = "sha256:dango";
+      id = "sha256:slisp";
       kind = "component";
-      size = 65536;
+      size = 131072;
     };
     {
       id = "sha256:sysinfo";
@@ -367,13 +376,6 @@
       holder = "spawn-service";
       loanCount = 1;
       mappingCount = 2;
-    };
-    {
-      bufferCount = 2;
-      bytePages = 8;
-      holder = "dango";
-      loanCount = 2;
-      mappingCount = 4;
     };
   ];
   state = [

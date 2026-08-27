@@ -36,17 +36,19 @@ shared-buffer mechanisms this first resident product graph uses. The graph is:
 | Component | Role |
 | --- | --- |
 | `init` | bootstrap; launches the resident services and supervises them |
-| `console` | receives dango output on a native endpoint |
-| `spawn-service` | spawns the two commands named by the shell profile |
-| `dango` | resident shell; waits for input and submits commands |
+| `console` | receives Slisp output on a native endpoint |
+| `spawn-service` | owns the executable catalogue entries the shell may later invoke |
+| `slisp` | resident shell; waits for input and evaluates pure S-expressions |
 | `sysinfo` | spawned application; reports its launch context |
 | `echo-agent` | spawned application; echoes its launch context |
 
-The product input source is intentionally empty until a hardware input driver
-supplies events. Empty input reports `WouldBlock`, so dango remains at its prompt
-instead of treating boot as a completed scripted session. The component-graph
-gate terminates on the root's live-health certificate: `init`, `console`,
-`spawn-service`, and `dango` are all still live and supervised.
+The QEMU product build temporarily maps the `virt` machine's PL011 receive FIFO
+inside `slime-root` and presents its bytes through Slisp's existing input
+capability. An empty FIFO still reports `WouldBlock`, so Slisp remains resident
+at its prompt; deterministic input planes keep their scripted source, and
+physical targets do not compile the QEMU address. The component-graph gate
+terminates on Slisp's first blocked input wait after the root certifies that
+`init`, `console`, `spawn-service`, and `slisp` are all live and supervised.
 
 Deferred components and the plane each waits on are recorded in
 `roadmap/07-architecture-portability.md`.
@@ -55,11 +57,13 @@ Deferred components and the plane each waits on are recorded in
 ## Authority path
 
 `init` receives executable authority for `console`, `spawn-service`, and
-`dango`. It launches them and retains their supervision handles. Native
-generation-owned endpoints connect dango to console and spawn-service; dango
-also receives its declared input, directory, and shared-buffer authority.
+`slisp`. It launches them and retains their supervision handles. Native
+generation-owned endpoints connect Slisp to console and spawn-service; Slisp
+also receives its declared input authority.
 
-`spawn-service` receives executable grants for `sysinfo` and `echo-agent`, so a
-shell command still resolves through the generation's command profile and can
-start exactly those two executables. The resident product does not infer command
-authority from the executable catalogue.
+`spawn-service` receives executable grants for `sysinfo` and `echo-agent`, plus
+one generation-owned launch-context endpoint for each command. A shell command
+therefore resolves through the generation's command profile, starts exactly one
+of those two executables, and delivers its bounded `spawn/v1` request on slot 0.
+The resident product does not infer command authority or communication paths
+from the executable catalogue.

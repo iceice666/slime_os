@@ -297,6 +297,28 @@
       transferable = false;
     };
     {
+      name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
       name = "spawn-service-shared-buffer-factory";
       capabilityKind = "sharedBufferFactory";
       rights = [
@@ -631,8 +653,16 @@
           slot = 2;
         };
         {
+          grant = "spawn-service-sysinfo-context";
+          slot = 3;
+        };
+        {
           grant = "spawn-service-shared-buffer-factory";
           slot = 4;
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 5;
         };
       ];
       dependencies = [
@@ -645,7 +675,12 @@
     };
     {
       autostart = false;
-      bindings = [];
+      bindings = [
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 0;
+        };
+      ];
       dependencies = [
         "spawn-service";
       ];
@@ -656,7 +691,12 @@
     };
     {
       autostart = false;
-      bindings = [];
+      bindings = [
+        {
+          grant = "spawn-service-echo-context";
+          slot = 0;
+        };
+      ];
       dependencies = [
         "spawn-service";
       ];

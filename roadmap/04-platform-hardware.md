@@ -83,7 +83,7 @@ Deliverables:
 - implement a userspace xHCI driver over IO0 request/completion, lease, epoch, and cancellation rules plus H2-bound IO1 resources, with bounded command, event, and transfer rings and explicit controller reset/timeout handling;
 - implement root-hub and bounded hub enumeration, descriptor validation, address/configuration selection, endpoint lifecycle, disconnect cancellation, and per-device incarnation identities so reconnect cannot satisfy an old transfer;
 - implement USB HID keyboard and pointer boot protocols, key rollover bounds, press/release events, and hotplug;
-- route i8042 and USB HID through one versioned seat/input service so Dango and later compositor clients do not depend on the physical transport;
+- route i8042 and USB HID through one versioned seat/input service so Slisp and later compositor clients do not depend on the physical transport;
 - keep xHCI commands, descriptors, endpoint policy, and HID semantics out of IO0/IO1 and `slime-root`, and keep physical xHCI bus mastering disabled until H4 supplies an IOMMU domain.
 
 Required checks:
@@ -91,7 +91,7 @@ Required checks:
 - malformed, cyclic, oversized, short, or inconsistent USB descriptors are rejected before ring or buffer allocation;
 - transfer timeout, controller reset, endpoint stall, surprise removal, and event-ring overflow leave no pinned buffer or permanently wedged input service;
 - one client holding seat input authority receives events while an ungranted component cannot read or inject them;
-- scripted QEMU keyboard input drives the native Dango REPL through the same seat protocol used by physical HID;
+- scripted QEMU keyboard input drives the native Slisp REPL through the same seat protocol used by physical HID;
 - repeated attach/detach remains within fixed device, endpoint, transfer, and queue bounds.
 
 Planned verification target:
@@ -120,7 +120,7 @@ Required checks:
 - stale translations are unusable after buffer release, driver restart, device reset, and generation transition;
 - unsupported or malformed IVRS data fails closed before bus mastering;
 - IOMMU fault storms are bounded and cannot livelock the kernel or suppress unrelated device interrupts;
-- on the Framework, the keyboard can type `$(sysinfo)` into Dango, receive `result:exit:0`, use Backspace and Shift punctuation, and close with Escape while internal NVMe comparison hashes remain unchanged.
+- on the Framework, the keyboard can type a Slisp capability-bearing system-information call, receive its structured success result, use Backspace and Shift punctuation, and close with Escape while internal NVMe comparison hashes remain unchanged;
 
 Planned verification targets:
 
@@ -227,7 +227,7 @@ Deliverables:
 
 - move visible output from the global debug stream to a userspace compositor holding the sole framebuffer capability; retain serial as diagnostics rather than the interactive UI path;
 - declare versioned surface, damage, presentation, seat-focus, clipboard, and dialog protocols; clients render only into IO0-bounded shared-buffer leases and cannot map the physical framebuffer;
-- implement software composition, double buffering, damage tracking, cursor rendering, focus, keyboard/pointer routing, and a terminal surface hosting the native Dango session;
+- implement software composition, double buffering, damage tracking, cursor rendering, focus, keyboard/pointer routing, and a terminal surface hosting the native Slisp session;
 - render the M6 powerbox as a compositor-owned modal dialog while preserving its user-gesture capability mint and IO0 cancellation semantics;
 - make display dimensions, pixel format, surface count, buffer bytes, damage rectangles, and event queues explicit bounds; display semantics remain H8-specific rather than generic I/O opcodes.
 
@@ -236,7 +236,7 @@ Required checks:
 - an ungranted client cannot read input, capture another surface, map the framebuffer, steal focus, or bypass a powerbox dialog;
 - malformed dimensions, overflowed strides, out-of-bounds damage, stalled clients, and compositor restart cannot write outside granted buffers;
 - deterministic scene fixtures produce byte-identical software-composited frame hashes under QEMU;
-- Dango remains usable while another client faults or floods damage/events within its quota;
+- Slisp remains usable while another client faults or floods damage/events within its quota;
 - on the Framework, terminal text, pointer movement, focus changes, and powerbox selection are visible and survive a compositor restart.
 
 Planned verification target:
@@ -295,7 +295,7 @@ Required checks:
 - no device can DMA while its IOMMU domain is torn down, and all post-resume DMA buffers are freshly mapped;
 - network reconnect, USB re-enumeration, input, compositor, storage, and audio recover without duplicating capabilities or leaking bounded resources;
 - QEMU fault injection covers every transition edge and repeated cycles;
-- the Framework completes at least 50 lid/user suspend-resume cycles, including cycles with active network and audio, without data corruption or loss of Dango control.
+- the Framework completes at least 50 lid/user suspend-resume cycles, including cycles with active network and audio, without data corruption or loss of Slisp control;
 
 Planned verification target:
 

@@ -3,10 +3,9 @@
 
 //! The seL4 input plane's subject: `InputRead` mediation (P5.4.3).
 //!
-//! Small on purpose. M6.4's Dango session is the *consumer* of key events, and
-//! it is a large composition with its own failure modes; this plane asserts the
-//! mechanism underneath it, so a defect in the authority path is distinguishable
-//! from a defect in the shell.
+//! Small on purpose. This plane isolates the input mediation mechanism from any
+//! interactive language, so authority-path defects remain distinguishable from
+//! shell or evaluator defects.
 //!
 //! Three claims:
 //!

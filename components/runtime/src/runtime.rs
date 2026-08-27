@@ -30,11 +30,12 @@ pub const STACK_SIZE: usize = 64 * 1024;
 /// VSpace, a thread owns a TCB, stack, IPC buffer, and schedule. Raising it is
 /// a change here and in `child_vspace`, which maps one buffer/window pair per
 /// thread.
-pub const MAX_THREADS: usize = 2;
+pub const MAX_THREADS: usize = boot_contracts::component_runtime_abi::MAX_THREADS;
 
 /// Granule size for this configuration, used to place the two runtime pages the
 /// root maps above the image.
 pub(crate) const GRANULE: usize = sel4::cap_type::Granule::FRAME_OBJECT_TYPE.bytes();
+const _: () = assert!(GRANULE == boot_contracts::component_runtime_abi::GRANULE_BYTES);
 
 sel4::sel4_cfg_if! {
     if #[sel4_cfg(PRINTING)] {

@@ -76,11 +76,9 @@ sel4_boot_selection_check: sel4_pin_check
 sel4_directory_check: sel4_pin_check
     python3 scripts/check/check-sel4-directory-plane.py
 
-# P5.4.3: `InputRead` mediation on its own, separate from M6.4's Dango session.
-# A granted capability decodes the generation's scripted keys in order, an
-# exhausted script ends its reader rather than blocking it — the arm that would
-# have caught `WAIT_KIND_INPUT` resolving to a never-ready wait target — and a
-# slot holding no input capability is refused.
+# P5.4.3: `InputRead` mediation on its own. A granted capability decodes the
+# generation's scripted keys in order, an exhausted script ends its reader
+# rather than blocking it, and a slot holding no input capability is refused.
 [group('planes / storage')]
 sel4_input_check: sel4_pin_check
     python3 scripts/check/check-sel4-input-plane.py
@@ -95,18 +93,6 @@ sel4_input_check: sel4_pin_check
 sel4_powerbox_check: sel4_pin_check
     python3 scripts/check/check-sel4-powerbox-plane.py
 
-# P5.4.3, M6.4, and C10.4: boot the dango image and require a scripted console
-# session to resolve three commands through the generation's profile and launch
-# all three through the spawn service — the second carrying a derived working
-# directory and a stdin endpoint, the third repeating the first — while an
-# undeclared command is denied at resolution and a malformed line is a parse
-# error. The repeat is what makes the free-frame census a conservation claim:
-# the root's own allocator watermarks must return to where they stood after the
-# previous cycle, with the released arena reused rather than replaced. Every
-# component is the oracle's.
-[group('planes / storage')]
-sel4_dango_check: sel4_pin_check
-    python3 scripts/check/check-sel4-dango-plane.py
 
 # P5.4.3 and M6.7: boot the transfer image with TWO devices — a read-only source
 # carrying the manifest and a writable receiver — and require a generation to

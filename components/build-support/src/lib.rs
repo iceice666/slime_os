@@ -21,13 +21,10 @@
 //! }
 //! ```
 //!
-//! Nothing here reads a generation manifest. Two generators derived
-//! `spawn-service`'s command table and `dango`'s command-name list from one
-//! fixture and wrote them into each crate's `OUT_DIR`; B70 replaced both with
-//! root-served runtime queries -- a named binding per declared command and per
-//! launch context, and the `SPAWN_BUDGET` scalar -- so the two components read
-//! the authenticated generation they are actually running inside instead of one
-//! a build script chose.
+//! Nothing here reads a generation manifest. Historical generators derived
+//! command tables from one fixture and wrote them into component `OUT_DIR`s;
+//! B70 replaced that coupling with root-served runtime queries, so components
+//! read the authenticated generation they are actually running inside.
 //!
 //! # What is *not* here
 //!

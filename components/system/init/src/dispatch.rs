@@ -9,7 +9,6 @@ mod boot_action {
     pub const CALL: u32 = 3;
     pub const CHANNEL: u32 = 4;
     pub const CROSSING: u32 = 5;
-    pub const DANGO: u32 = 6;
     pub const DIRECTORY: u32 = 7;
     pub const FILESYSTEM: u32 = 8;
     pub const GENERATION: u32 = 9;
@@ -67,7 +66,6 @@ mod boot_action {
     const _: () = assert!(CALL == BootAction::Call.id());
     const _: () = assert!(CHANNEL == BootAction::Channel.id());
     const _: () = assert!(CROSSING == BootAction::Crossing.id());
-    const _: () = assert!(DANGO == BootAction::Dango.id());
     const _: () = assert!(DIRECTORY == BootAction::Directory.id());
     const _: () = assert!(FILESYSTEM == BootAction::Filesystem.id());
     const _: () = assert!(GENERATION == BootAction::Generation.id());
@@ -251,11 +249,6 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
         action::POWERBOX => {
             drive_powerbox_plane();
             slime_rt::debug_write(b"[init] powerbox plane complete\n");
-            slime_rt::exit(0)
-        }
-        action::DANGO => {
-            drive_dango_plane();
-            slime_rt::debug_write(b"[init] dango plane complete\n");
             slime_rt::exit(0)
         }
         action::FILESYSTEM => {

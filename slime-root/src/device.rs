@@ -190,6 +190,50 @@ impl DeviceRegion {
     }
 }
 
+/// QEMU `virt`'s PL011 serial controller.
+///
+/// This is a temporary product-input path, not platform discovery. The QEMU
+/// build enables it explicitly, maps this page through BootInfo device
+/// authority, and leaves every physical-machine build without the constant.
+pub const QEMU_PL011_PADDR: usize = 0x0900_0000;
+
+/// Polling receive half of QEMU `virt`'s PL011.
+///
+/// Output continues through seL4's debug console; this view only drains bytes
+/// QEMU delivered on the same serial port. Polling is intentional: `InputRead`
+/// already reports `WouldBlock`, so an empty FIFO must not park the root's
+/// console dispatcher or require a new interrupt protocol.
+pub struct Pl011Input {
+    registers: DeviceRegion,
+}
+
+impl Pl011Input {
+    const DATA: usize = 0x000;
+    const FLAGS: usize = 0x018;
+    const RX_EMPTY: u32 = 1 << 4;
+    const DATA_ERRORS: u32 = 0x0f00;
+
+    pub const fn new(registers: DeviceRegion) -> Self {
+        Self { registers }
+    }
+
+    /// Drain one received byte, or report an empty FIFO.
+    ///
+    /// A byte carrying a PL011 receive error is consumed and refused rather
+    /// than turned into shell input. The next `InputRead` can then continue
+    /// with the following FIFO entry.
+    pub fn poll_byte(&self) -> Option<u8> {
+        if self.registers.read32(Self::FLAGS)? & Self::RX_EMPTY != 0 {
+            return None;
+        }
+        let data = self.registers.read32(Self::DATA)?;
+        if data & Self::DATA_ERRORS != 0 {
+            return None;
+        }
+        Some(data as u8)
+    }
+}
+
 const GRANULE_BYTES: usize = 4096;
 
 /// The virtio-mmio registers that identify a transport.

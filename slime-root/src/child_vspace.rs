@@ -18,6 +18,7 @@ use crate::object_allocator::{AllocError, ArenaPlan, ObjectAllocator, TaskArenaI
 
 /// seL4 base page size for this configuration.
 pub const GRANULE_SIZE: usize = sel4::FrameObjectType::GRANULE.bytes();
+const _: () = assert!(GRANULE_SIZE == boot_contracts::component_runtime_abi::GRANULE_BYTES);
 
 /// Pages one child image footprint may span, including the IPC buffer and
 /// startup transfer-window pages. A larger payload fails closed rather than
@@ -238,7 +239,7 @@ pub struct WorkerImage {
 /// stack and one worker entry point, and this maps one buffer/window pair per
 /// thread at addresses the runtime derives from the same arithmetic. Raising it
 /// means raising both.
-pub const MAX_CHILD_THREADS: usize = 2;
+pub const MAX_CHILD_THREADS: usize = boot_contracts::component_runtime_abi::MAX_THREADS;
 
 /// The IPC buffer and transfer window belonging to one thread (B47).
 ///

@@ -1,9 +1,6 @@
 [submodule "deps/zutai"]
 	path = deps/zutai
 	url = https://github.com/iceice666/zutai.git
-[submodule "deps/dango"]
-	path = deps/dango
-	url = https://github.com/iceice666/dango.git
 [submodule "deps/sel4"]
 	path = deps/sel4
 	url = https://github.com/seL4/seL4.git

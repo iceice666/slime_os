@@ -18,6 +18,12 @@ store_gen:
 spawn_gen:
     python3 scripts/generate/generate-spawn-bindings.py
 
+# Regenerate the language-neutral component startup/runtime ABI as Rust and C
+# bindings. The root, Rust runtime, and non-Rust runtimes consume one layout.
+[group('generate')]
+component_runtime_abi_gen:
+    python3 scripts/generate/generate-component-runtime-abi-bindings.py
+
 # Regenerate the root-service syscall ABI bindings and doc tables (B59). One
 # declaration feeds `slime-root`, `components/runtime`, and `docs/syscall-abi.md`,
 # so a renumbered operation cannot leave any of the three disagreeing.

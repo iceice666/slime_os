@@ -36,21 +36,10 @@ fn main(_startup_arg: u32) {
         slime_rt::debug_write(b"[console] unrelated progress while sender blocked\n");
     }
     // CP2's runtime binding resolution, proved on the planes this component
-    // already boots rather than in a component written to prove it.
-    //
-    // Only the *denial* arm is asserted here, and that is the honest scope. The
-    // grant arm needs a name this instance binds, but the name differs per plane
-    // — `console-output` under the product graph, `dango-output` under the
-    // channel and loan planes, `dango-console-rpc` under the dango plane — and
-    // enumerating them here would put a list of manifest facts back into this
-    // component's source, which is exactly the coupling B70 names. Two earlier
-    // versions did precisely that and each failed on the first plane it had not
-    // enumerated.
-    //
-    // The grant arm is proved where the name is a legitimate local fact instead:
-    // `shared_buffer_factory_slot()` below resolves this component's own factory
-    // grant on the loan plane, and `init`'s `console_send_slot()` resolves the
-    // channel edge it binds. Both run on real boots.
+    // already boots rather than in a component written only to prove it. The
+    // denial arm is asserted here; successful binding resolution is exercised
+    // by `init` on channel planes and by this component's own buffer-factory
+    // lookup on the loan plane.
     //
     // `init-shared-buffer-factory` is a real grant held by `init` in the planes
     // that declare it, so asking for it here is a component asking about

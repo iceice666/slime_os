@@ -18,6 +18,12 @@ pub(super) struct RootEndpoints {
     pub(super) console: sel4::cap::Endpoint,
 }
 
+pub(super) struct RuntimeDevices<'a> {
+    pub(super) timer: &'a mut PhysicalTimerAdapter,
+    pub(super) blocks: &'a mut BlockDevices,
+    pub(super) input: Option<device::Pl011Input>,
+}
+
 pub(super) fn launch_instance_graph(
     generation: &Generation<'_>,
     admission: &Admission,
@@ -25,10 +31,14 @@ pub(super) fn launch_instance_graph(
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     endpoints: RootEndpoints,
-    timer_adapter: &mut PhysicalTimerAdapter,
-    block_devices: &mut BlockDevices,
+    devices: RuntimeDevices<'_>,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
+    let RuntimeDevices {
+        timer,
+        blocks,
+        input,
+    } = devices;
     let mut tasks = TaskTable::<MAX_TASKS>::new();
     let mut windows = WindowTable::<MAX_WINDOW_ENTRIES>::new();
     let peers = unsafe { &mut *ptr::addr_of_mut!(PEER_ENDPOINTS) };
@@ -832,7 +842,8 @@ pub(super) fn launch_instance_graph(
             windows: &windows,
             tasks: &tasks,
             script: input_script(generation.number),
-            devices: block_devices,
+            input,
+            devices: blocks,
             namespaces: &mut namespaces,
             scopes: &scopes,
         },
@@ -852,13 +863,13 @@ pub(super) fn launch_instance_graph(
         scheduling_policy.as_ref(),
         lifecycle_service,
         lifecycle_policy.as_ref(),
-        timer_adapter,
+        timer,
         allocator,
         scratch,
         admission.fabric_capability_slots,
         &mut scopes,
         #[cfg(slime_boot_selector)]
-        block_devices,
+        blocks,
         #[cfg(slime_boot_selector)]
         boot_runtime,
     );

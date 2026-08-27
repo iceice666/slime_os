@@ -210,10 +210,11 @@ SystemBootProfile :: type {
 --
 -- `spawnBudget` is here too, and its being a placement rather than a component
 -- fact is a finding of this milestone rather than a preference: `init` carries
--- 1 in `sel4-channel.zti`, 2 in `sel4-crossing.zti`, 4 in `sel4-dango.zti`, 18
--- in `valid.zti`, and 19 in `sel4-boot.zti`. A spawn budget is how many
--- children *this* composition launches, so a component spec cannot own it. The
--- component spec's `runtime.resource.spawnBudget` remains the reference
+-- 1 in `sel4-channel.zti`, 2 in `sel4-crossing.zti`, 18 in `valid.zti`, and 19
+-- in `sel4-boot.zti`; the retired Dango composition historically carried 4.
+-- A spawn budget is how many children *this* composition launches, so a
+-- component spec cannot own it. The component spec's
+-- `runtime.resource.spawnBudget` remains the reference
 -- generation's value and is the default when a system declares no placement.
 Placement :: type {
   component : Text;

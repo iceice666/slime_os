@@ -4,11 +4,11 @@
 
 **Status:** Not started.
 
-**Decision:** The first additional application language is a programming-language frontend and direct component-image producer. It does not replace Zutai as Slime's only schema/configuration language or Dango as the interactive command language. The language implementation owns syntax, typing, compiler behavior, and its standard library; Slime owns executable-image, target, syscall, capability, build, admission, generation, activation, and verification contracts.
+**Decision:** Slisp is both the interactive language and the first non-Rust application language. Zutai remains Slime's only schema/configuration language. Slisp owns syntax, evaluator/compiler behavior, and its standard library; Slime owns executable-image, target, syscall, capability, build, admission, generation, activation, and verification contracts.
 
 **Source directions:** [direction 3](../docs/directions/03-nondeterminism-as-capabilities.md), [direction 23](../docs/directions/23-build-provenance.md), and [direction 30](../docs/directions/30-deterministic-on-device-builds.md).
 
-**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory capabilities, Dango, spawn service, generation management, and transfer; [P0](07-architecture-portability.md#p0-architecture-target-and-executable-artifact-contracts) for exact target/artifact identity; and [C9](02-core-runtime.md#c9-robot-runtime-authority) for explicit time ([C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority)), lifecycle control, and fresh-authority restart ([C9.4](02-core-runtime.md#c94--lifecycle-transitions-and-supervised-restart)). Bounded *CPU* accounts are not among them: they have no mechanism while the pinned kernel is built `KernelIsMCS OFF`, so D3's build account bounds memory, task count, buffer pages, and byte counts — every quantity the existing per-spawner and per-holder accounting already carries — and charges wall-clock time rather than conserved CPU. D7 additionally consumes [X1](05-foreign-workloads.md#x1-linux-userspace-personality) for the current Rust toolchain unless an independently qualified native Rust toolchain lands first.
+**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory, spawn, generation-management, input, and transfer mechanisms; Slisp's verified non-Rust component path; [P0](07-architecture-portability.md#p0-architecture-target-and-executable-artifact-contracts); and [C9](02-core-runtime.md#c9-robot-runtime-authority) for explicit time and lifecycle control.
 
 ## Boundaries
 
@@ -53,7 +53,7 @@ normalized source closure
 
 ## Sequencing
 
-1. D1 can begin from completed M6 directory and Dango mechanisms. D2 can proceed independently after P0 fixes the producer-neutral target/artifact contract.
+1. D1 begins from completed M6 storage/directory mechanisms and the resident Slisp REPL. D2 extends the already producer-neutral external-artifact path into a direct Slisp image backend.
 2. D3 composes D1 and D2 with C9 time/lifecycle authority and the existing per-spawner/per-holder resource accounting into a hermetic on-device build service.
 3. D4 consumes D3 output through a new bounded executable-admission mechanism and closes the first edit → compile → run loop without changing BootState.
 4. D5 is an independent C8/C9 lifecycle slice over signed generations; it introduces the narrow, transactional live-update class and deterministic reboot-required classification.
@@ -64,13 +64,13 @@ normalized source closure
 
 **Status:** Not started.
 
-**Depends on:** M6.2 command profiles, M6.3 directory capabilities, and M6.4 Dango.
+**Depends on:** M6.3 directory capabilities, the spawn service, and the resident Slisp REPL.
 
 ### Deliverables
 
 - define a bounded versioned Zutai source-workspace/project contract naming language identity, source entries, toolchain identity, exact target profile, entry unit, normalized build parameters, and output kind without host paths or inherited environment;
 - add a minimal native editor capable of creating, editing, saving, reopening, and atomically replacing bounded UTF-8 source files under one explicitly granted project directory;
-- extend Dango with bounded project/source operations and a stored-script path that executes only profile-resolved commands under explicit directory, stream, environment, and service grants;
+- extend Slisp with bounded project/source functions and stored program execution under explicit directory, stream, environment, and service grants; these are ordinary Lisp functions, not reader syntax;
 - preserve source roots as immutable directory snapshots with explicit commit, so interrupted saves retain the prior readable root and build inputs name one exact snapshot;
 - define generated structured diagnostic/source-span bindings for editor and later compiler use; diagnostics are bounded data, not unstructured access to a terminal or filesystem.
 
@@ -79,7 +79,7 @@ normalized source closure
 - an editor without the project `Directory` capability cannot enumerate, read, modify, or infer another namespace;
 - oversized files, invalid UTF-8 where text is required, excessive entries/depth, stale roots, and interrupted saves fail before replacing the prior root;
 - reopening a committed project returns byte-identical source and normalized project metadata;
-- a stored Dango script launches only commands in its granted profile, cannot acquire an undeclared cwd/stream/environment/capability, and leaves source data intact after parse or child failure.
+- a stored Slisp program launches only commands in its granted profile, cannot acquire an undeclared cwd/stream/environment/capability, and leaves source data intact after parse or child failure.
 
 ### Planned verification target
 
@@ -89,7 +89,7 @@ just authoring_check
 
 ### Exit condition
 
-Inside QEMU, a user creates a project, edits and commits source, reopens the identical snapshot, and runs a stored Dango script; an ungranted editor/script cannot observe or modify another directory or launch a command outside its profile.
+Inside QEMU, a user creates a project, edits and commits source, reopens the identical snapshot, and runs a stored Slisp program; an ungranted editor/program cannot observe or modify another directory or launch a command outside its profile.
 
 ## D2 — Producer-neutral image contract and direct language backend
 
@@ -239,7 +239,7 @@ A release-authorized generation differing only in one live-compatible component 
 ### Deliverables
 
 - run a userspace generation builder over normalized Zutai system intent and sealed component/resource objects, producing the same bounded canonical generation, closure, object identities, target binding, state policies, grants, health policy, and detached release subject as the host builder;
-- expose Dango build, inspect, test, authority-diff, stage, live-switch, next-boot select, and rollback operations through explicit service capabilities rather than global commands with ambient boot/store authority;
+- expose Slisp build, inspect, test, authority-diff, stage, live-switch, next-boot select, and rollback functions through explicit service capabilities rather than global commands with ambient boot/store authority;
 - keep ephemeral test and installation distinct: D4 may test an unsigned image, but D5 live switch and M6 next-boot selection require a complete M5.8-authorized release; no developer mode silently weakens immutable selector/root admission;
 - make the initial local authorization workflow import valid detached release metadata for the exact generation identity. On-device private-key custody is not introduced here and may later consume A2/A4 without blocking deterministic local builds;
 - select D5 only when its exact compatibility classifier accepts the generation; otherwise report reboot-required and use the ordinary pending-attempt path without mutating the running graph;

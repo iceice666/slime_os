@@ -19,6 +19,7 @@ from harness import ROOT
 
 GENERATOR = ROOT / "contracts" / "syscall-abi" / "v1" / "schema.zt"
 RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "syscall_abi.rs"
+C_OUTPUT = ROOT / "components" / "runtime" / "include" / "slime" / "syscall_abi.h"
 # `docs/syscall-abi.md`'s operation table is *verified* against the contract
 # rather than generated from it: the doc's rows carry per-operation operand
 # layouts and result conventions that the ABI declaration does not model, so
@@ -29,7 +30,7 @@ SYSCALL_ABI_DOC = ROOT / "docs" / "syscall-abi.md"
 INVALID_SCHEMA = "INVALID_SYSCALL_ABI_SCHEMA"
 
 
-def render() -> tuple[str, str]:
+def render() -> tuple[str, str, str]:
     with tempfile.TemporaryDirectory(prefix="slime-syscall-abi-bindings-") as temporary:
         staging = Path(temporary)
         environment = os.environ.copy()
@@ -49,14 +50,16 @@ def render() -> tuple[str, str]:
             sys.stderr.write(process.stderr)
             raise SystemExit(process.returncode)
         rust = staging / "syscall_abi.rs"
+        c = staging / "syscall_abi.h"
         markdown = staging / "syscall-abi.md"
-        if not rust.exists() or not markdown.exists():
-            raise SystemExit("syscall-abi generator did not write both bindings")
+        if not rust.exists() or not c.exists() or not markdown.exists():
+            raise SystemExit("syscall-abi generator did not write all bindings")
         rust_text = rust.read_text(encoding="utf-8")
+        c_text = c.read_text(encoding="utf-8")
         markdown_text = markdown.read_text(encoding="utf-8")
-        if INVALID_SCHEMA in rust_text or INVALID_SCHEMA in markdown_text:
+        if any(INVALID_SCHEMA in text for text in (rust_text, c_text, markdown_text)):
             raise SystemExit("syscall-abi schema validation failed")
-        return rust_text, markdown_text
+        return rust_text, c_text, markdown_text
 
 
 def format_rust(source: str) -> str:
@@ -128,18 +131,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
-    rust_text, markdown_text = render()
+    rust_text, c_text, markdown_text = render()
     rust_text = format_rust(rust_text)
     check_doc(declared_labels(markdown_text))
+    outputs = ((RUST_OUTPUT, rust_text), (C_OUTPUT, c_text))
     if arguments.check:
-        if not RUST_OUTPUT.exists() or RUST_OUTPUT.read_text(encoding="utf-8") != rust_text:
-            raise SystemExit(
-                f"generated {RUST_OUTPUT.relative_to(ROOT)} is stale; run `just syscall_abi_gen`"
-            )
+        for path, contents in outputs:
+            if not path.exists() or path.read_text(encoding="utf-8") != contents:
+                raise SystemExit(
+                    f"generated {path.relative_to(ROOT)} is stale; run `just syscall_abi_gen`"
+                )
         print("Syscall ABI bindings are current")
         return
-    write_atomic(RUST_OUTPUT, rust_text)
-    print(f"Generated {RUST_OUTPUT.relative_to(ROOT)}")
+    for path, contents in outputs:
+        write_atomic(path, contents)
+        print(f"Generated {path.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

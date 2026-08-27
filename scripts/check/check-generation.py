@@ -329,11 +329,10 @@ GRANT_POLICY_ONLY = 1
 # materializes — so B50 deleted the concept. An unknown bit is still refused.
 GRANT_FLAGS_KNOWN = 0
 BOOT_ACTIONS = {
-    "product", "boot", "call", "channel", "crossing", "dango", "demo",
-    "directory", "filesystem", "generation", "input", "loan", "operation",
-    "powerbox", "qos", "reclamation", "recovery", "rollback", "sample",
-    "spawn", "storage", "store", "stream", "supervision", "transfer",
-    "visibility",
+    "product", "boot", "call", "channel", "crossing", "demo", "directory",
+    "filesystem", "generation", "input", "loan", "operation", "powerbox",
+    "qos", "reclamation", "recovery", "rollback", "sample", "spawn",
+    "storage", "store", "stream", "supervision", "transfer", "visibility",
 }
 
 

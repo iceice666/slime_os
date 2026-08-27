@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 from pathlib import Path
 from typing import NoReturn
@@ -39,12 +40,17 @@ MANIFEST = ROOT / "build" / "slime-sel4-graph.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 
 BOOT_TIMEOUT_SECONDS = 120
+INPUT_WAIT_MARKER = r"\[slisp\] resident input wait"
 
-# The v5 product generation carries dango beside console and spawn-service.
-# Init launches all three and stays alive supervising them. The root first
-# certifies all required instances live; dango's first `WouldBlock` input result
-# is the terminal proof that startup completed and the shell entered residence.
-TERMINAL_MARKER = r"\[dango\] resident input wait"
+# The product generation carries Slisp beside console and spawn-service.
+# Init launches all three and stays alive supervising them. After the first
+# `WouldBlock` marker and a short startup-drain interval, this gate sends one
+# expression and then the `sysinfo` command through QEMU serial stdin. Pauses
+# between bytes force the FIFO empty between keystrokes and catch diagnostics
+# redrawn in the middle of a command without racing one-time service startup
+# logs. The command arm also proves the shell reaches generation-authorized
+# spawn-service dispatch and the child receives its declared launch context.
+TERMINAL_MARKER = r"=> spawned sysinfo"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=6 instances=6 grants=\d+ "),
@@ -76,20 +82,35 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "spawn-service received its installed native Endpoint capability",
         r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
     ),
-    ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1"),
+    ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1"),
+    ("init authorized Slisp through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0"),
+    (
+        "Slisp received its two declared service endpoints",
+        r"SLIME_GRAPH native endpoint task=3 slot=33 side=both",
+    ),
+    (
+        "Slisp received its second declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=3 slot=35 side=both",
+    ),
+    ("init spawned Slisp as instance task 3", r"SLIME_GRAPH spawned task=0 child=3 component=slisp grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0"),
     ("the supervisor certified the live graph", r"SLIME_GRAPH healthy generation=1 instances=[0-9a-f]{16} required=4 live=4 idle=4 failed=0"),
     ("init kept the product graph resident", r"\[init\] product services resident"),
-    ("the product printed the Slime OS banner", r"Slime OS"),
-    ("the product identified the Dango shell", r"Dango shell"),
-    ("dango displayed its prompt", r"dango> "),
-    ("dango entered resident input wait", TERMINAL_MARKER),
+    ("the product identified the Slisp shell", r"Slisp"),
+    ("Slisp displayed its prompt", r"slisp> "),
+    ("Slisp entered resident input wait", INPUT_WAIT_MARKER),
+    ("Slisp received uninterrupted QEMU serial input", r"\(\+ 1 1\)\n=> 2"),
+    ("Slisp requested sysinfo through spawn-service", r"sysinfo\n\[spawn-service\] request"),
+    ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
+    ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
+    ("spawn-service collected detached supervision", r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0"),
+    ("Slisp reported the accepted spawn", TERMINAL_MARKER),
 )
 
-EXPECTED_UNORDERED: tuple[str, ...] = (
-    r"\[spawn-service\] ready",
-    r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1",
-    r"\[spawn-service\] shared-buffer quota live",
-)
+# Component-spec evidence literal: startup scheduling may print this after the
+# terminal Slisp marker, so product admission checks its declared source string
+# without making it part of the bounded transcript prefix.
+SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
+EXPECTED_UNORDERED: tuple[str, ...] = ()
 
 # B50 is a repository-wide cutover. Guard every surviving implementation source
 # that could reintroduce the universal dispatcher or product-plane selection;
@@ -244,6 +265,7 @@ def boot(profile: dict[str, object]) -> str:
         str(IMAGE),
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
+    input_wait = re.compile(INPUT_WAIT_MARKER)
     terminal = re.compile(TERMINAL_MARKER)
     failures = re.compile("|".join(FAILURE_MARKERS))
     lines: list[str] = []
@@ -251,7 +273,7 @@ def boot(profile: dict[str, object]) -> str:
         process = subprocess.Popen(
             command,
             cwd=ROOT,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -259,15 +281,28 @@ def boot(profile: dict[str, object]) -> str:
         )
     except OSError as error:
         fail(f"cannot run QEMU: {error}")
+    assert process.stdin is not None
     # A wedged guest emits nothing, so the deadline cannot live in the read
     # loop; a watchdog kills QEMU, which closes the pipe and ends the loop.
     watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
     watchdog.start()
+    sent_expression = False
     try:
         assert process.stdout is not None
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
-            if terminal.search(line) or failures.search(line):
+            if failures.search(line):
+                break
+            if not sent_expression and input_wait.search(line):
+                time.sleep(0.5)
+                for command in ("(+ 1 1)\n", "sysinfo\n"):
+                    for character in command:
+                        process.stdin.write(character)
+                        process.stdin.flush()
+                        time.sleep(0.05)
+                sent_expression = True
+                continue
+            if sent_expression and terminal.search(line):
                 break
     finally:
         timed_out = not watchdog.is_alive()
@@ -280,8 +315,8 @@ def boot(profile: dict[str, object]) -> str:
             process.wait()
     transcript = "\n".join(lines)
     if timed_out and terminal.search(transcript) is None:
-        report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
+        print(transcript)
+        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without completing sysinfo")
     return transcript
 
 
@@ -373,7 +408,7 @@ def check_transcript(transcript: str) -> None:
 
     terminals = re.findall(TERMINAL_MARKER, transcript)
     if len(terminals) != 1:
-        fail(f"expected exactly one resident input-wait marker, saw {len(terminals)}")
+        fail(f"expected exactly one sysinfo completion marker, saw {len(terminals)}")
 
 
 def main() -> None:
@@ -399,8 +434,9 @@ def main() -> None:
     check_transcript(boot(profile))
     print(
         "seL4 component graph check: init launched console, spawn-service, and "
-        "dango with generation-declared authority; all four required product "
-        "instances remained live and the supervisor certified the resident graph"
+        "Slisp with generation-declared authority; QEMU serial input evaluated "
+        "and launched sysinfo through its declared context endpoint; all four "
+        "required resident instances remained live"
     )
 
 

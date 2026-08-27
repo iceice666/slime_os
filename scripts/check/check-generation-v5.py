@@ -66,18 +66,21 @@ def check_single_version(builder) -> None:
         fail(f"builder writes magic {magic!r}, expected {EXPECTED_MAGIC!r}")
 
 
-def built_header(manifest: str) -> tuple[bytes, int]:
+def built_header(manifest: str, slisp_mapping: str | None) -> tuple[bytes, int]:
     """Build one manifest and return the magic and version it encodes."""
     with tempfile.TemporaryDirectory() as directory:
         environment = os.environ.copy()
         environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
         environment["SLIME_SEL4_MANIFEST"] = manifest
+        command = [
+            sys.executable,
+            str(ROOT / "scripts" / "build" / "build-generation.py"),
+        ]
+        if slisp_mapping is not None:
+            command += ["--external-component", slisp_mapping]
+        command.append(directory)
         result = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "scripts" / "build" / "build-generation.py"),
-                directory,
-            ],
+            command,
             cwd=ROOT,
             env=environment,
             capture_output=True,
@@ -98,17 +101,38 @@ def main() -> None:
         fail(f"run from repository root: {ROOT}")
     builder = load_builder()
     check_single_version(builder)
+    with tempfile.TemporaryDirectory() as directory:
+        slisp = Path(directory) / "slisp.elf"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "build" / "build-c-component.py"),
+                str(ROOT / "components" / "slisp" / "slisp.c"),
+                str(ROOT / "components" / "slisp" / "main.c"),
+                str(slisp),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            fail(f"Slisp build failed: {result.stderr.strip().splitlines()[-1:]}")
+        slisp_mapping = f"slisp-external={slisp}"
 
-    manifests = sorted(builder.SEL4_MANIFESTS)
-    if not manifests:
-        fail("the builder declares no seL4 manifests")
-    for manifest in manifests:
-        magic, version = built_header(manifest)
-        if magic != EXPECTED_MAGIC or version != EXPECTED_VERSION:
-            fail(
-                f"{manifest} encodes magic {magic!r} version {version}, "
-                f"expected {EXPECTED_MAGIC!r} version {EXPECTED_VERSION}"
+        manifests = sorted(builder.SEL4_MANIFESTS)
+        if not manifests:
+            fail("the builder declares no seL4 manifests")
+        for manifest in manifests:
+            magic, version = built_header(
+                manifest,
+                slisp_mapping if manifest == "sel4" else None,
             )
+            if magic != EXPECTED_MAGIC or version != EXPECTED_VERSION:
+                fail(
+                    f"{manifest} encodes magic {magic!r} version {version}, "
+                    f"expected {EXPECTED_MAGIC!r} version {EXPECTED_VERSION}"
+                )
     label = EXPECTED_MAGIC.rstrip(b"\0").decode()
     print(
         f"generation v5 check: all {len(manifests)} seL4 manifests encode "

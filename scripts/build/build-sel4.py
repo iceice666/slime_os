@@ -157,8 +157,6 @@ DIRECTORY_IMAGE = BUILD_ROOT / "slime-sel4-directory.elf"
 DIRECTORY_MANIFEST = BUILD_ROOT / "slime-sel4-directory.identity.json"
 FILESYSTEM_IMAGE = BUILD_ROOT / "slime-sel4-filesystem.elf"
 FILESYSTEM_MANIFEST = BUILD_ROOT / "slime-sel4-filesystem.identity.json"
-DANGO_IMAGE = BUILD_ROOT / "slime-sel4-dango.elf"
-DANGO_MANIFEST = BUILD_ROOT / "slime-sel4-dango.identity.json"
 INPUT_IMAGE = BUILD_ROOT / "slime-sel4-input.elf"
 INPUT_MANIFEST = BUILD_ROOT / "slime-sel4-input.identity.json"
 POWERBOX_IMAGE = BUILD_ROOT / "slime-sel4-powerbox.elf"
@@ -169,6 +167,10 @@ BOOT_SELECTION_IMAGE = BUILD_ROOT / "slime-sel4-boot-selection.elf"
 BOOT_SELECTION_MANIFEST = BUILD_ROOT / "slime-sel4-boot-selection.identity.json"
 DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
+C_RUNTIME_IMAGE = BUILD_ROOT / "slime-sel4-c-runtime.elf"
+C_RUNTIME_MANIFEST = BUILD_ROOT / "slime-sel4-c-runtime.identity.json"
+SLISP_IMAGE = BUILD_ROOT / "slime-sel4-slisp.elf"
+SLISP_MANIFEST = BUILD_ROOT / "slime-sel4-slisp.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -192,6 +194,8 @@ LIFECYCLE_RESTART_VARIANT = "lifecycle-restart"
 REPLAY_VARIANT = "replay"
 ROBOT_RUNTIME_VARIANT = "robot-runtime"
 DEMO_VARIANT = "demo"
+C_RUNTIME_VARIANT = "c-runtime"
+SLISP_VARIANT = "slisp"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -228,7 +232,6 @@ RECOVERY_VARIANT = "recovery"
 GENERATION_VARIANT = "generation"
 DIRECTORY_VARIANT = "directory"
 FILESYSTEM_VARIANT = "filesystem"
-DANGO_VARIANT = "dango"
 INPUT_VARIANT = "input"
 POWERBOX_VARIANT = "powerbox"
 TRANSFER_VARIANT = "transfer"
@@ -269,10 +272,11 @@ VARIANT_MANIFESTS = {
     GENERATION_VARIANT: "sel4-generation",
     DIRECTORY_VARIANT: "sel4-directory",
     FILESYSTEM_VARIANT: "sel4-filesystem",
-    DANGO_VARIANT: "sel4-dango",
     INPUT_VARIANT: "sel4-input",
     POWERBOX_VARIANT: "sel4-powerbox",
     TRANSFER_VARIANT: "sel4-transfer",
+    C_RUNTIME_VARIANT: "sel4-c-runtime",
+    SLISP_VARIANT: "sel4-slisp",
     BOOT_SELECTION_VARIANT: "sel4",
 }
 # B62: what distinguishes a variant that shares another's manifest.
@@ -339,10 +343,11 @@ VARIANT_TARGET_DIRS = {
     GENERATION_VARIANT: "root-generation",
     DIRECTORY_VARIANT: "root-directory",
     FILESYSTEM_VARIANT: "root-filesystem",
-    DANGO_VARIANT: "root-dango",
     INPUT_VARIANT: "root-input",
     POWERBOX_VARIANT: "root-powerbox",
     TRANSFER_VARIANT: "root-transfer",
+    C_RUNTIME_VARIANT: "root-c-runtime",
+    SLISP_VARIANT: "root-slisp",
     BOOT_SELECTION_VARIANT: "root-boot-selection",
 }
 VARIANT_IMAGES = {
@@ -385,10 +390,11 @@ VARIANT_IMAGES = {
     GENERATION_VARIANT: (GENERATION_IMAGE, GENERATION_MANIFEST),
     DIRECTORY_VARIANT: (DIRECTORY_IMAGE, DIRECTORY_MANIFEST),
     FILESYSTEM_VARIANT: (FILESYSTEM_IMAGE, FILESYSTEM_MANIFEST),
-    DANGO_VARIANT: (DANGO_IMAGE, DANGO_MANIFEST),
     INPUT_VARIANT: (INPUT_IMAGE, INPUT_MANIFEST),
     POWERBOX_VARIANT: (POWERBOX_IMAGE, POWERBOX_MANIFEST),
     TRANSFER_VARIANT: (TRANSFER_IMAGE, TRANSFER_MANIFEST),
+    C_RUNTIME_VARIANT: (C_RUNTIME_IMAGE, C_RUNTIME_MANIFEST),
+    SLISP_VARIANT: (SLISP_IMAGE, SLISP_MANIFEST),
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
 }
 
@@ -957,6 +963,22 @@ def build_sel4_generation(
     run(command, environment=environment, description="build seL4 generation")
     return require_file(output / "generation.bin", "seL4 generation")
 
+
+def build_product_slisp() -> tuple[Path, str]:
+    """Build the in-tree freestanding Slisp ELF for external admission."""
+    output = BUILD_ROOT / "slisp-product.elf"
+    run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "build" / "build-c-component.py"),
+            str(ROOT / "components" / "slisp" / "slisp.c"),
+            str(ROOT / "components" / "slisp" / "main.c"),
+            str(output),
+        ],
+        description="build product Slisp component",
+    )
+    return require_file(output, "product Slisp ELF"), sha256_file(output)
+
 def build_application(
     pins: dict[str, object],
     *,
@@ -989,6 +1011,12 @@ def build_application(
 
     root_environment = environment.copy()
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
+    if platform is QEMU_ARM_VIRT and variant == GRAPH_VARIANT:
+        # Temporary interactive product path: the root polls QEMU virt's PL011
+        # RX FIFO and feeds those bytes through the existing input capability.
+        # Plane images keep deterministic scripts, and physical targets do not
+        # compile a QEMU address into their root task.
+        root_environment["SLIME_QEMU_KEYBOARD"] = "1"
     if variant == BOOT_SELECTION_VARIANT:
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
@@ -996,6 +1024,11 @@ def build_application(
     else:
         manifest = VARIANT_MANIFESTS.get(variant, "sel4")
         generation_environment = None
+        if variant == GRAPH_VARIANT and component_spec_root is None and not external_components:
+            slisp_elf, slisp_digest = build_product_slisp()
+            generation_environment = dict(os.environ)
+            generation_environment["SLIME_PRODUCT_SLISP_SHA256"] = slisp_digest
+            external_components = [f"slisp-external={slisp_elf}"]
         # B62: `traffic`, `fault`, and `saturation` share one manifest. They were
         # three 1882-line fixtures differing in exactly two fields, and a full
         # copy per variant is how a fixture goes stale against a rule it restates
@@ -1005,7 +1038,7 @@ def build_application(
         # images — distinct.
         variant_delta = VARIANT_GENERATION_DELTAS.get(variant)
         if variant_delta:
-            generation_environment = dict(os.environ)
+            generation_environment = generation_environment or dict(os.environ)
             generation_environment.update(variant_delta)
         if variant == FAULT_VARIANT:
             # C8.14: the one fault this plane must *inject* rather than script.
@@ -1529,15 +1562,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--dango-plane",
-        action="store_true",
-        help=(
-            "embed the M6.4 dango generation (P5.4.3): a scripted console "
-            "session launching commands through the spawn service, writing a "
-            "separate image"
-        ),
-    )
-    parser.add_argument(
         "--filesystem-plane",
         action="store_true",
         help=(
@@ -1590,6 +1614,16 @@ def main() -> None:
             "GPT validation and the object store in userspace over a block "
             "capability, writing a separate image"
         ),
+    )
+    parser.add_argument(
+        "--c-runtime-plane",
+        action="store_true",
+        help="embed the external C component runtime proof generation",
+    )
+    parser.add_argument(
+        "--slisp-plane",
+        action="store_true",
+        help="embed the external freestanding Slisp core generation",
     )
     parser.add_argument(
         "--component-spec-root",
@@ -1656,10 +1690,11 @@ def main() -> None:
             (GENERATION_VARIANT, arguments.generation_plane),
             (DIRECTORY_VARIANT, arguments.directory_plane),
             (FILESYSTEM_VARIANT, arguments.filesystem_plane),
-            (DANGO_VARIANT, arguments.dango_plane),
             (INPUT_VARIANT, arguments.input_plane),
             (POWERBOX_VARIANT, arguments.powerbox_plane),
             (TRANSFER_VARIANT, arguments.transfer_plane),
+            (C_RUNTIME_VARIANT, arguments.c_runtime_plane),
+            (SLISP_VARIANT, arguments.slisp_plane),
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
         )
         if chosen

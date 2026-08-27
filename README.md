@@ -130,25 +130,25 @@ Zutai host capabilities are language-level declarations and are currently adviso
 
 The build pipeline runs Zutai on the development host. Porting the compiler/runtime into Slime userspace is deferred behind the demo path.
 
-### Dango: native interactive shell
+### Slisp: native interactive language
 
-[Dango](deps/dango) is the planned native shell and interactive command language. Its explicit environment, working-directory, stream, diagnostic, effect, and resource-lifetime semantics become the user-facing form of Slime's component launch model.
+Slisp is the resident native shell and application language. Its syntax is only
+S-expressions: integers, symbols, lists, lexical functions, `let`, `if`, `do`,
+`quote`, and persistent top-level `define`. The freestanding C implementation
+proves component development is not tied to Rust; it is built as an external
+AArch64 ELF, hash-admitted through the ordinary component specification path,
+and launched with only its generation-declared input and service endpoints.
 
-A command such as `$(sysinfo)` does not directly invoke a path-based syscall. The runtime:
+Shell operations will be ordinary capability-bearing functions. Process spawn,
+streams, filesystem access, diagnostics, and termination remain explicit Slime
+service contracts rather than reader punctuation or ambient POSIX state.
 
-1. asks the active command profile to resolve the name to an executable capability;
-2. resolves the selected working directory under existing directory authority;
-3. constructs explicit environment and stream endpoints;
-4. asks the spawn service to create a component with only the listed grants;
-5. maps structured component termination into Dango command results and effects.
+### Native application compilation
 
-Dango stdout is a data stream. Stderr is a separate diagnostic channel. A component fault, forced termination, peer loss, capability revocation, and a program-selected nonzero status remain distinguishable at the host boundary.
-
-### Native application language
-
-The native-development roadmap admits an additional application language whose compiler emits the exact target-qualified Slime component-image format directly. This is a programming-language frontend, not a replacement for Zutai configuration/schemas or Dango command interaction. The compiler and standard library are pinned content-addressed toolchain inputs; emitted images carry mapping information only, while capabilities, resource accounts, release authorization, and activation remain Slime generation/admission policy.
-
-The language may consume Zutai-generated syscall and IPC bindings but may not define an independent cross-boundary schema source. Host and on-device compilation use the same normalized source/toolchain/target closure and must produce the same image identity.
+The native-development roadmap extends Slisp from its bounded interpreter to a
+compiler that emits the exact target-qualified Slime component-image format.
+Zutai remains the only schema/configuration language; Slisp may consume generated
+bindings but cannot define a second cross-boundary format or grant authority.
 
 ## Component and generation boundary
 
@@ -198,35 +198,21 @@ Exploratory directions enabled by the capability and generation model — descri
 
 ## First vertical slice (complete)
 
-The first end-to-end system milestone connected Slime OS, Zutai, and Dango without requiring a full filesystem or desktop:
+The current product vertical slice connects Slime OS, Zutai, and Slisp:
 
 ```text
-Zutai configuration
-    -> normalized static generation manifest
-    -> boot under QEMU
-    -> isolated init component
-    -> console service
-    -> minimal Dango runtime
-    -> command resolver
-    -> sysinfo component
-    -> echo-agent stub component (tool-call round-trip with no language model)
-    -> streamed output back to the console
+Zutai generation configuration
+    -> target-qualified Rust service ELFs
+    -> externally built freestanding C Slisp ELF
+    -> hash-checked component admission
+    -> isolated init, console, spawn service, and resident Slisp REPL
 ```
 
-Acceptance criteria:
-1. A host-side Zutai configuration describes `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components.
-2. The build produces immutable component objects and one deterministic generation manifest.
-3. The root task starts an isolated bootstrap/init component rather than implementing userspace policy itself.
-4. Init grants each component only the capabilities declared by the generation.
-5. Dango resolves `sysinfo` to an executable capability; it does not assume a global executable path.
-6. Spawn supplies no implicit environment, working directory, streams, or other authority.
-7. `sysinfo` streams output over IPC and reports a structured termination reason.
-8. Crashing `sysinfo` does not terminate Dango, the console service, init, or the system.
-9. The same component and IPC contracts run under QEMU and from removable media on the Framework target.
-10. The Framework run performs no write to the internal NVMe device.
-11. An `echo-agent` stub component receives a tool-call message over a channel and replies with a structured response, with no language model involved. This pins the agent abstraction to the same component, capability, channel, and structured-termination contracts as `sysinfo`.
-
-Criteria 1–8 and 11 are observed on the seL4 product path; `just sel4_dango_check` runs the scripted console session and `just sel4_component_graph_check` the launch graph. Criteria 9 and 10 were observed on the retired custom kernel only (M4); no seL4 Framework image exists, so they are historical rather than current evidence.
+`just sel4_component_graph_check` boots six target-qualified ELF payloads,
+observes the four required instances live, and stops after Slisp reaches its
+prompt and reports its first blocked input read. `just slisp_core_check`
+separately drives persistent definitions, lexical evaluation, typed refusal,
+and clean termination through the same non-Rust implementation.
 
 This slice defines the minimum useful contracts: userspace entry, address-space isolation, capability IPC, executable identity, command resolution, spawning, streams, termination notification, manifest decoding, fault containment, and the agent abstraction as a non-special case of the above.
 
@@ -261,7 +247,7 @@ tools/           Developer-facing helpers such as LLDB attachment
 roadmap/         Canonical status, backlog, dependency graph, milestones, checks, and release gates
 devlog/          Curated investigations, regression evidence, decisions, and verification history
 assets/          Boot/runtime assets
-deps/            Pinned seL4, rust-sel4, Zutai, and Dango submodules
+deps/            Pinned seL4, rust-sel4, and Zutai submodules
 Justfile         Build, run, test, format, lint, generation, contract, and debug commands
 ```
 

@@ -73,3 +73,15 @@ replay_check: sel4_pin_check
 [group('planes / runtime')]
 robot_runtime_check: sel4_pin_check
     python3 scripts/check/check-sel4-robot-runtime-plane.py
+
+# Language-neutral component proof: build a freestanding C ELF against the
+# generated C ABI, admit it as an external component, and boot it through QEMU.
+[group('planes / runtime')]
+sel4_c_runtime_check: sel4_pin_check
+    python3 scripts/check/check-sel4-c-runtime.py
+
+# Pure S-expression language core: host behavior vectors plus the same bounded
+# reader/evaluator running as an external freestanding component under QEMU.
+[group('planes / runtime')]
+slisp_core_check: sel4_pin_check
+    python3 scripts/check/check-slisp-core.py

@@ -112,7 +112,6 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4-filesystem", "--filesystem-plane", "slime-sel4-filesystem.elf"),
     ("sel4-input", "--input-plane", "slime-sel4-input.elf"),
     ("sel4-powerbox", "--powerbox-plane", "slime-sel4-powerbox.elf"),
-    ("sel4-dango", "--dango-plane", "slime-sel4-dango.elf"),
     ("sel4-transfer", "--transfer-plane", "slime-sel4-transfer.elf"),
     # C9.1. Init holds the one probe executable and no clock authority slot:
     # clock operations use the already-reserved badged root-service endpoint.
