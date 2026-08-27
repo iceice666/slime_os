@@ -34,7 +34,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
-from component_paths import source_path  # noqa: E402
+from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
@@ -227,7 +227,13 @@ def build_locked(checkout: Path, sdk: Path, root: Path, label: str) -> Path:
 
 
 def compose_and_boot(
-    root: Path, elf: Path, label: str, *, digest: str | None = None, allow_failure: bool = False
+    root: Path,
+    elf: Path,
+    slisp: Path,
+    label: str,
+    *,
+    digest: str | None = None,
+    allow_failure: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Bind the ELF by content hash, sign, embed, and boot.
 
@@ -265,6 +271,8 @@ def compose_and_boot(
             str(specs),
             "--external-component",
             f"{IMPLEMENTATION}={elf}",
+            "--external-component",
+            f"slisp-external={slisp}",
             str(output),
         ],
         cwd=ROOT,
@@ -391,6 +399,7 @@ def prove_fault_injection(
     root: Path,
     checkout: Path,
     second_sdk: Path,
+    slisp: Path,
     *,
     url: str,
     commit: str,
@@ -460,6 +469,7 @@ def prove_fault_injection(
     refused_build, output = compose_and_boot(
         root,
         stale_elf,
+        slisp,
         "digest-mismatch",
         digest="b" * 64,
         allow_failure=True,
@@ -490,6 +500,7 @@ def prove_fault_injection(
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="slime-component-sdk-upgrade-") as temporary:
         root = Path(temporary)
+        slisp = build_product_slisp(root / "slisp.elf")
         url = canonical_remote(root)
 
         publish(url, "1.0.0", (PROFILE,))
@@ -504,7 +515,7 @@ def main() -> None:
         adopt_console_role(checkout)
         first_elf = build_locked(checkout, first_sdk, root, "initial")
         first_digest = hashlib.sha256(first_elf.read_bytes()).hexdigest()
-        _, first_output = compose_and_boot(root, first_elf, "initial")
+        _, first_output = compose_and_boot(root, first_elf, slisp, "initial")
         first_generation = boot(root, first_output, "initial")
 
         # Retention is the rollback input, taken before any update touches the
@@ -535,6 +546,7 @@ def main() -> None:
             root,
             checkout,
             second_sdk,
+            slisp,
             url=url,
             commit=second_commit,
             previous=before,
@@ -567,7 +579,7 @@ def main() -> None:
             fail("the update produced no rebuilt ELF")
         if hashlib.sha256(updated_elf.read_bytes()).hexdigest() != second_digest:
             fail("the reported content hash does not match the rebuilt ELF")
-        _, updated_output = compose_and_boot(root, updated_elf, "updated")
+        _, updated_output = compose_and_boot(root, updated_elf, slisp, "updated")
         updated_generation = boot(root, updated_output, "updated")
         print(
             f"component SDK upgrade: the consumer moved to {second_commit[:12]}, rebuilt "
@@ -589,7 +601,7 @@ def main() -> None:
         rollback_elf = build_locked(checkout, retained / "sdk-1", root, "initial")
         if rollback_elf.read_bytes() != (retained / f"{BINARY}.elf").read_bytes():
             fail("rollback did not reproduce the previous ELF byte for byte")
-        _, rollback_output = compose_and_boot(root, rollback_elf, "rollback")
+        _, rollback_output = compose_and_boot(root, rollback_elf, slisp, "rollback")
         rollback_generation = boot(root, rollback_output, "rollback")
         if rollback_generation != first_generation:
             fail(

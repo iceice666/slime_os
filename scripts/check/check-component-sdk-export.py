@@ -35,7 +35,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
-from component_paths import source_path  # noqa: E402
+from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
@@ -457,7 +457,7 @@ def external_specs(destination: Path, digest: str) -> None:
         )
 
 
-def prove_boot(root: Path, elf: Path) -> None:
+def prove_boot(root: Path, elf: Path, slisp: Path) -> None:
     specs = root / "specs"
     specs.mkdir()
     external_specs(specs, hashlib.sha256(elf.read_bytes()).hexdigest())
@@ -473,6 +473,8 @@ def prove_boot(root: Path, elf: Path) -> None:
             str(specs),
             "--external-component",
             f"{EXTERNAL_IMPLEMENTATION}={elf}",
+            "--external-component",
+            f"slisp-external={slisp}",
             str(output),
         ],
         cwd=ROOT,
@@ -565,7 +567,8 @@ def main() -> None:
         checkout = external_workspace(root, sdk, revision)
         assert_metadata_boundary(checkout, sdk, revision)
         elf = build_external_component(root, sdk, checkout)
-        prove_boot(root, elf)
+        slisp = build_product_slisp(root / "slisp.elf")
+        prove_boot(root, elf, slisp)
         prove_refusals(root)
 
     print(

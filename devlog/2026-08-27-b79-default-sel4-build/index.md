@@ -63,6 +63,7 @@ The default seL4 image build again constructs the resident product generation on
 | `nix develop --command ruff check scripts/build/build-sel4.py` | Pass | Direct |
 | `env CC=gcc nix develop --command python3 scripts/build/build-c-component.py components/slisp/slisp.c components/slisp/main.c build/slisp-hosted-cc-test.elf` | Pass: ambient GCC was ignored and the dedicated Clang driver wrote the freestanding ELF | Direct |
 | `nix flake check --no-build` | Pass for the local Darwin dev shell; Linux system outputs were not evaluated on Darwin | Direct |
+| GitHub Actions run 33072132822 | Pass: clean hosted Linux built the default QEMU image with the dedicated Clang path, then continued through RPi5 construction and signed SDK publication | Direct |
 
 ## Decisions
 
@@ -80,11 +81,11 @@ The default seL4 image build again constructs the resident product generation on
 
 ## Open risks and follow-ups
 
-- [ ] The SDK publication workflow needs a replacement dispatch after the Clang fix reaches `main`; both failed runs stopped before environment review or the `m3air` publish job.
+- [x] Replacement run 33072132822 built the default QEMU image on hosted Linux and completed the protected signed publication.
 
 ## Artifacts and provenance
 
 - Focused report: this entry.
-- Raw transcript: [missing-mapping run 33060731037](https://github.com/iceice666/slime_os/actions/runs/33060731037), [ambient-GCC run 33061886811](https://github.com/iceice666/slime_os/actions/runs/33061886811).
+- Raw transcript: [missing-mapping run 33060731037](https://github.com/iceice666/slime_os/actions/runs/33060731037), [ambient-GCC run 33061886811](https://github.com/iceice666/slime_os/actions/runs/33061886811), [successful replacement run 33072132822](https://github.com/iceice666/slime_os/actions/runs/33072132822).
 - Related roadmap item: [P5.2](../../roadmap/07-architecture-portability.md#p52--native-component-images-on-sel4).
 - Predecessor: [`devlog/2026-08-27-slisp-product-cutover/`](../2026-08-27-slisp-product-cutover/index.md)

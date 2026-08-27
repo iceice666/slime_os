@@ -24,14 +24,6 @@ full and says why.
 
 ## Open
 
-### B81 — Freestanding C components emitted an unaligned writable load segment
-
-**Status:** Open. **Class:** Defect (linker orphan-section layout).
-**Problem:** `just sel4_rpi5_image_check` built the complete board prefix and component set, then refused the product Slisp ELF because LLD placed its orphan `.got` in a writable `PT_LOAD` beginning at non-page-aligned `0x403180`.
-**Evidence:** GitHub Actions run 33063988008 failed at `slisp: invalid or overlapping segment`; local `objdump -p build/slisp-product.elf` identified the unaligned load.
-**Proposed fix:** Collect `.got` and `.got.*` in the page-aligned `.data` output section and retain the existing component-image admission checks.
-**Exit condition:** A clean hosted `just sel4_rpi5_image_check` constructs and packages the RPi5 image with the repaired Slisp ELF.
-
 
 ## Deferred follow-ups
 
@@ -66,6 +58,13 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B81 — Freestanding C components emitted an unaligned writable load segment
+
+**Status:** Resolved 2026-08-27. **Class:** Defect (linker orphan-section layout).
+**Was:** Hosted RPi5 generation construction refused product Slisp because host LLD emitted a non-page-aligned writable `PT_LOAD`, and the first GOT-only repair remained host-dependent.
+**Exit condition (observed):** Workflow run 33072132822 built and packaged the QEMU and RPi5 images on hosted Linux with explicit program headers, then published signed SDK 2.0.0 containing both prefixes.
+**Evidence:** [`devlog/2026-08-27-b81-rpi5-c-segment-layout/`](../devlog/2026-08-27-b81-rpi5-c-segment-layout/index.md)
+
 
 ### B80 — Clean RPi5 builds lacked the `aarch64-unknown-none` Rust target
 

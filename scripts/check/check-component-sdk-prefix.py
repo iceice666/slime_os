@@ -37,7 +37,7 @@ from boot_contracts import (  # noqa: E402
     COMPONENT_IMAGE_HEADER_TARGET_PROFILE_OFFSET,
     COMPONENT_IMAGE_MAGIC,
 )
-from component_paths import source_path  # noqa: E402
+from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
@@ -261,6 +261,7 @@ def external_specs(destination: Path, digest: str) -> None:
 def build_generation(
     root: Path,
     elf: Path,
+    slisp: Path,
     *,
     profile: str,
     label: str,
@@ -291,6 +292,8 @@ def build_generation(
             str(specs),
             "--external-component",
             f"{EXTERNAL_IMPLEMENTATION}={elf}",
+            "--external-component",
+            f"slisp-external={slisp}",
             str(root / f"generation-{label}"),
         ],
         cwd=ROOT,
@@ -300,8 +303,8 @@ def build_generation(
     )
 
 
-def prove_qemu_boot(root: Path, elf: Path, prefix: str) -> None:
-    build_generation(root, elf, profile=QEMU_PROFILE, label="qemu", prefix=prefix)
+def prove_qemu_boot(root: Path, elf: Path, slisp: Path, prefix: str) -> None:
+    build_generation(root, elf, slisp, profile=QEMU_PROFILE, label="qemu", prefix=prefix)
     output = root / "generation-qemu"
     generation = CHECK.check_generation((output / "generation.bin").read_bytes())
     store = CHECK.check_bootstore((output / "boot-store.bin").read_bytes())
@@ -367,7 +370,12 @@ def declared_profile_ids(root: Path) -> tuple[int, int]:
 
 
 def prove_rpi_qualification(
-    root: Path, rpi_elf: Path, qemu_elf: Path, rpi_prefix: str, qemu_prefix: str
+    root: Path,
+    rpi_elf: Path,
+    qemu_elf: Path,
+    slisp: Path,
+    rpi_prefix: str,
+    qemu_prefix: str,
 ) -> None:
     """The RPi ELF is `bcm2712`-qualified, and the profiles are not interchangeable.
 
@@ -391,7 +399,7 @@ def prove_rpi_qualification(
     claim.
     """
     admitted = build_generation(
-        root, rpi_elf, profile=RPI_PROFILE, label="rpi", prefix=rpi_prefix
+        root, rpi_elf, slisp, profile=RPI_PROFILE, label="rpi", prefix=rpi_prefix
     )
     if f"implementation={EXTERNAL_IMPLEMENTATION} provider=external" not in admitted.stdout:
         fail("the RPi generation did not report the SDK-built component as external")
@@ -399,6 +407,7 @@ def prove_rpi_qualification(
     refused = build_generation(
         root,
         qemu_elf,
+        slisp,
         profile=RPI_PROFILE,
         label="qemu-into-rpi",
         prefix=rpi_prefix,
@@ -417,6 +426,7 @@ def prove_rpi_qualification(
     crossed = build_generation(
         root,
         rpi_elf,
+        slisp,
         profile=QEMU_PROFILE,
         label="rpi-into-qemu",
         prefix=qemu_prefix,
@@ -529,9 +539,7 @@ def prove_malformed_archives_are_refused(root: Path, sdk: Path, record: dict) ->
         clone = reidentified_clone(root, sdk, label)
         (clone / relative).write_bytes(mutated)
         contract = component_sdk.default_contract
-        rehashed = json.loads(
-            (clone / contract.NORMALIZED_FILE_NAME).read_text(encoding="utf-8")
-        )
+        rehashed = json.loads((clone / contract.NORMALIZED_FILE_NAME).read_text(encoding="utf-8"))
         for entry in rehashed["profiles"]:
             if entry["profile"] == QEMU_PROFILE:
                 entry["prefix"]["archiveHash"] = hashlib.sha256(mutated).hexdigest()
@@ -590,8 +598,9 @@ def main() -> None:
             fail("the two profiles produced byte-identical ELFs, so neither is qualified")
         qemu_prefix = qemu_export.split("=", 1)[1]
         rpi_prefix = rpi_export.split("=", 1)[1]
-        prove_qemu_boot(root, qemu_elf, qemu_prefix)
-        prove_rpi_qualification(root, rpi_elf, qemu_elf, rpi_prefix, qemu_prefix)
+        slisp = build_product_slisp(root / "slisp.elf")
+        prove_qemu_boot(root, qemu_elf, slisp, qemu_prefix)
+        prove_rpi_qualification(root, rpi_elf, qemu_elf, slisp, rpi_prefix, qemu_prefix)
         prove_malformed_archives_are_refused(root, sdk, record)
 
     print(
