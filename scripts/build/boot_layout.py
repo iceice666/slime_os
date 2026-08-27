@@ -62,12 +62,11 @@ ROLE = {
 NAMED_ROLES = {"executable", "endpoint-client", "endpoint-service"}
 
 # An endpoint label ending `-service` is the service half; every other endpoint
-# is the client half. Four pairs predate the convention -- `console-output` /
-# `dango-output`, `dango-spawn` / `service-spawn`, `sample-lender-side` /
-# `sample-receiver-side` -- and are recorded as client halves. Nothing depends
-# on the client/service distinction being semantically right for those; the
-# label is the lookup key, and the role is carried for validation only. What
-# matters is that this file and the kernel agree.
+# is the client half. Four historical pairs predate the convention --
+# `console-output` / `dango-output`, `dango-spawn` / `service-spawn`, and the
+# sample pair -- and remain frozen in the reference layout. Nothing depends on
+# their client/service label being semantically current; the role is validation
+# metadata and the channel label is the lookup key.
 
 BASE_LAYOUT = (
     (0, 'endpoint-factory', None, 0x20000),
@@ -442,17 +441,6 @@ SEL4_STORE_LAYOUT = (
     (1, 'executable', 'sel4-store-probe', 0x10008),
 )
 
-# Generation 30, the M6.4 dango plane. Init's factory plus the three
-# executables it spawns; the spawn service's own executables are granted to it,
-# not to init, so they land in its table rather than here.
-SEL4_DANGO_LAYOUT = (
-    (1, 'executable', 'console', 0x10008),
-    (2, 'executable', 'dango', 0x10008),
-    (3, 'executable', 'spawn-service', 0x10008),
-    (5, 'shared-buffer-factory', None, 0x1000000),
-    (6, 'executable', 'sysinfo', 0x10008),
-    (7, 'executable', 'echo-agent', 0x10008),
-)
 
 # Generation 29, the M6.3 filesystem plane. Three rows: init's factory and both
 # executables. Neither the block capability nor the namespace views are here —
@@ -565,7 +553,6 @@ REPLACEMENTS = {
     27: SEL4_GENERATION_LAYOUT,
     28: SEL4_DIRECTORY_LAYOUT,
     29: SEL4_FILESYSTEM_LAYOUT,
-    30: SEL4_DANGO_LAYOUT,
     31: SEL4_INPUT_LAYOUT,
     32: SEL4_POWERBOX_LAYOUT,
     33: SEL4_TRANSFER_LAYOUT,
@@ -615,11 +602,9 @@ def _layout_components() -> set[str]:
 
 
 # Channel label -> the component it belongs to. Built by stripping the suffixes
-# the endpoint convention appends, longest first so `-control-service` is not
-# read as a `-control` channel of a component ending `-control`. A label that
-# strips to no known component belongs to no one -- `console-output` and
-# `dango-spawn` name a channel between two components rather than one
-# component's own endpoint, and both ends live or die with the base layout.
+# the endpoint convention appends. A label that strips to no known component
+# belongs to no one; historical reference edges such as `dango-spawn` remain
+# base-layout data and are not active product wiring.
 def _channel_components() -> dict[str, str]:
     components = _layout_components()
     suffixes = ("-control-service", "-control", "-service", "-client", "-side")

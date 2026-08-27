@@ -265,11 +265,6 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 11),
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
-    # C10.4: 13 -> 16. The scripted session repeats its first command, and the
-    # three markers tracing that repeat are what make the free-frame census a
-    # conservation claim over one executable rather than an observation across
-    # four different ones.
-    ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 16),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 11),
     # P4: the physical Raspberry Pi 5 gate. Registered here for exactly the
     # reason a hardware gate needs it most — this control imports the checker

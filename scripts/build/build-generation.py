@@ -343,7 +343,6 @@ SEL4_MANIFESTS = {
     "sel4-generation": GENERATION_COMPOSITIONS / "sel4-generation.zti",
     "sel4-directory": GENERATION_COMPOSITIONS / "sel4-directory.zti",
     "sel4-filesystem": GENERATION_COMPOSITIONS / "sel4-filesystem.zti",
-    "sel4-dango": GENERATION_COMPOSITIONS / "sel4-dango.zti",
     "sel4-input": GENERATION_COMPOSITIONS / "sel4-input.zti",
     "sel4-powerbox": GENERATION_COMPOSITIONS / "sel4-powerbox.zti",
     "sel4-transfer": GENERATION_COMPOSITIONS / "sel4-transfer.zti",
@@ -587,6 +586,8 @@ def parse_external_components(values: list[str]) -> dict[str, Path]:
     return mappings
 
 
+
+
 def component_specs_for_manifest(
     manifest: dict, component_spec_root: Path | None = None
 ) -> dict[str, dict]:
@@ -631,6 +632,12 @@ def resolve_component_sources(
     specs = component_specs_for_manifest(manifest, component_spec_root)
 
     manifest_names = {executable["name"] for executable in manifest["executables"]}
+    product_slisp_digest = os.environ.get("SLIME_PRODUCT_SLISP_SHA256")
+    slisp_spec = specs.get("slisp")
+    if product_slisp_digest is not None:
+        if slisp_spec is None or slisp_spec["implementation"]["provider"] != "external":
+            fail("SLIME_PRODUCT_SLISP_SHA256 requires an external Slisp component spec")
+        slisp_spec["implementation"]["contentHash"] = product_slisp_digest
     workspace = manifest_names - set(specs)
     expected_external: set[str] = set()
     for executable_name, spec in specs.items():
@@ -894,10 +901,9 @@ def build_rust_components(
     # plane across 29 fixtures is a real cost, and grouping keeps it at today's.
     invocations: list[list[str]] = []
     if is_json_target(target_profile):
-        # No command-profile manifest is exported: `spawn-service` and `dango`
-        # resolve their commands, launch contexts, request endpoint, and spawn
-        # budget from the authenticated generation at runtime (B70), so nothing
-        # in a component build reads a fixture any more.
+        # No command-profile manifest is exported: `spawn-service` resolves its
+        # command bindings, launch contexts, request endpoint, and spawn budget
+        # from the authenticated generation at runtime (B70).
         # Build exactly the components this generation declares, rather than
         # every component crate. The fabric components are compiled against a
         # generated C8 profile this target has no graph for, so building them

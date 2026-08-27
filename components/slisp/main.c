@@ -39,12 +39,17 @@ void slime_component_main(uint32_t startup_arg)
     char line[LINE_BYTES];
     size_t used = 0;
     (void)startup_arg;
+    int resident_wait_reported = 0;
     slisp_session_reset();
     write_text("Slisp\nslisp> ");
     for (;;) {
         SlimeInputEvent event;
         int64_t status = slime_input_read(INPUT_SLOT, &event);
         if (status == SLIME_ERR_WOULDBLOCK) {
+            if (!resident_wait_reported) {
+                write_text("[slisp] resident input wait\n");
+                resident_wait_reported = 1;
+            }
             __asm__ volatile("yield");
             continue;
         }
@@ -52,6 +57,7 @@ void slime_component_main(uint32_t startup_arg)
             write_text("! input\n");
             slime_exit(1);
         }
+        resident_wait_reported = 0;
         if (!event.pressed) {
             continue;
         }

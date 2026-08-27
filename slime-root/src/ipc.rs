@@ -832,14 +832,12 @@ fn resolve_notification_slot(
 /// this is the slot it asked for. Kind is exact — a `block` capability is never
 /// an answer to an `endpoint` question, however its rights overlap.
 ///
-/// An *ambiguous* role is refused, not resolved to the lowest slot. This is the
-/// same discipline the removed layout fallback failed: `spawn-service` binds two
-/// `executable+exec,spawn` grants under `valid.zti` (`echo` at slot 1, `sysinfo`
-/// at slot 2) and three under `sel4-dango.zti`, so a lowest-slot tiebreak would
-/// have answered "spawn echo" to a question meaning "spawn sysinfo" — a wrong
-/// capability of the right type, which is exactly the failure that presents as a
-/// hang instead of an error. A component needing to tell those apart is asking a
-/// question this axis cannot answer, and must be told so rather than guessed at.
+/// An *ambiguous* role is refused, not resolved to the lowest slot. The frozen
+/// CP1 reference generation binds multiple executable grants to spawn-service;
+/// the retired Dango plane carried the same ambiguity for endpoints. A
+/// lowest-slot tiebreak can return a valid capability answering the wrong
+/// question, which presents as a hang rather than an error. Callers needing to
+/// distinguish those bindings must ask by stable generation name.
 fn resolve_role_slot(
     generation: &boot_contracts::generation::Generation<'_>,
     instance: boot_contracts::generation::Instance,
@@ -1659,15 +1657,11 @@ mod tests {
     /// An ambiguous role parses but resolves to nothing, and the refusal is not
     /// an accident of parsing.
     ///
-    /// This is a non-vacuous pairing (B67): the same spelling that must be refused
-    /// when several bindings match is a *well-formed* query whose kind and rights
-    /// all decode, so the refusal comes from the ambiguity itself rather than from
-    /// a rejected name. `sel4-dango.zti` grants `spawn-service` three
-    /// `send`+`recv` endpoints — the RPC channel plus one context endpoint per
-    /// command — which is exactly this case, and it was observed: resolving that
-    /// role hung the dango plane at `dango> $(sysinfo)`. B70 named that endpoint
-    /// `spawn-service-rpc` in every generation declaring the service, so the
-    /// component asks by name and this role stays refused rather than widened.
+    /// This is a non-vacuous pairing (B67): the same spelling that must be
+    /// refused when several bindings match is well-formed. The frozen Dango
+    /// composition supplied the observed multi-endpoint case; B70 subsequently
+    /// gave the request endpoint a stable name, so the active service asks by
+    /// name and role ambiguity remains a refusal rather than a guessed slot.
     #[test]
     fn an_ambiguous_role_is_well_formed_yet_unanswerable() {
         use boot_contracts::generation::{CapabilityKind, right_named};

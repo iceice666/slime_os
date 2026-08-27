@@ -114,9 +114,6 @@ framework_inventory_check:
     @exit 1
 
 [group('compatibility')]
-dango_check: sel4_dango_check
-
-[group('compatibility')]
 directory_check: sel4_filesystem_check
 
 [group('compatibility')]
@@ -136,3 +133,12 @@ storage_store_check: sel4_store_check
 
 [group('compatibility')]
 rollback_check: sel4_rollback_check
+
+# Historical devlog identifiers. The implementation and dedicated plane are
+# retired; both names now validate the active Slisp shell paths without keeping
+# Dango build or runtime wiring alive.
+[group('compatibility')]
+dango_check: slisp_core_check
+
+[group('compatibility')]
+sel4_dango_check: slisp_core_check sel4_component_graph_check

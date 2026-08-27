@@ -87,14 +87,10 @@ fn main(_startup_arg: u32) {
     // kind plus rights identifies it without naming a grant.
     let factory_slot = slime_rt::resolve_binding(b"kind:sharedBufferFactory+bufferCreate")
         .unwrap_or_else(|_| slime_rt::exit(1));
-    // The request endpoint, by the name every generation declaring this service
-    // uses for it. The role query cannot answer here and correctly refuses: the
-    // dango composition grants this component three `send`+`recv` endpoints --
-    // the RPC channel plus one launch context per command -- so which one
-    // carries requests is a fact about the graph's shape rather than about the
-    // capability. `RPC_SLOT` was a build-script constant parsed out of one
-    // manifest, which is what tied this image to that manifest; a stable name
-    // asks the root the same question at runtime.
+    // The request endpoint is resolved by its stable generation binding name.
+    // A capability-role query can be ambiguous when this service also holds
+    // launch-context endpoints, so refusing ambiguity and asking by name avoids
+    // a plausible but wrong lowest-slot answer.
     let rpc_slot =
         slime_rt::resolve_binding(b"spawn-service-rpc").unwrap_or_else(|_| slime_rt::exit(1));
     let budget = declared_budget();
@@ -268,14 +264,9 @@ fn handle_inner(
             )
         }
         // A root refusal is this service's failure to deliver an authorized
-        // spawn, not a refusal of the request. Propagating the root's own code
-        // would collapse the two: `ERR_BAD_CAP` is `STATUS_NOT_ALLOWED` on this
-        // wire, so a root that refused the executable slot would answer the
-        // client "your command is not declared" — which is false, and which
-        // `dango` reports as `resolve-denied`. The distinct status keeps the
-        // service's authorization decision the only thing that produces it, and
-        // the root's code travels in `detail` where it is diagnostic rather
-        // than policy.
+        // spawn, not a refusal of the request. The distinct status keeps the
+        // service's authorization decision separate; the root's code travels in
+        // `detail` as diagnosis rather than policy.
         Err(error) => (
             detailed_reply(STATUS_SPAWN_REFUSED, 0, 0, error as u64),
             None,

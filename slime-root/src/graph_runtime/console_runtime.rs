@@ -1,27 +1,11 @@
 use super::*;
 
-/// The key script a generation runs (M6.4, P5.4.3).
+/// The key script a generation runs for deterministic input gates.
 ///
-/// Selected by generation number, exactly as the oracle's `bootstrap` selects
-/// its own. A generation with no entry here gets an empty script, so
-/// `InputRead` on every other plane answers `WouldBlock` — which is what "no
-/// key has been pressed" means, and is why holding the capability on a plane
-/// with no session is harmless.
+/// A generation with no entry gets an empty source, so `InputRead` answers
+/// `WouldBlock`: holding input authority does not invent a session.
 pub(super) const fn input_script(generation: u64) -> &'static [u8] {
     match generation {
-        // The dango plane: the oracle's generation-7 session, byte for byte, so
-        // the same component produces the same transcript — plus one C10.4
-        // repeat.
-        //
-        // The repeat is `sysinfo` again, and it must be the *same* executable as
-        // the first command rather than a fifth one. `begin_task_arena` retains
-        // a released arena's parent untyped for reuse by the next task of the
-        // same size, so a cycle launching a *different* executable legitimately
-        // consumes a new parent and the free-frame count legitimately falls.
-        // Only a repeat of one executable makes "the count returns to where it
-        // started" a property of reclamation rather than of which binaries the
-        // script happened to name.
-        30 => b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n$(sysinfo)\n\x1b",
         // The input plane's own script: two characters, a space, a character,
         // and a newline — enough to prove ordering, the character encoding, the
         // named-key encoding, and exhaustion.

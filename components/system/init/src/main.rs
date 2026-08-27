@@ -144,13 +144,13 @@ fn main(startup_arg: u32) {
         .supervision_slot;
 
     if startup_arg == boot_contracts::generation::BootAction::Product.id() {
-        let dango_executable =
-            slime_rt::resolve_binding(b"executable:dango").unwrap_or_else(|_| slime_rt::exit(1));
-        let component_dango = slime_rt::spawn(dango_executable, &[])
+        let slisp_executable =
+            slime_rt::resolve_binding(b"executable:slisp").unwrap_or_else(|_| slime_rt::exit(1));
+        let component_slisp = slime_rt::spawn(slisp_executable, &[])
             .unwrap_or_else(|_| slime_rt::exit(1))
             .supervision_slot;
         slime_rt::debug_write(b"[init] product services resident\n");
-        supervise_resident(&[component_console, component_spawn_service, component_dango]);
+        supervise_resident(&[component_console, component_spawn_service, component_slisp]);
     }
 
     let shutdown = slime_proto::spawn::WireSpawnRequest {
@@ -343,18 +343,6 @@ fn wait_clean(handles: &[u32]) {
     }
 }
 
-fn wait_terminated(handles: &[u32]) {
-    for handle in handles {
-        loop {
-            match slime_rt::supervision_status(*handle) {
-                Ok(None) => slime_rt::yield_now(),
-                Ok(Some(slime_rt::Termination::Exit(_))) => break,
-                _ => slime_rt::exit(1),
-            }
-        }
-    }
-}
-
 /// Prove native endpoint rendezvous and unrelated progress while the sender is
 /// blocked in the kernel rather than filling a root-mediated queue.
 fn drive_channel_plane() {
@@ -387,39 +375,14 @@ fn drive_channel_plane() {
 
 /// The channel init uses for console output in the active generation.
 ///
-/// Product generations name it `console-output`; the standalone channel and loan
-/// planes retain the older `dango-output` edge. CP2 resolves whichever the active
-/// generation declares by asking the root, rather than choosing between two
-/// compile-time constants on the authenticated boot action.
-///
-/// That branch is what the milestone removes. `DANGO_OUTPUT_SLOT` and
-/// `CONSOLE_OUTPUT_SLOT` were both baked into this image from one manifest's
-/// layout, so the binary carried every graph's numbering and selected among them
-/// at runtime anyway — the coupling B70 names, one step removed. Asking by name
-/// answers the same question without the image knowing either number.
+/// Product generations name the edge `console-output`; the standalone channel
+/// and loan planes retain the historical `dango-output` label. CP2 resolves the
+/// active generation's binding instead of compiling either slot number into
+/// this component.
 fn console_send_slot() -> u32 {
-    // The two names the generations that reach this code give one edge:
-    // `console-output` under the product graph, `dango-output` under the channel
-    // and loan planes. Verified against the fixtures rather than assumed — a
-    // third spelling, `dango-console-rpc`, was listed here and was dead code: the
-    // dango plane binds that name to `console`, not to `init`, and binds `init`
-    // no console edge at all, so this function is never reached there.
-    //
-    // No generation binds both, so this is a disjoint lookup rather than a
-    // precedence rule.
-    //
-    // A pair of names is still a manifest fact in this source, and a smaller one
-    // than the slot numbers it replaces: the numbers differed per generation and
-    // had to be selected by boot action, while a name is stable across every
-    // generation declaring that edge. Giving the edge one name across the
-    // fixtures is a fixture change that would delete the list.
-    //
-    // The root answers only from this instance's own binding list, so a name this
-    // generation does not give `init` is refused rather than resolved from the
-    // shared boot layout. An earlier root did consult that layout, which declares
-    // every plane's edges, and this call site is where it went wrong: `init`
-    // asked, received another plane's edge, and sent into an endpoint nobody was
-    // waiting on.
+    // No generation reaching this function binds both names, so this is a
+    // disjoint lookup rather than a precedence rule. The root answers only from
+    // init's own binding list, preventing another plane's edge from leaking in.
     for name in [b"console-output".as_slice(), b"dango-output".as_slice()] {
         if let Ok(slot) = slime_rt::resolve_binding(name) {
             return slot;
@@ -611,65 +574,6 @@ fn drive_powerbox_plane() {
         .unwrap_or_else(|_| fail_plane(b"powerbox", b"spawn probe"));
     slime_rt::debug_write(b"[init] powerbox probe spawned\n");
     wait_clean(&[probe.supervision_slot, chooser.supervision_slot]);
-}
-
-/// One boot-layout executable slot, resolved by name through the root.
-///
-/// CP2's replacement for the `build.rs`-generated `*_SLOT` constants. `reason` is
-/// the component name reported when the active generation's layout declares no
-/// such executable, which is a real answer rather than a failure to paper over:
-/// a plane that cannot find the component it is about to launch must say so
-/// instead of spawning whatever sits at a guessed slot.
-fn layout_executable(query: &[u8], reason: &'static [u8]) -> u32 {
-    slime_rt::resolve_binding(query).unwrap_or_else(|_| fail_plane(b"dango", reason))
-}
-
-/// Drive the P5.4.3 dango plane (M6.4): a scripted console session that
-/// launches commands through the spawn service.
-///
-/// Four components and two channels. The grant lists are the components' own
-/// slot layouts — `spawn-service.rs` and `dango.rs` compile against fixed
-/// positions, and the *order of these lists* is what fixes them, exactly as
-/// `drive_sample_plane` fixes the lender's three.
-fn drive_dango_plane() {
-    // Console's shared-buffer factory is a declared init-to-console grant, so
-    // init holds the source and must hand it over at spawn. Every endpoint on
-    // this plane is a generation-declared object the root installs into both
-    // ends itself, so no endpoint half crosses here.
-    // The three executables this plane launches are layout roles, resolved by
-    // name through the root rather than compiled in (CP2). `executable:` names
-    // which of the layout's two identity domains is meant.
-    let console_slot = layout_executable(b"executable:console", b"console");
-    let service_slot = layout_executable(b"executable:spawn-service", b"spawn-service");
-    let dango_slot = layout_executable(b"executable:dango", b"dango");
-    let console = slime_rt::spawn(
-        console_slot,
-        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
-    )
-    .unwrap_or_else(|_| fail_plane(b"dango", b"spawn console"));
-    slime_rt::debug_write(b"[init] console spawned\n");
-    // The spawn service receives its factory and the two executables it may
-    // launch. Both executable grants are sourced by init, so init is the party
-    // that must pass them; ascending declared slot is the order the root pairs
-    // requests with declarations in.
-    let service = slime_rt::spawn(
-        service_slot,
-        &[
-            grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
-            grant(6, RIGHT_EXEC | RIGHT_SPAWN),
-            grant(7, RIGHT_EXEC | RIGHT_SPAWN),
-        ],
-    )
-    .unwrap_or_else(|_| fail_plane(b"dango", b"spawn service"));
-    slime_rt::debug_write(b"[init] spawn service spawned\n");
-    let dango =
-        slime_rt::spawn(dango_slot, &[]).unwrap_or_else(|_| fail_plane(b"dango", b"spawn dango"));
-    slime_rt::debug_write(b"[init] dango spawned\n");
-    wait_terminated(&[
-        dango.supervision_slot,
-        service.supervision_slot,
-        console.supervision_slot,
-    ]);
 }
 
 /// Drive the P5.4.3 filesystem plane (M6.3's other half): a service that

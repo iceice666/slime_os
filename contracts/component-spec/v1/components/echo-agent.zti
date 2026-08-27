@@ -49,9 +49,9 @@
     qos = "none";
   };
   test = {
-    testCondition = "the sel4_dango_check gate boots a generation declaring echo-agent";
-    expectedResult = "echo-agent reaches its declared behavior under that gate";
-    passFailCriteria = "echo-agent{tool=echo";
-    requiredTestEnvironment = "sel4_dango_check";
+    testCondition = "the component_spec_check gate validates the reference generation declaring echo-agent";
+    expectedResult = "echo-agent remains a valid optional component with no ambient capability requirements";
+    passFailCriteria = "reference generation";
+    requiredTestEnvironment = "component_spec_check";
   };
 }

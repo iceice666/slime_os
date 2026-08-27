@@ -153,7 +153,6 @@ pub enum BootAction {
     Call = 3,
     Channel = 4,
     Crossing = 5,
-    Dango = 6,
     Directory = 7,
     Filesystem = 8,
     Generation = 9,
@@ -235,7 +234,6 @@ impl BootAction {
         Self::Call,
         Self::Channel,
         Self::Crossing,
-        Self::Dango,
         Self::Directory,
         Self::Filesystem,
         Self::Generation,
@@ -286,7 +284,6 @@ impl BootAction {
                 Self::Call => Self::Call.id(),
                 Self::Channel => Self::Channel.id(),
                 Self::Crossing => Self::Crossing.id(),
-                Self::Dango => Self::Dango.id(),
                 Self::Directory => Self::Directory.id(),
                 Self::Filesystem => Self::Filesystem.id(),
                 Self::Generation => Self::Generation.id(),
@@ -331,7 +328,6 @@ impl BootAction {
             "call" => Self::Call,
             "channel" => Self::Channel,
             "crossing" => Self::Crossing,
-            "dango" => Self::Dango,
             "directory" => Self::Directory,
             "filesystem" => Self::Filesystem,
             "generation" => Self::Generation,
@@ -2916,13 +2912,12 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 38] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 37] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
         (BootAction::Channel, 4),
         (BootAction::Crossing, 5),
-        (BootAction::Dango, 6),
         (BootAction::Directory, 7),
         (BootAction::Filesystem, 8),
         (BootAction::Generation, 9),

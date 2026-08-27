@@ -69,6 +69,9 @@ int64_t slime_input_read(uint32_t slot, SlimeInputEvent *event)
         &mr2,
         &mr3,
         0);
+    if ((int64_t)mr0 == SLIME_ERR_WOULDBLOCK) {
+        return SLIME_ERR_WOULDBLOCK;
+    }
     if ((int64_t)mr0 < 0) {
         return (int64_t)mr0;
     }

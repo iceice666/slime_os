@@ -128,24 +128,22 @@ except ComponentSpecError as error:
     # internal error, so it is reported with the gate's own prefix rather than a
     # traceback: a suite of 30-odd gates is attributable by that prefix.
     fail(f"the committed corpus was refused: {error}")
-BY_NAME = {entry.name: entry for entry in CORPUS}
+CORPUS_BY_NAME = {entry.name: entry for entry in CORPUS}
 SOURCE_FORMS = {entry.name: entry.spec for entry in CORPUS}
 MANIFEST = load_manifest()
 
-# 1. Corpus coverage: every component the reference generation declares has a
-#    spec, and every spec names a component it declares. A corpus that merely
-#    overlaps the manifest would leave the uncovered components exactly where
-#    B70 found them.
+# 1. Corpus coverage: every component the frozen reference generation declares
+# has a spec. Additional specs may describe newer product compositions; their
+# own manifests and gates validate those records instead of projecting them
+# backward onto the CP1 reference fixture.
 declared_executables = {entry["name"] for entry in MANIFEST["executables"]}
 declared_instances = {entry["name"] for entry in MANIFEST["instances"]}
 if declared_executables != declared_instances:
     fail("the reference generation's executables and instances name different components")
-missing = sorted(declared_instances - set(BY_NAME))
+missing = sorted(declared_instances - set(CORPUS_BY_NAME))
 if missing:
     fail(f"no component spec for declared component(s): {missing}")
-extra = sorted(set(BY_NAME) - declared_instances)
-if extra:
-    fail(f"component spec(s) name no declared component: {extra}")
+BY_NAME = {name: CORPUS_BY_NAME[name] for name in declared_instances}
 
 # 2. Each spec agrees with the manifest on the facts both state. A spec free to
 #    disagree with the generation that composes it would be documentation, not a
@@ -384,13 +382,10 @@ for name, entry in sorted(BY_NAME.items()):
 # repeated here: the corpus admission at the top of this file already ran it for
 # all 42 records.
 
-# 4. Corpus-level implementation facts. The per-spec resolution of a gate target
-#    and a `[[bin]]` name is `component_spec` compiler work, exercised by the
-#    mutation arms below. What only the whole corpus can state is which
-#    components this repository declares but ships no implementation for, and
-#    that set must be exactly the two the deleted-client devlogs record. A third
-#    appearing silently is how B70's class of drift starts.
-EXPECTED_UNDECLARED = ("generation-list", "storage-store-probe")
+# 4. Corpus-level implementation facts. The reference generation pins its two
+# original implementation gaps plus the retired Dango identity; specs for newer
+# compositions remain admitted without being projected onto the frozen graph.
+EXPECTED_UNDECLARED = ("dango", "generation-list", "storage-store-probe")
 observed_undeclared = tuple(
     sorted(
         name
@@ -400,9 +395,9 @@ observed_undeclared = tuple(
 )
 if observed_undeclared != EXPECTED_UNDECLARED:
     fail(
-        f"declared-without-implementation set is {list(observed_undeclared)}, "
-        f"expected {list(EXPECTED_UNDECLARED)}; a component gaining or losing an "
-        "implementation must move this set in the same change"
+        f"reference declared-without-implementation set is {list(observed_undeclared)}, "
+        f"expected {list(EXPECTED_UNDECLARED)}; a reference component gaining or losing "
+        "an implementation must move this set in the same change"
     )
 # The pinned set is checked against the recursively discovered component crate
 # manifests rather than only asserted, so it stays a derived fact. Asserting the
@@ -654,7 +649,7 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         ("an unknown interface contract directory", "console", unknown_interface_contract),
         ("a real directory that is no contract root", "console", non_contract_interface_path),
         ("a dependency mode disagreeing with the dependencies", "console", wrong_dependency_mode),
-        ("a dependency mode disagreeing on a component that has some", "dango", wrong_dependency_mode),
+        ("a dependency mode disagreeing on a component that has some", "slisp", wrong_dependency_mode),
         ("a resource mode that is not a ceiling", "console", wrong_resource_mode),
         ("a parameter default disagreeing with its resource field", "init", parameter_default_disagrees),
         ("a parameter naming no resource field", "console", parameter_names_no_resource),

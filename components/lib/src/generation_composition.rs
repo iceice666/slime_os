@@ -33,13 +33,11 @@
 //!
 //! # Resolved once, cached
 //!
-//! [`is`] and its callers — `fabric_boot::active`, `fabric_matrix::active`,
-//! and the branches in `console`, `dango`, and `fabric-intruder` — sit on
-//! dispatch loops that ran against a `&str` comparison, so resolving per call
-//! would put a syscall where a constant was. The memo follows
-//! `fabric-service`'s `TIME_SLOT_CACHE` and `fabric_call_scenario`'s
-//! `WAKE_SLOT`: components are single-threaded, and a generation's boot action
-//! cannot change under a running graph.
+//! [`is`] and its callers sit on dispatch loops that previously compared a
+//! compile-time string. Resolving per call would put a syscall in hot paths, so
+//! the memo follows `fabric-service`'s `TIME_SLOT_CACHE`: components are
+//! single-threaded, and a generation's boot action cannot change under a
+//! running graph.
 
 use boot_contracts::generation::BootAction;
 

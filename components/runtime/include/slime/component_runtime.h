@@ -18,8 +18,6 @@ typedef struct {
     uint8_t pressed;
 } SlimeInputEvent;
 
-
-
 /* Implemented by each component. Returning is a clean lifecycle exit. */
 void slime_component_main(uint32_t startup_arg);
 

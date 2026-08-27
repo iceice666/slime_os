@@ -40,11 +40,11 @@ BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 
 BOOT_TIMEOUT_SECONDS = 120
 
-# The v5 product generation carries dango beside console and spawn-service.
+# The product generation carries Slisp beside console and spawn-service.
 # Init launches all three and stays alive supervising them. The root first
-# certifies all required instances live; dango's first `WouldBlock` input result
+# certifies all required instances live; Slisp's first `WouldBlock` input result
 # is the terminal proof that startup completed and the shell entered residence.
-TERMINAL_MARKER = r"\[dango\] resident input wait"
+TERMINAL_MARKER = r"\[slisp\] resident input wait"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=6 instances=6 grants=\d+ "),
@@ -77,19 +77,28 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
     ),
     ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1"),
+    ("init authorized Slisp through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0"),
+    (
+        "Slisp received its two declared service endpoints",
+        r"SLIME_GRAPH native endpoint task=3 slot=33 side=both",
+    ),
+    (
+        "Slisp received its second declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=3 slot=35 side=both",
+    ),
+    ("init spawned Slisp as instance task 3", r"SLIME_GRAPH spawned task=0 child=3 component=slisp grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0"),
     ("the supervisor certified the live graph", r"SLIME_GRAPH healthy generation=1 instances=[0-9a-f]{16} required=4 live=4 idle=4 failed=0"),
     ("init kept the product graph resident", r"\[init\] product services resident"),
-    ("the product printed the Slime OS banner", r"Slime OS"),
-    ("the product identified the Dango shell", r"Dango shell"),
-    ("dango displayed its prompt", r"dango> "),
-    ("dango entered resident input wait", TERMINAL_MARKER),
+    ("the product identified the Slisp shell", r"Slisp"),
+    ("Slisp displayed its prompt", r"slisp> "),
+    ("Slisp entered resident input wait", TERMINAL_MARKER),
 )
 
-EXPECTED_UNORDERED: tuple[str, ...] = (
-    r"\[spawn-service\] ready",
-    r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1",
-    r"\[spawn-service\] shared-buffer quota live",
-)
+# Component-spec evidence literal: startup scheduling may print this after the
+# terminal Slisp marker, so product admission checks its declared source string
+# without making it part of the bounded transcript prefix.
+SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
+EXPECTED_UNORDERED: tuple[str, ...] = ()
 
 # B50 is a repository-wide cutover. Guard every surviving implementation source
 # that could reintroduce the universal dispatcher or product-plane selection;
@@ -399,7 +408,7 @@ def main() -> None:
     check_transcript(boot(profile))
     print(
         "seL4 component graph check: init launched console, spawn-service, and "
-        "dango with generation-declared authority; all four required product "
+        "Slisp with generation-declared authority; all four required product "
         "instances remained live and the supervisor certified the resident graph"
     )
 

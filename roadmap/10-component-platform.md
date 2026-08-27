@@ -213,7 +213,7 @@ just external_component_admission_check
 
 ### Deliverables
 
-- publish, or provide as a pinned, git-consumable vendored bundle, `slime-rt`, `slime-proto`, `boot-contracts`, the seL4 JSON target spec, and the exact `sel4-sys`/`SEL4_PREFIX`/`LIBCLANG_PATH` toolchain recipe as a versioned "component SDK" a checkout outside this repository can consume by pinned commit — no crates.io/registry publish, matching this repository's existing pinned-submodule convention (`deps/rust-sel4`, `deps/sel4`, `deps/zutai`, `deps/dango`);
+- publish, or provide as a pinned, git-consumable vendored bundle, `slime-rt`, `slime-proto`, `boot-contracts`, the seL4 JSON target spec, and the exact `sel4-sys`/`SEL4_PREFIX`/`LIBCLANG_PATH` toolchain recipe as a versioned component SDK a checkout outside this repository can consume by pinned commit;
 - in a separate git repository (may be an unpublished scratch checkout used only for this milestone's verification), author [RP4](09-rpi5-ros2-demo.md#rp4--arm-component-data-path-on-qemu-and-raspberry-pi-5)'s two Arm data-path components (the bounded-C7/C8-sample producer and consumer) using only the SDK bundle above and CP3's crate-per-component convention, with zero commits or edits to this repository's `components/` tree;
 - build both components from that separate checkout into target-qualified component images for `aarch64-sel4-qemu-virt`;
 - feed both images through CP4's external-artifact admission path into a demo-scoped generation satisfying RP4's declared route/grant/capability requirements, sign it with the existing release trust root, and boot it.

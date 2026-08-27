@@ -26,10 +26,8 @@
 //! # Why this reports instead of exiting
 //!
 //! [`probe`] returns an outcome and [`probe_and_report`] prints it; neither ends
-//! the component. The caller decides, exactly as `dango` and `console` do for
-//! the shared-buffer check — a probe that exited would make "no quota declared"
-//! indistinguishable from a failure for the many components that legitimately
-//! have none.
+//! the component. The caller decides, so "no quota declared" remains distinct
+//! from failure for components that legitimately have none.
 
 extern crate alloc;
 

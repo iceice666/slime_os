@@ -11,8 +11,9 @@ Everything below runs on the automated product target
 
 ### 1. Clone with submodules
 
-The seL4 kernel, the rust-sel4 crates, Zutai, and Dango are pinned Git
-submodules under `deps/`. Nothing builds without them.
+The seL4 kernel, rust-sel4 crates, and Zutai are pinned Git submodules under
+`deps/`. The Slisp product component is built directly from the in-tree
+freestanding C sources.
 
 ```sh
 git clone --recurse-submodules https://github.com/iceice666/slime_os.git

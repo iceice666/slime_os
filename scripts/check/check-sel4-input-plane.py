@@ -2,10 +2,9 @@
 
 """P5.4.3 gate: `InputRead` mediation.
 
-Small on purpose. M6.4's Dango session is the consumer of key events and a large
-composition with its own failure modes; this asserts the mechanism underneath
-it, so a defect in the authority path is distinguishable from a defect in the
-shell.
+Small on purpose. This gate isolates input mediation from any interactive
+language, so authority-path defects remain distinguishable from shell or
+evaluator defects.
 
 Three claims: a granted capability yields the generation's scripted keys in
 order and decoded, an exhausted script terminates its reader rather than
