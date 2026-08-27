@@ -217,7 +217,8 @@ pub const FAST_MESSAGE_REGISTERS: usize = sel4::NUM_FAST_MESSAGE_REGISTERS;
 // The four-MR fast path and the four-capability logical bound are independent
 // facts that happen to agree on AArch64. Pin the transport side so a profile
 // with fewer fast registers fails here instead of silently truncating.
-const _: () = assert!(FAST_MESSAGE_REGISTERS == 4);
+const _: () =
+    assert!(FAST_MESSAGE_REGISTERS == boot_contracts::component_runtime_abi::FAST_REGISTERS);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IpcError {
@@ -380,11 +381,15 @@ pub enum ConsoleKind {
 }
 
 impl ConsoleKind {
-    const WRITE: sel4::Word = 0;
-    const INPUT_READ: sel4::Word = 1;
-    const BLOCK_TRANSACT: sel4::Word = 2;
-    const DIRECTORY_INSPECT: sel4::Word = 3;
-    const DIRECTORY_COMMIT: sel4::Word = 4;
+    const WRITE: sel4::Word = boot_contracts::component_runtime_abi::console_labels::WRITE;
+    const INPUT_READ: sel4::Word =
+        boot_contracts::component_runtime_abi::console_labels::INPUT_READ;
+    const BLOCK_TRANSACT: sel4::Word =
+        boot_contracts::component_runtime_abi::console_labels::BLOCK_TRANSACT;
+    const DIRECTORY_INSPECT: sel4::Word =
+        boot_contracts::component_runtime_abi::console_labels::DIRECTORY_INSPECT;
+    const DIRECTORY_COMMIT: sel4::Word =
+        boot_contracts::component_runtime_abi::console_labels::DIRECTORY_COMMIT;
 
     const fn from_label(label: sel4::Word) -> Option<Self> {
         match label {

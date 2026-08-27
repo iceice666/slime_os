@@ -418,6 +418,7 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
     root := env.get caps.env "SLIME_SYSCALL_ABI_BINDINGS_ROOT" ?? ".";
     bindings := gen.render abi;
     fs.writeAll caps.write (t.join "" { root; "/syscall_abi.rs"; }) bindings.rust;
+    fs.writeAll caps.write (t.join "" { root; "/syscall_abi.h"; }) bindings.c;
     fs.writeAll caps.write (t.join "" { root; "/syscall-abi.md"; }) bindings.markdown
   ];
 main

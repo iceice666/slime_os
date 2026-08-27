@@ -44,6 +44,9 @@ contracts_check: bootstate_model_check capability_rights_model_check
     # it declares. Before this the two crates and the doc each held their own
     # copy of the table.
     python3 scripts/generate/generate-syscall-abi-bindings.py --check
+    # The language-neutral startup/CSpace/descriptor ABI is generated for both
+    # Rust and C consumers; neither side may retain a handwritten layout.
+    python3 scripts/generate/generate-component-runtime-abi-bindings.py --check
 
 # P0 target-profile and executable-artifact contract matrix.
 [group('contracts')]

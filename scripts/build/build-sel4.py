@@ -169,6 +169,8 @@ BOOT_SELECTION_IMAGE = BUILD_ROOT / "slime-sel4-boot-selection.elf"
 BOOT_SELECTION_MANIFEST = BUILD_ROOT / "slime-sel4-boot-selection.identity.json"
 DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
+C_RUNTIME_IMAGE = BUILD_ROOT / "slime-sel4-c-runtime.elf"
+C_RUNTIME_MANIFEST = BUILD_ROOT / "slime-sel4-c-runtime.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -192,6 +194,7 @@ LIFECYCLE_RESTART_VARIANT = "lifecycle-restart"
 REPLAY_VARIANT = "replay"
 ROBOT_RUNTIME_VARIANT = "robot-runtime"
 DEMO_VARIANT = "demo"
+C_RUNTIME_VARIANT = "c-runtime"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -273,6 +276,7 @@ VARIANT_MANIFESTS = {
     INPUT_VARIANT: "sel4-input",
     POWERBOX_VARIANT: "sel4-powerbox",
     TRANSFER_VARIANT: "sel4-transfer",
+    C_RUNTIME_VARIANT: "sel4-c-runtime",
     BOOT_SELECTION_VARIANT: "sel4",
 }
 # B62: what distinguishes a variant that shares another's manifest.
@@ -343,6 +347,7 @@ VARIANT_TARGET_DIRS = {
     INPUT_VARIANT: "root-input",
     POWERBOX_VARIANT: "root-powerbox",
     TRANSFER_VARIANT: "root-transfer",
+    C_RUNTIME_VARIANT: "root-c-runtime",
     BOOT_SELECTION_VARIANT: "root-boot-selection",
 }
 VARIANT_IMAGES = {
@@ -389,6 +394,7 @@ VARIANT_IMAGES = {
     INPUT_VARIANT: (INPUT_IMAGE, INPUT_MANIFEST),
     POWERBOX_VARIANT: (POWERBOX_IMAGE, POWERBOX_MANIFEST),
     TRANSFER_VARIANT: (TRANSFER_IMAGE, TRANSFER_MANIFEST),
+    C_RUNTIME_VARIANT: (C_RUNTIME_IMAGE, C_RUNTIME_MANIFEST),
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
 }
 
@@ -1592,6 +1598,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--c-runtime-plane",
+        action="store_true",
+        help="embed the external C component runtime proof generation",
+    )
+    parser.add_argument(
         "--component-spec-root",
         type=Path,
         help="load component specifications from this directory",
@@ -1660,6 +1671,7 @@ def main() -> None:
             (INPUT_VARIANT, arguments.input_plane),
             (POWERBOX_VARIANT, arguments.powerbox_plane),
             (TRANSFER_VARIANT, arguments.transfer_plane),
+            (C_RUNTIME_VARIANT, arguments.c_runtime_plane),
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
         )
         if chosen

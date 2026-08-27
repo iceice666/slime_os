@@ -46,7 +46,8 @@ pub enum CapabilityDisposition {
 
 /// Size of the root-mapped startup transfer window: enough for the largest
 /// single service frame.
-pub(crate) const MIN_TRANSFER_WINDOW: usize = 4096;
+pub(crate) const MIN_TRANSFER_WINDOW: usize =
+    boot_contracts::component_runtime_abi::MIN_TRANSFER_WINDOW_BYTES;
 
 /// A capability rights bitset. The vocabulary and bit numbering are generated
 /// from `contracts/generation/v5/schema.zt`; see `boot_contracts::generation`

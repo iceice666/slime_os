@@ -348,6 +348,13 @@ SEL4_MANIFESTS = {
     "sel4-powerbox": GENERATION_COMPOSITIONS / "sel4-powerbox.zti",
     "sel4-transfer": GENERATION_COMPOSITIONS / "sel4-transfer.zti",
 }
+# These manifests require an explicitly supplied non-workspace ELF and matching
+# component-spec corpus. Keep them selectable by the product builder without
+# making corpus-wide checks pretend a Rust workspace package can build them.
+SEL4_EXTERNAL_MANIFESTS = {
+    "sel4-c-runtime": GENERATION_COMPOSITIONS / "sel4-c-runtime.zti",
+}
+SEL4_SELECTABLE_MANIFESTS = SEL4_MANIFESTS | SEL4_EXTERNAL_MANIFESTS
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
@@ -660,7 +667,7 @@ def manifest_source() -> Path:
     """
     if os.environ.get("SLIME_TARGET_PROFILE") in SEL4_TARGET_PROFILES:
         name = os.environ.get("SLIME_SEL4_MANIFEST", "sel4")
-        source = SEL4_MANIFESTS.get(name)
+        source = SEL4_SELECTABLE_MANIFESTS.get(name)
         if source is None:
             fail(f"unknown seL4 manifest {name!r}")
         return source
@@ -2408,11 +2415,15 @@ def build_sel4_generation(
     component_specs, workspace_binaries = resolve_component_sources(
         manifest, external_components, component_spec_root
     )
-    built = build_rust_components(
-        manifest["generation"],
-        target_profile,
-        candidate_identity=None,
-        components=workspace_binaries,
+    built = (
+        build_rust_components(
+            manifest["generation"],
+            target_profile,
+            candidate_identity=None,
+            components=workspace_binaries,
+        )
+        if workspace_binaries
+        else None
     )
     payloads: dict[str, bytes] = {}
     object_ids = {object_["id"] for object_ in manifest["objects"]}
@@ -2530,12 +2541,16 @@ def build_sel4_generation(
         if specification is None:
             binary_name = executable["name"]
             provider = "workspace-fixture"
+            if built is None:
+                fail(f"executable {executable['name']!r}: workspace build was not run")
             elf = component_executable(built, binary_name, target_profile)
         else:
             implementation = specification["implementation"]
             binary_name = implementation["binary"]
             provider = implementation["provider"]
             if provider == component_spec_contract.PROVIDER_WORKSPACE:
+                if built is None:
+                    fail(f"executable {executable['name']!r}: workspace build was not run")
                 elf = component_executable(built, binary_name, target_profile)
             else:
                 elf = external_components[binary_name]

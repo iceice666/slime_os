@@ -7,16 +7,14 @@
 //! These helpers do the packing and hold no transport state, so they can be
 //! reasoned about — and tested — on their own.
 
-/// Fast message registers available to one request or one reply.
-pub const FAST_REGISTERS: usize = 4;
+pub use boot_contracts::component_runtime_abi::{
+    DESCRIPTOR_FORM_INLINE as FORM_INLINE, DESCRIPTOR_FORM_WINDOW as FORM_WINDOW, FAST_REGISTERS,
+    INLINE_BYTES,
+};
 
-/// Payload bytes carried inline by the two payload registers (`MR2`, `MR3`).
-pub const INLINE_BYTES: usize = 16;
-
-/// Payload bytes ride in `MR2`/`MR3`. Only valid when no capability crosses.
-pub const FORM_INLINE: u64 = 0;
-/// Payload bytes and capability slots ride in the bound transfer window.
-pub const FORM_WINDOW: u64 = 1;
+const LENGTH_MASK: u64 = (1 << boot_contracts::component_runtime_abi::DESCRIPTOR_LENGTH_BITS) - 1;
+const CAPS_MASK: u64 = (1 << boot_contracts::component_runtime_abi::DESCRIPTOR_CAPS_BITS) - 1;
+const FORM_MASK: u64 = (1 << boot_contracts::component_runtime_abi::DESCRIPTOR_FORM_BITS) - 1;
 
 /// Largest byte count a transfer descriptor can name.
 pub const MAX_DESCRIPTOR_LEN: usize = 0xffff;
@@ -34,28 +32,33 @@ pub const MAX_DESCRIPTOR_CAPS: usize = super::MAX_CAPS_PER_MSG;
 pub const fn descriptor(len: usize, caps: usize, form: u64, thread: usize) -> u64 {
     debug_assert!(len <= MAX_DESCRIPTOR_LEN);
     debug_assert!(caps <= MAX_DESCRIPTOR_CAPS);
-    (len as u64) | ((caps as u64) << 16) | (form << 24) | ((thread as u64) << 32)
+    (len as u64)
+        | ((caps as u64) << boot_contracts::component_runtime_abi::DESCRIPTOR_CAPS_SHIFT)
+        | (form << boot_contracts::component_runtime_abi::DESCRIPTOR_FORM_SHIFT)
+        | ((thread as u64) << boot_contracts::component_runtime_abi::DESCRIPTOR_THREAD_SHIFT)
 }
 
 /// Payload byte count named by a transfer descriptor.
 pub const fn descriptor_len(descriptor: u64) -> usize {
-    (descriptor & 0xffff) as usize
+    ((descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_LENGTH_SHIFT) & LENGTH_MASK)
+        as usize
 }
 
 /// Capability count named by a transfer descriptor.
 pub const fn descriptor_caps(descriptor: u64) -> usize {
-    ((descriptor >> 16) & 0xff) as usize
+    ((descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_CAPS_SHIFT) & CAPS_MASK)
+        as usize
 }
 
 /// Payload carrier named by a transfer descriptor.
 pub const fn descriptor_form(descriptor: u64) -> u64 {
-    (descriptor >> 24) & 0xff
+    (descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_FORM_SHIFT) & FORM_MASK
 }
 
 #[cfg(test)]
 /// Thread index whose transfer window carries this frame.
 pub const fn descriptor_thread(descriptor: u64) -> usize {
-    (descriptor >> 32) as usize
+    (descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_THREAD_SHIFT) as usize
 }
 
 /// True when `len` bytes and `caps` capabilities fit in the fast registers.

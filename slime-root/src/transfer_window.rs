@@ -199,37 +199,43 @@ impl<const CAPACITY: usize> Default for WindowTable<CAPACITY> {
 
 // ---- transfer descriptors ----
 //
-// The component half of this encoding is `components/runtime/src/syscall/wire.rs`;
-// these are the same fields read from the other side. They are duplicated rather
-// than shared because the two live in different crates built for different
-// targets, and the encoding is a calling convention between them, not a
-// persisted format.
+// The calling convention is generated once from
+// `contracts/component-runtime-abi/v1/schema.zt` for the root, Rust runtime,
+// and non-Rust runtimes.
 
-/// Payload bytes ride in the fast registers.
-pub const FORM_INLINE: u64 = 0;
-/// Payload bytes and capability slots ride in the bound transfer window.
-pub const FORM_WINDOW: u64 = 1;
+pub use boot_contracts::component_runtime_abi::{
+    DESCRIPTOR_FORM_INLINE as FORM_INLINE, DESCRIPTOR_FORM_WINDOW as FORM_WINDOW,
+};
+
+const LENGTH_MASK: u64 = (1 << boot_contracts::component_runtime_abi::DESCRIPTOR_LENGTH_BITS) - 1;
+const CAPS_MASK: u64 = (1 << boot_contracts::component_runtime_abi::DESCRIPTOR_CAPS_BITS) - 1;
+const FORM_MASK: u64 = (1 << boot_contracts::component_runtime_abi::DESCRIPTOR_FORM_BITS) - 1;
 
 /// Builds the transfer descriptor: length, capability count, carrier, and
 /// sending thread index.
 pub const fn descriptor(len: usize, caps: usize, form: u64, thread: usize) -> u64 {
-    (len as u64) | ((caps as u64) << 16) | (form << 24) | ((thread as u64) << 32)
+    (len as u64)
+        | ((caps as u64) << boot_contracts::component_runtime_abi::DESCRIPTOR_CAPS_SHIFT)
+        | (form << boot_contracts::component_runtime_abi::DESCRIPTOR_FORM_SHIFT)
+        | ((thread as u64) << boot_contracts::component_runtime_abi::DESCRIPTOR_THREAD_SHIFT)
 }
 
 pub const fn descriptor_len(descriptor: u64) -> usize {
-    (descriptor & 0xffff) as usize
+    ((descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_LENGTH_SHIFT) & LENGTH_MASK)
+        as usize
 }
 
 pub const fn descriptor_caps(descriptor: u64) -> usize {
-    ((descriptor >> 16) & 0xff) as usize
+    ((descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_CAPS_SHIFT) & CAPS_MASK)
+        as usize
 }
 
 pub const fn descriptor_form(descriptor: u64) -> u64 {
-    (descriptor >> 24) & 0xff
+    (descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_FORM_SHIFT) & FORM_MASK
 }
 
 pub const fn descriptor_thread(descriptor: u64) -> usize {
-    (descriptor >> 32) as usize
+    (descriptor >> boot_contracts::component_runtime_abi::DESCRIPTOR_THREAD_SHIFT) as usize
 }
 
 /// Byte offset of the capability vector in a frame whose payload is `len`
