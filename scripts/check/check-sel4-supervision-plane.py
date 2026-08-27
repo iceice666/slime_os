@@ -54,6 +54,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from component_paths import source_path  # noqa: E402
 from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -427,7 +428,7 @@ LOOP_CHILD = "supervision-child"
 
 
 def check_loop_child_is_channel_free() -> None:
-    source = ROOT / "components" / "bins" / LOOP_CHILD / "src" / "main.rs"
+    source = source_path(LOOP_CHILD)
     try:
         text = source.read_text(encoding="utf-8")
     except OSError as error:

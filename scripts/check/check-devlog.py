@@ -27,12 +27,12 @@ import re
 import subprocess
 
 from harness import ROOT
+from just_metadata import targets as just_targets
 
 DEVLOG = ROOT / "devlog"
 README = DEVLOG / "README.md"
 TEMPLATE = DEVLOG / "TEMPLATE.md"
 ROADMAP = ROOT / "roadmap"
-JUSTFILE = ROOT / "Justfile"
 
 ENTRY_NAME = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -147,18 +147,13 @@ def roadmap_ids() -> set[str]:
     return ids
 
 
-def just_targets() -> set[str]:
-    # Recipe parameters sit between the name and the colon
-    # (`rpi5_boot_check serial="": deps`), so a pattern demanding `name:`
-    # immediately would silently treat every parameterised gate as nonexistent
-    # and reject devlog entries that correctly cite one.
-    return set(
-        re.findall(r"^([a-z_0-9]+)(?:\s+[^:\n]*)?:", JUSTFILE.read_text(), re.M)
-    )
+def declared_just_targets() -> set[str]:
+    """Every recipe in the fully imported repository Justfile."""
+    return set(just_targets())
 
 
 KNOWN_IDS = roadmap_ids()
-KNOWN_TARGETS = just_targets()
+KNOWN_TARGETS = declared_just_targets()
 
 entries = sorted(path for path in DEVLOG.iterdir() if path.is_dir())
 if not entries:

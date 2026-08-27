@@ -404,11 +404,11 @@ if observed_undeclared != EXPECTED_UNDECLARED:
         f"expected {list(EXPECTED_UNDECLARED)}; a component gaining or losing an "
         "implementation must move this set in the same change"
     )
-# The pinned set is checked against `components/bins/Cargo.toml` rather than
-# only asserted, so it stays a derived fact. Asserting the pair alone would go
-# stale the moment someone lands one of the two missing components: the corpus
-# would still say `undeclared`, the pin would still match, and nothing would
-# notice. This loop is what makes the pin bite from the other direction.
+# The pinned set is checked against the recursively discovered component crate
+# manifests rather than only asserted, so it stays a derived fact. Asserting the
+# pair alone would go stale the moment someone lands one of the two missing
+# components: the corpus would still say `undeclared`, the pin would still
+# match, and nothing would notice.
 BINARIES = dict(workspace_binaries())
 for name in EXPECTED_UNDECLARED:
     if name not in declared_instances:

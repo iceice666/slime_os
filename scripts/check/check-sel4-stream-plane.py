@@ -65,6 +65,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from component_paths import source_path  # noqa: E402
 from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -636,9 +637,8 @@ def check_no_participant_failed(transcript: str) -> None:
 
 
 # Every component this graph runs. All six, with no exceptions and no allowance
-# table -- which is the difference between this milestone and P5.5.1.
-# CP3: named by component rather than by source filename, since each is now its
-# own crate whose entry point is `components/bins/<name>/src/main.rs`.
+# CP3: named by component rather than by source filename. `source_path()`
+# resolves the crate's lifecycle-owned location.
 STREAM_COMPONENTS = (
     "fabric-service",
     "fabric-publisher",
@@ -660,7 +660,7 @@ def check_components_are_unmodified() -> None:
     """
     forbidden = ("option_env!(\"SLIME_SEL4_", "cfg!(slime_")
     for name in STREAM_COMPONENTS:
-        source = ROOT / "components" / "bins" / name / "src" / "main.rs"
+        source = source_path(name)
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as error:

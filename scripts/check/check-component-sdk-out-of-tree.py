@@ -19,6 +19,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from component_paths import source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
@@ -369,7 +370,7 @@ def create_external_checkout(root: Path, sdk: Path, revision: str) -> Path:
             "fn main() {\n    slime_build_support::configure();\n}\n",
             encoding="utf-8",
         )
-        source = ROOT / "components" / "bins" / name / "src" / "main.rs"
+        source = source_path(name)
         text = source.read_text(encoding="utf-8")
         text = instrument_external_source(strip_external_trace_helpers(text, name), name)
         role = "producer" if name == "fabric-publisher-b" else "consumer"

@@ -16,18 +16,20 @@ when all five layers agree:
 A crate or catalogue entry never launches itself. Keep that invariant in view
 through every step below.
 
-For the smallest current in-tree pattern, read the
-[`sysinfo` crate](../../components/bins/sysinfo/) beside its
+For the smallest current in-tree crate shape, read the
+[`sysinfo` crate](../../components/system/sysinfo/) beside its
 [component specification](../../contracts/component-spec/v1/components/sysinfo.zti).
-`sysinfo` is a leaf application with no capability requirements and no private
-resource budget. The `hello` snippets below copy that crate shape without
-adding its launch-context behavior.
+`sysinfo` is an authority-free system utility whose component-spec type remains
+`application`; source lifecycle ownership and contract type are separate axes.
+The `hello` snippets below copy that crate shape but place the new leaf workload
+under `applications/`; they do not copy `sysinfo`'s product role or add its
+launch-context behavior.
 
 ## Choose the layer you are changing
 
 | You are adding | Source to change | What it means |
 | --- | --- | --- |
-| Buildable in-tree code | `components/bins/<name>/` | Cargo can produce a component ELF. Nothing runs yet. |
+| Buildable in-tree code | `components/{system,services,applications,testkit}/<name>/` | Cargo can produce a component ELF. The selected root records lifecycle responsibility; nothing runs yet. |
 | A component declaration | `contracts/component-spec/v1/components/<name>.zti` | The repository can validate the component's identity, requirements, compatibility, and evidence. Nothing runs yet. |
 | A system-spec-derived composition | [`contracts/system-spec/v1/systems/*.zti`](../../contracts/system-spec/v1/systems/) | A system spec selects components, placement, authority, budgets, and graph records from which a generation fixture is derived. |
 | A direct seL4 plane composition | [`contracts/generation-manifest/v1/compositions/sel4-*.zti`](../../contracts/generation-manifest/v1/compositions/) | The owning seL4 composition directly declares its executable, instance, authority, and policy. |
@@ -47,20 +49,31 @@ directly owned. Do not hand-edit a derived fixture.
 
 ## 1. Add the implementation crate
 
-Create this minimum layout:
+First choose exactly one lifecycle root:
+
+- `system/` for boot-critical platform policy and system utilities;
+- `services/` for resident service components;
+- `applications/` for shipped user workloads; or
+- `testkit/` for probes, fixtures, fault injectors, and verification workers.
+
+Do not choose a root from the protocol the component happens to use or the
+composition that first launches it. A component has one lifecycle owner even
+when it participates in several protocols and generations. The `hello` example
+is a shipped leaf workload, so create this minimum layout:
 
 ```text
-components/bins/hello/
+components/applications/hello/
 ├── Cargo.toml
 ├── build.rs
 └── src/
     └── main.rs
 ```
 
-`components/bins/*` is already a workspace-member glob, so no new entry is
-needed in `[workspace].members`.
+`components/applications/*` is already a workspace-member glob, as are the
+other three lifecycle roots, so no new entry is needed in
+`[workspace].members`.
 
-### `components/bins/hello/Cargo.toml`
+### `components/applications/hello/Cargo.toml`
 
 ```toml
 [package]
@@ -86,7 +99,7 @@ slime-build-support = { path = "../../build-support" }
 workspace = true
 ```
 
-### `components/bins/hello/build.rs`
+### `components/applications/hello/build.rs`
 
 ```rust
 fn main() {
@@ -97,7 +110,7 @@ fn main() {
 The build script configures the shared component build environment. It must not
 parse a generation, copy private per-plane data, or derive capability slots.
 
-### `components/bins/hello/src/main.rs`
+### `components/applications/hello/src/main.rs`
 
 ```rust
 #![no_std]
@@ -130,16 +143,19 @@ whole.
 
 `just component_crate_split_check` enforces the crate boundary:
 
-- directory `hello`, package `slime-component-hello`, and binary `hello` agree;
+- lifecycle root, directory `hello`, package `slime-component-hello`, and
+  binary `hello` agree;
 - the crate declares exactly one binary and `build = "build.rs"`;
 - `build.rs` does nothing except call `slime_build_support::configure()`;
 - allocator features remain scoped to the component groups that require them;
-- the root release-profile stanza exists with the exact settings above; and
-- shared source lives in `components/lib`, not beside the component crates.
+- the root release-profile stanza exists with the exact settings above;
+- lifecycle category roots contain no `Cargo.toml` or `src/` of their own; and
+- reusable source shared by multiple crates lives in `components/lib`.
 
-Do not enable an allocator for an authority-free leaf component. If two
-components need the same source, move that source to `components/lib` instead
-of creating a second shared-code location.
+Do not enable an allocator for an authority-free leaf component. Private
+modules may remain inside the leaf crate. If two components need the same
+source, move that source to `components/lib` instead of creating a second
+category-level or cross-crate shared-code location.
 
 ## 2. Declare the component
 

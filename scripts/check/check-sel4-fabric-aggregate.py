@@ -165,7 +165,7 @@ SEMANTIC_FIELDS: tuple[str, ...] = (
 # first. That is the cross-activity arrival order B68's grouping was introduced
 # to quarantine, one level down: the call worker's two scripted clients settle
 # requests 4 and 22 independently
-# (`components/bins/fabric-call-client/src/main.rs:54-58`,
+# (`components/testkit/fabric-call-client/src/main.rs:54-58`,
 # `components/lib/src/fabric_call_scenario.rs:58-66`), both acks occur on every
 # boot, and only their arrival order moves.
 #
@@ -217,7 +217,7 @@ COMPARED_COUNTERS: frozenset[int] = frozenset(
 #
 # Only the stream worker's peer death is deferred. It is concluded from a drain
 # that runs *after* the termination latch
-# (`components/bins/fabric-service/src/main.rs:1136-1180`), and B75 made the
+# (`components/services/fabric-service/src/main.rs:1136-1180`), and B75 made the
 # record's presence independent of that race without fixing which instant the
 # drain completes in -- a record's stamp is whatever `self.now_ns` had reached
 # when `Trace::blank` built it (`components/lib/src/fabric_trace_log.rs:234`).

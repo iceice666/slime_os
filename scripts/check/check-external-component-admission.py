@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from component_paths import crate_path  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
@@ -65,7 +66,7 @@ def cargo_target_directory_name(target: Path) -> str:
 
 def isolated_console_source(source: Path) -> None:
     source.mkdir()
-    crate = ROOT / "components" / "bins" / "console"
+    crate = crate_path("console")
     for relative in EXTERNAL_CRATE_FILES:
         destination = source / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

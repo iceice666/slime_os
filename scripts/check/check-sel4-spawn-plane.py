@@ -47,6 +47,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from component_paths import source_path  # noqa: E402
 from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -456,7 +457,7 @@ def check_spawned_children_are_unmodified() -> None:
     data, which are the contracts this gate actually boots.
     """
     for name in UNMODIFIED_CHILDREN:
-        source = ROOT / "components" / "bins" / name / "src" / "main.rs"
+        source = source_path(name)
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as error:

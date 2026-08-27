@@ -344,3 +344,6 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [CI: a gate that could not run, a job that could not start, and a path that only resolved on one machine](2026-08-27-ci-hosted-arm64-cutover/index.md) | Defect | Verified | B78 |
 | 2026-08-27 | [Direction 24: capability rights as conservation laws, not a vacuous closure](2026-08-27-capability-rights-model/index.md) | Change | Verified | A0 |
 | 2026-08-27 | [P5.2 resident product graph and native Dango prompt](2026-08-27-resident-product-graph/index.md) | Change | Verified | P5.2 |
+| 2026-08-27 | [Just recipe hierarchy without gate renames](2026-08-27-just-recipe-hierarchy/index.md) | Change | Verified | none |
+| 2026-08-27 | [Justfile split by responsibility with parsed gate metadata](2026-08-27-justfile-responsibility-split/index.md) | Change | Verified | none |
+| 2026-08-27 | [Component crates grouped by lifecycle responsibility](2026-08-27-component-responsibility-hierarchy/index.md) | Change | Verified | none |

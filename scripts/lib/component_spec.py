@@ -30,28 +30,27 @@ from pathlib import Path
 from types import ModuleType
 
 import component_spec_contract as default_contract
+from component_paths import COMPONENT_CRATE_ROOTS
 from boot_contracts import COMPONENT_MAX_STACK_BYTES, PRIVATE_MEMORY_ROOT_REGION_PAGES
 from harness import CHECK_SCRIPTS, ROOT, load_script
 from zutai_cli import STDLIB, binary
+from just_metadata import recipes as just_recipes
+from just_metadata import targets as just_targets
 
 CONTRACT_ROOT = ROOT / "contracts" / "component-spec" / "v1"
 CHECKER = CONTRACT_ROOT / "check.zt"
 SPEC_ROOT = CONTRACT_ROOT / "components"
 INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interfaces"
-JUSTFILE = ROOT / "Justfile"
-COMPONENT_CRATE_ROOT = ROOT / "components" / "bins"
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONTRACT_PATH = re.compile(r"^contracts/[a-z][a-z0-9-]*/v\d+$")
-_JUST_TARGET = re.compile(r"^([a-z][a-z0-9_]*)\s*(?::|\s)", re.MULTILINE)
-# CP3: a component is its own crate under `components/bins/<name>/`, declaring
-# exactly one `[[bin]]`. Discovery is therefore a directory walk plus a
-# per-manifest read, not a scan of one shared `[[bin]]` table. The regex still
-# matches a single entry rather than trusting the directory name, so a crate
-# whose bin name disagrees with its directory is a resolution failure instead of
-# an invisible rename.
+# CP3: a component is its own crate below one lifecycle-owned component root,
+# declaring exactly one `[[bin]]`. Discovery is recursive rather than coupled to
+# a fixed category depth. The regex still matches the manifest entry instead of
+# trusting the directory name, so a crate whose bin name disagrees with its leaf
+# directory is a resolution failure instead of an invisible rename.
 _BIN_ENTRY = re.compile(
     r"\[\[bin\]\]\s*\nname\s*=\s*\"([^\"]+)\"\s*\npath\s*=\s*\"([^\"]+)\""
 )
@@ -190,35 +189,32 @@ def interface_catalogue() -> dict[str, str]:
 
 
 @lru_cache(maxsize=1)
-def just_targets() -> frozenset[str]:
-    """Every recipe name the Justfile declares.
-
-    Cached: this is read once per spec otherwise, and the Justfile does not
-    change under a single gate run."""
-    return frozenset(_JUST_TARGET.findall(JUSTFILE.read_text(encoding="utf-8")))
+def declared_just_targets() -> frozenset[str]:
+    """Every recipe in the fully imported repository Justfile."""
+    return just_targets()
 
 
 @lru_cache(maxsize=1)
 def workspace_binaries() -> tuple[tuple[str, str], ...]:
     """Every component binary the workspace builds, as `(name, path)` pairs.
 
-    CP3: each component is its own crate under `components/bins/<name>/`, so
-    this walks those directories instead of scanning one shared `[[bin]]` table.
-    The pair's path is repository-relative. The single-crate table's was
-    crate-relative (`src/bin/console.rs`), so this is a deliberate change, not a
-    preserved shape: with 52 crates a bare `src/main.rs` would name 52 different
-    files. Neither current consumer reads the path — `check-component-spec.py`
-    and `check-component-crate-split.py` both take `dict(...)` keys — so the
-    change is inert today and stated here for the caller that starts using it.
+    CP3: each component is its own crate below one lifecycle-owned root. The
+    pair's path is repository-relative, so callers can locate a component
+    without reconstructing its category.
 
     A crate declaring anything other than exactly one `[[bin]]`, or whose bin
-    name does not match its directory, is a failure rather than a skip. Both
+    name does not match its leaf directory, is a failure rather than a skip. Both
     would otherwise make a component invisible here while still building: the
     spec corpus would resolve `undeclared` for a component that ships, which is
     the drift class B70 records.
     """
     found: list[tuple[str, str]] = []
-    for manifest in sorted(COMPONENT_CRATE_ROOT.glob("*/Cargo.toml")):
+    manifests = sorted(
+        manifest
+        for root in COMPONENT_CRATE_ROOTS
+        for manifest in root.rglob("Cargo.toml")
+    )
+    for manifest in manifests:
         entries = _BIN_ENTRY.findall(manifest.read_text(encoding="utf-8"))
         directory = manifest.parent.name
         if len(entries) != 1:
@@ -236,6 +232,15 @@ def workspace_binaries() -> tuple[tuple[str, str], ...]:
     return tuple(found)
 
 
+def _check_scripts(recipe: dict) -> list[str]:
+    """Check-script paths named directly by one parsed Just recipe."""
+    scripts: list[str] = []
+    for line in recipe["body"]:
+        text = "".join(part if isinstance(part, str) else "" for part in line)
+        scripts.extend(re.findall(r"scripts/check/([\w.-]+\.py)", text))
+    return scripts
+
+
 @lru_cache(maxsize=None)
 def gate_markers(target: str) -> frozenset[str]:
     """Every string literal in every check script a Justfile recipe invokes.
@@ -250,23 +255,16 @@ def gate_markers(target: str) -> frozenset[str]:
     prerequisites (`sample_descriptor_check: contracts_check sel4_sample_check`)
     invokes no script of its own, so its prerequisites are followed one level.
     """
-    justfile = JUSTFILE.read_text(encoding="utf-8")
-    match = re.search(
-        rf"^{re.escape(target)}:([^\n]*)\n((?:[ \t]+[^\n]*\n|\n)*)", justfile, re.MULTILINE
-    )
-    if match is None:
+    recipes = just_recipes()
+    recipe = recipes.get(target)
+    if recipe is None:
         _fail(f"Justfile declares no recipe named {target!r}")
-    prerequisites, body = match.group(1).split(), match.group(2)
-    scripts = re.findall(r"scripts/check/([\w.-]+\.py)", body)
+    scripts = _check_scripts(recipe)
     if not scripts:
-        for prerequisite in prerequisites:
-            inner = re.search(
-                rf"^{re.escape(prerequisite)}:[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)",
-                justfile,
-                re.MULTILINE,
-            )
-            if inner:
-                scripts.extend(re.findall(r"scripts/check/([\w.-]+\.py)", inner.group(1)))
+        for dependency in recipe["dependencies"]:
+            prerequisite = recipes.get(dependency["recipe"])
+            if prerequisite is not None:
+                scripts.extend(_check_scripts(prerequisite))
     if not scripts:
         _fail(f"{target}: names no check script, so its markers cannot be verified")
     literals: set[str] = set()
@@ -722,7 +720,7 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
     # honour, on the same terms `just devlog_check` enforces for a devlog's
     # `Gates` front matter. Checked here rather than only at corpus level so a
     # single malformed record is refused on its own.
-    if test["requiredTestEnvironment"] not in just_targets():
+    if test["requiredTestEnvironment"] not in declared_just_targets():
         _fail(
             f"test.requiredTestEnvironment: {test['requiredTestEnvironment']!r} "
             "is no Justfile target"

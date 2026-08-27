@@ -37,6 +37,7 @@ from boot_contracts import (  # noqa: E402
     COMPONENT_IMAGE_HEADER_TARGET_PROFILE_OFFSET,
     COMPONENT_IMAGE_MAGIC,
 )
+from component_paths import source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
@@ -177,7 +178,7 @@ def consumer(root: Path, sdk: Path, name: str) -> Path:
         "fn main() {\n    slime_build_support::configure();\n}\n", encoding="utf-8"
     )
     shutil.copyfile(
-        ROOT / "components" / "bins" / "console" / "src" / "main.rs",
+        source_path("console"),
         checkout / "console" / "src" / "main.rs",
     )
     return checkout

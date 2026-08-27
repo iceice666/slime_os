@@ -2,7 +2,10 @@
 resolver = "3"
 members = [
     "boot-contracts",
-    "components/bins/*",
+    "components/system/*",
+    "components/services/*",
+    "components/applications/*",
+    "components/testkit/*",
     "components/build-support",
     "components/lib",
     "components/proto",

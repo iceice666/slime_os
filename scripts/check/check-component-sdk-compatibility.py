@@ -31,6 +31,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from component_paths import source_path  # noqa: E402
 import component_sdk  # noqa: E402
 import component_sdk_release_contract as contract  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
@@ -305,7 +306,7 @@ def build_and_boot(root: Path, sdk: Path, label: str) -> tuple[str, str]:
         "fn main() {\n    slime_build_support::configure();\n}\n", encoding="utf-8"
     )
     shutil.copyfile(
-        ROOT / "components" / "bins" / "console" / "src" / "main.rs",
+        source_path("console"),
         checkout / "console" / "src" / "main.rs",
     )
     target_dir = root / f"target-{label}"

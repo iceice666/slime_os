@@ -34,6 +34,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from component_paths import source_path  # noqa: E402
 import component_sdk  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
@@ -168,7 +169,7 @@ def consumer_from_template(root: Path, sdk: Path, url: str, commit: str, *, name
 def adopt_console_role(checkout: Path) -> None:
     """Give the template component the behavior the component graph composes."""
     shutil.copyfile(
-        ROOT / "components" / "bins" / "console" / "src" / "main.rs",
+        source_path("console"),
         checkout / "component" / "src" / "main.rs",
     )
 

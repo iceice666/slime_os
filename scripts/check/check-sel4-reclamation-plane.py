@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from component_paths import source_path  # noqa: E402
 from harness import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +20,7 @@ IMAGE = ROOT / "build" / "slime-sel4-reclamation.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-reclamation.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
-INIT = ROOT / "components" / "bins" / "init" / "src" / "main.rs"
+INIT = source_path("init")
 TIMEOUT = 180
 
 

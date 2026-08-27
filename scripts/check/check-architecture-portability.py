@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from component_paths import COMPONENT_CRATE_ROOTS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 NEUTRAL_ROOTS = (
-    ROOT / "components" / "runtime" / "src",
-    # CP3: component sources are per-crate; the shared helpers moved to
-    # `components/lib`. Both roots are listed so the scan still reaches
-    # every component source rather than one crate's.
-    ROOT / "components" / "bins",
+    *COMPONENT_CRATE_ROOTS,
     ROOT / "components" / "lib" / "src",
+    ROOT / "components" / "runtime" / "src",
     ROOT / "slime-root" / "src",
 )
 FORBIDDEN = re.compile(

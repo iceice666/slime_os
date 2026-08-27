@@ -132,15 +132,18 @@ pub fn configure() {
 /// or worse would have linked at the wrong base and been refused later by the
 /// generation builder.
 ///
-/// The in-tree fallback resolves `components/bins/<crate>` to `components`, so
-/// a workspace component needs no environment at all.
+/// The in-tree fallback walks upward to the `components` directory that owns
+/// the linker scripts, independent of the crate's lifecycle category depth.
 fn linker_script_dir(manifest_dir: &str) -> PathBuf {
     if let Ok(directory) = std::env::var("SLIME_COMPONENT_LINKER_DIR") {
         return PathBuf::from(directory);
     }
     Path::new(manifest_dir)
-        .parent()
-        .and_then(Path::parent)
-        .expect("component crate lives under components/bins/<crate>")
+        .ancestors()
+        .find(|directory| {
+            directory.join("component.ld").is_file()
+                && directory.join("component-aarch64.ld").is_file()
+        })
+        .expect("component crate is below the components linker-script root")
         .to_path_buf()
 }

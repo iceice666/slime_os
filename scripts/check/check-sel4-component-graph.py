@@ -98,13 +98,11 @@ EXPECTED_UNORDERED: tuple[str, ...] = (
 COMPATIBILITY_SOURCE_ROOTS = (
     ROOT / "slime-root" / "src",
     ROOT / "components" / "runtime" / "src",
-    # CP3: component sources are now per-crate under `components/bins/<name>/`,
-    # with the shared helpers in `components/lib` and the build-time manifest
-    # parser in `components/build-support`. All three are globbed, so the guard
-    # still reaches every surviving component source rather than one crate's.
-    ROOT / "components" / "bins",
-    ROOT / "components" / "lib" / "src",
-    ROOT / "components" / "build-support" / "src",
+    # CP3: component sources live below lifecycle-owned roots, with shared
+    # helpers in `components/lib` and build-time support in
+    # `components/build-support`. The whole component tree is scanned so a new
+    # category cannot escape this repository-wide compatibility guard.
+    ROOT / "components",
 )
 # The files that actually *held* the deleted model symbols: the manifest and
 # wire schemas that named `endpointCreate` as a right, the builder that encoded

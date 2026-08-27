@@ -23,9 +23,8 @@ landing it:
    `"*"` wildcard is accepted but does not apply to workspace members, and a
    glob is rejected outright, so a new crate would silently build at
    `opt-level=3` -- a size regression in an image `slime-root` maps whole.
-5. `components/bins` holds no shared source. A file two component crates both
-   need lives in `components/lib`, reached as a library or by `#[path]`; one left
-   behind in the old location would be dead or duplicated.
+5. Lifecycle-owned component roots hold only leaf crates. Shared source lives in
+   `components/lib`; category roots carry no source or manifest of their own.
 """
 
 from __future__ import annotations
@@ -38,10 +37,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from component_paths import COMPONENT_CRATE_ROOTS  # noqa: E402
 from component_spec import workspace_binaries  # noqa: E402
 from harness import load_script  # noqa: E402
 
-CRATE_ROOT = ROOT / "components" / "bins"
+CRATE_ROOTS = COMPONENT_CRATE_ROOTS
 SHARED_LIB = ROOT / "components" / "lib"
 BUILD_SUPPORT = ROOT / "components" / "build-support"
 WORKSPACE = ROOT / "Cargo.toml"
@@ -59,7 +59,11 @@ def manifest(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-crates = sorted(p for p in CRATE_ROOT.iterdir() if p.is_dir())
+crates = sorted(
+    manifest.parent
+    for root in CRATE_ROOTS
+    for manifest in root.rglob("Cargo.toml")
+)
 
 # 1. One crate per component, with agreeing names and exactly one binary.
 #    `workspace_binaries()` raises on a mismatch, so calling it is itself the
@@ -227,14 +231,15 @@ if support_package.startswith("slime-component-"):
         "'slime-component-*' glob the builder and lint recipe select components by"
     )
 
-# 5. No shared source is left in the component tree. A file both crates need is
-#    in components/lib; one here would be built into a single crate again.
-for stray in sorted(CRATE_ROOT.glob("*.rs")):
-    fail(f"{stray.name}: shared source belongs in components/lib, not components/bins")
-if (CRATE_ROOT / "src").exists():
-    fail("components/bins/src still exists; component sources live in per-crate directories")
-if (CRATE_ROOT / "Cargo.toml").exists():
-    fail("components/bins/Cargo.toml still exists; there is no shared component crate")
+# 5. Category roots contain only component crates and grouping directories. A
+# category-level source tree or manifest would silently turn a responsibility
+# directory into a second component crate; private modules inside a leaf crate
+# remain that crate's implementation.
+for root in CRATE_ROOTS:
+    if (root / "src").exists():
+        fail(f"{root.relative_to(ROOT)}/src exists; sources live in leaf component crates")
+    if (root / "Cargo.toml").exists():
+        fail(f"{root.relative_to(ROOT)}/Cargo.toml exists; category roots are not crates")
 
 if failures:
     print("component crate split check: FAILED", file=sys.stderr)
@@ -243,9 +248,10 @@ if failures:
     raise SystemExit(1)
 
 print(
-    f"component crate split check: {len(crates)} component crates, each one workspace package with "
-    f"one binary and no private manifest parser; {len(declared_store)} declare the store allocator "
-    f"and {len(declared_private_heap)} the private-region allocator, each matching the builder's "
-    "own build group; every package carries a release-profile stanza; no shared source remains in "
-    "components/bins"
+    f"component crate split check: {len(crates)} component crates under "
+    f"{len(CRATE_ROOTS)} lifecycle roots, each one workspace package with one binary and no "
+    f"private manifest parser; {len(declared_store)} declare the store allocator and "
+    f"{len(declared_private_heap)} the private-region allocator, each matching the builder's "
+    "own build group; every package carries a release-profile stanza; category roots are not "
+    "component crates"
 )
