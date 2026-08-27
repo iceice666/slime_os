@@ -86,7 +86,13 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # reporting it found none, paired with two failure markers that make "and
     # therefore every component is denied" an assertion rather than an
     # inference.
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 23),
+    #
+    # QEMU Slisp input raises the current product contract from 23 to 29: the
+    # second declared service endpoint, uninterrupted expression input, the
+    # generation-authorized sysinfo request and child output, clean child exit,
+    # and detached supervision collection. These markers make command dispatch
+    # and reclamation observable rather than implied by the shell response.
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 29),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
@@ -292,6 +298,10 @@ def literal_for(pattern: str) -> str:
     # Anchors and whitespace-tolerance constructs carry no content.
     text = text.replace(r"\s+", " ").replace(r"\s*", "")
     text = text.replace("^", "").replace("$", "")
+    # Multi-line marker contracts spell transcript newlines as regex `\n`.
+    # Materialize them before escaped-literal parking so the synthetic evidence
+    # is the same byte sequence the gate searches.
+    text = text.replace(r"\n", "\n")
     text = text.replace("-?", "-")
     # Character classes and repetitions, narrowest first.
     #
