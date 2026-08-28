@@ -18,16 +18,13 @@
 //! * ROLLBACK clears the staged generation;
 //! * STAGE then SELECT promotes, and SELECT naming the wrong generation is
 //!   refused;
-//! * a direct `BlockTransact` is refused, because no slot this component holds
-//!   names a device — the authority claim, checked rather than asserted.
+//! * the manager, not this client, owns the generation-declared IO0 ring whose
+//!   authority permits BootState reads and writes.
 
-use slime_proto::block::{self, WireBlockRequest};
 use slime_proto::generation::{self, WireGenerationReply, WireGenerationRequest};
 
 /// The RPC endpoint to the manager, and this component's only grant.
 const RPC_SLOT: u32 = 0;
-/// A slot naming no device — every slot this component holds, in fact.
-const NO_DEVICE_SLOT: u32 = RPC_SLOT;
 
 /// Kept in step with `sel4-generation-manager`.
 const KNOWN_GOOD: [u8; 32] = [0x11; 32];
@@ -101,26 +98,6 @@ fn main(_startup_arg: u32) {
         fail(b"select");
     }
     slime_rt::debug_write(b"[sel4-generation-client] promoted the candidate\n");
-
-    // The authority claim. This component was granted one endpoint; there is no
-    // slot it holds that names a block device, so it cannot forge a transition
-    // even though it knows the on-disk format perfectly well.
-    let probe = WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op: block::OP_READ,
-        flags: 0,
-        reserved: 0,
-        lba: 0,
-        sector_count: 1,
-        buffer_phys: 0,
-        buffer_pages: 0,
-    };
-    let mut reply = [0u8; block::REPLY_LEN];
-    if slime_rt::block_transact(NO_DEVICE_SLOT, &probe.encode(), &mut reply) >= 0 {
-        fail(b"direct device access accepted");
-    }
-    slime_rt::debug_write(b"[sel4-generation-client] direct device access refused\n");
 
     slime_rt::debug_write(b"[sel4-generation-client] generation client complete\n");
 }

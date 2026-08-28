@@ -27,12 +27,16 @@ use boot_contracts::bootstate::{
     BootState, SLOT_BYTES, SelectionError, Slot, empty_state_root, select_bootstate,
 };
 use boot_contracts::gpt::{self, GptError};
-use boot_contracts::object_store::{BlockIo, IoError};
-use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
+use boot_contracts::object_store::{BlockIo as BootBlockIo, IoError};
+use slime_components::block_io::BlockIo as DriverBlockIo;
 use slime_proto::generation::{self, WireGenerationReply, WireGenerationRequest};
 
-/// The block capability the generation grants this component.
-const BLOCK_SLOT: u32 = 1;
+/// The peer endpoint to the userspace driver and the crossing buffer factory
+/// this manager creates its IO0 ring and payload buffer from.
+const BLOCK_PEER_SLOT: u32 = 8;
+const BLOCK_FACTORY_SLOT: u32 = 4;
+const RING_BASE: u64 = 0x0000_001f_0000_0000;
+const DATA_BASE: u64 = 0x0000_001f_0001_0000;
 /// The preinstalled direct endpoint shared with the client.
 const CLIENT_SLOT: u32 = 0;
 /// The supervision handle naming the client, minted by init at spawn.
@@ -73,7 +77,22 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0);
     }
 
-    let mut io = BlockCapability;
+    let request_ready = binding(b"notification:generation-block-request-ready+signal");
+    let completion_ready = binding(b"notification:generation-block-completion-ready+wait");
+    // SAFETY: both bases are page-aligned addresses in this component's free
+    // VSpace range, do not alias each other, and nothing else maps them.
+    let driver: DriverBlockIo<'static> = unsafe {
+        DriverBlockIo::attach(
+            BLOCK_FACTORY_SLOT,
+            BLOCK_PEER_SLOT,
+            request_ready,
+            completion_ready,
+            RING_BASE,
+            DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"block attach"));
+    let mut io = BlockCapability { driver };
     let Some(partition) = locate_partition(&mut io) else {
         fail(b"partition");
     };
@@ -141,6 +160,7 @@ fn main(_startup_arg: u32) {
             }
         }
     }
+    io.shutdown();
 
     slime_rt::debug_write(b"[sel4-generation-manager] client closed\n");
 }
@@ -304,44 +324,44 @@ impl StateSlots {
     }
 }
 
-/// The device, reached through the granted capability.
-struct BlockCapability;
+/// The device, reached through the userspace driver's IO0 ring.
+struct BlockCapability {
+    driver: DriverBlockIo<'static>,
+}
 
-impl BlockIo for BlockCapability {
+impl BlockCapability {
+    fn shutdown(&mut self) {
+        self.driver
+            .shutdown()
+            .unwrap_or_else(|_| fail(b"driver shutdown"));
+    }
+}
+
+impl BootBlockIo for BlockCapability {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = block_request(block::OP_READ, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_sector(BLOCK_SLOT, &request.encode(), &mut reply, out);
-        if status < 0 || decode_block_reply(&reply).sectors_done != 1 {
+        let reply = self.driver.read(lba, out).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn write_sector(&mut self, lba: u64, data: &[u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = block_request(block::OP_WRITE, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_write(BLOCK_SLOT, &request.encode(), data, &mut reply);
-        if status < 0 || decode_block_reply(&reply).sectors_done != 1 {
+        let reply = self.driver.write(lba, data).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        let request = block_request(block::OP_FLUSH, 0);
-        let mut reply = [0u8; block::REPLY_LEN];
-        if slime_rt::block_transact(BLOCK_SLOT, &request.encode(), &mut reply) < 0 {
-            return Err(IoError::Device);
-        }
+        self.driver.flush().map_err(|_| IoError::Device)?;
         Ok(())
     }
 }
 
 fn locate_partition(io: &mut BlockCapability) -> Option<gpt::Partition> {
-    let capacity = device_capacity(io)?;
+    let capacity = io.driver.capacity();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_BYTES]| -> Result<(), GptError> {
         io.read_sector(lba, out).map_err(|_| GptError::Device)
     };
@@ -350,48 +370,8 @@ fn locate_partition(io: &mut BlockCapability) -> Option<gpt::Partition> {
     (last <= selected.partition.last_lba).then_some(selected.partition)
 }
 
-/// The device's sector count, measured by binary search over readable LBAs.
-fn device_capacity(io: &mut BlockCapability) -> Option<u64> {
-    let mut sector = [0u8; SECTOR_BYTES];
-    io.read_sector(0, &mut sector).ok()?;
-    let mut low = 0u64;
-    let mut high = 1u64;
-    while io.read_sector(high, &mut sector).is_ok() {
-        low = high;
-        high = high.checked_mul(2)?;
-    }
-    while high - low > 1 {
-        let middle = low + (high - low) / 2;
-        if io.read_sector(middle, &mut sector).is_ok() {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(low + 1)
-}
-
-fn block_request(op: u8, lba: u64) -> WireBlockRequest {
-    WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op,
-        flags: 0,
-        reserved: 0,
-        lba,
-        sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
-        buffer_phys: 0,
-        buffer_pages: 0,
-    }
-}
-
-fn decode_block_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    WireBlockReply::decode(bytes).unwrap_or(WireBlockReply {
-        magic: 0,
-        version: 0,
-        status: -1,
-        sectors_done: 0,
-    })
+fn binding(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 
 fn identity_words(identity: [u8; 32]) -> [u64; 4] {

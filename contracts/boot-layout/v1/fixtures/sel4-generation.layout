@@ -1,4 +1,5 @@
-[layout] path=init slots=2 max=64
+[layout] path=init slots=3 max=64
 [layout] 1 executable sel4-generation-client 0x10008
 [layout] 2 executable sel4-generation-manager 0x10008
+[layout] 5 shared-buffer-factory - 0x1000000
 [layout] end

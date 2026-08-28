@@ -24,9 +24,10 @@
 //! running identity, and promotion with a stale release sequence, are both
 //! refused.
 //!
-//! The root mediates sectors and the userspace generation-management component
-//! applies `boot_contracts::bootstate`, the same transition model used by the
-//! immutable disk-backed seL4 selector.
+//! A supervised userspace virtio-blk driver now mediates sectors over an IO0
+//! ring, while the userspace generation-management component applies
+//! `boot_contracts::bootstate`, the same transition model used by the immutable
+//! disk-backed seL4 selector.
 
 extern crate alloc;
 
@@ -35,12 +36,16 @@ use boot_contracts::bootstate::{
     select_bootstate,
 };
 use boot_contracts::gpt::{self, GptError};
-use boot_contracts::object_store::{BlockIo, IoError};
+use boot_contracts::object_store::{BlockIo as BootBlockIo, IoError};
 use boot_contracts::trace::{Action as TraceAction, Commit as TraceCommit, Record as TraceRecord};
-use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
+use slime_components::block_io::BlockIo as DriverBlockIo;
 
-/// The block capability, granted to this component by the generation.
-const BLOCK_SLOT: u32 = 1;
+/// The peer endpoint to the driver, and the buffer factory this probe creates
+/// its ring and payload buffer from.
+const PEER_SLOT: u32 = 8;
+const FACTORY_SLOT: u32 = 3;
+const RING_BASE: u64 = 0x0000_001f_0000_0000;
+const DATA_BASE: u64 = 0x0000_001f_0001_0000;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -68,7 +73,22 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0);
     }
 
-    let mut io = BlockCapability;
+    let request_ready = binding(b"notification:io-block-request-ready+signal");
+    let completion_ready = binding(b"notification:io-block-completion-ready+wait");
+    // SAFETY: both bases are page-aligned addresses in this component's own
+    // free VSpace range, do not alias each other, and nothing else maps them.
+    let driver: DriverBlockIo<'static> = unsafe {
+        DriverBlockIo::attach(
+            FACTORY_SLOT,
+            PEER_SLOT,
+            request_ready,
+            completion_ready,
+            RING_BASE,
+            DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"block attach"));
+    let mut io = BlockCapability { driver };
     let partition = match locate_partition(&mut io) {
         Some(partition) => partition,
         None => fail(b"partition"),
@@ -242,6 +262,7 @@ fn main(_startup_arg: u32) {
         }
     }
     slime_rt::debug_write(b"[sel4-rollback-probe] both slots decode\n");
+    io.shutdown();
 
     slime_rt::debug_write(b"[sel4-rollback-probe] rollback plane complete\n");
 }
@@ -312,38 +333,38 @@ impl StateSlots {
     }
 }
 
-/// The device, reached through the granted capability.
-struct BlockCapability;
+/// The device, reached through the userspace driver's IO0 ring.
+struct BlockCapability {
+    driver: DriverBlockIo<'static>,
+}
 
-impl BlockIo for BlockCapability {
+impl BlockCapability {
+    fn shutdown(&mut self) {
+        self.driver
+            .shutdown()
+            .unwrap_or_else(|_| fail(b"driver shutdown"));
+    }
+}
+
+impl BootBlockIo for BlockCapability {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = request(block::OP_READ, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_sector(BLOCK_SLOT, &request.encode(), &mut reply, out);
-        if status < 0 || decode_reply(&reply).sectors_done != 1 {
+        let reply = self.driver.read(lba, out).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn write_sector(&mut self, lba: u64, data: &[u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = request(block::OP_WRITE, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_write(BLOCK_SLOT, &request.encode(), data, &mut reply);
-        if status < 0 || decode_reply(&reply).sectors_done != 1 {
+        let reply = self.driver.write(lba, data).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        let request = request(block::OP_FLUSH, 0);
-        let mut reply = [0u8; block::REPLY_LEN];
-        if slime_rt::block_transact(BLOCK_SLOT, &request.encode(), &mut reply) < 0 {
-            return Err(IoError::Device);
-        }
+        self.driver.flush().map_err(|_| IoError::Device)?;
         Ok(())
     }
 }
@@ -351,7 +372,7 @@ impl BlockIo for BlockCapability {
 /// The store partition, which is also where the BootState slots live. Validated
 /// rather than assumed, so a malformed table cannot put the slots off the end.
 fn locate_partition(io: &mut BlockCapability) -> Option<gpt::Partition> {
-    let capacity = device_capacity(io)?;
+    let capacity = io.driver.capacity();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_BYTES]| -> Result<(), GptError> {
         io.read_sector(lba, out).map_err(|_| GptError::Device)
     };
@@ -361,50 +382,8 @@ fn locate_partition(io: &mut BlockCapability) -> Option<gpt::Partition> {
     (last <= selected.partition.last_lba).then_some(selected.partition)
 }
 
-/// The device's sector count, measured by binary search over readable LBAs: the
-/// block protocol reports completion, not geometry, and the root refuses
-/// `lba >= capacity`. Reads only.
-fn device_capacity(io: &mut BlockCapability) -> Option<u64> {
-    let mut sector = [0u8; SECTOR_BYTES];
-    io.read_sector(0, &mut sector).ok()?;
-    let mut low = 0u64;
-    let mut high = 1u64;
-    while io.read_sector(high, &mut sector).is_ok() {
-        low = high;
-        high = high.checked_mul(2)?;
-    }
-    while high - low > 1 {
-        let middle = low + (high - low) / 2;
-        if io.read_sector(middle, &mut sector).is_ok() {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(low + 1)
-}
-
-fn request(op: u8, lba: u64) -> WireBlockRequest {
-    WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op,
-        flags: 0,
-        reserved: 0,
-        lba,
-        sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
-        buffer_phys: 0,
-        buffer_pages: 0,
-    }
-}
-
-fn decode_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    WireBlockReply::decode(bytes).unwrap_or(WireBlockReply {
-        magic: 0,
-        version: 0,
-        status: -1,
-        sectors_done: 0,
-    })
+fn binding(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 
 fn slot_number(slot: Slot) -> u8 {

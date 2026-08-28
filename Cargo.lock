@@ -1151,6 +1151,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1263,6 +1264,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1282,6 +1284,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1310,6 +1313,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1319,6 +1323,7 @@ name = "slime-component-sel4-storage-probe"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1329,6 +1334,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1402,6 +1408,7 @@ dependencies = [
 name = "slime-component-virtio-blk-driver"
 version = "0.1.0"
 dependencies = [
+ "boot-contracts",
  "slime-build-support",
  "slime-components",
  "slime-proto",

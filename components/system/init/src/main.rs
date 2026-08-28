@@ -586,7 +586,11 @@ fn drive_powerbox_plane() {
 fn drive_filesystem_plane() {
     let service = slime_rt::spawn(
         resolve_executable(b"executable:sel4-filesystem-service"),
-        &[],
+        // B83: the service reaches its device through IO0 rings served by the
+        // userspace driver, and a ring is a shared buffer it allocates, so its
+        // factory is authority it cannot hold in its own right -- `init` is the
+        // declared source and the grant crosses the spawn.
+        &crossing_factory(b"filesystem-init-buffer-factory"),
     )
     .unwrap_or_else(|_| fail_plane(b"filesystem", b"spawn service"));
     slime_rt::debug_write(b"[init] filesystem service spawned\n");
@@ -635,9 +639,20 @@ fn drive_generation_plane() {
     )
     .unwrap_or_else(|_| fail_plane(b"generation", b"spawn client"));
     slime_rt::debug_write(b"[init] generation client spawned\n");
+    // Two crossing grants, matched positionally against the manager's ascending
+    // declared slot: its supervision handle for the client, and B83's
+    // shared-buffer factory. The factory is authority the manager cannot hold in
+    // its own right -- a ring is a shared buffer it allocates and `init` is the
+    // declared source -- so it crosses the spawn like the handle does.
+    //
+    // Order follows declared slot, not argument convenience: whichever of the
+    // two the composition binds at the lower slot must come first here.
     let manager = slime_rt::spawn(
         resolve_executable(b"executable:sel4-generation-manager"),
-        &[grant(client.supervision_slot, RIGHT_SUPERVISE)],
+        &[
+            grant(client.supervision_slot, RIGHT_SUPERVISE),
+            crossing_factory(b"generation-init-buffer-factory")[0],
+        ],
     )
     .unwrap_or_else(|_| fail_plane(b"generation", b"spawn manager"));
     slime_rt::debug_write(b"[init] generation manager spawned\n");
@@ -667,7 +682,7 @@ fn drive_store_plane() {
         b"[init] store probe spawned\n",
         b"store",
         Some(2),
-        &[],
+        &crossing_factory(b"store-init-buffer-factory"),
     );
 }
 

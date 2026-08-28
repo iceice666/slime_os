@@ -316,7 +316,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 b"[init] rollback probe spawned\n",
                 b"rollback",
                 Some(2),
-                &[],
+                &crossing_factory(b"rollback-init-buffer-factory"),
             );
             slime_rt::debug_write(b"[init] rollback plane complete\n");
             slime_rt::exit(0)

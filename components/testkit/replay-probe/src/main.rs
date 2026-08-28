@@ -40,6 +40,8 @@
 //! consuming any of them, and that is independent of how they arrived.
 
 use boot_contracts::generation::RIGHT_RECV;
+use slime_components::block_io::BlockIo;
+use slime_proto::block_v2;
 use slime_proto::recording_stream::{
     MAX_STREAM_BYTES, RECORD_BYTES, Recorder, RecordingError, Replay,
 };
@@ -53,6 +55,11 @@ slime_rt::entry!(main);
 
 /// The declared endpoint between the recorder and the replayer.
 const PEER_SLOT: u32 = 0;
+/// The unrecorded holder's peer endpoint and shared-buffer factory for its IO0 ring.
+const BLOCK_PEER_SLOT: u32 = 8;
+const BLOCK_FACTORY_SLOT: u32 = 3;
+const BLOCK_RING_BASE: u64 = 0x0000_001f_0000_0000;
+const BLOCK_DATA_BASE: u64 = 0x0000_001f_0001_0000;
 /// The recorder's declared wait binding on `replay-recorder-tick`, which carries
 /// its C9.1 timer expiry.
 const TICK_SLOT: u32 = 0;
@@ -122,29 +129,34 @@ fn main(_startup_arg: u32) {
     }
 }
 
-/// A recorder the generation cannot declare deterministic, because it holds a
-/// right classified as an unrecorded nondeterminism source.
+/// A recorder the generation cannot declare deterministic, because its IO0
+/// ring carries block-read authority classified as an unrecorded
+/// nondeterminism source.
 ///
 /// This is C9.5's second required check observed from inside: the manifest could
 /// ask for `deterministic = true` here and the build would refuse it, so what
-/// runs reads back an absent claim. The instance proves the grant is real — a
-/// `blockRead` handle it can actually name — so the refusal is about an authority
-/// it holds rather than one nobody has.
+/// runs reads back an absent claim. The instance proves the authority is real by
+/// reading a sector through the userspace driver, so the refusal is about an
+/// authority it holds rather than one nobody has.
 fn run_unrecorded(capacity: u32) -> ! {
-    // The block capability the generation granted. Its presence is what makes the
-    // determinism claim inadmissible, so a plane where the grant had silently
-    // stopped being installed would prove nothing.
-    const BLOCK_SLOT: u32 = 3;
-    let request = [0u8; 64];
-    let mut reply = [0u8; 64];
-    let result = slime_rt::block_transact(BLOCK_SLOT, &request, &mut reply);
-    // The transaction's *outcome* is not the assertion — this plane declares no
-    // real device — but the refusal must not be `ERR_BAD_CAP`, which is what an
-    // absent or wrong-kind capability answers. Anything else means the slot holds
-    // a block capability whose authority the root recognized.
-    if result == slime_rt::ERR_BAD_CAP {
-        fail(b"the unrecorded holder has no block capability")
+    let request_ready = binding(b"notification:io-block-request-ready+signal");
+    let completion_ready = binding(b"notification:io-block-completion-ready+wait");
+    // SAFETY: both bases are page-aligned addresses in this component's free
+    // VSpace range, do not alias each other, and nothing else maps them.
+    let mut io = unsafe {
+        BlockIo::attach(
+            BLOCK_FACTORY_SLOT,
+            BLOCK_PEER_SLOT,
+            request_ready,
+            completion_ready,
+            BLOCK_RING_BASE,
+            BLOCK_DATA_BASE,
+        )
     }
+    .unwrap_or_else(|_| fail(b"unrecorded block attach"));
+    let mut sector = [0u8; block_v2::SECTOR_BYTES];
+    io.read(0, &mut sector)
+        .unwrap_or_else(|_| fail(b"unrecorded block read"));
     write_pair(
         b"[replay:unrecorded] role=record capacity=",
         capacity as u64,
@@ -152,6 +164,8 @@ fn run_unrecorded(capacity: u32) -> ! {
         0,
     );
     debug_write(b"[replay:unrecorded] unrecorded source held\n");
+    io.shutdown()
+        .unwrap_or_else(|_| fail(b"unrecorded driver shutdown"));
     exit(0)
 }
 
@@ -580,6 +594,10 @@ fn receive_record(out: &mut [u8], offset: usize) -> Option<usize> {
         fail(b"stream frame was not one record")
     }
     None
+}
+
+fn binding(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 
 fn step(result: Result<(), RecordingError>, reason: &[u8]) {
