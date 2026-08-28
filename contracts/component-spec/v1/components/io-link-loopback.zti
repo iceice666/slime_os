@@ -1,0 +1,66 @@
+{
+  formatVersion = 1;
+  name = "io-link-loopback";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Deterministic backend-independent LinkDevice provider for the IO4 network service proof plane.";
+  implementation =  {
+    provider = "workspace";
+    binary = "io-link-loopback";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_network_check boots sel4-io-network";
+    expectedResult = "the service consumes LinkDevice semantics without host networking";
+    passFailCriteria = "[io-link-loopback] LinkDevice tx-queue=4 rx-queue=4 link=up";
+    requiredTestEnvironment = "io_network_check";
+  };
+}

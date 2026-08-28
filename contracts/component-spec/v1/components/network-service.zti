@@ -1,0 +1,68 @@
+{
+  formatVersion = 1;
+  name = "network-service";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Provides bounded TCP and UDP authority for exact generation-declared destinations over LinkDevice.";
+  implementation =  {
+    provider = "workspace";
+    binary = "network-service";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+    "io-link-loopback";
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_network_check boots sel4-io-network";
+    expectedResult = "exact destination authority, transfers, denials, reset and restart are observed";
+    passFailCriteria = "[io-network-probe] io network plane complete";
+    requiredTestEnvironment = "io_network_check";
+  };
+}

@@ -1,0 +1,66 @@
+{
+  formatVersion = 1;
+  name = "io-network-intruder";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves exact address, port, name, transport, right, raw-packet, resolver-wide and listen attempts fail closed without packets.";
+  implementation =  {
+    provider = "workspace";
+    binary = "io-network-intruder";
+    contentHash = "";
+  };
+  provides = [
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+    "network-service";
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_network_check boots sel4-io-network";
+    expectedResult = "every denial is structured and emits no packet";
+    passFailCriteria = "[io-network-intruder] every denial structured packets=0";
+    requiredTestEnvironment = "io_network_check";
+  };
+}
