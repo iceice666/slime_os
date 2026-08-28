@@ -7,10 +7,10 @@ mod state;
 use state::*;
 
 mod console_runtime;
-mod platform;
+pub(super) mod platform;
 
 use console_runtime::{ConsoleTables, declared_capability, input_script, start_console_dispatcher};
-pub(super) use platform::probe_devices;
+pub(super) use platform::{probe_authority_devices, probe_devices};
 
 #[derive(Clone, Copy)]
 pub(super) struct RootEndpoints {
@@ -22,6 +22,7 @@ pub(super) struct RuntimeDevices<'a> {
     pub(super) timer: &'a mut PhysicalTimerAdapter,
     pub(super) blocks: &'a mut BlockDevices,
     pub(super) input: Option<device::Pl011Input>,
+    pub(super) io_authority: &'a mut platform::AuthorityInventory,
 }
 
 pub(super) fn launch_instance_graph(
@@ -38,11 +39,13 @@ pub(super) fn launch_instance_graph(
         timer,
         blocks,
         input,
+        io_authority,
     } = devices;
-    let mut tasks = TaskTable::<MAX_TASKS>::new();
-    let mut windows = WindowTable::<MAX_WINDOW_ENTRIES>::new();
+    // These three are ~488 KiB together and live in `.bss` rather than in this
+    // frame; see the comment above `LAUNCH_TASKS`. As locals they subtracted
+    // `0x7a000` from `sp` in one prologue step, overrunning the 1 MiB stack.
+    let (tasks, windows, launched_instances) = init_launch_tables();
     let peers = unsafe { &mut *ptr::addr_of_mut!(PEER_ENDPOINTS) };
-    let mut launched_instances = LaunchedInstances::new();
     let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
     let mut launched = 0;
     // C10.2's declared private-memory budget, resolved once. `Admission::admit`
@@ -106,6 +109,12 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
+    let io_budget = match generation::io_resource_budget_object(generation) {
+        Some(Ok(budget)) => Some(budget),
+        Some(Err(error)) => fatal!("SLIME_IO FAIL admitted budget will not decode: {error:?}"),
+        None => None,
+    };
+    let mut io_service = services::IoResourceService::new();
 
     for instance_index in 0..generation.instance_count() {
         let instance = match generation.instance(instance_index) {
@@ -403,6 +412,35 @@ pub(super) fn launch_instance_graph(
                 );
             }
         }
+        if let Some(quota) = io_budget.as_ref().and_then(|budget| {
+            budget.quota_for(&boot_contracts::io_resource::driver_identity(instance.name))
+        }) {
+            let shared = io_authority.device(0).is_some_and(|device| {
+                io_authority
+                    .device(1)
+                    .is_some_and(|other| other.region == device.region)
+            });
+            if let Err(error) = services::install_driver(
+                &mut io_service,
+                slime_root::io_resource::DriverId(u64::from(id.0)),
+                instance_index,
+                quota,
+                shared,
+            ) {
+                fatal!(
+                    "SLIME_IO FAIL quota install task={} instance={} error={error:?}",
+                    id.0,
+                    instance.name
+                )
+            }
+            sel4::debug_println!(
+                "SLIME_IO quota task={} instance={} devices={} shared_granule={}",
+                id.0,
+                instance.name,
+                io_authority.len(),
+                shared as u8
+            );
+        }
         if let Err(error) = launched_instances.record(instance_index, instance.executable, id) {
             fatal!("SLIME_GRAPH FAIL instance mapping rejected: {error:?}")
         }
@@ -429,11 +467,10 @@ pub(super) fn launch_instance_graph(
         admission.wrong_target_images,
         admission.unrecognized_images,
     );
-    let materialized =
-        match peers.materialize(generation, &launched_instances, allocator, &mut tasks) {
-            Ok(report) => report,
-            Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
-        };
+    let materialized = match peers.materialize(generation, launched_instances, allocator, tasks) {
+        Ok(report) => report,
+        Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
+    };
     sel4::debug_println!(
         "SLIME_GRAPH peer endpoints created={} grants={} installed={}",
         peers.len(),
@@ -839,8 +876,8 @@ pub(super) fn launch_instance_graph(
         allocator,
         endpoints.console,
         ConsoleTables {
-            windows: &windows,
-            tasks: &tasks,
+            windows,
+            tasks,
             script: input_script(generation.number),
             input,
             devices: blocks,
@@ -851,11 +888,11 @@ pub(super) fn launch_instance_graph(
 
     serve_instance_graph(
         generation,
-        &mut launched_instances,
+        launched_instances,
         endpoints.service,
         endpoints.console,
-        &mut tasks,
-        &mut windows,
+        tasks,
+        windows,
         &mut buffers,
         clock_service,
         wait_set_service,
@@ -866,6 +903,8 @@ pub(super) fn launch_instance_graph(
         timer,
         allocator,
         scratch,
+        &mut io_service,
+        io_authority,
         admission.fabric_capability_slots,
         &mut scopes,
         #[cfg(slime_boot_selector)]

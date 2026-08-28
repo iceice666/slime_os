@@ -2,6 +2,7 @@
 
 // Protocol modules are generated from contracts/*/v1 schemas.
 pub mod block;
+pub mod block_v2;
 pub mod capability_transfer;
 pub mod component;
 pub mod fabric_call;
@@ -15,6 +16,10 @@ pub mod fabric_visibility;
 pub mod fs;
 pub mod generation;
 pub mod interface_schema;
+pub mod io_queue;
+pub mod io_queue_ring;
+pub mod link_device;
+pub mod network_service;
 pub mod powerbox;
 pub mod recording_stream;
 pub mod ring;
@@ -516,6 +521,257 @@ pub fn valid_ring_badge(badge: u64) -> bool {
     badge != 0 && badge & !fabric_ring::KNOWN_BADGE_BITS == 0
 }
 
+/// Structural validity of an I/O queue header (IO0).
+///
+/// The same discipline as [`valid_ring_header`], and for the same reason: a
+/// queue is shared memory, so every field was written by a peer this reader
+/// does not trust. The bounds come from the caller's own provisioning record,
+/// never from the mapping.
+///
+/// What differs is that a queue is duplex, so there are two occupancies to
+/// bound rather than one, and both must hold: a submission ring whose tail
+/// passed its head, or a completion backlog larger than the ring, is a header
+/// no correct peer produces.
+pub fn valid_queue_header(header: &io_queue::WireQueueHeader, expected_slots: usize) -> bool {
+    if header.magic != io_queue::QUEUE_MAGIC || header.version != io_queue::FORMAT_VERSION {
+        return false;
+    }
+    if header.request_slot_len as usize != io_queue::REQUEST_SLOT_LEN
+        || header.completion_slot_len as usize != io_queue::COMPLETION_SLOT_LEN
+    {
+        return false;
+    }
+    let slots = header.slot_count as usize;
+    if slots != expected_slots
+        || !(io_queue::MIN_QUEUE_SLOTS..=io_queue::MAX_QUEUE_SLOTS).contains(&slots)
+        || !slots.is_power_of_two()
+    {
+        return false;
+    }
+    if header.submit_tail > header.submit_head
+        || header.submit_head - header.submit_tail > slots as u64
+    {
+        return false;
+    }
+    if header.complete_tail > header.complete_head
+        || header.complete_head - header.complete_tail > slots as u64
+    {
+        return false;
+    }
+    // A completion can only answer a request that was submitted. More
+    // completions than submissions means the driver invented one, and a client
+    // that consumed it would settle a request it never made.
+    if header.complete_head > header.submit_head {
+        return false;
+    }
+    if !matches!(
+        header.driver_state,
+        io_queue::DRIVER_ACTIVE | io_queue::DRIVER_RESETTING | io_queue::DRIVER_DEAD
+    ) {
+        return false;
+    }
+    // Epoch zero is reserved for "no driver has claimed this queue", so an
+    // active driver must have advanced past it. A dead or resetting queue may
+    // still read zero if it was never claimed at all.
+    if header.driver_state == io_queue::DRIVER_ACTIVE && header.epoch == 0 {
+        return false;
+    }
+    header.client_reserved.iter().all(|byte| *byte == 0)
+        && header.client_padding.iter().all(|byte| *byte == 0)
+        && header.driver_reserved.iter().all(|byte| *byte == 0)
+        && header.driver_padding.iter().all(|byte| *byte == 0)
+}
+
+/// Whether a buffer slice names bytes the substrate may act on (IO0).
+///
+/// `mapped_len` is the length of the lease's own mapping as the *validator's*
+/// side knows it — not a number from the wire. That is the whole point: a slice
+/// is a claim about which bytes of a buffer an operation touches, and the check
+/// that matters is whether those bytes are inside the region the lease actually
+/// covers. Overflow is checked explicitly rather than relying on wrapping,
+/// because `offset + length` is exactly where a hostile descriptor aims.
+///
+/// A `DIRECTION_NONE` slice belongs to a control request that touches no
+/// buffer, and every other field must be zero. Admitting a half-filled
+/// no-direction slice would let a control request carry a lease identity the
+/// substrate would then have to decide whether to settle.
+pub fn valid_buffer_slice(slice: &io_queue::WireBufferSlice, mapped_len: u64) -> bool {
+    if slice.reserved.iter().any(|byte| *byte != 0) {
+        return false;
+    }
+    match slice.direction {
+        io_queue::DIRECTION_NONE => {
+            slice.buffer == 0 && slice.lease == 0 && slice.offset == 0 && slice.length == 0
+        }
+        io_queue::DIRECTION_DEVICE_READ | io_queue::DIRECTION_DEVICE_WRITE => {
+            if slice.buffer == 0 || slice.lease == 0 || slice.length == 0 {
+                return false;
+            }
+            match slice.offset.checked_add(slice.length) {
+                Some(end) => end <= mapped_len,
+                None => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Structural validity of one submission slot (IO0).
+///
+/// `expected_epoch` is the epoch the reader is serving. A slot carrying any
+/// other epoch is work from a driver incarnation that no longer exists, and
+/// refusing it here is what makes a stale submission unable to reach a device.
+///
+/// Only `SLOT_READY` is admissible, for the same reason as the fabric ring:
+/// `SLOT_CLAIMED` means the writer is mid-copy.
+pub fn valid_request_slot(
+    slot: &io_queue::WireRequestSlot,
+    expected_epoch: u64,
+    mapped_len: u64,
+) -> bool {
+    if slot.magic != io_queue::REQUEST_MAGIC || slot.state != io_queue::SLOT_READY {
+        return false;
+    }
+    if slot.flags & !io_queue::KNOWN_REQUEST_FLAGS != 0 {
+        return false;
+    }
+    // Request identity zero is reserved so a zeroed slot cannot be mistaken
+    // for a request, and the epoch must be the one being served.
+    if slot.request_id == 0 || slot.epoch == 0 || slot.epoch != expected_epoch {
+        return false;
+    }
+    let length = slot.payload_len as usize;
+    if length > io_queue::REQUEST_PAYLOAD_BYTES {
+        return false;
+    }
+    if slot.payload[length..].iter().any(|byte| *byte != 0) {
+        return false;
+    }
+    let slice = io_queue::WireBufferSlice {
+        buffer: slot.slice_buffer,
+        lease: slot.slice_lease,
+        offset: slot.slice_offset,
+        length: slot.slice_length,
+        direction: slot.slice_direction,
+        reserved: slot.slice_reserved,
+    };
+    valid_buffer_slice(&slice, mapped_len)
+}
+
+/// Structural validity of one completion slot (IO0).
+///
+/// A completion is only meaningful against the request it answers, so both the
+/// identity and the epoch are supplied by the caller from its own outstanding
+/// table. This is the check that rejects a late completion after cancellation,
+/// reset, or peer death: the caller has already settled that request and no
+/// longer holds it, so there is no `expected_request` to match.
+///
+/// `transferred` is bounded by the request's own slice length, which the caller
+/// passes because the completion does not restate it. A driver reporting more
+/// bytes than the slice covered is claiming to have touched memory the lease
+/// did not authorize.
+pub fn valid_completion_slot(
+    slot: &io_queue::WireCompletionSlot,
+    expected_request: u64,
+    expected_epoch: u64,
+    slice_length: u64,
+) -> bool {
+    if slot.magic != io_queue::COMPLETION_MAGIC {
+        return false;
+    }
+    if slot.flags & !io_queue::KNOWN_COMPLETION_FLAGS != 0 {
+        return false;
+    }
+    if slot.request_id == 0
+        || slot.request_id != expected_request
+        || slot.epoch == 0
+        || slot.epoch != expected_epoch
+    {
+        return false;
+    }
+    if !valid_completion_status(slot.status) {
+        return false;
+    }
+    // Only a successful completion moved bytes. A refusal that also claimed a
+    // transfer would be reporting two different outcomes at once, and a caller
+    // reading `transferred` without first branching on status would trust it.
+    if slot.status != io_queue::STATUS_OK && slot.transferred != 0 {
+        return false;
+    }
+    if slot.transferred > slice_length {
+        return false;
+    }
+    let length = slot.payload_len as usize;
+    length <= io_queue::COMPLETION_PAYLOAD_BYTES
+        && slot.payload[length..].iter().all(|byte| *byte == 0)
+}
+
+/// Whether a status word is one this version defines (IO0).
+pub fn valid_completion_status(status: u32) -> bool {
+    matches!(
+        status,
+        io_queue::STATUS_OK
+            | io_queue::STATUS_CANCELLED
+            | io_queue::STATUS_RESET
+            | io_queue::STATUS_PEER_DEAD
+            | io_queue::STATUS_MALFORMED
+            | io_queue::STATUS_BAD_SLICE
+            | io_queue::STATUS_BAD_EPOCH
+            | io_queue::STATUS_BAD_RIGHTS
+            | io_queue::STATUS_EXHAUSTED
+            | io_queue::STATUS_DEVICE_ERROR
+            | io_queue::STATUS_UNSUPPORTED
+    )
+}
+
+/// Which slot a sequence occupies in a queue ring, given a validated count.
+///
+/// Separate from [`ring_slot_index`] only so the two substrates do not share a
+/// helper whose power-of-two precondition is validated by different code.
+pub fn queue_slot_index(sequence: u64, slot_count: usize) -> usize {
+    (sequence as usize) & (slot_count - 1)
+}
+
+/// Whether an I/O queue badge word carries only defined bits (IO0).
+pub fn valid_queue_badge(badge: u64) -> bool {
+    badge != 0 && badge & !io_queue::KNOWN_BADGE_BITS == 0
+}
+
+/// Whether a request-lifecycle state is terminal (IO0).
+///
+/// Single-assignment is the invariant this supports: a caller that finds a
+/// request already in a terminal state must refuse the transition rather than
+/// overwrite it, which is what makes a lease release exactly once.
+pub fn terminal_request_state(state: u32) -> bool {
+    matches!(
+        state,
+        io_queue::STATE_COMPLETE
+            | io_queue::STATE_CANCELLED
+            | io_queue::STATE_RESET
+            | io_queue::STATE_PEER_DEAD
+    )
+}
+
+/// The terminal state a completion status settles a request into (IO0).
+///
+/// Total over defined statuses so a caller cannot forget a case: every status
+/// this version defines resolves to exactly one terminal state, which is what
+/// makes "every submitted request reaches one terminal state" checkable rather
+/// than aspirational. An undefined status yields `None` and must be refused.
+pub fn terminal_state_for_status(status: u32) -> Option<u32> {
+    match status {
+        io_queue::STATUS_CANCELLED => Some(io_queue::STATE_CANCELLED),
+        io_queue::STATUS_RESET => Some(io_queue::STATE_RESET),
+        io_queue::STATUS_PEER_DEAD => Some(io_queue::STATE_PEER_DEAD),
+        // Every other defined status is an answer the driver produced for this
+        // request -- successfully or not -- so the request completed. The
+        // distinction between "it worked" and "it was refused" is the status
+        // itself, not the lifecycle state.
+        status if valid_completion_status(status) => Some(io_queue::STATE_COMPLETE),
+        _ => None,
+    }
+}
+
 pub fn valid_time_advance(value: &fabric_time::WireTimeAdvance) -> bool {
     value.magic == fabric_time::TIME_ADVANCE_MAGIC
         && value.version == fabric_time::FORMAT_VERSION
@@ -934,4 +1190,243 @@ pub fn trace_records_ordered(
 ) -> bool {
     (earlier.now_ns, earlier.order_class, earlier.sequence)
         <= (later.now_ns, later.order_class, later.sequence)
+}
+/// Whether a LinkDevice operation is defined by version 1 (IO3).
+fn valid_link_op(op: u8) -> bool {
+    matches!(
+        op,
+        link_device::OP_TRANSMIT
+            | link_device::OP_PROVIDE_RECEIVE
+            | link_device::OP_QUERY_LINK
+            | link_device::OP_STATISTICS
+            | link_device::OP_RESET
+            | link_device::OP_CLOSE
+    )
+}
+
+/// Whether a frame length is a complete Ethernet frame admitted by LinkDevice.
+pub fn valid_link_frame_bounds(frame_len: usize) -> bool {
+    (link_device::MIN_FRAME_BYTES..=link_device::MAX_FRAME_BYTES).contains(&frame_len)
+}
+
+/// Whether a link-state value is one this version defines.
+pub fn valid_link_state(state: u8) -> bool {
+    matches!(
+        state,
+        link_device::LINK_UNKNOWN | link_device::LINK_DOWN | link_device::LINK_UP
+    )
+}
+
+/// Structural and operation-specific validity of an IO0 LinkDevice request payload.
+pub fn valid_link_request(request: &link_device::WireLinkRequest) -> bool {
+    if request.magic != link_device::LINK_MAGIC
+        || request.version != link_device::FORMAT_VERSION
+        || !valid_link_op(request.op)
+        || request.flags & !link_device::KNOWN_REQUEST_FLAGS != 0
+        || request.reserved.iter().any(|byte| *byte != 0)
+    {
+        return false;
+    }
+
+    let frame_len = request.frame_len as usize;
+    let length_valid = match request.op {
+        link_device::OP_TRANSMIT => valid_link_frame_bounds(frame_len),
+        // A receive lease must be able to hold every frame this contract admits;
+        // the completion reports the actual received length.
+        link_device::OP_PROVIDE_RECEIVE => frame_len == link_device::MAX_FRAME_BYTES,
+        link_device::OP_QUERY_LINK
+        | link_device::OP_STATISTICS
+        | link_device::OP_RESET
+        | link_device::OP_CLOSE => frame_len == 0,
+        _ => false,
+    };
+    length_valid && request.padding.iter().all(|byte| *byte == 0)
+}
+
+/// Structural and operation-specific validity of an IO0 LinkDevice reply payload.
+pub fn valid_link_reply(reply: &link_device::WireLinkReply) -> bool {
+    if reply.magic != link_device::LINK_MAGIC
+        || reply.version != link_device::FORMAT_VERSION
+        || !valid_link_op(reply.op)
+        || !valid_link_state(reply.link_state)
+        || reply.reserved.iter().any(|byte| *byte != 0)
+    {
+        return false;
+    }
+
+    let frame_len = reply.frame_len as usize;
+    match reply.op {
+        link_device::OP_TRANSMIT | link_device::OP_PROVIDE_RECEIVE => {
+            valid_link_frame_bounds(frame_len) && reply.tx_frames == 0 && reply.rx_frames == 0
+        }
+        link_device::OP_STATISTICS => frame_len == 0,
+        link_device::OP_QUERY_LINK | link_device::OP_RESET | link_device::OP_CLOSE => {
+            frame_len == 0 && reply.tx_frames == 0 && reply.rx_frames == 0
+        }
+        _ => false,
+    }
+}
+
+/// Structural and operation-specific validity of a NetworkService IO0 request payload.
+pub fn valid_network_request(request: &network_service::WireNetworkRequest) -> bool {
+    if request.magic != network_service::NETWORK_MAGIC
+        || request.version != network_service::FORMAT_VERSION
+        || request.flags & !network_service::KNOWN_REQUEST_FLAGS != 0
+        || request.reserved.iter().any(|byte| *byte != 0)
+        || request.name_len as usize > network_service::MAX_NAME_BYTES
+    {
+        return false;
+    }
+    let name_len = request.name_len as usize;
+    let address_tail_zero = request.endpoint[16..].iter().all(|byte| *byte == 0);
+    let endpoint_zero = request.endpoint.iter().all(|byte| *byte == 0);
+    let valid_destination = request.port != 0
+        && match request.address_kind {
+            network_service::ADDRESS_IPV4 => {
+                request.name_len == 0 && request.endpoint[4..].iter().all(|byte| *byte == 0)
+            }
+            network_service::ADDRESS_IPV6 => request.name_len == 0 && address_tail_zero,
+            network_service::ADDRESS_DNS => {
+                name_len > 0
+                    && request.endpoint[name_len..].iter().all(|byte| *byte == 0)
+                    && valid_network_name(&request.endpoint[..name_len])
+            }
+            _ => false,
+        };
+    match request.op {
+        network_service::OP_CONNECT => {
+            matches!(
+                request.transport,
+                network_service::TRANSPORT_TCP | network_service::TRANSPORT_UDP
+            ) && request.capability == 0
+                && valid_destination
+        }
+        network_service::OP_LISTEN => {
+            request.transport == network_service::TRANSPORT_TCP
+                && request.capability == 0
+                && valid_destination
+        }
+        network_service::OP_RESOLVE => {
+            request.transport == network_service::TRANSPORT_NONE
+                && request.capability == 0
+                && request.port == 0
+                && request.address_kind == network_service::ADDRESS_DNS
+                && name_len > 0
+                && request.endpoint[name_len..].iter().all(|byte| *byte == 0)
+                && valid_network_name(&request.endpoint[..name_len])
+        }
+        network_service::OP_SEND | network_service::OP_RECV | network_service::OP_CLOSE => {
+            request.transport == network_service::TRANSPORT_NONE
+                && request.capability != 0
+                && request.port == 0
+                && request.name_len == 0
+                && request.address_kind == network_service::ADDRESS_NONE
+                && endpoint_zero
+        }
+        network_service::OP_ACCEPT => {
+            request.transport == network_service::TRANSPORT_TCP
+                && request.capability != 0
+                && request.port == 0
+                && request.name_len == 0
+                && request.address_kind == network_service::ADDRESS_NONE
+                && endpoint_zero
+        }
+        _ => false,
+    }
+}
+
+fn valid_network_name(name: &[u8]) -> bool {
+    !name.is_empty()
+        && name[0] != b'.'
+        && name[name.len() - 1] != b'.'
+        && name
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'-'))
+        && !name.windows(2).any(|pair| pair == b"..")
+}
+
+/// Structural and typed-capability validity of a NetworkService completion payload.
+pub fn valid_network_completion(completion: &network_service::WireNetworkCompletion) -> bool {
+    if completion.magic != network_service::NETWORK_MAGIC
+        || completion.version != network_service::FORMAT_VERSION
+        || completion.flags & !network_service::KNOWN_COMPLETION_FLAGS != 0
+    {
+        return false;
+    }
+    match completion.op {
+        network_service::OP_CONNECT => {
+            completion.capability != 0
+                && matches!(
+                    completion.capability_kind,
+                    network_service::CAPABILITY_TCP_CONNECTION
+                        | network_service::CAPABILITY_UDP_ENDPOINT
+                )
+        }
+        network_service::OP_LISTEN => {
+            completion.capability != 0
+                && completion.capability_kind == network_service::CAPABILITY_TCP_LISTENER
+        }
+        network_service::OP_ACCEPT => {
+            completion.capability != 0
+                && completion.capability_kind == network_service::CAPABILITY_TCP_CONNECTION
+        }
+        network_service::OP_RESOLVE => {
+            completion.capability != 0
+                && completion.capability_kind == network_service::CAPABILITY_DNS_RECORD
+        }
+        network_service::OP_SEND | network_service::OP_RECV | network_service::OP_CLOSE => {
+            completion.capability == 0
+                && completion.capability_kind == network_service::CAPABILITY_NONE
+        }
+        _ => false,
+    }
+}
+
+/// Validate one BlockDevice v2 request payload before any DMA mapping or
+/// descriptor allocation. The IO0 envelope separately validates identity,
+/// epoch, lease, slice bounds, and direction.
+pub fn valid_block_v2_request(request: &block_v2::WireBlockRequest) -> bool {
+    if request.magic != block_v2::BLOCK_MAGIC
+        || request.version != block_v2::FORMAT_VERSION
+        || request.flags & !block_v2::KNOWN_REQUEST_FLAGS != 0
+        || request.reserved.iter().any(|byte| *byte != 0)
+        || request.padding.iter().any(|byte| *byte != 0)
+    {
+        return false;
+    }
+    match request.op {
+        block_v2::OP_READ | block_v2::OP_WRITE => {
+            request.sector_count != 0
+                && request.sector_count <= block_v2::MAX_SECTORS_PER_REQUEST
+                && request
+                    .lba
+                    .checked_add(u64::from(request.sector_count))
+                    .is_some()
+        }
+        block_v2::OP_FLUSH | block_v2::OP_GEOMETRY => request.lba == 0 && request.sector_count == 0,
+        _ => false,
+    }
+}
+
+/// Validate the device-semantic completion payload. Substrate status decides
+/// whether device_status/detail are meaningful; this checks canonical bytes and
+/// the bounded completed prefix independently.
+pub fn valid_block_v2_completion(
+    completion: &block_v2::WireBlockReply,
+    requested_sectors: u32,
+) -> bool {
+    completion.magic == block_v2::BLOCK_MAGIC
+        && completion.version == block_v2::FORMAT_VERSION
+        && completion.reserved == [0]
+        && matches!(
+            completion.op,
+            block_v2::OP_READ | block_v2::OP_WRITE | block_v2::OP_FLUSH | block_v2::OP_GEOMETRY
+        )
+        && completion.sectors_done <= requested_sectors
+        && matches!(
+            completion.device_status,
+            block_v2::DEVICE_STATUS_OK
+                | block_v2::DEVICE_STATUS_IO_ERR
+                | block_v2::DEVICE_STATUS_UNSUPPORTED
+        )
 }

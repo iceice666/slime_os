@@ -702,7 +702,10 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // Every seL4 gate boots this path, so the markers are unconditional and
     // every plane's transcript carries them.
     #[cfg_attr(not(slime_boot_selector), allow(unused_mut, unused_variables))]
+    #[cfg(slime_boot_selector)]
     let mut block_devices = probe_devices(bootinfo, allocator);
+    #[cfg(not(slime_boot_selector))]
+    let mut block_devices = BlockDevices::new();
     #[cfg(slime_boot_selector)]
     let selected = {
         let device = block_devices
@@ -742,6 +745,27 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(admission) => admission,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
+    // Mutually exclusive device ownership. An admitted generation carrying an
+    // IO-resource budget selects raw userspace authority before any virtio page
+    // is consumed by the legacy root block driver. The selector's one bootstrap
+    // device is the narrow exception: it must be read before that generation can
+    // be decoded, so decoded policy cannot select its own prerequisite.
+    #[cfg(not(slime_boot_selector))]
+    let userspace_io = admission.io_resource_drivers.is_some();
+    #[cfg(slime_boot_selector)]
+    let userspace_io = false;
+    #[cfg(not(slime_boot_selector))]
+    if !userspace_io {
+        block_devices = probe_devices(bootinfo, allocator);
+    }
+    let mut io_authority = if userspace_io {
+        graph_runtime::probe_authority_devices(bootinfo, allocator)
+    } else {
+        graph_runtime::platform::AuthorityInventory::new()
+    };
+    if userspace_io && !block_devices.is_empty() {
+        fatal!("SLIME_IO FAIL device ownership conflict root-driver=1 userspace=1")
+    }
     // The plan's total against the root's actual CSpace, which only the
     // allocator knows (B49). Per-instance ceilings say each process fits; this
     // says they all fit together, before any component starts rather than
@@ -848,6 +872,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 timer: &mut timer_adapter,
                 blocks: &mut block_devices,
                 input: qemu_input,
+                io_authority: &mut io_authority,
             },
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,

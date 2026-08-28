@@ -121,6 +121,8 @@ from zutai_cli import STDLIB, binary
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT
 from generation_resources import (
     build_clock_authority,
+    build_io_resource_budget,
+    build_network_destinations,
     build_lifecycle_policy,
     build_private_memory_budget,
     build_recording_policy,
@@ -201,6 +203,10 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
     if manifest.get("privateMemoryBudget") is not None:
         resolved["privateMemoryBudget"] = [
             entry for entry in manifest["privateMemoryBudget"] if entry["holder"] in kept
+        ]
+    if manifest.get("ioResourceBudget") is not None:
+        resolved["ioResourceBudget"] = [
+            entry for entry in manifest["ioResourceBudget"] if entry["holder"] in kept
         ]
     if manifest.get("clockAuthority") is not None:
         resolved["clockAuthority"] = [
@@ -293,6 +299,11 @@ SEL4_MANIFESTS = {
     "sel4-demo": GENERATION_COMPOSITIONS / "sel4-demo.zti",
     "sel4-channel": GENERATION_COMPOSITIONS / "sel4-channel.zti",
     "sel4-loan": GENERATION_COMPOSITIONS / "sel4-loan.zti",
+    "sel4-io-queue": GENERATION_COMPOSITIONS / "sel4-io-queue.zti",
+    "sel4-io-driver-authority": GENERATION_COMPOSITIONS / "sel4-io-driver-authority.zti",
+    "sel4-io-network": GENERATION_COMPOSITIONS / "sel4-io-network.zti",
+    "sel4-io-block": GENERATION_COMPOSITIONS / "sel4-io-block.zti",
+    "sel4-io-link": GENERATION_COMPOSITIONS / "sel4-io-link.zti",
     "sel4-spawn": GENERATION_COMPOSITIONS / "sel4-spawn.zti",
     "sel4-sample": GENERATION_COMPOSITIONS / "sel4-sample.zti",
     "sel4-stream": GENERATION_COMPOSITIONS / "sel4-stream.zti",
@@ -429,6 +440,15 @@ CAPABILITY_KIND = {
     "supervision": 7,
     "sharedBuffer": 8,
     "loan": 9,
+    # IO1's hardware-resource classes. Four kinds rather than one `device`,
+    # because they are four separately grantable authorities and collapsing them
+    # would make "this driver may map MMIO but must not touch DMA" unsayable.
+    # A `device` names one physical instance; the other three are the bounded
+    # resources that instance's driver may request against it.
+    "device": 10,
+    "mmioRegion": 11,
+    "interruptSource": 12,
+    "dmaAccount": 13,
 }
 
 
@@ -529,6 +549,10 @@ def validate_capability_rights(name: str, kind: str, rights: int) -> None:
             RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT["bufferLoan"] | RIGHT_TRANSFER
         ),
         "loan": RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT_TRANSFER,
+        "device": RIGHT["mapMmio"],
+        "mmioRegion": RIGHT["mapMmio"],
+        "interruptSource": RIGHT["irqAck"],
+        "dmaAccount": RIGHT["dmaPin"] | RIGHT["dmaRelease"],
     }
     required = {
         "endpoint": RIGHT["send"] | RIGHT["recv"],
@@ -545,6 +569,10 @@ def validate_capability_rights(name: str, kind: str, rights: int) -> None:
         "supervision": RIGHT["supervise"],
         "sharedBuffer": RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT["bufferLoan"],
         "loan": RIGHT["bufferMap"],
+        "device": RIGHT["mapMmio"],
+        "mmioRegion": RIGHT["mapMmio"],
+        "interruptSource": RIGHT["irqAck"],
+        "dmaAccount": RIGHT["dmaPin"] | RIGHT["dmaRelease"],
     }
     mask = masks.get(kind)
     if mask is None:
@@ -557,6 +585,10 @@ def validate_capability_rights(name: str, kind: str, rights: int) -> None:
         fail(f"{name}: executable capability requires exec and spawn")
     if kind == "input" and rights != RIGHT["inputRead"]:
         fail(f"{name}: input capability has an exact inputRead right")
+    if kind == "dmaAccount" and rights != RIGHT["dmaPin"] | RIGHT["dmaRelease"]:
+        fail(f"{name}: DMA account requires dmaPin and dmaRelease")
+
+
 MAX_SPAWN_BUDGET = 32
 POLICY = {
     "immutable": 1,
@@ -1231,6 +1263,7 @@ SERVICE_INPUT = 7
 SERVICE_BLOCK = 8
 SERVICE_CONSOLE = 9
 SERVICE_CLOCK = 10
+SERVICE_IO_RESOURCE = 11
 # Fixed userspace ABI slots. Several typed mechanisms share the root transport
 # endpoint at slot 1; the service discriminant states the authority carried.
 ROOT_SERVICE_SLOT = 1
@@ -1243,6 +1276,14 @@ SERVICE_BY_CAPABILITY_KIND = {
     "input": SERVICE_INPUT,
     "block": SERVICE_BLOCK,
     "supervision": SERVICE_SUPERVISION,
+    # IO1's four hardware-resource kinds share one root service, because they
+    # are one mechanism: a driver's device, its MMIO subranges, its interrupt,
+    # and its DMA account are constructed and reclaimed together, and splitting
+    # them across services would let a generation grant half a driver.
+    "device": SERVICE_IO_RESOURCE,
+    "mmioRegion": SERVICE_IO_RESOURCE,
+    "interruptSource": SERVICE_IO_RESOURCE,
+    "dmaAccount": SERVICE_IO_RESOURCE,
 }
 KERNEL_OBJECT_CNODE = 1
 KERNEL_OBJECT_VSPACE = 2
@@ -2468,6 +2509,18 @@ def build_sel4_generation(
         # declaring holders without the object would boot with every one of
         # them denied and no indication why.
         fail("privateMemoryBudget declared without a private-memory-budget resource object")
+    declared_io_resources = manifest.get("ioResourceBudget") or []
+    if "io-resource-budget" in object_ids:
+        payloads["io-resource-budget"] = build_io_resource_budget(declared_io_resources)
+    elif declared_io_resources:
+        fail("ioResourceBudget declared without an io-resource-budget resource object")
+    declared_network_destinations = manifest.get("networkDestinations") or []
+    if "network-destinations" in object_ids:
+        payloads["network-destinations"] = build_network_destinations(
+            declared_network_destinations
+        )
+    elif declared_network_destinations:
+        fail("networkDestinations declared without a network-destinations resource object")
     declared_clock_authority = manifest.get("clockAuthority") or []
     if "clock-authority" in object_ids:
         payloads["clock-authority"] = build_clock_authority(manifest)

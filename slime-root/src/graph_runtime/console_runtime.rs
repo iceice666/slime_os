@@ -27,7 +27,7 @@ pub(super) const fn input_script(generation: u64) -> &'static [u8] {
 /// Construct one typed root-mediated capability from a declared kind.
 pub(super) const fn declared_capability(
     kind: CapabilityKind,
-    device: u8,
+    resource: u8,
     rights: u64,
 ) -> Option<graph::CapabilityEntry> {
     match kind {
@@ -36,7 +36,13 @@ pub(super) const fn declared_capability(
         }
         CapabilityKind::Input => graph::CapabilityEntry::input(rights),
         CapabilityKind::SharedBufferFactory => graph::CapabilityEntry::buffer_factory(rights),
-        CapabilityKind::Block => graph::CapabilityEntry::block(device, rights),
+        CapabilityKind::Block => graph::CapabilityEntry::block(resource, rights),
+        CapabilityKind::Device => graph::CapabilityEntry::device(resource, rights),
+        CapabilityKind::MmioRegion => graph::CapabilityEntry::mmio_region(resource, rights),
+        CapabilityKind::InterruptSource => {
+            graph::CapabilityEntry::interrupt_source(resource, rights)
+        }
+        CapabilityKind::DmaAccount => graph::CapabilityEntry::dma_account(resource, rights),
         CapabilityKind::Endpoint
         | CapabilityKind::Executable
         | CapabilityKind::Supervision

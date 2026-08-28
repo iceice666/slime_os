@@ -38,13 +38,13 @@ pub use boot_contracts::fabric_graph::MAX_INGRESS_SOURCES as MAX_WAIT_SOURCES;
 /// happens to occupy a nearby number.
 pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
     use boot_contracts::generation::{
-        SERVICE_CAPABILITY_TRANSFER, SERVICE_CLOCK, SERVICE_DIRECTORY, SERVICE_LIFECYCLE,
-        SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
+        SERVICE_CAPABILITY_TRANSFER, SERVICE_CLOCK, SERVICE_DIRECTORY, SERVICE_IO_RESOURCE,
+        SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
     };
     use slime_proto::syscall_abi::{
         capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-        lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
-        supervision_labels,
+        io_resource_labels, lifecycle_labels, scheduling_labels, shared_buffer_labels,
+        spawn_labels, supervision_labels,
     };
     match label {
         lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
@@ -103,6 +103,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::OCCUPANCY
         | capability_table_labels::RESOLVE_BINDING
         | capability_table_labels::GRAPH_READ
+        | capability_table_labels::NETWORK_DESTINATIONS_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_table_labels::GRAPH_QUERY
         | capability_transfer_labels::EXPORT
@@ -125,6 +126,16 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | clock_labels::TIMER_CANCEL
         | clock_labels::SIMULATED_READ
         | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
+        io_resource_labels::BIND
+        | io_resource_labels::MAP_MMIO
+        | io_resource_labels::DMA_MAP
+        | io_resource_labels::DMA_RELEASE
+        | io_resource_labels::IRQ_WAIT_ACK
+        | io_resource_labels::QUEUE_MAP
+        | io_resource_labels::REQUEST_BEGIN
+        | io_resource_labels::REQUEST_SETTLE
+        | io_resource_labels::MMIO_READ32
+        | io_resource_labels::MMIO_WRITE32 => Some(SERVICE_IO_RESOURCE),
         // C9.3's class read is self-scoped by badge and grants nothing, so it is
         // gated on `lifecycle` for `WAIT_SOURCES`' reason: the band a thread
         // runs at is a property of being a task, not of any grant.
@@ -208,6 +219,22 @@ pub const fn lifecycle_request_len(label: sel4::Word) -> Option<usize> {
         // No operand at all: the caller is the badge, and naming another
         // instance's recording participation is authority no C9.5 field grants.
         lifecycle_labels::RECORDING_SOURCES => Some(0),
+        _ => None,
+    }
+}
+/// Exact fast-register count for IO1 hardware-resource operations.
+pub const fn io_resource_request_len(label: sel4::Word) -> Option<usize> {
+    use slime_proto::syscall_abi::io_resource_labels;
+    match label {
+        io_resource_labels::BIND => Some(1),
+        io_resource_labels::MAP_MMIO
+        | io_resource_labels::DMA_MAP
+        | io_resource_labels::QUEUE_MAP
+        | io_resource_labels::REQUEST_BEGIN
+        | io_resource_labels::REQUEST_SETTLE
+        | io_resource_labels::MMIO_READ32
+        | io_resource_labels::MMIO_WRITE32 => Some(4),
+        io_resource_labels::DMA_RELEASE | io_resource_labels::IRQ_WAIT_ACK => Some(3),
         _ => None,
     }
 }
@@ -1177,6 +1204,39 @@ pub fn read_graph_participants(
     Some(written / GRAPH_ROW_BYTES)
 }
 
+pub const NETWORK_DESTINATION_ROW_BYTES: usize = boot_contracts::network_destination::ENTRY_BYTES;
+pub const NETWORK_DESTINATION_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / NETWORK_DESTINATION_ROW_BYTES;
+
+/// Copy authenticated IO4 entries only to the generation's declared
+/// `network-service`. This is identity gating, not destination policy.
+pub fn read_network_destinations(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(destinations)) = crate::generation::network_destinations_object(generation) else {
+        return None;
+    };
+    let caller = generation.instance(instance).ok()?;
+    if caller.name != "network-service" {
+        return None;
+    }
+    let mut written = 0;
+    for index in cursor..destinations.destination_count() {
+        let end = written + NETWORK_DESTINATION_ROW_BYTES;
+        if end > out.len()
+            || written / NETWORK_DESTINATION_ROW_BYTES >= NETWORK_DESTINATION_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(destinations.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / NETWORK_DESTINATION_ROW_BYTES)
+}
+
 /// Bytes one encoded wake-source record occupies in a `WAIT_SOURCES` reply.
 ///
 /// The contract's own record size: the caller decodes with
@@ -1331,6 +1391,10 @@ mod tests {
                 SERVICE_CAPABILITY_TRANSFER,
             ),
             (
+                capability_table_labels::NETWORK_DESTINATIONS_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
                 capability_table_labels::GRAPH_QUERY,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
@@ -1419,12 +1483,13 @@ mod tests {
             // 43 until C10.1's `PRIVATE_MEMORY_GROW`, 44-48 until C9.1's clock
             // service, 49 until C9.2's `WAIT_SOURCES`, 50-51 until C9.3's
             // scheduling class, 52-56 until C9.4's lifecycle state and
-            // restart/parameter operations, and 57 until C9.5's
-            // `RECORDING_SOURCES`. Moving one out of this list is the whole
-            // change: a number this test asserts routes nowhere and a number the
-            // contract declares are the same fact stated twice, so assigning a
-            // label must fail here first.
-            58,
+            // restart/parameter operations, 57 until C9.5's
+            // `RECORDING_SOURCES`, 58-63 and 65-68 until IO1's hardware-resource
+            // service claimed them, and 64 until IO4's
+            // `NETWORK_DESTINATIONS_READ`. Moving one out of this list is the
+            // whole change: a number this test asserts routes nowhere and a
+            // number the contract declares are the same fact stated twice, so
+            // assigning a label must fail here first.
             sel4::Word::MAX,
         ] {
             assert_eq!(

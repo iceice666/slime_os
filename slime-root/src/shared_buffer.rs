@@ -250,6 +250,36 @@ pub enum MappingRights {
     ReadWrite,
 }
 
+/// Root-internal view of one authenticated live loan's exact frame range.
+/// It exposes logical frame anchors, never physical addresses or an IOVA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoanFrames {
+    anchors: FrameAnchors,
+    offset_pages: usize,
+    page_count: usize,
+    writable: bool,
+}
+
+impl LoanFrames {
+    pub const fn len(&self) -> usize {
+        self.page_count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.page_count == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<FrameCap> {
+        (index < self.page_count)
+            .then(|| self.anchors.get(self.offset_pages + index))
+            .flatten()
+    }
+
+    pub const fn writable(&self) -> bool {
+        self.writable
+    }
+}
+
 impl MappingRights {
     const fn writable(self) -> bool {
         matches!(self, Self::ReadWrite)
@@ -985,6 +1015,24 @@ impl SharedBufferTable {
             return Err(SharedBufferError::WrongReceiver);
         }
         Ok(loan)
+    }
+
+    /// Resolve the exact frames covered by a live receiver-authenticated loan.
+    /// The caller must already have authenticated `receiver` from its task
+    /// identity and supplied the loan capability held in that task's table.
+    pub fn loan_frames(
+        &self,
+        receiver: HolderId,
+        handle: LoanHandle,
+    ) -> Result<LoanFrames, SharedBufferError> {
+        let loan = self.authorize_loan(receiver, handle)?;
+        let region = self.live_region_any(loan.buffer)?;
+        Ok(LoanFrames {
+            anchors: region.anchors,
+            offset_pages: loan.offset_pages as usize,
+            page_count: loan.page_count as usize,
+            writable: loan.writable,
+        })
     }
 
     /// Remove one exact mapping. State commits only after the adapter completes
@@ -2227,6 +2275,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn loan_frames_are_live_receiver_bound_and_direction_scoped() {
+        let mut table = table();
+        let writable_buffer = table.create(OWNER, anchors(10, 2), true).unwrap();
+        let writable = table
+            .loan(OWNER, RECEIVER, writable_buffer, PAGE_SIZE, PAGE_SIZE, true)
+            .unwrap();
+        let frames = table.loan_frames(RECEIVER, writable).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames.get(0), Some(FrameCap(11)));
+        assert!(frames.writable());
+        assert_eq!(
+            table.loan_frames(HolderId(99), writable),
+            Err(SharedBufferError::WrongReceiver)
+        );
+
+        let mut adapter = RecordingAdapter::new();
+        table.revoke_loan(&mut adapter, OWNER, writable).unwrap();
+        assert_eq!(
+            table.loan_frames(RECEIVER, writable),
+            Err(SharedBufferError::NotFound)
+        );
+
+        let readonly_buffer = table.create(OWNER, anchors(20, 1), true).unwrap();
+        table.seal(&mut adapter, OWNER, readonly_buffer).unwrap();
+        let readonly = table
+            .loan(OWNER, RECEIVER, readonly_buffer, 0, PAGE_SIZE, false)
+            .unwrap();
+        assert!(!table.loan_frames(RECEIVER, readonly).unwrap().writable());
+    }
     #[test]
     fn failed_seal_restores_writable_mapping_and_state() {
         let mut table = table();

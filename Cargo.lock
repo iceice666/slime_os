@@ -993,11 +993,111 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-io-block-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-driver-intruder"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-driver-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-link-intruder"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-link-loopback"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-link-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-network-intruder"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-network-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-queue-client"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-queue-driver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-lifecycle-restart-probe"
 version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-network-service"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-proto",
  "slime-rt",
 ]
 
@@ -1294,6 +1394,26 @@ name = "slime-component-sysinfo"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-virtio-blk-driver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-virtio-net-driver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]

@@ -80,6 +80,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # one is: the channel plane now also guards that a component cannot resolve a
     # binding its instance was never granted.
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
+    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 27),
     # C10.2: 30 -> 31. This generation declares no `privateMemoryBudget`, which
     # is the case 22 of the 33 fixtures are in and the private-memory plane
     # cannot state — it exists to carry a budget. The new marker is the root
@@ -95,6 +96,9 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 29),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
+    ("sel4_io_queue_plane", "check/check-sel4-io-queue-plane.py", 15),
+    ("sel4_io_link_plane", "check/check-sel4-io-link-plane.py", 28),
+    ("sel4_io_driver_authority_plane", "check/check-sel4-io-driver-authority-plane.py", 15),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
     # C10.1: 43 -> 58. Fifteen private-memory markers, each a root record paired
     # with the child observation it cannot itself make: the size query, both
@@ -262,6 +266,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # those markers is still required by `check_composition`, just no longer
     # asserted as a fixed scheduling interleaving that was never true.
     ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 30),
+    ("sel4_io_block_plane", "check/check-sel4-io-block-plane.py", 18),
     ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 9),
     ("sel4_store_plane", "check/check-sel4-store-plane.py", 14),
     ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 16),

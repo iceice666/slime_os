@@ -42,6 +42,10 @@ fn service_for_capability(kind: CapabilityKind) -> Option<u32> {
         CapabilityKind::Input => Some(SERVICE_INPUT),
         CapabilityKind::Block => Some(SERVICE_BLOCK),
         CapabilityKind::Supervision => Some(SERVICE_SUPERVISION),
+        CapabilityKind::Device
+        | CapabilityKind::MmioRegion
+        | CapabilityKind::InterruptSource
+        | CapabilityKind::DmaAccount => Some(SERVICE_IO_RESOURCE),
         CapabilityKind::Endpoint | CapabilityKind::Executable => None,
     }
 }
@@ -64,6 +68,10 @@ pub enum CapabilityKind {
     Supervision = CAPABILITY_SUPERVISION,
     SharedBuffer = CAPABILITY_SHARED_BUFFER,
     Loan = CAPABILITY_LOAN,
+    Device = CAPABILITY_DEVICE,
+    MmioRegion = CAPABILITY_MMIO_REGION,
+    InterruptSource = CAPABILITY_INTERRUPT_SOURCE,
+    DmaAccount = CAPABILITY_DMA_ACCOUNT,
 }
 
 impl CapabilityKind {
@@ -78,6 +86,10 @@ impl CapabilityKind {
             CAPABILITY_SUPERVISION => Ok(Self::Supervision),
             CAPABILITY_SHARED_BUFFER => Ok(Self::SharedBuffer),
             CAPABILITY_LOAN => Ok(Self::Loan),
+            CAPABILITY_DEVICE => Ok(Self::Device),
+            CAPABILITY_MMIO_REGION => Ok(Self::MmioRegion),
+            CAPABILITY_INTERRUPT_SOURCE => Ok(Self::InterruptSource),
+            CAPABILITY_DMA_ACCOUNT => Ok(Self::DmaAccount),
             _ => Err(DecodeError::BadBounds),
         }
     }
@@ -102,6 +114,9 @@ fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
             RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN | RIGHT_TRANSFER
         }
         CapabilityKind::Loan => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
+        CapabilityKind::Device | CapabilityKind::MmioRegion => RIGHT_MAP_MMIO,
+        CapabilityKind::InterruptSource => RIGHT_IRQ_ACK,
+        CapabilityKind::DmaAccount => RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
     };
     let required = match kind {
         CapabilityKind::Endpoint => RIGHT_SEND | RIGHT_RECV,
@@ -118,6 +133,9 @@ fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
         CapabilityKind::Supervision => RIGHT_SUPERVISE,
         CapabilityKind::SharedBuffer => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN,
         CapabilityKind::Loan => RIGHT_BUFFER_MAP,
+        CapabilityKind::Device | CapabilityKind::MmioRegion => RIGHT_MAP_MMIO,
+        CapabilityKind::InterruptSource => RIGHT_IRQ_ACK,
+        CapabilityKind::DmaAccount => RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
     };
     rights != 0
         && rights & !allowed == 0
@@ -2140,7 +2158,7 @@ impl<'a> Generation<'a> {
                 return Err(DecodeError::BadBinding);
             }
         }
-        let mut seen_services = [[false; 11]; MAX_PROCESSES];
+        let mut seen_services = [[false; 12]; MAX_PROCESSES];
         for index in 0..self.service_binding_count {
             let binding = self.service_binding(index)?;
             let object_kind = if binding.object < self.kernel_object_count {
@@ -2160,6 +2178,7 @@ impl<'a> Generation<'a> {
                     | SERVICE_BLOCK
                     | SERVICE_CONSOLE
                     | SERVICE_CLOCK
+                    | SERVICE_IO_RESOURCE
             );
             let expected_slot = if binding.service == SERVICE_CONSOLE {
                 CONSOLE_SERVICE_SLOT
@@ -2183,7 +2202,7 @@ impl<'a> Generation<'a> {
             let process = self.process(process_index)?;
             let instance = self.instance(process.instance)?;
             let executable = self.executable(instance.executable)?;
-            let mut required = [false; 11];
+            let mut required = [false; 12];
             required[SERVICE_LIFECYCLE as usize] = true;
             required[SERVICE_CONSOLE as usize] = true;
             let holder_identity = shared_buffer_budget::holder_identity(instance.name);

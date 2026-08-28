@@ -58,6 +58,7 @@ pub mod event;
 pub mod fault;
 pub mod generation;
 pub mod graph;
+pub mod io_resource;
 pub mod ipc;
 pub mod launched;
 pub mod lifecycle;

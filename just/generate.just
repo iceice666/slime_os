@@ -1,3 +1,8 @@
+# Regenerate the shared I/O queue bindings from the Zutai schema.
+[group('generate')]
+io_queue_gen:
+    python3 scripts/generate/generate-io-queue-bindings.py
+
 # Regenerate Rust block protocol bindings from the Zutai schema.
 [group('generate')]
 block_gen:

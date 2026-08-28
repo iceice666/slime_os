@@ -25,8 +25,8 @@ use super::wire::{
 use super::{
     CapabilityDisposition, ERR_INVALID_ARG, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
     MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SpawnGrant, capability_table_labels,
-    capability_transfer_labels, clock_labels, directory_labels, lifecycle_labels,
-    scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+    capability_transfer_labels, clock_labels, directory_labels, io_resource_labels,
+    lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
 };
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word. Generated from `contracts/syscall-abi/v1`; the root decodes the same
@@ -922,6 +922,155 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
 pub fn shared_buffer_occupancy() -> (i64, u64) {
     pair_of(shared_buffer_labels::OCCUPANCY, &[0])
 }
+pub fn io_device_bind(device_slot: u32) -> Result<u64, i64> {
+    let result = result_of(io_resource_labels::BIND, &[device_slot as Word]);
+    (result >= 0).then_some(result as u64).ok_or(result)
+}
+
+pub fn io_mmio_map(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    base: u64,
+    offset: u32,
+    length: u32,
+) -> Result<u64, i64> {
+    let range = u64::from(offset) | (u64::from(length) << 32);
+    let result = result_of(
+        io_resource_labels::MAP_MMIO,
+        &[
+            device_slot as Word,
+            region_slot as Word,
+            base as Word,
+            range as Word,
+        ],
+    );
+    if result < 0 {
+        Err(result)
+    } else if epoch == 0 {
+        Err(ERR_INVALID_ARG)
+    } else {
+        Ok(result as u64)
+    }
+}
+pub fn io_mmio_read32(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    offset: u32,
+) -> Result<u32, i64> {
+    let result = result_of(
+        io_resource_labels::MMIO_READ32,
+        &[
+            device_slot as Word,
+            region_slot as Word,
+            epoch as Word,
+            offset as Word,
+        ],
+    );
+    (result >= 0).then_some(result as u32).ok_or(result)
+}
+
+pub fn io_mmio_write32(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    offset: u32,
+    value: u32,
+) -> i64 {
+    let packed = u64::from(offset) | (u64::from(value) << 32);
+    result_of(
+        io_resource_labels::MMIO_WRITE32,
+        &[
+            device_slot as Word,
+            region_slot as Word,
+            epoch as Word,
+            packed as Word,
+        ],
+    )
+}
+
+pub fn io_dma_map(
+    account_slot: u32,
+    loan_slot: u32,
+    epoch: u64,
+    direction: u64,
+) -> Result<(u64, u64), i64> {
+    let (result, iova) = pair_of(
+        io_resource_labels::DMA_MAP,
+        &[
+            account_slot as Word,
+            loan_slot as Word,
+            direction as Word,
+            epoch as Word,
+        ],
+    );
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((result as u64, iova))
+    }
+}
+
+pub fn io_queue_map(
+    account_slot: u32,
+    epoch: u64,
+    base: u64,
+    pages: u32,
+) -> Result<(u64, u64), i64> {
+    let (result, iova) = pair_of(
+        io_resource_labels::QUEUE_MAP,
+        &[
+            account_slot as Word,
+            pages as Word,
+            epoch as Word,
+            base as Word,
+        ],
+    );
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((result as u64, iova))
+    }
+}
+
+pub fn io_dma_release(account_slot: u32, mapping_id: u64, epoch: u64) -> i64 {
+    result_of(
+        io_resource_labels::DMA_RELEASE,
+        &[account_slot as Word, mapping_id as Word, epoch as Word],
+    )
+}
+
+pub fn io_irq_wait_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<u64, i64> {
+    let result = result_of(
+        io_resource_labels::IRQ_WAIT_ACK,
+        &[source_slot as Word, epoch as Word, prior_sequence as Word],
+    );
+    (result >= 0).then_some(result as u64).ok_or(result)
+}
+pub fn io_request_begin(account_slot: u32, mapping_id: u64, request_id: u64, epoch: u64) -> i64 {
+    result_of(
+        io_resource_labels::REQUEST_BEGIN,
+        &[
+            account_slot as Word,
+            mapping_id as Word,
+            request_id as Word,
+            epoch as Word,
+        ],
+    )
+}
+
+pub fn io_request_settle(account_slot: u32, mapping_id: u64, request_id: u64, epoch: u64) -> i64 {
+    result_of(
+        io_resource_labels::REQUEST_SETTLE,
+        &[
+            account_slot as Word,
+            mapping_id as Word,
+            request_id as Word,
+            epoch as Word,
+        ],
+    )
+}
 
 pub fn supervision_status(slot: u32) -> (i64, u64) {
     pair_of(supervision_labels::STATUS, &[slot as Word])
@@ -1048,6 +1197,28 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> i64 {
     };
     let (result, returned) = match outcome(&call(
         capability_table_labels::GRAPH_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
+/// Read authenticated IO4 destination entries into the transfer window.
+pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::NETWORK_DESTINATIONS_READ,
         &[cursor as Word, 0, transfer as Word],
     )) {
         Ok(pair) => pair,

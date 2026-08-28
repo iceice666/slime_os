@@ -321,7 +321,39 @@ test_sel4_root:
     # own source ceiling rather than a second number this module picked.
     # Direction 24: 183 -> 184. `graph` gains the capability-rights partition
     # test for root-only supervision rights and declared-but-ungated rights.
-    expected=184
+    # IO DMA join: 195 -> 200. `io_resource` gains four tests covering queue
+    # and payload reclamation, lease-first and driver-first teardown, and queue
+    # adapter rollback; `shared_buffer` gains the authenticated live-loan frame
+    # accessor test.
+    # IO1 restart: 200 -> 203. `io_resource` gains the three crash/restart
+    # reclamation tests: every live MMIO mapping and IRQ binding emits its
+    # teardown action in unbind-then-unmap order, repeated reclamation is
+    # idempotent without re-issuing effects, and a predecessor-epoch handle
+    # fails closed under the fresh epoch a replacement rebinds at.
+    # IO2 spawn grants: 203 -> 205. `generation` gains the two crossing-grant
+    # tests, and they exist because this rule cost two IO2 passes. Both had
+    # concluded the root could not carry a crossing spawn grant to a
+    # dynamically spawned child and reverted working migrations on that basis.
+    # It can: `only_owner_supplied_authority_crosses_a_spawn` pins which
+    # declarations an owner supplies -- owner-to-child yes, endpoint and
+    # self-loop no, because those are authority the root places itself -- and
+    # `a_declaration_the_root_places_is_never_charged_to_the_owner` pins the
+    # direction that makes widening unrepresentable: the count comes from
+    # declarations, so there is no index at which an owner can place a grant
+    # the generation never declared.
+    # Root slot budget: 205 -> 206. `object_allocator` gains
+    # `physical_provenance_is_freed_on_release_and_fails_closed_when_full`. The
+    # DMA join retained a frame's allocation-time physical base in a
+    # `[usize; MAX_ROOT_CSLOTS]` array -- 2 MB of `.bss`, and since the loader
+    # creates one root CSlot per `.bss` page, 512 root CSlots -- which dropped
+    # free slots to 2185 and made the boot plane's 2313-slot generation
+    # inadmissible. The replacement is bounded by the DMA-participating frame
+    # population instead, so unlike the array it can fill, and this test pins
+    # the three properties that makes load-bearing: a live frame's address is
+    # retrievable, a released frame's is not, and a full table refuses the
+    # allocation rather than losing a record and letting a device be handed
+    # some other frame's address.
+    expected=206
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

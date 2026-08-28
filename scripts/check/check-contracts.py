@@ -15,11 +15,15 @@ from harness import GENERATION_CONTRACT, ROOT
 
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-block-bindings.py"
+BLOCK_V2_CONTRACT = ROOT / "contracts" / "block" / "v2"
+BLOCK_V2_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-block-v2-bindings.py"
 COMPONENT_CONTRACT = ROOT / "contracts" / "component" / "v1"
 COMPONENT_V2_CONTRACT = ROOT / "contracts" / "component" / "v2"
 COMPONENT_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-component-bindings.py"
 STORE_CONTRACT = ROOT / "contracts" / "store" / "v1"
 STORE_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-store-bindings.py"
+IO_QUEUE_CONTRACT = ROOT / "contracts" / "io-queue" / "v1"
+IO_QUEUE_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-io-queue-bindings.py"
 FS_CONTRACT = ROOT / "contracts" / "fs" / "v1"
 FS_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-fs-bindings.py"
 GENERATION_MANAGEMENT_CONTRACT = ROOT / "contracts" / "generation-management" / "v1"
@@ -137,6 +141,13 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(BLOCK_V2_CONTRACT / "schema.zt"))
+run("check", str(BLOCK_V2_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(BLOCK_V2_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 
 run("check", str(COMPONENT_CONTRACT / "schema.zt"))
 run("check", str(COMPONENT_CONTRACT / "gen_rust.zt"))
@@ -146,6 +157,13 @@ subprocess.run(
     check=True,
 )
 
+run("check", str(IO_QUEUE_CONTRACT / "schema.zt"))
+run("check", str(IO_QUEUE_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(IO_QUEUE_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(STORE_CONTRACT / "schema.zt"))
 run("check", str(STORE_CONTRACT / "gen_rust.zt"))
 subprocess.run(

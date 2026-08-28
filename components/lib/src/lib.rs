@@ -11,3 +11,4 @@ pub mod fabric_visibility;
 pub mod generation_composition;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
+pub mod virtio_mmio;

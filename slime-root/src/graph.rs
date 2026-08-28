@@ -14,9 +14,10 @@ use crate::task::TaskId;
 use boot_contracts::generation::{
     RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BUFFER_CREATE, RIGHT_BUFFER_LOAN, RIGHT_BUFFER_MAP,
     RIGHT_BUFFER_WRITE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ,
-    RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_LIFECYCLE_RESTART,
-    RIGHT_PARAMETER_READ, RIGHT_PARAMETER_WRITE, RIGHT_RECV, RIGHT_SCHEDULING_PROMOTE, RIGHT_SEND,
-    RIGHT_SPAWN, RIGHT_SUPERVISE, RIGHT_TRANSFER,
+    RIGHT_DIRECTORY_WRITE, RIGHT_DMA_PIN, RIGHT_DMA_RELEASE, RIGHT_EXEC, RIGHT_INPUT_READ,
+    RIGHT_IRQ_ACK, RIGHT_LIFECYCLE_RESTART, RIGHT_MAP_MMIO, RIGHT_PARAMETER_READ,
+    RIGHT_PARAMETER_WRITE, RIGHT_RECV, RIGHT_SCHEDULING_PROMOTE, RIGHT_SEND, RIGHT_SPAWN,
+    RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 
 /// Logical capability slots one task may hold.
@@ -93,6 +94,10 @@ rights_type!(
     SharedBufferRights,
     RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN | RIGHT_TRANSFER
 );
+rights_type!(DeviceRights, RIGHT_MAP_MMIO);
+rights_type!(MmioRegionRights, RIGHT_MAP_MMIO);
+rights_type!(InterruptSourceRights, RIGHT_IRQ_ACK);
+rights_type!(DmaAccountRights, RIGHT_DMA_PIN | RIGHT_DMA_RELEASE);
 
 impl SharedBufferRights {
     pub const fn from_created_handle(handle: BufferHandle) -> Self {
@@ -158,6 +163,26 @@ pub struct LoanCapability {
     pub handle: LoanHandle,
     pub rights: LoanRights,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceCapability {
+    pub device: u8,
+    pub rights: DeviceRights,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MmioRegionCapability {
+    pub region: u8,
+    pub rights: MmioRegionRights,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InterruptSourceCapability {
+    pub source: u8,
+    pub rights: InterruptSourceRights,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DmaAccountCapability {
+    pub account: u8,
+    pub rights: DmaAccountRights,
+}
 
 /// One typed entry in a task-owned authority table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,6 +196,10 @@ pub enum CapabilityEntry {
     NativeEndpoint(NativeEndpointCapability),
     SharedBuffer(SharedBufferCapability),
     Loan(LoanCapability),
+    Device(DeviceCapability),
+    MmioRegion(MmioRegionCapability),
+    InterruptSource(InterruptSourceCapability),
+    DmaAccount(DmaAccountCapability),
 }
 
 impl CapabilityEntry {
@@ -246,6 +275,33 @@ impl CapabilityEntry {
             None => None,
         }
     }
+    pub const fn device(device: u8, rights: u64) -> Option<Self> {
+        match DeviceRights::from_bits(rights) {
+            Some(rights) => Some(Self::Device(DeviceCapability { device, rights })),
+            None => None,
+        }
+    }
+    pub const fn mmio_region(region: u8, rights: u64) -> Option<Self> {
+        match MmioRegionRights::from_bits(rights) {
+            Some(rights) => Some(Self::MmioRegion(MmioRegionCapability { region, rights })),
+            None => None,
+        }
+    }
+    pub const fn interrupt_source(source: u8, rights: u64) -> Option<Self> {
+        match InterruptSourceRights::from_bits(rights) {
+            Some(rights) => Some(Self::InterruptSource(InterruptSourceCapability {
+                source,
+                rights,
+            })),
+            None => None,
+        }
+    }
+    pub const fn dma_account(account: u8, rights: u64) -> Option<Self> {
+        match DmaAccountRights::from_bits(rights) {
+            Some(rights) => Some(Self::DmaAccount(DmaAccountCapability { account, rights })),
+            None => None,
+        }
+    }
 
     pub const fn kind_name(self) -> &'static str {
         match self {
@@ -258,6 +314,10 @@ impl CapabilityEntry {
             Self::NativeEndpoint(_) => "endpoint",
             Self::SharedBuffer(_) => "shared-buffer",
             Self::Loan(_) => "loan",
+            Self::Device(_) => "device",
+            Self::MmioRegion(_) => "mmio-region",
+            Self::InterruptSource(_) => "interrupt-source",
+            Self::DmaAccount(_) => "dma-account",
         }
     }
 
@@ -272,6 +332,10 @@ impl CapabilityEntry {
             Self::NativeEndpoint(cap) => cap.rights.bits(),
             Self::SharedBuffer(cap) => cap.rights.bits(),
             Self::Loan(cap) => cap.rights.bits(),
+            Self::Device(cap) => cap.rights.bits(),
+            Self::MmioRegion(cap) => cap.rights.bits(),
+            Self::InterruptSource(cap) => cap.rights.bits(),
+            Self::DmaAccount(cap) => cap.rights.bits(),
         }
     }
 
@@ -286,6 +350,10 @@ impl CapabilityEntry {
             Self::NativeEndpoint(cap) => cap.rights.allows(required),
             Self::Loan(cap) => cap.rights.allows(required),
             Self::SharedBuffer(cap) => cap.rights.allows(required),
+            Self::Device(cap) => cap.rights.allows(required),
+            Self::MmioRegion(cap) => cap.rights.allows(required),
+            Self::InterruptSource(cap) => cap.rights.allows(required),
+            Self::DmaAccount(cap) => cap.rights.allows(required),
         }
     }
 
@@ -351,6 +419,34 @@ impl CapabilityEntry {
                 Some(rights) => {
                     cap.rights = rights;
                     Some(Self::Loan(cap))
+                }
+                None => None,
+            },
+            Self::Device(mut cap) => match cap.rights.narrow(requested) {
+                Some(rights) => {
+                    cap.rights = rights;
+                    Some(Self::Device(cap))
+                }
+                None => None,
+            },
+            Self::MmioRegion(mut cap) => match cap.rights.narrow(requested) {
+                Some(rights) => {
+                    cap.rights = rights;
+                    Some(Self::MmioRegion(cap))
+                }
+                None => None,
+            },
+            Self::InterruptSource(mut cap) => match cap.rights.narrow(requested) {
+                Some(rights) => {
+                    cap.rights = rights;
+                    Some(Self::InterruptSource(cap))
+                }
+                None => None,
+            },
+            Self::DmaAccount(mut cap) => match cap.rights.narrow(requested) {
+                Some(rights) => {
+                    cap.rights = rights;
+                    Some(Self::DmaAccount(cap))
                 }
                 None => None,
             },

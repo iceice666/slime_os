@@ -1,5 +1,139 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AuthorityDevice {
+    pub(crate) region: usize,
+    pub(crate) offset: usize,
+}
+
+pub(crate) struct AuthorityInventory {
+    regions: [Option<device::DeviceRegion>; VIRTIO_MMIO_GRANULES],
+    devices: [Option<AuthorityDevice>; MAX_BLOCK_DEVICES],
+    irqs: [Option<device::DeviceIrq>; VIRTIO_MMIO_GRANULES],
+    len: usize,
+}
+
+impl AuthorityInventory {
+    pub const fn new() -> Self {
+        Self {
+            regions: [const { None }; VIRTIO_MMIO_GRANULES],
+            devices: [None; MAX_BLOCK_DEVICES],
+            irqs: [const { None }; VIRTIO_MMIO_GRANULES],
+            len: 0,
+        }
+    }
+    pub fn device(&self, index: usize) -> Option<AuthorityDevice> {
+        self.devices.get(index).copied().flatten()
+    }
+    pub fn region(&self, index: usize) -> Option<&device::DeviceRegion> {
+        self.regions.get(index)?.as_ref()
+    }
+    pub fn take_region(&mut self, index: usize) -> Option<device::DeviceRegion> {
+        self.regions.get_mut(index)?.take()
+    }
+    pub fn put_region(&mut self, index: usize, region: device::DeviceRegion) -> Result<(), ()> {
+        let slot = self.regions.get_mut(index).ok_or(())?;
+        if slot.is_some() {
+            return Err(());
+        }
+        *slot = Some(region);
+        Ok(())
+    }
+    pub fn unmap_region_at(&self, base: usize) -> Result<(), ()> {
+        self.regions
+            .iter()
+            .flatten()
+            .find(|region| region.mapped_base() == base)
+            .ok_or(())?
+            .unmap()
+            .map_err(|_| ())
+    }
+    pub fn take_irq(&mut self, index: usize) -> Option<device::DeviceIrq> {
+        self.irqs.get_mut(index)?.take()
+    }
+    pub fn irq(&self, index: usize) -> Option<&device::DeviceIrq> {
+        self.irqs.get(index)?.as_ref()
+    }
+    pub fn put_irq(&mut self, index: usize, irq: device::DeviceIrq) -> Result<(), ()> {
+        let slot = self.irqs.get_mut(index).ok_or(())?;
+        if slot.is_some() {
+            return Err(());
+        }
+        *slot = Some(irq);
+        Ok(())
+    }
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// Inventory attached transports without consuming them into the legacy root
+/// block driver. This path is selected only after generation admission says
+/// userspace hardware authority exists; the two ownership modes are exclusive.
+pub(crate) fn probe_authority_devices(
+    bootinfo: &sel4::BootInfo,
+    allocator: &mut ObjectAllocator,
+) -> AuthorityInventory {
+    let mut inventory = AuthorityInventory::new();
+    if allocator.device_untyped_count() == 0 {
+        return inventory;
+    }
+    let scan_base = ptr::addr_of!(DEVICE_PAGE) as usize;
+    if ScratchPage::claim(bootinfo, scan_base).is_err() {
+        return inventory;
+    }
+    for granule_index in 0..VIRTIO_MMIO_GRANULES {
+        let paddr = VIRTIO_MMIO_BASE + granule_index * GRANULE_SIZE;
+        let Ok(region) = device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            scan_base,
+            paddr,
+        ) else {
+            break;
+        };
+        let mut attached = [None; VIRTIO_MMIO_SLOTS_PER_GRANULE];
+        let mut attached_len = 0;
+        for slot in 0..VIRTIO_MMIO_SLOTS_PER_GRANULE {
+            if device::VirtioMmio::probe(&region, slot * VIRTIO_MMIO_STRIDE).is_some() {
+                attached[attached_len] = Some(slot * VIRTIO_MMIO_STRIDE);
+                attached_len += 1;
+            }
+        }
+        if attached_len == 0 {
+            let _ = region.unmap();
+            continue;
+        }
+        let standing_base = ptr::addr_of!(BLOCK_MMIO_PAGES) as usize + granule_index * GRANULE_SIZE;
+        if ScratchPage::claim(bootinfo, standing_base).is_err() {
+            break;
+        }
+        let Ok(region) = region.remap(sel4::init_thread::slot::VSPACE.cap(), standing_base) else {
+            break;
+        };
+        inventory.regions[granule_index] = Some(region);
+        for offset in attached.into_iter().flatten() {
+            if inventory.len < MAX_BLOCK_DEVICES {
+                inventory.devices[inventory.len] = Some(AuthorityDevice {
+                    region: granule_index,
+                    offset,
+                });
+                inventory.len += 1;
+            }
+        }
+    }
+    // QEMU assigns command-line devices from the highest transport down, so
+    // reverse physical order is the operator-visible stable device order.
+    inventory.devices[..inventory.len].sort_unstable_by_key(|entry| {
+        core::cmp::Reverse(entry.map_or(0, |d| d.region * GRANULE_SIZE + d.offset))
+    });
+    sel4::debug_println!(
+        "SLIME_ROOT io authority inventory devices={} mode=userspace",
+        inventory.len
+    );
+    inventory
+}
+
 /// Report what device authority BootInfo gives this root, and probe the
 /// platform's virtio-mmio transports (P5.4.2a).
 ///

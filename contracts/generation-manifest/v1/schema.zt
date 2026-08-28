@@ -160,6 +160,39 @@ PrivateMemoryBudgetEntry :: type {
   holder : Text;
   pageQuota : Int;
 };
+-- IO1 per-driver hardware-resource ceilings. The holder is the authenticated
+-- instance identity; omission denies every IO-resource operation.
+IoResourceBudgetEntry :: type {
+  holder : Text;
+  mmioBytes : Int;
+  mmioMappings : Int;
+  dmaPages : Int;
+  dmaMappings : Int;
+  irqSources : Int;
+  outstandingRequests : Int;
+  bufferLoans : Int;
+};
+
+-- IO4 exact destination authority and every bound the userspace network
+-- service may consume for that tuple. Address is either a dotted IPv4 literal,
+-- an IPv6 literal, or one exact DNS name according to `addressKind`; no field
+-- can express a prefix, range, wildcard, or resolver-wide grant.
+NetworkDestinationEntry :: type {
+  holder : Text;
+  transport : Text;
+  addressKind : Text;
+  address : Text;
+  port : Int;
+  rights : List Text;
+  queueDepth : Int;
+  byteBudget : Int;
+  timerBudget : Int;
+  retryLimit : Int;
+  reconnectLimit : Int;
+  socketLimit : Int;
+  listenerLimit : Int;
+  dnsRecordLimit : Int;
+};
 
 -- One instance's C9.1 root-brokered clock service authority. The four
 -- booleans are independent: a timer-only holder need not read either clock,
@@ -500,6 +533,14 @@ GenerationManifest :: type {
   -- that grants nobody working memory says so by omission instead of carrying
   -- an empty list it never reads.
   privateMemoryBudget? : List PrivateMemoryBudgetEntry;
+  -- Optional IO1 hardware-resource budget. Like the shared-buffer and private
+  -- memory budgets, this is emitted as an authenticated resource object;
+  -- absence and an empty list both deny every holder.
+  ioResourceBudget? : List IoResourceBudgetEntry;
+  -- Optional IO4 exact-destination table. Absent and empty both grant no
+  -- network destination. The authenticated resource object is readable only
+  -- by the declared network service; clients receive typed service authority.
+  networkDestinations? : List NetworkDestinationEntry;
   -- Optional C9.1 clock service authority. Absent and empty both deny every
   -- root-brokered clock operation; raw counter access is outside this service
   -- contract as documented by contracts/clock-authority/v1.
@@ -554,6 +595,7 @@ FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
 FromData @SharedBufferBudgetEntry :: derive
 FromData @PrivateMemoryBudgetEntry :: derive
+FromData @NetworkDestinationEntry :: derive
 FromData @FabricProfileInterposition :: derive
 FromData @FabricProfile :: derive
 FromData @FabricParticipant :: derive
@@ -586,6 +628,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   Instance =;
   SharedBufferBudgetEntry =;
   PrivateMemoryBudgetEntry =;
+  NetworkDestinationEntry =;
   ClockAuthorityEntry =;
   SchedulingClassBand =;
   SchedulingClassEntry =;

@@ -430,14 +430,13 @@ pub(super) fn serve_buffer_create(
         .ok_or(shared_buffer::SharedBufferError::BadSize)?;
     let mut adapter = BufferAdapter::new(allocator);
     let mut allocated = 0;
-    // `create` documents that a refused admission leaves the caller owning every
-    // anchor it supplied, so the frames are released here on both failure paths.
-    // A partial allocation is the same case seen earlier.
     let outcome = (|| {
-        for frame in requested.iter_mut() {
-            *frame = adapter
-                .allocate_frame()
-                .map_err(|_| shared_buffer::SharedBufferError::BytesExhausted)?;
+        let (first, _) = adapter
+            .allocator_mut()
+            .allocate_contiguous_granules(pages)
+            .map_err(|_| shared_buffer::SharedBufferError::BytesExhausted)?;
+        for (index, frame) in requested.iter_mut().enumerate() {
+            *frame = shared_buffer::FrameCap(first + index);
             allocated += 1;
         }
         let anchors = shared_buffer::FrameAnchors::from_slice(requested)?;

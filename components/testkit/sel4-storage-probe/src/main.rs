@@ -23,17 +23,8 @@
 use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 
 /// The block capability.
-///
-/// Slot 1, not 0: this component is not the bootstrap one, so the root numbers
-/// its generation-declared runtime grants above its executables — of which it
-/// has none — and the device is the first non-startup slot.
 const BLOCK_SLOT: u32 = 1;
 /// A slot holding no block capability, for the refusal arm.
-///
-/// Deliberately not slot 0: that one holds the run token, a real declared
-/// endpoint, so a `block_transact` against it would be refused for carrying the
-/// wrong *kind* rather than for holding nothing. Slot 2 is inside the table's
-/// bounds and this component is granted nothing there.
 const EMPTY_SLOT: u32 = 2;
 
 const SECTOR_BYTES: usize = 512;
@@ -64,8 +55,6 @@ fn main(_startup_arg: u32) {
     }
     slime_rt::debug_write(b"[sel4-storage-probe] sector 0 verified\n");
 
-    // Write, flush, read back. Three requests, each of which the capability's
-    // `blockWrite` right authorizes and the read-back independently confirms.
     let mut written = [0u8; SECTOR_BYTES];
     written[..SCRATCH_SIGNATURE.len()].copy_from_slice(SCRATCH_SIGNATURE);
     if write(SCRATCH_LBA, &written).status != 0 {
@@ -83,16 +72,12 @@ fn main(_startup_arg: u32) {
     }
     slime_rt::debug_write(b"[sel4-storage-probe] write flushed and verified\n");
 
-    // A sector past the device's capacity. The fixture is 1 MiB, so 2048
-    // sectors; the request is well-formed and the device bound refuses it.
     let mut discard = [0u8; SECTOR_BYTES];
     if read(1 << 40, &mut discard).status == 0 {
         fail(b"out-of-range accepted");
     }
     slime_rt::debug_write(b"[sel4-storage-probe] out-of-range refused\n");
 
-    // A malformed request: right shape, wrong magic. Refused before the driver
-    // sees it, so the error is the transport's rather than the device's.
     let mut malformed = request(block::OP_READ, 0);
     malformed.magic ^= 0xffff_ffff;
     let mut reply_bytes = [0u8; block::REPLY_LEN];
@@ -101,7 +86,6 @@ fn main(_startup_arg: u32) {
     }
     slime_rt::debug_write(b"[sel4-storage-probe] malformed refused\n");
 
-    // A slot holding no block capability at all.
     let plain = request(block::OP_READ, 0);
     if slime_rt::block_transact(EMPTY_SLOT, &plain.encode(), &mut reply_bytes) >= 0 {
         fail(b"ungranted slot accepted");
@@ -121,10 +105,6 @@ fn request(op: u8, lba: u64) -> WireBlockRequest {
         lba,
         sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
         buffer_pages: 1,
-        // Zero, deliberately: on seL4 the payload crosses in the transfer
-        // window, so there is no caller address for the root to dereference —
-        // and a root that honoured one would be reintroducing ambient
-        // addressing.
         buffer_phys: 0,
     }
 }
@@ -138,8 +118,6 @@ fn read(lba: u64, sector: &mut [u8; SECTOR_BYTES]) -> WireBlockReply {
         sector,
     ) < 0
     {
-        // A refusal is a legitimate answer for the out-of-range arm, so it is
-        // reported as a non-zero status rather than a failure here.
         return refused();
     }
     decode(&reply)
@@ -173,18 +151,11 @@ fn flush() -> WireBlockReply {
 }
 
 fn decode(reply: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    match WireBlockReply::decode(reply) {
-        Some(reply)
-            if reply.magic == block::BLOCK_MAGIC && reply.version == block::FORMAT_VERSION =>
-        {
-            reply
-        }
-        _ => fail(b"reply shape"),
-    }
+    WireBlockReply::decode(reply)
+        .filter(|reply| reply.magic == block::BLOCK_MAGIC && reply.version == block::FORMAT_VERSION)
+        .unwrap_or_else(|| fail(b"reply shape"))
 }
 
-/// The reply a refused transact stands for: a non-zero status the caller can
-/// test, rather than a decode of bytes the root never wrote.
 fn refused() -> WireBlockReply {
     WireBlockReply {
         magic: block::BLOCK_MAGIC,
