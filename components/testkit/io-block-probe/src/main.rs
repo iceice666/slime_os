@@ -75,16 +75,30 @@ fn main(_startup_arg: u32) {
     if notification_signal(request_ready) != ERR_SUCCESS {
         fail(b"request signal");
     }
-    let _ = slime_rt::notification_wait(completion_ready);
     let mut body = [0u8; COMPLETION_PAYLOAD_BYTES];
     let mut completed = 0;
-    while let Ok(completion) = queue.take_completion(&outstanding, &mut body) {
-        outstanding
-            .settle(completion.request_id, completion.status)
-            .unwrap_or_else(|_| fail(b"async settle"));
-        completed += 1;
+    // Drain until every admitted request has settled, rather than once behind a
+    // single wait. One wait observes whatever the driver has produced by then,
+    // which is a scheduling accident: the driver polls its notification and
+    // completes requests as it reaches them, so a client asserting a count must
+    // keep draining until its own outstanding table is empty.
+    while completed < IO0_SLOTS {
+        match queue.take_completion(&outstanding, &mut body) {
+            Ok(completion) => {
+                outstanding
+                    .settle(completion.request_id, completion.status)
+                    .unwrap_or_else(|_| fail(b"async settle"));
+                completed += 1;
+            }
+            Err(QueueError::Empty) => {
+                if slime_rt::notification_wait(completion_ready).is_err() {
+                    fail(b"completion wait");
+                }
+            }
+            Err(_) => fail(b"async completion"),
+        }
     }
-    if completed != IO0_SLOTS || !outstanding.is_empty() {
+    if !outstanding.is_empty() {
         fail(b"async completion count");
     }
     debug_write(b"[io-block-probe] async queued=8 completed=8 identities=8 overwrite=0\n");

@@ -1,6 +1,8 @@
 #![cfg_attr(not(test), no_std)]
 
 #[cfg(feature = "component-runtime")]
+pub mod block_io;
+#[cfg(feature = "component-runtime")]
 pub mod fabric_boot;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_matrix;

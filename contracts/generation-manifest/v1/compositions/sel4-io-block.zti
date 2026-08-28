@@ -53,6 +53,7 @@
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
     { id = "io-resource-budget"; kind = "resource"; size = 4096; };
     { id = "wait-set"; kind = "resource"; size = 4096; };
+    { id = "block-ring-authority"; kind = "resource"; size = 4096; };
     { id = "boot-layout"; kind = "resource"; size = 4096; };
   ];
   privateMemoryBudget = [];
@@ -62,6 +63,9 @@
   ];
   ioResourceBudget = [
     { holder = "virtio-blk-driver"; mmioBytes = 4096; mmioMappings = 1; dmaPages = 12; dmaMappings = 3; irqSources = 1; outstandingRequests = 8; bufferLoans = 4; };
+  ];
+  blockRingAuthority = [
+    { holder = "io-block-probe"; device = 1; ring = 0; rights = ["blockRead";"blockWrite";]; sectorLimit = 2048; };
   ];
   state = [];
   target = "aarch64-sel4-qemu-virt";

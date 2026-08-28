@@ -4,6 +4,7 @@
 use core::ptr;
 use core::sync::atomic::{Ordering, fence};
 
+use boot_contracts::block_authority::{self, BlockAuthority};
 use slime_components::virtio_mmio::{
     self, DESC_F_NEXT, DESC_F_WRITE, MediatedMmio, observe_used, publish_available,
     write_descriptor, write_u16,
@@ -13,15 +14,16 @@ use slime_proto::block_v2::{
     WireBlockRequest,
 };
 use slime_proto::io_queue::{
-    self, REQUEST_PAYLOAD_BYTES, STATUS_BAD_SLICE, STATUS_DEVICE_ERROR, STATUS_MALFORMED,
-    STATUS_OK, STATUS_UNSUPPORTED,
+    self, REQUEST_PAYLOAD_BYTES, STATUS_BAD_RIGHTS, STATUS_BAD_SLICE, STATUS_DEVICE_ERROR,
+    STATUS_MALFORMED, STATUS_OK, STATUS_UNSUPPORTED,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError};
 use slime_proto::{valid_block_v2_request, valid_buffer_slice};
 use slime_rt::{
-    DmaDirection, DmaMapping, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, capability_import,
-    debug_write, exit, io_device_bind, io_dma_map, io_queue_map, io_request_begin,
-    io_request_settle, notification_signal, resolve_binding, shared_buffer_loan_map, yield_now,
+    DmaDirection, DmaMapping, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, block_ring_authority_read,
+    capability_import, debug_write, exit, io_device_bind, io_dma_map, io_queue_map,
+    io_request_begin, io_request_settle, notification_signal, resolve_binding,
+    shared_buffer_loan_map, yield_now,
 };
 
 slime_rt::entry!(main);
@@ -45,11 +47,27 @@ const CONTROL_OFFSET: usize = 0x2000;
 const CONTROL_STRIDE: usize = 32;
 const VIRTIO_DEVICE_BLOCK: u32 = 2;
 const COMPLETION_POLLS: u32 = 100_000_000;
+/// Which device this driver's `io-block-device` grant names, and which IO0 ring
+/// its client's loan is. Both are the driver's own declared bindings, and both
+/// key the B83 authority table.
+const DEVICE_INDEX: u32 = 1;
+const RING_INDEX: u32 = 0;
+/// Authority rows one read may return. The generation declares at most one ring
+/// per client per device, and no plane wires more clients than this.
+const MAX_AUTHORITY_ROWS: usize = 8;
 
 fn main(_startup_arg: u32) {
-    let request_ready = binding(b"notification:io-block-request-ready+wait");
-    let completion_ready = binding(b"notification:io-block-completion-ready+signal");
-    let state_changed = binding(b"notification:io-block-state-changed+signal");
+    // Resolved by role and ordinal, not by grant name. A plane with two disks
+    // declares this service twice -- IO1 grants one device per driver instance
+    // -- and notification grant names are globally unique with exactly one
+    // waiter each, so the two instances are necessarily bound to
+    // differently-named grants. A driver naming one grant would serve only
+    // whichever instance received it. The ordinal is over this instance's own
+    // bindings by ascending slot, so the composition fixes the meaning:
+    // wait #0 is requests, signal #0 completions, signal #1 state changes.
+    let request_ready = binding(b"notification:@0+wait");
+    let completion_ready = binding(b"notification:@0+signal");
+    let state_changed = binding(b"notification:@1+signal");
     let device = io_device_bind(DEVICE_SLOT).unwrap_or_else(|_| fail(b"device bind"));
     let mmio = MediatedMmio::new(DEVICE_SLOT, MMIO_SLOT, device.epoch);
     let queue_dma = io_queue_map(
@@ -89,6 +107,13 @@ fn main(_startup_arg: u32) {
         unsafe { core::slice::from_raw_parts_mut(IO0_BASE as *mut u8, IO0_BYTES as usize) };
     let mut queue = Queue::attach(io0_bytes, IO0_SLOTS).unwrap_or_else(|_| fail(b"io0 attach"));
     let mut outstanding = Outstanding::<IO0_SLOTS>::new(queue.epoch());
+    // Read before announcing readiness: a driver that cannot tell a read-only
+    // ring from a read-write one must not accept a request, so this refuses the
+    // boot rather than serving without the gate.
+    let authority = Authority::read();
+    debug_write(b"[virtio-blk-driver] authority rings=");
+    debug_u64(authority.table().ring_count() as u64);
+    debug_write(b" rights=read,write source=generation\n");
     send_ready(capacity);
     debug_write(b"[virtio-blk-driver] ready capacity=");
     debug_u64(capacity);
@@ -96,44 +121,147 @@ fn main(_startup_arg: u32) {
     debug_u64(device.epoch);
     debug_write(b"\n");
 
-    // Single pass, not a loop: the peer provisions its whole request set behind
-    // one `request_ready` signal, `drain` settles all of it, and the only exit
-    // from `await_shutdown` is the peer's shutdown command. A lost peer diverges
-    // through `peer_dead`. There is no second iteration to reach.
-    if slime_rt::notification_wait(request_ready).is_err() {
-        peer_dead(
-            &mut queue,
-            &mut outstanding,
-            completion_ready,
-            state_changed,
-        );
-    }
-    drain(
-        &mut queue,
-        &mut outstanding,
+    // Serve until the peer says stop. B83's synchronous clients submit one
+    // request per signal and wait for that completion before the next, so a
+    // single drain pass would answer the first and leave the rest unanswered.
+    // The batch client (`io-block-probe`) is served identically: its whole set
+    // is provisioned behind one signal and one drain empties it.
+    //
+    // Both channels are *polled*, not waited on. Requests arrive on the
+    // notification and the shutdown command on the endpoint, and this driver
+    // has no wait set spanning the two: blocking on either one makes the other
+    // undeliverable. Parking in `notification_wait` leaves a client's blocking
+    // shutdown send with no receiver, and parking in `recv` leaves a later
+    // request's signal latched with nobody to observe it. Polling both and
+    // yielding is what lets one thread serve two sources.
+    //
+    // The shutdown send may block: a non-blocking receive still completes
+    // against a sender already parked on the endpoint, so the client blocks and
+    // this side polls.
+    //
+    // The virtqueue used-ring cursor, owned across every drain: the index is
+    // absolute and monotonic, so it cannot be re-derived per pass.
+    let mut used = 0u16;
+    let device = Device {
         mmio,
         queue_dma,
         data_read,
         data_write,
         capacity,
         completion_ready,
-    );
-    await_shutdown();
+        authority: &authority,
+        device_index: DEVICE_INDEX,
+        ring_index: RING_INDEX,
+    };
+    loop {
+        match slime_rt::notification_poll(request_ready) {
+            Ok(Some(_)) => drain(&mut queue, &mut outstanding, &device, &mut used),
+            Ok(None) => {}
+            Err(_) => peer_dead(
+                &mut queue,
+                &mut outstanding,
+                completion_ready,
+                state_changed,
+            ),
+        }
+        match peer_command() {
+            PeerCommand::None => {}
+            PeerCommand::Shutdown => {
+                // A final drain, on a *real* shutdown only. The poll and the
+                // receive are not one atomic step, so a request published
+                // between them is invisible to the poll above; without this the
+                // driver could exit leaving a live submission with no
+                // completion and its lease unsettled, which is exactly the leak
+                // this substrate exists to prevent.
+                //
+                // It converges because the client is synchronous: submit and
+                // shutdown are the same thread, so nothing can be published
+                // after the shutdown send.
+                drain(&mut queue, &mut outstanding, &device, &mut used);
+                break;
+            }
+            // Peer gone is NOT shutdown, and draining here would be a
+            // use-after-free: the root unmaps this driver's IO0 loan while
+            // reclaiming the dead client, so the ring bytes and its leases are
+            // already gone. `peer_dead` settles what it can and marks the ring
+            // `DRIVER_DEAD`, which is how a surviving client learns no further
+            // completion is coming instead of parking on a wait forever.
+            PeerCommand::PeerGone => peer_dead(
+                &mut queue,
+                &mut outstanding,
+                completion_ready,
+                state_changed,
+            ),
+        }
+        yield_now();
+    }
     debug_write(b"[virtio-blk-driver] peer complete, exiting\n");
     exit(0);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn drain(
-    queue: &mut Queue<'_>,
-    outstanding: &mut Outstanding<IO0_SLOTS>,
+/// What the peer endpoint is telling this driver.
+///
+/// Three answers, not two. Collapsing "the client asked me to stop" into "the
+/// client is gone" made the shutdown drain run after the root had already
+/// reclaimed the client and unmapped this driver's ring.
+enum PeerCommand {
+    None,
+    Shutdown,
+    PeerGone,
+}
+
+/// Poll the peer endpoint without blocking, so the request notification stays
+/// observable.
+fn peer_command() -> PeerCommand {
+    let mut message = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    match slime_rt::recv(PEER_SLOT, &mut message, &mut caps) {
+        slime_rt::ERR_WOULDBLOCK => PeerCommand::None,
+        1 if message[0] == 1 => PeerCommand::Shutdown,
+        result if result < 0 => PeerCommand::PeerGone,
+        _ => fail(b"shutdown command"),
+    }
+}
+
+/// Everything `drain` needs that does not change between requests.
+///
+/// A struct rather than eleven positional arguments: the mappings, the two DMA
+/// directions, and the authority triple are each easy to transpose at a call
+/// site, and a transposed `data_read`/`data_write` would program the device to
+/// write into a buffer it was meant to read.
+struct Device<'a> {
     mmio: MediatedMmio,
     queue_dma: DmaMapping,
     data_read: DmaMapping,
     data_write: DmaMapping,
     capacity: u64,
     completion_ready: u32,
+    authority: &'a Authority,
+    /// Which device and which IO0 ring this driver serves. The pair the
+    /// authority table is keyed by, taken from this driver's own declared
+    /// bindings rather than from any submission: a request naming its own ring
+    /// would be a client asserting its own authority.
+    device_index: u32,
+    ring_index: u32,
+}
+
+fn drain(
+    queue: &mut Queue<'_>,
+    outstanding: &mut Outstanding<IO0_SLOTS>,
+    device: &Device<'_>,
+    used: &mut u16,
 ) {
+    let Device {
+        mmio,
+        queue_dma,
+        data_read,
+        data_write,
+        capacity,
+        completion_ready,
+        authority,
+        device_index,
+        ring_index,
+    } = *device;
     let mut payload = [0u8; REQUEST_PAYLOAD_BYTES];
     loop {
         let submission = match queue.take_request(&mut payload, DATA_BYTES) {
@@ -164,6 +292,18 @@ fn drain(
                 malformed_reply(request.op),
                 completion_ready,
             );
+            continue;
+        }
+        // Shape first, then authority. A request whose magic, opcode, or slice
+        // is wrong is malformed before it is unauthorized, and answering it
+        // `STATUS_BAD_RIGHTS` would tell a caller its bytes were well-formed.
+        //
+        // This is the gate the root applied per request against the
+        // badge-derived caller's own capability. Here it is the ring's declared
+        // authority instead, because a ring is shared memory and a submission
+        // carries no rights identity to derive one from.
+        if !authority.allows(device_index, ring_index, &request) {
+            refuse_bad_rights(queue, submission.request_id, request.op, completion_ready);
             continue;
         }
         if request.op == block_v2::OP_GEOMETRY {
@@ -218,7 +358,14 @@ fn drain(
             );
             continue;
         }
-        let outcome = execute(mmio, queue_dma, mapping, submission.slice.offset, &request);
+        let outcome = execute(
+            mmio,
+            queue_dma,
+            mapping,
+            submission.slice.offset,
+            &request,
+            used,
+        );
         let _ = io_request_settle(DMA_SLOT, mapping, submission.request_id);
         let settled = outstanding
             .settle(submission.request_id, outcome.status)
@@ -243,12 +390,21 @@ struct Outcome {
     payload: [u8; block_v2::REPLY_LEN],
 }
 
+/// Program one request and wait for the device to retire it.
+///
+/// `used` is the client-side used-ring cursor, advanced by one on every
+/// completion this observes. It must persist across requests: the used index is
+/// absolute and monotonic, so comparing it against zero answers "has the device
+/// ever completed anything", not "has it completed *this*". A driver serving one
+/// batch behind a single signal never noticed; one serving a synchronous client
+/// reads its predecessor's completion on the second request.
 fn execute(
     mmio: MediatedMmio,
     queue_dma: DmaMapping,
     data_dma: DmaMapping,
     slice_offset: u64,
     request: &WireBlockRequest,
+    used: &mut u16,
 ) -> Outcome {
     let queue = unsafe {
         core::slice::from_raw_parts_mut(
@@ -275,24 +431,38 @@ fn execute(
     queue[control + 16] = 0xff;
     let control_iova = queue_dma.iova + control as u64;
     let bytes = request.sector_count as u64 * block_v2::SECTOR_BYTES as u64;
-    if !write_descriptor(queue, 0, 0, control_iova, 16, DESC_F_NEXT, 1)
-        || !write_descriptor(
+    // FLUSH moves no bytes, so it is a two-descriptor chain. A zero-length data
+    // descriptor is not a smaller transfer -- virtio rejects it -- and the batch
+    // client never issued a flush, so this path had no coverage until a
+    // synchronous client used it.
+    let chained = if request.op == block_v2::OP_FLUSH {
+        write_descriptor(queue, 0, 0, control_iova, 16, DESC_F_NEXT, 1)
+            && write_descriptor(queue, 0, 1, control_iova + 16, 1, DESC_F_WRITE, 0)
+    } else {
+        write_descriptor(queue, 0, 0, control_iova, 16, DESC_F_NEXT, 1)
+            && write_descriptor(
+                queue,
+                0,
+                1,
+                data_dma.iova + slice_offset,
+                bytes as u32,
+                DESC_F_NEXT
+                    | if request.op == block_v2::OP_READ {
+                        DESC_F_WRITE
+                    } else {
+                        0
+                    },
+                2,
+            )
+            && write_descriptor(queue, 0, 2, control_iova + 16, 1, DESC_F_WRITE, 0)
+    };
+    if !chained
+        || !write_u16(
             queue,
+            AVAIL_OFFSET + 4 + 2 * (*used as usize % VIRTQUEUE_SIZE),
             0,
-            1,
-            data_dma.iova + slice_offset,
-            bytes as u32,
-            DESC_F_NEXT
-                | if request.op == block_v2::OP_READ {
-                    DESC_F_WRITE
-                } else {
-                    0
-                },
-            2,
         )
-        || !write_descriptor(queue, 0, 2, control_iova + 16, 1, DESC_F_WRITE, 0)
-        || !write_u16(queue, AVAIL_OFFSET + 4, 0)
-        || !publish_available(queue, AVAIL_OFFSET + 2, 1)
+        || !publish_available(queue, AVAIL_OFFSET + 2, used.wrapping_add(1))
     {
         return Outcome {
             status: STATUS_DEVICE_ERROR,
@@ -302,7 +472,8 @@ fn execute(
     }
     mmio.notify_queue(0);
     for _ in 0..COMPLETION_POLLS {
-        if observe_used(queue, USED_OFFSET + 2).unwrap_or(0) != 0 {
+        if observe_used(queue, USED_OFFSET + 2).unwrap_or(*used) != *used {
+            *used = used.wrapping_add(1);
             mmio.acknowledge_interrupts();
             fence(Ordering::Acquire);
             let status = unsafe { ptr::read_volatile(queue.as_ptr().add(control + 16)) };
@@ -343,6 +514,87 @@ fn slice_matches(slice: &io_queue::WireBufferSlice, request: &WireBlockRequest) 
         block_v2::OP_FLUSH | block_v2::OP_GEOMETRY => slice.direction == io_queue::DIRECTION_NONE,
         _ => false,
     }
+}
+
+/// The authenticated per-ring authority this driver serves (B83).
+///
+/// Read once at start from the generation resource, through the root's
+/// identity-gated paged path. Held decoded for the driver's lifetime because
+/// the generation cannot change under a running driver: a new generation is a
+/// new boot, and a restart re-reads it under a fresh epoch.
+struct Authority {
+    bytes: [u8; block_authority::HEADER_BYTES + MAX_AUTHORITY_ROWS * block_authority::ENTRY_BYTES],
+    len: usize,
+}
+
+impl Authority {
+    /// Read and validate the table. A generation declaring none is fatal rather
+    /// than permissive: a driver that cannot tell a read-only ring from a
+    /// read-write one must not serve either.
+    fn read() -> Self {
+        let mut bytes = [0u8; block_authority::HEADER_BYTES
+            + MAX_AUTHORITY_ROWS * block_authority::ENTRY_BYTES];
+        bytes[..8].copy_from_slice(&block_authority::MAGIC);
+        bytes[8..12].copy_from_slice(&block_authority::FORMAT_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(block_authority::HEADER_BYTES as u32).to_le_bytes());
+        let rows = block_ring_authority_read(0, &mut bytes[block_authority::HEADER_BYTES..])
+            .unwrap_or_else(|_| fail(b"block authority read"));
+        let len = block_authority::HEADER_BYTES + rows * block_authority::ENTRY_BYTES;
+        bytes[24..28].copy_from_slice(&(rows as u32).to_le_bytes());
+        bytes[28..32].copy_from_slice(&(len as u32).to_le_bytes());
+        // Decoded here only to refuse a malformed table before serving; the
+        // borrow cannot be kept alongside the owning array, so each lookup
+        // re-decodes validated bytes.
+        BlockAuthority::decode(&bytes[..len]).unwrap_or_else(|_| fail(b"block authority decode"));
+        Self { bytes, len }
+    }
+
+    fn table(&self) -> BlockAuthority<'_> {
+        BlockAuthority::decode(&self.bytes[..self.len]).expect("validated at start")
+    }
+
+    /// Whether `ring`, on `device`, may perform `op` over `lba..lba + count`.
+    ///
+    /// The gate the root used to apply per request against the badge-derived
+    /// caller's capability. `GEOMETRY` needs read authority: capacity is
+    /// information about the medium, and a ring granted nothing must not learn
+    /// it. An unknown opcode is refused here rather than treated as
+    /// unauthorized, because it is malformed before it is unauthorized.
+    fn allows(&self, device: u32, ring: u32, request: &WireBlockRequest) -> bool {
+        let table = self.table();
+        let right = match request.op {
+            block_v2::OP_READ | block_v2::OP_GEOMETRY => block_authority::Right::Read,
+            block_v2::OP_WRITE | block_v2::OP_FLUSH => block_authority::Right::Write,
+            _ => return false,
+        };
+        match request.op {
+            // A range request is bounded by the ring's declared sector ceiling
+            // as well as its rights, so a granted ring cannot reach a sector
+            // the generation did not give it.
+            block_v2::OP_READ | block_v2::OP_WRITE => {
+                table.authorizes_range(device, ring, right, request.lba, request.sector_count)
+            }
+            _ => table.authorizes(device, ring, right),
+        }
+    }
+}
+
+/// Answer an unauthorized submission.
+///
+/// No settlement, because the request was refused *before* `admit`: it holds no
+/// outstanding entry and retains no lease, so there is nothing to release. This
+/// is the same shape the malformed and bad-slice refusals use, and it is why the
+/// authority gate sits ahead of admission — an unauthorized request must not
+/// charge an outstanding-request slot against the driver's IO1 budget.
+fn refuse_bad_rights(queue: &mut Queue<'_>, request_id: u64, op: u8, completion_ready: u32) {
+    complete(
+        queue,
+        request_id,
+        STATUS_BAD_RIGHTS,
+        0,
+        reply(op, 0, DEVICE_STATUS_IO_ERR, 0),
+        completion_ready,
+    );
 }
 
 fn settle_device_error(
@@ -428,18 +680,6 @@ fn send_ready(capacity: u64) {
             slime_rt::ERR_WOULDBLOCK => yield_now(),
             ERR_SUCCESS => return,
             _ => fail(b"ready send"),
-        }
-    }
-}
-
-fn await_shutdown() {
-    let mut message = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(PEER_SLOT, &mut message, &mut caps) {
-            slime_rt::ERR_WOULDBLOCK => yield_now(),
-            1 if message[0] == 1 => return,
-            _ => fail(b"shutdown command"),
         }
     }
 }
