@@ -2,166 +2,37 @@
   bootAction = "storage";
   bootstrapInstance = "init";
   executables = [
-    {
-      commandProfile = [];
-      name = "init";
-      object = "sha256:init";
-      role = "init";
-      spawnBudget = 1;
-    };
-    {
-      commandProfile = [];
-      name = "sel4-storage-probe";
-      object = "sha256:sel4-storage-probe";
-      role = "application";
-      spawnBudget = 0;
-    };
+    { commandProfile = []; name = "init"; object = "sha256:init"; role = "init"; spawnBudget = 1; };
+    { commandProfile = []; name = "sel4-storage-probe"; object = "sha256:sel4-storage-probe"; role = "application"; spawnBudget = 0; };
   ];
   formatVersion = 1;
   generation = 23;
   grants = [
-    {
-      name = "init-sel4-storage-probe";
-      capabilityKind = "executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
-      source = "init";
-      target = "sel4-storage-probe";
-      transferable = false;
-    };
-    {
-      name = "storage-probe-device";
-      capabilityKind = "block";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "sel4-storage-probe";
-      target = "sel4-storage-probe";
-      transferable = false;
-    };
-    {
-      name = "storage-probe-device-idle";
-      capabilityKind = "block";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "sel4-storage-probe-idle";
-      target = "sel4-storage-probe-idle";
-      transferable = false;
-    };
-    {
-      name = "sel4-storage-probe-run-token";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "init";
-      target = "sel4-storage-probe";
-      transferable = false;
-    };
-    {
-      name = "sel4-storage-probe-idle-token";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "sel4-storage-probe-idle";
-      target = "sel4-storage-probe-idle";
-      transferable = false;
-    };
+    { name = "init-sel4-storage-probe"; capabilityKind = "executable"; rights = ["exec";"spawn";]; source = "init"; target = "sel4-storage-probe"; transferable = false; };
+    { name = "storage-init-buffer-factory"; capabilityKind = "sharedBufferFactory"; rights = ["bufferCreate";]; source = "init"; target = "init"; transferable = false; };
+    { name = "storage-probe-buffer-factory"; capabilityKind = "sharedBufferFactory"; rights = ["bufferCreate";]; source = "init"; target = "sel4-storage-probe"; transferable = false; };
+    { name = "storage-probe-device"; capabilityKind = "block"; rights = ["blockRead";"blockWrite";]; source = "sel4-storage-probe"; target = "sel4-storage-probe"; transferable = false; };
+    { name = "storage-probe-device-idle"; capabilityKind = "block"; rights = ["blockRead";"blockWrite";]; source = "sel4-storage-probe-idle"; target = "sel4-storage-probe-idle"; transferable = false; };
+    { name = "sel4-storage-probe-run-token"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "init"; target = "sel4-storage-probe"; transferable = false; };
+    { name = "sel4-storage-probe-idle-token"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "sel4-storage-probe-idle"; target = "sel4-storage-probe-idle"; transferable = false; };
   ];
-  health = {
-    bootAttempts = 3;
-    requiredInstances = [
-      "init";
-    ];
-  };
+  health = { bootAttempts = 3; requiredInstances = ["init";]; };
   instances = [
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "init-sel4-storage-probe";
-          slot = 1;
-        };
-        {
-          grant = "sel4-storage-probe-run-token";
-          slot = 2;
-        };
-      ];
-      dependencies = [];
-      executable = "init";
-      health = "required";
-      name = "init";
-      owner = "root";
-    };
-    {
-      autostart = false;
-      bindings = [
-        {
-          grant = "storage-probe-device";
-          slot = 1;
-        };
-        {
-          grant = "sel4-storage-probe-run-token";
-          slot = 0;
-        };
-      ];
-      dependencies = [
-        "init";
-      ];
-      executable = "sel4-storage-probe";
-      health = "optional";
-      name = "sel4-storage-probe";
-      owner = "init";
-    };
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "storage-probe-device-idle";
-          slot = 1;
-        };
-        {
-          grant = "sel4-storage-probe-idle-token";
-          slot = 0;
-        };
-      ];
-      dependencies = [
-        "init";
-      ];
-      executable = "sel4-storage-probe";
-      health = "optional";
-      name = "sel4-storage-probe-idle";
-      owner = "root";
-    };
+    { autostart = true; bindings = [ { grant = "init-sel4-storage-probe"; slot = 1; }; { grant = "sel4-storage-probe-run-token"; slot = 2; }; { grant = "storage-init-buffer-factory"; slot = 4; }; ]; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
+    { autostart = false; bindings = [ { grant = "storage-probe-device"; slot = 1; }; { grant = "sel4-storage-probe-run-token"; slot = 0; }; { grant = "storage-probe-buffer-factory"; slot = 3; }; ]; dependencies = ["init";]; executable = "sel4-storage-probe"; health = "optional"; name = "sel4-storage-probe"; owner = "init"; };
+    { autostart = true; bindings = [ { grant = "storage-probe-device-idle"; slot = 1; }; { grant = "sel4-storage-probe-idle-token"; slot = 0; }; ]; dependencies = ["init";]; executable = "sel4-storage-probe"; health = "optional"; name = "sel4-storage-probe-idle"; owner = "root"; };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
   objects = [
-    {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
-    };
-    {
-      id = "sha256:sel4-storage-probe";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:sel4-storage-probe"; kind = "component"; size = 65536; };
+    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
   ];
-  sharedBufferBudget = [];
+  sharedBufferBudget = [
+    { bufferCount = 2; bytePages = 10; holder = "sel4-storage-probe"; loanCount = 2; mappingCount = 2; };
+  ];
   state = [];
   target = "aarch64-sel4-qemu-virt";
 }

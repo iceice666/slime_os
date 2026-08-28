@@ -667,18 +667,46 @@ fn drive_store_plane() {
         b"[init] store probe spawned\n",
         b"store",
         Some(2),
+        &[],
     );
 }
 
 /// Drive the P5.4.2c storage plane: spawn the probe holding its block
 /// capability and require a clean exit.
+///
+/// The probe's crossing grant is its shared-buffer factory. IO2's storage plane
+/// reaches its device through the IO0 rings rather than a root-mediated
+/// `BlockTransact`, and a ring is a shared buffer the client allocates, so the
+/// factory is authority the probe cannot hold in its own right: `init` is the
+/// declared source. The driver endpoint is *not* here and must not be --
+/// `grant_crosses_spawn` excludes endpoint grants because the root installs
+/// both declared ends itself.
 fn drive_storage_plane() {
     drive_probe_plane_with_token(
         resolve_executable(b"executable:sel4-storage-probe"),
         b"[init] storage probe spawned\n",
         b"storage",
         Some(2),
+        &crossing_factory(b"storage-init-buffer-factory"),
     );
+}
+
+/// The one crossing spawn grant a storage-family probe declares: init's own
+/// shared-buffer factory, narrowed to exactly `bufferCreate`.
+///
+/// Resolved by *grant name* rather than by `kind:sharedBufferFactory+bufferCreate`,
+/// on the rule [`resolve_own_buffer_factory`] documents: a role query refuses
+/// where a generation binds init more than one factory, and which factory a
+/// child allocates from is a graph fact the manifest states. The name is init's
+/// own binding, so the root answers only from init's list.
+///
+/// Returned by value rather than as a `const`: the slot is a number this
+/// generation chose and the root reports, so nothing here compiles a slot in.
+fn crossing_factory(name: &[u8]) -> [SpawnGrant; 1] {
+    [grant(
+        slime_rt::resolve_binding(name).unwrap_or_else(|_| slime_rt::exit(1)),
+        RIGHT_BUFFER_CREATE,
+    )]
 }
 
 /// Spawn one probe holding its generation-granted device capability and require
@@ -689,6 +717,11 @@ fn drive_storage_plane() {
 /// happens inside the probe, against a real device, through a capability the
 /// generation placed — so init's part is to hand it over and observe the
 /// outcome.
+/// `grants` is the exact crossing-grant vector this plane's manifest declares
+/// for the probe, matched positionally against ascending declared slot. The
+/// count must equal what `preflight_spawn_grants` derives from the generation or
+/// the root refuses the spawn with nothing constructed; a plane whose probe
+/// holds all its authority in its own right passes an empty slice.
 ///
 /// `run_token` names a declared endpoint to the spawned instance, for a plane
 /// that declares its probe executable twice: the instance init spawns and a
@@ -701,9 +734,10 @@ fn drive_probe_plane_with_token(
     spawned_marker: &[u8],
     plane: &'static [u8],
     run_token: Option<u32>,
+    grants: &[SpawnGrant],
 ) {
     let probe =
-        slime_rt::spawn(executable, &[]).unwrap_or_else(|_| fail_plane(plane, b"spawn probe"));
+        slime_rt::spawn(executable, grants).unwrap_or_else(|_| fail_plane(plane, b"spawn probe"));
     slime_rt::debug_write(spawned_marker);
     if let Some(slot) = run_token
         && slime_rt::send(slot, b"run", &[]) != slime_rt::ERR_SUCCESS

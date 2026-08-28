@@ -12,7 +12,9 @@ use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
+use boot_contracts::io_resource::{self, IoResourceBudget};
 use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
+use boot_contracts::network_destination::{self, NetworkDestinations};
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
 use boot_contracts::recording_policy::{self, RecordingPolicy};
 use boot_contracts::scheduling_class::{self, SchedulingClass};
@@ -85,6 +87,9 @@ pub enum GenerationError {
     /// before any component launches — a quota the root cannot honour must not
     /// become a runtime refusal against a ceiling the generation promised.
     UnsatisfiablePrivateMemoryBudget,
+    /// The generation carries an IO-resource budget that is malformed or asks
+    /// for aggregate/per-driver ceilings this root cannot honour (IO1).
+    UnsatisfiableIoResourceBudget,
     /// The generation carries clock authority that is malformed or asks for
     /// more live timers than this root can provision (C9.1).
     UnsatisfiableClockAuthority,
@@ -545,6 +550,60 @@ pub fn private_memory_budget_object<'a>(
             && object.bytes[..private_memory_budget::MAGIC.len()] == private_memory_budget::MAGIC
         {
             return Some(PrivateMemoryBudget::decode(object.bytes));
+        }
+    }
+    None
+}
+pub fn io_resource_budget_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<IoResourceBudget<'a>, io_resource::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= io_resource::MAGIC.len()
+            && object.bytes[..io_resource::MAGIC.len()] == io_resource::MAGIC
+        {
+            return Some(IoResourceBudget::decode(object.bytes));
+        }
+    }
+    None
+}
+
+fn io_resource_budget_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<usize>, GenerationError> {
+    let Some(budget) = io_resource_budget_object(generation) else {
+        return Ok(None);
+    };
+    let budget = budget.map_err(|_| GenerationError::UnsatisfiableIoResourceBudget)?;
+    budget
+        .validate_against(io_resource::DriverQuota {
+            driver_identity: [0; 32],
+            mmio_bytes: crate::io_resource::MAX_MMIO_MAPPINGS as u32
+                * crate::io_resource::PAGE_SIZE,
+            mmio_mappings: crate::io_resource::MAX_MMIO_MAPPINGS as u32,
+            dma_pages: crate::io_resource::MAX_DMA_MAPPINGS as u32,
+            dma_mappings: crate::io_resource::MAX_DMA_MAPPINGS as u32,
+            irq_sources: crate::io_resource::MAX_IRQ_SOURCES as u32,
+            outstanding_requests: crate::io_resource::MAX_REQUESTS as u32,
+            buffer_loans: crate::io_resource::MAX_LEASES as u32,
+        })
+        .map_err(|_| GenerationError::UnsatisfiableIoResourceBudget)?;
+    Ok(Some(budget.driver_count()))
+}
+
+/// Locate the authenticated IO4 destination table. The root decodes it only
+/// to bound and page authenticated bytes; destination policy remains userspace.
+pub(crate) fn network_destinations_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<NetworkDestinations<'a>, network_destination::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= network_destination::MAGIC.len()
+            && object.bytes[..network_destination::MAGIC.len()] == network_destination::MAGIC
+        {
+            return Some(NetworkDestinations::decode(object.bytes));
         }
     }
     None
@@ -1229,6 +1288,7 @@ pub struct Admission {
     /// both deny every component, but only the second means the generation
     /// carries a budget resource whose contents a gate can check.
     pub private_memory_holders: Option<usize>,
+    pub io_resource_drivers: Option<usize>,
     /// Wake sources named by the authenticated wait-set resource, or `None` when
     /// the generation declares none at all (C9.2).
     ///
@@ -1305,6 +1365,7 @@ impl Admission {
         // fails the whole generation rather than becoming a refusal against a
         // ceiling the generation promised a component it had.
         let private_memory_holders = private_memory_budget_admission(generation)?;
+        let io_resource_drivers = io_resource_budget_admission(generation)?;
         // C9.1: validate the authority resource and every timer-delivery
         // binding before any instance launches. The runtime authority table is
         // separately bounded by the concurrently live TaskTable.
@@ -1402,6 +1463,7 @@ impl Admission {
             fabric_interpositions: fabric.map_or(0, |shape| shape.interpositions),
             fabric_capability_slots: fabric.map_or(0, |shape| shape.capability_slots),
             private_memory_holders,
+            io_resource_drivers,
             wait_set_sources,
             scheduling_instances,
             lifecycle_restarts,
@@ -1564,6 +1626,62 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
     Ok(())
 }
 
+/// Whether a grant-backed binding is one the child's *owner* must supply at
+/// spawn.
+///
+/// Two classes are excluded, and both are authority the root places itself:
+///
+/// * an **endpoint**, which is a generation-owned seL4 Endpoint object the root
+///   materializes and installs into both declared ends, and
+/// * a **self-loop**, whose source and target are the child itself — authority
+///   it holds in its own right, installed by `construct_child`.
+///
+/// Neither crosses the spawn boundary, so neither is counted in the total a
+/// request must match nor given a position in the ordering that pairs requests
+/// with declarations. Those two must agree: a count that skips a declaration the
+/// ordering still numbers makes every child holding one unspawnable, because the
+/// request at index 0 resolves to a declaration its owner was never asked for.
+///
+/// Lives here rather than beside the dispatcher because it is a pure rule over
+/// decoded generation data, and because it is the rule two IO2 passes misread:
+/// the first concluded the root could not carry a crossing grant at all. It can,
+/// and [`declared_crossing_grants`] is the number an owner must supply.
+pub fn grant_crosses_spawn(
+    grant: boot_contracts::generation::Grant<'_>,
+    child_instance: usize,
+) -> bool {
+    use boot_contracts::generation::{CapabilityKind, GrantEndpoint};
+    grant.capability_kind != CapabilityKind::Endpoint
+        && (grant.source != GrantEndpoint::Instance(child_instance)
+            || grant.target != GrantEndpoint::Instance(child_instance))
+}
+
+/// How many crossing grants the generation declares for `child_instance` — the
+/// exact vector length its owner must pass at spawn.
+///
+/// This is the authority on "how many", and the only one: a spawn supplying a
+/// different count is refused with nothing constructed. It deliberately counts
+/// *declarations* rather than trusting a request, which is what makes widening
+/// unrepresentable — an owner cannot add a grant the generation never declared,
+/// because there is no index for it to occupy.
+pub fn declared_crossing_grants(
+    generation: &Generation<'_>,
+    child: Instance<'_>,
+    child_instance: usize,
+) -> Result<usize, DecodeError> {
+    let mut crossing = 0;
+    for index in 0..child.binding_count() {
+        let binding = generation.binding(child, index)?;
+        let grant = generation.grant(binding.grant)?;
+        crossing += usize::from(grant_crosses_spawn(grant, child_instance));
+    }
+    for index in 0..generation.minted_binding_count() {
+        let minted = generation.minted_binding(index)?;
+        crossing += usize::from(minted.holder == child_instance);
+    }
+    Ok(crossing)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1576,6 +1694,109 @@ mod tests {
 
     use super::admit_resource_quota;
     use crate::child_vspace::{MAX_CHILD_IMAGE_PAGES, MAX_CHILD_THREADS};
+
+    /// One declared grant, for the crossing-grant rule below.
+    fn declared_grant(
+        kind: boot_contracts::generation::CapabilityKind,
+        source: usize,
+        target: usize,
+    ) -> boot_contracts::generation::Grant<'static> {
+        use boot_contracts::generation::GrantEndpoint;
+        boot_contracts::generation::Grant {
+            name: "fixture:grant",
+            source: GrantEndpoint::Instance(source),
+            target: GrantEndpoint::Instance(target),
+            rights: RIGHT_SEND,
+            transferable: false,
+            capability_kind: kind,
+        }
+    }
+
+    /// The rule that decides which declarations an owner must supply at spawn,
+    /// and the one two IO2 passes misread.
+    ///
+    /// The first pass concluded the root could not carry a crossing grant to a
+    /// dynamically spawned child at all, and reverted a working migration on
+    /// that basis. It can: a grant whose source is the owner and whose target
+    /// is the child *does* cross, and is exactly what the owner passes. What
+    /// does not cross is an endpoint (the root installs both declared ends) or
+    /// a self-loop (the child holds it in its own right). Both exclusions are
+    /// authority the root places, so counting them would demand a vector no
+    /// owner can produce -- which is the `requested=0 parent=N` refusal that
+    /// cost those passes.
+    #[test]
+    fn only_owner_supplied_authority_crosses_a_spawn() {
+        use boot_contracts::generation::CapabilityKind;
+        const CHILD: usize = 1;
+        const OWNER: usize = 0;
+
+        // Crosses: the owner is the declared source, the child the target. This
+        // is the case the previous passes believed impossible.
+        assert!(super::grant_crosses_spawn(
+            declared_grant(CapabilityKind::SharedBufferFactory, OWNER, CHILD),
+            CHILD,
+        ));
+
+        // Does not cross: the child's own authority, installed by the root.
+        assert!(!super::grant_crosses_spawn(
+            declared_grant(CapabilityKind::Block, CHILD, CHILD),
+            CHILD,
+        ));
+
+        // Does not cross: an endpoint, even owner-to-child. The root
+        // materializes the Endpoint object and installs it into both ends, so
+        // an owner holds nothing to hand over.
+        assert!(!super::grant_crosses_spawn(
+            declared_grant(CapabilityKind::Endpoint, OWNER, CHILD),
+            CHILD,
+        ));
+
+        // ...and not even a self-loop endpoint, which is how an `idle`
+        // duplicate instance declares its own run token.
+        assert!(!super::grant_crosses_spawn(
+            declared_grant(CapabilityKind::Endpoint, CHILD, CHILD),
+            CHILD,
+        ));
+    }
+
+    /// A spawn cannot widen authority, expressed as a property of the count.
+    ///
+    /// `declared_crossing_grants` counts *declarations*, and `preflight_spawn_grants`
+    /// admits a request only when its length equals that number and each record
+    /// resolves to the declaration at its index. So an owner has no index at
+    /// which to place a grant the generation never declared: widening is
+    /// unrepresentable rather than merely refused. This pins the direction that
+    /// matters -- a grant reaching a child because the manifest declared it, not
+    /// because its owner asked.
+    #[test]
+    fn a_declaration_the_root_places_is_never_charged_to_the_owner() {
+        use boot_contracts::generation::CapabilityKind;
+        const CHILD: usize = 1;
+        const OWNER: usize = 0;
+
+        // Every kind the root places itself, against the same child. None may
+        // be counted, because none is a capability its owner could pass.
+        for kind in [
+            CapabilityKind::Block,
+            CapabilityKind::Device,
+            CapabilityKind::MmioRegion,
+            CapabilityKind::InterruptSource,
+            CapabilityKind::DmaAccount,
+        ] {
+            assert!(
+                !super::grant_crosses_spawn(declared_grant(kind, CHILD, CHILD), CHILD),
+                "a child's own {kind:?} authority is placed by the root, not passed at spawn",
+            );
+        }
+
+        // The converse, so this is not passing by refusing everything: the
+        // storage family's factory grant is owner-supplied and must be counted,
+        // or its holder becomes unspawnable.
+        assert!(super::grant_crosses_spawn(
+            declared_grant(CapabilityKind::SharedBufferFactory, OWNER, CHILD),
+            CHILD,
+        ));
+    }
 
     /// The quota a single-threaded process declares: one CNode, one VSpace,
     /// one TCB, one IPC-buffer frame, two endpoints, and a full CNode of

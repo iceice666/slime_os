@@ -422,16 +422,24 @@ SEL4_BOOT_LAYOUT = (
     (22, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# The seL4 M5 storage plane (P5.4.2c). Init's endpoint factory, the probe's
-# executable, and the block capability the probe holds.
+# The seL4 M5 storage plane (P5.4.2c). Init's executable for the probe, and
+# init's own shared-buffer factory.
 #
 # The block capability is *not* here, and that is the point: it is granted to
 # the probe rather than to init, so the root places it in the probe's own table
 # at its runtime cursor. A boot layout numbers the bootstrap component's slots;
 # a non-bootstrap component's are numbered `1..=n` above its executables, which
 # is the rule every other grant to a child follows.
+#
+# The factory at slot 4 is init's own, and it is here because IO2's probe
+# reaches its device through the IO0 rings rather than a root-mediated
+# `BlockTransact`. A ring is a shared buffer the client allocates, so the
+# factory is the plane's one *crossing* spawn grant: declared source `init`,
+# target the probe, handed over at spawn. It appears in init's table rather
+# than the probe's precisely because init is the holder that passes it on.
 SEL4_STORAGE_LAYOUT = (
     (1, 'executable', 'sel4-storage-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 # Generation 24, the store plane. Same two rows as the storage plane and for the

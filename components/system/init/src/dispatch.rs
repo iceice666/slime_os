@@ -267,6 +267,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 b"[init] transfer probe spawned\n",
                 b"transfer",
                 Some(2),
+                &[],
             );
             slime_rt::debug_write(b"[init] transfer plane complete\n");
             slime_rt::exit(0)
@@ -280,6 +281,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 // instance holds no such edge, which is what tells the two
                 // instances of this executable apart.
                 Some(2),
+                &[],
             );
             slime_rt::debug_write(b"[init] input plane complete\n");
             slime_rt::exit(0)
@@ -292,6 +294,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 // Init's own end of `sel4-directory-probe-run-token`; the idle
                 // instance holds a loopback nobody sends on.
                 Some(2),
+                &[],
             );
             slime_rt::debug_write(b"[init] directory plane complete\n");
             slime_rt::exit(0)
@@ -302,6 +305,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 b"[init] recovery probe spawned\n",
                 b"recovery",
                 Some(2),
+                &[],
             );
             slime_rt::debug_write(b"[init] recovery plane complete\n");
             slime_rt::exit(0)
@@ -312,6 +316,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 b"[init] rollback probe spawned\n",
                 b"rollback",
                 Some(2),
+                &[],
             );
             slime_rt::debug_write(b"[init] rollback plane complete\n");
             slime_rt::exit(0)
