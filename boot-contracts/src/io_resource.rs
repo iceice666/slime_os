@@ -1,0 +1,243 @@
+//! Generation-authenticated per-driver hardware-resource budgets.
+use crate::sha256::Sha256;
+pub const MAGIC: [u8; 8] = *b"SLIMEIO\0";
+include!("generated/io_resource.rs");
+pub const MAX_BYTES: usize = HEADER_BYTES + MAX_DRIVERS * ENTRY_BYTES;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeError {
+    Truncated,
+    BadMagic,
+    UnsupportedVersion,
+    UnknownRequiredFlags,
+    BadBounds,
+    BadOrder,
+    Impossible,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriverQuota {
+    pub driver_identity: [u8; 32],
+    pub mmio_bytes: u32,
+    pub mmio_mappings: u32,
+    pub dma_pages: u32,
+    pub dma_mappings: u32,
+    pub irq_sources: u32,
+    pub outstanding_requests: u32,
+    pub buffer_loans: u32,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct IoResourceBudget<'a> {
+    bytes: &'a [u8],
+    driver_count: usize,
+}
+impl<'a> IoResourceBudget<'a> {
+    pub fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
+        if bytes.len() < HEADER_BYTES || bytes.len() > MAX_BYTES {
+            return Err(DecodeError::Truncated);
+        }
+        if bytes[..8] != MAGIC {
+            return Err(DecodeError::BadMagic);
+        }
+        if u32_at(bytes, 8)? != FORMAT_VERSION || u32_at(bytes, 12)? as usize != HEADER_BYTES {
+            return Err(DecodeError::UnsupportedVersion);
+        }
+        if u64_at(bytes, 16)? != 0 {
+            return Err(DecodeError::UnknownRequiredFlags);
+        }
+        let driver_count = u32_at(bytes, 24)? as usize;
+        let total_len = u32_at(bytes, 28)? as usize;
+        if driver_count > MAX_DRIVERS
+            || total_len != HEADER_BYTES + driver_count * ENTRY_BYTES
+            || total_len != bytes.len()
+        {
+            return Err(DecodeError::BadBounds);
+        }
+        let mut previous = [0u8; 32];
+        for index in 0..driver_count {
+            let entry = decode_entry(bytes, index)?;
+            if entry.driver_identity == [0; 32] || (index > 0 && entry.driver_identity <= previous)
+            {
+                return Err(DecodeError::BadOrder);
+            }
+            previous = entry.driver_identity;
+        }
+        Ok(Self {
+            bytes,
+            driver_count,
+        })
+    }
+    pub const fn driver_count(&self) -> usize {
+        self.driver_count
+    }
+    pub fn driver(&self, index: usize) -> Option<DriverQuota> {
+        (index < self.driver_count)
+            .then(|| decode_entry(self.bytes, index).expect("validated IO-resource entry"))
+    }
+    pub fn quota_for(&self, identity: &[u8; 32]) -> Option<DriverQuota> {
+        (0..self.driver_count)
+            .filter_map(|index| self.driver(index))
+            .find(|entry| entry.driver_identity == *identity)
+    }
+    pub fn validate_against(&self, maxima: DriverQuota) -> Result<(), DecodeError> {
+        let mut totals = [0u32; 7];
+        for index in 0..self.driver_count {
+            let q = self.driver(index).expect("validated entry");
+            if q.mmio_bytes > maxima.mmio_bytes
+                || q.mmio_mappings > maxima.mmio_mappings
+                || q.dma_pages > maxima.dma_pages
+                || q.dma_mappings > maxima.dma_mappings
+                || q.irq_sources > maxima.irq_sources
+                || q.outstanding_requests > maxima.outstanding_requests
+                || q.buffer_loans > maxima.buffer_loans
+                || q.mmio_mappings > q.mmio_bytes
+                || q.dma_mappings > q.dma_pages
+            {
+                return Err(DecodeError::Impossible);
+            }
+            for (total, value) in totals.iter_mut().zip([
+                q.mmio_bytes,
+                q.mmio_mappings,
+                q.dma_pages,
+                q.dma_mappings,
+                q.irq_sources,
+                q.outstanding_requests,
+                q.buffer_loans,
+            ]) {
+                *total = total.saturating_add(value);
+            }
+        }
+        if totals[0] > maxima.mmio_bytes
+            || totals[1] > maxima.mmio_mappings
+            || totals[2] > maxima.dma_pages
+            || totals[3] > maxima.dma_mappings
+            || totals[4] > maxima.irq_sources
+            || totals[5] > maxima.outstanding_requests
+            || totals[6] > maxima.buffer_loans
+        {
+            return Err(DecodeError::Impossible);
+        }
+        Ok(())
+    }
+}
+pub fn driver_identity(name: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"slime-io-resource-driver-v1");
+    hasher.update(&(name.len() as u16).to_le_bytes());
+    hasher.update(name.as_bytes());
+    hasher.finalize()
+}
+fn decode_entry(bytes: &[u8], index: usize) -> Result<DriverQuota, DecodeError> {
+    let offset = HEADER_BYTES + index * ENTRY_BYTES;
+    let entry = bytes
+        .get(offset..offset + ENTRY_BYTES)
+        .ok_or(DecodeError::Truncated)?;
+    Ok(DriverQuota {
+        driver_identity: entry[..32].try_into().unwrap(),
+        mmio_bytes: u32_at(entry, 32)?,
+        mmio_mappings: u32_at(entry, 36)?,
+        dma_pages: u32_at(entry, 40)?,
+        dma_mappings: u32_at(entry, 44)?,
+        irq_sources: u32_at(entry, 48)?,
+        outstanding_requests: u32_at(entry, 52)?,
+        buffer_loans: u32_at(entry, 56)?,
+    })
+}
+fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, DecodeError> {
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(offset..offset + 4)
+            .ok_or(DecodeError::Truncated)?
+            .try_into()
+            .unwrap(),
+    ))
+}
+fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, DecodeError> {
+    Ok(u64::from_le_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .ok_or(DecodeError::Truncated)?
+            .try_into()
+            .unwrap(),
+    ))
+}
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+    use super::*;
+    fn quota(id: u8) -> DriverQuota {
+        DriverQuota {
+            driver_identity: [id; 32],
+            mmio_bytes: 4096,
+            mmio_mappings: 1,
+            dma_pages: 4,
+            dma_mappings: 1,
+            irq_sources: 1,
+            outstanding_requests: 2,
+            buffer_loans: 2,
+        }
+    }
+    fn build(entries: &[DriverQuota]) -> alloc::vec::Vec<u8> {
+        let total = HEADER_BYTES + entries.len() * ENTRY_BYTES;
+        let mut bytes = alloc::vec![0u8;total];
+        bytes[..8].copy_from_slice(&MAGIC);
+        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes[24..28].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        bytes[28..32].copy_from_slice(&(total as u32).to_le_bytes());
+        for (index, q) in entries.iter().enumerate() {
+            let o = HEADER_BYTES + index * ENTRY_BYTES;
+            bytes[o..o + 32].copy_from_slice(&q.driver_identity);
+            for (n, value) in [
+                q.mmio_bytes,
+                q.mmio_mappings,
+                q.dma_pages,
+                q.dma_mappings,
+                q.irq_sources,
+                q.outstanding_requests,
+                q.buffer_loans,
+            ]
+            .iter()
+            .enumerate()
+            {
+                bytes[o + 32 + n * 4..o + 36 + n * 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes
+    }
+    #[test]
+    fn decodes_and_looks_up() {
+        let a = quota(1);
+        let b = quota(2);
+        let bytes = build(&[a, b]);
+        let budget = IoResourceBudget::decode(&bytes).unwrap();
+        assert_eq!(budget.driver_count(), 2);
+        assert_eq!(budget.quota_for(&[2; 32]), Some(b));
+    }
+    #[test]
+    fn malformed_fails() {
+        assert_eq!(
+            IoResourceBudget::decode(&build(&[quota(2), quota(1)])).unwrap_err(),
+            DecodeError::BadOrder
+        );
+        let mut bytes = build(&[quota(1)]);
+        bytes[24..28].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            IoResourceBudget::decode(&bytes).unwrap_err(),
+            DecodeError::BadBounds
+        );
+    }
+    #[test]
+    fn aggregate_overcommit_fails() {
+        let bytes = build(&[quota(1), quota(2)]);
+        let budget = IoResourceBudget::decode(&bytes).unwrap();
+        assert_eq!(
+            budget.validate_against(quota(9)),
+            Err(DecodeError::Impossible)
+        );
+        assert!(
+            IoResourceBudget::decode(&build(&[quota(1)]))
+                .unwrap()
+                .validate_against(quota(9))
+                .is_ok()
+        );
+    }
+}

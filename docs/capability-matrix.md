@@ -49,7 +49,7 @@ Every new object kind or right must satisfy these rules before it ships:
 
 ## Capability kinds
 
-The nine declared kinds are `CapabilityKind` in `boot-contracts/src/generation.rs`,
+The thirteen declared kinds are `CapabilityKind` in `boot-contracts/src/generation.rs`,
 numbered by `boot-contracts/src/generated/generation.rs`.
 
 | Kind | Number | What it names | Where its operations are served |
@@ -63,6 +63,10 @@ numbered by `boot-contracts/src/generated/generation.rs`.
 | `Supervision` | 7 | one spawned task's outcome | root service `SUPERVISION STATUS` / `DERIVE` |
 | `SharedBuffer` | 8 | one allocated buffer | root service shared-buffer operations |
 | `Loan` | 9 | a receiver-bound loan of a subrange | root service loan operations |
+| `Device` | 10 | one enumerated hardware device assigned to a driver | root service `IO RESOURCE` |
+| `MmioRegion` | 11 | one bounded register region of the device | root service `IO RESOURCE` |
+| `InterruptSource` | 12 | one declared interrupt source | root service `IO RESOURCE` |
+| `DmaAccount` | 13 | one driver's bounded DMA authority and accounting | root service `IO RESOURCE` |
 
 ## Current matrix
 
@@ -75,6 +79,10 @@ Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
 | Endpoint | RECV (1) | `seL4_Recv` on the declared edge; the root mints at receive-only rights | same | gated |
 | *(meta, most kinds)* | TRANSFER (2) | `CAPABILITY EXPORT` and transferable derived spawn grants | — | gated on both paths |
 | Executable | EXEC (3) | executable slot validation in `SPAWN` | generation module only, hash-verified at boot | gated |
+| MmioRegion | MAP_MMIO (4) | map only the capability's bounded subrange at its declared access mode | root bootstrap from the generation's device assignment | gated (IO1) |
+| DmaAccount | DMA_PIN (5) | create one direction-scoped DMA mapping for a live shared-buffer lease; returns only an opaque IOVA | generation `io-resource/v1`; a shared-buffer capability alone grants no DMA authority | gated (IO1) |
+| DmaAccount | DMA_RELEASE (6) | destroy an idle DMA mapping; memory remains charged while a hardware request owns it | same | gated (IO1) |
+| InterruptSource | IRQ_ACK (7) | acknowledge only the holder's pending, declared interrupt source and epoch | root bootstrap from the generation's device assignment | gated (IO1) |
 | SharedBuffer | BUFFER_WRITE (8) | writable `SHARED BUFFER MAP`; irreversible `SHARED BUFFER SEAL` | `SHARED BUFFER CREATE` via a `SharedBufferFactory`; root-assigned identity | gated (C7.4) |
 | SharedBuffer | BUFFER_MAP (9) | read-only `SHARED BUFFER MAP`; exact `SHARED BUFFER UNMAP` | same | gated (C7.4) |
 | Block | BLOCK_READ (10) | read requests in `BLOCK TRANSACT` for the capability's exact device | root bootstrap from the generation's declared device | gated |
@@ -289,6 +297,8 @@ Semantics not visible in the table:
 | Live shared-buffer mappings | `MAX_MAPPINGS = 64` | `SharedBufferTable::map`; `MappingsExhausted` |
 | Live shared-buffer loans | `MAX_LOANS = 64` plus generation `loan_count` per lender | `SharedBufferTable::loan`; `LoansExhausted` / `QuotaExceeded` |
 | Declared holders per budget | `MAX_HOLDERS = 32` | `SharedBufferBudget::decode` |
+| Driver hardware-resource quota | generation `io-resource/v1`: MMIO bytes/mappings, DMA pages/mappings, IRQ sources, outstanding requests, and buffer loans; omission denies all | `ResourceTable` prepare/effect/commit transitions and `IoResourceBudget::validate_against` |
+| Live IO resource tables | drivers 32, MMIO regions/mappings 64, DMA mappings 64, IRQ sources 64, live leases/requests 128 | `slime-root/src/io_resource.rs` |
 | Directory path bytes / depth | `MAX_DIRECTORY_PATH = 128`, `MAX_DIRECTORY_DEPTH = 8` root-side; the userspace ABI and filesystem schema admit 48 bytes and depth 4 | `slime-root/src/directory.rs`; `components/runtime/src/syscall.rs`; `components/proto/src/fs.rs` |
 | Directory scopes | `MAX_SCOPES = 64` | `slime-root/src/directory.rs` |
 | Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |
@@ -307,7 +317,6 @@ observe the graph returning to zero live tasks.
 | --- | --- | --- | --- |
 | Generation-update authority as an object | possibly STAGE_PENDING | a generation service that must not hold raw block write | Boundary between userspace staging and immutable selector-owned slot writes, now that management is entirely a component over `Block` |
 | NetworkDestination | CONNECT / SEND / RECV / LISTEN | the RPi5 transport route ([RP5](../roadmap/09-rpi5-ros2-demo.md)) and [Hardware H6](../roadmap/04-platform-hardware.md) | Object shape: (protocol, address, port) declared in the generation? |
-| Device/IRQ authority for userspace drivers | MAP_MMIO / DMA_PIN / IRQ_ACK | a driver outside the root ([H1](../roadmap/04-platform-hardware.md)) | Whether these are Slime kinds at all or thin wrappers over seL4's own frame and IRQ handler capabilities |
 | EnergyAccount | READ? | [Hardware H track](../roadmap/04-platform-hardware.md) | Whether accounting is authority at all or read-only telemetry |
 
 M6.1 landed non-consuming narrow derive-copy spawn grants, per-spawner
