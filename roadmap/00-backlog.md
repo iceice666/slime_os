@@ -24,7 +24,49 @@ full and says why.
 
 ## Open
 
-*No open items.*
+### B91 — composition binding slots still duplicate component-local positional ABI
+
+**Problem:** Generation manifests still explicitly pin most instance binding slots.
+The builder can deterministically allocate omitted slots, but allocator equality alone
+does not make a pin removable: many components still call `send`, `recv`, device,
+notification, or directory operations through compiled `*_SLOT` constants. Thirteen
+name-resolved declarations across four compositions have moved to automatic allocation;
+the remaining declarations mix frozen layout requirements, spawn-order contracts, and
+ordinary component-local positional coupling with no machine-readable distinction.
+
+**Evidence:** The automatic-slot inventory found 582 of 600 composition instance
+bindings explicitly pinned before the first migrations. Re-testing each explicit
+binding against `assign_declared_slots` produced 259 cases where removing that one pin
+reconstructed the current holder layout, but source inspection showed many of those
+holders still consume the capability positionally. Combined omission also matters:
+the I/O supervisor's individually stable named bindings could not all be omitted
+together without moving neighbours. The first safe cuts and their byte/QEMU evidence
+are recorded in
+[`devlog/2026-08-28-automatic-binding-slots/`](../devlog/2026-08-28-automatic-binding-slots/index.md).
+
+**Proposed fix:** Classify bindings per holder, not per grant. For each holder:
+
+1. map every binding to its runtime consumer and label it name-resolved, role-resolved,
+   boot-layout-coupled, spawn-order-coupled, or fixed positional ABI;
+2. replace ordinary fixed-slot consumers with `resolve_binding` only where the stable
+   generation name is the actual authority identity; do not replace intentional ordered
+   spawn-grant or protocol layouts;
+3. test the complete proposed omission set through the production allocator and require
+   the entire resolved holder table to equal the pre-cut table;
+4. add the source-omission and resolved-slot assertion to the matching QEMU plane gate,
+   compare `generation.bin` before and after, then boot the behavior that consumes every
+   migrated binding; and
+5. repeat in small composition batches. Keep minted and notification namespaces separate
+   until their positional consumers receive the same classification.
+
+**Exit condition:** Every explicit instance binding slot is either removed and guarded
+by its matching plane gate, or retained with a documented external positional invariant
+(frozen boot artifact, boot-layout alignment, spawn-grant order, or protocol/device ABI).
+No component reconstructs an ordinary named capability's manifest slot in source.
+Every migrated composition remains byte-identical before/after allocation and passes its
+narrow QEMU gate; `just contracts_check`, `just generation_check`,
+`just sel4_boot_layout_check`, `just fmt_check_all`, `just lint_all`, and `just ruff`
+pass after the final batch.
 
 ## Deferred follow-ups
 
