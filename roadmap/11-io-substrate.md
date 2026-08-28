@@ -3,24 +3,27 @@
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
 **Status:** IO0, IO1, IO3, and IO4 complete 2026-08-28. IO2 complete except the root
-cutover. Each slice is observed under QEMU by its own gate — `just io_queue_check`,
-`just io_driver_authority_check`, `just io_block_check`, `just io_link_check`,
-`just io_network_check` — and every gate is registered in
+cutover's last two planes. Each slice is observed under QEMU by its own gate — `just
+io_queue_check`, `just io_driver_authority_check`, `just io_block_check`,
+`just io_link_check`, `just io_network_check` — and every gate is registered in
 `just sel4_gate_control_check`, which proves each fails on missing, reordered, or
 failure evidence.
 
 What is **not** done, stated plainly so no consumer assumes otherwise:
 
-- **IO2's root cutover.** `slime-root`'s virtio-blk command/descriptor implementation
-  and its graph-serving `BlockTransact` path are still the product path, and the six
-  storage-family compositions still use them. Userspace parity is proved; the
-  migration is not. The spawn-grant prerequisite is landed and host-tested, correcting
-  the earlier claim that the root lacked that mechanism. A second prerequisite is now
-  explicit: root `BlockTransact` authenticates per-caller `blockRead`/`blockWrite`, but
-  an IO0 ring does not authenticate which client's rights its submissions carry and
-  the driver has no generation-authenticated ring-to-rights policy. Until that policy
-  exists, migrating `sel4-recovery` would weaken its asserted readable-but-write-refused
-  guard-disk boundary.
+- **IO2's root cutover, for two planes.** Six of the eight block-holding
+  compositions — `sel4-storage`, `sel4-store`, `sel4-rollback`, `sel4-replay`,
+  `sel4-generation`, and `sel4-filesystem` — now reach their devices through the
+  userspace driver over IO0 rings, each gated on generation-declared per-ring rights
+  (`contracts/block-authority/v1`). The authority prerequisite this depended on is
+  landed: a ring's rights are declared rather than inferred, and the driver produces
+  `STATUS_BAD_RIGHTS` for a submission outside them.
+
+  `slime-root`'s virtio-blk command/descriptor implementation and its
+  `BlockTransact` path remain the product path for `sel4-recovery` and
+  `sel4-transfer`. Both declare two attached devices and IO1 grants exactly one
+  device per driver instance, so neither can be composed against the userspace
+  driver at all. Tracked as backlog B84, which owns the mechanism gap.
 - **IO4's declared-but-refused subset:** IPv6/NDP, DHCP, SLAAC, and the TCP
   listener/accept data path answer `STATUS_UNSUPPORTED`.
 - **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
@@ -179,30 +182,47 @@ The boot-selector's disk is a bounded ordering exception: it must be probed befo
 
 ## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
 
-**Status:** Complete except root cutover; the spawn-grant prerequisite is landed, while authenticated per-ring block rights remain a blocking prerequisite. QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` reaches `SLIME_GRAPH HEALTHY generation=51 required=3 live=0 completed=3 failed=0` and returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
+**Status:** Complete except the root cutover's last two planes; the authenticated per-ring rights prerequisite is landed and six of eight block-holding compositions are migrated. QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
 
 **Spawn-grant prerequisite: landed, and the previous diagnosis corrected.** Two earlier passes reported that a dynamically spawned storage client could not receive its crossing bindings because init's spawn supplied zero grant records, and each reverted a working migration believing the root lacked the mechanism. That conclusion was wrong. The root already derives crossing grants from the generation: adding a declared `sharedBufferFactory` grant (source `init`, target `sel4-storage-probe`) to `sel4-storage.zti` made preflight report `requested=0 parent=1 minted=0 respawn=false` — it had counted the declaration correctly and refused only because init passed nothing. The gap was entirely init-side. `drive_probe_plane_with_token` now takes the exact grant vector its manifest declares, and the storage plane boots with `SLIME_GRAPH spawn authorized task=0 slot=1 component=sel4-storage-probe grants=1` and `buffer_factory_grants=1`. The same idiom was already in production on the sample plane (`sample-lender-shared-buffer-factory`), so this is a use of the existing mechanism rather than a second one.
 
 The rule is now pinned where a host gate can reach it. `grant_crosses_spawn` and the new `declared_crossing_grants` moved from the binary-only dispatcher into `slime-root/src/generation.rs`, so the dispatcher and the tests share one implementation; `just test_sel4_root` is 205. Widening stays unrepresentable because the count comes from declarations, leaving no index at which an owner can place an undeclared grant.
 
-**Per-ring rights prerequisite: not implemented.** The root's current
-`serve_block_transact` identifies the caller from the endpoint badge and checks that
-caller's `BlockDevice` for `blockRead` or `blockWrite` on every request. The userspace
-driver sees only submissions in shared ring memory; neither the IO0 envelope nor the
-driver's generation view binds a ring to authenticated client rights. Thus
-`STATUS_BAD_RIGHTS` is defined by `io-queue/v1` but the driver never produces it. This
-is observable, not theoretical: `sel4-recovery` reads an attached guard disk through a
-read-only capability and requires a write through that same authority to be refused.
+**Per-ring rights prerequisite: landed 2026-08-28.** The root's
+`serve_block_transact` identified the caller from the endpoint badge and checked that
+caller's `BlockDevice` for `blockRead` or `blockWrite` on every request. A userspace
+driver sees only submissions in shared ring memory, and neither the IO0 envelope nor a
+submission binds a ring to authenticated client rights — so `STATUS_BAD_RIGHTS` was
+defined by `io-queue/v1` and produced by nothing.
 
-The design precedent is IO4's exact destination authority. Add a generation resource
-mapping each block ring to its read/write rights, require clients with different rights
-to use different rings, and let the driver read its own policy through the same
-authenticated cursor-paged generation-resource path used by `network-service`. The
-driver, not a request field or client-side adapter, then returns `STATUS_BAD_RIGHTS`
-for a write on a read-only ring. Only after that policy is gate-proved should the six
-storage compositions move to the shared IO0 adapter and the root path be removed.
+`contracts/block-authority/v1` closes that on IO4's precedent. Each entry binds one
+holder, on one device, to one ring, with independent read and write bits and a sector
+ceiling; the driver reads its own table through the root's identity-gated cursor-paged
+path (label 69) and refuses a submission outside it. Two properties are structural
+rather than checked: `(device, ring)` is ordered strictly ascending *without* the
+holder, so one ring can never carry two holders' rows — which is what lets the driver
+say whose rights a submission carries — and no field can express a wildcard holder,
+a device range, or an "all rights" value. The root reads no block right at any point;
+it authenticates who may read the table and bounds the bytes.
 
-**The root product path remains intact, and the remaining cutover is larger than previously recorded.** The six storage-family generations still grant synchronous root-served `BlockTransact` capabilities; all six gates pass unchanged, so no half-migration was retained. Two facts found while scoping it: **twelve** components call `block_transact*`, not six — `sel4-transfer-probe` (`sel4-transfer.zti`) and `replay-probe` (`sel4-replay.zti`) also depend on the root path, so removing it breaks two compositions outside the storage family — and `sel4-recovery-probe` holds **two** block capabilities with different rights (a writable recovery disk and a read-only guard disk whose byte-identity the gate asserts), which the single-device ring composition does not yet express.
+**Six of eight planes are migrated.** `sel4-storage`, `sel4-store`, `sel4-rollback`,
+`sel4-replay`, `sel4-generation`, and `sel4-filesystem` reach their devices only
+through the userspace driver, over one shared `components/lib/src/block_io.rs`
+adapter, and each gate now asserts the driver's authority read, its device bring-up,
+its clean release, and the root's numeric DMA reclamation in place of the retired
+`SLIME_GRAPH block served` corroboration. `just sel4_gate_control_check` rose from
+1761 to 1779 rejected mutations, so coverage grew rather than moved.
+
+**Two planes remain on the root path, and the reason is a mechanism gap.**
+`sel4-recovery` holds a writable recovery disk and a read-only guard disk whose
+byte-identity its gate asserts; `sel4-transfer` holds a source and a receiver. IO1
+grants exactly one device per driver instance (`DeviceId(1)` is hardcoded in
+`slime-root/src/graph_runtime/services/io_resource.rs`), and within one instance every
+non-`block` typed grant shares a single positional index, so two devices cannot be
+expressed even by declaring the driver twice. Tracked as backlog B84. An attempt to
+give `device` grants their own counter was reverted: the shared index meant
+incrementing on `Device` shifted each driver's `mmioRegion` index and broke every
+plane's virtio handshake at once.
 
 **Depends on:** IO0, IO1, and the existing M5/P5 block behavior and QEMU storage gates.
 

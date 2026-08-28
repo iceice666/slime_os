@@ -24,62 +24,100 @@ full and says why.
 
 ## Open
 
+### B84 — a userspace driver instance can serve exactly one device, so a two-disk plane cannot leave the root
+
+**Problem:** B83 migrated six storage-family planes to the userspace
+`virtio-blk-driver`, but `sel4-recovery` and `sel4-transfer` remain on the root's
+`BlockTransact` path. Both declare two attached disks — recovery a read-write primary
+and a read-only guard, transfer a source and a receiver — and IO1 cannot express that:
+`slime-root/src/graph_runtime/services/io_resource.rs` hardcodes `DeviceId(1)` at
+`install_driver`, `grant_mmio_region`, `grant_irq_source`, and every `DMA_MAP`/`IRQ`
+arm, so one driver instance is bound to one device.
+
+Declaring the driver twice — one instance per device, the shape every plane already uses
+for its `idle` probe — does not work either. Within one instance's bindings the root
+assigns a *single* positional index to every non-`block` typed grant, advanced only by
+`block` grants (`graph_runtime.rs`'s `block_index`, and its twin in
+`graph_runtime/services/spawn.rs`). Every `device`, `mmioRegion`, `interruptSource`, and
+`dmaAccount` grant in an instance therefore resolves to the same index, which is
+coherent for one device and unsatisfiable for two.
+
+**Evidence:** Observed twice in one session. `sel4-transfer`'s migration stopped here
+after confirming the builder requires notification grant names to be globally unique
+with exactly one waiter each (`scripts/build/build-generation.py`), which the
+ordinal-notification fix below resolved, leaving device indexing as the remaining
+blocker. An attempt to give `device` grants their own counter was **reverted**: because
+`declared_capability` passes one index to every kind, incrementing on `Device` shifted
+each driver's `mmioRegion` index from 0 to 1 and every migrated plane failed with
+`[virtio-blk-driver] fail: virtio handshake`. The revert restored `just io_block_check`
+and `just sel4_storage_check`.
+
+**Proposed fix:** Stop deriving a typed capability's device index from declaration
+order. The manifest already names which device a grant refers to nowhere at all, which
+is the actual gap: add an explicit device ordinal to the `device`/`mmioRegion`/
+`interruptSource`/`dmaAccount` grant records so a composition states the binding instead
+of the root inferring it, then thread that ordinal through `install_driver` in place of
+`DeviceId(1)`. Two driver instances then differ by declaration rather than by position.
+Preparatory work already landed under B83: `resolve_notification_slot` accepts
+`notification:@<ordinal>+<role>`, so a service declared twice no longer needs
+plane-specific grant names, and `block-authority/v1` is already keyed on
+`(device, ring)` with two-device tables covered by host tests.
+
+**Exit condition:** `just sel4_recovery_plane_check` and `just sel4_transfer_check` pass
+with their clients reaching storage only through the userspace driver, recovery's guard
+disk still reachable for reads and still refusing writes — with the refusal produced by
+the driver's ring authority rather than by the root — and the guard image still
+byte-identical after the boot. `just io_block_check` and the six planes B83 migrated
+must still pass.
+
 ### B83 — The root still owns the product virtio-blk path after IO2's parity proof
 
 **Problem:** IO2 proved a supervised userspace virtio-blk driver matches the root's
-observable block behaviour (`just io_block_check`: oracle parity on read/write/flush/
-geometry/rights/out-of-range/malformed/short-buffer/unsupported plus durable
-fresh-boot readback, `queued=8 completed=8 identities=8 overwrite=0`, all seven fault
-arms `settled=8 descriptors=0 dma=0 leases=0 charges=0`, fresh epoch refusing a stale
-completion). But `slime-root/src/virtio_blk.rs`'s command/descriptor implementation
-and `console.rs`'s `serve_block_transact` are still the product path, and all six
-storage-family compositions still use the synchronous root `BlockTransact` ABI. So
-IO2's deliverable "remove the root's virtio-blk command/descriptor implementation from
-the product path" is unmet, and the track's definition of done — "userspace virtio-blk
-preserves the existing block behavior *and removes device-specific parsing from the
-root product path*" — is half-satisfied.
+observable block behaviour, but the root's implementation was still the product path
+for every storage-family plane. **Mostly resolved 2026-08-28**: six of the eight
+block-holding compositions now reach their devices through the userspace driver over
+IO0 rings. What remains is narrower than the original statement and is tracked by
+**B84**, which owns the mechanism gap; this entry stays open only because its own exit
+condition names the two planes B84 blocks.
 
-**Evidence:** Three passes attempted the cutover and each deliberately reverted to a
-fully-green state rather than ship a half-migration; the reasoning is recorded in
-[`devlog/2026-08-28-io2-userspace-virtio-blk/`](../devlog/2026-08-28-io2-userspace-virtio-blk/index.md).
-The first two reported the root as lacking a crossing-grant mechanism. **That diagnosis
-was wrong**, and the correction is the useful part: preflight reported
-`requested=0 parent=1 minted=0 respawn=false`, i.e. the root had counted the declared
-crossing grant correctly and refused only because init passed an empty vector. The
-mechanism was already in production on the sample plane.
+**Landed.** The authority prerequisite is implemented. `contracts/block-authority/v1`
+declares each client ring's rights in the generation; the driver reads the table
+through the root's identity-gated cursor-paged path (label 69) and answers
+`STATUS_BAD_RIGHTS` for a write outside the ring's declared authority — a status
+`io-queue/v1` had always defined and nothing had ever produced. `(device, ring)` is
+ordered strictly ascending *without* the holder, so one ring carrying two holders'
+rows is unrepresentable rather than merely unlikely: that is what lets a driver say
+whose rights a submission carries. One shared `components/lib/src/block_io.rs`
+adapter serves every migrated client. `sel4-storage`, `sel4-store`, `sel4-rollback`,
+`sel4-replay`, `sel4-generation`, and `sel4-filesystem` are migrated and green.
 
-**Proposed fix:** Two prerequisites are now known. The spawn prerequisite is landed:
-init passes generation-declared crossing grants, and
-`grant_crosses_spawn`/`declared_crossing_grants` live in
-`slime-root/src/generation.rs` with host tests proving a spawn cannot widen
-authority. The remaining authority prerequisite is not implemented. Root
-`BlockTransact` authenticates the badge-derived caller and checks that caller's
-`BlockDevice` for `blockRead`/`blockWrite` on every request. An IO0 ring does not
-identify which client's rights a submission carries, and the userspace
-virtio-blk driver has no authenticated ring-to-rights policy; consequently
-`STATUS_BAD_RIGHTS` exists in `io-queue/v1` but the driver never produces it.
-This is load-bearing: `sel4-recovery` proves its guard disk is reachable for
-reads yet refuses writes specifically because its capability is read-only.
+**Not landed.** `slime-root/src/virtio_blk.rs` and `console.rs`'s
+`serve_block_transact` remain the product path for `sel4-recovery` and
+`sel4-transfer`. Both declare two attached devices and IO1 grants exactly one device
+per driver instance, so neither can be composed against the userspace driver at all.
+They are not residual callers to be cleaned up; they are planes the mechanism cannot
+currently serve. See B84.
 
-Follow IO4's `NetworkDestination` precedent rather than trusting request bytes
-or a client-side check. Add a generation resource that declares the rights of
-each client ring (clients with different rights must use different rings), let
-the driver read its own ring-to-rights bindings through the authenticated,
-cursor-paged generation-resource path, and return `STATUS_BAD_RIGHTS` for a
-write on a read-only ring. Then build one shared synchronous `BlockIo` adapter
-over IO0 and `block/v2`, migrate the six compositions one at a time (keeping the
-composition, frozen boot-layout fixture, and `scripts/build/boot_layout.py` in
-lockstep), and only after their denial markers pass remove the root product
-implementation.
+**Evidence:** [`devlog/2026-08-28-b83-userspace-block-cutover/`](../devlog/2026-08-28-b83-userspace-block-cutover/index.md).
+The earlier reverted attempts are recorded in
+[`devlog/2026-08-28-io2-userspace-virtio-blk/`](../devlog/2026-08-28-io2-userspace-virtio-blk/index.md);
+their first two diagnoses blamed a missing crossing-grant mechanism and **were wrong** —
+preflight reported `requested=0 parent=1 minted=0 respawn=false`, so the root had
+counted the declared grant correctly and refused only because init passed an empty
+vector.
 
-**Exit condition:** All six of `just sel4_storage_check`, `sel4_store_check`,
-`sel4_filesystem_check`, `sel4_rollback_check`, `sel4_recovery_plane_check`, and
-`sel4_generation_check` pass with clients reaching storage only through their declared
-`BlockDevice` capability served by the userspace driver; `just io_block_check`,
-`sel4_qemu_image_check`, and `sel4_boot_check` still pass; and no virtio-blk opcode or
-descriptor parsing remains in the product path. The boot selector's pre-admission
-bootstrap-device read path must survive — decoding a generation requires reading it
-from the boot device, an acknowledged bounded ordering exception.
+**Remaining fix:** Close B84, then migrate the two two-device planes and delete the
+root's command/descriptor implementation together with `console.rs`'s
+`serve_block_transact` and its `ConsoleKind::BlockTransact` label. The runtime
+wrappers `block_transact`/`block_transact_sector`/`block_transact_write` go with them.
+
+**Exit condition:** `just sel4_recovery_plane_check` and `just sel4_transfer_check`
+pass with their clients reaching storage only through the userspace driver, and no
+virtio-blk opcode or descriptor parsing remains in the product path. The six planes
+already migrated, plus `just io_block_check`, `sel4_qemu_image_check`, and
+`sel4_boot_check`, must still pass. The boot selector's pre-admission bootstrap-device
+read path must survive — decoding a generation requires reading it from the boot
+device, an acknowledged bounded ordering exception.
 
 ## Deferred follow-ups
 
