@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "io-block-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves BlockDevice v1 oracle parity, durable fresh-boot readback, async queue identity, fault settlement, epoch rejection, and exact IO1 reclamation.";
+  implementation = {
+    provider = "workspace";
+    binary = "io-block-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/block/v2";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "io_block_check boots generation 51 twice around a durable disk image";
+    expectedResult = "all oracle and async fault arms complete and every retained resource count reaches zero";
+    passFailCriteria = "[io-block-probe] io block plane complete";
+    requiredTestEnvironment = "io_block_check";
+  };
+}

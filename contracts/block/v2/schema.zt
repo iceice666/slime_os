@@ -1,0 +1,116 @@
+-- Slime OS asynchronous BlockDevice payload protocol, version 2 (IO2).
+--
+-- These records ride inside the IO0 queue envelope. IO0 owns request identity,
+-- driver epoch, buffer leases, direction, lifecycle, and terminal status. This
+-- contract owns block semantics only: bounded multi-sector read/write, flush,
+-- and geometry. No physical address or IOVA crosses this boundary.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 2;
+requestLen :: Int = 56;
+replyLen :: Int = 24;
+blockMagic :: Int = 843796546;
+sectorBytes :: Int = 512;
+maxSectorsPerRequest :: Int = 8;
+
+opRead :: Int = 1;
+opWrite :: Int = 2;
+opFlush :: Int = 3;
+opGeometry :: Int = 4;
+
+-- No device-semantic request flags are defined in v2. IO0 owns fencing, and
+-- proof-plane fault injection travels on the private control endpoint rather
+-- than becoming a production BlockDevice feature.
+knownRequestFlags :: Int = 0;
+
+-- Virtio block status bytes. A non-zero device status is reported with IO0
+-- STATUS_DEVICE_ERROR; detail retains transport-specific diagnostic detail.
+deviceStatusOk :: Int = 0;
+deviceStatusIoErr :: Int = 1;
+deviceStatusUnsupported :: Int = 2;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+BlockRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  flags : Int;
+  lba : Int;
+  sector_count : Int;
+  reserved : Int;
+  padding : Int;
+};
+
+-- For read/write, sectors_done is the exact completed prefix. For geometry it
+-- is zero and detail is capacity in 512-byte sectors. For a device failure,
+-- device_status carries the virtio status byte and detail carries transport
+-- diagnostics; the IO0 status is STATUS_DEVICE_ERROR.
+BlockReply :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  reserved : Int;
+  sectors_done : Int;
+  device_status : Int;
+  detail : Int;
+};
+
+requestSchema ::= schema BlockRequest;
+replySchema ::= schema BlockReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "flags"; width = 1; signed = false; byteArray = false; };
+  { name = "lba"; width = 8; signed = false; byteArray = false; };
+  { name = "sector_count"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = true; };
+  { name = "padding"; width = 32; signed = false; byteArray = true; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 1; signed = false; byteArray = true; };
+  { name = "sectors_done"; width = 4; signed = false; byteArray = false; };
+  { name = "device_status"; width = 4; signed = false; byteArray = false; };
+  { name = "detail"; width = 8; signed = false; byteArray = false; };
+};
+
+protocol ::= {
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  blockMagic =;
+  sectorBytes =;
+  maxSectorsPerRequest =;
+  opRead =;
+  opWrite =;
+  opFlush =;
+  opGeometry =;
+  knownRequestFlags =;
+  deviceStatusOk =;
+  deviceStatusIoErr =;
+  deviceStatusUnsupported =;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  requestLayout =;
+  replyLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BLOCK_V2_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render protocol;
+    path := t.join "" { root; "/components/proto/src/block_v2.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main
