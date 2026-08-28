@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import threading
 import tomllib
@@ -29,6 +30,7 @@ FIXTURE = GENERATION_COMPOSITIONS / "sel4-replay.zti"
 IMAGE_VARIANT = "replay"
 GENERATION = 45
 TIMEOUT = 300
+DISK_BYTES = 1 << 20
 
 # The recording the plane's own stream carries: one monotonic read, one timer
 # expiry, two simulated reads, one lifecycle transition, two outputs, and the
@@ -90,8 +92,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "a holder of an unrecorded source carries no determinism claim",
         (
             r"SLIME_RECORD entry task=\d+ instance=replay-unrecorded role=1 capacity=8 deterministic=0",
+            r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
+            r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+",
             r"\[replay:unrecorded\] role=record capacity=8 claim=0",
             r"\[replay:unrecorded\] unrecorded source held",
+            r"\[virtio-blk-driver\] peer complete, exiting",
         ),
     ),
     (
@@ -105,7 +110,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "terminal cleanup",
         (
             r"\[init\] replay plane is root-launched",
-            rf"SLIME_GRAPH HEALTHY generation={GENERATION} required=6 live=0 completed=6 failed=0",
+            rf"SLIME_GRAPH HEALTHY generation={GENERATION} required=7 live=0 completed=7 failed=0",
         ),
     ),
 )
@@ -126,6 +131,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_RECORD FAIL",
     r"\[replay\] FAIL",
+    r"\[virtio-blk-driver\] fail: .*",
     r"SLIME_GRAPH FAIL required instance",
 )
 
@@ -154,7 +160,7 @@ def build_image() -> None:
         fail("packaged image digest does not match identity manifest")
 
 
-def boot(profile: dict[str, object]) -> str:
+def boot(profile: dict[str, object], disk: Path) -> str:
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
@@ -173,6 +179,10 @@ def boot(profile: dict[str, object]) -> str:
         "mon:stdio",
         "-kernel",
         str(IMAGE),
+        "-drive",
+        f"if=none,id=slimedisk,format=raw,file={disk}",
+        "-device",
+        "virtio-blk-device,drive=slimedisk",
     ]
     process = subprocess.Popen(
         command,
@@ -187,7 +197,7 @@ def boot(profile: dict[str, object]) -> str:
     watchdog.start()
     lines: list[str] = []
     terminal = re.compile(
-        rf"SLIME_GRAPH HEALTHY generation={GENERATION} required=6 live=0 completed=6 failed=0"
+        rf"SLIME_GRAPH HEALTHY generation={GENERATION} required=7 live=0 completed=7 failed=0"
         r"|SLIME_ROOT FATAL|SLIME_RECORD FAIL|\[replay\] FAIL"
     )
     try:
@@ -273,24 +283,28 @@ def check_fixture_shape() -> None:
         if sorted(roles) != ["record", "replay"]:
             fail(f"stream {stream} declares roles {sorted(roles)}, expected one of each")
 
-    # The unrecorded-source arm is non-vacuous only if the grant is real: the
-    # holder must actually be given a right the classification calls unrecorded,
-    # and it must not be declared deterministic — which the builder would refuse.
+    # The unrecorded-source arm is non-vacuous only if the authority row is
+    # real: the holder's ring must carry the same blockRead right the retired
+    # root capability carried, and it must not be declared deterministic —
+    # which the builder would refuse. B83 moves that right from a grant into the
+    # generation's per-ring authority table; checking the old grant list here
+    # would make the assertion vacuous after the cutover.
     unrecorded = by_instance.get("replay-unrecorded")
     if unrecorded is None:
         fail("fixture declares no unrecorded-source holder")
     if unrecorded["deterministic"]:
         fail("the unrecorded-source holder is declared deterministic")
+    authorities = manifest.get("blockRingAuthority") or []
     held = {
         right
-        for grant in manifest["grants"]
-        if grant["target"] == "replay-unrecorded"
-        for right in grant["rights"]
+        for authority in authorities
+        if authority["holder"] == "replay-unrecorded"
+        for right in authority["rights"]
     }
-    if "blockRead" not in held:
+    if held != {"blockRead"}:
         fail(
-            "the unrecorded-source holder holds no unrecorded right, so its "
-            "inadmissibility would be vacuous"
+            f"the unrecorded-source holder's ring rights were {sorted(held)}, "
+            "expected blockRead alone"
         )
 
     # And the deny-by-default arm needs an instance the table genuinely omits.
@@ -420,6 +434,37 @@ def check_semantics(transcript: str) -> None:
     claimed = [instance for instance, _, _, flag in reads if flag == "1"]
     if claimed != ["replay-replayer"]:
         fail(f"instances claimed deterministic were {claimed}, expected the replayer alone")
+    # Root-side corroboration for the migrated path. The root no longer sees a
+    # block opcode, but it still mediates the payload DMA and accounts every IO
+    # resource returned when the userspace driver exits.
+    if re.search(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=DeviceWrite",
+        transcript,
+    ) is None:
+        fail("the root mediated no DeviceWrite payload DMA for the block read")
+    reclaim = re.search(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if reclaim is None:
+        fail("the root recorded no IO-resource reclamation for the userspace driver")
+    pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+        int(value) for value in reclaim.groups()
+    )
+    if pre_pages == 0 or pre_mappings == 0:
+        fail("the driver held no DMA pages or mappings, so it moved no bytes")
+    if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+        fail(
+            f"the root reclaimed {back_pages}/{back_mappings} of "
+            f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+        )
+    if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+        fail(
+            f"the driver left {post_pages} DMA pages, {post_mappings} mappings, "
+            f"and {post_requests} requests outstanding"
+        )
 
 
 def semantic_trace(transcript: str) -> tuple[str, ...]:
@@ -491,14 +536,18 @@ def main() -> None:
     # outputs across two boots". One boot could not distinguish a deterministic
     # replay from a replay that happened to agree with its own recording once.
     traces: list[tuple[str, ...]] = []
-    for boot_index in range(2):
-        transcript = boot(profile)
-        match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
-        for pattern in EXPECTED_UNORDERED:
-            if re.search(pattern, transcript) is None:
-                fail(f"boot {boot_index}: missing order-independent marker: {pattern}")
-        check_semantics(transcript)
-        traces.append(semantic_trace(transcript))
+
+    with tempfile.TemporaryDirectory(prefix="slime-replay-") as directory:
+        disk = Path(directory) / "replay-disk.img"
+        disk.write_bytes(bytes(DISK_BYTES))
+        for boot_index in range(2):
+            transcript = boot(profile, disk)
+            match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
+            for pattern in EXPECTED_UNORDERED:
+                if re.search(pattern, transcript) is None:
+                    fail(f"boot {boot_index}: missing order-independent marker: {pattern}")
+            check_semantics(transcript)
+            traces.append(semantic_trace(transcript))
     if traces[0] != traces[1]:
         divergent = [
             (first, second)

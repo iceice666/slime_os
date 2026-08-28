@@ -190,7 +190,14 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # replayer — the recorder holds the plane's only clock, so the replayer's
     # zeroes are what make its answers the recording's rather than the hardware's
     # — and the observer that pairs the second stream.
-    ("sel4_replay_plane", "check/check-sel4-replay-plane.py", 26),
+    # B83: 26 -> 29. The plane's unrecorded source now reaches its device
+    # through the userspace virtio-blk driver rather than the root, so the gate
+    # gained three markers covering that path: the driver reading its
+    # generation-declared per-ring authority, the device coming up with its
+    # capacity, and the driver releasing cleanly on its peer's command. Each is
+    # coverage the root path could not have: the root emitted no authority read
+    # at all, and its block service had no lifecycle to observe.
+    ("sel4_replay_plane", "check/check-sel4-replay-plane.py", 29),
     # C9.6. 45 required markers over twelve causal chains plus three
     # order-independent ones: the declared bands installed before traffic (3),
     # the sensor's role and first tick (3), the dependency-gated controller
@@ -267,13 +274,32 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # asserted as a fixed scheduling interleaving that was never true.
     ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 30),
     ("sel4_io_block_plane", "check/check-sel4-io-block-plane.py", 18),
-    ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 9),
-    ("sel4_store_plane", "check/check-sel4-store-plane.py", 14),
-    ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 16),
+    # B83 raised five of these six pins. Each migrated plane's client now
+    # reaches its device through the supervised userspace virtio-blk driver over
+    # IO0 rings instead of the root's `BlockTransact`, and each gate gained the
+    # same three markers for that path -- the driver reading its
+    # generation-declared per-ring authority, the device coming up with its
+    # capacity, and the driver releasing cleanly on its peer's command -- plus,
+    # where the plane had one, a replacement for the root's retired
+    # `SLIME_GRAPH block served` corroboration.
+    #
+    # Coverage grew rather than moved. The root emitted no authority read at all
+    # and its block service had no lifecycle to observe, so these are properties
+    # the previous path could not state. Each gate additionally parses the
+    # root's numeric `SLIME_IO reclaim` line, which is stronger than the boolean
+    # marker it replaced: it names how many DMA pages and mappings the driver
+    # held, that all of them came back, and that none remained.
+    #
+    # `sel4_recovery_plane` is unchanged at 11 because it is deliberately NOT
+    # migrated: its guard-disk claim needs two devices and IO1 grants one device
+    # per driver instance. See backlog B84.
+    ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 12),
+    ("sel4_store_plane", "check/check-sel4-store-plane.py", 17),
+    ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 19),
     ("sel4_recovery_plane", "check/check-sel4-recovery-plane.py", 11),
-    ("sel4_generation_plane", "check/check-sel4-generation-plane.py", 18),
+    ("sel4_generation_plane", "check/check-sel4-generation-plane.py", 21),
     ("sel4_directory_plane", "check/check-sel4-directory-plane.py", 16),
-    ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 11),
+    ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 14),
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 11),

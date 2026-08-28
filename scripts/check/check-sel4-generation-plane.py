@@ -50,12 +50,25 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] generation client spawned",
     ),
     (
+        "the manager received its declared crossing buffer authority",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sel4-generation-manager .*buffer_factory_grants=1",
+    ),
+    (
         "init spawned the manager",
         r"\[init\] generation manager spawned",
     ),
     (
-        # The manager holds the only block capability, so it is the only
-        # component that could have written this root.
+        "the userspace driver read the manager ring's generation authority",
+        r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
+    ),
+    (
+        "the userspace driver brought up the generation disk",
+        r"\[virtio-blk-driver\] ready capacity=2048 epoch=\d+",
+    ),
+    (
+        # The manager alone holds the generation-authorized IO0 ring, so it is
+        # the only component that could have written this root through the
+        # userspace driver.
         "the manager committed the known-good root",
         r"\[sel4-generation-manager\] ready",
     ),
@@ -111,14 +124,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sel4-generation-client\] promoted the candidate",
     ),
     (
-        # The authority claim. The client knows the on-disk format perfectly
-        # well and still cannot write it, because it holds no device.
-        "the client cannot reach the device directly",
-        r"\[sel4-generation-client\] direct device access refused",
-    ),
-    (
         "the client ran every arm and exited cleanly",
         r"\[sel4-generation-client\] generation client complete",
+    ),
+    (
+        "the userspace driver released cleanly on the manager's command",
+        r"\[virtio-blk-driver\] peer complete, exiting",
     ),
     (
         # The manager's loop ends on peer death, which only happens because
@@ -142,7 +153,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[init\] generation plane fail: .*",
     r"\[sel4-generation-manager\] fail: .*",
     r"\[sel4-generation-client\] fail: .*",
-    r"SLIME_ROOT block bring-up failed",
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -314,6 +325,43 @@ def check_transcript(transcript: str) -> None:
     if completions != 1:
         report_transcript(transcript)
         fail(f"{completions} clients ran the scenario, expected 1")
+    # Root-side corroboration after B83: the root no longer sees block opcodes,
+    # but it still mediates the userspace driver's DMA and accounts teardown.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace driver")
+    reclaim = re.search(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if reclaim is None:
+        report_transcript(transcript)
+        fail("the root recorded no IO-resource reclamation for the userspace driver")
+    pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+        int(value) for value in reclaim.groups()
+    )
+    if pre_pages == 0 or pre_mappings == 0:
+        report_transcript(transcript)
+        fail("the driver held no DMA pages or mappings, so it moved no bytes")
+    if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+        report_transcript(transcript)
+        fail(
+            f"the root reclaimed {back_pages}/{back_mappings} of "
+            f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+        )
+    if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+        report_transcript(transcript)
+        fail(
+            f"the driver left {post_pages} DMA pages, {post_mappings} mappings, "
+            f"and {post_requests} requests outstanding"
+        )
     # A refusal must report the exact sequence of the immediately preceding
     # committed (or initial ready) state. Merely collecting refusal sequences
     # cannot prove the root was left untouched.
@@ -352,8 +400,8 @@ def check_transcript(transcript: str) -> None:
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; the client drove "
         f"five operations through the service, {len(refusals)} refusals left the "
-        f"root untouched, {len(commits)} commits advanced it strictly, and a "
-        "direct device request was refused",
+        f"root untouched, {len(commits)} commits advanced it strictly, and the "
+        "root corroborated both DMA directions plus complete driver reclamation",
         flush=True,
     )
 
@@ -418,9 +466,9 @@ def main() -> None:
     print(
         "seL4 generation plane check: an unprivileged client drove list, "
         "inspect, stage, select, and rollback through a management service "
-        "holding the only block capability, every refusal left the root "
-        "untouched, and the client's own direct device request was refused "
-        "because no slot it holds names a device"
+        "using the only generation-authorized IO0 block ring, every refusal "
+        "left the root untouched, and root-mediated DMA plus exact resource "
+        "reclamation corroborated the userspace virtio-blk path"
     )
 
 

@@ -49,6 +49,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] filesystem service spawned",
     ),
     (
+        "the userspace driver read the service's generation-declared ring authority",
+        r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
+    ),
+    (
+        "the userspace driver brought up the full filesystem device",
+        r"\[virtio-blk-driver\] ready capacity=2048 epoch=\d+",
+    ),
+    (
         # The service opened the object store over its block capability, and
         # says so on a declared edge to init as well as on serial. The client is
         # not spawned until that announcement arrives: opening the store is
@@ -98,6 +106,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[directory-probe\] done",
     ),
     (
+        "the driver released cleanly on the service's shutdown command",
+        r"\[virtio-blk-driver\] peer complete, exiting",
+    ),
+    (
         "init observed both clean exits",
         r"\[init\] filesystem plane complete",
     ),
@@ -112,6 +124,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] filesystem plane fail: .*",
     r"\[filesystem\] fail: .*",
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -288,11 +301,50 @@ def check_transcript(transcript: str) -> None:
             "the client's directory view did not reach the service on each "
             f"request; exported {exports}, imported {imports}"
         )
+    # B83 moved block opcodes out of the root. Corroborate the service's claims
+    # with the mediation the root still owns: payload DMA in both directions,
+    # followed by exact reclamation of every driver hardware charge.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace driver")
+    reclaim = re.search(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if reclaim is None:
+        report_transcript(transcript)
+        fail("the root recorded no IO-resource reclamation for the userspace driver")
+    pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+        int(value) for value in reclaim.groups()
+    )
+    if pre_pages == 0 or pre_mappings == 0:
+        report_transcript(transcript)
+        fail("the driver held no DMA pages or mappings, so it moved no bytes")
+    if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+        report_transcript(transcript)
+        fail(
+            f"the root reclaimed {back_pages}/{back_mappings} of "
+            f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+        )
+    if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+        report_transcript(transcript)
+        fail(
+            f"the driver left {post_pages} DMA pages, {post_mappings} mappings, "
+            f"and {post_requests} requests outstanding"
+        )
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; the oracle's own "
         f"directory-probe drove read, interrupted-write, write, derive, and "
-        f"boundary arms through the seL4 filesystem service, handing its view "
-        f"across {len(exports)} times",
+        f"boundary arms through the seL4 filesystem service over IO0 rings, "
+        f"handing its view across {len(exports)} times; root-mediated DMA moved "
+        f"both directions and was fully reclaimed",
         flush=True,
     )
 
