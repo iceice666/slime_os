@@ -24,6 +24,62 @@ full and says why.
 
 ## Open
 
+### B83 — The root still owns the product virtio-blk path after IO2's parity proof
+
+**Problem:** IO2 proved a supervised userspace virtio-blk driver matches the root's
+observable block behaviour (`just io_block_check`: oracle parity on read/write/flush/
+geometry/rights/out-of-range/malformed/short-buffer/unsupported plus durable
+fresh-boot readback, `queued=8 completed=8 identities=8 overwrite=0`, all seven fault
+arms `settled=8 descriptors=0 dma=0 leases=0 charges=0`, fresh epoch refusing a stale
+completion). But `slime-root/src/virtio_blk.rs`'s command/descriptor implementation
+and `console.rs`'s `serve_block_transact` are still the product path, and all six
+storage-family compositions still use the synchronous root `BlockTransact` ABI. So
+IO2's deliverable "remove the root's virtio-blk command/descriptor implementation from
+the product path" is unmet, and the track's definition of done — "userspace virtio-blk
+preserves the existing block behavior *and removes device-specific parsing from the
+root product path*" — is half-satisfied.
+
+**Evidence:** Three passes attempted the cutover and each deliberately reverted to a
+fully-green state rather than ship a half-migration; the reasoning is recorded in
+[`devlog/2026-08-28-io2-userspace-virtio-blk/`](../devlog/2026-08-28-io2-userspace-virtio-blk/index.md).
+The first two reported the root as lacking a crossing-grant mechanism. **That diagnosis
+was wrong**, and the correction is the useful part: preflight reported
+`requested=0 parent=1 minted=0 respawn=false`, i.e. the root had counted the declared
+crossing grant correctly and refused only because init passed an empty vector. The
+mechanism was already in production on the sample plane.
+
+**Proposed fix:** Two prerequisites are now known. The spawn prerequisite is landed:
+init passes generation-declared crossing grants, and
+`grant_crosses_spawn`/`declared_crossing_grants` live in
+`slime-root/src/generation.rs` with host tests proving a spawn cannot widen
+authority. The remaining authority prerequisite is not implemented. Root
+`BlockTransact` authenticates the badge-derived caller and checks that caller's
+`BlockDevice` for `blockRead`/`blockWrite` on every request. An IO0 ring does not
+identify which client's rights a submission carries, and the userspace
+virtio-blk driver has no authenticated ring-to-rights policy; consequently
+`STATUS_BAD_RIGHTS` exists in `io-queue/v1` but the driver never produces it.
+This is load-bearing: `sel4-recovery` proves its guard disk is reachable for
+reads yet refuses writes specifically because its capability is read-only.
+
+Follow IO4's `NetworkDestination` precedent rather than trusting request bytes
+or a client-side check. Add a generation resource that declares the rights of
+each client ring (clients with different rights must use different rings), let
+the driver read its own ring-to-rights bindings through the authenticated,
+cursor-paged generation-resource path, and return `STATUS_BAD_RIGHTS` for a
+write on a read-only ring. Then build one shared synchronous `BlockIo` adapter
+over IO0 and `block/v2`, migrate the six compositions one at a time (keeping the
+composition, frozen boot-layout fixture, and `scripts/build/boot_layout.py` in
+lockstep), and only after their denial markers pass remove the root product
+implementation.
+
+**Exit condition:** All six of `just sel4_storage_check`, `sel4_store_check`,
+`sel4_filesystem_check`, `sel4_rollback_check`, `sel4_recovery_plane_check`, and
+`sel4_generation_check` pass with clients reaching storage only through their declared
+`BlockDevice` capability served by the userspace driver; `just io_block_check`,
+`sel4_qemu_image_check`, and `sel4_boot_check` still pass; and no virtio-blk opcode or
+descriptor parsing remains in the product path. The boot selector's pre-admission
+bootstrap-device read path must survive — decoding a generation requires reading it
+from the boot device, an acknowledged bounded ordering exception.
 
 ## Deferred follow-ups
 
@@ -58,6 +114,13 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B82 — `launch_instance_graph` overflowed the root stack into mapped `.bss`
+
+**Status:** Resolved 2026-08-28. **Class:** Defect (latent memory corruption, masked by `.bss` layout).
+**Was:** `launch_instance_graph` subtracted 488 KiB from `sp` in one step for three stack locals — `TaskTable<48>`, `WindowTable`, and `LaunchedInstances` — against a 1 MiB stack, so every boot overflowed; whether that landed in mapped `.bss` slack (silent corruption, every gate green) or on `ScratchPage`'s guard page (an honest fault) depended only on where preceding statics placed `STACK`.
+**Exit condition (observed):** The three tables moved to `.bss` as `LAUNCH_TASKS`/`LAUNCH_WINDOWS`/`LAUNCH_INSTANCES`, the prologue fell to 0x51000, and all five IO planes plus `sel4_boot_check` and `sel4_capability_layout_check` passed.
+**Evidence:** [`devlog/2026-08-28-io1-hardware-resource-authority/`](../devlog/2026-08-28-io1-hardware-resource-authority/index.md)
+
 ### B81 — Freestanding C components emitted an unaligned writable load segment
 
 **Status:** Resolved 2026-08-27. **Class:** Defect (linker orphan-section layout).

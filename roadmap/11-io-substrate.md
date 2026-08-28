@@ -2,7 +2,31 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** Not started. IO0 is the first slice. Existing C7 shared-buffer/loan accounting, C9.2 bounded WaitSets, C9.4 supervised restart, and the root-owned virtio-blk path are prerequisites and regression evidence, not completion of this track.
+**Status:** IO0, IO1, IO3, and IO4 complete 2026-08-28. IO2 complete except the root
+cutover. Each slice is observed under QEMU by its own gate — `just io_queue_check`,
+`just io_driver_authority_check`, `just io_block_check`, `just io_link_check`,
+`just io_network_check` — and every gate is registered in
+`just sel4_gate_control_check`, which proves each fails on missing, reordered, or
+failure evidence.
+
+What is **not** done, stated plainly so no consumer assumes otherwise:
+
+- **IO2's root cutover.** `slime-root`'s virtio-blk command/descriptor implementation
+  and its graph-serving `BlockTransact` path are still the product path, and the six
+  storage-family compositions still use them. Userspace parity is proved; the
+  migration is not. The spawn-grant prerequisite is landed and host-tested, correcting
+  the earlier claim that the root lacked that mechanism. A second prerequisite is now
+  explicit: root `BlockTransact` authenticates per-caller `blockRead`/`blockWrite`, but
+  an IO0 ring does not authenticate which client's rights its submissions carry and
+  the driver has no generation-authenticated ring-to-rights policy. Until that policy
+  exists, migrating `sel4-recovery` would weaken its asserted readable-but-write-refused
+  guard-disk boundary.
+- **IO4's declared-but-refused subset:** IPv6/NDP, DHCP, SLAAC, and the TCP
+  listener/accept data path answer `STATUS_UNSUPPORTED`.
+- **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
+  so no containment claim is made; H4 owns AMD-IOMMU proof and a future Arm milestone
+  owns any SMMU proof.
+- **Physical link and storage qualification** remain H6/H12/RP and Framework work.
 
 **Dependencies:** [Foundations](01-foundations.md), especially M5 block semantics and M6 capability/supervision machinery; [Core runtime](02-core-runtime.md), especially C7 shared buffers and loans, C9.2 Notification-backed WaitSets, and C9.4 restart/reclamation; [Architecture portability](07-architecture-portability.md), especially P1's source boundary and P5's current seL4 product path. Platform tracks supply concrete resource descriptions and physical containment evidence: Framework PCI/ACPI/APIC/AMD-IOMMU data remains in [H](04-platform-hardware.md), while Raspberry Pi 5 device-tree/controller qualification remains in P4/RP milestones.
 
@@ -63,7 +87,11 @@ P5.4.2 established device-untyped/MMIO/IRQ/DMA construction in `slime-root`, a b
 
 ## IO0 — Queue, identity, and buffer-lease contract
 
-**Status:** Not started.
+**Status:** Complete 2026-08-28. The contract, the `no_std` queue/lease library, and
+the two-component QEMU proof all landed; `just io_queue_check` boots the plane and
+asserts round trip, backpressure, late-completion rejection, reset epoch cutover,
+and malformed-slice refusal, with 54 host tests behind the structural refusals.
+**Evidence:** [`devlog/2026-08-28-io0-queue-substrate/`](../devlog/2026-08-28-io0-queue-substrate/index.md)
 
 **Depends on:** C7 shared-buffer identities, mappings, loans, quotas, and fault reclamation; C9.2 bounded WaitSets; C9.4 supervised restart terminal states.
 
@@ -100,7 +128,19 @@ Two supervised components exchange protocol-specific requests and completions th
 
 ## IO1 — Hardware resource authority and DMA accounts
 
-**Status:** Not started.
+**Status:** Complete. Observed under QEMU by `just io_driver_authority_check`:
+generation-declared device binding, exact-subrange mediated MMIO with out-of-range
+refusal, refusal to widen a shared-granule region to its page rather than mapping it,
+bounded interrupt authority with spoof refusal, opaque DMA paths exposing no physical
+address, and an ungranted component denied device, MMIO, DMA, and interrupt authority.
+The owner-spawned driver now faults with live MMIO, IRQ, and driver-owned queue-DMA
+authority; task death performs real unmap, IRQ unbind, DMA destruction, charge return,
+and request settlement before task-object reclamation. The boot transcript reports
+4096 MMIO bytes, one MMIO mapping, one IRQ source, two DMA pages, one DMA mapping,
+and zero outstanding requests reclaimed to exact zero, then respawns the driver at
+epoch 2 and refuses predecessor epoch 1. IO1's restart tally includes DMA charges now
+that live-loan payload DMA and driver-owned contiguous queue DMA have landed.
+**Evidence:** [`devlog/2026-08-28-io1-hardware-resource-authority/`](../devlog/2026-08-28-io1-hardware-resource-authority/index.md)
 
 **Depends on:** IO0, C7 generation-v3 rights and quotas, C9.4 supervision/reclamation, and the P1/P5 architecture boundary.
 
@@ -118,7 +158,7 @@ Two supervised components exchange protocol-specific requests and completions th
 ### Required checks
 
 - a component without the exact device resource cannot enumerate devices, map MMIO, allocate/map DMA memory, receive or acknowledge an interrupt, or map another holder's buffer;
-- a driver maps only its granted region and requested bounded subrange; wrong device, offset, length, cache/access mode, or duplicate mapping fails before touching the VSpace;
+- a driver maps only its granted region and requested bounded subrange; direct mapping additionally requires page exclusivity, while shared-granule regions use mediated `read32`/`write32` whose per-access bounds are stricter than page-granular mapping; wrong device, offset, length, cache/access mode, or duplicate mapping fails before touching the VSpace;
 - DMA allocation and live mappings cannot exceed the generation account, and memory remains charged and unreclaimable while a hardware request owns it;
 - one driver receives only its declared interrupt; spoofed, wrong-source, duplicate, and stale acknowledgements are rejected;
 - crash/restart revokes mappings and interrupt authority, settles IO0 requests, returns every charge, and starts with a fresh epoch;
@@ -135,9 +175,34 @@ just io_driver_authority_check
 
 A manifest-declared userspace driver receives exactly one device instance, its bounded MMIO, DMA account, interrupt, shared-data endpoints, and supervision handle; an ungranted component receives none of them, crash/restart returns every charge with a fresh epoch, and the root remains unaware of device semantics.
 
+The boot-selector's disk is a bounded ordering exception: it must be probed before the generation stored on it can be decoded, so decoded generation policy cannot select its own prerequisite. No other device inherits that exception; after decode, hardware ownership is generation-driven and mutually exclusive with the legacy root driver.
+
 ## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
 
-**Status:** Not started.
+**Status:** Complete except root cutover; the spawn-grant prerequisite is landed, while authenticated per-ring block rights remain a blocking prerequisite. QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` reaches `SLIME_GRAPH HEALTHY generation=51 required=3 live=0 completed=3 failed=0` and returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
+
+**Spawn-grant prerequisite: landed, and the previous diagnosis corrected.** Two earlier passes reported that a dynamically spawned storage client could not receive its crossing bindings because init's spawn supplied zero grant records, and each reverted a working migration believing the root lacked the mechanism. That conclusion was wrong. The root already derives crossing grants from the generation: adding a declared `sharedBufferFactory` grant (source `init`, target `sel4-storage-probe`) to `sel4-storage.zti` made preflight report `requested=0 parent=1 minted=0 respawn=false` — it had counted the declaration correctly and refused only because init passed nothing. The gap was entirely init-side. `drive_probe_plane_with_token` now takes the exact grant vector its manifest declares, and the storage plane boots with `SLIME_GRAPH spawn authorized task=0 slot=1 component=sel4-storage-probe grants=1` and `buffer_factory_grants=1`. The same idiom was already in production on the sample plane (`sample-lender-shared-buffer-factory`), so this is a use of the existing mechanism rather than a second one.
+
+The rule is now pinned where a host gate can reach it. `grant_crosses_spawn` and the new `declared_crossing_grants` moved from the binary-only dispatcher into `slime-root/src/generation.rs`, so the dispatcher and the tests share one implementation; `just test_sel4_root` is 205. Widening stays unrepresentable because the count comes from declarations, leaving no index at which an owner can place an undeclared grant.
+
+**Per-ring rights prerequisite: not implemented.** The root's current
+`serve_block_transact` identifies the caller from the endpoint badge and checks that
+caller's `BlockDevice` for `blockRead` or `blockWrite` on every request. The userspace
+driver sees only submissions in shared ring memory; neither the IO0 envelope nor the
+driver's generation view binds a ring to authenticated client rights. Thus
+`STATUS_BAD_RIGHTS` is defined by `io-queue/v1` but the driver never produces it. This
+is observable, not theoretical: `sel4-recovery` reads an attached guard disk through a
+read-only capability and requires a write through that same authority to be refused.
+
+The design precedent is IO4's exact destination authority. Add a generation resource
+mapping each block ring to its read/write rights, require clients with different rights
+to use different rings, and let the driver read its own policy through the same
+authenticated cursor-paged generation-resource path used by `network-service`. The
+driver, not a request field or client-side adapter, then returns `STATUS_BAD_RIGHTS`
+for a write on a read-only ring. Only after that policy is gate-proved should the six
+storage compositions move to the shared IO0 adapter and the root path be removed.
+
+**The root product path remains intact, and the remaining cutover is larger than previously recorded.** The six storage-family generations still grant synchronous root-served `BlockTransact` capabilities; all six gates pass unchanged, so no half-migration was retained. Two facts found while scoping it: **twelve** components call `block_transact*`, not six — `sel4-transfer-probe` (`sel4-transfer.zti`) and `replay-probe` (`sel4-replay.zti`) also depend on the root path, so removing it breaks two compositions outside the storage family — and `sel4-recovery-probe` holds **two** block capabilities with different rights (a writable recovery disk and a read-only guard disk whose byte-identity the gate asserts), which the single-device ring composition does not yet express.
 
 **Depends on:** IO0, IO1, and the existing M5/P5 block behavior and QEMU storage gates.
 
@@ -172,7 +237,29 @@ A supervised userspace virtio-blk driver provides the existing capability-gated 
 
 ## IO3 — Userspace virtio-net and LinkDevice validation
 
-**Status:** Not started.
+**Status:** Complete. `just io_link_check` builds, boots generation 52 under QEMU, and
+passes: the supervised userspace `virtio-net-driver` negotiates the legacy transport
+with no optional feature, programs two 16-slot virtqueues, and serves one bounded
+`LinkDevice` over the same IO0 queues and IO1 authority as virtio-blk. Observed in the
+transcript: link state up; one 60-byte frame transmitted and its address-swapped echo
+received and byte-verified from the deterministic UDP backend; eight transmits accepted
+then a ninth refused `Full` with the ring's submitted count unchanged; receive
+replenishment paused rather than reusing a device-owned buffer; eight completions
+drained from a single wake (`max-per-wake=8`); undersized and oversized frames refused
+with `device-programmed=0`; a frame longer than the slice it names refused
+`STATUS_BAD_SLICE` with `device-programmed=0`; reset settling one transmit and one
+receive request (`tx=1 rx=1 leases=2`); restart reclaiming every charge numerically
+(`dma=0 requests=0 leases=0`, corroborated by the root's own
+`SLIME_IO reclaim … post_dma_pages=0 post_dma_mappings=0 post_requests=0`); a fresh
+epoch `old=1 new=2` with one stale transmit and one stale receive completion refused;
+and the intruder denied all four raw-link operations with no packet emitted. The MMIO
+mechanism exercised is **mediated** bounded `read32`/`write32` — QEMU packs eight
+0x200 transports into one 4KiB granule, so the region is not page-exclusive and the
+direct-map path is not admitted. Interrupt *authority* is granted and reclaimed
+(`reclaimed_irq_sources`), but this device completes faster than the line is
+dispatched, so completions are serviced by draining the used ring; no
+interrupt-sequence marker is claimed.
+**Evidence:** [`devlog/2026-08-28-io3-userspace-virtio-net/`](../devlog/2026-08-28-io3-userspace-virtio-net/index.md)
 
 **Depends on:** IO0, IO1, and IO2 as the first complete substrate proof.
 
@@ -206,7 +293,27 @@ A userspace virtio-net driver exposes one bounded `LinkDevice` with duplex queue
 
 ## IO4 — Network service and exact destination authority
 
-**Status:** Not started.
+**Status:** Complete 2026-08-28 for the declared subset; `just io_network_check` boots
+the plane and reports exact destinations, denials, reset, restart, and backend
+independence proved. A granted client reaches exactly its declared TCP/UDP
+destination and DNS name; eleven separate denial arms — alternate address, alternate
+port, alternate DNS name, wrong transport, each of the four missing rights, raw
+packet, resolver-wide lookup, and listen without LISTEN — each observe zero packets.
+Reset and restart reclaim every queue, buffer, and lease with a fresh epoch and
+refuse stale completions.
+
+**Declared but structurally refused as `STATUS_UNSUPPORTED`,** and therefore *not*
+claimed: IPv6 and NDP, DHCP, SLAAC, and the TCP listener/accept data path beyond a
+structured refusal. Those remain declared in `contracts/network-service/v1` so
+adding them is an implementation change rather than a contract change. Anything
+consuming IO4 that needs one of them — an RPi5 or ROS path that requires DHCP, or a
+listening service — must treat it as unfinished.
+
+**Backend:** proved against a deterministic in-plane `io-link-loopback` `LinkDevice`
+provider, which is legitimate evidence precisely because backend independence is an
+IO4 deliverable. The virtio-net reference backend is IO3's and is qualified there;
+physical link qualification remains H6/H12/RP.
+**Evidence:** [`devlog/2026-08-28-io4-network-service/`](../devlog/2026-08-28-io4-network-service/index.md)
 
 **Depends on:** IO3, C9 clocks/WaitSets/restart where timers and reconnect use them, and generation/capability introspection.
 

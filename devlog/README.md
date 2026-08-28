@@ -356,3 +356,8 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [B81: the freestanding C linker emitted an unaligned writable segment](2026-08-27-b81-rpi5-c-segment-layout/index.md) | Defect | Verified | B81, P4 |
 | 2026-08-27 | [m3air becomes the credential-isolated SDK publication runner](2026-08-27-m3air-sdk-runner/index.md) | Change | Verified | CP7 |
 | 2026-08-27 | [Two hand-written SHA-256 implementations replaced by one RustCrypto facade](2026-08-27-sha256-rustcrypto-facade/index.md) | Change | Verified | none |
+| 2026-08-28 | [IO0: the shared queue, identity, and buffer-lease substrate](2026-08-28-io0-queue-substrate/index.md) | Change | Verified | IO0 |
+| 2026-08-28 | [IO4: the bounded network service and exact destination authority](2026-08-28-io4-network-service/index.md) | Change | Verified | IO4 |
+| 2026-08-28 | [IO2: userspace virtio-blk parity over the IO0 substrate](2026-08-28-io2-userspace-virtio-blk/index.md) | Change | Verified | IO2 |
+| 2026-08-28 | [IO1: hardware-resource authority, DMA accounts, and reclamation on death](2026-08-28-io1-hardware-resource-authority/index.md) | Change | Verified | IO1, B82 |
+| 2026-08-28 | [IO3: userspace virtio-net and LinkDevice duplex validation](2026-08-28-io3-userspace-virtio-net/index.md) | Change | Verified | IO3 |
