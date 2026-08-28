@@ -45,6 +45,7 @@ pub mod capability_table_labels {
     pub const GRAPH_QUERY: u64 = 41;
     pub const SPAWN_BUDGET: u64 = 42;
     pub const NETWORK_DESTINATIONS_READ: u64 = 64;
+    pub const BLOCK_RING_AUTHORITY_READ: u64 = 69;
 }
 
 pub mod directory_labels {

@@ -4,6 +4,14 @@ import struct
 import ipaddress
 
 from boot_contracts import (
+    BLOCK_AUTHORITY_ENTRY,
+    BLOCK_AUTHORITY_ENTRY_BYTES,
+    BLOCK_AUTHORITY_HEADER,
+    BLOCK_AUTHORITY_HEADER_BYTES,
+    BLOCK_AUTHORITY_MAGIC,
+    BLOCK_AUTHORITY_VERSION,
+    BLOCK_RIGHT_READ,
+    BLOCK_RIGHT_WRITE,
     CLOCK_AUTHORITY_ENTRY,
     CLOCK_AUTHORITY_ENTRY_BYTES,
     CLOCK_AUTHORITY_HEADER,
@@ -48,6 +56,8 @@ from boot_contracts import (
     IO_RESOURCE_HEADER_BYTES,
     IO_RESOURCE_MAGIC,
     IO_RESOURCE_VERSION,
+    MAX_BLOCK_RINGS,
+    MAX_BLOCK_RINGS_PER_HOLDER,
     MAX_IO_RESOURCE_DRIVERS,
     MAX_PRIVATE_MEMORY_BUDGET_HOLDERS,
     MAX_SHARED_BUFFER_BUDGET_HOLDERS,
@@ -295,6 +305,82 @@ def build_network_destinations(declarations: list[dict]) -> bytes:
         fail("network destination: duplicate exact tuple")
     total_len = NETWORK_DESTINATION_HEADER_BYTES + len(entries) * NETWORK_DESTINATION_ENTRY_BYTES
     header = NETWORK_DESTINATION_HEADER.pack(NETWORK_DESTINATION_MAGIC, NETWORK_DESTINATION_VERSION, NETWORK_DESTINATION_HEADER_BYTES, 0, len(entries), total_len)
+    return header + b"".join(entry for _, entry in entries)
+
+
+def block_ring_holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching `boot_contracts::block_authority`.
+
+    Its own domain tag: an identity computed for a network destination must not
+    be replayable as a block-ring identity, or a grant in either table would be
+    forgeable from the other.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-block-authority-holder-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def build_block_ring_authority(declarations: list[dict]) -> bytes:
+    """Encode B83's exact per-ring block authority table.
+
+    Rights are a property of the `(holder, device, ring)` triple, not of a
+    submission: an IO0 ring is shared memory carrying no rights identity, so a
+    driver reading this table is the only place a read-only ring's write can be
+    refused. Two clients whose rights differ therefore declare two rings, and
+    the strictly ascending sort makes a duplicate triple unrepresentable rather
+    than resolved by whichever row a lookup reaches first.
+    """
+    if len(declarations) > MAX_BLOCK_RINGS:
+        fail("block ring authority exceeds entry bound")
+    right_bits = {"blockRead": BLOCK_RIGHT_READ, "blockWrite": BLOCK_RIGHT_WRITE}
+    entries = []
+    holder_counts: dict[bytes, int] = {}
+    for declaration in declarations:
+        holder = block_ring_holder_identity(declaration["holder"])
+        rights = 0
+        for right in declaration["rights"]:
+            bit = right_bits.get(right)
+            if bit is None or rights & bit:
+                fail("block ring authority: unknown or duplicate right")
+            rights |= bit
+        numbers = (declaration["device"], declaration["ring"], declaration["sectorLimit"])
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in numbers
+        ):
+            fail("block ring authority: invalid device, ring, or sector limit")
+        device, ring, sector_limit = numbers
+        if rights == 0 or sector_limit == 0:
+            fail("block ring authority: a ring must carry a right and a nonzero limit")
+        if device > 0xFFFFFFFF or ring > 0xFFFFFFFF or sector_limit > 0xFFFFFFFFFFFFFFFF:
+            fail("block ring authority: field exceeds contract width")
+        holder_counts[holder] = holder_counts.get(holder, 0) + 1
+        if holder_counts[holder] > MAX_BLOCK_RINGS_PER_HOLDER:
+            fail("block ring authority exceeds per-holder bound")
+        packed = BLOCK_AUTHORITY_ENTRY.pack(
+            holder, device, ring, rights, sector_limit, bytes(14)
+        )
+        entries.append(((device, ring), packed))
+    entries.sort(key=lambda value: value[0])
+    # Adjacent pairs over a sorted list, so the second sequence is deliberately
+    # one shorter: `strict=False` is the intent, not an oversight.
+    #
+    # Keyed on `(device, ring)` without the holder, matching the decoder: one
+    # ring may carry exactly one row, even for two different holders. A ring
+    # shared by two holders would leave the driver unable to say whose rights a
+    # submission carries, which is the defect this table closes.
+    if any(left[0] == right[0] for left, right in zip(entries, entries[1:], strict=False)):
+        fail("block ring authority: two holders named one device and ring")
+    total_len = BLOCK_AUTHORITY_HEADER_BYTES + len(entries) * BLOCK_AUTHORITY_ENTRY_BYTES
+    header = BLOCK_AUTHORITY_HEADER.pack(
+        BLOCK_AUTHORITY_MAGIC,
+        BLOCK_AUTHORITY_VERSION,
+        BLOCK_AUTHORITY_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
     return header + b"".join(entry for _, entry in entries)
 
 

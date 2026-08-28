@@ -120,6 +120,7 @@ from zutai_cli import STDLIB, binary
 
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT
 from generation_resources import (
+    build_block_ring_authority,
     build_clock_authority,
     build_io_resource_budget,
     build_network_destinations,
@@ -2521,6 +2522,11 @@ def build_sel4_generation(
         )
     elif declared_network_destinations:
         fail("networkDestinations declared without a network-destinations resource object")
+    declared_block_rings = manifest.get("blockRingAuthority") or []
+    if "block-ring-authority" in object_ids:
+        payloads["block-ring-authority"] = build_block_ring_authority(declared_block_rings)
+    elif declared_block_rings:
+        fail("blockRingAuthority declared without a block-ring-authority resource object")
     declared_clock_authority = manifest.get("clockAuthority") or []
     if "clock-authority" in object_ids:
         payloads["clock-authority"] = build_clock_authority(manifest)

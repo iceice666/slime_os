@@ -173,6 +173,25 @@ IoResourceBudgetEntry :: type {
   bufferLoans : Int;
 };
 
+-- B83 exact per-ring block authority. Each entry binds one client instance,
+-- on one device, to one IO0 ring, with independent read and write rights and a
+-- declared sector ceiling.
+--
+-- Rights live on the ring rather than on a submission because an IO0 ring is
+-- shared memory: a submission carries a request, a slice, and a lease but no
+-- rights identity, so a driver serving the ring has no caller badge to derive
+-- authority from. Two clients whose rights differ therefore use two rings.
+--
+-- No field can widen: there is no wildcard holder, no device range, and no
+-- rights value meaning "all".
+BlockRingAuthorityEntry :: type {
+  holder : Text;
+  device : Int;
+  ring : Int;
+  rights : List Text;
+  sectorLimit : Int;
+};
+
 -- IO4 exact destination authority and every bound the userspace network
 -- service may consume for that tuple. Address is either a dotted IPv4 literal,
 -- an IPv6 literal, or one exact DNS name according to `addressKind`; no field
@@ -541,6 +560,12 @@ GenerationManifest :: type {
   -- network destination. The authenticated resource object is readable only
   -- by the declared network service; clients receive typed service authority.
   networkDestinations? : List NetworkDestinationEntry;
+  -- Optional B83 exact per-ring block authority table. Absent and empty both
+  -- grant no ring any block right, so a userspace block driver refuses every
+  -- submission rather than defaulting open. Readable only by the declared
+  -- block driver, through the same authenticated cursor-paged path as the IO4
+  -- destination table.
+  blockRingAuthority? : List BlockRingAuthorityEntry;
   -- Optional C9.1 clock service authority. Absent and empty both deny every
   -- root-brokered clock operation; raw counter access is outside this service
   -- contract as documented by contracts/clock-authority/v1.
@@ -596,6 +621,7 @@ FromData @HealthPolicy :: derive
 FromData @SharedBufferBudgetEntry :: derive
 FromData @PrivateMemoryBudgetEntry :: derive
 FromData @NetworkDestinationEntry :: derive
+FromData @BlockRingAuthorityEntry :: derive
 FromData @FabricProfileInterposition :: derive
 FromData @FabricProfile :: derive
 FromData @FabricParticipant :: derive
@@ -629,6 +655,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   SharedBufferBudgetEntry =;
   PrivateMemoryBudgetEntry =;
   NetworkDestinationEntry =;
+  BlockRingAuthorityEntry =;
   ClockAuthorityEntry =;
   SchedulingClassBand =;
   SchedulingClassEntry =;

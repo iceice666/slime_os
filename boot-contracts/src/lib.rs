@@ -9,6 +9,7 @@
 #[cfg(feature = "gpt")]
 extern crate alloc;
 
+pub mod block_authority;
 pub mod boot_layout;
 pub mod bootstate;
 pub mod clock_authority;
