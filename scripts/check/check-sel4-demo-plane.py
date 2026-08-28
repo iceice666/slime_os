@@ -62,6 +62,7 @@ fail the spawn closed.
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import os
@@ -77,7 +78,13 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import (  # noqa: E402
+    GENERATION_COMPOSITIONS,
+    profile_integer,
+    profile_text,
+    sha256_file,
+)
+from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -91,6 +98,11 @@ STORE_FIXTURE = ROOT / "scripts" / "build" / "build-store-fixture.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-demo.zti"
 IMAGE_VARIANT = "demo"
 MANIFEST_NAME = "sel4-demo"
+AUTOMATIC_BINDING_SLOTS = {
+    "spawn-service-rpc": 0,
+    "spawn-service-sysinfo": 1,
+    "spawn-service-sysinfo-context": 3,
+}
 
 BOOT_TIMEOUT_SECONDS = 420
 STORE_FIRST = 40
@@ -115,7 +127,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             # 13 executables and 13 instances: init, the product graph's four,
             # the C7 pair, and the C8 six. This count *is* the milestone claim.
-            r"SLIME_ROOT generation admitted number=\d+ executables=13 instances=13 grants=26 health=4 bootstrap=1",
+            r"SLIME_ROOT generation admitted number=\d+ executables=13 instances=13 grants=28 health=4 bootstrap=1",
             # The C8 half is real: a fabric graph the root validated against its
             # own ceilings, not an absent one. An earlier revision of this gate
             # asserted the rest of the slice over a generation with
@@ -456,6 +468,61 @@ def generator_module(name: str):
     return module
 
 
+def check_automatic_binding_slots() -> None:
+    """Omitted ordinary bindings must resolve to the frozen layout."""
+    environment = dict(os.environ)
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    process = subprocess.run(
+        [str(binary()), "json", str(FIXTURE)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode:
+        fail(f"cannot decode {FIXTURE.relative_to(ROOT)}: {process.stderr.strip()}")
+    try:
+        manifest = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"cannot parse decoded {FIXTURE.relative_to(ROOT)}: {error}")
+    spawn_service = next(
+        (instance for instance in manifest["instances"] if instance["name"] == "spawn-service"),
+        None,
+    )
+    if spawn_service is None:
+        fail("demo generation declares no spawn-service instance")
+    bindings = {binding["grant"]: binding for binding in spawn_service["bindings"]}
+    for grant in AUTOMATIC_BINDING_SLOTS:
+        binding = bindings.get(grant)
+        if binding is None:
+            fail(f"spawn-service does not bind {grant}")
+        if "slot" in binding:
+            fail(f"spawn-service/{grant} redundantly pins slot {binding['slot']}")
+
+    resolved = generator_module("slime_build_generation_demo_slots").assign_declared_slots(
+        copy.deepcopy(manifest)
+    )
+    resolved_spawn = next(
+        instance for instance in resolved["instances"] if instance["name"] == "spawn-service"
+    )
+    resolved_bindings = {
+        binding["grant"]: binding["slot"] for binding in resolved_spawn["bindings"]
+    }
+    for grant, expected in AUTOMATIC_BINDING_SLOTS.items():
+        if resolved_bindings.get(grant) != expected:
+            fail(
+                f"spawn-service/{grant} resolved to slot {resolved_bindings.get(grant)}, "
+                f"expected {expected}"
+            )
+    print(
+        f"demo manifest: {len(AUTOMATIC_BINDING_SLOTS)} ordinary binding slots "
+        "omitted and resolved unchanged",
+        flush=True,
+    )
+
+
 def build_demo_generation(output: Path, number: int, bundle: str, *, failing: bool) -> Path:
     """Build one demo generation for the rollback pair.
 
@@ -542,11 +609,7 @@ def only_boot_state_changed(before: bytes, after: bytes) -> None:
     """
     start = STORE_FIRST * SECTOR
     end = start + 2 * SECTOR
-    if (
-        len(before) != len(after)
-        or before[:start] != after[:start]
-        or before[end:] != after[end:]
-    ):
+    if len(before) != len(after) or before[:start] != after[:start] or before[end:] != after[end:]:
         fail("a boot mutated disk bytes outside the redundant BootState slots")
     if before[start:end] == after[start:end]:
         fail("BootState did not change")
@@ -561,9 +624,7 @@ def check_rollback_pair(profile: dict[str, object]) -> None:
     """
     run([sys.executable, str(BUILD_SCRIPT), "--boot-selection"])
     check_manifest(SELECTOR_MANIFEST, SELECTOR_IMAGE, "boot-selection", "--boot-selection")
-    bundle = str(
-        json.loads(SELECTOR_MANIFEST.read_text(encoding="utf-8"))["boot_bundle_identity"]
-    )
+    bundle = str(json.loads(SELECTOR_MANIFEST.read_text(encoding="utf-8"))["boot_bundle_identity"])
     with tempfile.TemporaryDirectory(prefix="slime-rp2-") as temporary:
         work = Path(temporary)
         known_good = build_demo_generation(work / "good", 1, bundle, failing=False)
@@ -697,6 +758,7 @@ def main() -> None:
         fail(f"run from repository root: {ROOT}")
     if not FIXTURE.is_file():
         fail(f"missing generation fixture {FIXTURE.relative_to(ROOT)}")
+    check_automatic_binding_slots()
     # The wrong-target arm must build: its whole subject is an image this gate
     # injects, and it must rebuild afterwards so the poisoned artifact does not
     # outlive the run. `--no-build` cannot be honored there, so the combination
@@ -741,8 +803,7 @@ def main() -> None:
         # so the poisoned artifact does not outlive a failed arm either.
         check_wrong_target(profile)
         observed.append(
-            "a wrong-target component image was refused before any of its bytes "
-            "were mapped"
+            "a wrong-target component image was refused before any of its bytes were mapped"
         )
 
     scope = "" if arguments.arm == "all" else f" (--arm {arguments.arm})"

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """IO1 gate: generation-scoped userspace hardware authority under seL4."""
+
 from __future__ import annotations
 
 import argparse
+import copy
+import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -14,15 +18,28 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import load_qemu_profile, profile_integer, profile_text, sha256_file  # noqa: E402
+from harness import (
+    GENERATION_COMPOSITIONS,
+    load_qemu_profile,
+    profile_integer,
+    profile_text,
+    sha256_file,
+)  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
+from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-io-driver-authority.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-io-driver-authority.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions" / "sel4-io-driver-authority.zti"
+GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-io-driver-authority.zti"
+AUTOMATIC_BINDING_SLOTS = {
+    "io-driver-worker-executable": 0,
+    "probe-device": 1,
+    "probe-mmio": 2,
+}
 IMAGE_VARIANT = "io-driver-authority"
 TIMEOUT = 240
 
@@ -79,6 +96,74 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 I/O driver authority plane check: {message}")
 
 
+def generator_module(name: str):
+    spec = importlib.util.spec_from_file_location(name, GENERATOR)
+    if spec is None or spec.loader is None:
+        fail("cannot import the generation builder")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_automatic_binding_slots() -> None:
+    """Omitted supervisor bindings must resolve to the frozen authority layout."""
+    environment = dict(os.environ)
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    process = subprocess.run(
+        [str(binary()), "json", str(FIXTURE)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode:
+        fail(f"cannot decode {FIXTURE.relative_to(ROOT)}: {process.stderr.strip()}")
+    try:
+        manifest = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"cannot parse decoded {FIXTURE.relative_to(ROOT)}: {error}")
+    supervisor = next(
+        (
+            instance
+            for instance in manifest["instances"]
+            if instance["name"] == "io-driver-supervisor"
+        ),
+        None,
+    )
+    if supervisor is None:
+        fail("generation declares no io-driver-supervisor instance")
+    bindings = {binding["grant"]: binding for binding in supervisor["bindings"]}
+    for grant in AUTOMATIC_BINDING_SLOTS:
+        binding = bindings.get(grant)
+        if binding is None:
+            fail(f"io-driver-supervisor does not bind {grant}")
+        if "slot" in binding:
+            fail(f"io-driver-supervisor/{grant} redundantly pins slot {binding['slot']}")
+
+    resolved = generator_module("slime_build_generation_io_authority_slots").assign_declared_slots(
+        copy.deepcopy(manifest)
+    )
+    resolved_supervisor = next(
+        instance for instance in resolved["instances"] if instance["name"] == "io-driver-supervisor"
+    )
+    resolved_bindings = {
+        binding["grant"]: binding["slot"] for binding in resolved_supervisor["bindings"]
+    }
+    for grant, expected in AUTOMATIC_BINDING_SLOTS.items():
+        if resolved_bindings.get(grant) != expected:
+            fail(
+                f"io-driver-supervisor/{grant} resolved to slot "
+                f"{resolved_bindings.get(grant)}, expected {expected}"
+            )
+    print(
+        f"I/O authority manifest: {len(AUTOMATIC_BINDING_SLOTS)} supervisor "
+        "binding slots omitted and resolved unchanged",
+        flush=True,
+    )
+
+
 def build_image() -> None:
     process = subprocess.run(
         [sys.executable, str(BUILD_SCRIPT), "--io-driver-authority-plane"],
@@ -109,13 +194,23 @@ def boot(profile: dict[str, object]) -> str:
         fail("qemu-system-aarch64 is not on PATH")
     command = [
         qemu,
-        "-machine", profile_text(profile, "machine", fail),
-        "-cpu", profile_text(profile, "cpu", fail),
-        "-smp", str(profile_integer(profile, "cpus", fail)),
-        "-m", f"size={profile_integer(profile, 'memory_mib', fail)}M",
-        "-nographic", "-serial", "mon:stdio", "-kernel", str(IMAGE),
-        "-drive", "if=none,file=/dev/zero,format=raw,id=d0",
-        "-device", "virtio-blk-device,drive=d0",
+        "-machine",
+        profile_text(profile, "machine", fail),
+        "-cpu",
+        profile_text(profile, "cpu", fail),
+        "-smp",
+        str(profile_integer(profile, "cpus", fail)),
+        "-m",
+        f"size={profile_integer(profile, 'memory_mib', fail)}M",
+        "-nographic",
+        "-serial",
+        "mon:stdio",
+        "-kernel",
+        str(IMAGE),
+        "-drive",
+        "if=none,file=/dev/zero,format=raw,id=d0",
+        "-device",
+        "virtio-blk-device,drive=d0",
     ]
     process = subprocess.Popen(
         command,
@@ -167,18 +262,23 @@ def check_fixture() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O driver authority proof plane")
+    parser = argparse.ArgumentParser(
+        description="Boot and check the seL4 I/O driver authority proof plane"
+    )
     parser.add_argument("--no-build", action="store_true")
     arguments = parser.parse_args()
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     check_fixture()
+    check_automatic_binding_slots()
     if not arguments.no_build:
         build_image()
     check_manifest()
     profile = load_qemu_profile(fail, PINS)
     match_marker_contract(boot(profile), CHAINS, FAILURE_MARKERS, fail)
-    print("seL4 I/O driver authority plane check: exact mediated MMIO, bounded IRQ authority, and ungranted denial proved")
+    print(
+        "seL4 I/O driver authority plane check: exact mediated MMIO, bounded IRQ authority, and ungranted denial proved"
+    )
 
 
 if __name__ == "__main__":

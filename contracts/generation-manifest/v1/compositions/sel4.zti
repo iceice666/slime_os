@@ -236,11 +236,9 @@
       bindings = [
         {
           grant = "spawn-service-rpc";
-          slot = 0;
         };
         {
           grant = "spawn-service-sysinfo";
-          slot = 1;
         };
         {
           grant = "spawn-service-echo";
@@ -248,7 +246,6 @@
         };
         {
           grant = "spawn-service-sysinfo-context";
-          slot = 3;
         };
         {
           grant = "spawn-service-shared-buffer-factory";

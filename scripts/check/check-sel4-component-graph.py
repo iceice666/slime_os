@@ -18,7 +18,10 @@ asserts about, so neither invalidates the other's evidence by being built last.
 from __future__ import annotations
 
 import argparse
+import copy
+import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,13 +34,27 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import GENERATION_CONTRACT, profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import (  # noqa: E402
+    GENERATION_COMPOSITIONS,
+    GENERATION_CONTRACT,
+    profile_integer,
+    profile_text,
+    sha256_file,
+)
+from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-graph.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-graph.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4.zti"
+AUTOMATIC_BINDING_SLOTS = {
+    "spawn-service-rpc": 0,
+    "spawn-service-sysinfo": 1,
+    "spawn-service-sysinfo-context": 3,
+}
 
 BOOT_TIMEOUT_SECONDS = 120
 INPUT_WAIT_MARKER = r"\[slisp\] resident input wait"
@@ -53,9 +70,15 @@ INPUT_WAIT_MARKER = r"\[slisp\] resident input wait"
 TERMINAL_MARKER = r"=> spawned sysinfo"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
-    ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=6 instances=6 grants=\d+ "),
+    (
+        "generation admitted",
+        r"SLIME_ROOT generation admitted number=1 executables=6 instances=6 grants=\d+ ",
+    ),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
-    ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=6 instances=6 slimecm=0 elf=6 unrecognized=0"),
+    (
+        "all catalogue payloads are native ELF images",
+        r"SLIME_ROOT graph admitted executables=6 instances=6 slimecm=0 elf=6 unrecognized=0",
+    ),
     # C10.2: this generation declares no `privateMemoryBudget` at all, which is
     # the case 22 of the 33 fixtures are in and which the private-memory plane
     # cannot state — that plane exists precisely to carry a budget. `declared=0`
@@ -67,23 +90,44 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "the generation declares no private-memory budget",
         r"SLIME_MEM budget holders=0 declared=0",
     ),
-    ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=6 bindings=6 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
-    ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=6 slimecm=0 wrong_target=0 unrecognized=0"),
+    (
+        "only root-owned init was staged",
+        r"SLIME_GRAPH staged task=0 instance=init executable=init grants=6 bindings=6 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+",
+    ),
+    (
+        "the executable catalogue remained available to spawn",
+        r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=6 slimecm=0 wrong_target=0 unrecognized=0",
+    ),
     ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
     ("init began the declared graph", r"\[init\] launching component graph"),
-    ("init authorized console through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0"),
+    (
+        "init authorized console through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0",
+    ),
     (
         "console received its installed native Endpoint capability",
         r"SLIME_GRAPH native endpoint task=1 slot=33 side=both",
     ),
-    ("init spawned console as instance task 1", r"SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0"),
-    ("init authorized spawn-service through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3"),
+    (
+        "init spawned console as instance task 1",
+        r"SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized spawn-service through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3",
+    ),
     (
         "spawn-service received its installed native Endpoint capability",
         r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
     ),
-    ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1"),
-    ("init authorized Slisp through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0"),
+    (
+        "init spawned spawn-service as instance task 2",
+        r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1",
+    ),
+    (
+        "init authorized Slisp through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0",
+    ),
     (
         "Slisp received its two declared service endpoints",
         r"SLIME_GRAPH native endpoint task=3 slot=33 side=both",
@@ -92,8 +136,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "Slisp received its second declared service endpoint",
         r"SLIME_GRAPH native endpoint task=3 slot=35 side=both",
     ),
-    ("init spawned Slisp as instance task 3", r"SLIME_GRAPH spawned task=0 child=3 component=slisp grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0"),
-    ("the supervisor certified the live graph", r"SLIME_GRAPH healthy generation=1 instances=[0-9a-f]{16} required=4 live=4 idle=4 failed=0"),
+    (
+        "init spawned Slisp as instance task 3",
+        r"SLIME_GRAPH spawned task=0 child=3 component=slisp grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "the supervisor certified the live graph",
+        r"SLIME_GRAPH healthy generation=1 instances=[0-9a-f]{16} required=4 live=4 idle=4 failed=0",
+    ),
     ("init kept the product graph resident", r"\[init\] product services resident"),
     ("the product identified the Slisp shell", r"Slisp"),
     ("Slisp displayed its prompt", r"slisp> "),
@@ -102,7 +152,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("Slisp requested sysinfo through spawn-service", r"sysinfo\n\[spawn-service\] request"),
     ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
     ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
-    ("spawn-service collected detached supervision", r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0"),
+    (
+        "spawn-service collected detached supervision",
+        r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
+    ),
     ("Slisp reported the accepted spawn", TERMINAL_MARKER),
 )
 
@@ -190,6 +243,70 @@ def load_pins() -> dict[str, object]:
     if not isinstance(pins.get("qemu_arm_virt"), dict):
         fail("sel4/pins.toml is missing [qemu_arm_virt]")
     return pins
+
+
+def generator_module(name: str):
+    spec = importlib.util.spec_from_file_location(name, GENERATOR)
+    if spec is None or spec.loader is None:
+        fail("cannot import the generation builder")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_automatic_binding_slots() -> None:
+    """Omitted product bindings must resolve to the frozen layout."""
+    environment = dict(os.environ)
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    process = subprocess.run(
+        [str(binary()), "json", str(FIXTURE)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode:
+        fail(f"cannot decode {FIXTURE.relative_to(ROOT)}: {process.stderr.strip()}")
+    try:
+        manifest = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"cannot parse decoded {FIXTURE.relative_to(ROOT)}: {error}")
+    spawn_service = next(
+        (instance for instance in manifest["instances"] if instance["name"] == "spawn-service"),
+        None,
+    )
+    if spawn_service is None:
+        fail("product generation declares no spawn-service instance")
+    bindings = {binding["grant"]: binding for binding in spawn_service["bindings"]}
+    for grant in AUTOMATIC_BINDING_SLOTS:
+        binding = bindings.get(grant)
+        if binding is None:
+            fail(f"spawn-service does not bind {grant}")
+        if "slot" in binding:
+            fail(f"spawn-service/{grant} redundantly pins slot {binding['slot']}")
+
+    resolved = generator_module("slime_build_generation_product_slots").assign_declared_slots(
+        copy.deepcopy(manifest)
+    )
+    resolved_spawn = next(
+        instance for instance in resolved["instances"] if instance["name"] == "spawn-service"
+    )
+    resolved_bindings = {
+        binding["grant"]: binding["slot"] for binding in resolved_spawn["bindings"]
+    }
+    for grant, expected in AUTOMATIC_BINDING_SLOTS.items():
+        if resolved_bindings.get(grant) != expected:
+            fail(
+                f"spawn-service/{grant} resolved to slot {resolved_bindings.get(grant)}, "
+                f"expected {expected}"
+            )
+    print(
+        f"product manifest: {len(AUTOMATIC_BINDING_SLOTS)} binding slots "
+        "omitted and resolved unchanged",
+        flush=True,
+    )
 
 
 def build_image() -> None:
@@ -384,7 +501,6 @@ def check_deleted_compatibility_surface() -> None:
     print("repository service surface: compatibility model deleted", flush=True)
 
 
-
 def check_transcript(transcript: str) -> None:
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
@@ -436,6 +552,7 @@ def main() -> None:
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     pins = load_pins()
+    check_automatic_binding_slots()
     if not arguments.no_build:
         build_image()
     check_manifest()

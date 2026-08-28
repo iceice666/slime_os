@@ -104,7 +104,6 @@
       bindings = [
         {
           grant = "dango-output";
-          slot = 0;
         };
         {
           grant = "init-sample-receiver";
@@ -112,7 +111,6 @@
         };
         {
           grant = "init-shared-buffer-factory";
-          slot = 2;
         };
         {
           grant = "powerbox-client";
@@ -120,7 +118,6 @@
         };
         {
           grant = "sample-receiver-side";
-          slot = 4;
         };
       ];
       dependencies = [];
@@ -150,7 +147,6 @@
       bindings = [
         {
           grant = "console-shared-buffer-factory";
-          slot = 1;
         };
         {
           grant = "dango-output";

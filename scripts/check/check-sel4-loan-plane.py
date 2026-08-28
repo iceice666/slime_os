@@ -27,6 +27,9 @@ being built last.
 from __future__ import annotations
 
 import argparse
+import copy
+import importlib.util
+import os
 import json
 import re
 import shutil
@@ -39,13 +42,29 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import (  # noqa: E402
+    GENERATION_COMPOSITIONS,
+    profile_integer,
+    profile_text,
+    sha256_file,
+)
+from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-loan.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-loan.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
+FIXTURE = GENERATION_COMPOSITIONS / "sel4-loan.zti"
+AUTOMATIC_BINDING_SLOTS = {
+    "init": {
+        "dango-output": 0,
+        "init-shared-buffer-factory": 2,
+        "sample-receiver-side": 4,
+    },
+    "console": {"console-shared-buffer-factory": 1},
+}
 IMAGE_VARIANT = "loan"
 
 BOOT_TIMEOUT_SECONDS = 120
@@ -349,6 +368,68 @@ def load_pins() -> dict[str, object]:
     return pins
 
 
+def generator_module(name: str):
+    spec = importlib.util.spec_from_file_location(name, GENERATOR)
+    if spec is None or spec.loader is None:
+        fail("cannot import the generation builder")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_automatic_binding_slots() -> None:
+    """Omitted named bindings must resolve to the frozen loan layout."""
+    environment = dict(os.environ)
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    process = subprocess.run(
+        [str(binary()), "json", str(FIXTURE)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode:
+        fail(f"cannot decode {FIXTURE.relative_to(ROOT)}: {process.stderr.strip()}")
+    try:
+        manifest = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"cannot parse decoded {FIXTURE.relative_to(ROOT)}: {error}")
+    instances = {instance["name"]: instance for instance in manifest["instances"]}
+    for holder, expected_bindings in AUTOMATIC_BINDING_SLOTS.items():
+        instance = instances.get(holder)
+        if instance is None:
+            fail(f"loan generation declares no {holder} instance")
+        bindings = {binding["grant"]: binding for binding in instance["bindings"]}
+        for grant in expected_bindings:
+            binding = bindings.get(grant)
+            if binding is None:
+                fail(f"{holder} does not bind {grant}")
+            if "slot" in binding:
+                fail(f"{holder}/{grant} redundantly pins slot {binding['slot']}")
+
+    resolved = generator_module("slime_build_generation_loan_slots").assign_declared_slots(
+        copy.deepcopy(manifest)
+    )
+    resolved_instances = {instance["name"]: instance for instance in resolved["instances"]}
+    for holder, expected_bindings in AUTOMATIC_BINDING_SLOTS.items():
+        resolved_bindings = {
+            binding["grant"]: binding["slot"] for binding in resolved_instances[holder]["bindings"]
+        }
+        for grant, expected in expected_bindings.items():
+            if resolved_bindings.get(grant) != expected:
+                fail(
+                    f"{holder}/{grant} resolved to slot {resolved_bindings.get(grant)}, "
+                    f"expected {expected}"
+                )
+    count = sum(len(bindings) for bindings in AUTOMATIC_BINDING_SLOTS.values())
+    print(
+        f"loan manifest: {count} named binding slots omitted and resolved unchanged",
+        flush=True,
+    )
+
+
 def build_image() -> None:
     command = [sys.executable, str(BUILD_SCRIPT), "--loan-plane"]
     print(f"[build] {' '.join(command)}", flush=True)
@@ -362,10 +443,7 @@ def build_image() -> None:
 
 def check_manifest() -> None:
     if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_loan_check`"
-        )
+        fail(f"missing identity manifest {MANIFEST.relative_to(ROOT)}; run `just sel4_loan_check`")
     try:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -505,10 +583,6 @@ def check_transcript(transcript: str) -> None:
         fail(f"settled loan export/import evidence was {exports!r}/{imports!r}")
 
 
-
-
-FIXTURE = GENERATION_COMPOSITIONS / "sel4-loan.zti"
-
 # The one ceiling this file needs by value rather than by comparison: the four
 # quota probes are written against `init`'s limits, so a fixture edit that
 # changed them would need matching probe edits. Checked against the fixture
@@ -584,7 +658,9 @@ def check_declared_quotas(transcript: str) -> None:
     # The probes are written against init's exact numbers, so a fixture edit
     # that moved them would make every ceiling+1 probe test the wrong thing
     # while still refusing. Fail here rather than pass on a coincidence.
-    if declared.get("init") != tuple(INIT_QUOTA[key] for key in ("pages", "buffers", "mappings", "loans")):
+    if declared.get("init") != tuple(
+        INIT_QUOTA[key] for key in ("pages", "buffers", "mappings", "loans")
+    ):
         fail(
             f"{FIXTURE.relative_to(ROOT)} declares init {declared.get('init')}, but the "
             f"quota probes in init.rs are written against {INIT_QUOTA}"
@@ -663,6 +739,7 @@ def main() -> None:
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     pins = load_pins()
+    check_automatic_binding_slots()
     if not arguments.no_build:
         build_image()
     check_manifest()

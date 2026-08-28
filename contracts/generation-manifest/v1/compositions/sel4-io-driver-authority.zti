@@ -19,9 +19,9 @@
   instances = [
     { autostart = true; bindings = []; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
     { autostart = true; bindings = [
-        { grant = "io-driver-worker-executable"; slot = 0; };
-        { grant = "probe-device"; slot = 1; };
-        { grant = "probe-mmio"; slot = 2; };
+        { grant = "io-driver-worker-executable"; };
+        { grant = "probe-device"; };
+        { grant = "probe-mmio"; };
         { grant = "probe-irq"; slot = 3; };
         { grant = "probe-dma"; slot = 4; };
       ]; dependencies = []; executable = "io-driver-probe"; health = "required"; name = "io-driver-supervisor"; owner = "root"; };
