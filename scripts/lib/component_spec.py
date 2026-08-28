@@ -779,14 +779,25 @@ _builder = load_script("component_spec_generation_builder", "build/build-generat
 _CAPABILITY_KINDS = tuple(sorted(_builder.CAPABILITY_KIND))
 # Which of those kinds are device authority rather than component-to-component
 # authority. Derived, not listed: `boot-contracts/src/generation.rs`'s
-# `service_for_capability` routes exactly `Block` to `SERVICE_BLOCK` and `Input`
-# to `SERVICE_INPUT`, the two services that front a platform device; every other
-# kind is either unmediated (endpoint, executable) or a root-owned memory object.
+# `service_for_capability` routes `Block` to `SERVICE_BLOCK` and `Input` to
+# `SERVICE_INPUT`, the two services that front a platform device, and IO1's
+# `device`/`mmioRegion`/`interruptSource`/`dmaAccount` to `SERVICE_IO_RESOURCE`,
+# which fronts the hardware itself. Every other kind is either unmediated
+# (endpoint, executable) or a root-owned memory object.
+#
+# Deriving this from the service routing rather than naming the kinds is what
+# made IO1's four new kinds land here without an edit to a second list — except
+# for this tuple of services, which is the one thing the routing cannot tell us:
+# whether a service fronts a device or a peer.
 _DEVICE_KINDS = tuple(
     kind
     for kind in _CAPABILITY_KINDS
     if _builder.SERVICE_BY_CAPABILITY_KIND.get(kind)
-    in (_builder.SERVICE_BLOCK, _builder.SERVICE_INPUT)
+    in (
+        _builder.SERVICE_BLOCK,
+        _builder.SERVICE_INPUT,
+        _builder.SERVICE_IO_RESOURCE,
+    )
 )
 # Resource ceilings, imported from the constants that already enforce them rather
 # than retyped: `COMPONENT_MAX_STACK_BYTES` from the generated
