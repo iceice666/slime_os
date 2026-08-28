@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "io-queue-driver";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Drains the shared I/O queue, echoes validated requests, and proves reset settles every request and releases every lease once.";
+  implementation = {
+    provider = "workspace";
+    binary = "io-queue-driver";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 1;
+      bufferCount = 1;
+      mappingCount = 1;
+      loanCount = 1;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the io_queue_check gate boots the sel4-io-queue composition";
+    expectedResult = "the driver drains requests and proves reset settlement and exact lease release";
+    passFailCriteria = "[io-queue-driver] reset settled=2 leases=2";
+    requiredTestEnvironment = "io_queue_check";
+  };
+}

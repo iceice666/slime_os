@@ -1,0 +1,329 @@
+-- Pure renderer for Slime OS I/O queue bindings (IO0).
+--
+-- Structurally the same as the fabric ring's renderer -- reflect the schema,
+-- check field order against the declared layout, emit offsets and a codec --
+-- because the checking is what makes a layout trustworthy and that does not
+-- change with the format. What changes is what is being described: a duplex
+-- request/completion queue with an explicit epoch and buffer slice, rather than
+-- a one-way sample ring.
+--
+-- Four records rather than two, and the extra one is deliberate:
+-- `BufferSlice` is emitted standalone as well as inlined into the request slot,
+-- so the substrate can validate a descriptor -- bounds, direction, lease
+-- identity -- without a surrounding request. That is the check IO1 must run
+-- before it will hand a device a DMA mapping.
+
+refl ::= import stdlib.reflect;
+n ::= import stdlib.num;
+t ::= import stdlib.text;
+l ::= import stdlib.list;
+w ::= import wire.rust;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+Protocol :: type {
+  formatVersion : Int;
+  queueHeaderLen : Int;
+  requestSlotLen : Int;
+  completionSlotLen : Int;
+  requestPayloadBytes : Int;
+  completionPayloadBytes : Int;
+  minQueueSlots : Int;
+  maxQueueSlots : Int;
+  maxOutstanding : Int;
+  queueMagic : Int;
+  requestMagic : Int;
+  completionMagic : Int;
+  driverActive : Int;
+  driverResetting : Int;
+  driverDead : Int;
+  slotEmpty : Int;
+  slotClaimed : Int;
+  slotReady : Int;
+  stateQueued : Int;
+  stateInFlight : Int;
+  stateComplete : Int;
+  stateCancelled : Int;
+  stateReset : Int;
+  statePeerDead : Int;
+  statusOk : Int;
+  statusCancelled : Int;
+  statusReset : Int;
+  statusPeerDead : Int;
+  statusMalformed : Int;
+  statusBadSlice : Int;
+  statusBadEpoch : Int;
+  statusBadRights : Int;
+  statusExhausted : Int;
+  statusDeviceError : Int;
+  statusUnsupported : Int;
+  directionNone : Int;
+  directionDeviceRead : Int;
+  directionDeviceWrite : Int;
+  knownDirections : Int;
+  flagFenced : Int;
+  knownRequestFlags : Int;
+  flagEpochEnded : Int;
+  knownCompletionFlags : Int;
+  badgeRequestReady : Int;
+  badgeCompletionReady : Int;
+  badgeDriverStateChanged : Int;
+  knownBadgeBits : Int;
+  headerFields : List refl.SchemaField;
+  sliceFields : List refl.SchemaField;
+  requestFields : List refl.SchemaField;
+  completionFields : List refl.SchemaField;
+  headerLayout : List WireField;
+  sliceLayout : List WireField;
+  requestLayout : List WireField;
+  completionLayout : List WireField;
+};
+
+layoutNames :: List WireField -> List Text
+  = fields => map _.name fields;
+
+validField :: WireField -> Bool
+  = field => if field.byteArray
+    then field.width > 0 && not field.signed
+    else w.validWidthSigned4 { name = field.name; width = field.width; signed = field.signed; };
+
+allValid :: List WireField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } => validField field && allValid rest;
+  };
+
+addWidth :: Int -> WireField -> Int
+  = total field => total + field.width;
+
+wireBytes :: List WireField -> Int
+  = fields => fold addWidth 0 fields;
+
+constName :: Text -> Text -> Text
+  = prefix name => w.join { "OFF_"; prefix; "_"; t.toUpper name; };
+
+offsetConsts :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "pub const "; constName prefix field.name; ": usize = "; n.toText offset; ";\n";
+      offsetConsts prefix (offset + field.width) rest;
+    };
+  };
+
+rustType :: WireField -> Text
+  = field => if field.byteArray
+    then w.join { "[u8; "; n.toText field.width; "]"; }
+    else w.rustType { name = field.name; width = field.width; signed = field.signed; };
+
+fieldDecls :: List WireField -> Text
+  = fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "    pub "; field.name; ": "; rustType field; ",\n";
+      fieldDecls rest;
+    };
+  };
+
+decodeExpr :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then w.join {
+      "buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].try_into().expect(\"generated io-queue layout\")";
+    }
+    else if field.width == 1
+      then w.join { "buf["; constName prefix field.name; "]"; }
+      else w.join {
+        rustType field; "::from_le_bytes(buf["; constName prefix field.name; ".."; constName prefix field.name;
+        " + "; n.toText field.width; "].try_into().expect(\"generated io-queue layout\"))";
+      };
+
+decodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "            "; field.name; ": "; decodeExpr prefix field; ",\n";
+      decodeFields prefix rest;
+    };
+  };
+
+encodeField :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then w.join {
+      "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].copy_from_slice(&self."; field.name; ");\n";
+    }
+    else if field.width == 1
+      then w.join { "        buf["; constName prefix field.name; "] = self."; field.name; ";\n"; }
+      else w.join {
+        "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+        "].copy_from_slice(&self."; field.name; ".to_le_bytes());\n";
+      };
+
+encodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join { encodeField prefix field; encodeFields prefix rest; };
+  };
+
+wireStruct :: Text -> Text -> Text -> List WireField -> Text
+  = name prefix lengthName fields => w.join {
+    "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n";
+    "pub struct "; name; " {\n"; fieldDecls fields; "}\n\n";
+    "impl "; name; " {\n";
+    "    pub fn decode(buf: &[u8]) -> Option<Self> {\n";
+    "        if buf.len() < "; lengthName; " { return None; }\n";
+    "        Some(Self {\n"; decodeFields prefix fields; "        })\n";
+    "    }\n\n";
+    "    pub fn encode(self) -> [u8; "; lengthName; "] {\n";
+    "        let mut buf = [0u8; "; lengthName; "];\n"; encodeFields prefix fields; "        buf\n";
+    "    }\n";
+    "}\n";
+  };
+
+rustBindings :: Protocol -> Text
+  = protocol => w.join {
+    "// @generated by contracts/io-queue/v1/gen_rust.zt; do not edit.\n";
+    "// Source contract: contracts/io-queue/v1/schema.zt\n\n";
+    "pub const FORMAT_VERSION: u32 = "; n.toText protocol.formatVersion; ";\n";
+    "pub const QUEUE_HEADER_LEN: usize = "; n.toText protocol.queueHeaderLen; ";\n";
+    "pub const REQUEST_SLOT_LEN: usize = "; n.toText protocol.requestSlotLen; ";\n";
+    "pub const COMPLETION_SLOT_LEN: usize = "; n.toText protocol.completionSlotLen; ";\n";
+    "pub const REQUEST_PAYLOAD_BYTES: usize = "; n.toText protocol.requestPayloadBytes; ";\n";
+    "pub const COMPLETION_PAYLOAD_BYTES: usize = "; n.toText protocol.completionPayloadBytes; ";\n";
+    "pub const MIN_QUEUE_SLOTS: usize = "; n.toText protocol.minQueueSlots; ";\n";
+    "pub const MAX_QUEUE_SLOTS: usize = "; n.toText protocol.maxQueueSlots; ";\n";
+    "pub const MAX_OUTSTANDING: usize = "; n.toText protocol.maxOutstanding; ";\n";
+    "pub const QUEUE_MAGIC: u32 = "; n.toText protocol.queueMagic; ";\n";
+    "pub const REQUEST_MAGIC: u32 = "; n.toText protocol.requestMagic; ";\n";
+    "pub const COMPLETION_MAGIC: u32 = "; n.toText protocol.completionMagic; ";\n";
+    "pub const DRIVER_ACTIVE: u32 = "; n.toText protocol.driverActive; ";\n";
+    "pub const DRIVER_RESETTING: u32 = "; n.toText protocol.driverResetting; ";\n";
+    "pub const DRIVER_DEAD: u32 = "; n.toText protocol.driverDead; ";\n";
+    "pub const SLOT_EMPTY: u32 = "; n.toText protocol.slotEmpty; ";\n";
+    "pub const SLOT_CLAIMED: u32 = "; n.toText protocol.slotClaimed; ";\n";
+    "pub const SLOT_READY: u32 = "; n.toText protocol.slotReady; ";\n";
+    "pub const STATE_QUEUED: u32 = "; n.toText protocol.stateQueued; ";\n";
+    "pub const STATE_IN_FLIGHT: u32 = "; n.toText protocol.stateInFlight; ";\n";
+    "pub const STATE_COMPLETE: u32 = "; n.toText protocol.stateComplete; ";\n";
+    "pub const STATE_CANCELLED: u32 = "; n.toText protocol.stateCancelled; ";\n";
+    "pub const STATE_RESET: u32 = "; n.toText protocol.stateReset; ";\n";
+    "pub const STATE_PEER_DEAD: u32 = "; n.toText protocol.statePeerDead; ";\n";
+    "pub const STATUS_OK: u32 = "; n.toText protocol.statusOk; ";\n";
+    "pub const STATUS_CANCELLED: u32 = "; n.toText protocol.statusCancelled; ";\n";
+    "pub const STATUS_RESET: u32 = "; n.toText protocol.statusReset; ";\n";
+    "pub const STATUS_PEER_DEAD: u32 = "; n.toText protocol.statusPeerDead; ";\n";
+    "pub const STATUS_MALFORMED: u32 = "; n.toText protocol.statusMalformed; ";\n";
+    "pub const STATUS_BAD_SLICE: u32 = "; n.toText protocol.statusBadSlice; ";\n";
+    "pub const STATUS_BAD_EPOCH: u32 = "; n.toText protocol.statusBadEpoch; ";\n";
+    "pub const STATUS_BAD_RIGHTS: u32 = "; n.toText protocol.statusBadRights; ";\n";
+    "pub const STATUS_EXHAUSTED: u32 = "; n.toText protocol.statusExhausted; ";\n";
+    "pub const STATUS_DEVICE_ERROR: u32 = "; n.toText protocol.statusDeviceError; ";\n";
+    "pub const STATUS_UNSUPPORTED: u32 = "; n.toText protocol.statusUnsupported; ";\n";
+    "pub const DIRECTION_NONE: u32 = "; n.toText protocol.directionNone; ";\n";
+    "pub const DIRECTION_DEVICE_READ: u32 = "; n.toText protocol.directionDeviceRead; ";\n";
+    "pub const DIRECTION_DEVICE_WRITE: u32 = "; n.toText protocol.directionDeviceWrite; ";\n";
+    "pub const KNOWN_DIRECTIONS: u32 = "; n.toText protocol.knownDirections; ";\n";
+    "pub const FLAG_FENCED: u32 = "; n.toText protocol.flagFenced; ";\n";
+    "pub const KNOWN_REQUEST_FLAGS: u32 = "; n.toText protocol.knownRequestFlags; ";\n";
+    "pub const FLAG_EPOCH_ENDED: u32 = "; n.toText protocol.flagEpochEnded; ";\n";
+    "pub const KNOWN_COMPLETION_FLAGS: u32 = "; n.toText protocol.knownCompletionFlags; ";\n";
+    "pub const BADGE_REQUEST_READY: u64 = "; n.toText protocol.badgeRequestReady; ";\n";
+    "pub const BADGE_COMPLETION_READY: u64 = "; n.toText protocol.badgeCompletionReady; ";\n";
+    "pub const BADGE_DRIVER_STATE_CHANGED: u64 = "; n.toText protocol.badgeDriverStateChanged; ";\n";
+    "pub const KNOWN_BADGE_BITS: u64 = "; n.toText protocol.knownBadgeBits; ";\n\n";
+    offsetConsts "HEADER" 0 protocol.headerLayout;
+    "\n";
+    wireStruct "WireQueueHeader" "HEADER" "QUEUE_HEADER_LEN" protocol.headerLayout;
+    "\n";
+    "pub const SLICE_LEN: usize = "; n.toText (wireBytes protocol.sliceLayout); ";\n";
+    offsetConsts "SLICE" 0 protocol.sliceLayout;
+    "\n";
+    wireStruct "WireBufferSlice" "SLICE" "SLICE_LEN" protocol.sliceLayout;
+    "\n";
+    offsetConsts "REQUEST" 0 protocol.requestLayout;
+    "\n";
+    wireStruct "WireRequestSlot" "REQUEST" "REQUEST_SLOT_LEN" protocol.requestLayout;
+    "\n";
+    offsetConsts "COMPLETION" 0 protocol.completionLayout;
+    "\n";
+    wireStruct "WireCompletionSlot" "COMPLETION" "COMPLETION_SLOT_LEN" protocol.completionLayout;
+  };
+
+-- The request slot inlines the slice, so the two must agree bit for bit: a
+-- request whose `slice_*` fields were ordered or sized differently from the
+-- standalone record would make the standalone validator a lie. Checked here
+-- rather than trusted, because the two layouts are written separately: the
+-- slice's own six fields, and the six `slice_`-prefixed fields the request
+-- carries at offsets 16..64.
+requestSliceNames :: List Text = {
+  "slice_buffer"; "slice_lease"; "slice_offset"; "slice_length";
+  "slice_direction"; "slice_reserved";
+};
+
+-- The inlined run, isolated positionally rather than by name matching, so a
+-- request that spelled a slice field correctly but placed it outside the run
+-- still fails. Six envelope fields precede it -- magic, state, flags,
+-- payload_len, request_id, epoch -- and the protocol payload follows.
+inlinedSlice :: List WireField -> List WireField
+  = fields => l.take 6 (l.drop 6 fields);
+
+prefixed :: Text -> Text = name => w.join { "slice_"; name; };
+
+fieldAgrees :: WireField -> WireField -> Bool
+  = standalone inlined =>
+    prefixed standalone.name == inlined.name
+      && standalone.width == inlined.width
+      && standalone.byteArray == inlined.byteArray
+      && standalone.signed == inlined.signed;
+
+andAll :: Bool -> Bool -> Bool = total value => total && value;
+
+agreements :: Protocol -> List Bool
+  = protocol => l.zipWith fieldAgrees protocol.sliceLayout (inlinedSlice protocol.requestLayout);
+
+sliceInlineAgrees :: Protocol -> Bool
+  = protocol =>
+    layoutNames (inlinedSlice protocol.requestLayout) == requestSliceNames
+      && fold andAll true (agreements protocol);
+
+-- The header's single-writer split must be real, not merely documented: the
+-- client's nine fields must sum to exactly one cache line, so the driver's six
+-- begin on the next one. Checked here because nothing downstream can observe a
+-- violation -- false sharing is a performance fault, not a correctness one, and
+-- would never fail a test.
+cacheLineBytes :: Int = 64;
+
+headerHalvesSplit :: Protocol -> Bool
+  = protocol =>
+    wireBytes (l.take 9 protocol.headerLayout) == cacheLineBytes
+      && wireBytes protocol.headerLayout == 2 * cacheLineBytes
+      && protocol.queueHeaderLen == 2 * cacheLineBytes;
+
+valid :: Protocol -> Bool
+  = protocol =>
+    w.schemaFieldsValid protocol.headerFields
+      && w.schemaFieldsValid protocol.sliceFields
+      && w.schemaFieldsValid protocol.requestFields
+      && w.schemaFieldsValid protocol.completionFields
+      && w.schemaNames protocol.headerFields == layoutNames protocol.headerLayout
+      && w.schemaNames protocol.sliceFields == layoutNames protocol.sliceLayout
+      && w.schemaNames protocol.requestFields == layoutNames protocol.requestLayout
+      && w.schemaNames protocol.completionFields == layoutNames protocol.completionLayout
+      && allValid protocol.headerLayout
+      && allValid protocol.sliceLayout
+      && allValid protocol.requestLayout
+      && allValid protocol.completionLayout
+      && sliceInlineAgrees protocol
+      && headerHalvesSplit protocol
+      && wireBytes protocol.sliceLayout <= protocol.requestSlotLen
+      && wireBytes protocol.requestLayout <= protocol.requestSlotLen
+      && wireBytes protocol.completionLayout <= protocol.completionSlotLen
+      && protocol.maxOutstanding >= protocol.maxQueueSlots;
+
+render :: Protocol -> { rust : Text; }
+  = protocol => if valid protocol
+    then { rust = rustBindings protocol; }
+    else { rust = "INVALID_IO_QUEUE_SCHEMA"; };
+
+{ render =; }
