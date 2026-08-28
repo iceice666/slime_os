@@ -143,9 +143,19 @@ def build_io_resource_budget(holders: list[dict]) -> bytes:
     names = [entry["holder"] for entry in holders]
     if len(names) != len(set(names)):
         fail("ioResourceBudget holder must be unique")
+    # A device is exclusive: two driver instances programming one transport's
+    # queue would each observe the other's completions (B84). The decoder
+    # refuses this too; catching it here names the offending holder.
+    devices = [entry.get("device", 0) for entry in holders]
+    if len(devices) != len(set(devices)):
+        fail("ioResourceBudget device must be unique per driver")
     rows = []
     for entry in sorted(holders, key=lambda item: io_resource_driver_identity(item["holder"])):
         values = [entry[name] for name in ("mmioBytes", "mmioMappings", "dmaPages", "dmaMappings", "irqSources", "outstandingRequests", "bufferLoans")]
+        # Zero-based ordinal into the platform's stable device order. Optional in
+        # the manifest because a single-device plane has nothing to choose, and
+        # requiring it would make every existing composition restate a default.
+        values.append(entry.get("device", 0))
         if any(value < 0 or value > 0xFFFFFFFF for value in values):
             fail(f"ioResourceBudget holder {entry['holder']}: quota out of range")
         rows.append(IO_RESOURCE_ENTRY.pack(io_resource_driver_identity(entry["holder"]), *values))

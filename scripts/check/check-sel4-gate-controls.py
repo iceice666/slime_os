@@ -290,19 +290,26 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # marker it replaced: it names how many DMA pages and mappings the driver
     # held, that all of them came back, and that none remained.
     #
-    # `sel4_recovery_plane` is unchanged at 11 because it is deliberately NOT
-    # migrated: its guard-disk claim needs two devices and IO1 grants one device
-    # per driver instance. See backlog B84.
+    # B84: `sel4_recovery_plane` 11 -> 12 and `sel4_transfer_plane` 11 -> 12.
+    # Both two-disk planes are now migrated, each gaining one marker for the
+    # driver-produced rights refusal on its read-only disk — recovery's guard
+    # and transfer's source. That refusal used to be the root checking the
+    # caller's own block capability; it is now the driver checking the ring's
+    # declared authority, so the marker names who refused as well as that a
+    # refusal happened. Recovery keeps its host-side whole-image SHA-256 and
+    # signature checks unchanged, and transfer keeps its source byte-identity
+    # check, so the disks are still proven readable rather than merely
+    # unreachable.
     ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 12),
     ("sel4_store_plane", "check/check-sel4-store-plane.py", 17),
     ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 19),
-    ("sel4_recovery_plane", "check/check-sel4-recovery-plane.py", 11),
+    ("sel4_recovery_plane", "check/check-sel4-recovery-plane.py", 12),
     ("sel4_generation_plane", "check/check-sel4-generation-plane.py", 21),
     ("sel4_directory_plane", "check/check-sel4-directory-plane.py", 16),
     ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 14),
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
-    ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 11),
+    ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 12),
     # P4: the physical Raspberry Pi 5 gate. Registered here for exactly the
     # reason a hardware gate needs it most — this control imports the checker
     # and exercises synthetic transcripts, so the marker table stays proven

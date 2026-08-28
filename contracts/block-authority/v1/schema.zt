@@ -46,6 +46,11 @@ AuthorityHeader :: type {
 
 AuthorityEntry :: type {
   holder_identity : Int;
+  -- Zero-based ordinal into the platform's stable device order, the same
+  -- numbering `contracts/io-resource/v1`'s `device` uses (B84). One convention
+  -- across both records on purpose: a driver instance learns its device from
+  -- its IO1 budget and looks its rings up here, so two numbering schemes in
+  -- adjacent manifest records would be a defect waiting to be written.
   device : Int;
   ring : Int;
   rights : Int;

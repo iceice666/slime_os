@@ -362,3 +362,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-28 | [IO1: hardware-resource authority, DMA accounts, and reclamation on death](2026-08-28-io1-hardware-resource-authority/index.md) | Change | Verified | IO1, B82 |
 | 2026-08-28 | [IO3: userspace virtio-net and LinkDevice duplex validation](2026-08-28-io3-userspace-virtio-net/index.md) | Change | Verified | IO3 |
 | 2026-08-28 | [B83: six storage planes leave the root's virtio-blk path](2026-08-28-b83-userspace-block-cutover/index.md) | Change | Verified | B83, B84 |
+| 2026-08-28 | [B84: two driver instances of one executable, one device each](2026-08-28-b84-two-device-driver-instances/index.md) | Change | Verified | B84, B83 |

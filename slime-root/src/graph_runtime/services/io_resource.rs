@@ -41,9 +41,17 @@ struct Sel4IoAdapter<'a> {
 }
 
 impl Sel4IoAdapter<'_> {
-    fn device(&self, device: DeviceId) -> Result<platform::AuthorityDevice, AdapterError> {
+    /// Zero-based inventory index of a one-based `DeviceId`.
+    fn index(&self, device: DeviceId) -> Result<usize, AdapterError> {
         let index = device.0.checked_sub(1).ok_or(AdapterError::MapFailed)? as usize;
-        self.inventory.device(index).ok_or(AdapterError::MapFailed)
+        (index < self.inventory.len())
+            .then_some(index)
+            .ok_or(AdapterError::MapFailed)
+    }
+    fn device(&self, device: DeviceId) -> Result<platform::AuthorityDevice, AdapterError> {
+        self.inventory
+            .device(self.index(device)?)
+            .ok_or(AdapterError::MapFailed)
     }
 }
 
@@ -115,9 +123,18 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
             .ok_or(AdapterError::MapFailed)
     }
 
+    /// Bind this device's interrupt.
+    ///
+    /// Keyed by the device ordinal, not by the granule it lives in (B84). QEMU
+    /// places two virtio disks at `0xa003e00` and `0xa003c00` — the same 4 KiB
+    /// granule — so a granule-keyed slot makes the second device's bind fail as
+    /// "already bound" while actually holding the first device's interrupt. The
+    /// SPI still comes from the transport's own physical address, so two
+    /// devices in one granule get two different interrupts.
     fn bind_irq(&mut self, device: DeviceId, _: IrqSourceId) -> Result<(), AdapterError> {
+        let index = self.index(device)?;
         let descriptor = self.device(device)?;
-        if self.inventory.irq(descriptor.region).is_some() {
+        if self.inventory.irq(index).is_some() {
             return Err(AdapterError::IrqFailed);
         }
         let paddr = self
@@ -130,12 +147,17 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         let binding = device::DeviceIrq::acquire(self.allocator, irq, VIRTIO_IRQ_BADGE, true)
             .map_err(|_| AdapterError::IrqFailed)?;
         self.inventory
-            .put_irq(descriptor.region, binding)
+            .put_irq(index, binding)
             .map_err(|_| AdapterError::IrqFailed)
     }
 
+    /// Acknowledge through the same device-keyed slot `bind_irq` filled.
+    ///
+    /// `install_driver` grants source `device + 1`, so the source ordinal and
+    /// the device ordinal coincide; this converts explicitly rather than
+    /// relying on that.
     fn ack_irq(&mut self, source: IrqSourceId) -> Result<(), AdapterError> {
-        let index = source.0.checked_sub(1).ok_or(AdapterError::IrqFailed)? as usize;
+        let index = self.index(DeviceId(source.0))?;
         self.inventory
             .irq(index)
             .ok_or(AdapterError::IrqFailed)?
@@ -249,15 +271,18 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
                     .map_err(|_| AdapterError::TeardownFailed)?;
             }
             AdapterAction::UnbindIrq { source } => {
-                let descriptor = self
-                    .device(DeviceId(source.0))
+                // The same device-keyed slot `bind_irq` filled, not the granule
+                // it lives in (B84): releasing by granule would free the other
+                // device's interrupt when two share a page.
+                let index = self
+                    .index(DeviceId(source.0))
                     .map_err(|_| AdapterError::TeardownFailed)?;
-                let Some(irq) = self.inventory.irq(descriptor.region) else {
+                let Some(irq) = self.inventory.irq(index) else {
                     return Ok(());
                 };
                 irq.release(self.allocator)
                     .map_err(|_| AdapterError::TeardownFailed)?;
-                self.inventory.take_irq(descriptor.region);
+                self.inventory.take_irq(index);
             }
             AdapterAction::DestroyDma { token } => {
                 if token == u64::MAX {
@@ -301,6 +326,17 @@ fn mapped<T>(outcome: Result<T, ResourceError>, ok: impl FnOnce(T) -> Response) 
     }
 }
 
+/// Install one driver instance's declared hardware budget, bound to the exact
+/// transport its generation names.
+///
+/// The device comes from the budget record rather than from the instance's
+/// grants (B84). A plane with two disks declares one driver executable twice,
+/// and the root gives every non-`block` typed grant in an instance a single
+/// positional index — so the grants of two instances are indistinguishable.
+/// This record is already keyed by authenticated instance identity, and one
+/// number here names the device for that instance's `device`, `mmioRegion`,
+/// `interruptSource`, and `dmaAccount` authority at once, so the four cannot
+/// disagree about which transport they mean.
 pub(crate) fn install_driver(
     service: &mut IoResourceService,
     driver: DriverId,
@@ -308,9 +344,15 @@ pub(crate) fn install_driver(
     quota: boot_contracts::io_resource::DriverQuota,
     shared_granule: bool,
 ) -> Result<DriverEpoch, ResourceError> {
+    // One-based throughout the resource table, where zero means "no device":
+    // `declare_quota` refuses `DeviceId(0)`, and `Sel4IoAdapter::device`
+    // subtracts one to index the inventory.
+    let device = DeviceId(u64::from(quota.device) + 1);
+    let region = MmioRegionId(u64::from(quota.device) + 1);
+    let source = IrqSourceId(u64::from(quota.device) + 1);
     let epoch = service.table.declare_quota_at_epoch(
         driver,
-        DeviceId(1),
+        device,
         slime_root::io_resource::DriverQuota {
             mmio_bytes: quota.mmio_bytes,
             mmio_mappings: quota.mmio_mappings,
@@ -324,8 +366,8 @@ pub(crate) fn install_driver(
     )?;
     service.table.grant_mmio_region(
         driver,
-        DeviceId(1),
-        MmioRegionId(1),
+        device,
+        region,
         if shared_granule {
             VIRTIO_MMIO_STRIDE as u32
         } else {
@@ -338,9 +380,7 @@ pub(crate) fn install_driver(
             MmioIsolation::PageExclusive
         },
     )?;
-    service
-        .table
-        .grant_irq_source(driver, DeviceId(1), IrqSourceId(1))?;
+    service.table.grant_irq_source(driver, device, source)?;
     service.next_epoch[instance] = epoch.0;
     Ok(epoch)
 }
@@ -445,8 +485,24 @@ pub(super) fn serve_io_resource(
             {
                 return denied();
             }
+            // The installed device, zero-based, not the capability's positional
+            // byte (B84): a driver declared twice carries the same byte in both
+            // instances, so returning it would tell each the same thing. The
+            // capability is still what authorizes the bind.
+            //
+            // `checked_sub` rather than `- 1`: the table's `DeviceId` is
+            // one-based and `declare_quota` refuses zero, so this cannot
+            // currently wrap — but that invariant lives in another module, and
+            // a wrap here would answer `u64::MAX` as a device ordinal.
+            let Some(device) = service
+                .table
+                .device(driver)
+                .and_then(|device| device.0.checked_sub(1))
+            else {
+                return denied();
+            };
             service.table.epoch(driver).map_or_else(denied, |epoch| {
-                Response::success(epoch.0 as i64, cap.device as sel4::Word)
+                Response::success(epoch.0 as i64, device as sel4::Word)
             })
         }
         io_resource_labels::MAP_MMIO
@@ -470,8 +526,16 @@ pub(super) fn serve_io_resource(
             {
                 return denied();
             }
-            let device = DeviceId(u64::from(device_cap.device) + 1);
-            let region = MmioRegionId(u64::from(region_cap.region) + 1);
+            // Which transport, from the driver's installed record rather than
+            // from the capability's own byte (B84). That byte is a positional
+            // index the root assigns per instance, so both instances of a
+            // two-disk plane's driver carry zero and it cannot name a device.
+            // Holding the capability is still what authorizes the operation;
+            // only the device identity comes from the authenticated install.
+            let Some(device) = service.table.device(driver) else {
+                return denied();
+            };
+            let region = MmioRegionId(device.0);
             if label == io_resource_labels::MAP_MMIO {
                 let packed = words[3];
                 let epoch = service.table.epoch(driver).unwrap_or(DriverEpoch(0));
@@ -530,10 +594,13 @@ pub(super) fn serve_io_resource(
                 return denied();
             }
             let epoch = DriverEpoch(words[2]);
+            let Some(device) = service.table.device(driver) else {
+                return denied();
+            };
             match service.table.map_device_queue(
                 &mut adapter,
                 driver,
-                DeviceId(1),
+                device,
                 epoch,
                 words[1] as u32,
             ) {
@@ -593,11 +660,14 @@ pub(super) fn serve_io_resource(
                 return invalid();
             }
             adapter.loan_frames = Some(frames);
+            let Some(device) = service.table.device(driver) else {
+                return denied();
+            };
             mapped(
                 service.table.create_dma_mapping(
                     &mut adapter,
                     driver,
-                    DeviceId(1),
+                    device,
                     epoch,
                     LeaseId(loan_cap.handle.id.0),
                     direction,
@@ -677,12 +747,18 @@ pub(super) fn serve_io_resource(
                 return denied();
             }
             let epoch = DriverEpoch(words[1]);
-            let source = IrqSourceId(u64::from(cap.source) + 1);
+            let Some(device) = service.table.device(driver) else {
+                return denied();
+            };
+            // The source is the device's, matching what `install_driver`
+            // granted. The capability's own byte is the per-instance positional
+            // index, identical across two instances of one driver executable.
+            let source = IrqSourceId(device.0);
             if words[2] == 0
                 && let Err(error) =
                     service
                         .table
-                        .bind_irq(&mut adapter, driver, DeviceId(1), epoch, source)
+                        .bind_irq(&mut adapter, driver, device, epoch, source)
             {
                 sel4::debug_println!(
                     "SLIME_IO irq bind refused task={} source={} error={error:?}",

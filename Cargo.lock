@@ -1303,6 +1303,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1345,6 +1346,7 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]

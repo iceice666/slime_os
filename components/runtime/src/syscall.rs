@@ -451,6 +451,11 @@ pub enum DmaDirection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IoDevice {
     pub epoch: u64,
+    /// Which attached transport the generation gave this driver instance,
+    /// zero-based. The root's authenticated answer: an instance's typed
+    /// capabilities carry a positional index identical across two instances of
+    /// one driver executable, so this is the only way to know (B84).
+    pub device: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -475,7 +480,7 @@ pub struct IrqEvent {
 }
 
 pub fn io_device_bind(device_slot: u32) -> Result<IoDevice, i64> {
-    transport::io_device_bind(device_slot).map(|epoch| IoDevice { epoch })
+    transport::io_device_bind(device_slot).map(|(epoch, device)| IoDevice { epoch, device })
 }
 
 pub fn io_mmio_map(

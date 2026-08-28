@@ -11,6 +11,8 @@ pub enum DecodeError {
     UnknownRequiredFlags,
     BadBounds,
     BadOrder,
+    /// Two driver instances named the same device ordinal (B84).
+    DuplicateDevice,
     Impossible,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +25,11 @@ pub struct DriverQuota {
     pub irq_sources: u32,
     pub outstanding_requests: u32,
     pub buffer_loans: u32,
+    /// Which attached transport this driver instance drives, zero-based in the
+    /// platform's stable device order (B84). Declared, never inferred: a plane
+    /// with two disks declares one driver executable twice, and nothing in the
+    /// instance's grants distinguishes the two.
+    pub device: u32,
 }
 #[derive(Debug, Clone, Copy)]
 pub struct IoResourceBudget<'a> {
@@ -59,6 +66,18 @@ impl<'a> IoResourceBudget<'a> {
                 return Err(DecodeError::BadOrder);
             }
             previous = entry.driver_identity;
+            // Two driver instances naming one transport is refused here rather
+            // than left to whichever installs second (B84). A device is
+            // exclusive: two drivers programming one queue would each observe
+            // the other's completions, and the root's own `WrongDevice` check
+            // cannot see it because each driver's record is individually
+            // coherent. Quadratic over at most `MAX_DRIVERS`, and only at
+            // admission.
+            for earlier in 0..index {
+                if decode_entry(bytes, earlier)?.device == entry.device {
+                    return Err(DecodeError::DuplicateDevice);
+                }
+            }
         }
         Ok(Self {
             bytes,
@@ -90,6 +109,12 @@ impl<'a> IoResourceBudget<'a> {
                 || q.buffer_loans > maxima.buffer_loans
                 || q.mmio_mappings > q.mmio_bytes
                 || q.dma_mappings > q.dma_pages
+                // `maxima.device` is the count of device slots the root can
+                // back, so an ordinal at or above it names a transport that
+                // cannot exist. Refused at admission rather than at first
+                // MMIO: a driver that boots and then cannot find its device
+                // has already announced readiness.
+                || q.device >= maxima.device
             {
                 return Err(DecodeError::Impossible);
             }
@@ -139,6 +164,7 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<DriverQuota, DecodeError> 
         irq_sources: u32_at(entry, 48)?,
         outstanding_requests: u32_at(entry, 52)?,
         buffer_loans: u32_at(entry, 56)?,
+        device: u32_at(entry, 60)?,
     })
 }
 fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, DecodeError> {
@@ -163,7 +189,13 @@ fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, DecodeError> {
 mod tests {
     extern crate alloc;
     use super::*;
+    /// `device` follows `id` so distinct drivers get distinct transports, which
+    /// is what a valid table looks like; `at` overrides it where a test is
+    /// specifically about the device ordinal.
     fn quota(id: u8) -> DriverQuota {
+        at(id, u32::from(id))
+    }
+    fn at(id: u8, device: u32) -> DriverQuota {
         DriverQuota {
             driver_identity: [id; 32],
             mmio_bytes: 4096,
@@ -173,6 +205,7 @@ mod tests {
             irq_sources: 1,
             outstanding_requests: 2,
             buffer_loans: 2,
+            device,
         }
     }
     fn build(entries: &[DriverQuota]) -> alloc::vec::Vec<u8> {
@@ -194,6 +227,7 @@ mod tests {
                 q.irq_sources,
                 q.outstanding_requests,
                 q.buffer_loans,
+                q.device,
             ]
             .iter()
             .enumerate()
@@ -237,6 +271,40 @@ mod tests {
             IoResourceBudget::decode(&build(&[quota(1)]))
                 .unwrap()
                 .validate_against(quota(9))
+                .is_ok()
+        );
+    }
+
+    /// B84: a transport is exclusive. Two driver instances naming one device
+    /// would each program the same queue and observe the other's completions,
+    /// and neither record is individually incoherent — so the table itself has
+    /// to refuse the pair.
+    #[test]
+    fn two_drivers_cannot_name_one_device() {
+        assert_eq!(
+            IoResourceBudget::decode(&build(&[at(1, 0), at(2, 0)])).unwrap_err(),
+            DecodeError::DuplicateDevice
+        );
+        assert!(IoResourceBudget::decode(&build(&[at(1, 0), at(2, 1)])).is_ok());
+    }
+
+    /// An ordinal at or above the root's device count names a transport that
+    /// cannot exist. Refused at admission, not at the driver's first MMIO: a
+    /// driver that boots and then cannot find its device has already announced
+    /// readiness.
+    #[test]
+    fn a_device_beyond_the_platform_is_refused() {
+        let two_devices = at(9, 2);
+        assert_eq!(
+            IoResourceBudget::decode(&build(&[at(1, 2)]))
+                .unwrap()
+                .validate_against(two_devices),
+            Err(DecodeError::Impossible)
+        );
+        assert!(
+            IoResourceBudget::decode(&build(&[at(1, 1)]))
+                .unwrap()
+                .validate_against(two_devices)
                 .is_ok()
         );
     }

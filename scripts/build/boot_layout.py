@@ -465,10 +465,13 @@ SEL4_FILESYSTEM_LAYOUT = (
     (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# Generation 33, the M6.7 transfer plane. Two rows; both device capabilities
-# are the probe's own declared grants.
+# Generation 33, the M6.7 transfer plane. B84: the probe reaches both its disks
+# through IO0 rings served by two instances of the userspace driver, so the two
+# block capabilities it used to hold are gone and the factory it builds its
+# rings from is the plane's crossing spawn grant.
 SEL4_TRANSFER_LAYOUT = (
     (1, 'executable', 'sel4-transfer-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 # Generation 32, the M6.6 powerbox plane. Init's factory and both executables;
@@ -504,11 +507,13 @@ SEL4_GENERATION_LAYOUT = (
     (5, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# Generation 26, the recovery plane. No factory row: B83 left this plane on the
-# root's block path, because its guard-disk claim needs two devices and IO1
-# grants one device per driver instance. See backlog B84.
+# Generation 26, the recovery plane. B84: same two-device cutover as transfer.
+# The read-only guard disk is now a read-only IO0 ring rather than a read-only
+# block capability, and the driver refuses a write against its declared ring
+# authority where the root used to refuse it against the caller's capability.
 SEL4_RECOVERY_LAYOUT = (
     (1, 'executable', 'sel4-recovery-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 # Generation 25, the rollback plane. Same shape again.

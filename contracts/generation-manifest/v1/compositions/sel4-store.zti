@@ -59,7 +59,7 @@
     { holder = "virtio-blk-driver"; mmioBytes = 4096; mmioMappings = 1; dmaPages = 12; dmaMappings = 3; irqSources = 1; outstandingRequests = 8; bufferLoans = 4; };
   ];
   blockRingAuthority = [
-    { holder = "sel4-store-probe"; device = 1; ring = 0; rights = ["blockRead";"blockWrite";]; sectorLimit = 2048; };
+    { holder = "sel4-store-probe"; device = 0; ring = 0; rights = ["blockRead";"blockWrite";]; sectorLimit = 2048; };
   ];
   state = [];
   target = "aarch64-sel4-qemu-virt";

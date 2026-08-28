@@ -363,7 +363,14 @@ test_sel4_root:
     # `notification:@<ordinal>+<role>` query answers positionally instead, and
     # this test pins the part that makes it safe: the role is required, because
     # "my first binding" spans two roles and identifies no slot.
-    expected=207
+    # B84: 207 -> 208. `io_resource` gains
+    # `two_drivers_each_hold_their_own_device`. Two instances of one driver
+    # executable, one device each, is the shape both two-disk planes boot; the
+    # test pins that every per-device identity is derived from the declared
+    # ordinal, because two instances asking for region 1 and source 1 -- what
+    # the old fixed identities produced -- collide on the table's uniqueness
+    # checks and the second install fails outright.
+    expected=208
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

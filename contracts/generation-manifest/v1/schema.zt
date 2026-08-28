@@ -171,6 +171,19 @@ IoResourceBudgetEntry :: type {
   irqSources : Int;
   outstandingRequests : Int;
   bufferLoans : Int;
+  -- Which attached transport this driver instance drives, zero-based in the
+  -- platform's stable device order (B84). Optional because a single-device
+  -- plane has nothing to choose; omission means device 0.
+  --
+  -- Stated here rather than derived, and rather than carried on the grant
+  -- record. A plane with two disks declares one driver executable twice, and
+  -- the root assigns every non-block typed grant in an instance one positional
+  -- index -- so both instances' grants are identical and cannot name a device.
+  -- This record is already keyed by the instance identity, and one number names
+  -- the device for that instance's device/mmioRegion/interruptSource/dmaAccount
+  -- authority at once, so the four cannot disagree about which transport they
+  -- mean. Two holders naming one device is refused: a transport is exclusive.
+  device? : Int;
 };
 
 -- B83 exact per-ring block authority. Each entry binds one client instance,

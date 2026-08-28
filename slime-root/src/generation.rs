@@ -588,6 +588,10 @@ fn io_resource_budget_admission(
             irq_sources: crate::io_resource::MAX_IRQ_SOURCES as u32,
             outstanding_requests: crate::io_resource::MAX_REQUESTS as u32,
             buffer_loans: crate::io_resource::MAX_LEASES as u32,
+            // How many device slots this root can back. An ordinal at or above
+            // it names a transport that cannot exist, so admission refuses it
+            // rather than letting a driver boot and fail its first MMIO (B84).
+            device: crate::device::MAX_BLOCK_DEVICES as u32,
         })
         .map_err(|_| GenerationError::UnsatisfiableIoResourceBudget)?;
     Ok(Some(budget.driver_count()))

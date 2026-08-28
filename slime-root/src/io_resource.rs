@@ -514,6 +514,16 @@ impl ResourceTable {
         true
     }
 
+    /// Which device this driver instance was installed against.
+    ///
+    /// The authenticated answer to "which transport", and the only one: a typed
+    /// capability's resource byte is a positional index the root assigns per
+    /// instance, so two instances of one driver executable carry identical
+    /// bytes (B84). The device is declared in the instance's IO1 budget and
+    /// recorded here at install.
+    pub fn device(&self, driver: DriverId) -> Option<DeviceId> {
+        self.driver(driver).map(|d| d.device)
+    }
     pub fn quota(&self, driver: DriverId) -> DriverQuota {
         self.driver(driver).map_or(DriverQuota::DENY, |d| d.quota)
     }
@@ -1749,6 +1759,75 @@ mod tests {
             .unwrap();
         table.grant_irq_source(DRIVER, DEVICE, IRQ).unwrap();
         (table, epoch)
+    }
+
+    /// B84: two driver instances of one executable, one device each.
+    ///
+    /// This is the shape `sel4-recovery` and `sel4-transfer` boot. Every
+    /// per-device identity must be derived from the declared ordinal rather
+    /// than fixed, because two instances asking for region 1 and source 1 —
+    /// which is what the old constants produced — collide on the uniqueness
+    /// checks below and the second install fails outright.
+    #[test]
+    fn two_drivers_each_hold_their_own_device() {
+        let mut table = ResourceTable::new();
+        table.declare_quota(DRIVER, DEVICE, QUOTA).unwrap();
+        table.declare_quota(OTHER, OTHER_DEVICE, QUOTA).unwrap();
+        assert_eq!(table.device(DRIVER), Some(DEVICE));
+        assert_eq!(table.device(OTHER), Some(OTHER_DEVICE));
+
+        // Distinct per-device identities install cleanly.
+        for (driver, device, region, irq) in [
+            (
+                DRIVER,
+                DEVICE,
+                MmioRegionId(DEVICE.0),
+                IrqSourceId(DEVICE.0),
+            ),
+            (
+                OTHER,
+                OTHER_DEVICE,
+                MmioRegionId(OTHER_DEVICE.0),
+                IrqSourceId(OTHER_DEVICE.0),
+            ),
+        ] {
+            table
+                .grant_mmio_region(
+                    driver,
+                    device,
+                    region,
+                    0x1000,
+                    MmioAccess::ReadWrite,
+                    MmioIsolation::PageExclusive,
+                )
+                .unwrap();
+            table.grant_irq_source(driver, device, irq).unwrap();
+        }
+
+        // A shared resource identity across two drivers is refused, so the
+        // pre-B84 arrangement cannot silently come back.
+        assert_eq!(
+            table.grant_irq_source(OTHER, OTHER_DEVICE, IrqSourceId(DEVICE.0)),
+            Err(ResourceError::Duplicate)
+        );
+        assert_eq!(
+            table.grant_mmio_region(
+                OTHER,
+                OTHER_DEVICE,
+                MmioRegionId(DEVICE.0),
+                0x1000,
+                MmioAccess::ReadWrite,
+                MmioIsolation::PageExclusive,
+            ),
+            Err(ResourceError::Duplicate)
+        );
+
+        // And neither driver can reach the other's device even holding its own
+        // valid epoch: the device is checked against the installed record.
+        assert_eq!(
+            table.grant_irq_source(DRIVER, OTHER_DEVICE, IrqSourceId(99)),
+            Err(ResourceError::WrongDevice)
+        );
     }
 
     #[test]

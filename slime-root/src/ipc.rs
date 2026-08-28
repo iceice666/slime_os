@@ -1284,18 +1284,32 @@ pub const BLOCK_RING_AUTHORITY_ROW_BYTES: usize = boot_contracts::block_authorit
 pub const BLOCK_RING_AUTHORITY_ROWS_PER_CALL: usize =
     crate::transfer_window::MAX_STAGED_ARRAY_BYTES / BLOCK_RING_AUTHORITY_ROW_BYTES;
 
-/// The one instance name authorized to read the B83 authority table.
+/// The one *executable* authorized to read the B83 authority table.
 ///
-/// A literal rather than a manifest field, matching IO4's `network-service`
-/// gate. The table says which client ring may write; handing it to anything but
-/// the driver that enforces it would disclose one client's authority to
-/// another. A second block driver would need its own declared name here, which
-/// is the review this literal forces.
-pub const BLOCK_DRIVER_INSTANCE: &str = "virtio-blk-driver";
+/// The executable rather than the instance name (B84): a plane with two disks
+/// declares this same audited binary twice, under two composition-chosen
+/// instance names, and both instances enforce the table. Gating on an instance
+/// name would mean every such composition had to spell one blessed name or
+/// patch this constant, and the property being checked is "is this the driver
+/// that enforces these rows", which is a property of the code, not of the name
+/// a composition happened to give one copy of it.
+///
+/// Still a literal rather than a manifest field, matching IO4's
+/// `network-service` gate: a second, different block driver would need its own
+/// declared name here, which is the review this literal forces.
+pub const BLOCK_DRIVER_EXECUTABLE: &str = "virtio-blk-driver";
 
 /// Copy authenticated B83 entries only to the generation's declared block
-/// driver. This is identity gating, not block policy: the root reads no right
+/// driver, and only the rows for the device that driver instance was installed
+/// against. This is identity gating, not block policy: the root reads no right
 /// here, because refusing a write on a read-only ring is a device decision.
+///
+/// Filtering by device is least authority, not convenience. Two driver
+/// instances serve two disks; each enforces only its own, so handing either the
+/// other's rows would disclose authority it cannot act on and could not have
+/// derived. The device comes from the caller's own declared IO1 budget — the
+/// same record `install_driver` bound it to — so a driver cannot ask for
+/// another device's rows by asking differently.
 pub fn read_block_ring_authority(
     generation: &boot_contracts::generation::Generation<'_>,
     instance: usize,
@@ -1306,11 +1320,31 @@ pub fn read_block_ring_authority(
         return None;
     };
     let caller = generation.instance(instance).ok()?;
-    if caller.name != BLOCK_DRIVER_INSTANCE {
+    let executable = generation.executable(caller.executable).ok()?;
+    if executable.name != BLOCK_DRIVER_EXECUTABLE {
         return None;
     }
+    // Which device this instance drives, from the budget that installed it. A
+    // driver with no declared budget holds no device authority at all, so it
+    // reads nothing rather than everything.
+    let device = crate::generation::io_resource_budget_object(generation)?
+        .ok()?
+        .quota_for(&boot_contracts::io_resource::driver_identity(caller.name))?
+        .device;
+    // The cursor counts *this device's* rows, not raw table positions. Skipping
+    // raw indices while returning a count of rows written would make a paging
+    // caller re-request forever, because the two numbers would not advance
+    // together.
+    let mut matched = 0;
     let mut written = 0;
-    for index in cursor..authority.ring_count() {
+    for index in 0..authority.ring_count() {
+        if authority.ring(index)?.device != device {
+            continue;
+        }
+        matched += 1;
+        if matched <= cursor {
+            continue;
+        }
         let end = written + BLOCK_RING_AUTHORITY_ROW_BYTES;
         if end > out.len()
             || written / BLOCK_RING_AUTHORITY_ROW_BYTES >= BLOCK_RING_AUTHORITY_ROWS_PER_CALL

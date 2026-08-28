@@ -289,7 +289,7 @@
     { holder = "virtio-blk-driver"; mmioBytes = 4096; mmioMappings = 1; dmaPages = 12; dmaMappings = 3; irqSources = 1; outstandingRequests = 8; bufferLoans = 4; };
   ];
   blockRingAuthority = [
-    { holder = "replay-unrecorded"; device = 1; ring = 0; rights = ["blockRead";]; sectorLimit = 1024; };
+    { holder = "replay-unrecorded"; device = 0; ring = 0; rights = ["blockRead";]; sectorLimit = 1024; };
   ];
   state = [];
   target = "aarch64-sel4-qemu-virt";

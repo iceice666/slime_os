@@ -47,10 +47,14 @@ const CONTROL_OFFSET: usize = 0x2000;
 const CONTROL_STRIDE: usize = 32;
 const VIRTIO_DEVICE_BLOCK: u32 = 2;
 const COMPLETION_POLLS: u32 = 100_000_000;
-/// Which device this driver's `io-block-device` grant names, and which IO0 ring
-/// its client's loan is. Both are the driver's own declared bindings, and both
-/// key the B83 authority table.
-const DEVICE_INDEX: u32 = 1;
+/// Which IO0 ring this driver's client uses. One driver instance serves one
+/// ring; a client with different rights uses a different ring, in a different
+/// instance.
+///
+/// The *device* is deliberately not a constant here. It comes from the root's
+/// bind answer, because a plane with two disks declares this executable twice
+/// and both instances' typed capabilities carry the same positional byte — so
+/// the binary cannot know which disk it holds (B84).
 const RING_INDEX: u32 = 0;
 /// Authority rows one read may return. The generation declares at most one ring
 /// per client per device, and no plane wires more clients than this.
@@ -150,7 +154,10 @@ fn main(_startup_arg: u32) {
         capacity,
         completion_ready,
         authority: &authority,
-        device_index: DEVICE_INDEX,
+        // The generation's answer, zero-based, exactly as declared in both the
+        // IO1 budget and the authority table. Two instances of a two-disk plane
+        // run these same bytes and differ only in what the root tells them.
+        device_index: device.device,
         ring_index: RING_INDEX,
     };
     loop {

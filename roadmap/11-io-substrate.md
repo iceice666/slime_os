@@ -11,19 +11,19 @@ failure evidence.
 
 What is **not** done, stated plainly so no consumer assumes otherwise:
 
-- **IO2's root cutover, for two planes.** Six of the eight block-holding
-  compositions — `sel4-storage`, `sel4-store`, `sel4-rollback`, `sel4-replay`,
-  `sel4-generation`, and `sel4-filesystem` — now reach their devices through the
-  userspace driver over IO0 rings, each gated on generation-declared per-ring rights
-  (`contracts/block-authority/v1`). The authority prerequisite this depended on is
-  landed: a ring's rights are declared rather than inferred, and the driver produces
-  `STATUS_BAD_RIGHTS` for a submission outside them.
+- **IO2's root cutover is complete for all eight planes; the root's own block
+  implementation remains only as dead code.** All eight block-holding compositions —
+  `sel4-storage`, `sel4-store`, `sel4-rollback`, `sel4-replay`, `sel4-generation`,
+  `sel4-filesystem`, `sel4-recovery`, and `sel4-transfer` — reach their devices through
+  the userspace driver over IO0 rings, each gated on generation-declared per-ring rights
+  (`contracts/block-authority/v1`). The last two, the two-disk planes, were unblocked by
+  B84 (resolved 2026-08-28), which declared a per-instance device ordinal in the IO1
+  budget and threaded it through every per-device identity.
 
-  `slime-root`'s virtio-blk command/descriptor implementation and its
-  `BlockTransact` path remain the product path for `sel4-recovery` and
-  `sel4-transfer`. Both declare two attached devices and IO1 grants exactly one
-  device per driver instance, so neither can be composed against the userspace
-  driver at all. Tracked as backlog B84, which owns the mechanism gap.
+  What remains is a deliberate dead-code removal, tracked as the narrowed backlog B83:
+  `slime-root`'s virtio-blk command/descriptor implementation and its `BlockTransact`
+  path are still linked though no seL4 composition can reach them. Removing them is
+  sequenced with the frozen CP1 fixture's own callers, not with any mechanism change.
 - **IO4's declared-but-refused subset:** IPv6/NDP, DHCP, SLAAC, and the TCP
   listener/accept data path answer `STATUS_UNSUPPORTED`.
 - **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
@@ -182,7 +182,7 @@ The boot-selector's disk is a bounded ordering exception: it must be probed befo
 
 ## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
 
-**Status:** Complete except the root cutover's last two planes; the authenticated per-ring rights prerequisite is landed and six of eight block-holding compositions are migrated. QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
+**Status:** Complete; all eight block-holding compositions reach their devices through the userspace driver, the authenticated per-ring rights prerequisite is landed, and the two two-disk planes were unblocked by B84's per-instance device authority. Only the root's now-unreachable block implementation awaits removal (narrowed backlog B83). QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
 
 **Spawn-grant prerequisite: landed, and the previous diagnosis corrected.** Two earlier passes reported that a dynamically spawned storage client could not receive its crossing bindings because init's spawn supplied zero grant records, and each reverted a working migration believing the root lacked the mechanism. That conclusion was wrong. The root already derives crossing grants from the generation: adding a declared `sharedBufferFactory` grant (source `init`, target `sel4-storage-probe`) to `sel4-storage.zti` made preflight report `requested=0 parent=1 minted=0 respawn=false` — it had counted the declaration correctly and refused only because init passed nothing. The gap was entirely init-side. `drive_probe_plane_with_token` now takes the exact grant vector its manifest declares, and the storage plane boots with `SLIME_GRAPH spawn authorized task=0 slot=1 component=sel4-storage-probe grants=1` and `buffer_factory_grants=1`. The same idiom was already in production on the sample plane (`sample-lender-shared-buffer-factory`), so this is a use of the existing mechanism rather than a second one.
 
@@ -205,24 +205,27 @@ say whose rights a submission carries — and no field can express a wildcard ho
 a device range, or an "all rights" value. The root reads no block right at any point;
 it authenticates who may read the table and bounds the bytes.
 
-**Six of eight planes are migrated.** `sel4-storage`, `sel4-store`, `sel4-rollback`,
-`sel4-replay`, `sel4-generation`, and `sel4-filesystem` reach their devices only
-through the userspace driver, over one shared `components/lib/src/block_io.rs`
-adapter, and each gate now asserts the driver's authority read, its device bring-up,
-its clean release, and the root's numeric DMA reclamation in place of the retired
-`SLIME_GRAPH block served` corroboration. `just sel4_gate_control_check` rose from
-1761 to 1779 rejected mutations, so coverage grew rather than moved.
+**All eight planes are migrated.** `sel4-storage`, `sel4-store`, `sel4-rollback`,
+`sel4-replay`, `sel4-generation`, `sel4-filesystem`, `sel4-recovery`, and
+`sel4-transfer` reach their devices only through the userspace driver, over one shared
+`components/lib/src/block_io.rs` adapter, and each gate asserts the driver's authority
+read, its device bring-up, its clean release, and the root's numeric DMA reclamation in
+place of the retired `SLIME_GRAPH block served` corroboration. `just
+sel4_gate_control_check` rejects 1781 mutated transcripts and layouts, so coverage grew
+rather than moved.
 
-**Two planes remain on the root path, and the reason is a mechanism gap.**
+**The two-disk planes were the last mechanism gap, and B84 closed it.**
 `sel4-recovery` holds a writable recovery disk and a read-only guard disk whose
 byte-identity its gate asserts; `sel4-transfer` holds a source and a receiver. IO1
-grants exactly one device per driver instance (`DeviceId(1)` is hardcoded in
-`slime-root/src/graph_runtime/services/io_resource.rs`), and within one instance every
-non-`block` typed grant shares a single positional index, so two devices cannot be
-expressed even by declaring the driver twice. Tracked as backlog B84. An attempt to
-give `device` grants their own counter was reverted: the shared index meant
-incrementing on `Device` shifted each driver's `mmioRegion` index and broke every
-plane's virtio handshake at once.
+previously bound one driver instance to one device through `DeviceId(1)` literals and a
+per-instance positional capability index, so two devices were inexpressible even by
+declaring the driver twice. B84 (resolved 2026-08-28) declared a per-instance device
+ordinal in the IO1 budget and threaded it through every per-device identity; both planes
+now declare two driver instances, and their read-only disks refuse writes by the driver's
+ring authority rather than the root's capability check. An earlier attempt to give
+`device` grants their own counter was reverted: the shared index meant incrementing on
+`Device` shifted each driver's `mmioRegion` index and broke every plane's virtio
+handshake at once.
 
 **Depends on:** IO0, IO1, and the existing M5/P5 block behavior and QEMU storage gates.
 

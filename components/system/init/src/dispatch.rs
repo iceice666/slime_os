@@ -267,7 +267,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 b"[init] transfer probe spawned\n",
                 b"transfer",
                 Some(2),
-                &[],
+                &crossing_factory(b"transfer-init-buffer-factory"),
             );
             slime_rt::debug_write(b"[init] transfer plane complete\n");
             slime_rt::exit(0)
@@ -305,7 +305,7 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
                 b"[init] recovery probe spawned\n",
                 b"recovery",
                 Some(2),
-                &[],
+                &crossing_factory(b"recovery-init-buffer-factory"),
             );
             slime_rt::debug_write(b"[init] recovery plane complete\n");
             slime_rt::exit(0)

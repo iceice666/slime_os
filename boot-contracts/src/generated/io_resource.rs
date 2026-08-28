@@ -3,5 +3,5 @@
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const HEADER_BYTES: usize = 32;
-pub const ENTRY_BYTES: usize = 60;
+pub const ENTRY_BYTES: usize = 64;
 pub const MAX_DRIVERS: usize = 32;

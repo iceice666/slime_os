@@ -25,13 +25,17 @@
 //! * the result is re-selected off the device and must be the index's target.
 //!
 //! Then the negative arm, which is the one M5.9 actually names: this component
-//! holds one writable recovery disk and a second, read-only guard-disk
-//! capability. Reading through the latter proves it reaches the attached guard
-//! disk; writing through the same capability is refused by rights.
+//! reaches two disks through the userspace block driver over IO0 rings (B84).
+//! One ring is read-write on the recovery disk; the other is read-only on the
+//! guard disk. Reading through the guard ring proves it reaches the attached
+//! disk; a write on that ring is refused with `STATUS_BAD_RIGHTS` by the
+//! driver, which checks the generation-declared ring-authority table rather
+//! than any per-caller capability. The gate is the declared ring, not the
+//! client's good behaviour.
 //!
 //! Kernel-resident in the oracle: `recovery::reconstruct` does all of the above
 //! behind a syscall gated on `GenerationControl` plus a selected block
-//! capability. Here the capability *is* the gate.
+//! capability. Here the ring's declared authority is the gate.
 
 extern crate alloc;
 
@@ -39,17 +43,21 @@ use boot_contracts::bootstate::{
     BootState, SLOT_BYTES, SelectionError, Slot, empty_state_root, select_bootstate,
 };
 use boot_contracts::gpt::{self, GptError};
-use boot_contracts::object_store::{BlockIo, IoError, ObjectStore};
+use boot_contracts::object_store::{BlockIo as ObjectBlockIo, IoError, ObjectStore};
 use boot_contracts::recovery::RecoveryIndex;
-use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
+use slime_components::block_io::{BlockError, BlockIo};
+use slime_proto::io_queue;
 
-/// The primary device this component may reconstruct.
-const BLOCK_SLOT: u32 = 1;
-/// A real second device capability, deliberately read-only. Its write path can
-/// reach the attached guard disk if authority is accidentally widened.
-const GUARD_BLOCK_SLOT: u32 = 2;
+const FACTORY_SLOT: u32 = 3;
+const PRIMARY_PEER_SLOT: u32 = 8;
+const GUARD_PEER_SLOT: u32 = 9;
+const PRIMARY_RING_BASE: u64 = 0x0000_001f_0000_0000;
+const PRIMARY_DATA_BASE: u64 = 0x0000_001f_0001_0000;
+const GUARD_RING_BASE: u64 = 0x0000_001f_0010_0000;
+const GUARD_DATA_BASE: u64 = 0x0000_001f_0011_0000;
 
 const SECTOR_BYTES: usize = 512;
+const GUARD_SIGNATURE: &[u8; 8] = b"GUARDDSK";
 
 /// The two BootState slots, partition-relative — the same layout the rollback
 /// plane uses, because it is the same on-disk structure.
@@ -70,7 +78,37 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0);
     }
 
-    let mut io = BlockCapability;
+    let primary_request = binding(b"notification:recovery-primary-request-ready+signal");
+    let primary_completion = binding(b"notification:recovery-primary-completion-ready+wait");
+    let guard_request = binding(b"notification:recovery-guard-request-ready+signal");
+    let guard_completion = binding(b"notification:recovery-guard-completion-ready+wait");
+    // SAFETY: all four bases are page-aligned, pairwise disjoint addresses in
+    // this component's free VSpace, and nothing else maps them.
+    let primary = unsafe {
+        BlockIo::attach(
+            FACTORY_SLOT,
+            PRIMARY_PEER_SLOT,
+            primary_request,
+            primary_completion,
+            PRIMARY_RING_BASE,
+            PRIMARY_DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"primary block attach"));
+    // SAFETY: covered by the disjoint mapping invariant above.
+    let guard = unsafe {
+        BlockIo::attach(
+            FACTORY_SLOT,
+            GUARD_PEER_SLOT,
+            guard_request,
+            guard_completion,
+            GUARD_RING_BASE,
+            GUARD_DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"guard block attach"));
+    let mut io = BlockCapability { driver: primary };
+    let mut guard = BlockCapability { driver: guard };
     let partition = match locate_partition(&mut io) {
         Some(partition) => partition,
         None => fail(b"partition"),
@@ -205,29 +243,26 @@ fn main(_startup_arg: u32) {
     }
     slime_rt::debug_write(b"[sel4-recovery-probe] recovery rerun from durable index converged\n");
 
-    // The negative arm uses a real capability for device 1. A read proves the
-    // slot reaches the attached guard disk; a write must then fail specifically
-    // because that capability carries no block-write right.
+    // The negative arm crosses the guard driver's real IO0 ring twice. A
+    // successful read proves the second attached disk is reachable. The write
+    // must then be refused specifically with STATUS_BAD_RIGHTS by that driver's
+    // generation-declared ring-authority row, not by an absent endpoint or a
+    // device error.
     let mut guard_sector = [0u8; SECTOR_BYTES];
-    let read = request(block::OP_READ, 0);
-    let mut reply = [0u8; block::REPLY_LEN];
-    if slime_rt::block_transact_sector(
-        GUARD_BLOCK_SLOT,
-        &read.encode(),
-        &mut reply,
-        &mut guard_sector,
-    ) < 0
-        || decode_reply(&reply).sectors_done != 1
+    if guard.read_sector(0, &mut guard_sector).is_err()
+        || &guard_sector[..GUARD_SIGNATURE.len()] != GUARD_SIGNATURE
     {
-        fail(b"guard disk capability was not reachable");
+        fail(b"guard disk ring did not return the attached disk signature");
     }
-    let write = request(block::OP_WRITE, 0);
-    if slime_rt::block_transact_write(GUARD_BLOCK_SLOT, &write.encode(), &guard_sector, &mut reply)
-        >= 0
-    {
-        fail(b"guard disk accepted a write");
+    match guard.driver.write(0, &guard_sector) {
+        Err(BlockError::Refused { status, .. }) if status == io_queue::STATUS_BAD_RIGHTS => {}
+        _ => fail(b"guard disk write was not refused by driver rights"),
     }
+    slime_rt::debug_write(b"[sel4-recovery-probe] guard write refused by driver rights\n");
     slime_rt::debug_write(b"[sel4-recovery-probe] reachable guard disk write refused\n");
+
+    guard.shutdown();
+    io.shutdown();
 
     slime_rt::debug_write(b"[sel4-recovery-probe] recovery plane complete\n");
 }
@@ -310,44 +345,43 @@ fn read_slot(io: &mut BlockCapability, lba: u64) -> [u8; SLOT_BYTES] {
     sector
 }
 
-/// The device, reached through the granted capability.
-struct BlockCapability;
+/// The primary or guard device, reached through a userspace driver's IO0 ring.
+struct BlockCapability {
+    driver: BlockIo<'static>,
+}
 
-impl BlockIo for BlockCapability {
+impl BlockCapability {
+    fn shutdown(&mut self) {
+        self.driver
+            .shutdown()
+            .unwrap_or_else(|_| fail(b"driver shutdown"));
+    }
+}
+
+impl ObjectBlockIo for BlockCapability {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = request(block::OP_READ, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_sector(BLOCK_SLOT, &request.encode(), &mut reply, out);
-        if status < 0 || decode_reply(&reply).sectors_done != 1 {
+        let reply = self.driver.read(lba, out).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn write_sector(&mut self, lba: u64, data: &[u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = request(block::OP_WRITE, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_write(BLOCK_SLOT, &request.encode(), data, &mut reply);
-        if status < 0 || decode_reply(&reply).sectors_done != 1 {
+        let reply = self.driver.write(lba, data).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        let request = request(block::OP_FLUSH, 0);
-        let mut reply = [0u8; block::REPLY_LEN];
-        if slime_rt::block_transact(BLOCK_SLOT, &request.encode(), &mut reply) < 0 {
-            return Err(IoError::Device);
-        }
-        Ok(())
+        self.driver.flush().map(|_| ()).map_err(|_| IoError::Device)
     }
 }
 
 fn locate_partition(io: &mut BlockCapability) -> Option<gpt::Partition> {
-    let capacity = device_capacity(io)?;
+    let capacity = io.driver.capacity();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_BYTES]| -> Result<(), GptError> {
         io.read_sector(lba, out).map_err(|_| GptError::Device)
     };
@@ -359,49 +393,8 @@ fn locate_partition(io: &mut BlockCapability) -> Option<gpt::Partition> {
     (last <= selected.partition.last_lba).then_some(selected.partition)
 }
 
-/// The device's sector count, measured by binary search over readable LBAs.
-/// Reads only.
-fn device_capacity(io: &mut BlockCapability) -> Option<u64> {
-    let mut sector = [0u8; SECTOR_BYTES];
-    io.read_sector(0, &mut sector).ok()?;
-    let mut low = 0u64;
-    let mut high = 1u64;
-    while io.read_sector(high, &mut sector).is_ok() {
-        low = high;
-        high = high.checked_mul(2)?;
-    }
-    while high - low > 1 {
-        let middle = low + (high - low) / 2;
-        if io.read_sector(middle, &mut sector).is_ok() {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(low + 1)
-}
-
-fn request(op: u8, lba: u64) -> WireBlockRequest {
-    WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op,
-        flags: 0,
-        reserved: 0,
-        lba,
-        sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
-        buffer_phys: 0,
-        buffer_pages: 0,
-    }
-}
-
-fn decode_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    WireBlockReply::decode(bytes).unwrap_or(WireBlockReply {
-        magic: 0,
-        version: 0,
-        status: -1,
-        sectors_done: 0,
-    })
+fn binding(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 
 fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {

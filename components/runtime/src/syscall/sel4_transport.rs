@@ -922,9 +922,17 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
 pub fn shared_buffer_occupancy() -> (i64, u64) {
     pair_of(shared_buffer_labels::OCCUPANCY, &[0])
 }
-pub fn io_device_bind(device_slot: u32) -> Result<u64, i64> {
-    let result = result_of(io_resource_labels::BIND, &[device_slot as Word]);
-    (result >= 0).then_some(result as u64).ok_or(result)
+/// Bind this driver to its declared device, answering the epoch and which
+/// transport the generation gave it.
+///
+/// The device is the root's authenticated answer, not the caller's guess (B84):
+/// a driver declared twice for two disks has identical capability bytes in both
+/// instances, so it cannot know which disk it holds until the root says.
+pub fn io_device_bind(device_slot: u32) -> Result<(u64, u32), i64> {
+    let (result, device) = pair_of(io_resource_labels::BIND, &[device_slot as Word]);
+    (result >= 0)
+        .then_some((result as u64, device as u32))
+        .ok_or(result)
 }
 
 pub fn io_mmio_map(
