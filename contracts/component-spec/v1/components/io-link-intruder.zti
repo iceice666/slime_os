@@ -1,0 +1,57 @@
+{
+  formatVersion = 1;
+  name = "io-link-intruder";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves a component omitted from LinkDevice grants cannot transmit, receive, query link state, or obtain raw frames.";
+  implementation = {
+    provider = "workspace";
+    binary = "io-link-intruder";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the io_link_check gate boots an instance with no LinkDevice grant";
+    expectedResult = "all four raw-link operations are denied and the deterministic backend observes no packet";
+    passFailCriteria = "[io-link-intruder] denied transmit=1 receive=1 query=1 raw=1 emitted=0";
+    requiredTestEnvironment = "io_link_check";
+  };
+}
