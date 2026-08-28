@@ -691,6 +691,40 @@ pub(super) fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // B83's per-ring block authority, answered only to the declared
+            // block driver.
+            //
+            // Paged like the IO4 destination table and gated the same way: the
+            // root authenticates who may read the table and bounds the bytes,
+            // and reads no block right itself. Refusing a write on a read-only
+            // ring is the driver's decision, because that is device policy.
+            capability_table_labels::BLOCK_RING_AUTHORITY_READ => {
+                let cursor = words.first().copied().unwrap_or(0) as usize;
+                let response = match words.get(2).copied() {
+                    Some(transfer) => {
+                        let mut rows = [0u8; ipc::BLOCK_RING_AUTHORITY_ROWS_PER_CALL
+                            * ipc::BLOCK_RING_AUTHORITY_ROW_BYTES];
+                        match ipc::read_block_ring_authority(
+                            generation, instance, cursor, &mut rows,
+                        ) {
+                            Some(count) => {
+                                let bytes = &rows[..count * ipc::BLOCK_RING_AUTHORITY_ROW_BYTES];
+                                match transfer_window::write_staged_region(
+                                    windows.bound(id, descriptor_thread(transfer)),
+                                    bytes,
+                                    scratch,
+                                ) {
+                                    Ok(descriptor) => Response::success(count as i64, descriptor),
+                                    Err(error) => Response::error(error),
+                                }
+                            }
+                            None => Response::error(IpcError::InvalidOperation),
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
             // C9.2's declared wake sources, answered only about the caller
             // itself.
             //

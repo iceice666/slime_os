@@ -5,6 +5,7 @@
 //! Initial authority comes only from per-instance bindings; executables are
 //! never inferred to be instances.
 
+use boot_contracts::block_authority::{self, BlockAuthority};
 use boot_contracts::clock_authority::{self, ClockAuthority};
 use boot_contracts::component_image::{self, ComponentTargetError};
 use boot_contracts::fabric_graph::{self, FabricGraph, MAX_INTERPOSITION_HOPS};
@@ -604,6 +605,23 @@ pub(crate) fn network_destinations_object<'a>(
             && object.bytes[..network_destination::MAGIC.len()] == network_destination::MAGIC
         {
             return Some(NetworkDestinations::decode(object.bytes));
+        }
+    }
+    None
+}
+/// Locate the authenticated B83 per-ring block authority table. Decoded here
+/// only to bound and page authenticated bytes; which ring may write is the
+/// driver's decision, because that is device policy.
+pub(crate) fn block_ring_authority_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<BlockAuthority<'a>, block_authority::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= block_authority::MAGIC.len()
+            && object.bytes[..block_authority::MAGIC.len()] == block_authority::MAGIC
+        {
+            return Some(BlockAuthority::decode(object.bytes));
         }
     }
     None

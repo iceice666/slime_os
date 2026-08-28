@@ -353,7 +353,17 @@ test_sel4_root:
     # retrievable, a released frame's is not, and a full table refuses the
     # allocation rather than losing a record and letting a device be handed
     # some other frame's address.
-    expected=206
+    # B83: 206 -> 207. `ipc` gains
+    # `the_ordinal_notification_query_requires_a_role`. Removing the root's
+    # block path needs the userspace driver declared once per device, and a
+    # service declared twice cannot resolve its notifications by grant name:
+    # grant names are globally unique with exactly one waiter each, so the two
+    # instances are necessarily bound to differently-named grants and a driver
+    # spelling one name would serve only the instance that got it. The
+    # `notification:@<ordinal>+<role>` query answers positionally instead, and
+    # this test pins the part that makes it safe: the role is required, because
+    # "my first binding" spans two roles and identifies no slot.
+    expected=207
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

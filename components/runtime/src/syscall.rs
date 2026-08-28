@@ -694,6 +694,19 @@ pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> Result<usize,
     }
 }
 
+/// Read the authenticated B83 per-ring block authority entries served to this
+/// generation's block driver. The request is self-scoped and names no holder,
+/// device, or ring; the root reads no block right, so refusing a write on a
+/// read-only ring is decided by the driver that reads this table.
+pub fn block_ring_authority_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::block_ring_authority_read(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// The graph's index for the route whose identity is `identity`.
 ///
 /// A participant folds its route name, interface identity, and contract kind

@@ -1233,6 +1233,29 @@ pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> i64 {
     }
 }
 
+/// Read authenticated B83 per-ring block authority entries into the transfer
+/// window. `network_destinations_read`'s exact shape, on this table's label.
+pub fn block_ring_authority_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::BLOCK_RING_AUTHORITY_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
 /// Read this component's own C9.2 declared wake sources (label 49).
 ///
 /// `graph_read`'s exact shape, and paged for the same reason: one record is 64

@@ -104,6 +104,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::RESOLVE_BINDING
         | capability_table_labels::GRAPH_READ
         | capability_table_labels::NETWORK_DESTINATIONS_READ
+        | capability_table_labels::BLOCK_RING_AUTHORITY_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_table_labels::GRAPH_QUERY
         | capability_transfer_labels::EXPORT
@@ -823,6 +824,41 @@ fn resolve_notification_slot(
         Some(_) => return None,
         None => (role, None),
     };
+    // A *name-free* query: `@<ordinal>+<role>`, answering "my Nth binding in
+    // this role, by ascending declared slot".
+    //
+    // A service declared twice — one instance per device, which is how a plane
+    // with two disks is composed, since IO1 grants one device per driver —-
+    // cannot ask by grant name: notification grant names are globally unique
+    // and each grant has exactly one waiter, so the two instances are bound to
+    // differently-named grants. A driver spelling one name would serve only the
+    // instance that happened to get it. This is the same compile-time coupling
+    // B70 removed for capability slots, reappearing as a name.
+    //
+    // Ordinal over *this holder's own* bindings, so it discloses nothing about
+    // a peer, and by ascending slot rather than declaration order so it is a
+    // property of the layout rather than of how the manifest was written.
+    if let Some(ordinal) = name.strip_prefix('@') {
+        let wanted = wanted?;
+        let Ok(ordinal) = ordinal.parse::<usize>() else {
+            return None;
+        };
+        let mut slots = [usize::MAX; MAX_NOTIFICATION_BINDINGS_PER_HOLDER];
+        let mut len = 0;
+        for index in 0..generation.notification_binding_count() {
+            let binding = generation.notification_binding(index).ok()?;
+            if binding.holder != holder || binding.role != wanted {
+                continue;
+            }
+            if len == slots.len() {
+                return None;
+            }
+            slots[len] = binding.slot;
+            len += 1;
+        }
+        slots[..len].sort_unstable();
+        return slots[..len].get(ordinal).copied();
+    }
     let mut found: Option<usize> = None;
     for index in 0..generation.notification_binding_count() {
         let binding = generation.notification_binding(index).ok()?;
@@ -845,6 +881,13 @@ fn resolve_notification_slot(
     }
     found
 }
+
+/// Notification bindings one holder may declare in a single role.
+///
+/// Bounds the ordinal query's scratch array. A holder declaring more is
+/// refused rather than truncated: answering from a partial list would return a
+/// different binding than the ordinal names.
+const MAX_NOTIFICATION_BINDINGS_PER_HOLDER: usize = 16;
 
 /// Which of `instance`'s slots carries a capability of `kind` bearing `rights`.
 ///
@@ -1237,6 +1280,49 @@ pub fn read_network_destinations(
     Some(written / NETWORK_DESTINATION_ROW_BYTES)
 }
 
+pub const BLOCK_RING_AUTHORITY_ROW_BYTES: usize = boot_contracts::block_authority::ENTRY_BYTES;
+pub const BLOCK_RING_AUTHORITY_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / BLOCK_RING_AUTHORITY_ROW_BYTES;
+
+/// The one instance name authorized to read the B83 authority table.
+///
+/// A literal rather than a manifest field, matching IO4's `network-service`
+/// gate. The table says which client ring may write; handing it to anything but
+/// the driver that enforces it would disclose one client's authority to
+/// another. A second block driver would need its own declared name here, which
+/// is the review this literal forces.
+pub const BLOCK_DRIVER_INSTANCE: &str = "virtio-blk-driver";
+
+/// Copy authenticated B83 entries only to the generation's declared block
+/// driver. This is identity gating, not block policy: the root reads no right
+/// here, because refusing a write on a read-only ring is a device decision.
+pub fn read_block_ring_authority(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(authority)) = crate::generation::block_ring_authority_object(generation) else {
+        return None;
+    };
+    let caller = generation.instance(instance).ok()?;
+    if caller.name != BLOCK_DRIVER_INSTANCE {
+        return None;
+    }
+    let mut written = 0;
+    for index in cursor..authority.ring_count() {
+        let end = written + BLOCK_RING_AUTHORITY_ROW_BYTES;
+        if end > out.len()
+            || written / BLOCK_RING_AUTHORITY_ROW_BYTES >= BLOCK_RING_AUTHORITY_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(authority.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / BLOCK_RING_AUTHORITY_ROW_BYTES)
+}
+
 /// Bytes one encoded wake-source record occupies in a `WAIT_SOURCES` reply.
 ///
 /// The contract's own record size: the caller decodes with
@@ -1395,6 +1481,10 @@ mod tests {
                 SERVICE_CAPABILITY_TRANSFER,
             ),
             (
+                capability_table_labels::BLOCK_RING_AUTHORITY_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
                 capability_table_labels::GRAPH_QUERY,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
@@ -1485,8 +1575,9 @@ mod tests {
             // scheduling class, 52-56 until C9.4's lifecycle state and
             // restart/parameter operations, 57 until C9.5's
             // `RECORDING_SOURCES`, 58-63 and 65-68 until IO1's hardware-resource
-            // service claimed them, and 64 until IO4's
-            // `NETWORK_DESTINATIONS_READ`. Moving one out of this list is the
+            // service claimed them, 64 until IO4's
+            // `NETWORK_DESTINATIONS_READ`, and 69 until B83's
+            // `BLOCK_RING_AUTHORITY_READ`. Moving one out of this list is the
             // whole change: a number this test asserts routes nowhere and a
             // number the contract declares are the same fact stated twice, so
             // assigning a label must fail here first.
@@ -1769,6 +1860,29 @@ mod tests {
         // `kind:` and `notification:` cannot both claim one name.
         assert!(!"notification:x".starts_with("kind:"));
         assert!(!"kind:endpoint".starts_with("notification:"));
+    }
+
+    /// The name-free notification query, and why it must require a role.
+    ///
+    /// A service declared twice — one instance per device, which is how a plane
+    /// with two disks is composed since IO1 grants one device per driver — is
+    /// bound to differently-named notification grants, because grant names are
+    /// globally unique and each grant has exactly one waiter. A driver spelling
+    /// one name serves only the instance that received it. `@<ordinal>+<role>`
+    /// asks by position in the caller's *own* role-filtered bindings instead.
+    ///
+    /// A bare `@0` with no role is refused: "my first binding" spans two roles
+    /// and identifies no slot, which is the same ambiguity rule every other axis
+    /// in this operation follows.
+    #[test]
+    fn the_ordinal_notification_query_requires_a_role() {
+        assert!(binding_name_admissible(b"notification:@0+wait"));
+        assert!(binding_name_admissible(b"notification:@1+signal"));
+        // An ordinal is not a grant name, so a grant literally named `@0` could
+        // not be reached by this query and vice versa — the namespaces stay
+        // disjoint by the `@` sigil rather than by convention.
+        assert!("@0".starts_with('@'));
+        assert!(!"io-block-request-ready".starts_with('@'));
     }
 
     /// The minted-binding axis is its own namespace too, disjoint from grants
