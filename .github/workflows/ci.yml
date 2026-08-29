@@ -136,6 +136,55 @@ jobs:
       - run: just devlog_check
       - run: just sel4_gate_control_check
 
+  kani_proofs:
+    name: Kani IO wire proofs
+    # An ordinary x64 runner, not the arm64 seL4 pool: nothing here builds for
+    # AArch64, links libsel4, or boots QEMU. `verification/io-proofs` is a
+    # zero-dependency crate compiled by Kani's own bundled toolchain, so this
+    # job needs neither the seL4 prefix nor a cargo cache.
+    #
+    # x86_64 is also deliberate coverage rather than just availability: the
+    # derivation was developed and observed on `aarch64-darwin`, so this is the
+    # first run of the Linux bundle and its `autoPatchelfHook` path.
+    runs-on: ubuntu-latest
+    # Observed warm on aarch64-darwin: 17 seconds. Cold here additionally
+    # fetches a ~143 MB release bundle and the pinned nightly, so the bound
+    # covers a cold cache and catches a wedged solver rather than a slow run.
+    timeout-minutes: 30
+    steps:
+      # No `submodules: recursive`: this gate reads `components/proto/src`,
+      # `verification/io-proofs`, and the flake. It touches nothing in `deps/`.
+      - uses: actions/checkout@v7
+
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      # Keyed on the kani pin alone, so an unrelated `sel4/pins.toml` or
+      # `Cargo.lock` change does not evict a 2.3 GiB closure. No `~/.rustup` or
+      # `~/.cargo` here: `kani-driver` uses the toolchain its bundle links
+      # against, out of the store, and the crate under proof has no
+      # dependencies to fetch.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            kani-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/kani.nix')
+            }}
+          restore-prefixes-first-match: kani-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+
+      # Separate from the gate on purpose. This step failing means the pinned
+      # bundle hash, the pinned nightly, or the derivation's own
+      # verify-a-harness install check is wrong; the gate step failing means a
+      # proof is. Collapsing them would report a broken pin as a broken proof.
+      - name: Realize the pinned Kani
+        run: nix build .#kani
+
+      - run: nix develop .#kani --command just kani_io_proofs
+
   # === Jobs that need the installed seL4 prefix ===
   #
   # `aarch64-sel4-qemu-virt` is an AArch64 target and every gate below either
