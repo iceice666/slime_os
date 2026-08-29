@@ -369,3 +369,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-29 | [B85: three stale `slime-proto` dependencies left `just machete` red](2026-08-29-b85-stale-proto-dependencies/index.md) | Defect | Fixed | B85 |
 | 2026-08-29 | [Devlog roadmap ID collision guard](2026-08-29-devlog-roadmap-id-collisions/index.md) | Change | Verified | none |
 | 2026-08-29 | [Kani enters the flake, and the false pass it exposed](2026-08-29-kani-in-flake/index.md) | Change | Verified | IO6 |
+| 2026-08-29 | [The storage-write allowlist still read the pre-IO2 grant shape](2026-08-29-framework-authority-ring-form/index.md) | Defect | Fixed | IO2 |

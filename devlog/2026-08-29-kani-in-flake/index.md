@@ -96,6 +96,7 @@ point is that this toolchain is a store path.
 | `ci.yml` parsed with `yaml.safe_load`; `kani_proofs` job inspected | 11 jobs; `runs-on: ubuntu-latest`, `timeout-minutes: 30`, five steps in the intended order | Direct |
 | Simulated `actions/checkout` **without** submodules (tracked files only, empty `deps/*`), then both CI steps run against it | `nix build .#kani` exit 0; `env -i` gate run exit 0 — `18 successfully verified harnesses, 0 failures` | Direct |
 | Control: bundle hash corrupted in that clean tree | `nix build .#kani` exit 1 — `hash mismatch in fixed-output derivation`, naming specified vs got; the gate step is never reached | Direct |
+| `kani_proofs` job's first real run on x86_64 Linux (PR #11, job 99054927967) | pass in 1m16s — `Complete - 18 successfully verified harnesses, 0 failures, 18 total` | Direct |
 
 No Rust source changed, so no product lint, test, or QEMU gate was rerun.
 
@@ -141,14 +142,12 @@ No Rust source changed, so no product lint, test, or QEMU gate was rerun.
 
 ## Open risks and follow-ups
 
-- [ ] No Linux build or verification run is observed **in this entry**: this
-  host cannot build for `*-linux`, so only `aarch64-darwin` was built and run
-  here. The three other systems' derivations evaluate and their bundle hashes
-  come from GitHub's published digests, but the
-  `autoPatchelfHook`/`stdenv.cc.cc.lib` path remains **[INFERENCE]**, following
-  upstream's own `os_hacks.rs` patchelf logic. The new `kani_proofs` job runs
-  x86_64 Linux, so its first green run is that path's first real evidence —
-  which is why this stays open until one is observed.
+- [x] **Closed the same day, by CI.** The Linux path was inference when this
+  entry was written — this host cannot build for `*-linux`, so only
+  `aarch64-darwin` was built and run locally. The `kani_proofs` job's first run
+  (PR #11, job 99054927967) verified 18/18 harnesses on x86_64 Linux in 1m16s,
+  which makes the `autoPatchelfHook`/`stdenv.cc.cc.lib` path observed rather
+  than inferred. `aarch64-linux` and `x86_64-darwin` remain evaluated-only.
 - [x] **Closed the same day.** `just kani_io_proofs` now runs in CI as the
   `kani_proofs` job. It remains outside `contracts_check` and every other
   aggregate gate on purpose: those must keep passing on a machine with no Kani
