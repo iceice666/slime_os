@@ -84,17 +84,19 @@ impl<'a> NetworkDestinations<'a> {
         if bytes.len() < HEADER_BYTES || bytes.len() > MAX_BYTES {
             return Err(DecodeError::Truncated);
         }
-        if bytes[..8] != MAGIC {
+        if bytes[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC_END] != MAGIC {
             return Err(DecodeError::BadMagic);
         }
-        if u32_at(bytes, 8)? != FORMAT_VERSION || u32_at(bytes, 12)? as usize != HEADER_BYTES {
+        if u32_at(bytes, OFF_HEADER_FORMAT_VERSION)? != FORMAT_VERSION
+            || u32_at(bytes, OFF_HEADER_HEADER_SIZE)? as usize != HEADER_BYTES
+        {
             return Err(DecodeError::UnsupportedVersion);
         }
-        if u64_at(bytes, 16)? != 0 {
+        if u64_at(bytes, OFF_HEADER_REQUIRED_FLAGS)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        let count = u32_at(bytes, 24)? as usize;
-        let total = u32_at(bytes, 28)? as usize;
+        let count = u32_at(bytes, OFF_HEADER_DESTINATION_COUNT)? as usize;
+        let total = u32_at(bytes, OFF_HEADER_TOTAL_LEN)? as usize;
         if count > MAX_DESTINATIONS
             || total != HEADER_BYTES + count * ENTRY_BYTES
             || total != bytes.len()
@@ -189,16 +191,18 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<Destination<'_>, DecodeErr
     let entry = bytes
         .get(offset..offset + ENTRY_BYTES)
         .ok_or(DecodeError::Truncated)?;
-    let transport = match entry[32] {
+    let transport = match entry[OFF_ENTRY_TRANSPORT] {
         TRANSPORT_TCP => Transport::Tcp,
         TRANSPORT_UDP => Transport::Udp,
         _ => return Err(DecodeError::InvalidEntry),
     };
-    let rights = u16_at(entry, 34)?;
-    let port = u16_at(entry, 36)?;
-    let name_len = u16_at(entry, 38)? as usize;
-    let raw_address: [u8; 16] = entry[40..56].try_into().unwrap();
-    let raw_name = &entry[56..120];
+    let rights = u16_at(entry, OFF_ENTRY_RIGHTS)?;
+    let port = u16_at(entry, OFF_ENTRY_PORT)?;
+    let name_len = u16_at(entry, OFF_ENTRY_NAME_LEN)? as usize;
+    let raw_address: [u8; 16] = entry[OFF_ENTRY_ADDRESS..OFF_ENTRY_ADDRESS_END]
+        .try_into()
+        .expect("generated network-destination layout");
+    let raw_name = &entry[OFF_ENTRY_NAME..OFF_ENTRY_NAME_END];
     if rights == 0
         || rights & !KNOWN_RIGHTS != 0
         || port == 0
@@ -207,13 +211,17 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<Destination<'_>, DecodeErr
     {
         return Err(DecodeError::InvalidEntry);
     }
-    let address = match entry[33] {
+    let address = match entry[OFF_ENTRY_ADDRESS_KIND] {
         ADDRESS_IPV4
             if name_len == 0
-                && raw_address[4..].iter().all(|byte| *byte == 0)
+                && raw_address[IPV4_BYTES..].iter().all(|byte| *byte == 0)
                 && raw_name.iter().all(|byte| *byte == 0) =>
         {
-            Address::Ipv4(raw_address[..4].try_into().unwrap())
+            Address::Ipv4(
+                raw_address[..IPV4_BYTES]
+                    .try_into()
+                    .expect("generated network-destination layout"),
+            )
         }
         ADDRESS_IPV6 if name_len == 0 && raw_name.iter().all(|byte| *byte == 0) => {
             Address::Ipv6(raw_address)
@@ -228,14 +236,14 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<Destination<'_>, DecodeErr
         }
         _ => return Err(DecodeError::InvalidEntry),
     };
-    let queue_depth = u32_at(entry, 120)?;
-    let byte_budget = u32_at(entry, 124)?;
-    let timer_budget = u32_at(entry, 128)?;
-    let retry_limit = u32_at(entry, 132)?;
-    let reconnect_limit = u32_at(entry, 136)?;
-    let socket_limit = u32_at(entry, 140)?;
-    let listener_limit = u32_at(entry, 144)?;
-    let dns_record_limit = u32_at(entry, 148)?;
+    let queue_depth = u32_at(entry, OFF_ENTRY_QUEUE_DEPTH)?;
+    let byte_budget = u32_at(entry, OFF_ENTRY_BYTE_BUDGET)?;
+    let timer_budget = u32_at(entry, OFF_ENTRY_TIMER_BUDGET)?;
+    let retry_limit = u32_at(entry, OFF_ENTRY_RETRY_LIMIT)?;
+    let reconnect_limit = u32_at(entry, OFF_ENTRY_RECONNECT_LIMIT)?;
+    let socket_limit = u32_at(entry, OFF_ENTRY_SOCKET_LIMIT)?;
+    let listener_limit = u32_at(entry, OFF_ENTRY_LISTENER_LIMIT)?;
+    let dns_record_limit = u32_at(entry, OFF_ENTRY_DNS_RECORD_LIMIT)?;
     if queue_depth == 0
         || queue_depth > MAX_QUEUE_DEPTH
         || byte_budget == 0
@@ -252,7 +260,9 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<Destination<'_>, DecodeErr
         return Err(DecodeError::Impossible);
     }
     Ok(Destination {
-        holder_identity: entry[..32].try_into().unwrap(),
+        holder_identity: entry[OFF_ENTRY_HOLDER_IDENTITY..OFF_ENTRY_HOLDER_IDENTITY_END]
+            .try_into()
+            .expect("generated network-destination layout"),
         transport,
         address,
         port,
@@ -348,26 +358,31 @@ mod tests {
         rights: u16,
     ) -> [u8; ENTRY_BYTES] {
         let mut value = [0; ENTRY_BYTES];
-        value[..32].copy_from_slice(&holder);
-        value[32] = transport;
-        value[33] = kind;
-        value[34..36].copy_from_slice(&rights.to_le_bytes());
-        value[36..38].copy_from_slice(&port.to_le_bytes());
+        value[OFF_ENTRY_HOLDER_IDENTITY..OFF_ENTRY_HOLDER_IDENTITY_END].copy_from_slice(&holder);
+        value[OFF_ENTRY_TRANSPORT] = transport;
+        value[OFF_ENTRY_ADDRESS_KIND] = kind;
+        value[OFF_ENTRY_RIGHTS..OFF_ENTRY_RIGHTS_END].copy_from_slice(&rights.to_le_bytes());
+        value[OFF_ENTRY_PORT..OFF_ENTRY_PORT_END].copy_from_slice(&port.to_le_bytes());
         if kind == ADDRESS_DNS {
-            value[38..40].copy_from_slice(&(address.len() as u16).to_le_bytes());
-            value[56..56 + address.len()].copy_from_slice(address);
+            value[OFF_ENTRY_NAME_LEN..OFF_ENTRY_NAME_LEN_END]
+                .copy_from_slice(&(address.len() as u16).to_le_bytes());
+            value[OFF_ENTRY_NAME..OFF_ENTRY_NAME + address.len()].copy_from_slice(address);
         } else {
-            value[40..40 + address.len()].copy_from_slice(address);
+            value[OFF_ENTRY_ADDRESS..OFF_ENTRY_ADDRESS + address.len()].copy_from_slice(address);
         }
+        // Budget fields, addressed by their generated offsets rather than by a
+        // second copy of the layout: this encoder is the decoder's only
+        // adversary, so a literal here could drift with the schema and still
+        // agree with itself.
         for (offset, number) in [
-            (120, 8u32),
-            (124, 4096),
-            (128, 2),
-            (132, 2),
-            (136, 2),
-            (140, 4),
-            (144, 1),
-            (148, 4),
+            (OFF_ENTRY_QUEUE_DEPTH, 8u32),
+            (OFF_ENTRY_BYTE_BUDGET, 4096),
+            (OFF_ENTRY_TIMER_BUDGET, 2),
+            (OFF_ENTRY_RETRY_LIMIT, 2),
+            (OFF_ENTRY_RECONNECT_LIMIT, 2),
+            (OFF_ENTRY_SOCKET_LIMIT, 4),
+            (OFF_ENTRY_LISTENER_LIMIT, 1),
+            (OFF_ENTRY_DNS_RECORD_LIMIT, 4),
         ] {
             value[offset..offset + 4].copy_from_slice(&number.to_le_bytes());
         }
@@ -485,5 +500,335 @@ mod tests {
         assert!(d.authorizes_resolve(&holder, b"one.example"));
         assert!(!d.authorizes_resolve(&holder, b"two.example"));
         assert!(!d.authorizes_resolve(&holder_identity("other"), b"one.example"));
+    }
+    /// Every header field the decoder refuses on, one mutation each. The
+    /// decoder had three positive-path tests and no negative ones, so each
+    /// refusal below was unreachable code as far as any check could tell.
+    #[test]
+    fn every_malformed_header_field_is_refused_with_its_own_error() {
+        let valid = object(&[entry(
+            holder_identity("client"),
+            TRANSPORT_TCP,
+            ADDRESS_IPV4,
+            &[10, 0, 0, 1],
+            443,
+            RIGHT_CONNECT,
+        )]);
+        assert!(NetworkDestinations::decode(&valid).is_ok());
+
+        let truncate = |n: usize| valid[..n].to_vec();
+        assert_eq!(
+            NetworkDestinations::decode(&truncate(HEADER_BYTES - 1)).err(),
+            Some(DecodeError::Truncated)
+        );
+        // A whole header but a short entry: bounds, not truncation, because the
+        // declared `total_len` no longer matches the byte count.
+        assert_eq!(
+            NetworkDestinations::decode(&truncate(HEADER_BYTES)).err(),
+            Some(DecodeError::BadBounds)
+        );
+
+        let mutate = |offset: usize, bytes: &[u8]| {
+            let mut value = valid.clone();
+            value[offset..offset + bytes.len()].copy_from_slice(bytes);
+            value
+        };
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(OFF_HEADER_MAGIC, b"SLIMEXX\0")).err(),
+            Some(DecodeError::BadMagic)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(OFF_HEADER_FORMAT_VERSION, &2u32.to_le_bytes()))
+                .err(),
+            Some(DecodeError::UnsupportedVersion)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(OFF_HEADER_HEADER_SIZE, &64u32.to_le_bytes()))
+                .err(),
+            Some(DecodeError::UnsupportedVersion)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(OFF_HEADER_REQUIRED_FLAGS, &1u64.to_le_bytes()))
+                .err(),
+            Some(DecodeError::UnknownRequiredFlags)
+        );
+        // A count the byte length cannot support, and a count past the ceiling.
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(OFF_HEADER_DESTINATION_COUNT, &2u32.to_le_bytes()))
+                .err(),
+            Some(DecodeError::BadBounds)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(
+                OFF_HEADER_DESTINATION_COUNT,
+                &(MAX_DESTINATIONS as u32 + 1).to_le_bytes()
+            ))
+            .err(),
+            Some(DecodeError::BadBounds)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&mutate(OFF_HEADER_TOTAL_LEN, &0u32.to_le_bytes())).err(),
+            Some(DecodeError::BadBounds)
+        );
+    }
+
+    /// The address-kind arms are mutually exclusive and each demands that every
+    /// byte outside its own field be zero. A non-canonical encoding of an
+    /// otherwise-valid destination is refused, which is what keeps one
+    /// authority from having two representations.
+    #[test]
+    fn a_non_canonical_address_encoding_is_refused() {
+        let holder = holder_identity("canon");
+        let with = |offset: usize, bytes: &[u8]| {
+            let mut value = entry(
+                holder,
+                TRANSPORT_TCP,
+                ADDRESS_IPV4,
+                &[10, 0, 0, 1],
+                443,
+                RIGHT_CONNECT,
+            );
+            value[offset..offset + bytes.len()].copy_from_slice(bytes);
+            object(&[value])
+        };
+        // IPv4 with a dirty tail past its four bytes.
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_ADDRESS + IPV4_BYTES, &[1])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        // IPv4 carrying name bytes, or a nonzero name length.
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_NAME, b"x")).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_NAME_LEN, &1u16.to_le_bytes())).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        // An undefined address kind and an undefined transport.
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_ADDRESS_KIND, &[9])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_TRANSPORT, &[9])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        // Zero port, zero rights, and an undefined rights bit.
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_PORT, &0u16.to_le_bytes())).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_RIGHTS, &0u16.to_le_bytes())).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&with(OFF_ENTRY_RIGHTS, &(KNOWN_RIGHTS + 1).to_le_bytes()))
+                .err(),
+            Some(DecodeError::InvalidEntry)
+        );
+    }
+
+    /// A DNS name is bounded, canonically padded, and syntactically checked.
+    /// `name_len` is the field the decoder slices by, so its boundary is the
+    /// one that decides whether a later `raw_name[..name_len]` is in range.
+    #[test]
+    fn dns_name_bounds_and_syntax_are_enforced_at_the_boundary() {
+        let holder = holder_identity("dns");
+        let named = |name: &[u8]| {
+            object(&[entry(
+                holder,
+                TRANSPORT_TCP,
+                ADDRESS_DNS,
+                name,
+                443,
+                RIGHT_CONNECT,
+            )])
+        };
+        // The longest admissible name is accepted, so the bound is not off by one.
+        let longest = [b'a'; MAX_NAME_BYTES];
+        assert!(NetworkDestinations::decode(&named(&longest)).is_ok());
+
+        // A `name_len` past the field is refused rather than slicing out of range.
+        let mut over = entry(
+            holder,
+            TRANSPORT_TCP,
+            ADDRESS_DNS,
+            b"api.example",
+            443,
+            RIGHT_CONNECT,
+        );
+        over[OFF_ENTRY_NAME_LEN..OFF_ENTRY_NAME_LEN_END]
+            .copy_from_slice(&(MAX_NAME_BYTES as u16 + 1).to_le_bytes());
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[over])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+
+        for malformed in [
+            &b".leading"[..],
+            &b"trailing."[..],
+            &b"double..dot"[..],
+            &b"under_score"[..],
+            &b"sp ace"[..],
+        ] {
+            assert_eq!(
+                NetworkDestinations::decode(&named(malformed)).err(),
+                Some(DecodeError::InvalidEntry),
+                "accepted a malformed DNS name"
+            );
+        }
+
+        // Declared length shorter than the bytes present: the tail past
+        // `name_len` must be zero, so a hidden suffix cannot ride along.
+        let mut dirty = entry(
+            holder,
+            TRANSPORT_TCP,
+            ADDRESS_DNS,
+            b"api.example",
+            443,
+            RIGHT_CONNECT,
+        );
+        dirty[OFF_ENTRY_NAME_LEN..OFF_ENTRY_NAME_LEN_END].copy_from_slice(&3u16.to_le_bytes());
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[dirty])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+    }
+
+    /// Entries must be strictly ascending, which is what makes a duplicate
+    /// destination unrepresentable rather than resolved by whichever row a
+    /// lookup reaches first.
+    #[test]
+    fn duplicate_and_descending_entries_are_refused() {
+        let holder = holder_identity("order");
+        let row = |port: u16| {
+            entry(
+                holder,
+                TRANSPORT_TCP,
+                ADDRESS_IPV4,
+                &[10, 0, 0, 1],
+                port,
+                RIGHT_CONNECT,
+            )
+        };
+        assert!(NetworkDestinations::decode(&object(&[row(80), row(443)])).is_ok());
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[row(443), row(80)])).err(),
+            Some(DecodeError::BadOrder)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[row(443), row(443)])).err(),
+            Some(DecodeError::BadOrder)
+        );
+        // A zero holder identity names no holder and is refused outright.
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[entry(
+                [0; 32],
+                TRANSPORT_TCP,
+                ADDRESS_IPV4,
+                &[10, 0, 0, 1],
+                443,
+                RIGHT_CONNECT
+            )]))
+            .err(),
+            Some(DecodeError::BadOrder)
+        );
+    }
+
+    /// `listen` is TCP-only, and a listener budget cannot exceed the socket
+    /// budget that must hold its accepted connections.
+    #[test]
+    fn impossible_authority_and_budget_combinations_are_refused() {
+        let holder = holder_identity("budget");
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[entry(
+                holder,
+                TRANSPORT_UDP,
+                ADDRESS_IPV4,
+                &[10, 0, 0, 1],
+                443,
+                RIGHT_LISTEN
+            )]))
+            .err(),
+            Some(DecodeError::InvalidEntry)
+        );
+
+        let over_budget = |offset: usize, value: u32| {
+            let mut row = entry(
+                holder,
+                TRANSPORT_TCP,
+                ADDRESS_IPV4,
+                &[10, 0, 0, 1],
+                443,
+                RIGHT_CONNECT,
+            );
+            row[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            object(&[row])
+        };
+        for (offset, value) in [
+            (OFF_ENTRY_QUEUE_DEPTH, 0),
+            (OFF_ENTRY_QUEUE_DEPTH, MAX_QUEUE_DEPTH + 1),
+            (OFF_ENTRY_BYTE_BUDGET, 0),
+            (OFF_ENTRY_BYTE_BUDGET, MAX_BYTE_BUDGET + 1),
+            (OFF_ENTRY_TIMER_BUDGET, MAX_TIMER_BUDGET + 1),
+            (OFF_ENTRY_RETRY_LIMIT, MAX_RETRY_LIMIT + 1),
+            (OFF_ENTRY_RECONNECT_LIMIT, MAX_RECONNECT_LIMIT + 1),
+            (OFF_ENTRY_SOCKET_LIMIT, 0),
+            (OFF_ENTRY_SOCKET_LIMIT, MAX_SOCKETS + 1),
+            (OFF_ENTRY_LISTENER_LIMIT, MAX_LISTENERS + 1),
+            (OFF_ENTRY_DNS_RECORD_LIMIT, MAX_DNS_RECORDS + 1),
+        ] {
+            assert_eq!(
+                NetworkDestinations::decode(&over_budget(offset, value)).err(),
+                Some(DecodeError::Impossible),
+                "admitted an out-of-range budget at offset {offset}"
+            );
+        }
+        // Listeners cannot outnumber the sockets that hold their connections.
+        let mut row = entry(
+            holder,
+            TRANSPORT_TCP,
+            ADDRESS_IPV4,
+            &[10, 0, 0, 1],
+            443,
+            RIGHT_CONNECT,
+        );
+        row[OFF_ENTRY_SOCKET_LIMIT..OFF_ENTRY_SOCKET_LIMIT + 4]
+            .copy_from_slice(&1u32.to_le_bytes());
+        row[OFF_ENTRY_LISTENER_LIMIT..OFF_ENTRY_LISTENER_LIMIT + 4]
+            .copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            NetworkDestinations::decode(&object(&[row])).err(),
+            Some(DecodeError::Impossible)
+        );
+    }
+
+    /// The per-holder ceiling binds independently of the table ceiling.
+    #[test]
+    fn the_per_holder_ceiling_binds_before_the_table_ceiling() {
+        let holder = holder_identity("many");
+        let rows: Vec<[u8; ENTRY_BYTES]> = (0..=MAX_DESTINATIONS_PER_HOLDER)
+            .map(|index| {
+                entry(
+                    holder,
+                    TRANSPORT_TCP,
+                    ADDRESS_IPV4,
+                    &[10, 0, 0, 1],
+                    1000 + index as u16,
+                    RIGHT_CONNECT,
+                )
+            })
+            .collect();
+        assert_eq!(
+            NetworkDestinations::decode(&object(&rows[..MAX_DESTINATIONS_PER_HOLDER]))
+                .map(|d| d.destination_count()),
+            Ok(MAX_DESTINATIONS_PER_HOLDER)
+        );
+        assert_eq!(
+            NetworkDestinations::decode(&object(&rows)).err(),
+            Some(DecodeError::Impossible)
+        );
     }
 }

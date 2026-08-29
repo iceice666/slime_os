@@ -16,6 +16,11 @@ entryBytes :: Int = 152;
 maxDestinations :: Int = 128;
 maxDestinationsPerHolder :: Int = 16;
 maxNameBytes :: Int = 64;
+-- The IPv4 prefix of the 16-byte address field. Declared rather than written
+-- as a `4` in the decoder: the padding rule ("every byte past the prefix must
+-- be zero") is part of this format's canonical encoding, so the prefix length
+-- is schema data like every other width here.
+ipv4Bytes :: Int = 4;
 maxQueueDepth :: Int = 256;
 maxByteBudget :: Int = 16777216;
 maxTimerBudget :: Int = 256;
@@ -97,7 +102,7 @@ entryLayout :: List WireField = {
 
 format ::= {
   formatVersion =; headerBytes =; entryBytes =; maxDestinations =;
-  maxDestinationsPerHolder =; maxNameBytes =; maxQueueDepth =; maxByteBudget =;
+  maxDestinationsPerHolder =; maxNameBytes =; ipv4Bytes =; maxQueueDepth =; maxByteBudget =;
   maxTimerBudget =; maxRetryLimit =; maxReconnectLimit =; maxSockets =;
   maxListeners =; maxDnsRecords =;
   transportTcp =; transportUdp =; addressIpv4 =; addressIpv6 =; addressDns =;
