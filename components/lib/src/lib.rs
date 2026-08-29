@@ -6,6 +6,7 @@ pub mod block_io;
 pub mod fabric_boot;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_matrix;
+#[cfg(feature = "component-runtime")]
 pub mod fabric_self_view;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_visibility;

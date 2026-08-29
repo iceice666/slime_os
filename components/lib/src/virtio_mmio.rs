@@ -49,6 +49,11 @@ pub const DESCRIPTOR_BYTES: usize = 16;
 /// QEMU places several 0x200-byte transports in one page. Mapping that page
 /// into a child would expose adjacent devices, so each register access instead
 /// crosses IO1 and is checked against the declared transport length.
+///
+/// Gated on `component-runtime` because every access is a syscall: without it
+/// this crate builds for the host, which is what makes the pure ring
+/// primitives below testable off-target.
+#[cfg(feature = "component-runtime")]
 #[derive(Clone, Copy)]
 pub struct MediatedMmio {
     device_slot: u32,
@@ -56,6 +61,7 @@ pub struct MediatedMmio {
     epoch: u64,
 }
 
+#[cfg(feature = "component-runtime")]
 impl MediatedMmio {
     pub const fn new(device_slot: u32, region_slot: u32, epoch: u64) -> Self {
         Self {
@@ -158,12 +164,14 @@ impl MediatedMmio {
     }
 }
 
+#[cfg(feature = "component-runtime")]
 pub struct MediatedHandshake {
     mmio: MediatedMmio,
     status: u32,
     offered_low: u32,
 }
 
+#[cfg(feature = "component-runtime")]
 impl MediatedHandshake {
     pub const fn offered_low(&self) -> u32 {
         self.offered_low
@@ -470,4 +478,130 @@ pub fn observe_used(bytes: &[u8], index_offset: usize) -> Option<u16> {
     let index = read_u16(bytes, index_offset)?;
     fence(Ordering::Acquire);
     Some(index)
+}
+
+/// Whether the device's published used index is one this driver can consume.
+///
+/// The device owns this field, so it can name any `u16`. A driver that trusts
+/// it consumes ring cells it never published: virtio's used index is free
+/// running and wraps at `u16`, so the only defensible bound is the number of
+/// entries actually outstanding. `distance` is that number, and the comparison
+/// is `wrapping_sub` because the honest case wraps too.
+///
+/// Returns the count of newly published entries, zero when the ring is empty.
+/// `None` when the device claims more than `distance`, which is a device
+/// error rather than an empty ring and must not be read as "nothing to do".
+pub fn used_ring_progress(published: u16, consumed: u16, distance: u16) -> Option<u16> {
+    let ahead = published.wrapping_sub(consumed);
+    if ahead > distance {
+        return None;
+    }
+    Some(ahead)
+}
+
+/// The driver slot a device-reported used descriptor id names, if any.
+///
+/// The id is device-written and arbitrary. This driver publishes two-descriptor
+/// chains at even heads (`slot * 2`), so exactly the even ids below
+/// `slots * 2` are ones it could have submitted. Rejecting the rest is what
+/// separates two failures worth distinguishing: an out-of-range id would index
+/// past the driver's per-slot tables, while an *odd in-range* id would land on
+/// a valid neighbouring slot and silently settle another client's request.
+pub fn used_descriptor_slot(id: u32, slots: usize) -> Option<usize> {
+    let head = usize::try_from(id).ok()?;
+    if !head.is_multiple_of(2) {
+        return None;
+    }
+    let slot = head / 2;
+    (slot < slots).then_some(slot)
+}
+
+/// The payload length a receive completion may report, or `None` if the device
+/// overshot.
+///
+/// virtio reports bytes written including the net header. A device may report
+/// more than it was offered, so both ends are checked: the header must be
+/// present, and the payload must fit the frame length the client's descriptor
+/// actually named. Returning the length as `u16` makes the caller's
+/// LinkDevice reply field exact by construction rather than by a cast that
+/// silently truncates.
+pub fn received_payload_len(reported: u32, header_bytes: usize, frame_len: u16) -> Option<u16> {
+    let header = u32::try_from(header_bytes).ok()?;
+    let payload = reported.checked_sub(header)?;
+    (payload <= u32::from(frame_len)).then_some(payload as u16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SLOTS: usize = 8;
+    const HEADER: usize = 10;
+
+    #[test]
+    fn an_odd_used_id_is_refused_rather_than_aliased_onto_a_live_neighbour() {
+        // The whole point: `3 / 2 == 1` is a perfectly valid slot, so a driver
+        // dividing without checking parity settles slot 1's request against
+        // the device's answer for a chain it never published.
+        assert_eq!(used_descriptor_slot(3, SLOTS), None);
+        assert_eq!(used_descriptor_slot(1, SLOTS), None);
+        assert_eq!(used_descriptor_slot(15, SLOTS), None);
+    }
+
+    #[test]
+    fn used_ids_this_driver_could_have_published_resolve_to_their_slot() {
+        for slot in 0..SLOTS {
+            let id = u32::try_from(slot * 2).unwrap();
+            assert_eq!(used_descriptor_slot(id, SLOTS), Some(slot));
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_used_id_is_refused_before_it_indexes_a_table() {
+        assert_eq!(used_descriptor_slot(16, SLOTS), None);
+        assert_eq!(used_descriptor_slot(u32::MAX - 1, SLOTS), None);
+        assert_eq!(used_descriptor_slot(u32::MAX, SLOTS), None);
+    }
+
+    #[test]
+    fn the_used_index_may_run_ahead_only_as_far_as_the_outstanding_entries() {
+        assert_eq!(used_ring_progress(5, 5, 4), Some(0));
+        assert_eq!(used_ring_progress(7, 5, 4), Some(2));
+        assert_eq!(used_ring_progress(9, 5, 4), Some(4));
+        assert_eq!(used_ring_progress(10, 5, 4), None);
+    }
+
+    #[test]
+    fn a_wrapping_used_index_is_progress_not_a_device_error() {
+        assert_eq!(used_ring_progress(1, u16::MAX, 4), Some(2));
+        assert_eq!(used_ring_progress(u16::MAX, u16::MAX, 0), Some(0));
+        // Wrapping does not excuse overshoot.
+        assert_eq!(used_ring_progress(4, u16::MAX, 4), None);
+    }
+
+    #[test]
+    fn a_receive_length_shorter_than_the_header_is_refused() {
+        assert_eq!(received_payload_len(0, HEADER, 1514), None);
+        assert_eq!(received_payload_len(9, HEADER, 1514), None);
+        assert_eq!(received_payload_len(10, HEADER, 1514), Some(0));
+    }
+
+    #[test]
+    fn a_receive_length_past_the_offered_frame_is_refused_not_truncated() {
+        assert_eq!(
+            received_payload_len(HEADER as u32 + 1514, HEADER, 1514),
+            Some(1514)
+        );
+        assert_eq!(
+            received_payload_len(HEADER as u32 + 1515, HEADER, 1514),
+            None
+        );
+        // The pre-fix cast: 0x1_0000 + 10 reported against a 1514-byte frame
+        // truncated to 0 in a u16 reply while the completion reported 65536.
+        assert_eq!(
+            received_payload_len(0x1_0000 + HEADER as u32, HEADER, 1514),
+            None
+        );
+        assert_eq!(received_payload_len(u32::MAX, HEADER, 1514), None);
+    }
 }

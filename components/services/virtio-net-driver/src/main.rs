@@ -11,7 +11,8 @@
 //! that makes a device-owned buffer safe.
 
 use slime_components::virtio_mmio::{
-    DESC_F_WRITE, MediatedMmio, observe_used, publish_available, write_descriptor, write_u16,
+    DESC_F_WRITE, MediatedMmio, observe_used, publish_available, received_payload_len,
+    used_descriptor_slot, used_ring_progress, write_descriptor, write_u16,
 };
 use slime_proto::io_queue::{
     DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE, REQUEST_PAYLOAD_BYTES, STATUS_BAD_SLICE,
@@ -120,18 +121,40 @@ impl ControlQueue {
         self.avail = next;
         Ok(())
     }
-    fn take_used(&mut self) -> Option<(u32, u32)> {
+    /// One published used entry, or `None` when the ring is empty.
+    ///
+    /// `outstanding` is how many chains this driver currently has in flight.
+    /// The device cannot be further ahead than that, and a device claiming
+    /// otherwise is refused rather than followed: consuming on its word reads
+    /// ring cells this driver never published.
+    fn take_used(&mut self, outstanding: u16) -> Result<Option<(u32, u32)>, ()> {
         let used = self.used;
-        let index = observe_used(self.bytes(), USED_OFFSET + 2)?;
-        if index == used {
-            return None;
+        let Some(published) = observe_used(self.bytes(), USED_OFFSET + 2) else {
+            return Err(());
+        };
+        match used_ring_progress(published, used, outstanding) {
+            None => return Err(()),
+            Some(0) => return Ok(None),
+            Some(_) => {}
         }
         let base = USED_OFFSET + 4 + (usize::from(used) % VIRT_SLOTS) * 8;
         let bytes = self.bytes();
-        let id = u32::from_le_bytes(bytes.get(base..base + 4)?.try_into().ok()?);
-        let len = u32::from_le_bytes(bytes.get(base + 4..base + 8)?.try_into().ok()?);
+        let Some(id) = bytes
+            .get(base..base + 4)
+            .and_then(|raw| raw.try_into().ok())
+            .map(u32::from_le_bytes)
+        else {
+            return Err(());
+        };
+        let Some(len) = bytes
+            .get(base + 4..base + 8)
+            .and_then(|raw| raw.try_into().ok())
+            .map(u32::from_le_bytes)
+        else {
+            return Err(());
+        };
         self.used = used.wrapping_add(1);
-        Some((id, len))
+        Ok(Some((id, len)))
     }
 }
 
@@ -169,6 +192,11 @@ struct Driver<'a> {
     rx_frames: u32,
     rx_replenished: u32,
     rx_stalled: u32,
+    tx_stalled: u32,
+    /// Used-ring entries refused because the device contradicted what this
+    /// driver published: a bad index, a bad descriptor id, or a length past
+    /// the descriptor it answers.
+    device_refused: u32,
     undersized_refused: u32,
     oversized_refused: u32,
     overrun_refused: u32,
@@ -266,6 +294,8 @@ fn main(_startup_arg: u32) {
         rx_frames: 0,
         rx_replenished: 0,
         rx_stalled: 0,
+        tx_stalled: 0,
+        device_refused: 0,
         undersized_refused: 0,
         oversized_refused: 0,
         overrun_refused: 0,
@@ -494,8 +524,22 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
 fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
     let mut pass_tx = 0;
     let mut pass_rx = 0;
-    while let Some((id, _)) = driver.tx_control.take_used() {
-        let slot = id as usize / 2;
+    loop {
+        let outstanding = outstanding_chains(&driver.tx);
+        let entry = match driver.tx_control.take_used(outstanding) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(()) => {
+                driver.device_refused += 1;
+                report_device_refusal(driver, b"tx used ring");
+                break;
+            }
+        };
+        let Some(slot) = used_descriptor_slot(entry.0, IO_SLOTS) else {
+            driver.device_refused += 1;
+            report_device_refusal(driver, b"tx used id");
+            continue;
+        };
         if settle(
             &mut driver.tx,
             slot,
@@ -507,12 +551,35 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
             driver.tx_frames += 1;
             pass_tx += 1;
         } else {
-            driver.rx_stalled += 1;
+            driver.tx_stalled += 1;
         }
     }
-    while let Some((id, len)) = driver.rx_control.take_used() {
-        let slot = id as usize / 2;
-        let transferred = len.saturating_sub(NET_HEADER_BYTES as u32);
+    loop {
+        let outstanding = outstanding_chains(&driver.rx);
+        let (id, len) = match driver.rx_control.take_used(outstanding) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(()) => {
+                driver.device_refused += 1;
+                report_device_refusal(driver, b"rx used ring");
+                break;
+            }
+        };
+        let Some(slot) = used_descriptor_slot(id, IO_SLOTS) else {
+            driver.device_refused += 1;
+            report_device_refusal(driver, b"rx used id");
+            continue;
+        };
+        // The device reports how much it wrote. Believing a figure larger than
+        // the descriptor this driver published would report bytes outside the
+        // client's lease, so an overshoot is a device error, not a long frame.
+        let Some(transferred) =
+            received_payload_len(len, NET_HEADER_BYTES, driver.rx.frame_lengths[slot])
+        else {
+            driver.device_refused += 1;
+            report_device_refusal(driver, b"rx used length");
+            continue;
+        };
         if settle(
             &mut driver.rx,
             slot,
@@ -543,10 +610,25 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
     }
 }
 
+/// Chains this driver has published to the device and not yet consumed.
+///
+/// The device's used index may legitimately run this far ahead of the local
+/// cursor and no further.
+fn outstanding_chains(link: &LinkQueue<'_>) -> u16 {
+    u16::try_from(link.outstanding.len()).unwrap_or(u16::MAX)
+}
+
+fn report_device_refusal(driver: &Driver<'_>, reason: &[u8]) {
+    debug_write(b"[virtio-net-driver] device refused=");
+    debug_write(reason);
+    write_number(b" total=", driver.device_refused as u64);
+    debug_write(b"\n");
+}
+
 fn settle(
     link: &mut LinkQueue<'_>,
     slot: usize,
-    observed: Option<u32>,
+    observed: Option<u16>,
     op: u8,
     ready: u32,
     charges: &mut Charges,
@@ -559,7 +641,7 @@ fn settle(
         .unwrap_or_else(|| fail(b"missing virtio mapping"));
     // A transmit's device-visible length is the descriptor's, not the used
     // ring's: virtio reports zero written bytes for a device-read chain.
-    let transferred = observed.unwrap_or(u32::from(link.frame_lengths[slot]));
+    let transferred = observed.unwrap_or(link.frame_lengths[slot]);
     link.frame_lengths[slot] = 0;
     if io_request_settle(DMA_SLOT, dma, request_id) != ERR_SUCCESS {
         fail(b"request settle");
@@ -573,7 +655,7 @@ fn settle(
         .settle(request_id, STATUS_OK)
         .unwrap_or_else(|_| fail(b"settlement"));
     charges.leases_live -= 1;
-    let payload = reply(op, transferred as u16, 0, 0).encode();
+    let payload = reply(op, transferred, 0, 0).encode();
     link.queue
         .complete(
             request_id,
@@ -592,6 +674,8 @@ fn reset(driver: &mut Driver<'_>, ready: u32, state_changed: u32) {
     write_number(b"[virtio-net-driver] rx drained=", driver.rx_frames as u64);
     write_number(b" replenished=", driver.rx_replenished as u64);
     write_number(b" stalled=", driver.rx_stalled as u64);
+    write_number(b" tx-stalled=", driver.tx_stalled as u64);
+    write_number(b" device-refused=", driver.device_refused as u64);
     debug_write(b"\n");
     write_number(
         b"[virtio-net-driver] coalesced pass tx=",

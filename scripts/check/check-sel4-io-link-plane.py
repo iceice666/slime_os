@@ -74,7 +74,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "reset settles duplex work",
         (
-            r"\[virtio-net-driver\] rx drained=\d+ replenished=\d+ stalled=0",
+            r"\[virtio-net-driver\] rx drained=\d+ replenished=\d+ stalled=0 tx-stalled=0 device-refused=0",
             r"\[virtio-net-driver\] coalesced pass tx=[1-8] rx=[1-4] drained=all remaining-tx=\d+",
             r"\[virtio-net-driver\] reset settled tx=1 rx=1 leases=2",
             r"\[io-link-probe\] reset completions tx=1 rx=1 status=reset",

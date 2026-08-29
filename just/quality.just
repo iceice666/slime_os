@@ -294,6 +294,12 @@ test_host:
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cargo test --manifest-path boot-contracts/Cargo.toml --all-features
     (cd components && cargo test --target "$host" -p slime-proto)
+    # `--no-default-features` drops `component-runtime`, whose syscall wrappers
+    # only link on a seL4 target. What remains is the device-boundary
+    # arithmetic a userspace driver applies to bytes the *device* wrote, which
+    # is exactly the part no plane gate can drive adversarially: QEMU's virtio
+    # device is well behaved, so a driver trusting it passes every plane.
+    (cd components && cargo test --target "$host" -p slime-components --no-default-features)
     cargo test -p slime-build-support
 
 # B23: `slime-root`'s mechanism modules, run on the host.
