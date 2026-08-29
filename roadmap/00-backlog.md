@@ -24,7 +24,30 @@ full and says why.
 
 ## Open
 
-No open items. Every recorded defect is in the resolved log below.
+### B85 — `just machete` fails on three stale `slime-proto` dependencies
+
+**Problem:** `just machete` exits 1. Three testkit crates declare a dependency
+on `slime-proto` that none of them uses:
+`components/testkit/sel4-store-probe`, `components/testkit/sel4-rollback-probe`,
+and `components/testkit/io-link-intruder`. An unused-dependency gate that is
+already red cannot report the next stale dependency anyone adds, which is the
+only thing it exists to do.
+
+**Evidence:** Observed 2026-08-29 while validating IO6. `just machete` reports
+all three under "unused dependencies in components". Confirmed pre-existing
+rather than introduced: stashing the IO6 working tree and re-running on clean
+`HEAD` reproduces the same three, same exit code. `grep slime_proto` across all
+three crates' `src/` returns nothing, so these are declarations rather than
+false positives — `[package.metadata.cargo-machete] ignored` would be the wrong
+remedy.
+
+**Proposed fix:** Delete the three `slime-proto = { path = "../../proto" }`
+lines. Each crate builds without it; nothing else should be needed. If a crate
+turns out to need it after all, that is a compile error naming the crate, not a
+judgement call.
+
+**Exit condition:** `just machete` exits 0 with "didn't find any unused
+dependencies" for `boot-contracts`, `components`, and `slime-root`.
 
 ## Deferred follow-ups
 
