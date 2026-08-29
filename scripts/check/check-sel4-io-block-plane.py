@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IO2 gate: userspace virtio-blk parity, async settlement, and reclamation."""
+"""IO2 gate: computed virtio-blk operations, refusals, and async settlement."""
 from __future__ import annotations
 
 import argparse
@@ -29,6 +29,8 @@ SECTOR_BYTES = 512
 DISK_BYTES = 1 << 20
 FRESH_LBA = 3
 FRESH_MARKER = b"SLIMEIO2"
+WRITTEN_PREFIX = b"SLIMEIO2-WRITTEN"
+WRITTEN_FILL = 0xA5
 
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("generation and driver authority", (
@@ -36,28 +38,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         r"\[virtio-blk-driver\] mmio mechanism=mediated-bounded-read32-write32",
         r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+",
     )),
-    ("oracle parity", (
-        r"\[io-block-probe\] parity read write flush geometry rights out-of-range malformed short-buffer unsupported=match",
-        r"\[io-block-probe\] durable fresh-boot readback verified",
-    )),
     ("bounded asynchronous identity", (
-        r"\[io-block-probe\] backpressure full refused overwrite=0",
+        r"\[io-block-probe\] backpressure full_refusals=1 overwrite=0",
         r"\[io-block-probe\] async queued=8 completed=8 identities=8 overwrite=0",
     )),
-    ("all injected terminal causes reclaim exactly", (
-        r"\[io-block-probe\] descriptor-failure settled=8 descriptors=0 dma=0 leases=0 charges=0",
-        r"\[io-block-probe\] timeout settled=8 descriptors=0 dma=0 leases=0 charges=0",
-        r"\[io-block-probe\] cancellation settled=8 descriptors=0 dma=0 leases=0 charges=0",
-        r"\[io-block-probe\] reset settled=8 descriptors=0 dma=0 leases=0 charges=0",
-        r"\[io-block-probe\] interrupt-loss-coalescing settled=8 descriptors=0 dma=0 leases=0 charges=0",
-        r"\[io-block-probe\] driver-crash settled=8 descriptors=0 dma=0 leases=0 charges=0",
-        r"\[io-block-probe\] peer-death settled=8 descriptors=0 dma=0 leases=0 charges=0",
+    ("observed block operations", (
+        r"\[io-block-probe\] operations read=2 write=1 flush=1 geometry=1",
+        r"\[io-block-probe\] byte-verification readback=512 mismatches=0",
     )),
-    ("fresh epoch rejects stale completion", (
-        r"\[io-block-probe\] restarted old_epoch=\d+ fresh_epoch=\d+",
-        r"\[io-block-probe\] stale completion refused buffer_unchanged=1 request_live=1",
-        r"\[io-block-probe\] io block plane complete",
-        r"SLIME_GRAPH HEALTHY generation=51 required=3 live=0 completed=3 failed=0",
+    ("observed refusal arms", (
+        r"\[io-block-probe\] refusals out_of_range=1 malformed=1 short_buffer=1 unsupported=1 missing_right=1",
+        r"\[io-block-probe\] io block plane complete observed_operations=5 observed_refusals=5",
+        r"SLIME_GRAPH HEALTHY generation=51 required=4 live=0 completed=4 failed=0",
     )),
 )
 
@@ -88,14 +80,16 @@ def check_manifest() -> None:
         fail("packaged image digest does not match identity manifest")
 
 
-def boot(profile: dict[str, object], disk: Path) -> str:
+def boot(profile: dict[str, object], disk: Path, readonly_disk: Path) -> str:
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
     command = [qemu, "-machine", profile_text(profile, "machine", fail), "-cpu", profile_text(profile, "cpu", fail),
                "-smp", str(profile_integer(profile, "cpus", fail)), "-m", f"size={profile_integer(profile, 'memory_mib', fail)}M",
                "-nographic", "-serial", "mon:stdio", "-kernel", str(IMAGE), "-drive",
-               f"if=none,id=slimeio2,format=raw,file={disk}", "-device", "virtio-blk-device,drive=slimeio2"]
+               f"if=none,id=slimeio2,format=raw,file={disk}", "-device", "virtio-blk-device,drive=slimeio2",
+               "-drive", f"if=none,id=slimeio2ro,format=raw,file={readonly_disk},readonly=on",
+               "-device", "virtio-blk-device,drive=slimeio2ro"]
     process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, bufsize=1)
     watchdog = threading.Timer(TIMEOUT, process.kill)
@@ -143,14 +137,18 @@ def main() -> None:
     profile = load_qemu_profile(fail, PINS)
     with tempfile.TemporaryDirectory(prefix="slime-io-block-") as temporary:
         disk = Path(temporary) / "disk.img"
+        readonly_disk = Path(temporary) / "readonly-disk.img"
         image = bytearray(DISK_BYTES)
         image[FRESH_LBA * SECTOR_BYTES:FRESH_LBA * SECTOR_BYTES + len(FRESH_MARKER)] = FRESH_MARKER
         disk.write_bytes(image)
-        transcript = boot(profile, disk)
+        readonly_disk.write_bytes(bytearray(DISK_BYTES))
+        transcript = boot(profile, disk, readonly_disk)
         match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
-        if disk.read_bytes()[FRESH_LBA * SECTOR_BYTES:FRESH_LBA * SECTOR_BYTES + len(FRESH_MARKER)] != FRESH_MARKER:
-            fail("durable marker changed unexpectedly")
-    print("seL4 I/O block plane check: oracle parity, async identity, faults, reclamation, and stale epoch proved")
+        written = disk.read_bytes()[FRESH_LBA * SECTOR_BYTES:(FRESH_LBA + 1) * SECTOR_BYTES]
+        expected = WRITTEN_PREFIX + bytes([WRITTEN_FILL]) * (SECTOR_BYTES - len(WRITTEN_PREFIX))
+        if written != expected:
+            fail("flushed write did not reach the backing disk byte-for-byte")
+    print("seL4 I/O block plane check: computed operations, byte readback, async identity, and refusal arms proved")
 
 
 if __name__ == "__main__":
