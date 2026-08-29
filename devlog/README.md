@@ -364,3 +364,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-28 | [B83: six storage planes leave the root's virtio-blk path](2026-08-28-b83-userspace-block-cutover/index.md) | Change | Verified | B83, B84 |
 | 2026-08-28 | [B84: two driver instances of one executable, one device each](2026-08-28-b84-two-device-driver-instances/index.md) | Change | Verified | B84, B83 |
 | 2026-08-29 | [B83: the root's virtio-blk product path is deleted](2026-08-29-b83-root-block-path-deleted/index.md) | Change | Verified | B83, B84, IO2 |
+| 2026-08-29 | [IO5: checked models of the IO0/IO1 lifetime and accounting rules](2026-08-29-io5-substrate-models/index.md) | Change | Verified | IO5, IO0, IO1, A0 |

@@ -2,12 +2,15 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** IO0 through IO4 complete; IO2's root cutover closed 2026-08-29. Each
-slice is observed under QEMU by its own gate — `just io_queue_check`, `just
+**Status:** IO0 through IO5 complete; IO2's root cutover closed 2026-08-29, and
+IO5 added the track's host model gates the same day. Each implementation slice
+is observed under QEMU by its own gate — `just io_queue_check`, `just
 io_driver_authority_check`, `just io_block_check`, `just io_link_check`, `just
 io_network_check` — and every gate is registered in `just
 sel4_gate_control_check`, which proves each fails on missing, reordered, or
-failure evidence.
+failure evidence. IO5 adds `just io_queue_model_check` and `just
+io_resource_model_check`, which quantify IO0's lease/epoch rules and IO1's
+charge conservation over every interleaving rather than one schedule.
 
 What is **not** done, stated plainly so no consumer assumes otherwise:
 
@@ -371,6 +374,150 @@ just io_network_check
 
 Native components obtain bounded TCP/UDP services only for generation-declared exact destinations over a backend-independent `LinkDevice`; the virtio-net reference path survives malformed traffic, denial, link reset, and restart, and no client receives ambient socket or packet authority.
 
+## IO5 — Checked models of the substrate's lifetime and accounting rules
+
+**Status:** Complete 2026-08-29. Two bounded transition models, fifteen
+scenarios, thirteen must-fail mutations, and two negative controls, guarded by
+`just io_queue_model_check`, `just io_resource_model_check`, and
+`just contracts_check`.
+
+**Depends on:** IO0 and IO1 as the implemented contracts being modelled; the
+M5.6a/A0 checked-contract methodology this reuses.
+
+### Why a model rather than another plane gate
+
+IO0–IO4's QEMU gates are the right instrument for *this schedule works*: they
+boot real components over real rings and observe real reclamation. What they
+structurally cannot express is *no schedule works otherwise*. `io_queue_check`
+observes one interleaving of submit/take/complete/cancel/reset/drain;
+`io_driver_authority_check` observes one death schedule and reports the root's
+numeric reclamation for it. IO0's contract, however, claims properties
+quantified over every interleaving — every terminal transition is
+single-assignment, every lease releases exactly once, no ring overwrites an
+unconsumed entry, no request outlives the epoch that admitted it — and IO1
+claims that *no* reachable sequence leaves a charge outstanding. A serial
+transcript cannot carry a universally quantified claim, and adding more QEMU
+arms samples more schedules without ever closing the quantifier.
+
+### Tooling decision
+
+`zutai model-check` over pure `.zt`, not seL4-style refinement proof. The
+reasons are ordered by weight:
+
+- **The seL4 route is unavailable here, not merely expensive.** The proof chain
+  is Isabelle/HOL from abstract spec to the *kernel's* C, and
+  `deps/sel4/CAVEATS.md` scopes it to listed verified platforms and
+  configurations. This product's own kernel build is already outside that set
+  by its own admission — `sel4/config/qemu-arm-virt.cmake` sets
+  `KernelVerificationBuild OFF` with `KernelDebugBuild`/`KernelPrinting ON`,
+  and `qemu-arm-virt` appears in no verified-platform list. More decisively,
+  the code under discussion is `no_std` Rust in `slime-root` and
+  `components/`, which no part of the l4v chain covers. Adopting "seL4's kind"
+  of verification would mean standing up an Isabelle refinement proof for Rust
+  userspace from scratch: a multi-year effort whose first deliverable arrives
+  after the RPi5 demo, for properties the bounded checker settles in seconds.
+- **The methodology is already this repository's.** M5.6a/M5.6b froze BootState
+  semantics this way, and A0 did the same for the rights algebra, both with the
+  must-fail-mutation discipline. A third mechanism beside two working ones
+  would be a second convention.
+- **Measured cost is negligible.** Both models together explore 2520 states in
+  under three seconds, against BootState's 5416 states in about 80 seconds.
+  There is no budget argument for deferring.
+- **A Rust-level bounded prover was considered and rejected for now.** Kani
+  is already vendored transitively (`deps/rust-sel4/hacking/nix/scope/kani/`)
+  and would check the *implementation* rather than an abstraction — genuinely
+  stronger where it applies. It is not the right first step: the ring
+  discipline's interesting properties are temporal and cross-party
+  (`leadsTo` over a driver/client interleaving), which a per-function harness
+  does not express, and the shared-memory rings would need a harness modelling
+  an adversarial peer, which is the transition system above by another name.
+  Recorded as a follow-up, not a rejection: `Outstanding`'s
+  single-assignment settlement in `components/proto/src/io_queue_ring.rs` is a
+  genuinely good Kani target once a model says what to prove.
+
+### Delivered
+
+- `contracts/io-queue/model/io-queue.zt` models the IO0 lifecycle over one
+  queue, three request identities, two ring slots, and two epochs:
+  submit/take/complete/cancel/drain, begin-reset, reset settlement, peer death,
+  and epoch advance. Seven safety properties —
+  `RingNeverOverwrites`, `SingleTerminalAssignment`,
+  `LeaseReleasedAtMostOnce`, `LeaseHeldUntilTerminal`, `LeaseSettledOnDrain`,
+  `NoLiveRequestAcrossEpoch`, `EpochStrictlyAdvances` — plus six reachability
+  obligations and one `leadsTo` liveness rule,
+  `EveryLiveRequestSettlesAndReleases`. Six mutations must each produce the
+  named counterexample. Observed: main scenario 2322 states, 6039 transitions,
+  zero deadlocks; 7/7 scenarios in 2.3 s.
+- `contracts/io-resource/model/io-resource.zt` models the IO1 charge lifetime
+  over one driver instance against the `sel4-io-driver` plane's own declared
+  budget — one MMIO mapping, one DMA mapping over two pages, one interrupt
+  source, one pending acknowledgement, one outstanding request — across bind,
+  map, charge, raise/acknowledge, fault, reclaim, and respawn. Seven safety
+  properties — `WithinDeclaredBudget`, `DeathReturnsEveryCharge`,
+  `ReclaimRunsAtMostOnce`, `NoChargeAcrossEpoch`, `EpochStrictlyAdvances`,
+  `StaleAckRefused`, `NoAuthorityWithoutDevice` — plus six reachability
+  obligations and the liveness rule
+  `FaultedDriverAlwaysReachesZeroCharges`. Seven mutations must each produce
+  the named counterexample. Observed: main scenario 198 states, 667
+  transitions, zero deadlocks; 8/8 scenarios in 0.3 s.
+- Both models make `terminal` total (`nextFor` producing nothing), so deadlock
+  is unrepresentable by construction and the `leadsTo` obligations carry real
+  content rather than restating a guard.
+
+### Findings the models produced
+
+Two, both recorded because a model that only confirms what its author assumed
+has not been exercised:
+
+- **IO1's DMA accounting is per-region, not per-page.** The first model charged
+  one DMA mapping per mapped page, and the `fully-charged` reachability
+  obligation failed — the declared budget of one mapping made a two-page region
+  unreachable. The plane's own transcript reports two DMA pages under one
+  mapping; the model was wrong and now charges the region on its first page and
+  returns it with its last.
+- **Unconditional charge-return liveness is false without fairness, and should
+  not be claimed.** `premise = any outstanding charge` fails with a two-step
+  map/release lasso, which is honest driver behaviour rather than a leak: a
+  running driver may cycle forever, and the checker assumes no fairness. The
+  defensible property is the one IO1 actually needs — a driver that has stopped
+  running cannot escape reclamation — so the premise is a *faulted* instance.
+  This is strictly stronger than the safety predicate `DeathReturnsEveryCharge`,
+  which only says a dead instance holds nothing and would be satisfied by never
+  reclaiming at all.
+
+### Verification target
+
+```sh
+just io_model_check
+```
+
+### Exit condition (observed)
+
+Two bounded models check fourteen named safety properties, twelve reachability
+obligations, and two liveness rules over IO0's request/epoch/lease contract and
+IO1's charge lifetime; thirteen mutations each produce their named
+counterexample; and two negative controls confirm the gate fails closed — a
+mutation scenario whose fault is disabled exits non-zero with
+`FAILED (expected violation of "SingleTerminalAssignment", none found)`, and an
+injected requeue cycle exits non-zero with a `leadsTo` lasso counterexample
+rather than passing silently.
+
+### Boundary
+
+These models are abstractions, and the gap is stated rather than implied. They
+do not check the concrete wire layout — magics, slot lengths, reserved bytes,
+absolute-sequence encoding, offset/length overflow — because
+`components/proto/tests/io_queue.rs` and the generated codec's structural
+validators already decide those, and restating them in a model would weaken
+rather than strengthen the boundary. They do not check MMIO subrange
+arithmetic, page exclusivity versus mediated `read32`/`write32`, or DMA token
+opacity, which are per-access checks on concrete addresses owned by the root's
+host tests and the plane's out-of-range arm. They are not a refinement proof:
+that the Rust in `io_queue_ring.rs` and `slime-root/src/io_resource.rs`
+implements these transition systems is argued by construction and pinned by the
+QEMU gates, not machine-checked. A model passing cannot complete an IO slice,
+and an IO QEMU pass cannot complete IO5.
+
 ## Consumption by later subsystems
 
 Later milestones reuse the substrate but retain their own semantics:
@@ -400,7 +547,16 @@ just io_link_check
 just io_network_check
 ```
 
-Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support.
+Host model gates, which are quantified over interleavings rather than observing
+one schedule, and are therefore complements to the plane gates above rather
+than substitutes for them:
+
+```sh
+just io_queue_model_check
+just io_resource_model_check
+```
+
+Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support, and a passing model cannot complete any slice whose exit condition names observed QEMU behavior.
 
 ## I/O track definition of done
 
@@ -413,4 +569,5 @@ The common substrate is complete only when:
 - userspace virtio-blk preserves the existing block behavior and removes device-specific parsing from the root product path;
 - userspace virtio-net proves the same substrate under duplex readiness/replenishment without protocol-specific substrate hooks;
 - the network service enforces exact destination authority over a backend-independent link service;
+- the lifetime and accounting rules the plane gates observe one schedule of are additionally checked over every interleaving of a bounded model, with each rule's negation exhibited as a counterexample;
 - future USB, audio, display, and GPU work can consume queue/buffer/lease/completion mechanisms without adding a universal opcode or moving device semantics into `slime-root`.
