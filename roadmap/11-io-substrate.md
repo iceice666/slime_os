@@ -2,8 +2,8 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** IO0 through IO6 complete; IO2's root cutover closed 2026-08-29, and
-IO5 and IO6 added the track's two host verification layers the same day. Each
+**Status:** IO0 through IO7 complete; IO2's root cutover closed 2026-08-29, and
+IO5, IO6, and IO7 added the track's host verification layers. Each
 implementation slice is observed under QEMU by its own gate — `just
 io_queue_check`, `just io_driver_authority_check`, `just io_block_check`, `just
 io_link_check`, `just io_network_check` — and every gate is registered in `just
@@ -13,9 +13,11 @@ io_resource_model_check`, which quantify IO0's lease/epoch rules and IO1's
 charge conservation over every interleaving rather than one schedule. IO6 adds
 `just kani_io_proofs`, which closes the wire arithmetic IO5's models explicitly
 disclaimed — slot indexing, cursor subtraction, and slice bounds — over every
-value of the declared types. The three layers are complements: one real
-schedule, all interleavings of an abstraction, all values through the shipped
-Rust.
+value of the declared types. IO7 adds `just kani_virtio_proofs` over the one
+input class the other three cannot reach: the bytes a *device* writes. The
+layers are complements — one real schedule, all interleavings of an
+abstraction, all values through the shipped Rust on the client side, then all
+values on the device side.
 
 What is **not** done, stated plainly so no consumer assumes otherwise:
 
@@ -294,6 +296,20 @@ dispatched, so completions are serviced by draining the used ring; no
 interrupt-sequence marker is claimed.
 **Evidence:** [`devlog/2026-08-28-io3-userspace-virtio-net/`](../devlog/2026-08-28-io3-userspace-virtio-net/index.md)
 
+**Device-boundary hardening, 2026-08-29 (B86, B87).** IO3's original driver
+validated its client and largely trusted its device: the used-ring descriptor
+id was reduced with `id as usize / 2` and used to index the per-slot tables, so
+an odd in-range id — one this driver never publishes, since it submits
+two-descriptor chains at even heads — silently settled a different client's
+lease, and a receive length past the published descriptor was truncated into
+the reply's `u16` while the completion reported it in full. Neither was
+reachable under this plane, because QEMU's device is well behaved; that is the
+point. The rules are now three pure helpers in `components/lib/src/virtio_mmio.rs`
+covered by seven host tests under `just test_host`, and the plane's reset marker
+asserts `tx-stalled=0 device-refused=0` so a refusal of legitimate traffic
+becomes visible. **Evidence:**
+[`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
+
 **Depends on:** IO0, IO1, and IO2 as the first complete substrate proof.
 
 ### Deliverables
@@ -334,6 +350,19 @@ port, alternate DNS name, wrong transport, each of the four missing rights, raw
 packet, resolver-wide lookup, and listen without LISTEN — each observe zero packets.
 Reset and restart reclaim every queue, buffer, and lease with a fresh epoch and
 refuse stale completions.
+
+**Authority-decoder hardening, 2026-08-29 (B88).** The destination-authority
+record's layout is declared by `contracts/network-destination/v1/schema.zt`, but
+only the Python renderer emitted its offsets, so
+`boot-contracts/src/network_destination.rs` read all twenty-two fields through
+hand-written byte literals — and its test encoder restated them, so neither copy
+could be checked against the schema. The Rust renderer now emits
+`OFF_HEADER_*`/`OFF_ENTRY_*` constants and a schema-declared `ipv4Bytes`, every
+literal is gone from the decoder and its encoder, and the module went from 3
+positive-path tests to 9 covering the refusal arms that previously had none.
+Four parser mutations and one corrupted generated offset each fail the suite.
+**Evidence:**
+[`devlog/2026-08-29-b88-network-destination-generated-offsets/`](../devlog/2026-08-29-b88-network-destination-generated-offsets/index.md)
 
 **Declared but structurally refused as `STATUS_UNSUPPORTED`,** and therefore *not*
 claimed: IPv6 and NDP, DHCP, SLAAC, and the TCP listener/accept data path beyond a
@@ -656,6 +685,101 @@ Nothing here is a refinement proof of the substrate as a whole, and no
 `slime-root` code is covered: `io_resource.rs` charge accounting remains
 IO5-modelled and plane-observed.
 
+## IO7 — Proofs of the device trust boundary
+
+**Status:** Complete 2026-08-29. Thirteen Kani harnesses over the shipped
+`components/lib/src/virtio_mmio.rs`, eight must-fail mutations, and two gate
+controls, guarded by `just kani_virtio_proofs`.
+
+**Depends on:** IO3 as the driver whose device boundary is proved; B86/B87 as
+the defects that showed the boundary was unguarded; IO6 for the proof-crate
+mechanism this reuses.
+
+### Why this exists
+
+IO0–IO6 quantify over inputs that arrive from a *client*: a request crosses a
+capability, is decoded by a generated codec, and is validated before use. IO6
+proves that arithmetic over every value. None of it constrains the other
+direction. A driver also consumes bytes written by a **device**, into shared
+memory, under no capability at all — and that input class was checked by
+nothing.
+
+B86 and B87 are what that costs. The IO3 driver reduced a device-written
+used-ring descriptor id with `id as usize / 2` and indexed its per-slot tables
+with the result; an odd id — one `submit` can never publish, since it writes
+two-descriptor chains at even heads — mapped onto a *live neighbouring slot*
+and silently settled another client's lease. Separately, a receive length past
+the published descriptor was truncated into the reply's `u16` while the
+completion reported it in full. Both passed `just io_link_check` indefinitely,
+because a plane gate can only observe the schedule its device produces and
+QEMU's virtio device is well behaved. That is the structural gap: **no plane
+gate can be adversarial about its own device.**
+
+### What is proved
+
+Thirteen harnesses over symbolic inputs. Slot depth is a symbolic `slots`, so
+the ring properties hold for every depth a driver could declare, not just
+IO3's eight:
+
+- **Slot resolution.** Every accepted used id is a valid index into a
+  `slots`-length table — the obligation that makes the driver's unchecked
+  `request_ids[slot]` sound. Acceptance coincides *exactly* with the ids
+  `submit` can publish (even, below `slots * 2`) for every `u32`; no odd id is
+  ever accepted; distinct accepted ids never name one slot; and an accepted id
+  round-trips to the head that was programmed.
+- **Used-index progress.** Reported progress never exceeds the outstanding
+  chain count, is exact modular distance or an explicit refusal, treats an idle
+  ring as zero rather than an error, and admits nothing at all when the driver
+  has no chains in flight.
+- **Receive length.** An accepted length fits the published frame, is the exact
+  payload rather than a truncation (`u32::from(payload) == reported - header`,
+  which the old `as u16` cast violated), matches the declared rule in both
+  directions, and refuses a header-short report rather than saturating it to a
+  successful empty receive.
+
+### Verification target
+
+```sh
+nix develop .#kani --command just kani_virtio_proofs
+```
+
+`verification/virtio-proofs/Cargo.toml` points `[lib] path` at
+`components/lib/src/virtio_mmio.rs` itself — the module, not the crate root,
+because `slime-components` pulls in `boot-contracts`/`sha2` and `slime_rt`,
+neither of which builds under Kani's toolchain and neither of which is under
+proof. The module imports only `core`, and `MediatedMmio` is behind
+`component-runtime`, which the proof manifest never enables. One source file,
+so verified-versus-shipped drift is not representable.
+
+### Exit condition (observed)
+
+Thirteen harnesses verify in under a second. Eight mutations of the shipped
+source each produce a counterexample in the matching harness, including two
+subtle ones: replacing `wrapping_sub` with `saturating_sub` in the progress
+rule keeps every value in range and is caught only by the exact-distance
+harness, and dropping the frame-fit check is caught by the exactness assertion
+that B87's cast violated. Two gate controls confirm fail-closed behavior:
+disabling the proof module fails the gate, and deleting a single
+`#[kani::proof]` attribute is caught by the harness-count assertion while Kani
+itself still reports `VERIFICATION:- SUCCESSFUL`.
+
+**Evidence:** [`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
+
+### Boundary
+
+These proofs cover three pure functions, not the driver. That the driver
+*calls* them on every used-ring entry is argued by construction and pinned by
+`just io_link_check`; a harness cannot reach `drain_used`, which is
+`no_std`/`no_main` and syscall-bound. No adversarial device exists in this
+repository, so the refusal arms are proved over all values but never observed
+on a booted plane.
+
+`ControlQueue::submit`'s own descriptor and ring arithmetic is not proved here:
+it writes through `write_descriptor`/`write_u16`, which bounds-check
+internally, and its slot argument is driver-derived rather than device-derived.
+The virtio-blk driver needs none of this — it is single-outstanding and reads
+only the used *index* — so IO7 is IO3-scoped by fact, not by omission.
+
 ## Consumption by later subsystems
 
 Later milestones reuse the substrate but retain their own semantics:
@@ -703,6 +827,14 @@ models disclaim:
 nix develop .#kani --command just kani_io_proofs
 ```
 
+Host proof gate for the *device* side of the same boundary — the only input
+class no capability constrains and no plane gate can drive adversarially,
+since a plane observes only the schedule its own device produces:
+
+```sh
+nix develop .#kani --command just kani_virtio_proofs
+```
+
 Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support, and neither a passing model nor a passing proof can complete any slice whose exit condition names observed QEMU behavior.
 
 ## I/O track definition of done
@@ -718,4 +850,5 @@ The common substrate is complete only when:
 - the network service enforces exact destination authority over a backend-independent link service;
 - the lifetime and accounting rules the plane gates observe one schedule of are additionally checked over every interleaving of a bounded model, with each rule's negation exhibited as a counterexample;
 - the wire arithmetic those models disclaim — slot indexing over all of `u64`, cursor subtraction against what the header validator actually admits, mapping and slice bounds including their overflow cases — is proved of the shipped source over every value of the declared types, with each proof shown non-vacuous by a mutation that breaks it;
+- a driver's handling of bytes written by its **device** — used-ring indices, descriptor ids, and reported transfer lengths — is proved over every value of the declared types, since no capability constrains that input and no plane gate can make its own device misbehave;
 - future USB, audio, display, and GPU work can consume queue/buffer/lease/completion mechanisms without adding a universal opcode or moving device semantics into `slime-root`.

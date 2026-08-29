@@ -370,3 +370,6 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-29 | [Devlog roadmap ID collision guard](2026-08-29-devlog-roadmap-id-collisions/index.md) | Change | Verified | none |
 | 2026-08-29 | [Kani enters the flake, and the false pass it exposed](2026-08-29-kani-in-flake/index.md) | Change | Verified | IO6 |
 | 2026-08-29 | [The storage-write allowlist still read the pre-IO2 grant shape](2026-08-29-framework-authority-ring-form/index.md) | Defect | Fixed | IO2 |
+| 2026-08-29 | [B86/B87: the virtio-net driver trusted the device's used ring](2026-08-29-b86-virtio-net-device-boundary/index.md) | Defect | Verified | B86, B87, IO3, IO6 |
+| 2026-08-29 | [B88: the network-destination decoder read a Zutai layout through byte literals](2026-08-29-b88-network-destination-generated-offsets/index.md) | Defect | Verified | B88, IO4 |
+| 2026-08-29 | [B89: fourteen renderers, one 82-line codec block, three drifts](2026-08-29-b89-shared-codec-emitters/index.md) | Defect | Verified | B89, B88, IO0 |
