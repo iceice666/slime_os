@@ -617,8 +617,15 @@ range, so the ring properties hold for every accepted depth at once:
 ### Verification target
 
 ```sh
-just kani_io_proofs
+nix develop .#kani --command just kani_io_proofs
 ```
+
+Kani entered the flake on 2026-08-29 as a dedicated `.#kani` devShell plus a
+`packages.<system>.kani` output, so the gate needs no imperative install and
+runs against a bundle pinned by its published sha256 and a toolchain pinned as
+a store path. Bare `just kani_io_proofs` still works wherever `cargo-kani` is
+already on `PATH`. Evidence:
+[`devlog/2026-08-29-kani-in-flake/`](../devlog/2026-08-29-kani-in-flake/index.md).
 
 ### Exit condition (observed)
 
@@ -693,7 +700,7 @@ Rust rather than an abstraction of it, and owns exactly the wire arithmetic the
 models disclaim:
 
 ```sh
-just kani_io_proofs
+nix develop .#kani --command just kani_io_proofs
 ```
 
 Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support, and neither a passing model nor a passing proof can complete any slice whose exit condition names observed QEMU behavior.

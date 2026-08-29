@@ -368,3 +368,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-29 | [IO6: bit-precise proofs of the IO substrate's wire arithmetic](2026-08-29-io6-kani-wire-proofs/index.md) | Change | Verified | IO6, IO5, IO0 |
 | 2026-08-29 | [B85: three stale `slime-proto` dependencies left `just machete` red](2026-08-29-b85-stale-proto-dependencies/index.md) | Defect | Fixed | B85 |
 | 2026-08-29 | [Devlog roadmap ID collision guard](2026-08-29-devlog-roadmap-id-collisions/index.md) | Change | Verified | none |
+| 2026-08-29 | [Kani enters the flake, and the false pass it exposed](2026-08-29-kani-in-flake/index.md) | Change | Verified | IO6 |

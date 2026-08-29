@@ -175,14 +175,21 @@ proof file that quietly stopped being compiled would report success forever.
 - [ ] No `slime-root` code is proved. `io_resource.rs` charge accounting stays
   IO5-modelled and plane-observed. IO1's per-access MMIO subrange arithmetic is
   a plausible next Kani target.
-- [ ] Kani is not in the Nix flake's `devShell`; contributors install it via
-  `cargo install --locked kani-verifier && cargo kani setup`. The recipe names
-  those commands on absence. Wiring the vendored
-  `deps/rust-sel4/hacking/nix/scope/kani/` derivation into this repository's
-  flake would make the gate reproducible rather than machine-local.
-- [ ] `just kani_io_proofs` is not registered in any aggregate gate, so it runs
-  only when invoked. Deliberate while Kani is a local install; revisit if it
-  enters the flake.
+- [x] **Closed 2026-08-29.** Kani is now in the flake as a `.#kani` devShell
+  and a `packages.<system>.kani` output, so
+  `nix develop .#kani --command just kani_io_proofs` needs no imperative
+  install. Wiring the vendored `deps/rust-sel4/hacking/nix/scope/kani/`
+  derivation was attempted and rejected: it is reachable only from rust-sel4's
+  own package scope, and both shells that consume it gate it on
+  `hostPlatform.isx86_64`, so it would not serve this repository's aarch64
+  hosts. `nix/kani.nix` pins the upstream release bundle by its published
+  sha256 instead. **Evidence:**
+  [`devlog/2026-08-29-kani-in-flake/`](../2026-08-29-kani-in-flake/index.md).
+- [x] **Closed 2026-08-29.** `just kani_io_proofs` now runs in CI as the
+  `kani_proofs` job on every push and pull request. It stays outside
+  `contracts_check` and every other aggregate gate deliberately: those must
+  keep passing on a machine without the Kani closure. **Evidence:**
+  [`devlog/2026-08-29-kani-in-flake/`](../2026-08-29-kani-in-flake/index.md).
 
 ## Artifacts and provenance
 
