@@ -67,6 +67,44 @@
       listenerLimit = 0;
       dnsRecordLimit = 0;
     };
+    {
+      holder = "io-network-intruder";
+      transport = "tcp";
+      addressKind = "dns";
+      address = "recv-only.test";
+      port = 6001;
+      rights = [
+        "connect";
+        "recv";
+      ];
+      queueDepth = 2;
+      byteBudget = 1024;
+      timerBudget = 0;
+      retryLimit = 0;
+      reconnectLimit = 0;
+      socketLimit = 1;
+      listenerLimit = 0;
+      dnsRecordLimit = 0;
+    };
+    {
+      holder = "io-network-intruder";
+      transport = "tcp";
+      addressKind = "dns";
+      address = "send-path.test";
+      port = 6002;
+      rights = [
+        "connect";
+        "send";
+      ];
+      queueDepth = 2;
+      byteBudget = 1024;
+      timerBudget = 0;
+      retryLimit = 0;
+      reconnectLimit = 0;
+      socketLimit = 1;
+      listenerLimit = 0;
+      dnsRecordLimit = 0;
+    };
   ];
   executables  =  [
     {

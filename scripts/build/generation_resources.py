@@ -128,6 +128,8 @@ from boot_contracts import (
     sha256,
 )
 
+NETWORK_SERVICE_MAX_NAME_BYTES = 24
+
 RIGHT = GENERATION_RIGHT_BY_MANIFEST_NAME
 DEFAULT_CHILD_PRIORITY = 254
 
@@ -294,6 +296,11 @@ def build_network_destinations(declarations: list[dict]) -> bytes:
                 fail("network destination: non-ASCII DNS name")
             if not encoded or len(encoded) > MAX_NETWORK_NAME_BYTES or encoded.startswith(b".") or encoded.endswith(b".") or b".." in encoded or any(not (byte in b".-" or chr(byte).isalnum()) for byte in encoded):
                 fail("network destination: invalid exact DNS name")
+            if len(encoded) > NETWORK_SERVICE_MAX_NAME_BYTES:
+                fail(
+                    "network destination contract permits this DNS name, but "
+                    "network-service/v1 maxNameBytes is 24; destination is unreachable"
+                )
             raw_name = encoded + bytes(64 - len(encoded))
         keys = ("queueDepth", "byteBudget", "timerBudget", "retryLimit", "reconnectLimit", "socketLimit", "listenerLimit", "dnsRecordLimit")
         limits = tuple(declaration[key] for key in keys)

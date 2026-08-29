@@ -1359,6 +1359,10 @@ pub fn valid_network_completion(completion: &network_service::WireNetworkComplet
     {
         return false;
     }
+    if completion.status_detail != 0 {
+        return completion.capability == 0
+            && completion.capability_kind == network_service::CAPABILITY_NONE;
+    }
     match completion.op {
         network_service::OP_CONNECT => {
             completion.capability != 0

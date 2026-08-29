@@ -169,11 +169,17 @@ impl<'a> NetworkDestinations<'a> {
                 && entry.rights & right.bit() != 0
         })
     }
+    /// Exact-name resolution consumes DNS-record authority on a destination
+    /// that can also be connected. There is deliberately no separate resolve
+    /// right in the v1 wire vocabulary, so CONNECT plus a nonzero DNS budget is
+    /// the fail-closed generation declaration for this operation.
     pub fn authorizes_resolve(&self, holder: &[u8; 32], name: &[u8]) -> bool {
         (0..self.destination_count).any(|index| {
             let entry = decode_entry(self.bytes, index).expect("validated network destination");
             entry.holder_identity == *holder
                 && matches!(entry.address, Address::Dns(value) if value == name)
+                && entry.rights & RIGHT_CONNECT != 0
+                && entry.dns_record_limit > 0
         })
     }
 }
@@ -486,20 +492,40 @@ mod tests {
         }
     }
     #[test]
-    fn resolving_one_name_grants_no_other_lookup() {
+    fn resolving_requires_exact_holder_name_connect_and_dns_budget() {
         let holder = holder_identity("resolver");
-        let bytes = object(&[entry(
+        let granted = entry(
             holder,
             TRANSPORT_TCP,
             ADDRESS_DNS,
             b"one.example",
             443,
             RIGHT_CONNECT,
-        )]);
-        let d = NetworkDestinations::decode(&bytes).unwrap();
+        );
+        let granted_bytes = object(&[granted]);
+        let d = NetworkDestinations::decode(&granted_bytes).unwrap();
         assert!(d.authorizes_resolve(&holder, b"one.example"));
         assert!(!d.authorizes_resolve(&holder, b"two.example"));
         assert!(!d.authorizes_resolve(&holder_identity("other"), b"one.example"));
+
+        let send_only = entry(
+            holder,
+            TRANSPORT_TCP,
+            ADDRESS_DNS,
+            b"one.example",
+            443,
+            RIGHT_SEND,
+        );
+        let send_only_bytes = object(&[send_only]);
+        let d = NetworkDestinations::decode(&send_only_bytes).unwrap();
+        assert!(!d.authorizes_resolve(&holder, b"one.example"));
+
+        let mut no_budget = granted;
+        no_budget[OFF_ENTRY_DNS_RECORD_LIMIT..OFF_ENTRY_DNS_RECORD_LIMIT_END]
+            .copy_from_slice(&0u32.to_le_bytes());
+        let no_budget_bytes = object(&[no_budget]);
+        let d = NetworkDestinations::decode(&no_budget_bytes).unwrap();
+        assert!(!d.authorizes_resolve(&holder, b"one.example"));
     }
     /// Every header field the decoder refuses on, one mutation each. The
     /// decoder had three positive-path tests and no negative ones, so each

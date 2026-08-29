@@ -1,26 +1,30 @@
 #![no_std]
 #![no_main]
-use slime_rt::{debug_write, exit, yield_now};
+use slime_rt::{debug_write, exit};
 slime_rt::entry!(main);
 fn main(_: u32) {
-    debug_write(b"[io-link-loopback] LinkDevice tx-queue=4 rx-queue=4 link=up\n");
-    debug_write(
-        b"[io-link-loopback] deterministic ethernet arp ipv4 icmp udp tcp dns peer ready\n",
+    let endpoint_bindings =
+        u64::from(slime_rt::resolve_binding(b"network-service-link-device").is_ok());
+    let protocol_operations = 0u64;
+    write_number(
+        b"[io-link-loopback] declared endpoint bindings=",
+        endpoint_bindings,
     );
-    debug_write(b"[io-link-loopback] denied endpoint observed packets=0\n");
-    debug_write(
-        b"[io-link-loopback] reset epoch=2 settled=2 reclaimed queues=2 buffers=2 leases=2\n",
-    );
-    for _ in 0..2000 {
-        yield_now();
-    }
+    write_number(b" protocol operations=", protocol_operations);
+    debug_write(b"\n");
     exit(0)
 }
-fn _link_contract_bounds() {
-    let _ = (
-        slime_proto::link_device::MIN_FRAME_BYTES,
-        slime_proto::link_device::MAX_FRAME_BYTES,
-        slime_proto::link_device::OP_TRANSMIT,
-        slime_proto::link_device::OP_PROVIDE_RECEIVE,
-    );
+fn write_number(prefix: &[u8], mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut offset = digits.len();
+    loop {
+        offset -= 1;
+        digits[offset] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    debug_write(prefix);
+    debug_write(&digits[offset..]);
 }

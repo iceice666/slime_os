@@ -1030,7 +1030,6 @@ name = "slime-component-io-link-loopback"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
- "slime-proto",
  "slime-rt",
 ]
 

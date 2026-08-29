@@ -1,12 +1,16 @@
 #![no_std]
 #![no_main]
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
+use slime_proto::valid_network_completion;
 use slime_rt::{
     ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, yield_now,
 };
 slime_rt::entry!(main);
 const SERVICE: u32 = 0;
+const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
 fn main(_: u32) {
+    let mut tcp_capabilities = 0u64;
+    let mut successful_transfers = 0u64;
     let tcp = call(destination(
         network_service::OP_CONNECT,
         network_service::TRANSPORT_TCP,
@@ -16,58 +20,109 @@ fn main(_: u32) {
     if tcp.status_detail != 0 || tcp.capability_kind != network_service::CAPABILITY_TCP_CONNECTION {
         fail(b"tcp connect");
     }
-    debug_write(b"[io-network-probe] exact tcp destination connected rights=connect,send,recv\n");
+    tcp_capabilities += 1;
+    write_number(b"[io-network-probe] tcp capabilities=", tcp_capabilities);
+    debug_write(b" rights=connect,send,recv\n");
     for op in [network_service::OP_SEND, network_service::OP_RECV] {
         let reply = call(capability(op, tcp.capability));
         if reply.status_detail != 0 {
             fail(b"tcp transfer");
         }
+        successful_transfers += 1;
     }
-    debug_write(b"[io-network-probe] deterministic length-prefixed transfer bytes=12 echoed=12\n");
-    let denied = call(destination(
+    write_number(
+        b"[io-network-probe] successful capability operations=",
+        successful_transfers,
+    );
+    debug_write(b"\n");
+
+    let wrong_port = call(destination(
         network_service::OP_CONNECT,
         network_service::TRANSPORT_TCP,
         b"echo.test",
         4243,
     ));
-    if denied.status_detail >= 0 {
-        fail(b"simultaneous denied endpoint");
-    }
-    debug_write(b"[io-network-probe] simultaneous denied endpoint packets=0\n");
+    require_denied(wrong_port, b"wrong port");
+    let exact_refusals = u64::from(wrong_port.status_detail < 0);
+    write_number(
+        b"[io-network-probe] exact destination refusals=",
+        exact_refusals,
+    );
+    debug_write(b"\n");
+
     let dns = call(resolve(b"echo.test"));
-    if dns.status_detail != 0 {
+    if dns.status_detail != 0 || dns.capability_kind != network_service::CAPABILITY_DNS_RECORD {
         fail(b"dns");
     }
-    debug_write(b"[io-network-probe] exact dns resolved name=echo.test address=10.0.0.2\n");
+    let dns_exhausted = call(resolve(b"echo.test"));
+    require_denied(dns_exhausted, b"dns budget");
+    let dns_records = u64::from(dns.status_detail == 0);
+    let dns_budget_refusals = u64::from(dns_exhausted.status_detail < 0);
+    write_number(b"[io-network-probe] dns records=", dns_records);
+    write_number(b" budget_refusals=", dns_budget_refusals);
+    debug_write(b"\n");
+
     let udp = call(destination(
         network_service::OP_CONNECT,
         network_service::TRANSPORT_UDP,
         b"echo.test",
         5353,
     ));
-    if udp.status_detail != 0 {
+    if udp.status_detail != 0 || udp.capability_kind != network_service::CAPABILITY_UDP_ENDPOINT {
         fail(b"udp connect");
     }
-    debug_write(b"[io-network-probe] exact udp endpoint connected rights=connect,send,recv\n");
-    debug_write(
-        b"[io-network-probe] link reset settled=2 queues=2 buffers=2 leases=2 outstanding=0\n",
-    );
-    let stale = call(capability(network_service::OP_SEND, tcp.capability));
-    if stale.status_detail >= 0 {
-        fail(b"stale reset epoch");
+    let tcp_second = call(destination(
+        network_service::OP_CONNECT,
+        network_service::TRANSPORT_TCP,
+        b"echo.test",
+        4242,
+    ));
+    if tcp_second.status_detail != 0 {
+        fail(b"second tcp connect");
     }
-    debug_write(
-        b"[io-network-probe] link reset fresh epoch=2 stale epoch=1 refused reconnects=1\n",
+    let socket_exhausted = call(destination(
+        network_service::OP_CONNECT,
+        network_service::TRANSPORT_TCP,
+        b"echo.test",
+        4242,
+    ));
+    require_denied(socket_exhausted, b"socket budget");
+    let socket_charges =
+        u64::from(tcp.status_detail == 0) + u64::from(tcp_second.status_detail == 0);
+    let socket_budget_refusals = u64::from(socket_exhausted.status_detail < 0);
+    write_number(b"[io-network-probe] socket charges=", socket_charges);
+    write_number(b" budget_refusals=", socket_budget_refusals);
+    debug_write(b"\n");
+
+    let mut closed_capabilities = 0u64;
+    for id in [
+        tcp.capability,
+        dns.capability,
+        udp.capability,
+        tcp_second.capability,
+    ] {
+        let closed = call(capability(network_service::OP_CLOSE, id));
+        if closed.status_detail != 0 {
+            fail(b"close");
+        }
+        closed_capabilities += 1;
+    }
+    let shutdown = call(capability(network_service::OP_CLOSE, SHUTDOWN_CAPABILITY));
+    if shutdown.status_detail != 0 {
+        fail(b"shutdown");
+    }
+    write_number(
+        b"[io-network-probe] closed capabilities=",
+        closed_capabilities,
     );
-    debug_write(
-        b"[io-network-probe] service restart settled=1 queues=2 buffers=2 leases=1 outstanding=0\n",
-    );
-    debug_write(b"[io-network-probe] service restart fresh epoch=3 stale completion refused\n");
-    debug_write(
-        b"[io-network-probe] no ambient socket nic raw-packet or resolver-wide authority\n",
-    );
-    debug_write(b"[io-network-probe] io network plane complete\n");
+    write_number(b" shutdown=", u64::from(shutdown.status_detail == 0));
+    debug_write(b"\n");
     exit(0)
+}
+fn require_denied(reply: WireNetworkCompletion, reason: &[u8]) {
+    if reply.status_detail >= 0 {
+        fail(reason);
+    }
 }
 fn destination(op: u8, transport: u8, name: &[u8], port: u16) -> WireNetworkRequest {
     let mut endpoint = [0; 24];
@@ -125,11 +180,29 @@ fn call(request: WireNetworkRequest) -> WireNetworkCompletion {
             ERR_WOULDBLOCK => yield_now(),
             result if result < 0 => fail(b"recv"),
             result => {
-                return WireNetworkCompletion::decode(&out[..result as usize])
+                let reply = WireNetworkCompletion::decode(&out[..result as usize])
                     .unwrap_or_else(|| fail(b"reply"));
+                if !valid_network_completion(&reply) {
+                    fail(b"invalid completion");
+                }
+                return reply;
             }
         }
     }
+}
+fn write_number(prefix: &[u8], mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut offset = digits.len();
+    loop {
+        offset -= 1;
+        digits[offset] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    debug_write(prefix);
+    debug_write(&digits[offset..]);
 }
 fn fail(reason: &[u8]) -> ! {
     debug_write(b"[io-network-probe] fail: ");
