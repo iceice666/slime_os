@@ -225,6 +225,52 @@ miri:
     cd ../components
     cargo miri test --target "$host" -p slime-proto
 
+# Bit-precise proofs of the IO substrate's pure logic, over all inputs of the
+# declared types rather than the cases a `#[test]` names.
+#
+# This is the third layer of the IO verification stack and it is not
+# interchangeable with the other two. The plane gates observe one real schedule
+# on real hardware queues; `just io_model_check` settles all interleavings of an
+# abstraction; this settles all *values* flowing through the shipped Rust. Each
+# closes what the others structurally cannot: the models explicitly disclaim
+# wire arithmetic and bounds, which is exactly what these harnesses own.
+#
+# Kani ships its own pinned toolchain (nightly-2025-11-21), older than this
+# repository's. `verification/io-proofs/Cargo.toml` exists solely to present
+# `slime-proto`'s own `src/lib.rs` under a manifest with no `rust-version`, so
+# the *shipped* source is what gets verified -- there is no second copy to
+# drift. The harnesses live in `components/proto/src/io_queue_proofs.rs` behind
+# `#[cfg(kani)]`, so no product build, lint, or Miri run ever sees them.
+#
+# Not part of `contracts_check`: it needs a separate toolchain plus CBMC, the
+# same reason `miri` stands alone above.
+[group('quality')]
+kani_io_proofs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-kani >/dev/null 2>&1; then
+        echo "kani_io_proofs: cargo-kani not found." >&2
+        echo "  install: cargo install --locked kani-verifier && cargo kani setup" >&2
+        exit 1
+    fi
+    # Every harness must run. A pass here is only evidence if the harness count
+    # is the expected one: a proof file that silently stopped being compiled
+    # would otherwise report success by verifying nothing.
+    expected=18
+    log="$(mktemp)"
+    trap 'rm -f "$log"' EXIT
+    cargo kani --manifest-path verification/io-proofs/Cargo.toml 2>&1 | tee "$log"
+    if ! grep -q "^VERIFICATION:- SUCCESSFUL" "$log"; then
+        echo "kani_io_proofs: verification did not succeed" >&2
+        exit 1
+    fi
+    got="$(sed -n 's/^Complete - \([0-9]*\) successfully verified harnesses.*/\1/p' "$log" | tail -1)"
+    if [ "$got" != "$expected" ]; then
+        echo "kani_io_proofs: expected $expected harnesses, ran ${got:-0}" >&2
+        exit 1
+    fi
+    echo "kani_io_proofs: $got harnesses verified"
+
 # Host-side unit tests for the crates that need neither QEMU nor a built seL4
 # prefix. Use the actual host triple: hardcoding Linux makes the gate fail on
 # Darwin, while omitting `--target` makes components pick its bare-metal default.

@@ -18,6 +18,12 @@ pub mod generation;
 pub mod interface_schema;
 pub mod io_queue;
 pub mod io_queue_ring;
+// IO0 proof harnesses. Compiled only by Kani, which is why they may name
+// crate-private helpers: the `kani` cfg is never set for a product build, so
+// this module does not exist in any shipped artifact. Driven through
+// `verification/io-proofs/Cargo.toml`, which compiles this very file.
+#[cfg(kani)]
+mod io_queue_proofs;
 pub mod link_device;
 pub mod network_service;
 pub mod powerbox;
