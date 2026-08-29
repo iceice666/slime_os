@@ -466,7 +466,29 @@ test_sel4_root:
     # ordinal, because two instances asking for region 1 and source 1 -- what
     # the old fixed identities produced -- collide on the table's uniqueness
     # checks and the second install fails outright.
-    expected=208
+    # PR #11 review findings 7, 8, and N3: 208 -> 211. `io_resource` gains
+    # `failed_mmio_map_leaves_device_usable`, pinning that an adapter map
+    # failure commits no MMIO authority and leaves the device mappable and
+    # readable afterwards -- the region used to be moved out of the inventory
+    # and dropped after its frame was already unmapped, so the lost frame
+    # capability was observable only as an unrelated later syscall failing for
+    # the rest of the boot.
+    #
+    # `failed_queue_request_begin_leaves_mapping_destroyable`, pinning that
+    # `REQUEST_BEGIN` against a queue DMA mapping -- which carries no lease,
+    # while its identifier is handed to the driver as the `QUEUE_MAP` success
+    # value -- commits no request charge, so `destroy_dma_mapping` still
+    # succeeds. The charge used to be committed before the two fallible
+    # lookups, leaving a mapping permanently `MappingBusy` behind a refusal the
+    # caller will never settle.
+    #
+    # `mediated_mmio_refuses_in_granule_offset_outside_grant`, pinning that an
+    # aligned offset inside the 4 KiB granule but outside the granted subrange
+    # is refused before the device's granule offset is added. Containment
+    # previously rested on QEMU packing transports top-down with the top one
+    # ending exactly at the granule edge, which is an allocation accident
+    # rather than an authority bound.
+    expected=211
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

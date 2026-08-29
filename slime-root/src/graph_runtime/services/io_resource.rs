@@ -3,7 +3,7 @@ use super::*;
 use slime_root::io_resource::{
     AdapterAction, AdapterError, DeviceId, DmaDirection, DriverEpoch, DriverId, IoResourceAdapter,
     IrqHandle, IrqSourceId, LeaseId, MAX_DMA_MAPPINGS, MmioAccess, MmioIsolation, MmioRegionId,
-    ResourceError, ResourceTable,
+    ResourceError, ResourceTable, mediated_mmio_offset,
 };
 
 #[derive(Clone, Copy)]
@@ -35,6 +35,7 @@ struct Sel4IoAdapter<'a> {
     allocator: &'a mut ObjectAllocator,
     caller_vspace: sel4::cap::VSpace,
     requested_base: usize,
+    granted_mmio_bytes: u32,
     dma_pages: &'a mut [Option<device::DmaPage>; MAX_DMA_MAPPINGS],
     queues: &'a mut [Option<QueueRecord>; MAX_DMA_MAPPINGS],
     loan_frames: Option<shared_buffer::LoanFrames>,
@@ -78,21 +79,16 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         let descriptor = self.device(device)?;
         let region = self
             .inventory
-            .take_region(descriptor.region)
+            .region_mut(descriptor.region)
             .ok_or(AdapterError::MapFailed)?;
-        match region.map_child(
-            self.caller_vspace,
-            self.requested_base,
-            matches!(access, MmioAccess::ReadWrite),
-        ) {
-            Ok(region) => {
-                self.inventory
-                    .put_region(descriptor.region, region)
-                    .map_err(|_| AdapterError::MapFailed)?;
-                Ok(self.requested_base as u64)
-            }
-            Err(_) => Err(AdapterError::MapFailed),
-        }
+        region
+            .map_child(
+                self.caller_vspace,
+                self.requested_base,
+                matches!(access, MmioAccess::ReadWrite),
+            )
+            .map_err(|_| AdapterError::MapFailed)?;
+        Ok(self.requested_base as u64)
     }
 
     fn read_mmio32(
@@ -102,9 +98,11 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         offset: u32,
     ) -> Result<u32, AdapterError> {
         let descriptor = self.device(device)?;
+        let offset = mediated_mmio_offset(self.granted_mmio_bytes, descriptor.offset, offset)
+            .ok_or(AdapterError::MapFailed)?;
         self.inventory
             .region(descriptor.region)
-            .and_then(|region| region.read32(descriptor.offset + offset as usize))
+            .and_then(|region| region.read32(offset))
             .ok_or(AdapterError::MapFailed)
     }
 
@@ -116,9 +114,11 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         value: u32,
     ) -> Result<(), AdapterError> {
         let descriptor = self.device(device)?;
+        let offset = mediated_mmio_offset(self.granted_mmio_bytes, descriptor.offset, offset)
+            .ok_or(AdapterError::MapFailed)?;
         self.inventory
             .region(descriptor.region)
-            .filter(|region| region.write32(descriptor.offset + offset as usize, value))
+            .filter(|region| region.write32(offset, value))
             .map(|_| ())
             .ok_or(AdapterError::MapFailed)
     }
@@ -410,6 +410,7 @@ pub(super) fn reclaim_driver(
         allocator,
         caller_vspace,
         requested_base: 0,
+        granted_mmio_bytes: 0,
         dma_pages: &mut service.dma_pages,
         queues: &mut service.queues,
         loan_frames: None,
@@ -445,6 +446,33 @@ pub(super) fn reclaim_driver(
     );
     Ok(())
 }
+pub(super) fn revoke_buffer_lease(
+    service: &mut IoResourceService,
+    inventory: &mut platform::AuthorityInventory,
+    allocator: &mut ObjectAllocator,
+    tasks: &TaskTable<MAX_TASKS>,
+    task: TaskId,
+    lease: LeaseId,
+) -> Result<(), ResourceError> {
+    let caller_vspace = tasks
+        .get(task)
+        .map(|task| task.vspace.vspace)
+        .unwrap_or(sel4::cap::VSpace::from_bits(0));
+    let mut adapter = Sel4IoAdapter {
+        inventory,
+        allocator,
+        caller_vspace,
+        requested_base: 0,
+        granted_mmio_bytes: 0,
+        dma_pages: &mut service.dma_pages,
+        queues: &mut service.queues,
+        loan_frames: None,
+    };
+    match service.table.revoke_lease(&mut adapter, lease) {
+        Ok(_) | Err(ResourceError::LeaseNotLive) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn serve_io_resource(
@@ -470,6 +498,7 @@ pub(super) fn serve_io_resource(
         allocator,
         caller_vspace,
         requested_base: words[3] as usize,
+        granted_mmio_bytes: 0,
         dma_pages: &mut service.dma_pages,
         queues: &mut service.queues,
         loan_frames: None,
@@ -505,14 +534,50 @@ pub(super) fn serve_io_resource(
                 Response::success(epoch.0 as i64, device as sel4::Word)
             })
         }
-        io_resource_labels::MAP_MMIO
-        | io_resource_labels::MMIO_READ32
-        | io_resource_labels::MMIO_WRITE32 => {
+        io_resource_labels::MAP_MMIO => {
+            let device_slot = words[0] as u32;
+            let region_slot = (words[0] >> 32) as u32;
+            let Some(graph::CapabilityEntry::Device(device_cap)) = table.get(device_slot) else {
+                return denied();
+            };
+            let Some(graph::CapabilityEntry::MmioRegion(region_cap)) = table.get(region_slot)
+            else {
+                return denied();
+            };
+            if !device_cap
+                .rights
+                .allows(boot_contracts::generation::RIGHT_MAP_MMIO)
+                || !region_cap
+                    .rights
+                    .allows(boot_contracts::generation::RIGHT_MAP_MMIO)
+            {
+                return denied();
+            }
+            let Some(device) = service.table.device(driver) else {
+                return denied();
+            };
+            let region = MmioRegionId(device.0);
+            adapter.requested_base = words[2] as usize;
+            let packed = words[3];
+            mapped(
+                service.table.map_mmio(
+                    &mut adapter,
+                    driver,
+                    device,
+                    DriverEpoch(words[1]),
+                    region,
+                    packed as u32,
+                    (packed >> 32) as u32,
+                    MmioAccess::ReadWrite,
+                ),
+                |handle| Response::success(handle.id.0 as i64, words[2]),
+            )
+        }
+        io_resource_labels::MMIO_READ32 | io_resource_labels::MMIO_WRITE32 => {
             let Some(graph::CapabilityEntry::Device(device_cap)) = table.get(words[0] as u32)
             else {
                 return denied();
             };
-            adapter.requested_base = words[2] as usize;
             let Some(graph::CapabilityEntry::MmioRegion(region_cap)) = table.get(words[1] as u32)
             else {
                 return denied();
@@ -526,33 +591,14 @@ pub(super) fn serve_io_resource(
             {
                 return denied();
             }
-            // Which transport, from the driver's installed record rather than
-            // from the capability's own byte (B84). That byte is a positional
-            // index the root assigns per instance, so both instances of a
-            // two-disk plane's driver carry zero and it cannot name a device.
-            // Holding the capability is still what authorizes the operation;
-            // only the device identity comes from the authenticated install.
             let Some(device) = service.table.device(driver) else {
                 return denied();
             };
             let region = MmioRegionId(device.0);
-            if label == io_resource_labels::MAP_MMIO {
-                let packed = words[3];
-                let epoch = service.table.epoch(driver).unwrap_or(DriverEpoch(0));
-                return mapped(
-                    service.table.map_mmio(
-                        &mut adapter,
-                        driver,
-                        device,
-                        epoch,
-                        region,
-                        packed as u32,
-                        (packed >> 32) as u32,
-                        MmioAccess::ReadWrite,
-                    ),
-                    |handle| Response::success(handle.id.0 as i64, words[2]),
-                );
-            }
+            let Some(granted_bytes) = service.table.mmio_grant_bytes(driver, region) else {
+                return denied();
+            };
+            adapter.granted_mmio_bytes = granted_bytes;
             let epoch = DriverEpoch(words[2]);
             if label == io_resource_labels::MMIO_READ32 {
                 mapped(
@@ -647,6 +693,9 @@ pub(super) fn serve_io_resource(
                 _ => return invalid(),
             };
             let epoch = DriverEpoch(words[3]);
+            let Some(device) = service.table.device(driver) else {
+                return denied();
+            };
             if service
                 .table
                 .declare_lease(
@@ -660,9 +709,6 @@ pub(super) fn serve_io_resource(
                 return invalid();
             }
             adapter.loan_frames = Some(frames);
-            let Some(device) = service.table.device(driver) else {
-                return denied();
-            };
             mapped(
                 service.table.create_dma_mapping(
                     &mut adapter,
@@ -738,7 +784,7 @@ pub(super) fn serve_io_resource(
                 |_| Response::success(0, 0),
             )
         }
-        io_resource_labels::IRQ_WAIT_ACK => {
+        io_resource_labels::IRQ_ACK => {
             let Some(graph::CapabilityEntry::InterruptSource(cap)) = table.get(words[0] as u32)
             else {
                 return denied();
@@ -750,36 +796,27 @@ pub(super) fn serve_io_resource(
             let Some(device) = service.table.device(driver) else {
                 return denied();
             };
-            // The source is the device's, matching what `install_driver`
-            // granted. The capability's own byte is the per-instance positional
-            // index, identical across two instances of one driver executable.
             let source = IrqSourceId(device.0);
-            if words[2] == 0
-                && let Err(error) =
+            if words[2] == 0 {
+                return mapped(
                     service
                         .table
-                        .bind_irq(&mut adapter, driver, device, epoch, source)
-            {
-                sel4::debug_println!(
-                    "SLIME_IO irq bind refused task={} source={} error={error:?}",
-                    task.0,
-                    source.0
+                        .bind_irq(&mut adapter, driver, device, epoch, source),
+                    |_| Response::success(0, epoch.0 as sel4::Word),
                 );
-                return invalid();
             }
-            let Ok(handle) = service.table.interrupt_arrived(source) else {
-                return invalid();
-            };
             mapped(
                 service.table.ack_irq(
                     &mut adapter,
                     driver,
                     IrqHandle {
-                        sequence: handle.sequence,
-                        ..handle
+                        driver,
+                        source,
+                        epoch,
+                        sequence: words[2],
                     },
                 ),
-                |_| Response::success(handle.sequence as i64, epoch.0 as sel4::Word),
+                |_| Response::success(words[2] as i64, epoch.0 as sel4::Word),
             )
         }
         _ => invalid(),

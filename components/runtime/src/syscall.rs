@@ -546,8 +546,11 @@ pub fn io_dma_release(account_slot: u32, mapping: DmaMapping) -> i64 {
     transport::io_dma_release(account_slot, mapping.id, mapping.epoch)
 }
 
-pub fn io_irq_wait_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<IrqEvent, i64> {
-    transport::io_irq_wait_ack(source_slot, epoch, prior_sequence)
+/// Bind the declared interrupt source when `prior_sequence` is zero, or
+/// acknowledge an already-dispatched sequence. This call does not wait for
+/// hardware arrival; readiness is delivered through the declared notification.
+pub fn io_irq_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<IrqEvent, i64> {
+    transport::io_irq_ack(source_slot, epoch, prior_sequence)
         .map(|sequence| IrqEvent { epoch, sequence })
 }
 pub fn io_request_begin(account_slot: u32, mapping: DmaMapping, request_id: u64) -> i64 {

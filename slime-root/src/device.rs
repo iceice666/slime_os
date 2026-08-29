@@ -103,13 +103,16 @@ impl DeviceRegion {
     }
     /// Map this exact device frame into a child VSpace. The caller has already
     /// proved page exclusivity; this function never rounds or widens a region.
+    /// A failed map leaves the frame capability owned by this region and marks
+    /// it unmapped, so the inventory can retain it for a later retry.
     pub fn map_child(
-        mut self,
+        &mut self,
         vspace: sel4::cap::VSpace,
         base: usize,
         writable: bool,
-    ) -> Result<Self, DeviceError> {
+    ) -> Result<(), DeviceError> {
         self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        self.base = 0;
         let rights = sel4::CapRightsBuilder::none()
             .read(true)
             .write(writable)
@@ -123,7 +126,7 @@ impl DeviceRegion {
             )
             .map_err(DeviceError::Map)?;
         self.base = base;
-        Ok(self)
+        Ok(())
     }
 
     /// Retype the granule containing `paddr` and map it at `base`.
@@ -188,8 +191,10 @@ impl DeviceRegion {
     /// space it came from is a device untyped this root has no second use for.
     /// What this frees is the *virtual* window, so one claimed root-image page
     /// can scan a region larger than a granule.
-    pub fn unmap(&self) -> Result<(), DeviceError> {
-        self.frame.frame_unmap().map_err(DeviceError::Map)
+    pub fn unmap(&mut self) -> Result<(), DeviceError> {
+        self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        self.base = 0;
+        Ok(())
     }
 
     /// Read one 32-bit register at `offset` bytes into the bank.

@@ -369,7 +369,7 @@ operations :: List Operation = {
   operation "ioResource" "MAP_MMIO" 59;
   operation "ioResource" "DMA_MAP" 60;
   operation "ioResource" "DMA_RELEASE" 61;
-  operation "ioResource" "IRQ_WAIT_ACK" 62;
+  operation "ioResource" "IRQ_ACK" 62;
   operation "ioResource" "QUEUE_MAP" 63;
   operation "ioResource" "REQUEST_BEGIN" 65;
   operation "ioResource" "REQUEST_SETTLE" 66;

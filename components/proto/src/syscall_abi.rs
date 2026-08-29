@@ -90,7 +90,7 @@ pub mod io_resource_labels {
     pub const MAP_MMIO: u64 = 59;
     pub const DMA_MAP: u64 = 60;
     pub const DMA_RELEASE: u64 = 61;
-    pub const IRQ_WAIT_ACK: u64 = 62;
+    pub const IRQ_ACK: u64 = 62;
     pub const QUEUE_MAP: u64 = 63;
     pub const REQUEST_BEGIN: u64 = 65;
     pub const REQUEST_SETTLE: u64 = 66;

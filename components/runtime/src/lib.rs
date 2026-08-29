@@ -45,7 +45,7 @@ pub use syscall::{
     boot_action, call, cap_drop, capability_delegate, capability_import, capability_slot_occupancy,
     debug_write, directory_commit, directory_derive, directory_inspect, exit, graph_query,
     graph_read, graph_route_index, input_read, io_device_bind, io_dma_map, io_dma_release,
-    io_irq_wait_ack, io_mmio_map, io_mmio_read32, io_mmio_write32, io_queue_map, io_request_begin,
+    io_irq_ack, io_mmio_map, io_mmio_read32, io_mmio_write32, io_queue_map, io_request_begin,
     io_request_settle, lifecycle_parameter_read, lifecycle_parameter_write,
     lifecycle_restart_admit, lifecycle_state_advance, lifecycle_state_read, monotonic_read,
     network_destinations_read, notification_poll, notification_signal, notification_wait,

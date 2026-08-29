@@ -421,10 +421,14 @@ pub(super) fn launch_instance_graph(
         if let Some(quota) = io_budget.as_ref().and_then(|budget| {
             budget.quota_for(&boot_contracts::io_resource::driver_identity(instance.name))
         }) {
-            let shared = io_authority.device(0).is_some_and(|device| {
-                io_authority
-                    .device(1)
-                    .is_some_and(|other| other.region == device.region)
+            let ordinal = quota.device as usize;
+            let shared = io_authority.device(ordinal).is_some_and(|device| {
+                (0..io_authority.len()).any(|other_ordinal| {
+                    other_ordinal != ordinal
+                        && io_authority
+                            .device(other_ordinal)
+                            .is_some_and(|other| other.region == device.region)
+                })
             });
             if let Err(error) = services::install_driver(
                 &mut io_service,

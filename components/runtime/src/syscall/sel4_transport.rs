@@ -939,20 +939,14 @@ pub fn io_mmio_map(
     offset: u32,
     length: u32,
 ) -> Result<u64, i64> {
+    let slots = u64::from(device_slot) | (u64::from(region_slot) << 32);
     let range = u64::from(offset) | (u64::from(length) << 32);
     let result = result_of(
         io_resource_labels::MAP_MMIO,
-        &[
-            device_slot as Word,
-            region_slot as Word,
-            base as Word,
-            range as Word,
-        ],
+        &[slots as Word, epoch as Word, base as Word, range as Word],
     );
     if result < 0 {
         Err(result)
-    } else if epoch == 0 {
-        Err(ERR_INVALID_ARG)
     } else {
         Ok(result as u64)
     }
@@ -1044,10 +1038,9 @@ pub fn io_dma_release(account_slot: u32, mapping_id: u64, epoch: u64) -> i64 {
         &[account_slot as Word, mapping_id as Word, epoch as Word],
     )
 }
-
-pub fn io_irq_wait_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<u64, i64> {
+pub fn io_irq_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<u64, i64> {
     let result = result_of(
-        io_resource_labels::IRQ_WAIT_ACK,
+        io_resource_labels::IRQ_ACK,
         &[source_slot as Word, epoch as Word, prior_sequence as Word],
     );
     (result >= 0).then_some(result as u64).ok_or(result)

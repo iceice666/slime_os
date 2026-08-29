@@ -282,7 +282,7 @@ pub(super) fn serve_instance_graph(
                 | io_resource_labels::DMA_MAP
                 | io_resource_labels::DMA_RELEASE
                 | io_resource_labels::QUEUE_MAP
-                | io_resource_labels::IRQ_WAIT_ACK
+                | io_resource_labels::IRQ_ACK
                 | io_resource_labels::REQUEST_BEGIN
                 | io_resource_labels::REQUEST_SETTLE
         ) {
@@ -1181,6 +1181,8 @@ pub(super) fn serve_instance_graph(
                     operation,
                     buffers,
                     allocator,
+                    io_service,
+                    io_authority,
                     tasks,
                     id,
                     &words,
@@ -1335,6 +1337,8 @@ pub(super) fn serve_instance_graph(
                     operation,
                     buffers,
                     allocator,
+                    io_service,
+                    io_authority,
                     tasks,
                     id,
                     &words,
@@ -1555,8 +1559,8 @@ use slime_proto::syscall_abi::{
     GRANT_RECORD_BYTES as SPAWN_GRANT_RECORD_BYTES, GRANT_RIGHTS_OFFSET, GRANT_SLOT_OFFSET,
 };
 pub(super) mod io_resource;
-use io_resource::serve_io_resource;
 pub(super) use io_resource::{IoResourceService, install_driver};
+use io_resource::{revoke_buffer_lease, serve_io_resource};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.

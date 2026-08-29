@@ -28,20 +28,12 @@ impl AuthorityInventory {
     pub fn region(&self, index: usize) -> Option<&device::DeviceRegion> {
         self.regions.get(index)?.as_ref()
     }
-    pub fn take_region(&mut self, index: usize) -> Option<device::DeviceRegion> {
-        self.regions.get_mut(index)?.take()
+    pub fn region_mut(&mut self, index: usize) -> Option<&mut device::DeviceRegion> {
+        self.regions.get_mut(index)?.as_mut()
     }
-    pub fn put_region(&mut self, index: usize, region: device::DeviceRegion) -> Result<(), ()> {
-        let slot = self.regions.get_mut(index).ok_or(())?;
-        if slot.is_some() {
-            return Err(());
-        }
-        *slot = Some(region);
-        Ok(())
-    }
-    pub fn unmap_region_at(&self, base: usize) -> Result<(), ()> {
+    pub fn unmap_region_at(&mut self, base: usize) -> Result<(), ()> {
         self.regions
-            .iter()
+            .iter_mut()
             .flatten()
             .find(|region| region.mapped_base() == base)
             .ok_or(())?
@@ -85,7 +77,7 @@ pub(crate) fn probe_authority_devices(
     }
     for granule_index in 0..VIRTIO_MMIO_GRANULES {
         let paddr = VIRTIO_MMIO_BASE + granule_index * GRANULE_SIZE;
-        let Ok(region) = device::DeviceRegion::map(
+        let Ok(mut region) = device::DeviceRegion::map(
             allocator,
             sel4::init_thread::slot::VSPACE.cap(),
             scan_base,
@@ -207,7 +199,7 @@ pub(crate) fn probe_devices(
         [None; MAX_BLOCK_DEVICES];
     for granule in 0..VIRTIO_MMIO_GRANULES {
         let paddr = VIRTIO_MMIO_BASE + granule * GRANULE_SIZE;
-        let region = match device::DeviceRegion::map(
+        let mut region = match device::DeviceRegion::map(
             allocator,
             sel4::init_thread::slot::VSPACE.cap(),
             base,

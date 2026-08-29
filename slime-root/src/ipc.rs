@@ -131,7 +131,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | io_resource_labels::MAP_MMIO
         | io_resource_labels::DMA_MAP
         | io_resource_labels::DMA_RELEASE
-        | io_resource_labels::IRQ_WAIT_ACK
+        | io_resource_labels::IRQ_ACK
         | io_resource_labels::QUEUE_MAP
         | io_resource_labels::REQUEST_BEGIN
         | io_resource_labels::REQUEST_SETTLE
@@ -235,7 +235,7 @@ pub const fn io_resource_request_len(label: sel4::Word) -> Option<usize> {
         | io_resource_labels::REQUEST_SETTLE
         | io_resource_labels::MMIO_READ32
         | io_resource_labels::MMIO_WRITE32 => Some(4),
-        io_resource_labels::DMA_RELEASE | io_resource_labels::IRQ_WAIT_ACK => Some(3),
+        io_resource_labels::DMA_RELEASE | io_resource_labels::IRQ_ACK => Some(3),
         _ => None,
     }
 }

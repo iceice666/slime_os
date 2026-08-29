@@ -11,8 +11,8 @@
 //! `DeviceWrite`, with no value that can widen them to both directions.
 //! Direct child mapping additionally requires page exclusivity. A region sharing
 //! a hardware granule is never rounded outwards; it is accessed through bounded
-//! mediated `read32`/`write32`, which checks the exact subrange per access and
-//! therefore exposes less than a page-granular mapping could.
+//! mediated `read32`/`write32`. Each access is bounded to the exact granted
+//! subrange before the adapter adds the transport's offset within its granule.
 
 pub const MAX_DRIVERS: usize = 32;
 pub const MAX_MMIO_REGIONS: usize = 64;
@@ -24,6 +24,19 @@ pub const MAX_REQUESTS: usize = 128;
 pub const MAX_ACTIONS: usize =
     MAX_MMIO_MAPPINGS + MAX_DMA_MAPPINGS + MAX_IRQ_SOURCES + MAX_REQUESTS;
 pub const PAGE_SIZE: u32 = 4096;
+/// Translate a grant-relative 32-bit MMIO offset into the mapped granule.
+/// The grant bound is checked before the device's granule offset is added, so
+/// containment follows authority rather than the transport's packing order.
+pub fn mediated_mmio_offset(
+    granted_bytes: u32,
+    device_offset: usize,
+    offset: u32,
+) -> Option<usize> {
+    if offset.checked_add(4).is_none_or(|end| end > granted_bytes) || !offset.is_multiple_of(4) {
+        return None;
+    }
+    device_offset.checked_add(offset as usize)
+}
 
 macro_rules! identity {
     ($name:ident) => {
@@ -539,6 +552,13 @@ impl ResourceTable {
     }
     pub fn lease_count(&self) -> usize {
         self.leases.iter().flatten().count()
+    }
+    pub fn mmio_grant_bytes(&self, driver: DriverId, region: MmioRegionId) -> Option<u32> {
+        self.regions
+            .iter()
+            .flatten()
+            .find(|grant| grant.driver == driver && grant.id == region)
+            .map(|grant| grant.bytes)
     }
 
     pub fn grant_mmio_region(
@@ -1300,6 +1320,8 @@ impl ResourceTable {
             .iter()
             .position(Option::is_none)
             .ok_or(ResourceError::TableFull)?;
+        let lease = mapping.lease.ok_or(ResourceError::LeaseNotLive)?;
+        let lease_slot = self.lease_slot(lease).ok_or(ResourceError::LeaseNotLive)?;
         self.requests[slot] = Some(Request {
             driver,
             id,
@@ -1307,8 +1329,6 @@ impl ResourceTable {
             mapping: mapping_id,
         });
         self.dma[dma_slot].as_mut().unwrap().requests += 1;
-        let lease = mapping.lease.ok_or(ResourceError::LeaseNotLive)?;
-        let lease_slot = self.lease_slot(lease).ok_or(ResourceError::LeaseNotLive)?;
         self.leases[lease_slot].as_mut().unwrap().requests += 1;
         self.drivers[driver_slot]
             .as_mut()
@@ -2262,6 +2282,64 @@ mod tests {
             table.revoke_lease(&mut adapter, LEASE),
             Err(ResourceError::LeaseNotLive)
         );
+        assert_eq!(table.occupancy(DRIVER), DriverOccupancy::EMPTY);
+    }
+
+    #[test]
+    fn failed_mmio_map_leaves_device_usable() {
+        let (mut table, epoch) = table();
+        let mut failed = RecordingAdapter::failing_at(0);
+        assert!(matches!(
+            table.map_mmio(
+                &mut failed,
+                DRIVER,
+                DEVICE,
+                epoch,
+                REGION,
+                0,
+                PAGE_SIZE,
+                MmioAccess::ReadWrite,
+            ),
+            Err(ResourceError::Adapter(_))
+        ));
+        let mut retry = RecordingAdapter::new();
+        table
+            .map_mmio(
+                &mut retry,
+                DRIVER,
+                DEVICE,
+                epoch,
+                REGION,
+                0,
+                PAGE_SIZE,
+                MmioAccess::ReadWrite,
+            )
+            .unwrap();
+        assert_eq!(
+            table.read_mmio32(&mut retry, DRIVER, DEVICE, epoch, REGION, 0),
+            Ok(0x7472_6976)
+        );
+    }
+    #[test]
+    fn mediated_mmio_refuses_in_granule_offset_outside_grant() {
+        assert_eq!(mediated_mmio_offset(0x200, 0xe00, 0x200), None);
+        assert_eq!(mediated_mmio_offset(0x200, 0xe00, 0x1fc), Some(0xffc));
+    }
+
+    #[test]
+    fn failed_queue_request_begin_leaves_mapping_destroyable() {
+        let (mut table, epoch) = table();
+        let mut adapter = RecordingAdapter::new();
+        let queue = table
+            .map_device_queue(&mut adapter, DRIVER, DEVICE, epoch, 1)
+            .unwrap();
+        assert_eq!(
+            table.begin_request(DRIVER, epoch, RequestId(1), queue.id),
+            Err(ResourceError::LeaseNotLive)
+        );
+        table
+            .destroy_dma_mapping_id(&mut adapter, DRIVER, epoch, queue.id)
+            .unwrap();
         assert_eq!(table.occupancy(DRIVER), DriverOccupancy::EMPTY);
     }
 
