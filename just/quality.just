@@ -276,6 +276,45 @@ kani_io_proofs:
     fi
     echo "kani_io_proofs: $got harnesses verified"
 
+# IO7: bit-precise proofs of the *device*-boundary arithmetic in
+# `components/lib/src/virtio_mmio.rs`.
+#
+# Separate from `kani_io_proofs` above because it proves a different trust
+# boundary. Those harnesses cover `slime-proto`, whose inputs arrive from a
+# client across a capability-checked contract; these cover the bytes a *device*
+# writes into a shared used ring, which no capability constrains and no plane
+# gate can drive adversarially — QEMU's virtio device is well behaved, which is
+# exactly why B86 and B87 stayed latent under every green gate.
+#
+# Two proof crates rather than one because Kani takes a single `[lib] path`, and
+# these two properties live in different packages. See
+# `verification/virtio-proofs/Cargo.toml` for why it points at the module rather
+# than at `slime-components`' `lib.rs`.
+[group('quality')]
+kani_virtio_proofs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-kani >/dev/null 2>&1; then
+        echo "kani_virtio_proofs: cargo-kani not found." >&2
+        echo "  run: nix develop .#kani --command just kani_virtio_proofs" >&2
+        exit 1
+    fi
+    # As above: a proof gate that can silently verify nothing is not a gate.
+    expected=13
+    log="$(mktemp)"
+    trap 'rm -f "$log"' EXIT
+    cargo-kani --manifest-path verification/virtio-proofs/Cargo.toml 2>&1 | tee "$log"
+    if ! grep -q "^VERIFICATION:- SUCCESSFUL" "$log"; then
+        echo "kani_virtio_proofs: verification did not succeed" >&2
+        exit 1
+    fi
+    got="$(sed -n 's/^Complete - \([0-9]*\) successfully verified harnesses.*/\1/p' "$log" | tail -1)"
+    if [ "$got" != "$expected" ]; then
+        echo "kani_virtio_proofs: expected $expected harnesses, ran ${got:-0}" >&2
+        exit 1
+    fi
+    echo "kani_virtio_proofs: $got harnesses verified"
+
 # Host-side unit tests for the crates that need neither QEMU nor a built seL4
 # prefix. Use the actual host triple: hardcoding Linux makes the gate fail on
 # Darwin, while omitting `--target` makes components pick its bare-metal default.

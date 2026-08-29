@@ -137,7 +137,7 @@ jobs:
       - run: just sel4_gate_control_check
 
   kani_proofs:
-    name: Kani IO wire proofs
+    name: Kani IO wire and device-boundary proofs
     # An ordinary x64 runner, not the arm64 seL4 pool: nothing here builds for
     # AArch64, links libsel4, or boots QEMU. `verification/io-proofs` is a
     # zero-dependency crate compiled by Kani's own bundled toolchain, so this
@@ -184,6 +184,11 @@ jobs:
         run: nix build .#kani
 
       - run: nix develop .#kani --command just kani_io_proofs
+
+      # Same shell, same bundle, different trust boundary: these prove the
+      # arithmetic applied to bytes a *device* wrote. Run in this job rather
+      # than a new one so the ~325 MB Kani closure is realized once.
+      - run: nix develop .#kani --command just kani_virtio_proofs
 
   # === Jobs that need the installed seL4 prefix ===
   #

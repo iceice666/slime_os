@@ -531,6 +531,211 @@ pub fn received_payload_len(reported: u32, header_bytes: usize, frame_len: u16) 
     (payload <= u32::from(frame_len)).then_some(payload as u16)
 }
 
+/// IO7: proofs of the device-boundary arithmetic, over every value of the
+/// declared types rather than the cases the `#[test]`s below name.
+///
+/// These three functions decide what a *device* — the one input class no
+/// capability can constrain — is allowed to make a driver do. B86 and B87 were
+/// both latent under every plane gate, because QEMU's virtio device is well
+/// behaved and a plane can only observe the schedule its device produces. Host
+/// tests fixed the specific cases; these harnesses close the quantifier.
+///
+/// Built only by `verification/virtio-proofs/`; see `just kani_virtio_proofs`.
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// The driver's tables are `[_; IO_SLOTS]` with `IO_SLOTS = 8`. Slot depth
+    /// is symbolic anyway, so the proofs hold for every depth a driver could
+    /// choose, not just this one.
+    fn any_slots() -> usize {
+        let slots: usize = kani::any();
+        // A ring with room for chains at even heads: two descriptors per slot
+        // must not overflow when doubled. Real drivers declare a small
+        // constant; this is the widest admissible range.
+        kani::assume(slots > 0 && slots <= usize::MAX / 2);
+        slots
+    }
+
+    /// The safety obligation the driver relies on: an accepted id is a valid
+    /// index into a `slots`-length table. This is what makes
+    /// `link.request_ids[slot]` sound without a second bounds check.
+    #[kani::proof]
+    fn an_accepted_used_id_is_always_a_valid_slot_index() {
+        let id: u32 = kani::any();
+        let slots = any_slots();
+        if let Some(slot) = used_descriptor_slot(id, slots) {
+            assert!(slot < slots);
+        }
+    }
+
+    /// Exactly the ids this driver can publish are accepted — nothing wider,
+    /// nothing narrower. `submit` writes chains at `slot * 2`, so acceptance
+    /// must coincide with "even and below `slots * 2`" for every `u32`.
+    #[kani::proof]
+    fn acceptance_coincides_with_the_ids_submit_can_publish() {
+        let id: u32 = kani::any();
+        let slots = any_slots();
+        let publishable = id % 2 == 0 && u64::from(id) < (slots as u64).saturating_mul(2);
+        assert_eq!(used_descriptor_slot(id, slots).is_some(), publishable);
+    }
+
+    /// B86's silent arm, quantified: no odd id is ever accepted. An odd id is
+    /// unpublishable, but `id / 2` maps it onto a *live neighbouring slot*, so
+    /// this is the property that separates refusal from settling another
+    /// client's request.
+    #[kani::proof]
+    fn no_odd_used_id_is_ever_accepted() {
+        let id: u32 = kani::any();
+        let slots = any_slots();
+        kani::assume(id % 2 != 0);
+        assert!(used_descriptor_slot(id, slots).is_none());
+    }
+
+    /// The mapping is injective: two distinct accepted ids never name one
+    /// slot. A collision would let one used entry settle a request another
+    /// entry owns.
+    #[kani::proof]
+    fn distinct_accepted_ids_name_distinct_slots() {
+        let a: u32 = kani::any();
+        let b: u32 = kani::any();
+        let slots = any_slots();
+        kani::assume(a != b);
+        if let (Some(x), Some(y)) = (
+            used_descriptor_slot(a, slots),
+            used_descriptor_slot(b, slots),
+        ) {
+            assert_ne!(x, y);
+        }
+    }
+
+    /// An accepted id round-trips to the head `submit` would have written, so
+    /// the slot the driver settles is the slot it programmed.
+    #[kani::proof]
+    fn an_accepted_id_round_trips_to_its_published_head() {
+        let slot: usize = kani::any();
+        let slots = any_slots();
+        kani::assume(slot < slots);
+        let Ok(head) = u32::try_from(slot * 2) else {
+            return;
+        };
+        assert_eq!(used_descriptor_slot(head, slots), Some(slot));
+    }
+
+    /// Progress never exceeds what the driver has outstanding, so a consumer
+    /// looping on this count cannot walk past the entries it published.
+    #[kani::proof]
+    fn reported_progress_never_exceeds_the_outstanding_chains() {
+        let published: u16 = kani::any();
+        let consumed: u16 = kani::any();
+        let distance: u16 = kani::any();
+        if let Some(ahead) = used_ring_progress(published, consumed, distance) {
+            assert!(ahead <= distance);
+        }
+    }
+
+    /// Progress is exact modular distance, and totality: for every triple the
+    /// answer is either that distance or a refusal — never a wrong count, and
+    /// never a refusal of an honest wrap. `wrapping_sub` is the whole point,
+    /// since virtio's used index is free running over `u16`.
+    #[kani::proof]
+    fn progress_is_exact_modular_distance_or_a_refusal() {
+        let published: u16 = kani::any();
+        let consumed: u16 = kani::any();
+        let distance: u16 = kani::any();
+        let expected = published.wrapping_sub(consumed);
+        match used_ring_progress(published, consumed, distance) {
+            Some(ahead) => {
+                assert_eq!(ahead, expected);
+                assert!(expected <= distance);
+            }
+            None => assert!(expected > distance),
+        }
+    }
+
+    /// An idle ring reports zero rather than refusing: the driver must be able
+    /// to distinguish "nothing published" from "device lied", and treating the
+    /// empty ring as an error would stall every quiet queue.
+    #[kani::proof]
+    fn an_idle_ring_is_zero_progress_not_a_refusal() {
+        let cursor: u16 = kani::any();
+        let distance: u16 = kani::any();
+        assert_eq!(used_ring_progress(cursor, cursor, distance), Some(0));
+    }
+
+    /// A driver with nothing in flight can accept no progress at all, which is
+    /// what stops a device from publishing into an empty ring.
+    #[kani::proof]
+    fn a_driver_with_no_outstanding_chains_accepts_only_an_idle_ring() {
+        let published: u16 = kani::any();
+        let consumed: u16 = kani::any();
+        kani::assume(published != consumed);
+        assert!(used_ring_progress(published, consumed, 0).is_none());
+    }
+
+    /// B87's obligation: an accepted receive length fits the descriptor the
+    /// driver published, so the reported byte count never names memory outside
+    /// the client's lease.
+    #[kani::proof]
+    fn an_accepted_receive_length_fits_the_published_frame() {
+        let reported: u32 = kani::any();
+        let header: usize = kani::any();
+        let frame_len: u16 = kani::any();
+        if let Some(payload) = received_payload_len(reported, header, frame_len) {
+            assert!(payload <= frame_len);
+        }
+    }
+
+    /// The returned `u16` is the exact payload, not a truncation. This is the
+    /// property the old `transferred as u16` violated: the completion reported
+    /// `u64::from(transferred)` while the reply carried the low sixteen bits,
+    /// so above `u16::MAX` the two disagreed.
+    #[kani::proof]
+    fn an_accepted_receive_length_is_exact_never_truncated() {
+        let reported: u32 = kani::any();
+        let header: usize = kani::any();
+        let frame_len: u16 = kani::any();
+        if let Some(payload) = received_payload_len(reported, header, frame_len) {
+            let header = u32::try_from(header).expect("accepted header fits u32");
+            assert_eq!(u32::from(payload), reported - header);
+            assert_eq!(u64::from(payload), u64::from(reported) - u64::from(header));
+        }
+    }
+
+    /// Totality over the length rule: acceptance holds exactly when the header
+    /// is present and the payload fits. Neither an overshoot nor a
+    /// header-short report can slip through, for any of the three inputs.
+    #[kani::proof]
+    fn receive_length_acceptance_is_exactly_the_declared_rule() {
+        let reported: u32 = kani::any();
+        let header: usize = kani::any();
+        let frame_len: u16 = kani::any();
+        let admissible = match u32::try_from(header) {
+            Ok(header) => reported >= header && reported - header <= u32::from(frame_len),
+            Err(_) => false,
+        };
+        assert_eq!(
+            received_payload_len(reported, header, frame_len).is_some(),
+            admissible
+        );
+    }
+
+    /// A report shorter than the header is refused rather than saturating to
+    /// zero. `saturating_sub` — what the driver used before — would have
+    /// reported an empty frame as a successful receive.
+    #[kani::proof]
+    fn a_report_shorter_than_the_header_is_refused_not_saturated() {
+        let reported: u32 = kani::any();
+        let header: usize = kani::any();
+        let frame_len: u16 = kani::any();
+        let Ok(header_u32) = u32::try_from(header) else {
+            return;
+        };
+        kani::assume(reported < header_u32);
+        assert!(received_payload_len(reported, header, frame_len).is_none());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

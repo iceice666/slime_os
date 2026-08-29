@@ -1,0 +1,36 @@
+# Kani proof harnesses for the virtio device-boundary arithmetic (IO7).
+#
+# Same mechanism and same reason as `verification/io-proofs/Cargo.toml`: point
+# `[lib] path` at the *shipped* source so there is one file and drift between
+# verified and shipped code is not representable.
+#
+# Two things differ from the io-proofs crate, both forced:
+#
+# 1. The target is `components/lib/src/virtio_mmio.rs` directly, not that
+#    crate's `lib.rs`. `slime-components` depends on `boot-contracts` (and so on
+#    `sha2`), and its other modules call `slime_rt`; neither builds under Kani's
+#    toolchain and neither is under proof. `virtio_mmio.rs` imports only `core`,
+#    so it stands alone as a crate root. `MediatedMmio` is `#[cfg(feature =
+#    "component-runtime")]`, and no feature is declared here, so the
+#    syscall-backed half compiles out and the pure ring arithmetic remains.
+#
+# 2. `slime-components` has no `build.rs`, so the `kani` cfg is declared by the
+#    one below rather than by the package under proof. `cargo::rustc-check-cfg`
+#    only silences `unexpected_cfgs`; the product build of `slime-components`
+#    never sets `kani` and never sees the harness module.
+#
+# Deliberately outside the root workspace (hence the empty `[workspace]`), so
+# `cargo build`, `just lint_all`, and `just miri` never pick it up.
+[package]
+name = "slime-virtio-proofs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[workspace]
+
+[lib]
+name = "slime_virtio_mmio"
+path = "../../components/lib/src/virtio_mmio.rs"
+doctest = false
