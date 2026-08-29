@@ -80,7 +80,15 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # one is: the channel plane now also guards that a component cannot resolve a
     # binding its instance was never granted.
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
-    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 27),
+    # PR #11 review finding 1: 27 -> 16. IO4's reset/restart/reclamation
+    # markers were unconditional literals asserting evidence the plane cannot
+    # produce -- it declares an empty `sharedBufferBudget`, no notifications,
+    # and no supervision grant, so there is no queue, buffer, or lease to
+    # reclaim and no restart to observe. The banner's packet-stack and
+    # `backend=LinkDevice` claims went the same way. What replaces them is
+    # computed: per-destination socket/listener/DNS ceilings read from the
+    # decoded authority table, and refusal counts observed per arm.
+    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 16),
     # C10.2: 30 -> 31. This generation declares no `privateMemoryBudget`, which
     # is the case 22 of the 33 fixtures are in and the private-memory plane
     # cannot state — it exists to carry a budget. The new marker is the root
@@ -98,7 +106,13 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_io_queue_plane", "check/check-sel4-io-queue-plane.py", 15),
     ("sel4_io_link_plane", "check/check-sel4-io-link-plane.py", 28),
-    ("sel4_io_driver_authority_plane", "check/check-sel4-io-driver-authority-plane.py", 15),
+    # PR #11 review finding 12 and finding 9: 15 -> 16. Two IO1 markers were
+    # unconditional -- no interrupt spoof was attempted and no physical address
+    # was checked -- and are replaced by markers computed from an observed
+    # refusal and an observed address comparison. The added marker is the
+    # stale-epoch refusal on `map_mmio`, which the probe previously exercised
+    # only on `read32` because `MAP_MMIO` never transmitted the caller's epoch.
+    ("sel4_io_driver_authority_plane", "check/check-sel4-io-driver-authority-plane.py", 16),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 2),
     # C10.1: 43 -> 58. Fifteen private-memory markers, each a root record paired
     # with the child observation it cannot itself make: the size query, both
@@ -273,7 +287,17 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # those markers is still required by `check_composition`, just no longer
     # asserted as a fixed scheduling interleaving that was never true.
     ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 30),
-    ("sel4_io_block_plane", "check/check-sel4-io-block-plane.py", 18),
+    # PR #11 review finding 1: 18 -> 10. Nine of IO2's markers were
+    # unconditional string literals in `io-block-probe` -- seven fault-injection
+    # arms, a restart, and a stale-completion refusal -- asserting evidence the
+    # plane structurally cannot produce: the driver has no fault, timeout,
+    # cancellation, or crash path, and the composition declares no supervision
+    # grant, so nothing can restart the driver. Mutating those transcripts
+    # proved only that the checker reads strings. They are deleted, and the
+    # surviving markers are computed from observed counters and byte
+    # comparisons: five real block operations, an initial/readback byte
+    # verification, and five real refusal arms.
+    ("sel4_io_block_plane", "check/check-sel4-io-block-plane.py", 10),
     # B83 raised five of these six pins. Each migrated plane's client now
     # reaches its device through the supervised userspace virtio-blk driver over
     # IO0 rings instead of the root's `BlockTransact`, and each gate gained the

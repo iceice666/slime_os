@@ -91,7 +91,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "ungranted component and terminal cleanup",
         (
-            r"\[io-link-intruder\] denied transmit=1 receive=1 query=1 raw=1 emitted=0",
+            r"\[io-link-intruder\] binding-resolution refused=8",
             r"\[io-link-probe\] io link plane complete",
             r"SLIME_GRAPH HEALTHY generation=52 required=4 live=0 completed=4 failed=0",
         ),

@@ -17,13 +17,31 @@ const UNGRANTED: [&[u8]; 8] = [
 ];
 
 fn main(_startup_arg: u32) {
+    let mut refused = 0;
     for name in UNGRANTED {
         if resolve_binding(name).is_ok() {
             fail(b"ungranted raw link binding resolved");
         }
+        refused += 1;
     }
-    debug_write(b"[io-link-intruder] denied transmit=1 receive=1 query=1 raw=1 emitted=0\n");
+    write_number(b"[io-link-intruder] binding-resolution refused=", refused);
+    debug_write(b"\n");
     exit(0)
+}
+
+fn write_number(prefix: &[u8], mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut offset = digits.len();
+    loop {
+        offset -= 1;
+        digits[offset] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    debug_write(prefix);
+    debug_write(&digits[offset..]);
 }
 
 fn fail(reason: &[u8]) -> ! {

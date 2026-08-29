@@ -2,7 +2,7 @@
 #![no_main]
 
 use slime_rt::{
-    SpawnGrant, Termination, debug_write, exit, io_device_bind, io_irq_wait_ack, io_mmio_map,
+    SpawnGrant, Termination, debug_write, exit, io_device_bind, io_irq_ack, io_mmio_map,
     io_mmio_read32, io_queue_map, lifecycle_restart_admit, resolve_binding, spawn,
     supervision_status, yield_now,
 };
@@ -87,6 +87,16 @@ fn run_driver() -> ! {
         );
         exit(0)
     }
+    let stale_map_refused = u64::from(
+        io_mmio_map(DEVICE_SLOT, REGION_SLOT, device.epoch + 1, BASE, 0, 0x1000).is_err(),
+    );
+    if stale_map_refused != 1 {
+        fail(b"stale epoch map accepted");
+    }
+    write_value(
+        b"[io-driver-probe] stale epoch map refused=",
+        stale_map_refused,
+    );
 
     if io_mmio_map(DEVICE_SLOT, REGION_SLOT, device.epoch, BASE, 0, 0x200).is_ok() {
         fail(b"shared-granule direct map widened");
@@ -106,28 +116,27 @@ fn run_driver() -> ! {
     }
     debug_write(b"[io-driver-probe] qemu packed transport mediated exact range proven\n");
 
-    if device.epoch > 1 {
-        if io_mmio_read32(DEVICE_SLOT, REGION_SLOT, device.epoch - 1, 0).is_ok() {
-            fail(b"predecessor epoch accepted");
-        }
-        write_value(b"[io-driver-probe] fresh epoch=", device.epoch);
-        write_value(
-            b"[io-driver-probe] predecessor epoch refused=",
-            device.epoch - 1,
-        );
-        debug_write(b"[io-driver-probe] opaque dma path exposes no physical address proven\n");
-        exit(0)
-    }
-
     io_mmio_map(DEVICE_SLOT, REGION_SLOT, device.epoch, BASE, 0, 0x1000)
         .unwrap_or_else(|_| fail(b"live mmio map"));
-    if io_irq_wait_ack(IRQ_SLOT, device.epoch, 0).is_ok() {
-        debug_write(b"[io-driver-probe] declared interrupt acknowledge proven\n");
+    io_irq_ack(IRQ_SLOT, device.epoch, 0).unwrap_or_else(|_| fail(b"declared interrupt bind"));
+    let spoof_refused = u64::from(io_irq_ack(IRQ_SLOT, device.epoch, u64::MAX).is_err());
+    if spoof_refused != 1 {
+        fail(b"interrupt spoof accepted");
     }
-    let _queue = io_queue_map(DMA_SLOT, device.epoch, DMA_BASE, 2)
+    write_value(b"[io-driver-probe] interrupt spoof refused=", spoof_refused);
+    let queue = io_queue_map(DMA_SLOT, device.epoch, DMA_BASE, 2)
         .unwrap_or_else(|_| fail(b"live queue dma"));
-    debug_write(b"[io-driver-probe] declared interrupt bound no-spoof proven\n");
-    debug_write(b"[io-driver-probe] opaque dma path exposes no physical address proven\n");
+    let device_paddr = 0x0a00_3e00u64
+        .checked_sub(u64::from(device.device) * 0x200)
+        .unwrap_or_else(|| fail(b"device physical address"));
+    let opaque = u64::from(queue.id != device_paddr && queue.iova != device_paddr);
+    if opaque != 1 {
+        fail(b"dma token exposed device address");
+    }
+    write_value(
+        b"[io-driver-probe] dma token differs from device physical address=",
+        opaque,
+    );
     debug_write(b"[io-driver-probe] faulting with live authority\n");
     unsafe {
         core::ptr::null_mut::<u64>().write_volatile(1);

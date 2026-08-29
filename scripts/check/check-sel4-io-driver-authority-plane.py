@@ -40,10 +40,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "granted driver receives only bounded authority",
         (
             r"\[io-driver-probe\] bind exactly one device proven",
+            r"\[io-driver-probe\] stale epoch map refused=1",
             r"\[io-driver-probe\] shared-granule direct map refused not widened",
             r"\[io-driver-probe\] qemu packed transport mediated exact range proven",
-            r"\[io-driver-probe\] declared interrupt bound no-spoof proven",
-            r"\[io-driver-probe\] opaque dma path exposes no physical address proven",
+            r"\[io-driver-probe\] interrupt spoof refused=1",
+            r"\[io-driver-probe\] dma token differs from device physical address=1",
             r"\[io-driver-probe\] faulting with live authority",
             r"SLIME_IO reclaim task=\d+ pre_mmio_bytes=4096 pre_mmio_mappings=1 pre_irq_sources=1 pre_dma_pages=2 pre_dma_mappings=1 pre_requests=0 reclaimed_mmio_bytes=4096 reclaimed_mmio_mappings=1 reclaimed_irq_sources=1 reclaimed_dma_pages=2 reclaimed_dma_mappings=1 settled_requests=0 post_mmio_bytes=0 post_mmio_mappings=0 post_irq_sources=0 post_dma_pages=0 post_dma_mappings=0 post_requests=0 actions=3 fresh_epoch=2",
             r"\[io-driver-probe\] fresh epoch=2",
@@ -54,7 +55,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "ungranted component is denied without fault",
-        (r"\[io-driver-intruder\] device mmio dma interrupt denials proven",),
+        (r"\[io-driver-intruder\] denied device=1 mmio=2 dma=2 interrupt=1",),
     ),
     (
         "terminal cleanup",
