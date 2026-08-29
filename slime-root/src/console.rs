@@ -36,10 +36,6 @@ use crate::child_vspace::ScratchPage;
 use crate::ipc::{self, IpcError, Response};
 use crate::task::{MAX_TASKS, TaskId, TaskTable};
 use crate::transfer_window::{self, Window, WindowTable, descriptor_thread};
-// B59: the capability-rights vocabulary is generated from
-// `contracts/generation/v5/schema.zt`; these were local copies of the same
-// bit numbering.
-use boot_contracts::generation::{RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE};
 
 /// Stack for the console thread, in the root's own image so it is mapped
 /// before the thread runs.
@@ -91,14 +87,6 @@ pub struct ConsoleContext {
     pub input: *mut ScriptedInput,
     /// Task records, read to resolve the caller's typed authority.
     pub tasks: *const TaskTable<MAX_TASKS>,
-    /// The block devices this thread drives (B43).
-    ///
-    /// Owned here rather than shared with the main dispatcher: whoever answers
-    /// block requests *is* the driver, and splitting the answer from the
-    /// device tables would leave the authority in two places. The selector
-    /// variant launches no components, so it keeps its own direct access and
-    /// never constructs this thread.
-    pub devices: *mut crate::device::BlockDevices,
     /// The namespace roots (B45). Owned here because inspect and commit are
     /// the only writers and both live here.
     pub namespaces: *mut crate::directory::Namespaces,
@@ -197,12 +185,12 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
     // SAFETY: the buffer is this thread's own, named by `tcb_configure` and
     // referenced by nothing else, so the reborrow each iteration is unique.
     let buffer = unsafe { &mut *context.buffer };
-    // SAFETY: the caller's contract; both outlive this thread, and the input
-    // cursor is owned here rather than shared with the main dispatcher.
+    // SAFETY: the caller's contract; these pointers outlive this thread, and
+    // the input cursor and namespace table are owned here rather than shared
+    // with the main dispatcher.
     let windows = unsafe { &*context.windows };
     let tasks = unsafe { &*context.tasks };
     let input = unsafe { &mut *context.input };
-    let devices = unsafe { &mut *context.devices };
     let namespaces = unsafe { &mut *context.namespaces };
     let scopes = unsafe { &*context.scopes };
 
@@ -254,17 +242,6 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
                     tasks,
                     namespaces,
                     scopes,
-                    window,
-                    &context.scratch,
-                    id,
-                    &message.mrs[..message.len],
-                    buffer,
-                ));
-            }
-            ipc::ConsoleKind::BlockTransact => {
-                pending = Some(serve_block_transact(
-                    tasks,
-                    devices,
                     window,
                     &context.scratch,
                     id,
@@ -351,161 +328,5 @@ fn serve_input_read<const TASKS: usize>(
     match input.next_event(id) {
         Some(event) => Response::success(0, event),
         None => Response::error(IpcError::WouldBlock),
-    }
-}
-
-/// Answer `BlockTransact`: one sector-granular device request (B43).
-///
-/// Serving this on the console thread rather than the lifecycle dispatcher is
-/// the point — a block request is a *device* request, and a slow disk must not
-/// hold up lifecycle, supervision, or fabric traffic. The device tables came
-/// here with it, because authority over them is the thing that must not be
-/// shared: whoever answers block requests is the driver.
-///
-/// The device index is the capability's, not the request's, so a component
-/// holding the source cannot name the receiver. Read-only authority is
-/// enforced against the grant's rights, so a read-only capability cannot be
-/// talked into a write by any request field.
-///
-/// The reply's sector is written behind the record in the caller's own window:
-/// the retired kernel took a buffer pointer and wrote through it, and there is
-/// no such ambient addressing here. `bytes_len` is the record plus sector
-/// representation in the reply this cutover answers with.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn serve_block_transact<const TASKS: usize>(
-    tasks: &TaskTable<TASKS>,
-    devices: &mut crate::device::BlockDevices,
-    window: Option<transfer_window::Window>,
-    scratch: &ScratchPage,
-    id: TaskId,
-    words: &[sel4::Word],
-    buffer: &mut sel4::IpcBuffer,
-) -> Response {
-    use slime_proto::block::{
-        BLOCK_MAGIC, FORMAT_VERSION, OFF_REPLY_MAGIC, OFF_REPLY_SECTORS_DONE, OFF_REPLY_STATUS,
-        OFF_REPLY_VERSION, OP_FLUSH, OP_READ, OP_WRITE, REPLY_LEN, WireBlockRequest,
-    };
-
-    let Some(slot) = words.first().map(|slot| *slot as u32) else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    let Some(table) = tasks.authority(id) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let Some(capability) = table.get(slot) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let crate::graph::CapabilityEntry::Block(capability) = capability else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let index = capability.device as usize;
-    // Which device: the capability's own index, placed by the generation. A
-    // component holding the source cannot name the receiver, because the index
-    // is in the capability rather than in the request.
-    let Some(device) = devices.get_mut(index) else {
-        // Authority the boot could not back: the generation granted the device
-        // but none was attached. A bounded refusal, not a fault.
-        return Response::error(IpcError::UnsupportedOperation);
-    };
-    let Some(transfer) = words.get(1).copied() else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    // The wide reader: a write carries its sector behind the 64-byte record, so
-    // the request is 576 bytes and the *message* reader's 64-byte bound would
-    // refuse it. `read_staged_array` refuses any descriptor naming a
-    // capability, which is the rule this operation needs anyway.
-    let frame =
-        match transfer_window::read_staged_array_with(window, transfer, words, scratch, buffer) {
-            Ok(frame) => frame,
-            Err(error) => return Response::error(error),
-        };
-    let Some(request) = WireBlockRequest::decode(frame.bytes()) else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    if request.magic != BLOCK_MAGIC || request.version != FORMAT_VERSION {
-        return Response::error(IpcError::InvalidLength);
-    }
-    let required = match request.op {
-        OP_READ => RIGHT_BLOCK_READ,
-        OP_WRITE | OP_FLUSH => RIGHT_BLOCK_WRITE,
-        _ => return Response::error(IpcError::InvalidLength),
-    };
-    if !capability.rights.allows(required) {
-        sel4::debug_println!(
-            "SLIME_GRAPH block refused task={} op={} class=rights",
-            id.0,
-            request.op,
-        );
-        return Response::error(IpcError::BadCapability);
-    }
-    // One sector per request. The reply carries `sectors_done`, so a partial
-    // completion is representable — but nothing in this cutover produces one,
-    // and accepting a count this driver would silently truncate is worse than
-    // refusing it.
-    if request.op != OP_FLUSH && request.sector_count != 1 {
-        return Response::error(IpcError::InvalidLength);
-    }
-
-    let mut sector = [0u8; crate::virtio_blk::SECTOR_BYTES];
-    let outcome = match request.op {
-        OP_READ => device.read_sector(request.lba, &mut sector),
-        OP_WRITE => {
-            let bytes = frame.bytes();
-            let start = slime_proto::block::REQUEST_LEN;
-            match bytes.get(start..start + crate::virtio_blk::SECTOR_BYTES) {
-                Some(payload) => {
-                    sector.copy_from_slice(payload);
-                    device.write_sector(request.lba, &sector)
-                }
-                None => return Response::error(IpcError::InvalidLength),
-            }
-        }
-        _ => device.flush(),
-    };
-    let (status, sectors_done) = match outcome {
-        Ok(()) => (0i32, if request.op == OP_FLUSH { 0 } else { 1u32 }),
-        Err(error) => {
-            sel4::debug_println!(
-                "SLIME_GRAPH block failed task={} op={} lba={} {error:?}",
-                id.0,
-                request.op,
-                request.lba,
-            );
-            (-1i32, 0)
-        }
-    };
-    // The device index is part of the record: a plane holding two device
-    // capabilities cannot otherwise tell which one answered, and "the right
-    // device served this" is exactly what multi-device selection claims.
-    sel4::debug_println!(
-        "SLIME_GRAPH block served task={} device={index} op={} lba={} status={status} sectors={sectors_done}",
-        id.0,
-        request.op,
-        request.lba,
-    );
-
-    // The reply is the 64-byte record, and for a successful read the sector
-    // follows it in the caller's window.
-    //
-    // Written as one region rather than a `StagedFrame`, whose bound is
-    // `MAX_STAGED_BYTES` — the *message* bound, 64 bytes. A sector is not a
-    // message: it crosses no channel and is bounded by the window, exactly as
-    // a console line is on its own endpoint. `write_staged_region` is the same
-    // write path without the message-shaped ceiling.
-    let mut reply = [0u8; REPLY_LEN + crate::virtio_blk::SECTOR_BYTES];
-    reply[OFF_REPLY_MAGIC..OFF_REPLY_MAGIC + 4].copy_from_slice(&BLOCK_MAGIC.to_le_bytes());
-    reply[OFF_REPLY_VERSION..OFF_REPLY_VERSION + 4].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-    reply[OFF_REPLY_STATUS..OFF_REPLY_STATUS + 4].copy_from_slice(&status.to_le_bytes());
-    reply[OFF_REPLY_SECTORS_DONE..OFF_REPLY_SECTORS_DONE + 4]
-        .copy_from_slice(&sectors_done.to_le_bytes());
-    let length = if request.op == OP_READ && status == 0 {
-        reply[REPLY_LEN..].copy_from_slice(&sector);
-        reply.len()
-    } else {
-        REPLY_LEN
-    };
-    match transfer_window::write_staged_region_with(window, &reply[..length], scratch, buffer) {
-        Ok(descriptor) => Response::success(length as i64, descriptor),
-        Err(error) => Response::error(error),
     }
 }

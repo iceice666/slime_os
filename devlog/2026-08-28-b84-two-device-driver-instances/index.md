@@ -122,3 +122,14 @@ block path is now unreachable from every seL4 composition.
   driver-produced rights refusal markers and the host-side disk invariants.
 - Related roadmap item: [`roadmap/00-backlog.md`](../../roadmap/00-backlog.md) B84
   (resolved), B83 (residue narrowed).
+
+## Corrections
+
+- 2026-08-29: this entry's residue item above — "B83's residue is now unblocked
+  and is the only open item naming the root's block path ... Deleting them is a
+  deliberate cutover with its own gate consequences, not part of this entry." —
+  is closed. That cutover landed on 2026-08-29, deleting
+  `slime-root/src/virtio_blk.rs`, `console.rs::serve_block_transact`, the
+  `ConsoleKind::BlockTransact` label, and the runtime wrappers. The body above is
+  left as written; see
+  [`devlog/2026-08-29-b83-root-block-path-deleted/`](../2026-08-29-b83-root-block-path-deleted/index.md).

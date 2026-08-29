@@ -55,6 +55,16 @@ _BIN_ENTRY = re.compile(
     r"\[\[bin\]\]\s*\nname\s*=\s*\"([^\"]+)\"\s*\npath\s*=\s*\"([^\"]+)\""
 )
 
+# Frozen CP1 identities whose `sel4-<name>` crate is a distinct component rather
+# than the missing implementation, so the `sel4-` candidate below must not be
+# treated as one. Exactly one entry, and it is justified by authority rather
+# than by naming: `storage-probe`'s projected `requires` is `["block"]`, while
+# `sel4-storage-probe` requires `["endpoint"]` and reaches its device over an
+# IO0 ring served by the userspace driver (B83). Every other `sel4-`-prefixed
+# binary in this corpus *is* its record's implementation, which is why the
+# general guard stays.
+SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION = frozenset({"storage-probe"})
+
 _SPEC_FIELDS = {
     "formatVersion",
     "name",
@@ -451,8 +461,23 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         if binary_name or content_hash:
             _fail("implementation: an undeclared provider names no binary or content hash")
         # An undeclared provider is a recorded gap, so it must be a real one: a
-        # component whose binary does exist must not claim to be missing.
-        for candidate in (name, f"sel4-{name}"):
+        # component whose binary does exist must not claim to be missing. Both
+        # candidates are checked, because this corpus's own convention is that a
+        # `sel4-`-prefixed binary implements the unprefixed spec identity --
+        # `filesystem-service` names `sel4-filesystem-service`, and
+        # `generation-manager` names `sel4-generation-manager`.
+        #
+        # `storage-probe` is the one exception, and it is a fact about authority
+        # rather than a naming convention. Its frozen record's `requires` is
+        # projected from `valid.zti`'s grants as `["block"]`, while
+        # `sel4-storage-probe` requires `["endpoint"]` and reaches its device
+        # over an IO0 ring. The two identities need different capabilities, so
+        # the seL4 crate cannot be the missing implementation of this record
+        # (B83).
+        candidates = (
+            (name,) if name in SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION else (name, f"sel4-{name}")
+        )
+        for candidate in candidates:
             if candidate in binaries:
                 _fail(
                     f"implementation: declared undeclared, but [[bin]] {candidate!r} "

@@ -49,7 +49,6 @@ pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits =
     boot_contracts::component_runtime_abi::CONSOLE_SERVICE_SLOT as sel4::CPtrBits;
 
 use boot_contracts::component_runtime_abi::console_labels::{
-    BLOCK_TRANSACT as CONSOLE_LABEL_BLOCK_TRANSACT,
     DIRECTORY_COMMIT as CONSOLE_LABEL_DIRECTORY_COMMIT,
     DIRECTORY_INSPECT as CONSOLE_LABEL_DIRECTORY_INSPECT, INPUT_READ as CONSOLE_LABEL_INPUT_READ,
     WRITE as CONSOLE_LABEL_WRITE,
@@ -57,9 +56,6 @@ use boot_contracts::component_runtime_abi::console_labels::{
 
 /// Bytes of the immutable directory root in an inspect reply frame.
 const DIRECTORY_ROOT_BYTES: usize = 32;
-
-/// Bytes of a block, store, or generation protocol frame.
-const TRANSACT_BYTES: usize = 64;
 
 /// The root service endpoint. Reconstructed per call from a constant slot, so
 /// no capability is cached in component-writable state.
@@ -1464,129 +1460,6 @@ pub fn input_read(slot: u32) -> (i64, u64) {
     }
 }
 
-/// The shape of a 64-byte request/reply protocol: the request crosses in the
-/// transfer window and the reply is written back over it.
-///
-/// `endpoint` is a parameter because block requests go to the console
-/// endpoint rather than the root's (B43), and after B44 removed the
-/// generation and recovery labels they are the only caller left.
-fn transact_on(
-    endpoint: cap::Endpoint,
-    label: u64,
-    slot: u32,
-    request: &[u8; 64],
-    reply_out: &mut [u8; 64],
-) -> i64 {
-    let transfer = match stage(request.as_slice(), &[]) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
-    };
-    let (result, returned) =
-        match outcome(&call_on(endpoint, label, &[slot as Word, transfer as Word])) {
-            Ok(pair) => pair,
-            Err(error) => return error,
-        };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, reply_out.as_mut_slice(), None) {
-        Ok(TRANSACT_BYTES) => result,
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
-}
-
-pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    // The console endpoint, not the root's: a block request is a device
-    // request, and the device tables live with whoever answers them (B43).
-    // Without this capability there is no path to a device at all.
-    transact_on(
-        console_service(),
-        CONSOLE_LABEL_BLOCK_TRANSACT,
-        slot,
-        request,
-        reply,
-    )
-}
-
-/// A block request whose reply carries a sector behind the record (P5.4.2c).
-///
-/// [`transact`]'s reply is exactly 64 bytes, which is right for the store,
-/// generation, and directory protocols and wrong for a read: the sector has
-/// nowhere to go. On the retired kernel the caller passed a buffer pointer in
-/// `buffer_phys` and the kernel wrote through it; there is no such ambient
-/// addressing here, so the sector comes back in the same window the request
-/// went out through, immediately after the reply record.
-const fn exact_sector_reply_len(length: usize) -> bool {
-    length == TRANSACT_BYTES + 512
-}
-
-pub fn block_transact_sector(
-    slot: u32,
-    request: &[u8; 64],
-    reply_out: &mut [u8; 64],
-    sector: &mut [u8; 512],
-) -> i64 {
-    let mut staged = [0u8; 64 + 512];
-    staged[..64].copy_from_slice(request);
-    let transfer = match stage(staged[..64].as_ref(), &[]) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
-    };
-    let (result, returned) = match outcome(&call_on(
-        console_service(),
-        CONSOLE_LABEL_BLOCK_TRANSACT,
-        &[slot as Word, transfer as Word],
-    )) {
-        Ok(pair) => pair,
-        Err(error) => return error,
-    };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, staged.as_mut_slice(), None) {
-        Ok(length) if exact_sector_reply_len(length) => {
-            reply_out.copy_from_slice(&staged[..TRANSACT_BYTES]);
-            sector.copy_from_slice(&staged[TRANSACT_BYTES..TRANSACT_BYTES + 512]);
-            result
-        }
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
-}
-
-/// A block write, whose sector crosses in the request rather than the reply.
-pub fn block_transact_write(
-    slot: u32,
-    request: &[u8; 64],
-    sector: &[u8; 512],
-    reply_out: &mut [u8; 64],
-) -> i64 {
-    let mut staged = [0u8; 64 + 512];
-    staged[..64].copy_from_slice(request);
-    staged[64..].copy_from_slice(sector);
-    let transfer = match stage(staged.as_slice(), &[]) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
-    };
-    let (result, returned) = match outcome(&call_on(
-        console_service(),
-        CONSOLE_LABEL_BLOCK_TRANSACT,
-        &[slot as Word, transfer as Word],
-    )) {
-        Ok(pair) => pair,
-        Err(error) => return error,
-    };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, reply_out.as_mut_slice(), None) {
-        Ok(TRANSACT_BYTES) => result,
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
-}
-
 pub fn unhealthy() -> ! {
     let _ = call(lifecycle_labels::UNHEALTHY, &[]);
     // Exit after recording the unhealthy transition so this diverging API
@@ -1662,16 +1535,4 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
             .send_with_mrs(info, mrs);
     }
     bytes.len() as i64
-}
-#[cfg(test)]
-mod tests {
-    use super::exact_sector_reply_len;
-
-    #[test]
-    fn sector_reply_requires_record_and_sector() {
-        assert!(exact_sector_reply_len(64 + 512));
-        assert!(!exact_sector_reply_len(64));
-        assert!(!exact_sector_reply_len(64 + 511));
-        assert!(!exact_sector_reply_len(64 + 513));
-    }
 }

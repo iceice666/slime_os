@@ -60,9 +60,8 @@ consoleOperation :: Text -> Int -> ConsoleOperation
 consoleOperations :: List ConsoleOperation = {
   consoleOperation "WRITE" 0;
   consoleOperation "INPUT_READ" 1;
-  consoleOperation "BLOCK_TRANSACT" 2;
-  consoleOperation "DIRECTORY_INSPECT" 3;
-  consoleOperation "DIRECTORY_COMMIT" 4;
+  consoleOperation "DIRECTORY_INSPECT" 2;
+  consoleOperation "DIRECTORY_COMMIT" 3;
 };
 
 abi ::= {

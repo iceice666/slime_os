@@ -1,5 +1,8 @@
-//! A bounded virtio-mmio block driver for `slime-root` (P5.4.2b).
+//! Bounded pre-admission virtio-mmio block reader for the immutable boot selector.
 //!
+//! This module is compiled only into `slime_boot_selector` images. Ordinary
+//! generation-driven seL4 compositions never link its opcode or descriptor
+//! parser; they grant raw device authority to supervised userspace drivers.
 //! Deliberately the smallest driver that can carry a sector: one virtqueue, one
 //! outstanding request, one fixed data buffer. The store above it reads and
 //! writes 512 bytes at a time and waits for each, so depth would buy nothing

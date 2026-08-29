@@ -4,10 +4,10 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Writes a marker pattern to a sector, flushes it, and reads it back to confirm the write persisted.";
+  purpose = "Declared frozen CP1 storage writer; its implementation retired when seL4 storage moved to userspace IO0 rings.";
   implementation = {
-    provider = "workspace";
-    binary = "storage-writer";
+    provider = "undeclared";
+    binary = "";
     contentHash = "";
   };
   provides = [];
@@ -53,8 +53,8 @@
     qos = "none";
   };
   test = {
-    testCondition = "the generation_check gate boots a generation declaring storage-writer";
-    expectedResult = "storage-writer reaches its declared behavior under that gate";
+    testCondition = "the generation_check gate validates the frozen reference manifest declaring storage-writer";
+    expectedResult = "storage-writer remains declared for fixture compatibility but no implementation is admitted";
     passFailCriteria = "generation determinism check";
     requiredTestEnvironment = "generation_check";
   };

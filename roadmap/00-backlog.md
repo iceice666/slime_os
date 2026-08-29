@@ -24,53 +24,7 @@ full and says why.
 
 ## Open
 
-### B83 — The root still owns the product virtio-blk path after IO2's parity proof
-
-**Problem:** IO2 proved a supervised userspace virtio-blk driver matches the root's
-observable block behaviour. B83 migrated every storage-family plane off the root's
-`BlockTransact` path and onto that driver over IO0 rings, and **B84 (resolved
-2026-08-28)** supplied the last piece — per-instance device authority — so the two
-two-disk planes `sel4-recovery` and `sel4-transfer` now reach storage only through
-the userspace driver. All eight block-holding compositions are migrated. What remains
-is narrower than the original statement: the root's own virtio-blk command/descriptor
-implementation is still linked and still parseable, even though no seL4 composition
-can reach it.
-
-**Landed.** `contracts/block-authority/v1` declares each client ring's rights; the
-driver answers `STATUS_BAD_RIGHTS` for a write outside the ring's declared authority.
-One shared `components/lib/src/block_io.rs` adapter serves every client. All eight
-planes — `sel4-storage`, `sel4-store`, `sel4-rollback`, `sel4-replay`,
-`sel4-generation`, `sel4-filesystem`, `sel4-recovery`, and `sel4-transfer` — pass
-their gates against the userspace driver. See the B83 and B84 devlog entries.
-
-**Not landed.** The root still contains the product-path block implementation:
-`slime-root/src/virtio_blk.rs` (virtio command/descriptor handling),
-`console.rs`'s `serve_block_transact`, and the `ConsoleKind::BlockTransact` dispatch
-label. No seL4 composition grants a `block` capability or declares this path reachable
-anymore — `valid.zti`'s three x86-reference callers are the only remaining users of the
-`block_transact*` runtime wrappers, and they belong to the frozen CP1 fixture rather
-than any seL4 plane. The code is dead product code awaiting removal, not an
-authority gap.
-
-**Evidence:** [`devlog/2026-08-28-b83-userspace-block-cutover/`](../devlog/2026-08-28-b83-userspace-block-cutover/index.md)
-and [`devlog/2026-08-28-b84-two-device-driver-instances/`](../devlog/2026-08-28-b84-two-device-driver-instances/index.md).
-The earlier reverted attempts are recorded in
-[`devlog/2026-08-28-io2-userspace-virtio-blk/`](../devlog/2026-08-28-io2-userspace-virtio-blk/index.md).
-
-**Remaining fix:** Delete the root's command/descriptor implementation together with
-`console.rs`'s `serve_block_transact` and its `ConsoleKind::BlockTransact` label, and
-the runtime wrappers `block_transact`/`block_transact_sector`/`block_transact_write`.
-Because the x86-reference callers live in the frozen CP1 fixture, removing the wrappers
-must be sequenced with that fixture's own migration or an explicit decision to retire
-those probes. This is a deliberate cutover with its own gate consequences, not a
-mechanism change.
-
-**Exit condition:** No virtio-blk opcode or descriptor parsing remains in the product
-path, and `slime-root/src/virtio_blk.rs` is gone or provably unreachable from every
-seL4 composition. All eight migrated planes, plus `just io_block_check`,
-`sel4_qemu_image_check`, and `sel4_boot_check`, must still pass. The boot selector's
-pre-admission bootstrap-device read path must survive — decoding a generation requires
-reading it from the boot device, an acknowledged bounded ordering exception.
+No open items. Every recorded defect is in the resolved log below.
 
 ## Deferred follow-ups
 
@@ -105,6 +59,12 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B83 — The root still owns the product virtio-blk path after IO2's parity proof
+
+**Status:** Resolved 2026-08-29. **Class:** Change (dead-code cutover of an unreachable product path).
+**Was:** `slime-root/src/virtio_blk.rs`, `console.rs::serve_block_transact`, the `ConsoleKind::BlockTransact` label, and the `block_transact*` runtime wrappers were still compiled into every product image and the post-admission `probe_devices` call could still construct a root-owned block driver, so the root retained virtio opcode and descriptor parsing that no seL4 composition could reach.
+**Exit condition (observed):** The parser survives only as `boot_selector_block.rs` under `#[cfg(slime_boot_selector)]` for the acknowledged pre-admission bootstrap read; all eight migrated planes plus `just io_block_check`, `sel4_qemu_image_check`, `sel4_boot_check`, `sel4_device_check`, and `sel4_boot_selection_check` passed, and `sel4_component_graph_check` now fails if any retired symbol returns.
+**Evidence:** [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
 ### B84 — a userspace driver instance can serve exactly one device, so a two-disk plane cannot leave the root
 
 **Status:** Resolved 2026-08-28. **Class:** Defect (mechanism gap in IO1 device authority).

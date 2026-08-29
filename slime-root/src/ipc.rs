@@ -373,7 +373,7 @@ pub struct Reception {
 /// it.
 ///
 /// The console endpoint has its own narrow labels because one thread serves
-/// console, input, block, and directory device traffic.
+/// console, input, and directory traffic.
 pub struct ConsoleMessage {
     pub badge: sel4::Badge,
     pub kind: ConsoleKind,
@@ -383,18 +383,17 @@ pub struct ConsoleMessage {
 
 /// What a console-endpoint message asks for.
 ///
-/// Two kinds share one endpoint because one thread serves them and a second
-/// endpoint would need a second blocking receive. They are both "the
-/// terminal", so one queue between them is the honest shape.
+/// The kinds share one endpoint because one thread serves them and a second
+/// endpoint would need a second blocking receive. They are all console-adjacent
+/// services, so one queue between them is the honest shape.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ConsoleKind {
     /// One-way debug output.
     Write,
     /// A read returning one decoded key event.
     InputRead,
-    /// A directory inspect, derive, or commit (B45). Here for the same
-    /// reason block requests are: the namespace and scope tables came with
-    /// the handlers, and a commit racing a lifecycle syscall on one queue
+    /// A directory inspect or commit (B45). The namespace and scope tables came
+    /// with the handlers, and a commit racing a lifecycle syscall on one queue
     /// makes each wait for the other for no reason.
     ///
     /// Derive is *not* here: it is the only writer of the caller's capability
@@ -402,18 +401,12 @@ pub enum ConsoleKind {
     /// one task's table is a data race.
     DirectoryInspect,
     DirectoryCommit,
-    /// One sector-granular block-device request (B43). On this thread because
-    /// a slow disk must not hold up lifecycle or fabric traffic, and because
-    /// the device tables live with whoever answers block requests.
-    BlockTransact,
 }
 
 impl ConsoleKind {
     const WRITE: sel4::Word = boot_contracts::component_runtime_abi::console_labels::WRITE;
     const INPUT_READ: sel4::Word =
         boot_contracts::component_runtime_abi::console_labels::INPUT_READ;
-    const BLOCK_TRANSACT: sel4::Word =
-        boot_contracts::component_runtime_abi::console_labels::BLOCK_TRANSACT;
     const DIRECTORY_INSPECT: sel4::Word =
         boot_contracts::component_runtime_abi::console_labels::DIRECTORY_INSPECT;
     const DIRECTORY_COMMIT: sel4::Word =
@@ -423,7 +416,6 @@ impl ConsoleKind {
         match label {
             Self::WRITE => Some(Self::Write),
             Self::INPUT_READ => Some(Self::InputRead),
-            Self::BLOCK_TRANSACT => Some(Self::BlockTransact),
             Self::DIRECTORY_INSPECT => Some(Self::DirectoryInspect),
             Self::DIRECTORY_COMMIT => Some(Self::DirectoryCommit),
             _ => None,

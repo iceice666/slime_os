@@ -94,7 +94,6 @@ pub(super) struct ConsoleTables<'a> {
     pub(super) tasks: &'a TaskTable<MAX_TASKS>,
     pub(super) script: &'static [u8],
     pub(super) input: Option<device::Pl011Input>,
-    pub(super) devices: &'a mut BlockDevices,
     pub(super) namespaces: &'a mut directory::Namespaces,
     pub(super) scopes: &'a directory::ScopeTable,
 }
@@ -110,7 +109,6 @@ pub(super) fn start_console_dispatcher(
         tasks,
         script,
         input,
-        devices,
         namespaces,
         scopes,
     } = tables;
@@ -148,7 +146,6 @@ pub(super) fn start_console_dispatcher(
             buffer: ptr::addr_of_mut!(CONSOLE_IPC_BUFFER) as *mut sel4::IpcBuffer,
             input,
             tasks: tasks as *const _,
-            devices: ptr::addr_of_mut!(*devices),
             namespaces: ptr::addr_of_mut!(*namespaces),
             scopes: scopes as *const _,
         });

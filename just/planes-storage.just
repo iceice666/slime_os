@@ -1,8 +1,8 @@
-# P5.4.2a: boot the component-graph image with a virtio-blk device attached and
-# require the root to reach it — retype a granule out of BootInfo device untyped
-# memory, map it non-cacheably into its own VSpace, and identify the disk by
-# register read. `sel4_root_boot_check` asserts the same probe finding nothing
-# when no drive is attached; the pair is what makes the mechanism observed.
+# B83: boot the product component-graph image with a virtio-blk device attached
+# and require the root *not* to touch it — the disk must be byte-identical
+# afterwards, and every retired root-driver marker (`block ready`, `block read`,
+# `virtio irq bound`) is a failure marker rather than evidence. The observed
+# userspace device path is `just io_block_check`'s.
 [group('planes / storage')]
 sel4_device_check: sel4_pin_check
     python3 scripts/check/check-sel4-device-plane.py
@@ -51,10 +51,10 @@ sel4_recovery_plane_check: sel4_pin_check
 
 # P5.4.3 and M6.5: boot the generation image and require an *unprivileged*
 # client to drive list, inspect, stage, select, and rollback through a
-# management service that holds the plane's only block capability. Every
+# management service that holds the plane's only block ring authority. Every
 # refusal must leave BootState untouched — checked against the disk image, not
-# just the status — and the client's own direct BlockTransact must be refused,
-# because no slot it holds names a device.
+# just the status — and the client's own attempt to reach the device directly
+# must be refused, because no slot it holds names a ring or a driver endpoint.
 [group('planes / storage')]
 sel4_generation_check: sel4_pin_check
     python3 scripts/check/check-sel4-generation-plane.py

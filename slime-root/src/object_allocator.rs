@@ -50,10 +50,11 @@ const MAX_DEVICE_FRAME_SKIP: usize = 64;
 /// device untyped, can be handed to a device, so only those need a physical
 /// base remembered. The root holds at most: one frame-cap anchor per page of
 /// every live shared buffer, IO1's contiguous device-queue pages, one frame per
-/// declared MMIO region the probe reaches and per mapping IO1 hands out, and
-/// the virtqueue and request pages each root-driven block device keeps. Every
-/// term is another module's own declared ceiling rather than a number chosen
-/// here, so a plane that raises its bound raises this with it instead of
+/// declared MMIO region the probe reaches and per mapping IO1 hands out, the
+/// userspace IO service's declared DMA and MMIO ceilings, and — only in the
+/// immutable selector image — two bootstrap DMA pages per admitted boot device.
+/// Every term is another module's own declared ceiling rather than a number
+/// chosen here, so a plane that raises its bound raises this with it instead of
 /// silently overrunning it.
 ///
 /// Sizing this by root CSlot instead cost a boot, and the reason is the same
@@ -65,14 +66,21 @@ const MAX_DEVICE_FRAME_SKIP: usize = 64;
 /// admissible generation unbootable, refused with
 /// `PlanExceedsRootSlots { required: 2313, available: 2185 }`.
 ///
-/// The live bound below is 452 entries. [`PROVENANCE_SLOTS`] rounds that to a
-/// 1024-position open table of two-word records: 16 KiB of `.bss`, four root
-/// CSlots, against the 512 the array spent.
+/// The live bound below is 448 entries, or 452 in the immutable selector image,
+/// whose two bootstrap DMA pages per admitted boot device are the only terms
+/// this product path no longer contributes. [`PROVENANCE_SLOTS`] rounds either
+/// to a 1024-position open table of two-word records: 16 KiB of `.bss`, four
+/// root CSlots, against the 512 the array spent.
+#[cfg(slime_boot_selector)]
+const SELECTOR_PHYSICAL_PROVENANCE: usize = 2 * crate::device::MAX_BLOCK_DEVICES;
+#[cfg(not(slime_boot_selector))]
+const SELECTOR_PHYSICAL_PROVENANCE: usize = 0;
+
 const MAX_PHYSICAL_PROVENANCE: usize = crate::shared_buffer::MAX_FRAME_ANCHORS
     + crate::io_resource::MAX_DMA_MAPPINGS
     + crate::io_resource::MAX_MMIO_REGIONS
     + crate::io_resource::MAX_MMIO_MAPPINGS
-    + 2 * crate::device::MAX_BLOCK_DEVICES;
+    + SELECTOR_PHYSICAL_PROVENANCE;
 
 /// Positions in the open-addressed provenance table.
 ///

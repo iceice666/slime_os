@@ -4,10 +4,10 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Reads sector zero through its block capability, verifies the digest, and asserts refused requests stay refused.";
+  purpose = "Declared frozen CP1 storage probe; its implementation retired when seL4 storage moved to the userspace virtio-blk driver.";
   implementation = {
-    provider = "workspace";
-    binary = "storage-probe";
+    provider = "undeclared";
+    binary = "";
     contentHash = "";
   };
   provides = [];
@@ -53,9 +53,9 @@
     qos = "none";
   };
   test = {
-    testCondition = "the sel4_storage_check gate boots a generation declaring storage-probe";
-    expectedResult = "storage-probe reaches its declared behavior under that gate";
-    passFailCriteria = "[sel4-storage-probe] storage plane complete";
-    requiredTestEnvironment = "sel4_storage_check";
+    testCondition = "the generation_check gate validates the frozen reference manifest declaring storage-probe";
+    expectedResult = "storage-probe remains declared for fixture compatibility but no implementation is admitted";
+    passFailCriteria = "generation determinism check";
+    requiredTestEnvironment = "generation_check";
   };
 }

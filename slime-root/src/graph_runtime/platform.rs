@@ -8,7 +8,7 @@ pub(crate) struct AuthorityDevice {
 
 pub(crate) struct AuthorityInventory {
     regions: [Option<device::DeviceRegion>; VIRTIO_MMIO_GRANULES],
-    devices: [Option<AuthorityDevice>; MAX_BLOCK_DEVICES],
+    devices: [Option<AuthorityDevice>; device::MAX_IO_DEVICES],
     irqs: [Option<device::DeviceIrq>; VIRTIO_MMIO_GRANULES],
     len: usize,
 }
@@ -17,7 +17,7 @@ impl AuthorityInventory {
     pub const fn new() -> Self {
         Self {
             regions: [const { None }; VIRTIO_MMIO_GRANULES],
-            devices: [None; MAX_BLOCK_DEVICES],
+            devices: [None; device::MAX_IO_DEVICES],
             irqs: [const { None }; VIRTIO_MMIO_GRANULES],
             len: 0,
         }
@@ -67,6 +67,7 @@ impl AuthorityInventory {
     }
 }
 
+#[cfg(not(slime_boot_selector))]
 /// Inventory attached transports without consuming them into the legacy root
 /// block driver. This path is selected only after generation admission says
 /// userspace hardware authority exists; the two ownership modes are exclusive.
@@ -104,7 +105,8 @@ pub(crate) fn probe_authority_devices(
             let _ = region.unmap();
             continue;
         }
-        let standing_base = ptr::addr_of!(BLOCK_MMIO_PAGES) as usize + granule_index * GRANULE_SIZE;
+        let standing_base =
+            ptr::addr_of!(AUTHORITY_MMIO_PAGES) as usize + granule_index * GRANULE_SIZE;
         if ScratchPage::claim(bootinfo, standing_base).is_err() {
             break;
         }
@@ -113,7 +115,7 @@ pub(crate) fn probe_authority_devices(
         };
         inventory.regions[granule_index] = Some(region);
         for offset in attached.into_iter().flatten() {
-            if inventory.len < MAX_BLOCK_DEVICES {
+            if inventory.len < device::MAX_IO_DEVICES {
                 inventory.devices[inventory.len] = Some(AuthorityDevice {
                     region: granule_index,
                     offset,
@@ -134,6 +136,12 @@ pub(crate) fn probe_authority_devices(
     inventory
 }
 
+#[cfg(slime_boot_selector)]
+use device::{BlockDevices, MAX_BLOCK_DEVICES};
+#[cfg(slime_boot_selector)]
+use slime_root::boot_selector_block as virtio_blk;
+
+#[cfg(slime_boot_selector)]
 /// Report what device authority BootInfo gives this root, and probe the
 /// platform's virtio-mmio transports (P5.4.2a).
 ///
@@ -283,21 +291,6 @@ pub(crate) fn probe_devices(
         let Some(transport) = *entry else {
             continue;
         };
-        #[cfg(not(slime_boot_selector))]
-        {
-            let irq = virtio_irq(transport.paddr);
-            match device::DeviceIrq::acquire(allocator, irq, VIRTIO_IRQ_BADGE, true) {
-                Ok(binding) => sel4::debug_println!(
-                    "SLIME_ROOT virtio irq bound transport={:#x} irq={} badge={:#x}",
-                    transport.paddr,
-                    binding.irq(),
-                    VIRTIO_IRQ_BADGE,
-                ),
-                Err(error) => {
-                    sel4::debug_println!("SLIME_ROOT virtio irq unavailable irq={irq} {error:?}");
-                }
-            }
-        }
         #[cfg(slime_boot_selector)]
         sel4::debug_println!(
             "SLIME_ROOT virtio irq polled transport={:#x}",
@@ -354,6 +347,7 @@ pub(crate) fn probe_devices(
 /// Everything `bring_up_block` does except the mapping: the frame is already
 /// standing at a driver's window, so this allocates only the DMA pages and
 /// hands the driver a borrow at its own offset.
+#[cfg(slime_boot_selector)]
 fn bring_up_shared_block(
     allocator: &mut ObjectAllocator,
     bootinfo: &sel4::BootInfo,
@@ -366,8 +360,8 @@ fn bring_up_shared_block(
     if index >= MAX_BLOCK_DEVICES {
         return None;
     }
-    let queue_base = ptr::addr_of!(BLOCK_QUEUE_PAGES) as usize + index * GRANULE_SIZE;
-    let buffer_base = ptr::addr_of!(BLOCK_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
+    let queue_base = ptr::addr_of!(BOOT_QUEUE_PAGES) as usize + index * GRANULE_SIZE;
+    let buffer_base = ptr::addr_of!(BOOT_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
     for address in [queue_base, buffer_base] {
         if let Err(error) = ScratchPage::claim(bootinfo, address) {
             sel4::debug_println!("SLIME_ROOT block page unavailable: {error:?}");
@@ -401,7 +395,7 @@ fn bring_up_shared_block(
         queue.physical_address(),
         buffer.physical_address(),
     );
-    let mut block = match virtio_blk::VirtioBlock::new(shared, offset, queue, buffer) {
+    let block = match virtio_blk::VirtioBlock::new(shared, offset, queue, buffer) {
         Ok(block) => block,
         Err(error) => {
             sel4::debug_println!("SLIME_ROOT block bring-up failed {error:?}");
@@ -413,21 +407,6 @@ fn bring_up_shared_block(
         transport.paddr,
         block.capacity_sectors(),
     );
-    #[cfg(not(slime_boot_selector))]
-    {
-        let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
-        match block.read_sector(0, &mut sector) {
-            Ok(()) => sel4::debug_println!(
-                "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
-                sector.len(),
-                sector[0],
-                sector[1],
-                sector[2],
-                sector[3],
-            ),
-            Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
-        }
-    }
     Some(block)
 }
 
@@ -446,6 +425,7 @@ fn bring_up_shared_block(
 /// never moved a byte would report a capacity and nothing else; a completed
 /// read means descriptors the device followed, a buffer it wrote through DMA,
 /// and a status byte it set.
+#[cfg(slime_boot_selector)]
 fn bring_up_block(
     allocator: &mut ObjectAllocator,
     bootinfo: &sel4::BootInfo,
@@ -461,9 +441,9 @@ fn bring_up_block(
     // Address arithmetic on the array base rather than indexing the static:
     // indexing reads it, and a mutable static may not be read outside `unsafe`.
     // Each element is exactly one granule, so the offset is exact.
-    let base = ptr::addr_of!(BLOCK_MMIO_PAGES) as usize + index * GRANULE_SIZE;
-    let queue_base = ptr::addr_of!(BLOCK_QUEUE_PAGES) as usize + index * GRANULE_SIZE;
-    let buffer_base = ptr::addr_of!(BLOCK_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
+    let base = ptr::addr_of!(BOOT_MMIO_PAGES) as usize + index * GRANULE_SIZE;
+    let queue_base = ptr::addr_of!(BOOT_QUEUE_PAGES) as usize + index * GRANULE_SIZE;
+    let buffer_base = ptr::addr_of!(BOOT_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
     for address in [base, queue_base, buffer_base] {
         if let Err(error) = ScratchPage::claim(bootinfo, address) {
             sel4::debug_println!("SLIME_ROOT block page unavailable: {error:?}");
@@ -507,7 +487,7 @@ fn bring_up_block(
         buffer.physical_address(),
     );
     let borrowed = region.granule();
-    let mut block = match virtio_blk::VirtioBlock::new(borrowed, offset, queue, buffer) {
+    let block = match virtio_blk::VirtioBlock::new(borrowed, offset, queue, buffer) {
         Ok(block) => block,
         Err(error) => {
             sel4::debug_println!("SLIME_ROOT block bring-up failed {error:?}");
@@ -519,21 +499,6 @@ fn bring_up_block(
         transport.paddr,
         block.capacity_sectors(),
     );
-    #[cfg(not(slime_boot_selector))]
-    {
-        let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
-        match block.read_sector(0, &mut sector) {
-            Ok(()) => sel4::debug_println!(
-                "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
-                sector.len(),
-                sector[0],
-                sector[1],
-                sector[2],
-                sector[3],
-            ),
-            Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
-        }
-    }
     // Bring-up reads. It does not write.
     //
     // It used to: a write/flush/read-back round trip on sector 1 proved the

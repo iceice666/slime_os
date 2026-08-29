@@ -2,28 +2,30 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** IO0, IO1, IO3, and IO4 complete 2026-08-28. IO2 complete except the root
-cutover's last two planes. Each slice is observed under QEMU by its own gate — `just
-io_queue_check`, `just io_driver_authority_check`, `just io_block_check`,
-`just io_link_check`, `just io_network_check` — and every gate is registered in
-`just sel4_gate_control_check`, which proves each fails on missing, reordered, or
+**Status:** IO0 through IO4 complete; IO2's root cutover closed 2026-08-29. Each
+slice is observed under QEMU by its own gate — `just io_queue_check`, `just
+io_driver_authority_check`, `just io_block_check`, `just io_link_check`, `just
+io_network_check` — and every gate is registered in `just
+sel4_gate_control_check`, which proves each fails on missing, reordered, or
 failure evidence.
 
 What is **not** done, stated plainly so no consumer assumes otherwise:
 
-- **IO2's root cutover is complete for all eight planes; the root's own block
-  implementation remains only as dead code.** All eight block-holding compositions —
-  `sel4-storage`, `sel4-store`, `sel4-rollback`, `sel4-replay`, `sel4-generation`,
-  `sel4-filesystem`, `sel4-recovery`, and `sel4-transfer` — reach their devices through
-  the userspace driver over IO0 rings, each gated on generation-declared per-ring rights
-  (`contracts/block-authority/v1`). The last two, the two-disk planes, were unblocked by
-  B84 (resolved 2026-08-28), which declared a per-instance device ordinal in the IO1
-  budget and threaded it through every per-device identity.
-
-  What remains is a deliberate dead-code removal, tracked as the narrowed backlog B83:
-  `slime-root`'s virtio-blk command/descriptor implementation and its `BlockTransact`
-  path are still linked though no seL4 composition can reach them. Removing them is
-  sequenced with the frozen CP1 fixture's own callers, not with any mechanism change.
+- **IO2's root cutover is complete and the root's block implementation is gone.**
+  All eight block-holding compositions — `sel4-storage`, `sel4-store`,
+  `sel4-rollback`, `sel4-replay`, `sel4-generation`, `sel4-filesystem`,
+  `sel4-recovery`, and `sel4-transfer` — reach their devices through the
+  userspace driver over IO0 rings, each gated on generation-declared per-ring
+  rights (`contracts/block-authority/v1`). The last two, the two-disk planes,
+  were unblocked by B84 (resolved 2026-08-28), which declared a per-instance
+  device ordinal in the IO1 budget and threaded it through every per-device
+  identity. B83 (resolved 2026-08-29) then deleted `slime-root`'s virtio-blk
+  command/descriptor implementation, `console.rs::serve_block_transact`, the
+  `ConsoleKind::BlockTransact` label, and the `block_transact*` runtime
+  wrappers; the parser survives only as `boot_selector_block.rs` under
+  `#[cfg(slime_boot_selector)]`, serving the immutable selector's
+  pre-admission bootstrap read. Evidence:
+  [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
 - **IO4's declared-but-refused subset:** IPv6/NDP, DHCP, SLAAC, and the TCP
   listener/accept data path answer `STATUS_UNSUPPORTED`.
 - **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
@@ -182,7 +184,7 @@ The boot-selector's disk is a bounded ordering exception: it must be probed befo
 
 ## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
 
-**Status:** Complete; all eight block-holding compositions reach their devices through the userspace driver, the authenticated per-ring rights prerequisite is landed, and the two two-disk planes were unblocked by B84's per-instance device authority. Only the root's now-unreachable block implementation awaits removal (narrowed backlog B83). QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
+**Status:** Complete; all eight block-holding compositions reach their devices through the userspace driver, the authenticated per-ring rights prerequisite is landed, and the two two-disk planes were unblocked by B84's per-instance device authority. The root's own block implementation was deleted by B83 (resolved 2026-08-29); the parser survives only as `boot_selector_block.rs` under `#[cfg(slime_boot_selector)]` for the selector's pre-admission bootstrap read. QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
 
 **Spawn-grant prerequisite: landed, and the previous diagnosis corrected.** Two earlier passes reported that a dynamically spawned storage client could not receive its crossing bindings because init's spawn supplied zero grant records, and each reverted a working migration believing the root lacked the mechanism. That conclusion was wrong. The root already derives crossing grants from the generation: adding a declared `sharedBufferFactory` grant (source `init`, target `sel4-storage-probe`) to `sel4-storage.zti` made preflight report `requested=0 parent=1 minted=0 respawn=false` — it had counted the declaration correctly and refused only because init passed nothing. The gap was entirely init-side. `drive_probe_plane_with_token` now takes the exact grant vector its manifest declares, and the storage plane boots with `SLIME_GRAPH spawn authorized task=0 slot=1 component=sel4-storage-probe grants=1` and `buffer_factory_grants=1`. The same idiom was already in production on the sample plane (`sample-lender-shared-buffer-factory`), so this is a use of the existing mechanism rather than a second one.
 

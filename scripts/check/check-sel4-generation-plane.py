@@ -2,17 +2,18 @@
 
 """P5.4.3 gate: M6.5's generation commands, in userspace (M6.5).
 
-Two components and one channel. The manager holds the plane's only block
-capability and is therefore the only thing that can touch BootState; the client
+Two components and one channel. The manager holds the plane's only block ring
+authority and is therefore the only thing that can touch BootState; the client
 holds one RPC endpoint and nothing else. That split IS the milestone: M6.5
 requires `BOOT_UPDATE` scoped by manifest to the management service, so a
 component that wants to inspect, stage, select, or roll back must ask.
 
-The client walks all five operations and their refusals, then tries a direct
-`BlockTransact` and is refused — not by a rights check, but because no slot it
-holds names a device. The gate additionally compares the disk image around the
-refused-stage arm: "fail before BootState changes" is a claim about bytes, and
-a component reporting a refusal it did not honour would pass the marker.
+The client walks all five operations and their refusals, then tries to reach the
+device directly and is refused — not by a rights check, but because no slot it
+holds names a ring or a driver endpoint. The gate additionally compares the disk
+image around the refused-stage arm: "fail before BootState changes" is a claim
+about bytes, and a component reporting a refusal it did not honour would pass
+the marker.
 """
 
 from __future__ import annotations

@@ -37,7 +37,7 @@ pub(super) fn serve_instance_graph(
     // because it also writes the caller's capability table, which this loop
     // writes on `cap_drop` and on a spawn's result (B45).
     scopes: &mut directory::ScopeTable,
-    #[cfg(slime_boot_selector)] block_devices: &mut BlockDevices,
+    #[cfg(slime_boot_selector)] block_devices: &mut device::BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
     let mut terminations = supervision::Terminations::new();

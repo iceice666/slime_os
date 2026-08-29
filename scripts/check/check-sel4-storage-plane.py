@@ -2,10 +2,11 @@
 
 """P5.4.2c gate: a userspace component reaches a real disk (M5.2, M5.3).
 
-`just sel4_device_check` proves the root can drive a virtio block device.
-This gate proves the layer that matters: a *component* moving sectors through
-nothing but a capability its generation granted it, mediated by
-`BlockTransact`.
+`just sel4_device_check` proves the product root does *not* touch an attached
+disk. This gate proves the layer that matters: a *component* moving sectors
+through nothing but a capability its generation granted it, served by the
+supervised userspace `virtio-blk-driver` over an IO0 ring whose rights the
+generation declares (B83).
 
 Six arms, and each fails differently:
 

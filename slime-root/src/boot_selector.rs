@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-use crate::virtio_blk::{SECTOR_BYTES, VirtioBlock};
+use crate::boot_selector_block::{SECTOR_BYTES, VirtioBlock};
 use boot_contracts::bootstate::{
     BOOTSTORE_CAPACITY, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET,
     BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET, BOOTSTORE_ENTRY_LEN, BOOTSTORE_ENTRY_PADDING_OFFSET,

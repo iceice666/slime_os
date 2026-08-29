@@ -10,7 +10,11 @@ mod console_runtime;
 pub(super) mod platform;
 
 use console_runtime::{ConsoleTables, declared_capability, input_script, start_console_dispatcher};
-pub(super) use platform::{probe_authority_devices, probe_devices};
+// Matches the sole caller's cfg in `main.rs`: the fixture image asserts the
+// root's two-fixture proof path rather than launching a generation graph, so it
+// never admits an IO-resource budget and never probes for userspace authority.
+#[cfg(all(not(slime_boot_selector), not(slime_root_fixture)))]
+pub(super) use platform::probe_authority_devices;
 
 #[derive(Clone, Copy)]
 pub(super) struct RootEndpoints {
@@ -20,7 +24,8 @@ pub(super) struct RootEndpoints {
 
 pub(super) struct RuntimeDevices<'a> {
     pub(super) timer: &'a mut PhysicalTimerAdapter,
-    pub(super) blocks: &'a mut BlockDevices,
+    #[cfg(slime_boot_selector)]
+    pub(super) boot_blocks: &'a mut device::BlockDevices,
     pub(super) input: Option<device::Pl011Input>,
     pub(super) io_authority: &'a mut platform::AuthorityInventory,
 }
@@ -37,7 +42,8 @@ pub(super) fn launch_instance_graph(
 ) {
     let RuntimeDevices {
         timer,
-        blocks,
+        #[cfg(slime_boot_selector)]
+        boot_blocks,
         input,
         io_authority,
     } = devices;
@@ -880,7 +886,6 @@ pub(super) fn launch_instance_graph(
             tasks,
             script: input_script(generation.number),
             input,
-            devices: blocks,
             namespaces: &mut namespaces,
             scopes: &scopes,
         },
@@ -908,7 +913,7 @@ pub(super) fn launch_instance_graph(
         admission.fabric_capability_slots,
         &mut scopes,
         #[cfg(slime_boot_selector)]
-        blocks,
+        boot_blocks,
         #[cfg(slime_boot_selector)]
         boot_runtime,
     );

@@ -146,21 +146,6 @@ pub fn valid_directory_path(path: &[u8], allow_empty: bool) -> bool {
     true
 }
 
-/// Answer one `BlockTransact` (P5.4.2c).
-///
-/// Three checks before a sector moves, in the order the oracle's
-/// `sys_block_transact` makes them:
-///
-/// 1. the caller's slot must resolve to a `Block` capability — holding a slot
-///    number is not authority;
-/// 2. the request must decode as a `WireBlockRequest` with the right magic and
-///    version, so a malformed frame is refused rather than interpreted;
-/// 3. the operation must be covered by the capability's own rights —
-///    `blockRead` for `OP_READ`, `blockWrite` for `OP_WRITE` and `OP_FLUSH`.
-///
-/// The payload travels through the caller's transfer window, like every other
-/// windowed operation. One sector per request: `sector_count` above one is
-/// refused rather than partially served, because a partial completion has no
 /// The namespace root the boot starts from (M6.3, P5.4.3).
 ///
 /// The identity of the directory snapshot `scripts/build/build-directory-fixture.py`

@@ -581,26 +581,31 @@ impl DmaPage {
     }
 }
 
-/// Block devices this cutover brings up, in stable physical-address order.
+/// Device ordinals admitted by the userspace IO-resource mechanism.
 ///
-/// Two, because M6.7 transfers a generation from a source device to a receiver
-/// and needs both at once. The bound is a table size rather than a policy: a
-/// generation grants authority over a device by index, and an index the boot
-/// did not fill is authority the root cannot back.
-pub const MAX_BLOCK_DEVICES: usize = 2;
+/// Two, because the recovery and transfer planes use a source and receiver at
+/// once. This bounds raw device authority; only the boot-selector build turns
+/// an ordinal into a root-owned block driver.
+pub const MAX_IO_DEVICES: usize = 2;
 
+#[cfg(slime_boot_selector)]
+pub const MAX_BLOCK_DEVICES: usize = MAX_IO_DEVICES;
+
+#[cfg(slime_boot_selector)]
 /// The brought-up devices.
 pub struct BlockDevices {
-    devices: [Option<crate::virtio_blk::VirtioBlock>; MAX_BLOCK_DEVICES],
+    devices: [Option<crate::boot_selector_block::VirtioBlock>; MAX_BLOCK_DEVICES],
     len: usize,
 }
 
+#[cfg(slime_boot_selector)]
 impl Default for BlockDevices {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(slime_boot_selector)]
 impl BlockDevices {
     pub const fn new() -> Self {
         Self {
@@ -609,7 +614,7 @@ impl BlockDevices {
         }
     }
 
-    pub fn push(&mut self, device: crate::virtio_blk::VirtioBlock) {
+    pub fn push(&mut self, device: crate::boot_selector_block::VirtioBlock) {
         if self.len < MAX_BLOCK_DEVICES {
             self.devices[self.len] = Some(device);
             self.len += 1;
@@ -624,7 +629,10 @@ impl BlockDevices {
         self.len == 0
     }
 
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut crate::virtio_blk::VirtioBlock> {
+    pub fn get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut crate::boot_selector_block::VirtioBlock> {
         self.devices.get_mut(index)?.as_mut()
     }
 }

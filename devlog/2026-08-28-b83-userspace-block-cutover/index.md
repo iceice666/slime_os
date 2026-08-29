@@ -135,3 +135,12 @@ it, because the batch client had masked them:
 - Serial/debugger/model output: `just sel4_storage_check` prints the marker
   chain and the host-side image comparison
 - Related roadmap item: [`roadmap/11-io-substrate.md`](../../roadmap/11-io-substrate.md), backlog B83 and B84
+
+## Corrections
+
+- 2026-08-29: this entry's residue items above — "The root's `virtio_blk.rs` and
+  `console.rs::serve_block_transact` remain the product path for the two
+  unmigrated planes. They are not dead code and must not be removed until B84
+  closes." — are closed. B84 closed on 2026-08-28, and the deletion landed on
+  2026-08-29. The body above is left as written; see
+  [`devlog/2026-08-29-b83-root-block-path-deleted/`](../2026-08-29-b83-root-block-path-deleted/index.md).

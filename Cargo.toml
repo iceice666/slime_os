@@ -348,21 +348,6 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
-[profile.release.package.slime-component-storage-fault-probe]
-opt-level = "s"
-codegen-units = 1
-debug = false
-
-[profile.release.package.slime-component-storage-probe]
-opt-level = "s"
-codegen-units = 1
-debug = false
-
-[profile.release.package.slime-component-storage-writer]
-opt-level = "s"
-codegen-units = 1
-debug = false
-
 [profile.release.package.slime-component-supervision-child]
 opt-level = "s"
 codegen-units = 1

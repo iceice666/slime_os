@@ -41,8 +41,8 @@ Route work by ownership before searching for a symbol. Read the named module roo
 | IPC/service protocol semantics | `contracts/<protocol>/v1/schema.zt` | generated Rust in `components/proto/src/<protocol>.rs`; validators in `components/proto/src/lib.rs` |
 | Boot/persistence contract decoder | `boot-contracts/src/<contract>.rs` | generated constants/layouts in `boot-contracts/src/generated/` |
 | Fabric schemas, graph authority, stream framing | `contracts/interface-schema/v1/`, `contracts/fabric-graph/v1/`, `contracts/fabric-stream/v1/` | `boot-contracts/src/fabric_graph.rs`, `components/services/fabric-service/src/main.rs` |
-| Block/storage transport and services | `slime-root/src/{device,virtio_blk}.rs` | production services in `components/services/`; qualification probes in `components/testkit/` |
-| Generation management, rollback, recovery | `components/services/sel4-generation-manager/src/main.rs` | matching rollback/recovery/transfer probes in `components/testkit/` and root block mediation |
+| Block/storage transport and services | `components/services/virtio-blk-driver/src/main.rs` | ring adapter `components/lib/src/block_io.rs`, per-ring rights `contracts/block-authority/v1/schema.zt` and `boot-contracts/src/block_authority.rs`, raw device authority `slime-root/src/{device,io_resource}.rs`; qualification probes in `components/testkit/`. The boot selector's pre-admission reader is `slime-root/src/boot_selector_block.rs`, compiled only into `slime_boot_selector` images |
+| Generation management, rollback, recovery | `components/services/sel4-generation-manager/src/main.rs` | matching rollback/recovery/transfer probes in `components/testkit/`, all reaching storage over the userspace driver's IO0 rings |
 | Architecture, traps, interrupts, platform boot | `sel4/config/qemu-arm-virt.cmake` | `slime-root/src/{fault,platform_timer}.rs`, `scripts/build/build-sel4.py` |
 | Host build/check orchestration | `Justfile` target | implementation in `scripts/{build,check,generate,lib}/` |
 | Root behavioral regression | `slime-root/src/<module>.rs` tests | run `just test_sel4_root` and the matching `just sel4_*_check` |

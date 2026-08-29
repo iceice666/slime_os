@@ -1152,35 +1152,6 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
     transport::debug_write(bytes)
 }
 
-/// Issues a 64-byte block-protocol request/reply pair against the block
-/// device capability in slot `slot`. A non-negative return means the
-/// transaction was delivered; the block-protocol outcome is in `reply`
-/// (`OFF_REPLY_STATUS`), not in the return value.
-pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transport::block_transact(slot, request, reply)
-}
-
-/// A read whose sector returns through the caller's transfer window behind the
-/// 64-byte reply record.
-pub fn block_transact_sector(
-    slot: u32,
-    request: &[u8; 64],
-    reply: &mut [u8; 64],
-    sector: &mut [u8; 512],
-) -> i64 {
-    transport::block_transact_sector(slot, request, reply, sector)
-}
-
-/// A write whose sector crosses with the request, on the same rule.
-pub fn block_transact_write(
-    slot: u32,
-    request: &[u8; 64],
-    sector: &[u8; 512],
-    reply: &mut [u8; 64],
-) -> i64 {
-    transport::block_transact_write(slot, request, sector, reply)
-}
-
 /// Terminates the current component with an explicit unhealthy status.
 pub fn unhealthy() -> ! {
     transport::unhealthy()
