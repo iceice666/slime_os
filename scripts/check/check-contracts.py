@@ -24,6 +24,14 @@ STORE_CONTRACT = ROOT / "contracts" / "store" / "v1"
 STORE_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-store-bindings.py"
 IO_QUEUE_CONTRACT = ROOT / "contracts" / "io-queue" / "v1"
 IO_QUEUE_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-io-queue-bindings.py"
+LINK_DEVICE_CONTRACT = ROOT / "contracts" / "link-device" / "v1"
+LINK_DEVICE_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-link-device-bindings.py"
+)
+NETWORK_SERVICE_CONTRACT = ROOT / "contracts" / "network-service" / "v1"
+NETWORK_SERVICE_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-network-service-bindings.py"
+)
 FS_CONTRACT = ROOT / "contracts" / "fs" / "v1"
 FS_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-fs-bindings.py"
 GENERATION_MANAGEMENT_CONTRACT = ROOT / "contracts" / "generation-management" / "v1"
@@ -161,6 +169,18 @@ run("check", str(IO_QUEUE_CONTRACT / "schema.zt"))
 run("check", str(IO_QUEUE_CONTRACT / "gen_rust.zt"))
 subprocess.run(
     [sys.executable, str(IO_QUEUE_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+run("check", str(LINK_DEVICE_CONTRACT / "schema.zt"))
+subprocess.run(
+    [sys.executable, str(LINK_DEVICE_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+run("check", str(NETWORK_SERVICE_CONTRACT / "schema.zt"))
+subprocess.run(
+    [sys.executable, str(NETWORK_SERVICE_BINDING_GENERATOR), "--check"],
     cwd=ROOT,
     check=True,
 )
@@ -382,7 +402,7 @@ subprocess.run(
 print(
     "Generation source/binary, kernel image v1/v2, target profile, BootState, "
     "BootState trace, recovery, block, component v1/v2, store, spawn, filesystem, "
-    "powerbox, generation-management, transfer, sample-descriptor, interface-schema, "
+    "link-device, network-service, powerbox, generation-management, transfer, "
     "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
     "fabric-call, fabric-operation, fabric-visibility, fabric-trace, "
     "component-spec, system-spec, component-sdk-release, and rpi5-ros2-demo "

@@ -66,17 +66,19 @@ impl<'a> BlockAuthority<'a> {
         if bytes.len() < HEADER_BYTES || bytes.len() > MAX_BYTES {
             return Err(DecodeError::Truncated);
         }
-        if bytes[..8] != MAGIC {
+        if bytes[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC_END] != MAGIC {
             return Err(DecodeError::BadMagic);
         }
-        if u32_at(bytes, 8)? != FORMAT_VERSION || u32_at(bytes, 12)? as usize != HEADER_BYTES {
+        if u32_at(bytes, OFF_HEADER_FORMAT_VERSION)? != FORMAT_VERSION
+            || u32_at(bytes, OFF_HEADER_HEADER_SIZE)? as usize != HEADER_BYTES
+        {
             return Err(DecodeError::UnsupportedVersion);
         }
-        if u64_at(bytes, 16)? != 0 {
+        if u64_at(bytes, OFF_HEADER_REQUIRED_FLAGS)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        let count = u32_at(bytes, 24)? as usize;
-        let total = u32_at(bytes, 28)? as usize;
+        let count = u32_at(bytes, OFF_HEADER_RING_COUNT)? as usize;
+        let total = u32_at(bytes, OFF_HEADER_TOTAL_LEN)? as usize;
         if count > MAX_RINGS || total != HEADER_BYTES + count * ENTRY_BYTES || total != bytes.len()
         {
             return Err(DecodeError::BadBounds);
@@ -205,20 +207,25 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<RingAuthority, DecodeError
     let entry = bytes
         .get(offset..offset + ENTRY_BYTES)
         .ok_or(DecodeError::Truncated)?;
-    let device = u32_at(entry, 32)?;
-    let ring = u32_at(entry, 36)?;
-    let rights = u16_at(entry, 40)?;
-    let sector_limit = u64_at(entry, 42)?;
+    let device = u32_at(entry, OFF_ENTRY_DEVICE)?;
+    let ring = u32_at(entry, OFF_ENTRY_RING)?;
+    let rights = u16_at(entry, OFF_ENTRY_RIGHTS)?;
+    let sector_limit = u64_at(entry, OFF_ENTRY_SECTOR_LIMIT)?;
     if rights == 0 || rights & !KNOWN_RIGHTS != 0 || sector_limit == 0 {
         return Err(DecodeError::InvalidEntry);
     }
     // Reserved bytes must be zero: a later version giving them meaning must
     // not be satisfiable by a table this version already admitted.
-    if entry[50..64].iter().any(|byte| *byte != 0) {
+    if entry[OFF_ENTRY_RESERVED..OFF_ENTRY_RESERVED_END]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
         return Err(DecodeError::InvalidEntry);
     }
     Ok(RingAuthority {
-        holder_identity: entry[..32].try_into().unwrap(),
+        holder_identity: entry[OFF_ENTRY_HOLDER_IDENTITY..OFF_ENTRY_HOLDER_IDENTITY_END]
+            .try_into()
+            .expect("generated block-authority layout"),
         device,
         ring,
         rights,
@@ -278,25 +285,30 @@ mod tests {
         sector_limit: u64,
     ) -> [u8; ENTRY_BYTES] {
         let mut value = [0; ENTRY_BYTES];
-        value[..32].copy_from_slice(&holder);
-        value[32..36].copy_from_slice(&device.to_le_bytes());
-        value[36..40].copy_from_slice(&ring.to_le_bytes());
-        value[40..42].copy_from_slice(&rights.to_le_bytes());
-        value[42..50].copy_from_slice(&sector_limit.to_le_bytes());
+        value[OFF_ENTRY_HOLDER_IDENTITY..OFF_ENTRY_HOLDER_IDENTITY_END].copy_from_slice(&holder);
+        value[OFF_ENTRY_DEVICE..OFF_ENTRY_DEVICE_END].copy_from_slice(&device.to_le_bytes());
+        value[OFF_ENTRY_RING..OFF_ENTRY_RING_END].copy_from_slice(&ring.to_le_bytes());
+        value[OFF_ENTRY_RIGHTS..OFF_ENTRY_RIGHTS_END].copy_from_slice(&rights.to_le_bytes());
+        value[OFF_ENTRY_SECTOR_LIMIT..OFF_ENTRY_SECTOR_LIMIT_END]
+            .copy_from_slice(&sector_limit.to_le_bytes());
         value
     }
 
     fn table(entries: &[[u8; ENTRY_BYTES]]) -> Vec<u8> {
         let total = HEADER_BYTES + entries.len() * ENTRY_BYTES;
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&MAGIC);
-        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&(total as u32).to_le_bytes());
-        for value in entries {
-            bytes.extend_from_slice(value);
+        let mut bytes = std::vec![0; total];
+        bytes[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC_END].copy_from_slice(&MAGIC);
+        bytes[OFF_HEADER_FORMAT_VERSION..OFF_HEADER_FORMAT_VERSION_END]
+            .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[OFF_HEADER_HEADER_SIZE..OFF_HEADER_HEADER_SIZE_END]
+            .copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes[OFF_HEADER_RING_COUNT..OFF_HEADER_RING_COUNT_END]
+            .copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        bytes[OFF_HEADER_TOTAL_LEN..OFF_HEADER_TOTAL_LEN_END]
+            .copy_from_slice(&(total as u32).to_le_bytes());
+        for (index, value) in entries.iter().enumerate() {
+            let offset = HEADER_BYTES + index * ENTRY_BYTES;
+            bytes[offset..offset + ENTRY_BYTES].copy_from_slice(value);
         }
         bytes
     }
@@ -335,8 +347,16 @@ mod tests {
         ];
         entries.sort_by_key(|value| {
             (
-                u32::from_le_bytes(value[32..36].try_into().unwrap()),
-                u32::from_le_bytes(value[36..40].try_into().unwrap()),
+                u32::from_le_bytes(
+                    value[OFF_ENTRY_DEVICE..OFF_ENTRY_DEVICE_END]
+                        .try_into()
+                        .unwrap(),
+                ),
+                u32::from_le_bytes(
+                    value[OFF_ENTRY_RING..OFF_ENTRY_RING_END]
+                        .try_into()
+                        .unwrap(),
+                ),
             )
         });
         let bytes = table(&entries);
@@ -449,7 +469,7 @@ mod tests {
     fn nonzero_reserved_bytes_are_refused() {
         let probe = holder("sel4-storage-probe");
         let mut value = entry(probe, 1, 0, RIGHT_READ, 2048);
-        value[63] = 1;
+        value[OFF_ENTRY_RESERVED_END - 1] = 1;
         let bytes = table(&[value]);
         assert_eq!(
             BlockAuthority::decode(&bytes).err(),
@@ -463,28 +483,29 @@ mod tests {
         let good = table(&[entry(probe, 1, 0, RIGHT_READ, 2048)]);
 
         let mut bad_magic = good.clone();
-        bad_magic[0] = b'X';
+        bad_magic[OFF_HEADER_MAGIC] = b'X';
         assert_eq!(
             BlockAuthority::decode(&bad_magic).err(),
             Some(DecodeError::BadMagic)
         );
 
         let mut bad_version = good.clone();
-        bad_version[8] = FORMAT_VERSION as u8 + 1;
+        bad_version[OFF_HEADER_FORMAT_VERSION] = FORMAT_VERSION as u8 + 1;
         assert_eq!(
             BlockAuthority::decode(&bad_version).err(),
             Some(DecodeError::UnsupportedVersion)
         );
 
         let mut bad_flags = good.clone();
-        bad_flags[16] = 1;
+        bad_flags[OFF_HEADER_REQUIRED_FLAGS] = 1;
         assert_eq!(
             BlockAuthority::decode(&bad_flags).err(),
             Some(DecodeError::UnknownRequiredFlags)
         );
 
         let mut bad_count = good.clone();
-        bad_count[24..28].copy_from_slice(&2u32.to_le_bytes());
+        bad_count[OFF_HEADER_RING_COUNT..OFF_HEADER_RING_COUNT_END]
+            .copy_from_slice(&2u32.to_le_bytes());
         assert_eq!(
             BlockAuthority::decode(&bad_count).err(),
             Some(DecodeError::BadBounds)

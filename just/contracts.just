@@ -52,6 +52,8 @@ release_trust_check: contracts_check sel4_rollback_check
 contracts_check: bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
+    python3 scripts/generate/generate-link-device-bindings.py --check
+    python3 scripts/generate/generate-network-service-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py
     # B42: lifecycle authority is a capability, so no wire record or public
     # runtime type may name a bare task id.

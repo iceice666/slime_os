@@ -2,6 +2,16 @@
 [group('generate')]
 io_queue_gen:
     python3 scripts/generate/generate-io-queue-bindings.py
+# Regenerate userspace LinkDevice protocol bindings.
+[group('generate')]
+link_device_gen:
+    python3 scripts/generate/generate-link-device-bindings.py
+
+# Regenerate userspace network-service protocol bindings.
+[group('generate')]
+network_service_gen:
+    python3 scripts/generate/generate-network-service-bindings.py
+
 
 # Regenerate Rust block protocol bindings from the Zutai schema.
 [group('generate')]

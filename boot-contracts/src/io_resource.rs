@@ -41,17 +41,19 @@ impl<'a> IoResourceBudget<'a> {
         if bytes.len() < HEADER_BYTES || bytes.len() > MAX_BYTES {
             return Err(DecodeError::Truncated);
         }
-        if bytes[..8] != MAGIC {
+        if bytes[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC_END] != MAGIC {
             return Err(DecodeError::BadMagic);
         }
-        if u32_at(bytes, 8)? != FORMAT_VERSION || u32_at(bytes, 12)? as usize != HEADER_BYTES {
+        if u32_at(bytes, OFF_HEADER_FORMAT_VERSION)? != FORMAT_VERSION
+            || u32_at(bytes, OFF_HEADER_HEADER_SIZE)? as usize != HEADER_BYTES
+        {
             return Err(DecodeError::UnsupportedVersion);
         }
-        if u64_at(bytes, 16)? != 0 {
+        if u64_at(bytes, OFF_HEADER_REQUIRED_FLAGS)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        let driver_count = u32_at(bytes, 24)? as usize;
-        let total_len = u32_at(bytes, 28)? as usize;
+        let driver_count = u32_at(bytes, OFF_HEADER_DRIVER_COUNT)? as usize;
+        let total_len = u32_at(bytes, OFF_HEADER_TOTAL_LEN)? as usize;
         if driver_count > MAX_DRIVERS
             || total_len != HEADER_BYTES + driver_count * ENTRY_BYTES
             || total_len != bytes.len()
@@ -156,15 +158,17 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<DriverQuota, DecodeError> 
         .get(offset..offset + ENTRY_BYTES)
         .ok_or(DecodeError::Truncated)?;
     Ok(DriverQuota {
-        driver_identity: entry[..32].try_into().unwrap(),
-        mmio_bytes: u32_at(entry, 32)?,
-        mmio_mappings: u32_at(entry, 36)?,
-        dma_pages: u32_at(entry, 40)?,
-        dma_mappings: u32_at(entry, 44)?,
-        irq_sources: u32_at(entry, 48)?,
-        outstanding_requests: u32_at(entry, 52)?,
-        buffer_loans: u32_at(entry, 56)?,
-        device: u32_at(entry, 60)?,
+        driver_identity: entry[OFF_ENTRY_DRIVER_IDENTITY..OFF_ENTRY_DRIVER_IDENTITY_END]
+            .try_into()
+            .expect("generated IO-resource layout"),
+        mmio_bytes: u32_at(entry, OFF_ENTRY_MMIO_BYTES)?,
+        mmio_mappings: u32_at(entry, OFF_ENTRY_MMIO_MAPPINGS)?,
+        dma_pages: u32_at(entry, OFF_ENTRY_DMA_PAGES)?,
+        dma_mappings: u32_at(entry, OFF_ENTRY_DMA_MAPPINGS)?,
+        irq_sources: u32_at(entry, OFF_ENTRY_IRQ_SOURCES)?,
+        outstanding_requests: u32_at(entry, OFF_ENTRY_OUTSTANDING_REQUESTS)?,
+        buffer_loans: u32_at(entry, OFF_ENTRY_BUFFER_LOANS)?,
+        device: u32_at(entry, OFF_ENTRY_DEVICE)?,
     })
 }
 fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, DecodeError> {
@@ -211,28 +215,50 @@ mod tests {
     fn build(entries: &[DriverQuota]) -> alloc::vec::Vec<u8> {
         let total = HEADER_BYTES + entries.len() * ENTRY_BYTES;
         let mut bytes = alloc::vec![0u8;total];
-        bytes[..8].copy_from_slice(&MAGIC);
-        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-        bytes[12..16].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
-        bytes[24..28].copy_from_slice(&(entries.len() as u32).to_le_bytes());
-        bytes[28..32].copy_from_slice(&(total as u32).to_le_bytes());
+        bytes[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC_END].copy_from_slice(&MAGIC);
+        bytes[OFF_HEADER_FORMAT_VERSION..OFF_HEADER_FORMAT_VERSION_END]
+            .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[OFF_HEADER_HEADER_SIZE..OFF_HEADER_HEADER_SIZE_END]
+            .copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes[OFF_HEADER_DRIVER_COUNT..OFF_HEADER_DRIVER_COUNT_END]
+            .copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        bytes[OFF_HEADER_TOTAL_LEN..OFF_HEADER_TOTAL_LEN_END]
+            .copy_from_slice(&(total as u32).to_le_bytes());
         for (index, q) in entries.iter().enumerate() {
             let o = HEADER_BYTES + index * ENTRY_BYTES;
-            bytes[o..o + 32].copy_from_slice(&q.driver_identity);
-            for (n, value) in [
-                q.mmio_bytes,
-                q.mmio_mappings,
-                q.dma_pages,
-                q.dma_mappings,
-                q.irq_sources,
-                q.outstanding_requests,
-                q.buffer_loans,
-                q.device,
-            ]
-            .iter()
-            .enumerate()
-            {
-                bytes[o + 32 + n * 4..o + 36 + n * 4].copy_from_slice(&value.to_le_bytes());
+            bytes[o + OFF_ENTRY_DRIVER_IDENTITY..o + OFF_ENTRY_DRIVER_IDENTITY_END]
+                .copy_from_slice(&q.driver_identity);
+            for (start, end, value) in [
+                (OFF_ENTRY_MMIO_BYTES, OFF_ENTRY_MMIO_BYTES_END, q.mmio_bytes),
+                (
+                    OFF_ENTRY_MMIO_MAPPINGS,
+                    OFF_ENTRY_MMIO_MAPPINGS_END,
+                    q.mmio_mappings,
+                ),
+                (OFF_ENTRY_DMA_PAGES, OFF_ENTRY_DMA_PAGES_END, q.dma_pages),
+                (
+                    OFF_ENTRY_DMA_MAPPINGS,
+                    OFF_ENTRY_DMA_MAPPINGS_END,
+                    q.dma_mappings,
+                ),
+                (
+                    OFF_ENTRY_IRQ_SOURCES,
+                    OFF_ENTRY_IRQ_SOURCES_END,
+                    q.irq_sources,
+                ),
+                (
+                    OFF_ENTRY_OUTSTANDING_REQUESTS,
+                    OFF_ENTRY_OUTSTANDING_REQUESTS_END,
+                    q.outstanding_requests,
+                ),
+                (
+                    OFF_ENTRY_BUFFER_LOANS,
+                    OFF_ENTRY_BUFFER_LOANS_END,
+                    q.buffer_loans,
+                ),
+                (OFF_ENTRY_DEVICE, OFF_ENTRY_DEVICE_END, q.device),
+            ] {
+                bytes[o + start..o + end].copy_from_slice(&value.to_le_bytes());
             }
         }
         bytes
@@ -253,7 +279,8 @@ mod tests {
             DecodeError::BadOrder
         );
         let mut bytes = build(&[quota(1)]);
-        bytes[24..28].copy_from_slice(&2u32.to_le_bytes());
+        bytes[OFF_HEADER_DRIVER_COUNT..OFF_HEADER_DRIVER_COUNT_END]
+            .copy_from_slice(&2u32.to_le_bytes());
         assert_eq!(
             IoResourceBudget::decode(&bytes).unwrap_err(),
             DecodeError::BadBounds
