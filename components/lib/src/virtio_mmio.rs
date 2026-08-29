@@ -455,6 +455,18 @@ pub fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     })
 }
 
+pub fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(core::mem::size_of::<u32>())?;
+    if end > bytes.len() {
+        return None;
+    }
+    let mut raw = [0u8; core::mem::size_of::<u32>()];
+    for (index, byte) in raw.iter_mut().enumerate() {
+        *byte = unsafe { ptr::read_volatile(bytes.as_ptr().add(offset + index)) };
+    }
+    Some(u32::from_le_bytes(raw))
+}
+
 pub fn write_u16(bytes: &mut [u8], offset: usize, value: u16) -> bool {
     let Some(high) = offset.checked_add(1) else {
         return false;
@@ -517,18 +529,19 @@ pub fn used_descriptor_slot(id: u32, slots: usize) -> Option<usize> {
 }
 
 /// The payload length a receive completion may report, or `None` if the device
-/// overshot.
+/// reported a runt or overshot.
 ///
 /// virtio reports bytes written including the net header. A device may report
 /// more than it was offered, so both ends are checked: the header must be
-/// present, and the payload must fit the frame length the client's descriptor
-/// actually named. Returning the length as `u16` makes the caller's
-/// LinkDevice reply field exact by construction rather than by a cast that
-/// silently truncates.
+/// present, and the payload must be within the LinkDevice contract's declared
+/// frame bounds and fit the frame length the client's descriptor actually
+/// named. Returning the length as `u16` makes the caller's LinkDevice reply
+/// field exact by construction rather than by a cast that silently truncates.
 pub fn received_payload_len(reported: u32, header_bytes: usize, frame_len: u16) -> Option<u16> {
     let header = u32::try_from(header_bytes).ok()?;
     let payload = reported.checked_sub(header)?;
-    (payload <= u32::from(frame_len)).then_some(payload as u16)
+    (payload >= slime_proto::link_device::MIN_FRAME_BYTES as u32 && payload <= u32::from(frame_len))
+        .then_some(payload as u16)
 }
 
 /// IO7: proofs of the device-boundary arithmetic, over every value of the
@@ -673,15 +686,16 @@ mod proofs {
         assert!(used_ring_progress(published, consumed, 0).is_none());
     }
 
-    /// B87's obligation: an accepted receive length fits the descriptor the
-    /// driver published, so the reported byte count never names memory outside
-    /// the client's lease.
+    /// B87's obligation: an accepted receive length is a non-runt frame that
+    /// fits the descriptor the driver published, so the reported byte count
+    /// never names memory outside the client's lease.
     #[kani::proof]
     fn an_accepted_receive_length_fits_the_published_frame() {
         let reported: u32 = kani::any();
         let header: usize = kani::any();
         let frame_len: u16 = kani::any();
         if let Some(payload) = received_payload_len(reported, header, frame_len) {
+            assert!(usize::from(payload) >= slime_proto::link_device::MIN_FRAME_BYTES);
             assert!(payload <= frame_len);
         }
     }
@@ -703,15 +717,20 @@ mod proofs {
     }
 
     /// Totality over the length rule: acceptance holds exactly when the header
-    /// is present and the payload fits. Neither an overshoot nor a
-    /// header-short report can slip through, for any of the three inputs.
+    /// is present and the payload is at least the contract minimum and fits.
+    /// Neither a runt, an overshoot, nor a header-short report can slip through,
+    /// for any of the three inputs.
     #[kani::proof]
     fn receive_length_acceptance_is_exactly_the_declared_rule() {
         let reported: u32 = kani::any();
         let header: usize = kani::any();
         let frame_len: u16 = kani::any();
         let admissible = match u32::try_from(header) {
-            Ok(header) => reported >= header && reported - header <= u32::from(frame_len),
+            Ok(header) => {
+                reported >= header
+                    && reported - header >= slime_proto::link_device::MIN_FRAME_BYTES as u32
+                    && reported - header <= u32::from(frame_len)
+            }
             Err(_) => false,
         };
         assert_eq!(
@@ -785,10 +804,15 @@ mod tests {
     }
 
     #[test]
-    fn a_receive_length_shorter_than_the_header_is_refused() {
+    fn a_receive_length_shorter_than_the_minimum_frame_is_refused() {
         assert_eq!(received_payload_len(0, HEADER, 1514), None);
         assert_eq!(received_payload_len(9, HEADER, 1514), None);
-        assert_eq!(received_payload_len(10, HEADER, 1514), Some(0));
+        assert_eq!(received_payload_len(10, HEADER, 1514), None);
+        assert_eq!(received_payload_len(HEADER as u32 + 59, HEADER, 1514), None);
+        assert_eq!(
+            received_payload_len(HEADER as u32 + 60, HEADER, 1514),
+            Some(60)
+        );
     }
 
     #[test]

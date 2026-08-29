@@ -11,12 +11,12 @@
 //! that makes a device-owned buffer safe.
 
 use slime_components::virtio_mmio::{
-    DESC_F_WRITE, MediatedMmio, observe_used, publish_available, received_payload_len,
+    DESC_F_WRITE, MediatedMmio, observe_used, publish_available, read_u32, received_payload_len,
     used_descriptor_slot, used_ring_progress, write_descriptor, write_u16,
 };
 use slime_proto::io_queue::{
     DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE, REQUEST_PAYLOAD_BYTES, STATUS_BAD_SLICE,
-    STATUS_MALFORMED, STATUS_OK, STATUS_RESET,
+    STATUS_DEVICE_ERROR, STATUS_EXHAUSTED, STATUS_MALFORMED, STATUS_OK, STATUS_RESET,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError};
 use slime_proto::link_device::{
@@ -139,18 +139,10 @@ impl ControlQueue {
         }
         let base = USED_OFFSET + 4 + (usize::from(used) % VIRT_SLOTS) * 8;
         let bytes = self.bytes();
-        let Some(id) = bytes
-            .get(base..base + 4)
-            .and_then(|raw| raw.try_into().ok())
-            .map(u32::from_le_bytes)
-        else {
+        let Some(id) = read_u32(bytes, base) else {
             return Err(());
         };
-        let Some(len) = bytes
-            .get(base + 4..base + 8)
-            .and_then(|raw| raw.try_into().ok())
-            .map(u32::from_le_bytes)
-        else {
+        let Some(len) = read_u32(bytes, base + 4) else {
             return Err(());
         };
         self.used = used.wrapping_add(1);
@@ -313,28 +305,50 @@ fn main(_startup_arg: u32) {
     // QEMU packs eight 0x200 transports into one 4KiB granule, so this
     // region is not page-exclusive and IO1 admits only the mediated path.
     debug_write(b"[virtio-net-driver] mmio mechanism=mediated-bounded-read32-write32\n");
-    // The interrupt line is bound and acknowledged through IO1's
-    // `io_irq_wait_ack`, which returns only once the root has dispatched a
-    // pending interrupt for this source. This plane's device completes fast
-    // enough that the used ring is drained before the line is dispatched, so
-    // the driver services completions by polling the used ring and does not
-    // report an interrupt-sequence marker it never observed.
+    // The interrupt line is bound and acknowledged through IO1's `io_irq_ack`,
+    // after the root has dispatched a pending interrupt for this source. This
+    // plane's device completes fast enough that the used ring is drained before
+    // the line is dispatched, so the driver services completions by polling the
+    // used ring and reports no interrupt marker it did not observe.
     send_ready();
     loop {
         // Receive first: a reset arrives on the transmit queue, and work the
         // client provisioned before it must be admitted before it is settled.
         if matches!(notification_poll(rx_request_ready), Ok(Some(_))) {
-            drain_requests(&mut driver, false, rx_completion_ready, state_changed);
+            drain_requests(
+                &mut driver,
+                false,
+                rx_completion_ready,
+                tx_completion_ready,
+                state_changed,
+            );
         }
         if matches!(notification_poll(tx_request_ready), Ok(Some(_))) {
-            drain_requests(&mut driver, true, tx_completion_ready, state_changed);
+            drain_requests(
+                &mut driver,
+                true,
+                tx_completion_ready,
+                rx_completion_ready,
+                state_changed,
+            );
         }
-        drain_used(&mut driver, tx_completion_ready, rx_completion_ready);
+        drain_used(
+            &mut driver,
+            tx_completion_ready,
+            rx_completion_ready,
+            state_changed,
+        );
         yield_now();
     }
 }
 
-fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_changed: u32) {
+fn drain_requests(
+    driver: &mut Driver<'_>,
+    transmit: bool,
+    ready: u32,
+    other_ready: u32,
+    state_changed: u32,
+) {
     let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
     loop {
         let submission = {
@@ -345,10 +359,16 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
             };
             match link.queue.take_request(&mut body, PAGE) {
                 Ok(value) => value,
-                Err(QueueError::Empty) => break,
-                Err(_) => {
+                Err(error) if error.error == QueueError::Empty => break,
+                Err(error) => {
                     driver.overrun_refused += 1;
-                    break;
+                    if error.request_id != 0 {
+                        link.queue
+                            .complete(error.request_id, STATUS_MALFORMED, 0, &[], false)
+                            .unwrap_or_else(|_| fail(b"malformed completion"));
+                        signal(ready);
+                    }
+                    continue;
                 }
             }
         };
@@ -363,25 +383,6 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
             );
             continue;
         };
-        if request.op == OP_RESET {
-            reset(driver, ready, state_changed);
-            exit(0);
-        }
-        if matches!(request.op, OP_QUERY_LINK | OP_STATISTICS | OP_CLOSE) {
-            // No optional feature was accepted, so VIRTIO_NET_F_STATUS is not
-            // negotiated and the transport's link is up by definition.
-            let payload = reply(request.op, 0, driver.tx_frames, driver.rx_frames).encode();
-            let link = if transmit {
-                &mut driver.tx
-            } else {
-                &mut driver.rx
-            };
-            link.queue
-                .complete(submission.request_id, STATUS_OK, 0, &payload, false)
-                .unwrap_or_else(|_| fail(b"control completion"));
-            signal(ready);
-            continue;
-        }
         if !valid_link_request(&request) {
             let length = usize::from(request.frame_len);
             if matches!(request.op, OP_TRANSMIT | OP_PROVIDE_RECEIVE) {
@@ -409,6 +410,25 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
                 (driver.charges.programmed - programmed_before) as u64,
             );
             debug_write(b"\n");
+            continue;
+        }
+        if request.op == OP_RESET {
+            reset(driver, ready, other_ready, state_changed);
+            exit(0);
+        }
+        if matches!(request.op, OP_QUERY_LINK | OP_STATISTICS | OP_CLOSE) {
+            // No optional feature was accepted, so VIRTIO_NET_F_STATUS is not
+            // negotiated and the transport's link is up by definition.
+            let payload = reply(request.op, 0, driver.tx_frames, driver.rx_frames).encode();
+            let link = if transmit {
+                &mut driver.tx
+            } else {
+                &mut driver.rx
+            };
+            link.queue
+                .complete(submission.request_id, STATUS_OK, 0, &payload, false)
+                .unwrap_or_else(|_| fail(b"control completion"));
+            signal(ready);
             continue;
         }
         let expected = if transmit {
@@ -451,13 +471,22 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
             debug_write(b"\n");
             continue;
         }
-        let loan_slot = driver
+        let Some(loan_slot) = driver
             .loans
             .iter()
             .flatten()
             .find(|entry| entry.lease == submission.slice.lease)
             .map(|entry| entry.slot)
-            .unwrap_or_else(|| fail(b"unknown payload lease"));
+        else {
+            refuse(
+                driver,
+                transmit,
+                submission.request_id,
+                STATUS_BAD_SLICE,
+                ready,
+            );
+            continue;
+        };
         let dma = io_dma_map(
             DMA_SLOT,
             loan_slot,
@@ -475,12 +504,30 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
         }
         driver.charges.requests_live += 1;
         driver.charges.leases_live += 1;
-        let slot = submission.request_id as usize % IO_SLOTS;
-        {
+        let slot = {
             let link = if transmit {
                 &mut driver.tx
             } else {
                 &mut driver.rx
+            };
+            let Some(slot) = link.request_ids.iter().position(Option::is_none) else {
+                if io_request_settle(DMA_SLOT, dma, submission.request_id) != ERR_SUCCESS {
+                    fail(b"capacity request settle");
+                }
+                driver.charges.requests_live -= 1;
+                if io_dma_release(DMA_SLOT, dma) != ERR_SUCCESS {
+                    fail(b"capacity dma release");
+                }
+                driver.charges.dma_live -= 1;
+                driver.charges.leases_live -= 1;
+                refuse(
+                    driver,
+                    transmit,
+                    submission.request_id,
+                    STATUS_EXHAUSTED,
+                    ready,
+                );
+                continue;
             };
             link.outstanding
                 .admit(
@@ -495,7 +542,8 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
             link.frame_lengths[slot] = request.frame_len;
             link.dma[slot] = Some(dma);
             link.request_ids[slot] = Some(submission.request_id);
-        }
+            slot
+        };
         let control = if transmit {
             &mut driver.tx_control
         } else {
@@ -521,7 +569,7 @@ fn drain_requests(driver: &mut Driver<'_>, transmit: bool, ready: u32, state_cha
 
 /// One service pass over both used rings. Badges are readiness, not counts, so
 /// a pass drains until both rings are empty and records how much it drained.
-fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
+fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_changed: u32) {
     let mut pass_tx = 0;
     let mut pass_rx = 0;
     loop {
@@ -532,13 +580,15 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
             Err(()) => {
                 driver.device_refused += 1;
                 report_device_refusal(driver, b"tx used ring");
-                break;
+                reset(driver, tx_ready, rx_ready, state_changed);
+                exit(0);
             }
         };
         let Some(slot) = used_descriptor_slot(entry.0, IO_SLOTS) else {
             driver.device_refused += 1;
             report_device_refusal(driver, b"tx used id");
-            continue;
+            reset(driver, tx_ready, rx_ready, state_changed);
+            exit(0);
         };
         if settle(
             &mut driver.tx,
@@ -551,7 +601,10 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
             driver.tx_frames += 1;
             pass_tx += 1;
         } else {
-            driver.tx_stalled += 1;
+            driver.device_refused += 1;
+            report_device_refusal(driver, b"tx unused id");
+            reset(driver, tx_ready, rx_ready, state_changed);
+            exit(0);
         }
     }
     loop {
@@ -562,13 +615,15 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
             Err(()) => {
                 driver.device_refused += 1;
                 report_device_refusal(driver, b"rx used ring");
-                break;
+                reset(driver, tx_ready, rx_ready, state_changed);
+                exit(0);
             }
         };
         let Some(slot) = used_descriptor_slot(id, IO_SLOTS) else {
             driver.device_refused += 1;
             report_device_refusal(driver, b"rx used id");
-            continue;
+            reset(driver, tx_ready, rx_ready, state_changed);
+            exit(0);
         };
         // The device reports how much it wrote. Believing a figure larger than
         // the descriptor this driver published would report bytes outside the
@@ -578,6 +633,10 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
         else {
             driver.device_refused += 1;
             report_device_refusal(driver, b"rx used length");
+            if !settle_error(&mut driver.rx, slot, rx_ready, &mut driver.charges) {
+                reset(driver, tx_ready, rx_ready, state_changed);
+                exit(0);
+            }
             continue;
         };
         if settle(
@@ -591,7 +650,10 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32) {
             driver.rx_frames += 1;
             pass_rx += 1;
         } else {
-            driver.rx_stalled += 1;
+            driver.device_refused += 1;
+            report_device_refusal(driver, b"rx unused id");
+            reset(driver, tx_ready, rx_ready, state_changed);
+            exit(0);
         }
     }
     if pass_tx > driver.pass_tx_max {
@@ -669,7 +731,34 @@ fn settle(
     true
 }
 
-fn reset(driver: &mut Driver<'_>, ready: u32, state_changed: u32) {
+fn settle_error(link: &mut LinkQueue<'_>, slot: usize, ready: u32, charges: &mut Charges) -> bool {
+    let Some(request_id) = link.request_ids[slot].take() else {
+        return false;
+    };
+    let Some(dma) = link.dma[slot].take() else {
+        return false;
+    };
+    link.frame_lengths[slot] = 0;
+    if io_request_settle(DMA_SLOT, dma, request_id) != ERR_SUCCESS {
+        fail(b"error request settle");
+    }
+    charges.requests_live -= 1;
+    if io_dma_release(DMA_SLOT, dma) != ERR_SUCCESS {
+        fail(b"error dma release");
+    }
+    charges.dma_live -= 1;
+    link.outstanding
+        .settle(request_id, STATUS_DEVICE_ERROR)
+        .unwrap_or_else(|_| fail(b"error settlement"));
+    charges.leases_live -= 1;
+    link.queue
+        .complete(request_id, STATUS_DEVICE_ERROR, 0, &[], false)
+        .unwrap_or_else(|_| fail(b"error completion"));
+    signal(ready);
+    true
+}
+
+fn reset(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_changed: u32) {
     // Progress and continuity totals, measured, before the epoch moves.
     write_number(b"[virtio-net-driver] rx drained=", driver.rx_frames as u64);
     write_number(b" replenished=", driver.rx_replenished as u64);
@@ -690,10 +779,12 @@ fn reset(driver: &mut Driver<'_>, ready: u32, state_changed: u32) {
     driver.tx.queue.begin_reset();
     driver.rx.queue.begin_reset();
     signal(state_changed);
+    // Quiesce the device before releasing any IOVA named by a published chain.
+    driver.mmio.reset();
     let tx = settle_all(&mut driver.tx, &mut driver.charges);
     let rx = settle_all(&mut driver.rx, &mut driver.charges);
-    signal(ready);
-    driver.mmio.reset();
+    signal(tx_ready);
+    signal(rx_ready);
     write_number(b"[virtio-net-driver] reset settled tx=", tx as u64);
     write_number(b" rx=", rx as u64);
     write_number(b" leases=", (tx + rx) as u64);
@@ -762,20 +853,20 @@ fn reset(driver: &mut Driver<'_>, ready: u32, state_changed: u32) {
             false,
         )
         .unwrap_or_else(|_| fail(b"stale rx publish"));
-    signal(ready);
+    signal(tx_ready);
+    signal(rx_ready);
     signal(state_changed);
 }
 
 fn settle_all(link: &mut LinkQueue<'_>, charges: &mut Charges) -> usize {
-    let mut ids = [0u64; IO_SLOTS];
     let mut count = 0;
-    link.outstanding.settle_all(STATUS_RESET, |settled| {
-        ids[count] = settled.request_id;
-        count += 1;
-    });
-    for request_id in ids[..count].iter().copied() {
-        let slot = request_id as usize % IO_SLOTS;
-        link.request_ids[slot] = None;
+    for slot in 0..IO_SLOTS {
+        let Some(request_id) = link.request_ids[slot].take() else {
+            continue;
+        };
+        link.outstanding
+            .settle(request_id, STATUS_RESET)
+            .unwrap_or_else(|_| fail(b"reset settlement"));
         link.frame_lengths[slot] = 0;
         if let Some(dma) = link.dma[slot].take() {
             if io_request_settle(DMA_SLOT, dma, request_id) == ERR_SUCCESS {
@@ -795,6 +886,7 @@ fn settle_all(link: &mut LinkQueue<'_>, charges: &mut Charges) -> usize {
                 true,
             )
             .unwrap_or_else(|_| fail(b"reset completion"));
+        count += 1;
     }
     count
 }
