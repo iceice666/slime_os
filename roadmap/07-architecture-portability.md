@@ -214,6 +214,117 @@ just riscv64_qemu_check
 
 The pinned RV64 QEMU profile passes the same architecture-neutral isolation, wait/wake, sample-plane, generation, and rollback corpus as AArch64 without importing x86 or ARM mechanism into its contracts.
 
+### P3.D — Milk-V Duo physical bring-up loop and firmware handoff evidence
+
+**Status:** Complete for what it claims — an observed, repeatable custom-payload
+boot on a named physical RISC-V board, with the firmware handoff measured rather
+than assumed. It deliberately does **not** claim seL4, `slime-root`, or any
+Slime generation on this board; P3 still owns the RV64 vertical slice, and the
+seL4 platform port is P3.E below.
+
+**Delivered (2026-08-29):** `cv1800b_duo` is a pinned physical board profile
+(`sel4/pins.toml [cv1800b_duo]`) whose every value was read from the running
+board or the vendor firmware's own source. A 533-byte S-mode payload
+(`tools/duo/payload/smoke.S`) is built reproducibly into the FIT this board's
+firmware accepts (`just duo_payload_check`), deployed to the board's own FAT
+boot partition over its USB-NCM link, started from U-Boot over serial, and
+required to print ordered S-mode evidence (`just duo_boot_check /dev/ttyUSB0`).
+Three consecutive runs passed with no physical contact, 0 framing errors.
+
+**Why this milestone exists separately from P4's pattern:** the operator's
+laptop has no SD card reader, so P4's "copy the media onto the FAT partition and
+reset the board" step is unavailable. Iterating by re-flashing a card is not a
+workflow this board can sustain. P3.D therefore establishes the deployment path
+P3.E will reuse: the card never leaves the board, and the stock vendor image
+stays bootable as the recovery path.
+
+**Depends on:** nothing in-tree; it qualifies a board and a loop, not Slime code.
+
+### Deliverables
+
+- pin the board's SoC, CPU, ISA, MMU mode, DRAM window, firmware reservation,
+  interrupt controller, timer frequency, SBI implementation, U-Boot version,
+  prompt, launch command, staging and payload addresses, boot partition, and
+  USB-NCM address, each sourced from the board or its firmware rather than
+  asserted;
+- build a flat S-mode payload and its FIT wrapper deterministically, with an
+  identity manifest binding the artifact digests to the pinned load address;
+- deploy over the board's own network link and verify the deployed bytes by
+  digest read back from the target;
+- drive the board's U-Boot over serial and require ordered evidence that the
+  payload reached S-mode with translation disabled, received a hart id and a DRAM
+  device-tree pointer, and read a nonzero timebase;
+- prove the marker chain rejects deleted, reordered, and failure-marked evidence.
+
+### Required checks
+
+- the payload's linked base, its ELF entry point, and the pinned
+  `payload_load_address` agree, and a stale FIT is rejected by digest;
+- a missing board, unreachable USB-NCM link, absent serial device, non-tty
+  device, silent wire, missing marker, out-of-order marker, or failure marker
+  each fail nonzero rather than skipping;
+- the payload exits by returning into U-Boot, so no run can strand the board and
+  require physical intervention.
+
+### Verification target
+
+```sh
+just duo_payload_check
+just duo_boot_check /dev/ttyUSB0
+just duo_gate_control_check
+```
+
+### Exit condition (observed)
+
+A named Milk-V Duo booted a pinned Slime-built payload in S-mode at
+`0x82000000` from its own boot partition, printed every ordered marker with zero
+framing errors, and returned control without physical intervention; the same
+loop ran three times consecutively hands-off.
+
+**Evidence:** [`devlog/2026-08-29-p3d-milkv-duo-bringup/`](../devlog/2026-08-29-p3d-milkv-duo-bringup/index.md)
+
+### P3.E — seL4 on the Milk-V Duo
+
+**Status:** Not started. P3.D established the handoff and the loop; this slice is
+the kernel port itself.
+
+**Depends on:** P3 (the RV64 QEMU profile must pass its corpus first), and P3.D
+for the board's pinned facts and deployment loop.
+
+### Deliverables
+
+- add `riscv64-sel4-qemu-virt` to `contracts/target-profile/v1/schema.zt` with
+  its own ABI constant, on P5's precedent that a different invocation
+  convention is a different ABI rather than a reused one, and admit it in
+  `scripts/build/build-generation.py`;
+- add the upstream seL4 RISC-V platform for this SoC using
+  `deps/sel4/src/plat/spacemit-k1` as the template — `config.cmake`,
+  `overlay-*.dts`, `tools/dts/*.dts` — with `TIMER_FREQUENCY 25000000` from
+  P3.D's measurement and an interrupt-controller entry only after the CV1800B
+  PLIC's context layout is confirmed against the TRM;
+- add `sel4/config/cv1800b-duo.cmake`, its `[observed_prefix_cv1800b_duo]`
+  hashes, and a platform record in `scripts/build/build-sel4.py` with isolated
+  prefix, cargo target, generation, image, and manifest paths;
+- measure the elfloader, kernel, and root ELF sizes against the board's
+  63.25 MiB window before assuming they fit, and record the peak placement map;
+- establish the T-Head C906's memory-attribute state — MAEE occupies PTE bits
+  60–63 and is gated by custom `mxstatus`/`sxstatus` CSRs that upstream seL4
+  does not touch — before trusting standard Sv39 page tables.
+
+### Required checks
+
+- a physical `riscv64-sel4-milkv-duo` profile boots the seL4 kernel and
+  `slime-root` on the board and reaches the same ordered root evidence the
+  AArch64 planes require, with the RV64 QEMU profile passing first;
+- unsupported ISA extensions, page modes, firmware handoffs, and interrupt
+  profiles fail explicitly rather than being guessed from the running machine.
+
+### Exit condition
+
+The named Milk-V Duo boots a verified Slime generation on upstream seL4 and
+reaches `slime-root`'s ready state, with the board's own evidence distinguishing
+this claim from the RV64 QEMU profile.
+
 ## P4: Raspberry Pi 5 physical architecture qualification
 
 **Status:** Deferred on hardware — the build path is complete and reproducible;
