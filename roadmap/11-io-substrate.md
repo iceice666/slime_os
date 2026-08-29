@@ -2,15 +2,20 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** IO0 through IO5 complete; IO2's root cutover closed 2026-08-29, and
-IO5 added the track's host model gates the same day. Each implementation slice
-is observed under QEMU by its own gate — `just io_queue_check`, `just
-io_driver_authority_check`, `just io_block_check`, `just io_link_check`, `just
-io_network_check` — and every gate is registered in `just
+**Status:** IO0 through IO6 complete; IO2's root cutover closed 2026-08-29, and
+IO5 and IO6 added the track's two host verification layers the same day. Each
+implementation slice is observed under QEMU by its own gate — `just
+io_queue_check`, `just io_driver_authority_check`, `just io_block_check`, `just
+io_link_check`, `just io_network_check` — and every gate is registered in `just
 sel4_gate_control_check`, which proves each fails on missing, reordered, or
 failure evidence. IO5 adds `just io_queue_model_check` and `just
 io_resource_model_check`, which quantify IO0's lease/epoch rules and IO1's
-charge conservation over every interleaving rather than one schedule.
+charge conservation over every interleaving rather than one schedule. IO6 adds
+`just kani_io_proofs`, which closes the wire arithmetic IO5's models explicitly
+disclaimed — slot indexing, cursor subtraction, and slice bounds — over every
+value of the declared types. The three layers are complements: one real
+schedule, all interleavings of an abstraction, all values through the shipped
+Rust.
 
 What is **not** done, stated plainly so no consumer assumes otherwise:
 
@@ -518,6 +523,132 @@ implements these transition systems is argued by construction and pinned by the
 QEMU gates, not machine-checked. A model passing cannot complete an IO slice,
 and an IO QEMU pass cannot complete IO5.
 
+## IO6 — Bit-precise proofs of the substrate's wire arithmetic
+
+**Status:** Complete 2026-08-29. Eighteen Kani harnesses over the shipped
+`slime-proto` source, eighteen must-fail mutations, and two gate controls,
+guarded by `just kani_io_proofs`.
+
+**Depends on:** IO0 as the implemented contract being proved; IO5 for the
+boundary it declared and this closes.
+
+### Why this exists
+
+IO5 closed the *all-interleavings* quantifier and explicitly disclaimed the
+wire layer: sequence encoding, slot arithmetic, and bounds were left to the
+generated codec's validators and `components/proto/tests/io_queue.rs`. That
+disclaimer was correct — a model restating field offsets would be a second,
+drifting copy of the contract — but it left a real gap, because the remaining
+obligations are *all-values* claims that a fixed-input `#[test]` cannot close
+either.
+
+`queue_slot_index` is the sharp case. It reduces a `u64` sequence with
+`(sequence as usize) & (slot_count - 1)`, which is modular reduction only when
+`slot_count` is a power of two and underflows at zero. Its own doc comment says
+the precondition "is validated by different code" — `admissible_slot_count` and
+`valid_queue_header`, in another module. Nothing mechanically tied the two
+halves together: each side reads as locally correct, which is exactly how a
+bounds bug survives review.
+
+The same shape recurs. `Queue::submitted` and `Queue::completions_pending`
+subtract shared-memory cursors with no local check, relying entirely on
+`valid_queue_header` having ordered them at attach; release profiles wrap on
+overflow, so an admitted `tail > head` would not panic — it would report a
+near-`u64::MAX` occupancy and every downstream "ring is full" comparison would
+silently read false.
+
+### Tooling decision
+
+Kani, at the 0.67.0 already pinned by `deps/rust-sel4/hacking/nix/scope/kani/`,
+following the `#[cfg(kani)]` harness placement of
+`deps/rust-sel4/crates/sel4/bitfield-ops`. Unlike the IO5 models this checks
+the implementation rather than an abstraction, so there is no
+model-to-code correspondence left to argue. This is also why it is not a
+substitute for IO5: Kani reasons about one entry point's value space, not about
+two parties interleaving over time, so the `leadsTo` liveness rules and the
+all-schedules reachability obligations remain the models' to own.
+
+### Verified source, not a copy
+
+Kani 0.67.0 ships its own toolchain (nightly-2025-11-21), older than this
+repository's `nightly-2026-05-26`, and Cargo refuses a package whose declared
+`rust-version` exceeds the compiler in hand. Lowering `slime-proto`'s declared
+MSRV to suit a verification tool would put a falsehood in a shipped manifest,
+and copying the code under proof into a proof crate would create exactly the
+drift this repository's generated-code rule exists to prevent.
+
+`verification/io-proofs/Cargo.toml` instead points `[lib] path` at
+`components/proto/src/lib.rs` itself, under a manifest declaring no MSRV, and
+sits outside the root workspace so no product build, lint, or Miri run picks it
+up. Kani compiles the same file the product compiles; there is one source, so
+verified-versus-shipped drift is not representable.
+
+### What is proved
+
+Eighteen harnesses, quantified over symbolic inputs rather than enumerated
+cases. Slot depth is a symbolic `slot_count` constrained to the admissible
+range, so the ring properties hold for every accepted depth at once:
+
+- **Slot arithmetic.** Every index a validated ring produces is in bounds for
+  all of `u64`, including the wraparound a long-lived queue reaches; the mask is
+  genuine modular reduction, not merely something small; and two distinct
+  sequences within one ring depth never alias onto one slot.
+- **Cursor safety.** Any header `valid_queue_header` believes makes both
+  occupancy subtractions non-underflowing and ring-bounded, never claims more
+  completions than submissions, and never presents an active driver at epoch
+  zero.
+- **Mapping arithmetic.** `mapping_bytes` is exact, the two rings do not
+  overlap, and the request ring ends precisely where the completion ring begins.
+- **Status totality.** `terminal_state_for_status` agrees exactly with
+  `valid_completion_status` in both directions, and every state it yields is
+  genuinely terminal — a defined status yielding `None` would be a completion
+  the client must refuse to settle, which leaks the lease.
+- **Slice bounds.** Every accepted slice names bytes inside the lease mapping
+  with a non-overflowing `offset + length`; a `DIRECTION_NONE` control slice
+  carries no lease identity; an unknown direction is always refused.
+- **Lease lifetime in the real table.** Over `Outstanding`'s hand-written entry
+  search: settle is single-assignment and returns the retained lease exactly
+  once, duplicate identities are refused rather than merged, capacity is never
+  exceeded, an epoch never advances over a live request, epoch adoption is
+  strictly monotonic, `settle_all` releases every lease once or nothing at all,
+  a request cannot be started twice, and a foreign-epoch completion never
+  resolves a live request.
+
+### Verification target
+
+```sh
+just kani_io_proofs
+```
+
+### Exit condition (observed)
+
+Eighteen harnesses verify in 14 s (57 checks including Kani's implicit
+arithmetic-overflow and pointer-validity checks). Eighteen mutations of the
+shipped source each produce a concrete counterexample in the matching harness,
+including two — dividing the computed index by two — that keep every index *in
+bounds* and are caught only by the modularity and slot-distinctness harnesses.
+Two gate controls confirm fail-closed behavior: disabling the proof module
+fails the gate, and deleting a single `#[kani::proof]` attribute is caught by
+the gate's harness-count assertion while Kani itself still reports
+`VERIFICATION:- SUCCESSFUL` — which is why that assertion exists.
+
+### Boundary
+
+These proofs are bit-precise about values and say nothing about time. They do
+not cover the two-party interleavings, reachability, or liveness that IO5's
+models own, and cannot: a Kani harness drives one entry point, not a schedule.
+
+`Outstanding` proofs are evidence about `Outstanding<2>`, because `N` is a const
+generic that must be fixed at compile time; the capacity-independent lifetime
+argument stays with the IO5 model. Reachability of the *shared-memory* paths —
+`Queue::submit`, `take_request`, `complete`, `take_completion` — is proved
+indirectly, through the header invariants and slot arithmetic every one of them
+depends on, rather than by symbolically executing a full mapping.
+
+Nothing here is a refinement proof of the substrate as a whole, and no
+`slime-root` code is covered: `io_resource.rs` charge accounting remains
+IO5-modelled and plane-observed.
+
 ## Consumption by later subsystems
 
 Later milestones reuse the substrate but retain their own semantics:
@@ -556,7 +687,16 @@ just io_queue_model_check
 just io_resource_model_check
 ```
 
-Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support, and a passing model cannot complete any slice whose exit condition names observed QEMU behavior.
+Host proof gate, quantified over every value of the declared types rather than
+over schedules, and complementary to both layers above — it checks the shipped
+Rust rather than an abstraction of it, and owns exactly the wire arithmetic the
+models disclaim:
+
+```sh
+just kani_io_proofs
+```
+
+Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support, and neither a passing model nor a passing proof can complete any slice whose exit condition names observed QEMU behavior.
 
 ## I/O track definition of done
 
@@ -570,4 +710,5 @@ The common substrate is complete only when:
 - userspace virtio-net proves the same substrate under duplex readiness/replenishment without protocol-specific substrate hooks;
 - the network service enforces exact destination authority over a backend-independent link service;
 - the lifetime and accounting rules the plane gates observe one schedule of are additionally checked over every interleaving of a bounded model, with each rule's negation exhibited as a counterexample;
+- the wire arithmetic those models disclaim — slot indexing over all of `u64`, cursor subtraction against what the header validator actually admits, mapping and slice bounds including their overflow cases — is proved of the shipped source over every value of the declared types, with each proof shown non-vacuous by a mutation that breaks it;
 - future USB, audio, display, and GPU work can consume queue/buffer/lease/completion mechanisms without adding a universal opcode or moving device semantics into `slime-root`.
