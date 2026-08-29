@@ -5,8 +5,14 @@
 //! generated codec and its structural validators (`tests/io_queue.rs`) do not
 //! cover on their own.
 
-use slime_proto::io_queue::{self, COMPLETION_PAYLOAD_BYTES, REQUEST_PAYLOAD_BYTES};
-use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError, format, mapping_bytes};
+use slime_proto::io_queue::{
+    self, COMPLETION_PAYLOAD_BYTES, OFF_HEADER_DRIVER_STATE, OFF_HEADER_SUBMIT_HEAD,
+    OFF_HEADER_SUBMIT_TAIL, OFF_REQUEST_EPOCH, QUEUE_HEADER_LEN, REQUEST_PAYLOAD_BYTES,
+    WireQueueHeader,
+};
+use slime_proto::io_queue_ring::{
+    Outstanding, Queue, QueueError, TakeRequestError, format, mapping_bytes,
+};
 
 const SLOTS: usize = 4;
 const EPOCH: u64 = 1;
@@ -197,20 +203,127 @@ fn a_completion_for_an_unknown_or_already_settled_request_is_rejected() {
 fn a_stale_epoch_submission_is_refused_by_the_driver() {
     let mut bytes = buffer();
     format(&mut bytes, SLOTS, EPOCH).expect("format");
-    let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+        queue
+            .submit(17, &control_slice(), &[], false, MAPPED)
+            .expect("submit under old epoch");
+    }
 
-    // Hand-craft a slot at the wrong epoch by submitting, then forging the
-    // epoch field through a fresh queue view sharing the same bytes would be
-    // out of scope for the public API -- instead, prove the check the other
-    // direction: after `advance_epoch`, an old submission is never reachable
-    // because the ring itself was cleared, and a submit call after the
-    // advance is served at the new epoch.
-    queue
-        .submit(1, &control_slice(), &[], false, MAPPED)
-        .expect("submit");
+    // The ready entry remains from epoch N while the driver view has moved to
+    // N + 1, exactly the stale identity the consumer must refuse and report.
+    let request_epoch = QUEUE_HEADER_LEN + OFF_REQUEST_EPOCH;
+    bytes[request_epoch..request_epoch + 8].copy_from_slice(&EPOCH.to_le_bytes());
+    let header_epoch = io_queue::OFF_HEADER_EPOCH;
+    bytes[header_epoch..header_epoch + 8].copy_from_slice(&(EPOCH + 1).to_le_bytes());
+
+    let mut queue = Queue::attach(&mut bytes, SLOTS).expect("reattach at fresh epoch");
     let mut out = [0u8; REQUEST_PAYLOAD_BYTES];
-    let submission = queue.take_request(&mut out, MAPPED).expect("take");
-    assert_eq!(submission.epoch, EPOCH);
+    assert_eq!(
+        queue.take_request(&mut out, MAPPED),
+        Err(TakeRequestError {
+            error: QueueError::StaleEpoch,
+            request_id: 17,
+            epoch: EPOCH,
+        })
+    );
+    assert_eq!(queue.submitted(), 0, "refused slot was consumed");
+}
+
+#[test]
+fn each_side_updates_only_its_owned_header_cache_line() {
+    let mut bytes = buffer();
+    format(&mut bytes, SLOTS, EPOCH).expect("format");
+    let driver_line = OFF_HEADER_DRIVER_STATE..QUEUE_HEADER_LEN;
+    let client_line = 0..OFF_HEADER_DRIVER_STATE;
+
+    let before = bytes[..QUEUE_HEADER_LEN].to_vec();
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+        queue
+            .submit(1, &control_slice(), &[], false, MAPPED)
+            .expect("submit");
+    }
+    assert_eq!(&bytes[driver_line.clone()], &before[driver_line.clone()]);
+
+    let before = bytes[..QUEUE_HEADER_LEN].to_vec();
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+        let mut request = [0u8; REQUEST_PAYLOAD_BYTES];
+        queue
+            .take_request(&mut request, MAPPED)
+            .expect("take request");
+        queue
+            .complete(1, io_queue::STATUS_OK, 0, &[], false)
+            .expect("complete");
+        queue.begin_reset();
+        queue.mark_driver_dead();
+    }
+    assert_eq!(&bytes[client_line.clone()], &before[client_line.clone()]);
+
+    let before = bytes[..QUEUE_HEADER_LEN].to_vec();
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+        let mut outstanding: Outstanding<1> = Outstanding::new(EPOCH);
+        outstanding.admit(1, 0, 0).expect("admit");
+        let mut completion = [0u8; COMPLETION_PAYLOAD_BYTES];
+        queue
+            .take_completion(&outstanding, &mut completion)
+            .expect("take completion");
+    }
+    assert_eq!(&bytes[driver_line.clone()], &before[driver_line]);
+}
+
+#[test]
+fn stale_client_publish_cannot_roll_back_driver_submit_tail() {
+    let mut bytes = buffer();
+    format(&mut bytes, SLOTS, EPOCH).expect("format");
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+        queue
+            .submit(1, &control_slice(), &[], false, MAPPED)
+            .expect("first submit");
+    }
+
+    let stale = WireQueueHeader::decode(&bytes[..QUEUE_HEADER_LEN]).expect("header snapshot");
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("driver attach");
+        let mut request = [0u8; REQUEST_PAYLOAD_BYTES];
+        queue
+            .take_request(&mut request, MAPPED)
+            .expect("driver advances tail");
+    }
+
+    // The pre-fix whole-header publish demonstrably rolls the driver's cursor
+    // back to the stale value. Preserve that counterexample beside the fixed
+    // publish so the interleaving itself, not merely the final state, is pinned.
+    let next = stale.submit_head + 1;
+    let mut old_header = stale;
+    old_header.submit_head = next;
+    let mut old_publish = bytes.clone();
+    old_publish[..QUEUE_HEADER_LEN].copy_from_slice(&old_header.encode());
+    let rolled_back =
+        WireQueueHeader::decode(&old_publish[..QUEUE_HEADER_LEN]).expect("old header");
+    assert_eq!(rolled_back.submit_head, 2);
+    assert_eq!(rolled_back.submit_tail, 0);
+
+    // Finish the client publish using the head computed from its stale header
+    // snapshot. `Queue::submit` now performs this narrow field write; restoring
+    // its old `stale.encode()` whole-header write makes the assertion below
+    // observe the same rollback as `old_publish`.
+    bytes[OFF_HEADER_SUBMIT_HEAD..OFF_HEADER_SUBMIT_HEAD + 8].copy_from_slice(&next.to_le_bytes());
+
+    let current = WireQueueHeader::decode(&bytes[..QUEUE_HEADER_LEN]).expect("current header");
+    assert_eq!(current.submit_head, 2);
+    assert_eq!(current.submit_tail, 1);
+    assert_eq!(
+        u64::from_le_bytes(
+            bytes[OFF_HEADER_SUBMIT_TAIL..OFF_HEADER_SUBMIT_TAIL + 8]
+                .try_into()
+                .expect("tail bytes"),
+        ),
+        1
+    );
 }
 
 #[test]

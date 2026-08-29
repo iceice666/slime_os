@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
-use slime_proto::io_queue::{self, REQUEST_PAYLOAD_BYTES, STATE_RESET, STATUS_OK, STATUS_RESET};
+use slime_proto::io_queue::{
+    self, REQUEST_PAYLOAD_BYTES, STATE_RESET, STATUS_MALFORMED, STATUS_OK, STATUS_RESET,
+};
 use slime_proto::io_queue_ring::{Outstanding, Queue};
 use slime_rt::{
     ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, notification_signal,
@@ -79,9 +81,18 @@ fn main(_startup_arg: u32) {
     wait_request(request_ready);
     let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
     for _ in 0..RESET_REQUESTS {
-        let submission = queue
-            .take_request(&mut body, PAGE)
-            .unwrap_or_else(|_| fail(b"reset request drain"));
+        let submission = match queue.take_request(&mut body, PAGE) {
+            Ok(submission) => submission,
+            Err(error) => {
+                if error.request_id != 0 {
+                    queue
+                        .complete(error.request_id, STATUS_MALFORMED, 0, &[], false)
+                        .unwrap_or_else(|_| fail(b"malformed reset completion"));
+                    signal(completion_ready);
+                }
+                fail(b"reset request drain")
+            }
+        };
         outstanding
             .admit(
                 submission.request_id,
@@ -142,9 +153,18 @@ fn drain_echoes(
 ) {
     let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
     for index in 0..count {
-        let submission = queue
-            .take_request(&mut body, PAGE)
-            .unwrap_or_else(|_| fail(b"request drain"));
+        let submission = match queue.take_request(&mut body, PAGE) {
+            Ok(submission) => submission,
+            Err(error) => {
+                if error.request_id != 0 {
+                    queue
+                        .complete(error.request_id, STATUS_MALFORMED, 0, &[], false)
+                        .unwrap_or_else(|_| fail(b"malformed request completion"));
+                    signal(completion_ready);
+                }
+                fail(b"request drain")
+            }
+        };
         if submission.payload_len != 8
             || submission.slice.direction != io_queue::DIRECTION_DEVICE_READ
             || submission.slice.offset + submission.slice.length > PAGE

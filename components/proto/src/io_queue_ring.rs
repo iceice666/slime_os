@@ -40,8 +40,10 @@
 //! something it did not expect.
 
 use crate::io_queue::{
-    self, COMPLETION_PAYLOAD_BYTES, COMPLETION_SLOT_LEN, QUEUE_HEADER_LEN, REQUEST_PAYLOAD_BYTES,
-    REQUEST_SLOT_LEN, WireCompletionSlot, WireQueueHeader, WireRequestSlot,
+    self, COMPLETION_PAYLOAD_BYTES, COMPLETION_SLOT_LEN, OFF_HEADER_COMPLETE_HEAD,
+    OFF_HEADER_COMPLETE_TAIL, OFF_HEADER_DRIVER_STATE, OFF_HEADER_SUBMIT_HEAD,
+    OFF_HEADER_SUBMIT_TAIL, QUEUE_HEADER_LEN, REQUEST_PAYLOAD_BYTES, REQUEST_SLOT_LEN,
+    WireCompletionSlot, WireQueueHeader, WireRequestSlot,
 };
 use crate::{
     queue_slot_index, terminal_state_for_status, valid_completion_slot, valid_queue_header,
@@ -91,6 +93,19 @@ pub enum QueueError {
     /// cancellation, reset, or peer death is no longer in the table, so a
     /// completion naming it cannot resurrect it or its lease.
     Unknown,
+}
+
+/// A submitted entry the driver consumed but could not accept.
+///
+/// A decoded slot reports its request identity and epoch even when its contents
+/// are otherwise malformed, allowing the driver to publish a terminal
+/// [`io_queue::STATUS_MALFORMED`] completion. `request_id == 0` means the slot
+/// identity itself was unusable and the entry cannot be answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TakeRequestError {
+    pub error: QueueError,
+    pub request_id: u64,
+    pub epoch: u64,
 }
 
 /// The bytes one queue mapping must be, for a given ring depth.
@@ -197,8 +212,29 @@ impl<'a> Queue<'a> {
             .unwrap_or_else(|| unreachable!("attach validated the header"))
     }
 
-    fn put_header(&mut self, header: WireQueueHeader) {
-        self.bytes[..QUEUE_HEADER_LEN].copy_from_slice(&header.encode());
+    fn put_submit_head(&mut self, value: u64) {
+        self.bytes[OFF_HEADER_SUBMIT_HEAD..OFF_HEADER_SUBMIT_HEAD + 8]
+            .copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_complete_tail(&mut self, value: u64) {
+        self.bytes[OFF_HEADER_COMPLETE_TAIL..OFF_HEADER_COMPLETE_TAIL + 8]
+            .copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_driver_state(&mut self, value: u32) {
+        self.bytes[OFF_HEADER_DRIVER_STATE..OFF_HEADER_DRIVER_STATE + 4]
+            .copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_complete_head(&mut self, value: u64) {
+        self.bytes[OFF_HEADER_COMPLETE_HEAD..OFF_HEADER_COMPLETE_HEAD + 8]
+            .copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_submit_tail(&mut self, value: u64) {
+        self.bytes[OFF_HEADER_SUBMIT_TAIL..OFF_HEADER_SUBMIT_TAIL + 8]
+            .copy_from_slice(&value.to_le_bytes());
     }
 
     fn request_range(&self, sequence: u64) -> core::ops::Range<usize> {
@@ -273,7 +309,7 @@ impl<'a> Queue<'a> {
         if payload.len() > REQUEST_PAYLOAD_BYTES {
             return Err(QueueError::TooLarge);
         }
-        let mut header = self.header();
+        let header = self.header();
         if header.driver_state != io_queue::DRIVER_ACTIVE {
             return Err(QueueError::Closed);
         }
@@ -310,8 +346,7 @@ impl<'a> Queue<'a> {
         let sequence = header.submit_head + 1;
         let range = self.request_range(sequence);
         self.bytes[range].copy_from_slice(&slot.encode());
-        header.submit_head = sequence;
-        self.put_header(header);
+        self.put_submit_head(sequence);
         Ok(sequence)
     }
 
@@ -330,7 +365,7 @@ impl<'a> Queue<'a> {
         expected: &Outstanding<N>,
         out: &mut [u8; COMPLETION_PAYLOAD_BYTES],
     ) -> Result<Completion, QueueError> {
-        let mut header = self.header();
+        let header = self.header();
         if header.complete_head == header.complete_tail {
             return Err(QueueError::Empty);
         }
@@ -340,8 +375,7 @@ impl<'a> Queue<'a> {
 
         // Consume before judging. A completion whose identity is unknown is
         // still an entry the driver produced and the ring must advance past.
-        header.complete_tail = sequence;
-        self.put_header(header);
+        self.put_complete_tail(sequence);
 
         let live = expected
             .find(slot.request_id, slot.epoch)
@@ -376,26 +410,40 @@ impl<'a> Queue<'a> {
         &mut self,
         out: &mut [u8; REQUEST_PAYLOAD_BYTES],
         mapped_len: u64,
-    ) -> Result<Submission, QueueError> {
-        let mut header = self.header();
+    ) -> Result<Submission, TakeRequestError> {
+        let header = self.header();
         if header.submit_head == header.submit_tail {
-            return Err(QueueError::Empty);
+            return Err(TakeRequestError {
+                error: QueueError::Empty,
+                request_id: 0,
+                epoch: header.epoch,
+            });
         }
         let sequence = header.submit_tail + 1;
         let range = self.request_range(sequence);
-        let slot = WireRequestSlot::decode(&self.bytes[range]).ok_or(QueueError::Malformed)?;
+        let slot = WireRequestSlot::decode(&self.bytes[range]);
 
-        header.submit_tail = sequence;
-        self.put_header(header);
+        // Consume before judging. Even an undecodable entry must not wedge all
+        // later requests behind it; without a decoded identity it is simply
+        // unanswerable.
+        self.put_submit_tail(sequence);
 
+        let Some(slot) = slot else {
+            return Err(TakeRequestError {
+                error: QueueError::Malformed,
+                request_id: 0,
+                epoch: 0,
+            });
+        };
         if !valid_request_slot(&slot, header.epoch, mapped_len) {
-            // The identity is still reported when it is usable, so the driver
-            // can answer the request it cannot honour. A zero identity means
-            // even that is unavailable and the entry is unanswerable.
-            return Err(if slot.epoch != header.epoch {
-                QueueError::StaleEpoch
-            } else {
-                QueueError::Malformed
+            return Err(TakeRequestError {
+                error: if slot.epoch != header.epoch {
+                    QueueError::StaleEpoch
+                } else {
+                    QueueError::Malformed
+                },
+                request_id: slot.request_id,
+                epoch: slot.epoch,
             });
         }
         let length = slot.payload_len as usize;
@@ -434,7 +482,7 @@ impl<'a> Queue<'a> {
         if payload.len() > COMPLETION_PAYLOAD_BYTES {
             return Err(QueueError::TooLarge);
         }
-        let mut header = self.header();
+        let header = self.header();
         if header.complete_head - header.complete_tail >= self.slot_count as u64 {
             return Err(QueueError::Full);
         }
@@ -460,8 +508,7 @@ impl<'a> Queue<'a> {
         let sequence = header.complete_head + 1;
         let range = self.completion_range(sequence);
         self.bytes[range].copy_from_slice(&slot.encode());
-        header.complete_head = sequence;
-        self.put_header(header);
+        self.put_complete_head(sequence);
         Ok(sequence)
     }
 
@@ -472,10 +519,8 @@ impl<'a> Queue<'a> {
     /// the two is what lets a client observe the reset and stop producing
     /// before the epoch moves under it.
     pub fn begin_reset(&mut self) {
-        let mut header = self.header();
-        if header.driver_state == io_queue::DRIVER_ACTIVE {
-            header.driver_state = io_queue::DRIVER_RESETTING;
-            self.put_header(header);
+        if self.header().driver_state == io_queue::DRIVER_ACTIVE {
+            self.put_driver_state(io_queue::DRIVER_RESETTING);
         }
     }
 
@@ -498,7 +543,10 @@ impl<'a> Queue<'a> {
         header.complete_head = 0;
         header.complete_tail = 0;
         header.driver_state = io_queue::DRIVER_ACTIVE;
-        self.put_header(header);
+        // This is the sole whole-header write after provisioning: the driver
+        // has quiesced both rings and legitimately resets both parties' cursors
+        // as one epoch transition.
+        self.bytes[..QUEUE_HEADER_LEN].copy_from_slice(&header.encode());
         Ok(next)
     }
 
@@ -507,10 +555,8 @@ impl<'a> Queue<'a> {
     /// Written by the root during reclamation, so a client blocked on a dead
     /// driver learns it from the mapping rather than from a root round trip.
     pub fn mark_driver_dead(&mut self) {
-        let mut header = self.header();
-        if header.driver_state != io_queue::DRIVER_DEAD {
-            header.driver_state = io_queue::DRIVER_DEAD;
-            self.put_header(header);
+        if self.header().driver_state != io_queue::DRIVER_DEAD {
+            self.put_driver_state(io_queue::DRIVER_DEAD);
         }
     }
 }
