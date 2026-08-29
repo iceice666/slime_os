@@ -12,6 +12,31 @@ capability_rights_model_check:
     cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
     ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/capability-rights/model/capability-rights.zt
 
+# Ring occupancy, single-assignment terminal states, exactly-once lease
+# release, epoch cutover, and the liveness rule that a live request always
+# settles and releases. Six mutations must each produce a counterexample.
+#
+# Exhaustively check the bounded IO0 request/epoch/lease contract.
+[group('contracts')]
+io_queue_model_check:
+    cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+    ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/io-queue/model/io-queue.zt
+
+# Declared budgets, total charge return on death, single reclamation, epoch
+# confinement, stale-acknowledgement refusal, and the liveness rule that a
+# faulted driver always reaches zero charges. Seven mutations must each
+# produce a counterexample.
+#
+# Exhaustively check the bounded IO1 hardware-resource charge lifetime.
+[group('contracts')]
+io_resource_model_check:
+    cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+    ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/io-resource/model/io-resource.zt
+
+# Both IO substrate models, for the IO track's own verification stack.
+[group('contracts')]
+io_model_check: io_queue_model_check io_resource_model_check
+
 # The custom-kernel persistence gates were superseded by the userspace seL4
 # planes. These aliases keep historical devlog gate identifiers resolvable.
 [group('contracts')]
@@ -24,7 +49,7 @@ release_trust_check: contracts_check sel4_rollback_check
 
 # Validate the pinned generation manifest schema and fixtures.
 [group('contracts')]
-contracts_check: bootstate_model_check capability_rights_model_check
+contracts_check: bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py
