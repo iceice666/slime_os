@@ -88,6 +88,59 @@ boot_files = ["config.txt", "kernel8.img"]
 export_pcnt_user = true
 export_ptmr_user = true
 
+# P3.D's physical RISC-V bring-up board. Every value here was read from the
+# running board or from the vendor firmware's own source, never asserted:
+#  * `serial_baud` from the vendor console (`console=ttyS0,115200` in
+#    `/proc/cmdline`), on UART0 at 40-pin header pins 16 (TX) / 17 (RX) /
+#    18 (GND) per Milk-V's own pinout.
+#  * `dram_base`/`dram_size` from the board's device tree
+#    `memory@80000000/reg` = <0x80000000 0x03f40000>. The vendor Linux sees
+#    only ~28 MiB of that because of its ION/multimedia carve-outs
+#    (`reserved-memory/ion`), so a Slime port must publish its own memory
+#    description rather than inherit this one.
+#  * `sbi_reservation_bytes` from `reserved-memory/mmode_resv0@80000000`
+#    = <0x80000000 0x00040000>, the OpenSBI region.
+#  * `interrupt_controller` from `interrupt-controller@70000000`, whose
+#    `compatible` is `riscv,plic0` — the layout seL4's own
+#    `include/drivers/irq/riscv_plic0.h` family implements.
+#  * `timer_frequency_hz` from `cpus/timebase-frequency` = 0x017d7840. This is
+#    the value a kernel platform port must set; it is NOT QEMU's 10 MHz.
+#  * `sbi_spec`/`sbi_impl` from the vendor kernel's own boot log. Note the
+#    absence of SRST: this firmware implements the legacy calls plus
+#    TIME/IPI/RFENCE only, so a payload must not rely on SBI system reset.
+#  * `isa`/`mmu` from `/proc/cpuinfo`. `v` appears in the vendor string but
+#    seL4 16.0.0 places no vector state in its context, which is compatible.
+#
+# The U-Boot facts are the firmware contract, not a Slime choice. This build of
+# U-Boot 2021.10 is compiled without `go`, `booti`, `bootelf`, `loadx`/`loady`
+# and TFTP, so `bootm` on a FIT is the only way to transfer control, and there
+# is no writable environment store (`CONFIG_CMD_SAVEENV` unset, and
+# `Loading Environment from <NULL>`), so autoboot must be interrupted on every
+# iteration rather than `bootcmd` being changed once.
+[cv1800b_duo]
+soc = "cv1800b"
+board = "milkv-duo"
+cpu = "thead-c906"
+isa = "rv64imafdvcsu"
+mmu = "sv39"
+serial_baud = 115200
+serial_header_pins = "16-tx/17-rx/18-gnd"
+dram_base = "0x80000000"
+dram_size = "0x03f40000"
+sbi_reservation_bytes = 262144
+interrupt_controller = "riscv-plic0-0x70000000"
+timer_frequency_hz = 25000000
+sbi_spec = "0.3"
+sbi_impl = "opensbi-0.9"
+sbi_has_srst = false
+uboot_version = "2021.10-cvitek_cv180x"
+uboot_prompt = "cv180x_c906#"
+uboot_launch = "bootm {staging}#{config}"
+fit_staging_address = "0x81400000"
+payload_load_address = "0x82000000"
+boot_partition = "mmc 0:1"
+usb_ncm_address = "192.168.42.1"
+
 # Hashes of the installed seL4 prefix, observed from `just sel4_qemu_image_check`.
 # The build pins the QEMU device-tree dump (`dtb-randomness=off`), maps the
 # source and build roots to fixed logical prefixes, drops the ambient dev
