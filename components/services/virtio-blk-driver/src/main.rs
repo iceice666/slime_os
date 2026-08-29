@@ -7,7 +7,7 @@ use core::sync::atomic::{Ordering, fence};
 use boot_contracts::block_authority::{self, BlockAuthority};
 use slime_components::virtio_mmio::{
     self, DESC_F_NEXT, DESC_F_WRITE, MediatedMmio, observe_used, publish_available,
-    write_descriptor, write_u16,
+    used_descriptor_slot, used_ring_progress, write_descriptor, write_u16,
 };
 use slime_proto::block_v2::{
     self, DEVICE_STATUS_IO_ERR, DEVICE_STATUS_OK, DEVICE_STATUS_UNSUPPORTED, WireBlockReply,
@@ -146,6 +146,7 @@ fn main(_startup_arg: u32) {
     // The virtqueue used-ring cursor, owned across every drain: the index is
     // absolute and monotonic, so it cannot be re-derived per pass.
     let mut used = 0u16;
+    let mut unanswerable_requests = 0u64;
     let device = Device {
         mmio,
         queue_dma,
@@ -162,7 +163,13 @@ fn main(_startup_arg: u32) {
     };
     loop {
         match slime_rt::notification_poll(request_ready) {
-            Ok(Some(_)) => drain(&mut queue, &mut outstanding, &device, &mut used),
+            Ok(Some(_)) => drain(
+                &mut queue,
+                &mut outstanding,
+                &device,
+                &mut used,
+                &mut unanswerable_requests,
+            ),
             Ok(None) => {}
             Err(_) => peer_dead(
                 &mut queue,
@@ -184,7 +191,13 @@ fn main(_startup_arg: u32) {
                 // It converges because the client is synchronous: submit and
                 // shutdown are the same thread, so nothing can be published
                 // after the shutdown send.
-                drain(&mut queue, &mut outstanding, &device, &mut used);
+                drain(
+                    &mut queue,
+                    &mut outstanding,
+                    &device,
+                    &mut used,
+                    &mut unanswerable_requests,
+                );
                 break;
             }
             // Peer gone is NOT shutdown, and draining here would be a
@@ -257,6 +270,7 @@ fn drain(
     outstanding: &mut Outstanding<IO0_SLOTS>,
     device: &Device<'_>,
     used: &mut u16,
+    unanswerable_requests: &mut u64,
 ) {
     let Device {
         mmio,
@@ -273,8 +287,25 @@ fn drain(
     loop {
         let submission = match queue.take_request(&mut payload, DATA_BYTES) {
             Ok(value) => value,
-            Err(QueueError::Empty) => break,
-            Err(_) => continue,
+            Err(error) if error.error == QueueError::Empty => break,
+            Err(error) => {
+                if error.request_id == 0 {
+                    *unanswerable_requests += 1;
+                    debug_write(b"[virtio-blk-driver] unanswerable requests=");
+                    debug_u64(*unanswerable_requests);
+                    debug_write(b"\n");
+                } else {
+                    complete(
+                        queue,
+                        error.request_id,
+                        STATUS_MALFORMED,
+                        0,
+                        malformed_reply(0),
+                        completion_ready,
+                    );
+                }
+                continue;
+            }
         };
         let Some(request) = WireBlockRequest::decode(&payload[..submission.payload_len]) else {
             complete(
@@ -399,12 +430,12 @@ struct Outcome {
 
 /// Program one request and wait for the device to retire it.
 ///
-/// `used` is the client-side used-ring cursor, advanced by one on every
-/// completion this observes. It must persist across requests: the used index is
-/// absolute and monotonic, so comparing it against zero answers "has the device
-/// ever completed anything", not "has it completed *this*". A driver serving one
-/// batch behind a single signal never noticed; one serving a synchronous client
-/// reads its predecessor's completion on the second request.
+/// `used` is the driver-owned used-ring cursor. This driver publishes exactly
+/// one chain at a time, so a device may advance the index by at most one. The
+/// used entry must then name head zero and report exactly the bytes writable by
+/// that chain; every other device-written value terminally refuses this request.
+/// The cursor persists across requests because the used index is absolute and
+/// monotonic.
 fn execute(
     mmio: MediatedMmio,
     queue_dma: DmaMapping,
@@ -479,32 +510,71 @@ fn execute(
     }
     mmio.notify_queue(0);
     for _ in 0..COMPLETION_POLLS {
-        if observe_used(queue, USED_OFFSET + 2).unwrap_or(*used) != *used {
-            *used = used.wrapping_add(1);
-            mmio.acknowledge_interrupts();
-            fence(Ordering::Acquire);
-            let status = unsafe { ptr::read_volatile(queue.as_ptr().add(control + 16)) };
-            return if status == 0 {
-                Outcome {
-                    status: STATUS_OK,
-                    bytes,
-                    payload: reply(request.op, request.sector_count, DEVICE_STATUS_OK, 0),
+        let Some(published) = observe_used(queue, USED_OFFSET + 2) else {
+            return device_error(mmio, request.op, 4);
+        };
+        match used_ring_progress(published, *used, 1) {
+            None => return device_error(mmio, request.op, 5),
+            Some(0) => {}
+            Some(_) => {
+                let entry = USED_OFFSET + 4 + (usize::from(*used) % VIRTQUEUE_SIZE) * 8;
+                let id = unsafe {
+                    u32::from_le(ptr::read_volatile(queue.as_ptr().add(entry).cast::<u32>()))
+                };
+                let reported = unsafe {
+                    u32::from_le(ptr::read_volatile(
+                        queue.as_ptr().add(entry + 4).cast::<u32>(),
+                    ))
+                };
+                *used = used.wrapping_add(1);
+                let expected = if request.op == block_v2::OP_READ {
+                    bytes
+                        .checked_add(1)
+                        .and_then(|value| u32::try_from(value).ok())
+                } else {
+                    Some(1)
+                };
+                if used_descriptor_slot(id, 1) != Some(slot) || expected != Some(reported) {
+                    return device_error(mmio, request.op, 6);
                 }
-            } else {
-                Outcome {
-                    status: STATUS_DEVICE_ERROR,
-                    bytes: 0,
-                    payload: reply(request.op, 0, u32::from(status), 0),
-                }
-            };
+                mmio.acknowledge_interrupts();
+                fence(Ordering::Acquire);
+                let status = unsafe { ptr::read_volatile(queue.as_ptr().add(control + 16)) };
+                return match status {
+                    value if u32::from(value) == DEVICE_STATUS_OK => Outcome {
+                        status: STATUS_OK,
+                        bytes,
+                        payload: reply(request.op, request.sector_count, DEVICE_STATUS_OK, 0),
+                    },
+                    value if u32::from(value) == DEVICE_STATUS_IO_ERR => Outcome {
+                        status: STATUS_DEVICE_ERROR,
+                        bytes: 0,
+                        payload: reply(request.op, 0, DEVICE_STATUS_IO_ERR, 0),
+                    },
+                    value if u32::from(value) == DEVICE_STATUS_UNSUPPORTED => Outcome {
+                        status: STATUS_DEVICE_ERROR,
+                        bytes: 0,
+                        payload: reply(request.op, 0, DEVICE_STATUS_UNSUPPORTED, 0),
+                    },
+                    value => Outcome {
+                        status: STATUS_DEVICE_ERROR,
+                        bytes: 0,
+                        payload: reply(request.op, 0, DEVICE_STATUS_IO_ERR, u64::from(value)),
+                    },
+                };
+            }
         }
         yield_now();
     }
+    device_error(mmio, request.op, 2)
+}
+
+fn device_error(mmio: MediatedMmio, op: u8, detail: u64) -> Outcome {
     mmio.fail();
     Outcome {
         status: STATUS_DEVICE_ERROR,
         bytes: 0,
-        payload: reply(request.op, 0, DEVICE_STATUS_IO_ERR, 2),
+        payload: reply(op, 0, DEVICE_STATUS_IO_ERR, detail),
     }
 }
 

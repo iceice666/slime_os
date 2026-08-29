@@ -301,72 +301,82 @@ impl<'a> BlockIo<'a> {
         self.outstanding
             .admit(id, slice.lease, slice.length)
             .map_err(|_| BlockError::Setup)?;
-        if notification_signal(self.request_ready) != ERR_SUCCESS {
-            return Err(BlockError::Lost);
-        }
         let mut body = [0u8; COMPLETION_PAYLOAD_BYTES];
-        // Retry, not a single wait. `completion_ready` is a *latched*
-        // notification, so a completion produced while this client was between
-        // its signal and its first ring check leaves a wake latched with no
-        // entry behind it. The next request's wait then returns immediately,
-        // finds the ring still empty, and a single-wait loop would report the
-        // live request lost -- without settling it, desynchronising every later
-        // completion.
-        //
-        // Liveness comes from the ring's `driver_state`, not from a wake count.
-        // `notification_wait` is `seL4_Wait`: it blocks rather than yielding, so
-        // a counter over waits never advances against a driver that stopped
-        // signalling, and the bound would be unreachable exactly when it was
-        // needed. `driver_state` is the driver's own single-writer field and a
-        // supervised death marks it `DRIVER_DEAD`, which is a fact rather than a
-        // guess about elapsed time.
-        //
-        // Checked *before* each wait, so a driver that died between the ring
-        // check and the wait is seen on the next iteration rather than parked on.
-        let completion = loop {
-            match self.queue.take_completion(&self.outstanding, &mut body) {
-                Ok(completion) if completion.request_id == id => break completion,
-                // A completion for another identity cannot occur with one
-                // request in flight, and is not silently dropped: the ring has
-                // already consumed it, so the only honest answer is that this
-                // ring is not behaving as its contract says.
-                Ok(_) => return Err(BlockError::Malformed),
-                Err(QueueError::Empty) => {
-                    // A dead or resetting driver will produce no further
-                    // completion, so waiting for one would park forever. The
-                    // request stays admitted; settling it is the caller's
-                    // decision once it knows the epoch ended.
-                    if self.queue.driver_state() == io_queue::DRIVER_DEAD {
-                        return Err(BlockError::Lost);
-                    }
-                    if notification_wait(self.completion_ready).is_err() {
-                        return Err(BlockError::Lost);
-                    }
-                }
-                Err(_) => return Err(BlockError::Malformed),
+        let result = (|| {
+            if notification_signal(self.request_ready) != ERR_SUCCESS {
+                return Err(BlockError::Lost);
             }
+            // Retry, not a single wait. `completion_ready` is a *latched*
+            // notification, so a completion produced while this client was between
+            // its signal and its first ring check leaves a wake latched with no
+            // entry behind it. The next request's wait then returns immediately,
+            // finds the ring still empty, and a single-wait loop would report the
+            // live request lost -- without settling it, desynchronising every later
+            // completion.
+            //
+            // Liveness comes from the ring's `driver_state`, not from a wake count.
+            // `notification_wait` is `seL4_Wait`: it blocks rather than yielding, so
+            // a counter over waits never advances against a driver that stopped
+            // signalling, and the bound would be unreachable exactly when it was
+            // needed. `driver_state` is the driver's own single-writer field and a
+            // supervised death marks it `DRIVER_DEAD`, which is a fact rather than a
+            // guess about elapsed time.
+            //
+            // Checked *before* each wait, so a driver that died between the ring
+            // check and the wait is seen on the next iteration rather than parked on.
+            let completion = loop {
+                match self.queue.take_completion(&self.outstanding, &mut body) {
+                    Ok(completion) if completion.request_id == id => break completion,
+                    // A completion for another identity cannot occur with one
+                    // request in flight, and is not silently dropped: the ring has
+                    // already consumed it, so the only honest answer is that this
+                    // ring is not behaving as its contract says.
+                    Ok(_) => return Err(BlockError::Malformed),
+                    Err(QueueError::Empty) => {
+                        if self.queue.driver_state() == io_queue::DRIVER_DEAD {
+                            return Err(BlockError::Lost);
+                        }
+                        if notification_wait(self.completion_ready).is_err() {
+                            return Err(BlockError::Lost);
+                        }
+                    }
+                    Err(_) => return Err(BlockError::Malformed),
+                }
+            };
+            let reply = WireBlockReply::decode(&body[..completion.payload_len])
+                .filter(|reply| {
+                    reply.magic == block_v2::BLOCK_MAGIC
+                        && reply.version == block_v2::FORMAT_VERSION
+                })
+                .ok_or(BlockError::Malformed)?;
+            if completion.status != io_queue::STATUS_OK {
+                return Err(BlockError::Refused {
+                    status: completion.status,
+                    device_status: reply.device_status,
+                });
+            }
+            Ok((completion, reply))
+        })();
+
+        // The admitted identity has one structural exit: settle it before
+        // judging the operation result. This releases the lease exactly once
+        // whether the driver honoured, refused, malformed, or lost the request.
+        let terminal_status = match &result {
+            Ok((completion, _)) => completion.status,
+            Err(BlockError::Malformed | BlockError::BadRequest | BlockError::Setup) => {
+                io_queue::STATUS_MALFORMED
+            }
+            Err(BlockError::Refused { status, .. }) => *status,
+            Err(BlockError::Lost) => io_queue::STATUS_DEVICE_ERROR,
         };
-        // Settle before judging status: the lease must be released exactly once
-        // whether the driver honoured the request or refused it, and an early
-        // return on refusal would leak it.
         let settled = self
             .outstanding
-            .settle(completion.request_id, completion.status)
+            .settle(id, terminal_status)
             .map_err(|_| BlockError::Malformed)?;
         if settled.lease != slice.lease {
             return Err(BlockError::Malformed);
         }
-        let reply = WireBlockReply::decode(&body[..completion.payload_len])
-            .filter(|reply| {
-                reply.magic == block_v2::BLOCK_MAGIC && reply.version == block_v2::FORMAT_VERSION
-            })
-            .ok_or(BlockError::Malformed)?;
-        if completion.status != io_queue::STATUS_OK {
-            return Err(BlockError::Refused {
-                status: completion.status,
-                device_status: reply.device_status,
-            });
-        }
+        let (completion, reply) = result?;
         Ok(BlockReply {
             sectors_done: reply.sectors_done,
             device_status: reply.device_status,
