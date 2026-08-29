@@ -24,30 +24,7 @@ full and says why.
 
 ## Open
 
-### B85 — `just machete` fails on three stale `slime-proto` dependencies
-
-**Problem:** `just machete` exits 1. Three testkit crates declare a dependency
-on `slime-proto` that none of them uses:
-`components/testkit/sel4-store-probe`, `components/testkit/sel4-rollback-probe`,
-and `components/testkit/io-link-intruder`. An unused-dependency gate that is
-already red cannot report the next stale dependency anyone adds, which is the
-only thing it exists to do.
-
-**Evidence:** Observed 2026-08-29 while validating IO6. `just machete` reports
-all three under "unused dependencies in components". Confirmed pre-existing
-rather than introduced: stashing the IO6 working tree and re-running on clean
-`HEAD` reproduces the same three, same exit code. `grep slime_proto` across all
-three crates' `src/` returns nothing, so these are declarations rather than
-false positives — `[package.metadata.cargo-machete] ignored` would be the wrong
-remedy.
-
-**Proposed fix:** Delete the three `slime-proto = { path = "../../proto" }`
-lines. Each crate builds without it; nothing else should be needed. If a crate
-turns out to need it after all, that is a compile error naming the crate, not a
-judgement call.
-
-**Exit condition:** `just machete` exits 0 with "didn't find any unused
-dependencies" for `boot-contracts`, `components`, and `slime-root`.
+No open items. Every recorded defect is in the resolved log below.
 
 ## Deferred follow-ups
 
@@ -82,6 +59,12 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B85 — `just machete` fails on three stale `slime-proto` dependencies
+
+**Status:** Resolved 2026-08-29. **Class:** Defect (stale dependency declarations leaving a gate permanently red).
+**Was:** `components/testkit/sel4-store-probe`, `components/testkit/sel4-rollback-probe`, and `components/testkit/io-link-intruder` each declared a `slime-proto` path dependency that no source in those crates referenced, so `just machete` exited 1 and could not report the next stale dependency anyone added.
+**Exit condition (observed):** The three declarations were deleted and `just machete` exited 0 for `boot-contracts`, `components`, and `slime-root`; `just lint_all`, `just sel4_store_check`, `just sel4_rollback_check`, and `just io_link_check` passed, and `just generation_check` reproduced generation `197c86bc97a57a23051f8681bce453771f662c65a7129cc23e16d3ec2d2e6298` unchanged.
+**Evidence:** [`devlog/2026-08-29-b85-stale-proto-dependencies/`](../devlog/2026-08-29-b85-stale-proto-dependencies/index.md).
 ### B83 — The root still owns the product virtio-blk path after IO2's parity proof
 
 **Status:** Resolved 2026-08-29. **Class:** Change (dead-code cutover of an unreachable product path).

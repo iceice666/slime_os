@@ -12,7 +12,6 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
-slime-proto = { path = "../../proto" }
 slime-rt = { path = "../../runtime" }
 
 [build-dependencies]

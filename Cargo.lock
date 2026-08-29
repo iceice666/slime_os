@@ -1022,7 +1022,6 @@ name = "slime-component-io-link-intruder"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
- "slime-proto",
  "slime-rt",
 ]
 
@@ -1315,7 +1314,6 @@ dependencies = [
  "boot-contracts",
  "slime-build-support",
  "slime-components",
- "slime-proto",
  "slime-rt",
 ]
 
@@ -1336,7 +1334,6 @@ dependencies = [
  "boot-contracts",
  "slime-build-support",
  "slime-components",
- "slime-proto",
  "slime-rt",
 ]
 
