@@ -4,7 +4,7 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Proves exact address, port, name, transport, right, raw-packet, resolver-wide and listen attempts fail closed without packets.";
+  purpose = "Proves exact address, port, name, transport, rights-mask, and cross-holder capability attempts all fail closed.";
   implementation =  {
     provider = "workspace";
     binary = "io-network-intruder";
@@ -59,8 +59,8 @@
   };
   test =  {
     testCondition = "io_network_check boots sel4-io-network";
-    expectedResult = "every denial is structured and emits no packet";
-    passFailCriteria = "[io-network-intruder] every denial structured packets=0";
+    expectedResult = "every exact-authority, cross-holder, and rights-mask attempt is refused with a structured denial";
+    passFailCriteria = "[io-network-intruder] structured denials=14 shutdown=1";
     requiredTestEnvironment = "io_network_check";
   };
 }

@@ -109,3 +109,8 @@ Two platform facts shaped the design more than anything in the roadmap text: QEM
 - Raw transcript: none retained; reproduce with `just io_driver_authority_check`.
 - Serial/debugger/model output: the `SLIME_IO reclaim` line and marker list under *Verification*, as asserted by `scripts/check/check-sel4-io-driver-authority-plane.py`.
 - Related roadmap item: [IO1 — Hardware resource authority and DMA accounts](../../roadmap/11-io-substrate.md#io1--hardware-resource-authority-and-dma-accounts)
+
+## Corrections
+
+**2026-08-29 — The original intruder and opaque-DMA markers did not earn their wording.**
+The frozen guards above originally claimed DMA denial although the intruder made no DMA call, and claimed that the probe had checked absence of a physical address although it discarded the queue result without comparing it. Both gaps are now closed. The intruder attempts two DMA operations as well as device, MMIO, and interrupt operations and computes `[io-driver-intruder] denied device=1 mmio=2 dma=2 interrupt=1`. The probe forges `u64::MAX` as a prior interrupt sequence and computes `[io-driver-probe] interrupt spoof refused=1`; it compares both the opaque DMA mapping id and returned IOVA against the authenticated device ordinal's QEMU transport physical address and computes `[io-driver-probe] dma token differs from device physical address=1`. It also computes `[io-driver-probe] stale epoch map refused=1`. These replace the unearned literal wording with Direct evidence; operation 62 is now honestly named `IRQ_ACK` because it acknowledges but does not wait for hardware arrival.

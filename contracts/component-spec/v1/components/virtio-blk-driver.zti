@@ -60,8 +60,8 @@
     qos = "none";
   };
   test = {
-    testCondition = "io_block_check boots generation 51 with a real virtio-blk-device";
-    expectedResult = "oracle parity plus exhaustive async terminal settlement and numeric resource reclamation";
+    testCondition = "io_block_check boots generation 51 with two real virtio-blk-devices";
+    expectedResult = "every observed request settles exactly once against validated used-ring progress, and a read-only ring refuses a write";
     passFailCriteria = "[io-block-probe] io block plane complete";
     requiredTestEnvironment = "io_block_check";
   };

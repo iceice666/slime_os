@@ -4,7 +4,7 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Proves a component omitted from LinkDevice grants cannot transmit, receive, query link state, or obtain raw frames.";
+  purpose = "Proves a component omitted from LinkDevice grants resolves none of the plane's declared bindings.";
   implementation = {
     provider = "workspace";
     binary = "io-link-intruder";
@@ -50,8 +50,8 @@
   };
   test = {
     testCondition = "the io_link_check gate boots an instance with no LinkDevice grant";
-    expectedResult = "all four raw-link operations are denied and the deterministic backend observes no packet";
-    passFailCriteria = "[io-link-intruder] denied transmit=1 receive=1 query=1 raw=1 emitted=0";
+    expectedResult = "every declared binding name fails to resolve, so the component holds no link authority to attempt an operation with";
+    passFailCriteria = "[io-link-intruder] binding-resolution refused=8";
     requiredTestEnvironment = "io_link_check";
   };
 }

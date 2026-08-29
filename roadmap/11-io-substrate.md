@@ -2,8 +2,9 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** IO0 through IO7 complete; IO2's root cutover closed 2026-08-29, and
-IO5, IO6, and IO7 added the track's host verification layers. Each
+**Status:** IO0–IO3 and IO5–IO7 complete; IO4 is complete only for its exact-
+destination authority boundary, while its network data plane remains unfinished.
+IO2's root cutover closed 2026-08-29, and IO5, IO6, and IO7 added the track's host verification layers. Each
 implementation slice is observed under QEMU by its own gate — `just
 io_queue_check`, `just io_driver_authority_check`, `just io_block_check`, `just
 io_link_check`, `just io_network_check` — and every gate is registered in `just
@@ -36,8 +37,12 @@ What is **not** done, stated plainly so no consumer assumes otherwise:
   `#[cfg(slime_boot_selector)]`, serving the immutable selector's
   pre-admission bootstrap read. Evidence:
   [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
-- **IO4's declared-but-refused subset:** IPv6/NDP, DHCP, SLAAC, and the TCP
-  listener/accept data path answer `STATUS_UNSUPPORTED`.
+- **IO4's unimplemented network data plane:** Ethernet framing, ARP, IPv4,
+  ICMP, UDP, TCP, exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC,
+  and the TCP listener/accept data path are not implemented. DHCP, SLAAC, and
+  NDP are not declared by the current contracts, so the earlier claim that
+  they were "declared and refused" and could later land without a contract
+  change is withdrawn.
 - **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
   so no containment claim is made; H4 owns AMD-IOMMU proof and a future Arm milestone
   owns any SMMU proof.
@@ -142,12 +147,17 @@ just io_queue_check
 Two supervised components exchange protocol-specific requests and completions through fixed shared rings, buffer leases, Notifications, and a WaitSet; full queues backpressure, cancellation and peer death settle every request, restart creates a fresh epoch, and stale or malformed completions cannot reclaim or resurrect memory.
 
 ## IO1 — Hardware resource authority and DMA accounts
-
 **Status:** Complete. Observed under QEMU by `just io_driver_authority_check`:
 generation-declared device binding, exact-subrange mediated MMIO with out-of-range
-refusal, refusal to widen a shared-granule region to its page rather than mapping it,
-bounded interrupt authority with spoof refusal, opaque DMA paths exposing no physical
-address, and an ungranted component denied device, MMIO, DMA, and interrupt authority.
+refusal, refusal to widen a shared-granule region to its page, and an ungranted
+component's computed denials for device, MMIO, two DMA operations, and interrupt
+authority. The probe forges `u64::MAX` as a prior interrupt sequence and observes
+`interrupt spoof refused=1`; it also compares both the opaque DMA mapping id and
+returned IOVA against the authenticated device ordinal's QEMU transport physical
+address and observes `dma token differs from device physical address=1`. Interrupt
+operation 62 is honestly named `IRQ_ACK`: it acknowledges a pending declared
+sequence but does not wait for hardware arrival. A stale-epoch map is also observed
+refused.
 The owner-spawned driver now faults with live MMIO, IRQ, and driver-owned queue-DMA
 authority; task death performs real unmap, IRQ unbind, DMA destruction, charge return,
 and request settlement before task-object reclamation. The boot transcript reports
@@ -175,7 +185,7 @@ that live-loan payload DMA and driver-owned contiguous queue DMA have landed.
 - a component without the exact device resource cannot enumerate devices, map MMIO, allocate/map DMA memory, receive or acknowledge an interrupt, or map another holder's buffer;
 - a driver maps only its granted region and requested bounded subrange; direct mapping additionally requires page exclusivity, while shared-granule regions use mediated `read32`/`write32` whose per-access bounds are stricter than page-granular mapping; wrong device, offset, length, cache/access mode, or duplicate mapping fails before touching the VSpace;
 - DMA allocation and live mappings cannot exceed the generation account, and memory remains charged and unreclaimable while a hardware request owns it;
-- one driver receives only its declared interrupt; spoofed, wrong-source, duplicate, and stale acknowledgements are rejected;
+- one driver receives only its declared interrupt; wrong-source, duplicate, spoofed, and stale acknowledgements are rejected, while hardware-arrival waiting remains outside `IRQ_ACK`;
 - crash/restart revokes mappings and interrupt authority, settles IO0 requests, returns every charge, and starts with a fresh epoch;
 - ordinary service clients observe only typed semantic capabilities and buffer descriptors, never physical addresses, IOVAs, BDFs, vectors, or global enumeration results;
 - no device-specific opcode, descriptor parser, or retry policy enters `slime-root`.
@@ -190,11 +200,9 @@ just io_driver_authority_check
 
 A manifest-declared userspace driver receives exactly one device instance, its bounded MMIO, DMA account, interrupt, shared-data endpoints, and supervision handle; an ungranted component receives none of them, crash/restart returns every charge with a fresh epoch, and the root remains unaware of device semantics.
 
-The boot-selector's disk is a bounded ordering exception: it must be probed before the generation stored on it can be decoded, so decoded generation policy cannot select its own prerequisite. No other device inherits that exception; after decode, hardware ownership is generation-driven and mutually exclusive with the legacy root driver.
 
 ## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
-
-**Status:** Complete; all eight block-holding compositions reach their devices through the userspace driver, the authenticated per-ring rights prerequisite is landed, and the two two-disk planes were unblocked by B84's per-instance device authority. The root's own block implementation was deleted by B83 (resolved 2026-08-29); the parser survives only as `boot_selector_block.rs` under `#[cfg(slime_boot_selector)]` for the selector's pre-admission bootstrap read. QEMU generation 51 boots the userspace virtio-blk plane through root-mediated bounded MMIO, proves read/write/flush/geometry and negative parity, durable fresh-boot readback, eight-request identity-safe queuing and full-ring backpressure, numeric zero-leak settlement for descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death, plus fresh-epoch restart with stale-completion rejection. `just io_block_check` returns exit 0 after an explicit probe-to-driver shutdown rendezvous.
+**Status:** Complete for the userspace-driver cutover and the IO2 behavior directly exercised by generation 51. All eight block-holding compositions reach their devices through the userspace driver, the authenticated per-ring rights prerequisite is landed, B84 supplies per-instance authority for the two two-disk planes, and B83 deleted the product root's block implementation; only the boot selector's pre-admission parser remains. The plane computes one full-ring refusal without overwrite and eight identity-matched completions. It observes two reads, one write, one flush, and one geometry reply; verifies a 512-byte same-boot readback with zero mismatches; and observes out-of-range, malformed, short-buffer, unsupported-opcode, and missing-write-right refusals. The host gate also verifies the flushed sector reached the backing image byte-for-byte. Fresh-boot readback, seven injected fault settlements, numeric zero-leak reclamation for those absent paths, supervised restart/fresh epoch, and stale-completion rejection remain withdrawn. `just io_block_check` gates the surviving computed evidence.
 
 **Spawn-grant prerequisite: landed, and the previous diagnosis corrected.** Two earlier passes reported that a dynamically spawned storage client could not receive its crossing bindings because init's spawn supplied zero grant records, and each reverted a working migration believing the root lacked the mechanism. That conclusion was wrong. The root already derives crossing grants from the generation: adding a declared `sharedBufferFactory` grant (source `init`, target `sel4-storage-probe`) to `sel4-storage.zti` made preflight report `requested=0 parent=1 minted=0 respawn=false` — it had counted the declaration correctly and refused only because init passed nothing. The gap was entirely init-side. `drive_probe_plane_with_token` now takes the exact grant vector its manifest declares, and the storage plane boots with `SLIME_GRAPH spawn authorized task=0 slot=1 component=sel4-storage-probe grants=1` and `buffer_factory_grants=1`. The same idiom was already in production on the sample plane (`sample-lender-shared-buffer-factory`), so this is a use of the existing mechanism rather than a second one.
 
@@ -253,10 +261,9 @@ handshake at once.
 
 ### Required checks
 
-- read, write, flush, geometry, rights denial, out-of-range LBA, malformed request, short buffer, unsupported feature, and durable fresh-boot behavior match the existing storage-plane oracle;
+- the plane observes read, write, flush, geometry, rights denial, out-of-range LBA, malformed request, short buffer, unsupported opcode, and same-boot write/flush/readback; fresh-boot durability remains unproved by this gate;
 - multiple queued requests complete without overwrite or identity confusion, and a full ring backpressures the caller;
-- injected descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death settle every request and reclaim every descriptor, DMA mapping, lease, and charge;
-- a restarted driver has a fresh epoch, and a deliberately injected old-epoch completion is rejected without modifying the new request or buffer;
+- descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, peer death, supervised restart, and stale-completion injection remain required follow-up evidence rather than completed IO2 claims;
 - filesystem, object-store, generation, rollback, and recovery clients still reach storage only through their declared `BlockDevice` capability;
 - the product root contains no virtio-blk opcode or descriptor parsing after cutover.
 
@@ -268,7 +275,7 @@ just io_block_check
 
 ### Exit condition
 
-A supervised userspace virtio-blk driver provides the existing capability-gated read/write/flush behavior through asynchronous bounded buffers and completions, survives injected reset/crash/stale-completion cases without leaked authority or memory, and leaves `slime-root` responsible only for IO1 resource construction and reclamation.
+A userspace virtio-blk driver provides capability-gated block operations through asynchronous bounded buffers and completions, and every block-holding composition uses it; the IO2 plane directly establishes operation/refusal behavior, identity-safe queueing, and backpressure, but does not yet establish the fault/restart/stale-epoch portion of the original exit condition.
 
 ## IO3 — Userspace virtio-net and LinkDevice validation
 
@@ -300,8 +307,8 @@ interrupt-sequence marker is claimed.
 validated its client and largely trusted its device: the used-ring descriptor
 id was reduced with `id as usize / 2` and used to index the per-slot tables, so
 an odd in-range id — one this driver never publishes, since it submits
-two-descriptor chains at even heads — silently settled a different client's
-lease, and a receive length past the published descriptor was truncated into
+two-descriptor chains at even heads — silently settled a different live request
+of the same client, and a receive length past the published descriptor was truncated into
 the reply's `u16` while the completion reported it in full. Neither was
 reachable under this plane, because QEMU's device is well behaved; that is the
 point. The rules are now three pure helpers in `components/lib/src/virtio_mmio.rs`
@@ -342,14 +349,16 @@ A userspace virtio-net driver exposes one bounded `LinkDevice` with duplex queue
 
 ## IO4 — Network service and exact destination authority
 
-**Status:** Complete 2026-08-28 for the declared subset; `just io_network_check` boots
-the plane and reports exact destinations, denials, reset, restart, and backend
-independence proved. A granted client reaches exactly its declared TCP/UDP
-destination and DNS name; eleven separate denial arms — alternate address, alternate
-port, alternate DNS name, wrong transport, each of the four missing rights, raw
-packet, resolver-wide lookup, and listen without LISTEN — each observe zero packets.
-Reset and restart reclaim every queue, buffer, and lease with a fresh epoch and
-refuse stale completions.
+**Status:** Complete only for the exact-destination authority boundary exercised by
+the generation-53 fixture; it is not a network data-plane implementation. The
+service computes five decoded destinations with CONNECT/SEND/RECV authority and
+reports declared socket/listener/DNS-record ceilings. The probe observes two
+successful capability operations plus exact-destination, DNS-budget, and
+socket-budget refusals; the intruder observes exact-authority, cross-holder, and
+rights-mask refusals. Socket, listener, and DNS-record charging are enforced from
+generation data; the other five declared bounds remain decoded but unenforced. The
+earlier transfer, packet-stack, reset, restart, reclamation, stale-completion,
+`LinkDevice` backend, and backend-independence conclusions are withdrawn.
 
 **Authority-decoder hardening, 2026-08-29 (B88).** The destination-authority
 record's layout is declared by `contracts/network-destination/v1/schema.zt`, but
@@ -364,17 +373,19 @@ Four parser mutations and one corrupted generated offset each fail the suite.
 **Evidence:**
 [`devlog/2026-08-29-b88-network-destination-generated-offsets/`](../devlog/2026-08-29-b88-network-destination-generated-offsets/index.md)
 
-**Declared but structurally refused as `STATUS_UNSUPPORTED`,** and therefore *not*
-claimed: IPv6 and NDP, DHCP, SLAAC, and the TCP listener/accept data path beyond a
-structured refusal. Those remain declared in `contracts/network-service/v1` so
-adding them is an implementation change rather than a contract change. Anything
-consuming IO4 that needs one of them — an RPi5 or ROS path that requires DHCP, or a
-listening service — must treat it as unfinished.
-
-**Backend:** proved against a deterministic in-plane `io-link-loopback` `LinkDevice`
-provider, which is legitimate evidence precisely because backend independence is an
-IO4 deliverable. The virtio-net reference backend is IO3's and is qualified there;
-physical link qualification remains H6/H12/RP.
+**Unimplemented and not claimed:** Ethernet framing, ARP, IPv4, ICMP, UDP, TCP,
+exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC, and the TCP
+listener/accept data path. DHCP, SLAAC, and NDP are not declared by the current
+contracts; the earlier statement that they were declared and structurally refused,
+and therefore could be added without a contract change, is withdrawn. Consumers
+needing a network byte stream, datagrams, name resolution, address configuration,
+or listening must treat IO4 as unfinished.
+**Backend:** none is exercised by the IO4 service plane. The composition's
+`io-link-loopback` fixture now resolves its declared endpoint and computes
+`declared endpoint bindings=1 protocol operations=0`; it intentionally performs no
+`LinkDevice` operation. The service therefore does not demonstrate a backend boundary
+or backend independence. IO3 separately qualifies virtio-net `LinkDevice`; physical
+link qualification remains H6/H12/RP.
 **Evidence:** [`devlog/2026-08-28-io4-network-service/`](../devlog/2026-08-28-io4-network-service/index.md)
 
 **Depends on:** IO3, C9 clocks/WaitSets/restart where timers and reconnect use them, and generation/capability introspection.
@@ -391,12 +402,11 @@ physical link qualification remains H6/H12/RP.
 
 ### Required checks
 
-- a component granted one destination reaches only that exact name/address, transport, port, and rights set; alternate address, port, DNS name, raw packet, resolver, and listen attempts fail closed;
-- malformed frames, DHCP options, DNS messages, fragments, TCP options, sequence/window state, retransmission exhaustion, and peer loss cannot exceed declared bounds or wedge unrelated connections;
-- the manifest and authority-diff tooling enumerate every reachable destination and distinguish connection, send, receive, and listen authority;
-- QEMU transfers deterministic data to one allowed endpoint while a simultaneous denied endpoint receives no packet;
-- link unplug/reset and network-service or driver restart invalidate stale connection/request epochs, reclaim queues and buffers, and reconnect only where the declared policy permits it;
-- R0/RP5 can obtain the one bounded TCP byte stream they declare without acquiring discovery, router, wildcard, or raw-link authority.
+- a component granted one destination is admitted only for that exact holder, name/address, transport, port, and rights set; alternate address, port, DNS name, raw packet, resolver, and listen attempts fail closed at the authority boundary;
+- Ethernet/ARP/IP/ICMP/UDP/TCP/DNS framing, malformed-packet bounds, deterministic transfers, and peer-loss behavior remain unimplemented and unverified;
+- the manifest enumerates reachable destinations and distinguishes connection, send, receive, and listen authority;
+- link unplug/reset and network-service or driver restart reclamation remain unimplemented and unverified in IO4;
+- R0/RP5 cannot yet obtain a TCP byte stream from this service and must treat IO4 as unfinished.
 
 ### Planned verification target
 
@@ -406,7 +416,7 @@ just io_network_check
 
 ### Exit condition
 
-Native components obtain bounded TCP/UDP services only for generation-declared exact destinations over a backend-independent `LinkDevice`; the virtio-net reference path survives malformed traffic, denial, link reset, and restart, and no client receives ambient socket or packet authority.
+Native components can be admitted or refused at the exact generation-declared destination-authority boundary without receiving ambient socket or packet authority. The network packet/data plane, `LinkDevice` attachment, transfers, bounded protocol state, reset/restart reclamation, and backend independence remain unfinished.
 
 ## IO5 — Checked models of the substrate's lifetime and accounting rules
 
@@ -519,10 +529,11 @@ has not been exercised:
   which only says a dead instance holds nothing and would be satisfied by never
   reclaiming at all.
 
-### Verification target
+### Verification targets
 
 ```sh
-just io_model_check
+just io_queue_model_check
+just io_resource_model_check
 ```
 
 ### Exit condition (observed)

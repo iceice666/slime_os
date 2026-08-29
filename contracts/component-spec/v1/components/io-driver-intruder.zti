@@ -20,5 +20,5 @@
   };
   health = "required";
   compatibility = { platform = "aarch64-sel4-qemu-virt"; interface = "contracts/interface-schema/v1"; dependency = "none"; resource = "atMost"; runtime = "exact"; qos = "none"; };
-  test = { testCondition = "the io_driver_authority_check gate boots the authority composition"; expectedResult = "all hardware-resource attempts are denied without a fault"; passFailCriteria = "[io-driver-intruder] device mmio dma interrupt denials proven"; requiredTestEnvironment = "io_driver_authority_check"; };
+  test = { testCondition = "the io_driver_authority_check gate boots the authority composition"; expectedResult = "every attempted device, MMIO, DMA, and interrupt operation is denied without a fault"; passFailCriteria = "[io-driver-intruder] denied device=1 mmio=2 dma=2 interrupt=1"; requiredTestEnvironment = "io_driver_authority_check"; };
 }

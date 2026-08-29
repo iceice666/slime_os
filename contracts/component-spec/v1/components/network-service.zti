@@ -4,7 +4,7 @@
   componentType = "service";
   version = "1.0.0";
   owner = "root";
-  purpose = "Provides bounded TCP and UDP authority for exact generation-declared destinations over LinkDevice.";
+  purpose = "Enforces exact generation-declared NetworkDestination authority at its protocol boundary; packet framing and LinkDevice transport are not implemented.";
   implementation =  {
     provider = "workspace";
     binary = "network-service";
@@ -61,8 +61,8 @@
   };
   test =  {
     testCondition = "io_network_check boots sel4-io-network";
-    expectedResult = "exact destination authority, transfers, denials, reset and restart are observed";
-    passFailCriteria = "[io-network-probe] io network plane complete";
+    expectedResult = "exact destination authorization and fail-closed denials are observed; packet transfers, reset, restart, and backend attachment are not claimed";
+    passFailCriteria = "[network-service] observed requests=33 packets=7 socket_refusals=1 listener_refusals=0 dns_refusals=1 cross_holder_refusals=4";
     requiredTestEnvironment = "io_network_check";
   };
 }

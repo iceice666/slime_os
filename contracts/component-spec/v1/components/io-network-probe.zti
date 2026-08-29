@@ -4,7 +4,7 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Proves its one exact TCP and UDP destination, deterministic transfer, DNS, reset and restart behavior without ambient network authority.";
+  purpose = "Proves its exact declared TCP and UDP destinations, exact-name DNS, and per-holder socket and DNS-record budgets, with no ambient network authority.";
   implementation =  {
     provider = "workspace";
     binary = "io-network-probe";
@@ -59,8 +59,8 @@
   };
   test =  {
     testCondition = "io_network_check boots sel4-io-network";
-    expectedResult = "the granted client reaches only declared destinations and survives resets";
-    passFailCriteria = "[io-network-probe] io network plane complete";
+    expectedResult = "the granted client reaches only its declared destinations, is refused past its declared budgets, and closes every capability it opened";
+    passFailCriteria = "[io-network-probe] closed capabilities=4 shutdown=1";
     requiredTestEnvironment = "io_network_check";
   };
 }

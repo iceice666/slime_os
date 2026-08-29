@@ -20,5 +20,5 @@
   };
   health = "required";
   compatibility = { platform = "aarch64-sel4-qemu-virt"; interface = "contracts/interface-schema/v1"; dependency = "none"; resource = "atMost"; runtime = "exact"; qos = "none"; };
-  test = { testCondition = "the io_driver_authority_check gate boots the authority composition"; expectedResult = "only the granted probe receives bounded hardware authority"; passFailCriteria = "[io-driver-probe] io driver authority plane complete"; requiredTestEnvironment = "io_driver_authority_check"; };
+  test = { testCondition = "the io_driver_authority_check gate boots the authority composition"; expectedResult = "only the granted probe receives bounded hardware authority, and stale-epoch map, interrupt spoof, and physical-address exposure are each refused"; passFailCriteria = "[io-driver-probe] io driver authority plane complete"; requiredTestEnvironment = "io_driver_authority_check"; };
 }

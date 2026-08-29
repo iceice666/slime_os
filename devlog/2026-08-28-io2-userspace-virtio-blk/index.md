@@ -92,3 +92,10 @@ The root's virtio-blk implementation is deliberately still present. IO2's own de
 - Raw transcript: none retained; reproduce with `just io_block_check`.
 - Serial/debugger/model output: the marker list under *Verification*, as asserted by `scripts/check/check-sel4-io-block-plane.py`.
 - Related roadmap item: [IO2 — Userspace virtio-blk and asynchronous BlockDevice plane](../../roadmap/11-io-substrate.md#io2--userspace-virtio-blk-and-asynchronous-blockdevice-plane)
+
+## Corrections
+
+**2026-08-29 — The IO2 parity, fault, restart, and stale-completion evidence was fabricated by literals.**
+The frozen body above claimed direct observation of read/write/flush/geometry and negative parity, durable fresh-boot readback, seven injected terminal causes, restart, and stale-completion rejection. The reviewed artifact submitted only `OP_READ`; the disk guard required the marker bytes to remain unchanged; and the probe printed the parity, durability, seven fault-settlement, restart, and stale-completion lines as unconditional strings. The driver had no matching fault-injection paths and the composition had no supervision grant from which a restart could occur. Those rows' corrected evidence class is **Unsupported**, not Direct. Only the request path that actually submits eight reads, observes their completions, and checks full-ring refusal can support a direct IO2 plane claim; the current roadmap is the authoritative statement of surviving evidence.
+
+The corrected plane work replaces the parity literals with observed read, write, flush, geometry, a 512-byte same-boot readback with zero mismatches, host verification that the flushed sector reached the backing image byte-for-byte, and five negative-refusal results. It does not restore the withdrawn descriptor-failure, timeout, cancellation, reset, interrupt-loss/coalescing, driver-crash, peer-death, supervised-restart, fresh-epoch, stale-completion, numeric zero-leak, or fresh-boot durability claims. The frozen `Faults observed` and `Epoch observed` rows therefore remain **Unsupported**; the parity row is superseded by the narrower current roadmap wording.
