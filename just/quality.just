@@ -243,14 +243,19 @@ miri:
 # `#[cfg(kani)]`, so no product build, lint, or Miri run ever sees them.
 #
 # Not part of `contracts_check`: it needs a separate toolchain plus CBMC, the
-# same reason `miri` stands alone above.
+# same reason `miri` stands alone above. `nix develop .#kani` is a distinct
+# shell for the same reason -- the bundle is ~325 MB and nothing else uses it.
 [group('quality')]
 kani_io_proofs:
     #!/usr/bin/env bash
     set -euo pipefail
+    # `cargo-kani`, not `cargo kani`: the latter needs an ambient `cargo` to
+    # dispatch the subcommand, and the `.#kani` shell deliberately ships none
+    # (`kani-driver` uses its bundle's own toolchain). Both forms behave
+    # identically otherwise.
     if ! command -v cargo-kani >/dev/null 2>&1; then
         echo "kani_io_proofs: cargo-kani not found." >&2
-        echo "  install: cargo install --locked kani-verifier && cargo kani setup" >&2
+        echo "  run: nix develop .#kani --command just kani_io_proofs" >&2
         exit 1
     fi
     # Every harness must run. A pass here is only evidence if the harness count
@@ -259,7 +264,7 @@ kani_io_proofs:
     expected=18
     log="$(mktemp)"
     trap 'rm -f "$log"' EXIT
-    cargo kani --manifest-path verification/io-proofs/Cargo.toml 2>&1 | tee "$log"
+    cargo-kani --manifest-path verification/io-proofs/Cargo.toml 2>&1 | tee "$log"
     if ! grep -q "^VERIFICATION:- SUCCESSFUL" "$log"; then
         echo "kani_io_proofs: verification did not succeed" >&2
         exit 1
