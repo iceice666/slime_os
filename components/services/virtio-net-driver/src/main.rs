@@ -628,9 +628,12 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_chang
         // The device reports how much it wrote. Believing a figure larger than
         // the descriptor this driver published would report bytes outside the
         // client's lease, so an overshoot is a device error, not a long frame.
-        let Some(transferred) =
-            received_payload_len(len, NET_HEADER_BYTES, driver.rx.frame_lengths[slot])
-        else {
+        let Some(transferred) = received_payload_len(
+            len,
+            NET_HEADER_BYTES,
+            slime_proto::link_device::MIN_FRAME_BYTES,
+            driver.rx.frame_lengths[slot],
+        ) else {
             driver.device_refused += 1;
             report_device_refusal(driver, b"rx used length");
             if !settle_error(&mut driver.rx, slot, rx_ready, &mut driver.charges) {

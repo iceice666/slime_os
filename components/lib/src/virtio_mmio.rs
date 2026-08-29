@@ -533,15 +533,29 @@ pub fn used_descriptor_slot(id: u32, slots: usize) -> Option<usize> {
 ///
 /// virtio reports bytes written including the net header. A device may report
 /// more than it was offered, so both ends are checked: the header must be
-/// present, and the payload must be within the LinkDevice contract's declared
-/// frame bounds and fit the frame length the client's descriptor actually
-/// named. Returning the length as `u16` makes the caller's LinkDevice reply
-/// field exact by construction rather than by a cast that silently truncates.
-pub fn received_payload_len(reported: u32, header_bytes: usize, frame_len: u16) -> Option<u16> {
+/// present, and the payload must be at least `min_payload_bytes` and fit the
+/// frame length the client's descriptor actually named. Returning the length as
+/// `u16` makes the caller's LinkDevice reply field exact by construction rather
+/// than by a cast that silently truncates.
+///
+/// The minimum is a parameter rather than a constant read from the LinkDevice
+/// contract, because this module is the virtio-mmio transport and a minimum
+/// frame size is a link-protocol fact. Importing `slime_proto` for it would
+/// also break the standalone-crate-root property the Kani proof crate depends
+/// on: `verification/virtio-proofs` points `[lib] path` at this file so the
+/// verified and shipped sources cannot drift, which only works while this file
+/// imports nothing but `core`. The caller passes
+/// `slime_proto::link_device::MIN_FRAME_BYTES`.
+pub fn received_payload_len(
+    reported: u32,
+    header_bytes: usize,
+    min_payload_bytes: usize,
+    frame_len: u16,
+) -> Option<u16> {
     let header = u32::try_from(header_bytes).ok()?;
+    let minimum = u32::try_from(min_payload_bytes).ok()?;
     let payload = reported.checked_sub(header)?;
-    (payload >= slime_proto::link_device::MIN_FRAME_BYTES as u32 && payload <= u32::from(frame_len))
-        .then_some(payload as u16)
+    (payload >= minimum && payload <= u32::from(frame_len)).then_some(payload as u16)
 }
 
 /// IO7: proofs of the device-boundary arithmetic, over every value of the
@@ -689,13 +703,17 @@ mod proofs {
     /// B87's obligation: an accepted receive length is a non-runt frame that
     /// fits the descriptor the driver published, so the reported byte count
     /// never names memory outside the client's lease.
+    ///
+    /// The minimum is symbolic, so this holds for every minimum a link protocol
+    /// could declare rather than only for the LinkDevice contract's 60.
     #[kani::proof]
     fn an_accepted_receive_length_fits_the_published_frame() {
         let reported: u32 = kani::any();
         let header: usize = kani::any();
+        let minimum: usize = kani::any();
         let frame_len: u16 = kani::any();
-        if let Some(payload) = received_payload_len(reported, header, frame_len) {
-            assert!(usize::from(payload) >= slime_proto::link_device::MIN_FRAME_BYTES);
+        if let Some(payload) = received_payload_len(reported, header, minimum, frame_len) {
+            assert!(usize::from(payload) >= minimum);
             assert!(payload <= frame_len);
         }
     }
@@ -708,8 +726,9 @@ mod proofs {
     fn an_accepted_receive_length_is_exact_never_truncated() {
         let reported: u32 = kani::any();
         let header: usize = kani::any();
+        let minimum: usize = kani::any();
         let frame_len: u16 = kani::any();
-        if let Some(payload) = received_payload_len(reported, header, frame_len) {
+        if let Some(payload) = received_payload_len(reported, header, minimum, frame_len) {
             let header = u32::try_from(header).expect("accepted header fits u32");
             assert_eq!(u32::from(payload), reported - header);
             assert_eq!(u64::from(payload), u64::from(reported) - u64::from(header));
@@ -717,24 +736,25 @@ mod proofs {
     }
 
     /// Totality over the length rule: acceptance holds exactly when the header
-    /// is present and the payload is at least the contract minimum and fits.
-    /// Neither a runt, an overshoot, nor a header-short report can slip through,
-    /// for any of the three inputs.
+    /// is present, the minimum is representable, and the payload is at least
+    /// that minimum and fits. Neither a runt, an overshoot, nor a header-short
+    /// report can slip through, for any of the four inputs.
     #[kani::proof]
     fn receive_length_acceptance_is_exactly_the_declared_rule() {
         let reported: u32 = kani::any();
         let header: usize = kani::any();
+        let minimum: usize = kani::any();
         let frame_len: u16 = kani::any();
-        let admissible = match u32::try_from(header) {
-            Ok(header) => {
+        let admissible = match (u32::try_from(header), u32::try_from(minimum)) {
+            (Ok(header), Ok(minimum)) => {
                 reported >= header
-                    && reported - header >= slime_proto::link_device::MIN_FRAME_BYTES as u32
+                    && reported - header >= minimum
                     && reported - header <= u32::from(frame_len)
             }
-            Err(_) => false,
+            _ => false,
         };
         assert_eq!(
-            received_payload_len(reported, header, frame_len).is_some(),
+            received_payload_len(reported, header, minimum, frame_len).is_some(),
             admissible
         );
     }
@@ -746,12 +766,13 @@ mod proofs {
     fn a_report_shorter_than_the_header_is_refused_not_saturated() {
         let reported: u32 = kani::any();
         let header: usize = kani::any();
+        let minimum: usize = kani::any();
         let frame_len: u16 = kani::any();
         let Ok(header_u32) = u32::try_from(header) else {
             return;
         };
         kani::assume(reported < header_u32);
-        assert!(received_payload_len(reported, header, frame_len).is_none());
+        assert!(received_payload_len(reported, header, minimum, frame_len).is_none());
     }
 }
 
@@ -761,6 +782,11 @@ mod tests {
 
     const SLOTS: usize = 8;
     const HEADER: usize = 10;
+    /// The LinkDevice contract's `MIN_FRAME_BYTES`, restated here rather than
+    /// imported: this module takes the minimum as a parameter so it depends on
+    /// nothing but `core`, which is what lets the Kani proof crate use this
+    /// file as a standalone crate root.
+    const MIN_PAYLOAD: usize = 60;
 
     #[test]
     fn an_odd_used_id_is_refused_rather_than_aliased_onto_a_live_neighbour() {
@@ -805,12 +831,15 @@ mod tests {
 
     #[test]
     fn a_receive_length_shorter_than_the_minimum_frame_is_refused() {
-        assert_eq!(received_payload_len(0, HEADER, 1514), None);
-        assert_eq!(received_payload_len(9, HEADER, 1514), None);
-        assert_eq!(received_payload_len(10, HEADER, 1514), None);
-        assert_eq!(received_payload_len(HEADER as u32 + 59, HEADER, 1514), None);
+        assert_eq!(received_payload_len(0, HEADER, MIN_PAYLOAD, 1514), None);
+        assert_eq!(received_payload_len(9, HEADER, MIN_PAYLOAD, 1514), None);
+        assert_eq!(received_payload_len(10, HEADER, MIN_PAYLOAD, 1514), None);
         assert_eq!(
-            received_payload_len(HEADER as u32 + 60, HEADER, 1514),
+            received_payload_len(HEADER as u32 + 59, HEADER, MIN_PAYLOAD, 1514),
+            None
+        );
+        assert_eq!(
+            received_payload_len(HEADER as u32 + 60, HEADER, MIN_PAYLOAD, 1514),
             Some(60)
         );
     }
@@ -818,19 +847,22 @@ mod tests {
     #[test]
     fn a_receive_length_past_the_offered_frame_is_refused_not_truncated() {
         assert_eq!(
-            received_payload_len(HEADER as u32 + 1514, HEADER, 1514),
+            received_payload_len(HEADER as u32 + 1514, HEADER, MIN_PAYLOAD, 1514),
             Some(1514)
         );
         assert_eq!(
-            received_payload_len(HEADER as u32 + 1515, HEADER, 1514),
+            received_payload_len(HEADER as u32 + 1515, HEADER, MIN_PAYLOAD, 1514),
             None
         );
         // The pre-fix cast: 0x1_0000 + 10 reported against a 1514-byte frame
         // truncated to 0 in a u16 reply while the completion reported 65536.
         assert_eq!(
-            received_payload_len(0x1_0000 + HEADER as u32, HEADER, 1514),
+            received_payload_len(0x1_0000 + HEADER as u32, HEADER, MIN_PAYLOAD, 1514),
             None
         );
-        assert_eq!(received_payload_len(u32::MAX, HEADER, 1514), None);
+        assert_eq!(
+            received_payload_len(u32::MAX, HEADER, MIN_PAYLOAD, 1514),
+            None
+        );
     }
 }

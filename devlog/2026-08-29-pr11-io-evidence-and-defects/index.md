@@ -113,7 +113,8 @@ contract requires identities to be unique but not dense.
 | `just sel4_boot_layout_check` | 31 plane layouts match their fixtures | Direct |
 | `just fmt_check_all`, `just lint_all`, `just machete`, `just ruff`, `just typos`, `just devlog_check` | Pass | Direct |
 | Fresh-boot durability for IO2 | Not run; IO2 no longer claims it | Unsupported |
-| Kani harness suites | Not re-run; harness counts unchanged at 18 and 13 | Inherited |
+| `just kani_io_proofs` | 18 harnesses verified | Direct |
+| `just kani_virtio_proofs` | 13 harnesses verified | Direct |
 
 ## Decisions
 
@@ -147,6 +148,21 @@ contract requires identities to be unique but not dense.
   authority row on the same device is unreachable without editing the driver,
   and one-driver-per-device is the established multi-disk pattern.
   Rejected alternative: relaxing the driver's ring constant to fit the test.
+
+- Decision: `received_payload_len` takes the minimum frame size as a parameter
+  rather than reading `slime_proto::link_device::MIN_FRAME_BYTES` directly.
+  Rationale: the first cut imported the constant, which broke CI. Beyond the
+  build, it was a layering error: `virtio_mmio.rs` is the virtio-mmio transport
+  and a minimum frame size is a link-protocol fact. The import also violated a
+  stated invariant — `verification/virtio-proofs` points `[lib] path` at this
+  file so verified and shipped source cannot drift, which only holds while the
+  file imports nothing but `core`. Making the bound a parameter fixed all
+  three, and made the three Kani harnesses stronger: the minimum is now
+  symbolic, so they hold for every minimum a link protocol could declare
+  rather than only for 60.
+  Rejected alternative: adding `slime-proto` to the proof crate's manifest,
+  which would make the proof crate diverge from the shipped compilation and
+  leave the layering inversion in place.
 
 ## Open risks and follow-ups
 
