@@ -60,6 +60,7 @@ in the same commit as the surface it describes.
 | --- | --- |
 | Canonical plan, milestone status, acceptance criteria | [`roadmap/`](../roadmap/README.md) |
 | Known defects and regressions (resolve before milestone work) | [`roadmap/00-backlog.md`](../roadmap/00-backlog.md) |
+| How a userspace driver gets device/MMIO/IRQ/DMA authority, and what the IO gates prove | [`roadmap/11-io-substrate.md`](../roadmap/11-io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and the operations in [`syscall-abi.md`](syscall-abi.md) |
 | How a conclusion was reached: investigations, evidence, decisions | [`devlog/`](../devlog/README.md) |
 | Code map and task-to-file index | [`AGENTS.md`](../AGENTS.md) |
 | The schemas every persisted or cross-process format is generated from | `contracts/` |

@@ -44,9 +44,11 @@ component has:
 
 ## Where components live
 
-- Code: one crate per component under `components/bins/<name>/`, entered
-  through `src/main.rs`. Shared helpers are in `components/lib`; the syscall
-  surface is `components/runtime` (`slime_rt`).
+- Code: one crate per component under
+  `components/{system,services,applications,testkit}/<name>/`, entered through
+  `src/main.rs`. Shared helpers are in `components/lib`; the syscall surface is
+  `components/runtime` (`slime_rt`); build-time support is
+  `components/build-support`.
 - Authority: the matching generation fixture under
   `contracts/generation-manifest/v1/fixtures/` declares the instance's grants and slot
   layout. A component binary alone never determines its own authority —
@@ -57,7 +59,7 @@ component has:
   you find yourself wanting the root to make a decision, the decision
   belongs in a component.
 
-Small enough to read in one sitting: `components/bins/echo-agent/src/main.rs`
+Small enough to read in one sitting: `components/testkit/echo-agent/src/main.rs`
 receives its launch context, validates its explicitly-granted working
 directory and stdin, and prints a structured reply — the whole component
 model in 64 lines.

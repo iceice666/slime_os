@@ -45,8 +45,8 @@ commit schema and output together. `just contracts_check` validates every
 contract and generated binding agree.
 
 One consumer is generated at build time rather than checked in:
-`components/bins/build.rs` derives command and fabric profiles from the
-generation fixture into `OUT_DIR`.
+`components/build-support` derives each component crate's command table and
+fabric profile from the generation fixture into that crate's `OUT_DIR`.
 
 ## Why this is worth the ceremony
 

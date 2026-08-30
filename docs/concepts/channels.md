@@ -32,15 +32,21 @@ Consequences:
 ## Path 2: root-served — component to mechanism
 
 Everything the root owns as mechanism — lifecycle, spawn, supervision,
-capability transfer, shared buffers, directories, input, blocks, debug
-output — crosses as one bounded `seL4_Call` on a badged endpoint, carrying
-an operation label. The badge authenticates the caller; the label selects
-the operation; the generation's service bindings decide whether this caller
-may name that operation at all, before any argument is read.
+capability transfer, shared buffers, directories, the clock, hardware I/O
+resources, input, debug output — crosses as one bounded `seL4_Call` on a badged
+endpoint, carrying an operation label. The badge authenticates the caller; the
+label selects the operation; the generation's service bindings decide whether
+this caller may name that operation at all, before any argument is read.
 
-Two endpoints, two threads: a slow disk or noisy console must not queue
-behind lifecycle traffic, and a console defect must not share the system
-dispatcher's fault domain.
+Storage is deliberately *not* in that list. A block device is reached through a
+supervised userspace driver over shared-memory rings, so bulk sector traffic
+never crosses the root at all — the root's part is granting the driver its
+device, MMIO, interrupt, and DMA authority, and copying the generation's
+per-ring rights table to it.
+
+Two endpoints, two threads: a noisy console must not queue behind lifecycle
+traffic, and a console defect must not share the system dispatcher's fault
+domain.
 
 ## Capabilities travel on channels
 
@@ -74,3 +80,7 @@ Two properties are load-bearing:
 - Fabric routes, brokered streams, and QoS are userspace policy built on
   these two paths — see `contracts/fabric-graph/v1/` and the C8 milestones in
   `roadmap/02-core-runtime.md`.
+- Request/completion rings over shared memory plus Notifications are the third
+  shape built on these two paths, for drivers and their clients — see
+  `contracts/io-queue/v1/` and the IO milestones in
+  `roadmap/11-io-substrate.md`.
