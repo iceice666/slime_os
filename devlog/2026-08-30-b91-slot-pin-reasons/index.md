@@ -132,26 +132,30 @@ false.
       encoded layout, but a composition whose layout is not frozen by a `*.layout`
       fixture could in principle absorb the change under its own plane gate. That
       is a per-composition question this entry does not answer.
-- [ ] `compiles_slot` matches the number anywhere in the holder executable's
-      sources, not on the code path holding the binding. `io-driver-probe` runs as
-      both `io-driver-supervisor` and `io-driver-worker` on different branches of
-      `main`; the worker's `DEVICE_SLOT`/`REGION_SLOT` constants would suppress the
-      clause for a supervisor-side pin, which resolves purely by name. All four
-      currently suppressed pins are the worker's, so today's labels are right, but
-      the predicate does not distinguish the roles.
-- [ ] Neither the minimality clause nor the soundness predicate checks *which*
-      number a pin carries — only that it is pinned and what the allocator would do
-      without it. Permuting two positionally-consumed pins inside one holder
-      therefore passes every host gate added here. It is caught by the owning
-      plane's QEMU boot, since the component then binds the wrong capability, but
-      no host gate names it.
+- [x] `compiles_slot` matches the number anywhere in the holder executable's
+      sources, not on the code path holding the binding. **Resolved as
+      not-a-defect** by [`devlog/2026-08-30-b91-followups-audit/`](../2026-08-30-b91-followups-audit/index.md):
+      the paragraph below was wrong about why. Function scoping was implemented
+      and reverted because it flags all four worker pins, and all four are
+      load-bearing — `run_supervisor` resolves those names and forwards them in
+      array order to `spawn`, which is *how* they become the worker's positional
+      slots. Splitting name-resolution from positional use across functions is
+      the correct shape here, so the crate-wide predicate stands. A real
+      tightening needs the grant's ordinal in the `spawn` array.
+- [x] Neither the minimality clause nor the soundness predicate checks *which*
+      number a pin carries. **Resolved as adequately-guarded** by the same entry:
+      the permutation was installed and the QEMU claim confirmed directly —
+      `just io_driver_authority_check` fails with `[io-driver-probe] fail: `
+      while every host gate stays green. Joint-removal equality was tested as a
+      host substitute and refuted; it does not hold on the clean tree either.
 - [ ] Minted and notification bindings remain fully explicit (83 and 322) and carry
       no reason. Their namespaces and positional consumers are separate, and B91
       scoped itself to instance bindings.
-- [ ] The five removed pins are guarded by `just contracts_check`'s resolved-slot
-      equality rather than by a new assertion in `io_network_check` and
-      `system_spec_check`; the byte-identity evidence above is direct but was
-      observed in this session rather than pinned into those gates.
+- [x] The five removed pins are guarded by `just contracts_check`'s resolved-slot
+      equality rather than by a named assertion. **Resolved** by the same entry:
+      `MIGRATED_PINS` in `check-slot-pin-reasons.py` now asserts each one is still
+      unpinned and still resolves to the slot the allocator produced, with three
+      fail-closed controls.
 
 ## Artifacts and provenance
 
