@@ -94,6 +94,24 @@ Use the Justfile targets from the repository root:
 
 Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `index.md` written from `devlog/TEMPLATE.md`, with focused reports, raw transcripts, and other evidence as siblings in that folder — a folder even when there is no evidence yet, so later evidence never moves the entry. Front matter declares `Date`, `Kind` (`Defect`/`Change`/`Audit`/`Decision`, which selects the required sections), `Status`, `Scope`, `Roadmap`, `Gates`, `Trigger`, and `Baseline` in that order; `Roadmap` ids must resolve to real roadmap headings and `Gates` to real Justfile targets. Register the entry in `devlog/README.md` and follow its evidence rules — prefer exact `just` targets and observed results, label inherited evidence and unobserved conclusions, and never rewrite a raw log; corrections are appended under `## Corrections`, never edited into the frozen body. Run `just devlog_check` after touching `devlog/`. Roadmap completion stays authoritative in `roadmap/`; devlog entries explain how conclusions were reached. When a backlog item or milestone closes, its devlog entry is the record of how it closed, and the `roadmap/` side keeps only the outcome plus a link to that entry. A resolved backlog item or completed milestone with no devlog link is incomplete: either write the entry or leave the full text in place and say why no entry exists.
 
+## Documentation ownership
+
+A comment should state what must remain true, not argue that the author was right.
+
+Keep implementation comments for correctness or safety invariants not evident
+from types or code, ownership and ordering requirements, ABI constraints,
+capability or security boundaries, platform constraints, and why an apparently
+simpler local implementation would violate a current invariant. Do not put
+investigation history, failed approaches, reviewer findings, mutation campaigns,
+historical alternatives, speculative designs, verification results, or narration
+of the code in implementation comments.
+
+Place local invariants beside the implementation, stable subsystem rationale in
+the owning `docs/` or contract documentation, investigation and evidence in
+`devlog/`, and review guidance in the PR description. Prefer one to three precise
+sentences over defensive paragraphs. PR descriptions state the change, claim,
+risk, review surface, and verification; they do not duplicate devlogs.
+
 ## Development rules
 
 - **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, and boot records — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
@@ -103,6 +121,29 @@ Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `inde
 - Do not treat framebuffer output alone as milestone completion.
 - Do not claim physical-machine support without an observed removable-media Framework boot that does not write internal NVMe.
 - Keep generation data deterministic, versioned, bounded, and explicitly validated.
+
+## Verification code discipline
+
+Do not create a new `scripts/check/check-*.py` merely because a change adds an
+invariant or roadmap gate. Identify the verification mechanism that owns the
+invariant, extend its checker when one exists, and add a case or module when
+execution and evidence collection are shared. Add a top-level checker only for a
+genuinely new mechanism or independently reusable boundary, such as a different
+execution environment, distinct input/output protocol, stable subsystem boundary
+with multiple checks, independent reuse, or materially different semantics.
+
+Roadmap items, backlog IDs, compositions, individual regressions, and individual
+QEMU planes do not by themselves justify top-level checker executables. Public
+`just` targets remain narrow and descriptive; several targets may invoke one
+checker with different cases.
+
+For seL4 planes, converge repeated mechanisms toward a shared
+`scripts/check/check-sel4-plane.py` entry point with focused modules under
+`scripts/check/sel4/`. The shared runner should own QEMU invocation, transcript
+collection, marker ordering, common failures, and common control or mutation
+machinery. Plane modules should own concrete expectations for boot, lifecycle,
+fabric, IO, storage, and similar domains. Extract only observed repetition; do
+not build a generic class-heavy test framework, and keep existing public gates.
 
 ## Verification
 
