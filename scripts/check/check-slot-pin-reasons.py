@@ -43,14 +43,28 @@ for newly-migratable pins, not a proof that the other 254 were audited.
 Two known limits, both erring toward keeping a pin:
 
 - `compiles_slot` matches the number anywhere in the holder executable's sources
-  rather than on the code path holding the binding. One executable run as two
-  instances taking different branches -- `io-driver-probe` as both supervisor and
-  worker -- has one branch's constants suppress the clause for the other's pins.
+  rather than on the code path holding the binding. Scoping the two claims to one
+  function was tried and reverted: it flagged `io-driver-worker`'s four pins,
+  and all four are real. `io-driver-probe` runs as both supervisor and worker;
+  `run_supervisor` resolves `probe-device`/`probe-mmio`/`probe-irq`/`probe-dma`
+  by name and forwards them *in array order* to `spawn`, which is precisely how
+  they become the worker's slots 0-3, consumed there as `DEVICE_SLOT`/
+  `REGION_SLOT`/`IRQ_SLOT`/`DMA_SLOT`. Removing those pins swaps `probe-mmio`
+  with `probe-dma` and breaks the plane. So a resolved name in one function and
+  the matching number in another is not evidence of a missing consumer: spawn
+  forwarding legitimately splits the two halves across branches, and the
+  crate-wide test is the one that survives it. Tightening this needs the grant's
+  ordinal in the `spawn` grant array, not its enclosing function.
 - Neither this clause nor the soundness predicate checks *which* number a pin
   carries, only that it is pinned and what the allocator would do without it. A
   permutation of two positionally-consumed slots inside one holder therefore
-  passes every host gate here; it is caught by the owning plane's QEMU boot,
-  because the component binds the wrong capability.
+  passes every host gate here. Observed: swapping `probe-device` and
+  `probe-mmio` in `sel4-io-driver-authority.zti` leaves this gate,
+  `check-boot-layout-resource.py`, and the resolved-slot table all green, and
+  `just io_driver_authority_check` fails in QEMU with `[io-driver-probe] fail:`.
+  Joint-removal equality is *not* an available host substitute -- it does not
+  hold on the clean tree either, because the allocator refills freed pins
+  lowest-first and reorders the group.
 
 Host-only: no seL4 prefix, no QEMU, no build.
 """
@@ -79,6 +93,27 @@ BUILDER = load_script("slime_build_generation_slot_reasons", "build/build-genera
 # included because it is a real manifest the builder encodes, not only a
 # schema-conformance input, and its pins are subject to the same rules.
 CORPUS = [GENERATION_FIXTURES / "valid.zti", *sorted(GENERATION_COMPOSITIONS.glob("*.zti"))]
+
+# The five pins deleted on the minimality clause's evidence, with the slot the
+# allocator must reproduce for each. Nothing else in the tree records that these
+# grants were once pinned, so without this set a later change could re-pin one --
+# or shift the allocation so the automatic slot differs -- and every gate would
+# stay green: the clause only objects to a *labelled* pin, and an unpinned
+# binding is invisible to it.
+#
+# Keyed by `(manifest, instance, grant)`, valued by the resolved slot the
+# allocator produces. `valid.zti` is derived from
+# `contracts/system-spec/v1/systems/reference.zti`, so its two `spawn-service`
+# entries pin the derivation's output as well as the manifest's. The other
+# derived manifest, `sel4-channel.zti`, declares no `spawn-service` instance and
+# so has nothing to assert here.
+MIGRATED_PINS = {
+    ("valid.zti", "spawn-service", "spawn-service-echo"): 1,
+    ("valid.zti", "spawn-service", "spawn-service-sysinfo"): 2,
+    ("sel4-io-network.zti", "io-link-loopback", "network-service-link-device"): 0,
+    ("sel4-io-network.zti", "network-service", "network-intruder-service"): 1,
+    ("sel4-io-network.zti", "network-service", "network-service-link-device"): 2,
+}
 
 # `resolve_binding(b"<name>")` with a literal name: the holder asking the root
 # for a slot by its stable generation name, which is the mechanism that makes a
@@ -275,6 +310,7 @@ def main() -> None:
     profiles = 0
     exempt = 0
     migratable: list[str] = []
+    seen_migrated: set[tuple[str, str, str]] = set()
 
     for source in CORPUS:
         manifest = decode(source)
@@ -323,10 +359,46 @@ def main() -> None:
                         "by name and compiles no such slot number"
                     )
 
+        # The five deleted pins: still unpinned, and still landing on the slot
+        # the component resolves by name. Checked against the production
+        # allocator's output so this asserts the same number a build encodes.
+        resolved = BUILDER.resolved_slot_table(manifest)
+        for instance in manifest.get("instances", []):
+            for binding in instance.get("bindings", []):
+                key = (source.name, instance["name"], binding["grant"])
+                if key not in MIGRATED_PINS:
+                    continue
+                seen_migrated.add(key)
+                if binding.get("slot") is not None:
+                    fail(
+                        f"{source.name}: {instance['name']}/{binding['grant']} is pinned again to "
+                        f"slot {binding['slot']}. It was removed because the holder resolves it by "
+                        "name and compiles no such position; re-pinning it needs a slotReason the "
+                        "builder can confirm, and MIGRATED_PINS updated to say why"
+                    )
+                expected = MIGRATED_PINS[key]
+                actual = resolved[(instance["name"], "capability", binding["grant"])]
+                if actual != expected:
+                    fail(
+                        f"{source.name}: {instance['name']}/{binding['grant']} now resolves to slot "
+                        f"{actual}, not the {expected} observed when its pin was removed. The "
+                        "removal was proven byte-identical at that number; re-check the plane"
+                    )
+
     if migratable:
         for line in migratable:
             print(f"slot pin reasons: {line}", file=sys.stderr)
         fail(f"{len(migratable)} pin(s) claim a positional consumer that does not exist")
+
+    # Every entry must have been reached. A renamed instance or grant would
+    # otherwise silently retire its own regression assertion.
+    missing = sorted(set(MIGRATED_PINS) - seen_migrated)
+    if missing:
+        fail(
+            "MIGRATED_PINS names bindings that no longer exist: "
+            + ", ".join(f"{manifest}:{instance}/{grant}" for manifest, instance, grant in missing)
+            + " -- update the set with the new names rather than dropping the assertion"
+        )
 
     total = sum(labelled.values())
     print(
@@ -338,6 +410,10 @@ def main() -> None:
     print(
         f"  componentAbi pins on sourceless executables, exempt from the minimality "
         f"clause: {exempt} ({', '.join(sorted(SOURCELESS_EXECUTABLES))})"
+    )
+    print(
+        f"  formerly pinned, now allocator-reproduced at their observed slots: "
+        f"{len(MIGRATED_PINS)}"
     )
     print("slot pin reasons check: ok")
 
