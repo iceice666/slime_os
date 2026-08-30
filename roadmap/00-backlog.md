@@ -24,7 +24,65 @@ full and says why.
 
 ## Open
 
-No open items. Every recorded defect is in the resolved log below.
+### B90 — the `Block` capability kind and its two rights bits survive B83 with no operation to gate
+
+**Problem.** B83 deleted `BLOCK TRANSACT`, the only operation that ever
+resolved a `Block` capability. The kind, its two rights bits, and their
+enforcement machinery all survive: `CapabilityKind::Block` is admitted by
+`capability_rights_valid` requiring both `blockRead` and `blockWrite`
+(`boot-contracts/src/generation.rs`), `BlockRights` and
+`AuthorityTable::resolve_block` still exist in `slime-root/src/graph.rs`,
+`service_for_capability` still derives `SERVICE_BLOCK` from a `Block` grant so
+admission still *requires* an instance holding one to declare service `8`, and
+two spawn paths still assign per-device ordinals to `Block` grants
+(`graph_runtime.rs`, `graph_runtime/services/spawn.rs`). Nothing consumes any of
+it: `resolve_block` has no non-test caller, and no label maps to
+`SERVICE_BLOCK`. This is the shape the capability matrix's Grammar rule 2
+forbids — a right with no gate — and rule 1's converse: enforcement machinery
+naming no operation.
+
+**Evidence.** `AuthorityTable::resolve_block`'s only callers are three
+assertions in its own module's tests. `service_for_root_label`
+(`slime-root/src/ipc.rs`) maps no label to `SERVICE_BLOCK` while mapping labels
+to all ten other service ids. No seL4 composition declares a `block` grant; the
+three that exist are in `contracts/generation-manifest/v1/fixtures/valid.zti`
+and `contracts/system-spec/v1/`, both belonging to the retained pre-P0
+`x86_64-qemu-virtio` identity, which builds no image. Documented 2026-08-30 in
+`docs/capability-matrix.md` as **ungated in the root**.
+
+**Why it is debt rather than cosmetic.** The kind still has teeth on the
+admission path. An instance granted a `Block` capability must declare service
+`8` or fail decode, and `capability_rights_valid` *requires* `blockWrite` on
+every `Block` grant — so the vestige can refuse a generation while granting no
+authority anything checks. A future reader adding a storage capability would
+also find a plausible-looking kind to extend rather than the per-ring
+`block-authority/v1` model that actually gates storage.
+
+**Proposed fix.** Decide between two clean cutovers, not a third state:
+
+1. **Delete the kind.** Remove `CapabilityKind::Block`, both rights bits from
+   every kind mask, `BlockRights`, `resolve_block`, the `SERVICE_BLOCK`
+   derivation, and the per-device ordinal threading; migrate the three legacy
+   fixtures. This is blocked on roadmap invariant 7: the bounded rollback window
+   must still *decode* the `x86_64-qemu-virtio` generation, so the wire
+   discriminant and its rights bits cannot simply disappear from
+   `boot-contracts`. Scope the deletion to the enforcement half and keep the
+   decode half, or establish that the rollback window no longer includes that
+   identity.
+2. **Keep it as an explicitly frozen legacy identity.** Mark the kind and bits
+   decode-only in the contract, refuse a `Block` grant at admission for every
+   built target profile, and drop the root-side `BlockRights` /`resolve_block`
+   /ordinal machinery that no operation reaches.
+
+Either way, add the four IO kinds to
+`declared_rights_partition_into_manifest_declarable_and_root_only`'s `BASELINES`
+so that test covers the kinds it is cited as covering.
+
+**Exit condition.** No rights bit in `RIGHT_ALL` is both admitted by a
+`CapabilityKind` mask and checked by no operation; `resolve_block` either has a
+caller or does not exist; the partition test enumerates all thirteen (or
+twelve) kinds; and `docs/capability-matrix.md` carries no row whose gate status
+is "ungated in the root".
 
 ## Deferred follow-ups
 
