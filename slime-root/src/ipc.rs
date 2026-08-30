@@ -956,7 +956,6 @@ fn capability_kind_named(name: &str) -> Option<boot_contracts::generation::Capab
         "endpoint" => CapabilityKind::Endpoint,
         "executable" => CapabilityKind::Executable,
         "sharedBufferFactory" => CapabilityKind::SharedBufferFactory,
-        "block" => CapabilityKind::Block,
         "directory" => CapabilityKind::Directory,
         "input" => CapabilityKind::Input,
         "supervision" => CapabilityKind::Supervision,
@@ -1800,7 +1799,6 @@ mod tests {
             ("endpoint", CapabilityKind::Endpoint),
             ("executable", CapabilityKind::Executable),
             ("sharedBufferFactory", CapabilityKind::SharedBufferFactory),
-            ("block", CapabilityKind::Block),
             ("directory", CapabilityKind::Directory),
             ("input", CapabilityKind::Input),
             ("supervision", CapabilityKind::Supervision),
@@ -1823,13 +1821,17 @@ mod tests {
     #[test]
     fn manifest_right_spellings_match_their_bits() {
         use boot_contracts::generation::{
-            RIGHT_BLOCK_READ, RIGHT_BUFFER_CREATE, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, right_named,
+            RIGHT_BUFFER_CREATE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, right_named,
         };
         assert_eq!(right_named("send"), Some(RIGHT_SEND));
         assert_eq!(right_named("recv"), Some(RIGHT_RECV));
         assert_eq!(right_named("exec"), Some(RIGHT_EXEC));
         assert_eq!(right_named("bufferCreate"), Some(RIGHT_BUFFER_CREATE));
-        assert_eq!(right_named("blockRead"), Some(RIGHT_BLOCK_READ));
+        assert_eq!(right_named("inputRead"), Some(RIGHT_INPUT_READ));
+        // B90 retired both block rights, so their manifest spellings are now
+        // unaskable rather than mapped to a reserved bit.
+        assert_eq!(right_named("blockRead"), None);
+        assert_eq!(right_named("blockWrite"), None);
         // Rust spellings are not manifest spellings, and only the latter is asked.
         assert_eq!(right_named("RIGHT_SEND"), None);
         assert_eq!(right_named("buffer_create"), None);

@@ -12,7 +12,12 @@ every product plane.
 
 A layout entry names a role, not a concrete mechanism object. Slot 9 is storage
 authority; whether it resolves to a block device or an object store depends on
-the admitted generation and discovered devices.
+the admitted generation and discovered devices. That indirection is why the
+retained x86 tables below still carry `storage-capability` rows after B90
+retired the `block` capability kind: a role is a position in the bootstrap
+component's CSpace, not a capability kind, and these rows are a frozen
+transcription of what the retired custom kernel resolved rather than something
+any current generation derives.
 """
 
 import struct

@@ -517,7 +517,10 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         spec["requires"] = ["pciFunction"]
 
     def unsorted_capability_kinds(spec: dict) -> None:
-        spec["provides"] = ["endpoint", "block"]
+        # Two *live* kinds out of order. Naming a retired kind here would be
+        # refused by the membership check that runs before `_sorted_unique`,
+        # leaving the sort rule with no negative control (B90).
+        spec["provides"] = ["input", "directory"]
 
     def wrong_semantic(spec: dict) -> None:
         spec["communication"]["semantic"] = CONTRACT.SEMANTIC_CALL
@@ -612,7 +615,10 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         spec["runtime"]["resource"]["privatePageQuota"] = PRIVATE_MEMORY_ROOT_REGION_PAGES + 1
 
     def undeclared_device(spec: dict) -> None:
-        spec["runtime"]["devices"] = ["block"]
+        # A live device kind this component declares in neither `provides` nor
+        # `requires`, so the refusal is the coverage rule rather than the
+        # membership check ahead of it (B90).
+        spec["runtime"]["devices"] = ["input"]
 
     def bad_version(spec: dict) -> None:
         spec["version"] = "1.0"
@@ -701,13 +707,26 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
 
     # A corpus-level rule needs a corpus-level case: one spec, so every
     # requirement it states is unmet unless the corpus provides it.
+    #
+    # `directory-probe` rather than a storage probe: B90 retired the `block`
+    # kind, leaving the frozen storage records requiring nothing at all, and a
+    # spec that requires nothing cannot exercise a rule about unmet
+    # requirements. This arm needs a spec whose `requires` is non-empty, and
+    # `directory` is provided by `init` alone — which is what makes the paired
+    # arm below a real converse.
     lone = root / "lone"
     lone.mkdir()
-    isolated = source_spec("storage-probe")
+    isolated = source_spec("directory-probe")
     isolated["dependencies"] = []
+    # `compatibility.dependency` is derived from the dependency count, so
+    # clearing one without the other is refused for an unrelated reason and the
+    # arm would prove nothing about capability coverage.
+    isolated["compatibility"]["dependency"] = "none"
+    if not isolated["requires"]:
+        fail("the corpus-coverage arm needs a spec that requires something")
     write_spec(lone, isolated)
     try:
-        admit_specs([lone / "storage-probe.zti"], catalogue=CATALOGUE)
+        admit_specs([lone / "directory-probe.zti"], catalogue=CATALOGUE)
     except ComponentSpecError:
         pass
     else:

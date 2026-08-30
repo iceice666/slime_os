@@ -1761,7 +1761,7 @@ mod tests {
 
         // Does not cross: the child's own authority, installed by the root.
         assert!(!super::grant_crosses_spawn(
-            declared_grant(CapabilityKind::Block, CHILD, CHILD),
+            declared_grant(CapabilityKind::Device, CHILD, CHILD),
             CHILD,
         ));
 
@@ -1799,7 +1799,6 @@ mod tests {
         // Every kind the root places itself, against the same child. None may
         // be counted, because none is a capability its owner could pass.
         for kind in [
-            CapabilityKind::Block,
             CapabilityKind::Device,
             CapabilityKind::MmioRegion,
             CapabilityKind::InterruptSource,

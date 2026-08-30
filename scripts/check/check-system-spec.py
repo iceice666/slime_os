@@ -102,6 +102,21 @@ KNOWN_DEAD_BINDINGS = {
     ("storage-store-probe", "store-access"),
 }
 
+# Grants the frozen baseline declares in a capability kind the contract has
+# since retired, and the slots they pinned. They are not dead text the way
+# `KNOWN_DEAD_BINDINGS` is — they named real grants when the baseline froze —
+# but the vocabulary that made them expressible is gone, so the derivation
+# cannot reproduce them and re-blessing the baseline is not an option: it is
+# evidence precisely because it is never regenerated.
+#
+# B90 retired `block`. Its three grants were the only holders. The removal is
+# not an unexamined skip: `RETIRED_KINDS_COVERED` below refuses an entry that
+# covers no real grant, `check_retired_kinds` refuses a kind that has become
+# spellable again, and the per-system `unexplained`/`live` sets refuse a
+# stripped binding that names a live grant. A future retirement adds its kind
+# here and inherits all three rather than widening a blanket ignore.
+RETIRED_CAPABILITY_KINDS = {"block"}
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"system spec check: {message}")
@@ -175,6 +190,60 @@ def strip_dead_bindings(manifest: dict) -> dict:
             if (instance["name"], binding["grant"]) not in KNOWN_DEAD_BINDINGS
         ]
     return value
+
+
+def strip_retired_kinds(manifest: dict) -> tuple[dict, list[dict]]:
+    """Drop grants in a retired capability kind, and the bindings naming them.
+
+    Returns `(comparable, removed)`. `removed` is not discarded: the caller
+    compares it against the unmodified fixture, and the module-level
+    `RETIRED_KINDS_COVERED` guard proves each listed kind covers a real grant, so
+    the removal is evidence rather than an unexamined skip.
+    """
+    value = copy.deepcopy(manifest)
+    removed = [
+        grant
+        for grant in value["grants"]
+        if grant["capabilityKind"] in RETIRED_CAPABILITY_KINDS
+    ]
+    retired_names = {grant["name"] for grant in removed}
+    value["grants"] = [
+        grant for grant in value["grants"] if grant["name"] not in retired_names
+    ]
+    for instance in value["instances"]:
+        instance["bindings"] = [
+            binding
+            for binding in instance["bindings"]
+            if binding["grant"] not in retired_names
+        ]
+    return value, removed
+
+
+def check_retired_kinds() -> None:
+    """A kind listed as retired must really be unspellable.
+
+    One assertion, deliberately. An earlier version of this helper also re-read
+    each stripped grant's `capabilityKind` and refused a "live" one, but that
+    could not fire: `strip_retired_kinds` selects on exactly that field, so the
+    check was its own filter's complement. Rewriting it to read the untouched
+    fixture did not help either — `declared` is built from the same grant list
+    the stripped entries were selected out of, so it only fires on a duplicated
+    grant name, which `scripts/lib/system_spec.py` refuses independently.
+
+    The two properties that assertion was reaching for are checked where they
+    can actually fail: the caller's `unexplained`/`live` sets compare the
+    stripped bindings against the *unmodified* fixture, and the module-level
+    `RETIRED_KINDS_COVERED` guard refuses an entry that covers nothing. What is
+    left here is the one thing neither of those sees — a retired kind quietly
+    becoming spellable again while this comparison still skips its grants.
+    """
+    for kind in sorted(RETIRED_CAPABILITY_KINDS):
+        if kind in BUILDER.CAPABILITY_KIND:
+            fail(
+                f"{kind!r} is listed as a retired capability kind but the builder "
+                "still admits it; either the retirement was reverted or the "
+                "exemption is stale"
+            )
 
 
 def split_post_baseline(manifest: dict) -> tuple[dict, dict]:
@@ -266,6 +335,24 @@ identities = {entry.identity for entry in systems.values()}
 if len(identities) != len(systems):
     fail("two system specs computed the same identity")
 
+# Every retired-kind entry must cover at least one real grant, asserted BEFORE
+# any baseline comparison. Ordering matters for diagnosis: the divergence check
+# below raises first, and an engineer who mistyped or emptied this set would be
+# pointed at the frozen fixture and tempted to re-bless it — the one action the
+# exemption exists to avoid. Per-kind rather than per-set, so a set that covers
+# three grants through one entry cannot let a second entry skip nothing.
+RETIRED_KINDS_COVERED = {
+    grant["capabilityKind"]
+    for name in sorted(systems)
+    for grant in strip_retired_kinds(load_baseline(DERIVED_FIXTURES[name]))[1]
+}
+if RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED:
+    fail(
+        "no frozen baseline declares a grant in "
+        f"{sorted(RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED)}, so those "
+        "RETIRED_CAPABILITY_KINDS entries cover nothing and must be removed"
+    )
+
 # 1. Each system derives the fixture it replaces.
 for name, system in sorted(systems.items()):
     # The pre-CP1 hand-authored fixture, frozen under
@@ -275,7 +362,13 @@ for name, system in sorted(systems.items()):
     # what the derivation has to reproduce, and it never changes again.
     fixture = load_baseline(DERIVED_FIXTURES[name])
     derived = normalized(derive_manifest(system))
-    committed = normalized(strip_dead_bindings(fixture))
+    # Grants whose capability kind the contract has retired are lifted out
+    # before the dead-binding strip, so the two exemptions stay separable: one
+    # is text that never named a grant, the other named a grant in a vocabulary
+    # that no longer exists.
+    without_retired, retired_grants = strip_retired_kinds(fixture)
+    check_retired_kinds()
+    committed = normalized(strip_dead_bindings(without_retired))
     # Sections the baseline predates are lifted out and asserted separately: it
     # was frozen before they existed, so it has no opinion to compare against.
     derived, _added = split_post_baseline(derived)
@@ -286,10 +379,12 @@ for name, system in sorted(systems.items()):
             f"{first_difference(derived, committed, 'manifest')}"
         )
     check_post_baseline(name, normalized(derive_manifest(system)), system)
-    # And the removal above must be exactly the dead bindings, never a live one:
-    # comparing against the unmodified fixture must fail for that reason alone.
+    # And the removal above must be exactly the dead bindings and the
+    # retired-kind ones, never a live grant in a live kind: comparing against
+    # the unmodified fixture must fail for those reasons alone.
     untouched = normalized(fixture)
     if untouched != committed:
+        retired_names = {grant["name"] for grant in retired_grants}
         removed = {
             (instance["name"], binding["grant"])
             for instance in fixture["instances"]
@@ -299,10 +394,22 @@ for name, system in sorted(systems.items()):
             for instance in committed["instances"]
             for binding in instance["bindings"]
         }
-        if not removed <= KNOWN_DEAD_BINDINGS:
-            fail(f"{name}: stripped a binding that is not declared dead: {sorted(removed)}")
+        unexplained = {
+            entry
+            for entry in removed
+            if entry not in KNOWN_DEAD_BINDINGS and entry[1] not in retired_names
+        }
+        if unexplained:
+            fail(
+                f"{name}: stripped a binding that is neither declared dead nor "
+                f"retired-kind: {sorted(unexplained)}"
+            )
         grants = {grant["name"] for grant in fixture["grants"]}
-        live = [entry for entry in removed if entry[1] in grants]
+        live = [
+            entry
+            for entry in removed
+            if entry[1] in grants and entry[1] not in retired_names
+        ]
         if live:
             fail(f"{name}: a stripped binding names a real grant: {sorted(live)}")
 
@@ -427,7 +534,13 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
         spec["grants"][0]["capabilityKind"] = "pciFunction"
 
     def rights_outside_kind(spec: dict) -> None:
-        spec["grants"][0]["rights"] = ["blockWrite"]
+        # A *live* right the first grant's kind forbids. That grant is
+        # `dango-output`, an `endpoint`, and `directoryRead` is valid vocabulary
+        # on another kind — so the refusal is `validate_capability_rights`
+        # rejecting a right for this kind. Naming a retired right would be
+        # refused as unknown vocabulary before that check ran, leaving this rule
+        # uncovered (B90).
+        spec["grants"][0]["rights"] = ["directoryRead"]
 
     def stale_slot_pin(spec: dict) -> None:
         spec["slotPins"] = [{"holder": "console", "grant": "no-such-grant", "slot": 3}]

@@ -10,9 +10,7 @@
     binary = "virtio-blk-driver";
     contentHash = "";
   };
-  provides = [
-    "block";
-  ];
+  provides = [];
   requires = [
     "device";
     "dmaAccount";
@@ -47,7 +45,7 @@
       privatePageQuota = 0;
     };
     devices = [
-      "block";
+      "device";
     ];
   };
   health = "required";

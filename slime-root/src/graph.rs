@@ -12,12 +12,11 @@ use crate::task::TaskId;
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
 use boot_contracts::generation::{
-    RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BUFFER_CREATE, RIGHT_BUFFER_LOAN, RIGHT_BUFFER_MAP,
-    RIGHT_BUFFER_WRITE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ,
-    RIGHT_DIRECTORY_WRITE, RIGHT_DMA_PIN, RIGHT_DMA_RELEASE, RIGHT_EXEC, RIGHT_INPUT_READ,
-    RIGHT_IRQ_ACK, RIGHT_LIFECYCLE_RESTART, RIGHT_MAP_MMIO, RIGHT_PARAMETER_READ,
-    RIGHT_PARAMETER_WRITE, RIGHT_RECV, RIGHT_SCHEDULING_PROMOTE, RIGHT_SEND, RIGHT_SPAWN,
-    RIGHT_SUPERVISE, RIGHT_TRANSFER,
+    RIGHT_BUFFER_CREATE, RIGHT_BUFFER_LOAN, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE,
+    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
+    RIGHT_DMA_PIN, RIGHT_DMA_RELEASE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_IRQ_ACK,
+    RIGHT_LIFECYCLE_RESTART, RIGHT_MAP_MMIO, RIGHT_PARAMETER_READ, RIGHT_PARAMETER_WRITE,
+    RIGHT_RECV, RIGHT_SCHEDULING_PROMOTE, RIGHT_SEND, RIGHT_SPAWN, RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 
 /// Logical capability slots one task may hold.
@@ -74,7 +73,6 @@ rights_type!(
         | RIGHT_PARAMETER_WRITE
         | RIGHT_TRANSFER
 );
-rights_type!(BlockRights, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE);
 rights_type!(
     DirectoryRights,
     RIGHT_DIRECTORY_READ
@@ -127,12 +125,6 @@ pub struct BufferFactoryCapability {
 pub struct SupervisionCapability {
     pub task: TaskId,
     pub rights: SupervisionRights,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BlockCapability {
-    pub device: u8,
-    pub rights: BlockRights,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,7 +182,6 @@ pub enum CapabilityEntry {
     Executable(ExecutableCapability),
     BufferFactory(BufferFactoryCapability),
     Supervision(SupervisionCapability),
-    Block(BlockCapability),
     Directory(DirectoryCapability),
     Input(InputCapability),
     NativeEndpoint(NativeEndpointCapability),
@@ -223,13 +214,6 @@ impl CapabilityEntry {
     pub const fn supervision(task: TaskId, rights: u64) -> Option<Self> {
         match SupervisionRights::from_bits(rights) {
             Some(rights) => Some(Self::Supervision(SupervisionCapability { task, rights })),
-            None => None,
-        }
-    }
-
-    pub const fn block(device: u8, rights: u64) -> Option<Self> {
-        match BlockRights::from_bits(rights) {
-            Some(rights) => Some(Self::Block(BlockCapability { device, rights })),
             None => None,
         }
     }
@@ -308,7 +292,6 @@ impl CapabilityEntry {
             Self::Executable(_) => "executable",
             Self::BufferFactory(_) => "shared-buffer-factory",
             Self::Supervision(_) => "supervision",
-            Self::Block(_) => "block",
             Self::Directory(_) => "directory",
             Self::Input(_) => "input",
             Self::NativeEndpoint(_) => "endpoint",
@@ -326,7 +309,6 @@ impl CapabilityEntry {
             Self::Executable(cap) => cap.rights.bits(),
             Self::BufferFactory(cap) => cap.rights.bits(),
             Self::Supervision(cap) => cap.rights.bits(),
-            Self::Block(cap) => cap.rights.bits(),
             Self::Directory(cap) => cap.rights.bits(),
             Self::Input(cap) => cap.rights.bits(),
             Self::NativeEndpoint(cap) => cap.rights.bits(),
@@ -344,7 +326,6 @@ impl CapabilityEntry {
             Self::Executable(cap) => cap.rights.allows(required),
             Self::BufferFactory(cap) => cap.rights.allows(required),
             Self::Supervision(cap) => cap.rights.allows(required),
-            Self::Block(cap) => cap.rights.allows(required),
             Self::Directory(cap) => cap.rights.allows(required),
             Self::Input(cap) => cap.rights.allows(required),
             Self::NativeEndpoint(cap) => cap.rights.allows(required),
@@ -377,13 +358,6 @@ impl CapabilityEntry {
                 Some(rights) => {
                     cap.rights = rights;
                     Some(Self::Supervision(cap))
-                }
-                None => None,
-            },
-            Self::Block(mut cap) => match cap.rights.narrow(requested) {
-                Some(rights) => {
-                    cap.rights = rights;
-                    Some(Self::Block(cap))
                 }
                 None => None,
             },
@@ -561,13 +535,6 @@ impl AuthorityTable {
         }
     }
 
-    pub fn resolve_block(&self, slot: u32, required: u64) -> Result<BlockCapability, IpcError> {
-        match self.get(slot) {
-            Some(CapabilityEntry::Block(cap)) if cap.rights.allows(required) => Ok(cap),
-            _ => Err(IpcError::InvalidOperation),
-        }
-    }
-
     pub fn resolve_directory(
         &self,
         slot: u32,
@@ -596,21 +563,33 @@ impl Default for AuthorityTable {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthorityTable, CapabilityEntry, MAX_TASK_CAPS, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
-        RIGHT_LIFECYCLE_RESTART, RIGHT_PARAMETER_READ, RIGHT_PARAMETER_WRITE,
-        RIGHT_SCHEDULING_PROMOTE, RIGHT_SUPERVISE,
+        AuthorityTable, CapabilityEntry, MAX_TASK_CAPS, RIGHT_LIFECYCLE_RESTART,
+        RIGHT_PARAMETER_READ, RIGHT_PARAMETER_WRITE, RIGHT_SCHEDULING_PROMOTE, RIGHT_SUPERVISE,
     };
+    use crate::directory::ScopeTable;
     use crate::ipc::IpcError;
     use crate::task::TaskId;
     use boot_contracts::generation::{
-        RIGHT_BOOT_UPDATE, RIGHT_DMA_PIN, RIGHT_DMA_RELEASE, RIGHT_HEALTH_CONFIRM, RIGHT_IRQ_ACK,
-        RIGHT_MAP_MMIO, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
+        RIGHT_BOOT_UPDATE, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_DMA_PIN,
+        RIGHT_DMA_RELEASE, RIGHT_HEALTH_CONFIRM, RIGHT_IRQ_ACK, RIGHT_MAP_MMIO, RIGHT_STORE_READ,
+        RIGHT_STORE_WRITE,
     };
+
+    /// A directory capability at read-only rights, the stand-in every test below
+    /// uses when it needs *some* typed entry rather than a specific mechanism.
+    fn directory(rights: u64) -> CapabilityEntry {
+        CapabilityEntry::directory(0, ScopeTable::ROOT, rights).expect("valid directory rights")
+    }
 
     #[test]
     fn typed_rights_refuse_cross_kind_bits() {
-        assert!(CapabilityEntry::block(0, RIGHT_BLOCK_READ).is_some());
-        assert!(CapabilityEntry::block(0, RIGHT_BLOCK_READ | (1 << 23)).is_none());
+        assert!(CapabilityEntry::device(0, RIGHT_MAP_MMIO).is_some());
+        assert!(CapabilityEntry::device(0, RIGHT_MAP_MMIO | RIGHT_IRQ_ACK).is_none());
+        assert!(CapabilityEntry::directory(0, ScopeTable::ROOT, RIGHT_DIRECTORY_READ).is_some());
+        assert!(
+            CapabilityEntry::directory(0, ScopeTable::ROOT, RIGHT_DIRECTORY_READ | RIGHT_MAP_MMIO)
+                .is_none()
+        );
     }
 
     #[test]
@@ -633,19 +612,20 @@ mod tests {
             RIGHT_BOOT_UPDATE,
         ] {
             assert!(CapabilityEntry::supervision(TaskId(0), RIGHT_SUPERVISE | dead).is_none());
-            assert!(CapabilityEntry::block(0, RIGHT_BLOCK_READ | dead).is_none());
+            assert!(
+                CapabilityEntry::directory(0, ScopeTable::ROOT, RIGHT_DIRECTORY_READ | dead)
+                    .is_none()
+            );
         }
     }
 
     #[test]
     fn a_slot_resolves_only_as_its_declared_kind() {
         let mut table = AuthorityTable::new();
-        table
-            .install(4, CapabilityEntry::block(0, RIGHT_BLOCK_READ).unwrap())
-            .unwrap();
-        assert!(table.resolve_block(4, RIGHT_BLOCK_READ).is_ok());
+        table.install(4, directory(RIGHT_DIRECTORY_READ)).unwrap();
+        assert!(table.resolve_directory(4, RIGHT_DIRECTORY_READ).is_ok());
         assert_eq!(
-            table.resolve_block(4, RIGHT_BLOCK_WRITE),
+            table.resolve_directory(4, RIGHT_DIRECTORY_WRITE),
             Err(IpcError::InvalidOperation)
         );
         assert_eq!(table.resolve_input(4), Err(IpcError::InvalidOperation));
@@ -654,7 +634,7 @@ mod tests {
     #[test]
     fn allocation_stays_bounded_and_non_overwriting() {
         let mut table = AuthorityTable::new();
-        let cap = CapabilityEntry::block(0, RIGHT_BLOCK_READ).unwrap();
+        let cap = directory(RIGHT_DIRECTORY_READ);
         table.install(2, cap).unwrap();
         assert_eq!(table.install(2, cap), Err(IpcError::WaiterConflict));
         assert_eq!(

@@ -1,9 +1,10 @@
 -- The capability-rights vocabulary. Every valid right is named here exactly
 -- once, and `RIGHT_ALL` is rendered as the union of these bits rather than as a
--- bit-width mask: a width mask admits the gaps in the numbering, and bit 17 is
--- such a gap (B57). Bit positions are an ABI -- a component compiled against an
--- older generation names the same bit -- so they are pinned individually rather
--- than derived from declaration order.
+-- bit-width mask: a width mask admits the gaps in the numbering, and bits 10,
+-- 11, and 17 are such gaps (B57, B90). Bit positions are an ABI -- a component
+-- compiled against an older generation names the same bit -- so they are pinned
+-- individually rather than derived from declaration order, and a retired right's
+-- position is never reused.
 --
 -- `manifest` is the spelling a `.zti` grant writes; `name` is the constant
 -- suffix both bindings emit. Declaring both here is what keeps the builder's
@@ -57,8 +58,12 @@ rightBits :: List RightBit = {
   right "IRQ_ACK" 7 "irqAck" "unrecorded";
   right "BUFFER_WRITE" 8 "bufferWrite" "neutral";
   right "BUFFER_MAP" 9 "bufferMap" "neutral";
-  right "BLOCK_READ" 10 "blockRead" "unrecorded";
-  right "BLOCK_WRITE" 11 "blockWrite" "unrecorded";
+  -- Bits 10 and 11 were `BLOCK_READ`/`BLOCK_WRITE`, retired with B90. B83
+  -- deleted `BLOCK TRANSACT`, the only operation that ever resolved a `Block`
+  -- capability, and storage authority is now declared per ring in
+  -- `contracts/block-authority/v1` -- whose own `rightRead`/`rightWrite` are an
+  -- independent two-bit vocabulary, not these bits. The positions stay reserved
+  -- rather than reassigned, because a bit is an ABI a component may still name.
   right "STORE_READ" 12 "storeRead" "unrecorded";
   right "STORE_WRITE" 13 "storeWrite" "unrecorded";
   right "HEALTH_CONFIRM" 14 "healthConfirm" "neutral";

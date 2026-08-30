@@ -36,7 +36,6 @@ pub(super) const fn declared_capability(
         }
         CapabilityKind::Input => graph::CapabilityEntry::input(rights),
         CapabilityKind::SharedBufferFactory => graph::CapabilityEntry::buffer_factory(rights),
-        CapabilityKind::Block => graph::CapabilityEntry::block(resource, rights),
         CapabilityKind::Device => graph::CapabilityEntry::device(resource, rights),
         CapabilityKind::MmioRegion => graph::CapabilityEntry::mmio_region(resource, rights),
         CapabilityKind::InterruptSource => {

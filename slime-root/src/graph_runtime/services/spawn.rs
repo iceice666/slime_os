@@ -539,8 +539,6 @@ pub(super) fn construct_child(
         release_child(tasks, windows, buffers, allocator, id);
         return Err(IpcError::BadCapability);
     };
-    // Counts the block devices placed into *this* child, in declaration order.
-    let mut block_index = 0u8;
     for index in 0..child.binding_count() {
         let Ok(binding) = generation.binding(child, index) else {
             release_child(tasks, windows, buffers, allocator, id);
@@ -555,12 +553,10 @@ pub(super) fn construct_child(
         {
             continue;
         }
-        let device = block_index;
-        if grant.capability_kind == CapabilityKind::Block {
-            block_index = block_index.saturating_add(1);
-        }
-        let Some(capability) = declared_capability(grant.capability_kind, device, grant.rights)
-        else {
+        // Resource 0 for every kind: B90 deleted the `Block` launch-order
+        // ordinal, and the IO kinds carry their device identity in the
+        // IO-resource authority table rather than here.
+        let Some(capability) = declared_capability(grant.capability_kind, 0, grant.rights) else {
             continue;
         };
         if tasks

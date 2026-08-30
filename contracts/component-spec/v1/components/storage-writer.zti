@@ -11,9 +11,7 @@
     contentHash = "";
   };
   provides = [];
-  requires = [
-    "block";
-  ];
+  requires = [];
   interfaces = [];
   dependencies = [];
   communication = {
@@ -39,9 +37,7 @@
       loanCount = 0;
       privatePageQuota = 0;
     };
-    devices = [
-      "block";
-    ];
+    devices = [];
   };
   health = "optional";
   compatibility = {

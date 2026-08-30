@@ -435,7 +435,9 @@ CAPABILITY_KIND = {
     "endpoint": 1,
     "executable": 2,
     "sharedBufferFactory": 3,
-    "block": 4,
+    # 4 was `block`, retired with B90. Reserved rather than reassigned: a
+    # discriminant is wire identity, and storage authority is now declared per
+    # ring in `contracts/block-authority/v1`.
     "directory": 5,
     "input": 6,
     "supervision": 7,
@@ -536,7 +538,6 @@ def validate_capability_rights(name: str, kind: str, rights: int) -> None:
         "endpoint": RIGHT["send"] | RIGHT["recv"] | RIGHT_TRANSFER,
         "executable": RIGHT["exec"] | RIGHT["spawn"] | RIGHT_TRANSFER,
         "sharedBufferFactory": RIGHT["bufferCreate"] | RIGHT_TRANSFER,
-        "block": RIGHT["blockRead"] | RIGHT["blockWrite"],
         "directory": (
             RIGHT["directoryRead"]
             | RIGHT["directoryWrite"]
@@ -559,7 +560,6 @@ def validate_capability_rights(name: str, kind: str, rights: int) -> None:
         "endpoint": RIGHT["send"] | RIGHT["recv"],
         "executable": RIGHT["exec"] | RIGHT["spawn"],
         "sharedBufferFactory": RIGHT["bufferCreate"],
-        "block": RIGHT["blockRead"] | RIGHT["blockWrite"],
         "directory": (
             RIGHT["directoryRead"]
             | RIGHT["directoryWrite"]
@@ -1261,7 +1261,8 @@ SERVICE_CAPABILITY_TRANSFER = 4
 SERVICE_SHARED_BUFFER = 5
 SERVICE_DIRECTORY = 6
 SERVICE_INPUT = 7
-SERVICE_BLOCK = 8
+# 8 was `SERVICE_BLOCK`, retired with B90 once no root label mapped to it.
+# Reserved rather than reassigned.
 SERVICE_CONSOLE = 9
 SERVICE_CLOCK = 10
 SERVICE_IO_RESOURCE = 11
@@ -1275,7 +1276,6 @@ SERVICE_BY_CAPABILITY_KIND = {
     "loan": SERVICE_SHARED_BUFFER,
     "directory": SERVICE_DIRECTORY,
     "input": SERVICE_INPUT,
-    "block": SERVICE_BLOCK,
     "supervision": SERVICE_SUPERVISION,
     # IO1's four hardware-resource kinds share one root service, because they
     # are one mechanism: a driver's device, its MMIO subranges, its interrupt,

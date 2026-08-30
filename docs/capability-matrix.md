@@ -49,15 +49,16 @@ Every new object kind or right must satisfy these rules before it ships:
 
 ## Capability kinds
 
-The thirteen declared kinds are `CapabilityKind` in `boot-contracts/src/generation.rs`,
-numbered by `boot-contracts/src/generated/generation.rs`.
+The twelve declared kinds are `CapabilityKind` in `boot-contracts/src/generation.rs`,
+numbered by `boot-contracts/src/generated/generation.rs`. Discriminant 4 was
+`Block` until B90 retired it; the number stays reserved rather than reassigned,
+because a discriminant is wire identity.
 
 | Kind | Number | What it names | Where its operations are served |
 | --- | --- | --- | --- |
 | `Endpoint` | 1 | one side of a declared native seL4 Endpoint edge | the kernel; no root mediation |
 | `Executable` | 2 | generation-module bytes verified at boot | root service `SPAWN` |
 | `SharedBufferFactory` | 3 | authority to mint shared buffers | root service `SHARED BUFFER CREATE` |
-| `Block` | 4 | one enumerated block device | nothing; no surviving operation resolves it (B83) |
 | `Directory` | 5 | a namespace root, possibly scoped | console service inspect/commit, root service derive |
 | `Input` | 6 | the decoded key source | console service `INPUT READ` |
 | `Supervision` | 7 | one spawned task's outcome | root service `SUPERVISION STATUS` / `DERIVE` |
@@ -71,7 +72,8 @@ numbered by `boot-contracts/src/generated/generation.rs`.
 ## Current matrix
 
 Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
-33, excluding the deliberate gap at bit 17; bits 34–63 are free.
+33, excluding the reserved gaps at bits 10, 11, and 17; bits 34–63 are free.
+Bits 10 and 11 were `BLOCK_READ`/`BLOCK_WRITE` until B90 retired them.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -85,8 +87,6 @@ Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
 | InterruptSource | IRQ_ACK (7) | `IO RESOURCE IRQ ACK` for the holder's pending, declared interrupt source and epoch only | root bootstrap from the generation's device assignment | gated (IO1) |
 | SharedBuffer | BUFFER_WRITE (8) | writable `SHARED BUFFER MAP`; irreversible `SHARED BUFFER SEAL` | `SHARED BUFFER CREATE` via a `SharedBufferFactory`; root-assigned identity | gated (C7.4) |
 | SharedBuffer | BUFFER_MAP (9) | read-only `SHARED BUFFER MAP`; exact `SHARED BUFFER UNMAP` | same | gated (C7.4) |
-| Block | BLOCK_READ (10) | *no root operation.* B83 deleted `BLOCK TRANSACT`, so no dispatcher path resolves a `Block` capability and `AuthorityTable::resolve_block` has no non-test caller. The surviving gate on a read is per-ring and userspace: `contracts/block-authority/v1` declares the rights, the root copies the authenticated table through `CAPABILITY BLOCK RING AUTHORITY READ`, and `virtio-blk-driver` refuses | root bootstrap from the generation's declared device | **ungated in the root** (see Grammar rule 2) |
-| Block | BLOCK_WRITE (11) | same: no root operation. The bit is still admitted on a manifest grant and still decodes, because the retained pre-P0 `x86_64-qemu-virtio` identity declares three `block` grants (`contracts/generation-manifest/v1/fixtures/valid.zti`, `contracts/system-spec/v1/`) that the bounded rollback window must keep decoding. No seL4 composition declares one | same | **ungated in the root** |
 | Executable | SPAWN (16) | instance launch in `SPAWN`; always travels with EXEC | generation manifest | gated (M6.1) |
 | Supervision | SUPERVISE (18) | `SUPERVISION STATUS` and `SUPERVISION DERIVE` | returned by a successful `SPAWN` | gated (M6.1/B25) |
 | Directory | DIRECTORY_READ (19) | `DIRECTORY INSPECT` before filesystem reads | root bootstrap from the generation's declared root | gated (M6.3) |
@@ -143,19 +143,31 @@ Grammar rule 2 forbids for a *new* right, and a condition these four predate.
 Reassign them deliberately; do not assume they still mean what a pre-cutover
 document says.
 
+Bits 10 and 11 were a fifth and sixth such bit until B90. They were
+`blockRead`/`blockWrite` on a `Block` kind whose only operation, `BLOCK
+TRANSACT`, B83 had already deleted — so the kind was admitted at decode,
+materialized into a typed root entry, and resolvable by nothing. B90 deleted the
+kind, both bits, `BlockRights`, `resolve_block`, `SERVICE_BLOCK`, and the
+launch-order ordinal that numbered `Block` grants. Storage authority is declared
+per ring in `contracts/block-authority/v1`, whose `rightRead`/`rightWrite` are an
+independent two-bit `u16` vocabulary that never shared these positions. Bits 10,
+11, and discriminants 4 (kind) and 8 (service) are reserved, never reassigned:
+each is an ABI a component may still name.
+
 `boot-contracts`'s
-`declared_rights_partition_into_manifest_declarable_and_root_only` pins a
-*narrower* claim than its name suggests, and the difference matters when adding
-a kind. Its `BASELINES` name nine kinds — the four IO kinds are absent — so its
-`NOT_MANIFEST_DECLARABLE` list means "rejected for those nine", not "declarable
-by no manifest". Bits 4–7 sit in that list and are declared by manifest grants
-anyway, on kinds the test does not enumerate. Bits 26–33 sit in it for the
-opposite reason: no grant names them because their source is a declared
-resource (`clock-authority/v1`, `lifecycle-policy/v1`, `scheduling-class/v1`)
-that the root reads to mint the bit onto a service or supervision handle.
-Wiring one of bits 12–15 to any of the nine fails the test; wiring one to a
-tenth kind would not, so a new kind must be added to `BASELINES` in the same
-change.
+`declared_rights_partition_into_manifest_declarable_and_root_only` enumerates all
+twelve declared kinds, so its two classes partition the vocabulary rather than an
+arbitrary subset of it. Until B90 its `BASELINES` named nine — the four IO kinds
+were absent — and `NOT_MANIFEST_DECLARABLE` therefore meant "rejected for those
+nine" rather than "declarable by no manifest": bits 4–7 sat in that list while
+real manifest grants declared them, on kinds the test did not enumerate. They are
+now in `MANIFEST_DECLARABLE`, where the grants that spell them always implied they
+belonged. Bits 26–33 remain in the rejected class for the opposite reason: no
+grant names them because their source is a declared resource
+(`clock-authority/v1`, `lifecycle-policy/v1`, `scheduling-class/v1`) that the root
+reads to mint the bit onto a service or supervision handle. Wiring one of bits
+12–15 to any declared kind fails the test, and a *new* kind must still be added to
+`BASELINES` in the same change — that is what keeps the partition total.
 
 Semantics not visible in the table:
 

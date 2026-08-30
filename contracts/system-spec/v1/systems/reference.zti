@@ -53,38 +53,6 @@
   placements = [];
   grants = [
     {
-      capabilityKind = "block";
-      name = "block-fault-check";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "init";
-      target = "storage-fault-probe";
-      transferable = false;
-    };
-    {
-      capabilityKind = "block";
-      name = "block-read";
-      rights = [
-        "blockRead";
-      ];
-      source = "init";
-      target = "storage-probe";
-      transferable = false;
-    };
-    {
-      capabilityKind = "block";
-      name = "block-write-check";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "init";
-      target = "storage-writer";
-      transferable = false;
-    };
-    {
       capabilityKind = "input";
       name = "console-input";
       rights = [
@@ -776,21 +744,6 @@
       grant = "spawn-service-sysinfo";
       holder = "spawn-service";
       slot = 2;
-    };
-    {
-      grant = "block-fault-check";
-      holder = "storage-fault-probe";
-      slot = 1;
-    };
-    {
-      grant = "block-read";
-      holder = "storage-probe";
-      slot = 1;
-    };
-    {
-      grant = "block-write-check";
-      holder = "storage-writer";
-      slot = 1;
     };
   ];
   commandBindings = [

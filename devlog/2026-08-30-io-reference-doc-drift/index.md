@@ -92,10 +92,12 @@ mistake.
 
 ## Open risks and follow-ups
 
-- [ ] B90: decide whether to delete the `Block` kind or freeze it decode-only,
-      and add the four I/O kinds to
+- [x] B90: resolved 2026-08-30 by deleting the `Block` kind, both rights bits,
+      `SERVICE_BLOCK`, and the root-side machinery, and by completing
       `declared_rights_partition_into_manifest_declarable_and_root_only`'s
-      `BASELINES` so the test covers what the matrix cites it for.
+      `BASELINES` to all twelve declared kinds. The research also disproved this
+      entry's assumption that the rollback window forced the decode-only option.
+      See [`devlog/2026-08-30-b90-block-kind-retired/`](../2026-08-30-b90-block-kind-retired/index.md).
 - [ ] `docs/capability-matrix.md`'s Bounds and gate-status columns are still
       prose checked only by review. The rights *vocabulary* is generated, but
       no gate compares the matrix's gate-status column against the set of rights

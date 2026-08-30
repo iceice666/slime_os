@@ -246,7 +246,8 @@ slot, or the request is refused with `-1` before any argument is read. The ids
 are generated from the generation contract
 (`boot-contracts/src/generated/generation.rs`): `1` lifecycle, `2` spawn,
 `3` supervision, `4` capability transfer, `5` shared buffer, `6` directory,
-`7` input, `8` block, `9` console, `10` clock, `11` IO resource.
+`7` input, `9` console, `10` clock, `11` IO resource. Id `8` was block and is
+reserved, never reassigned; see below.
 
 Which services an instance must declare is derived from what it holds, by
 `boot-contracts/src/generation.rs`, and a mismatch in either direction fails
@@ -257,9 +258,10 @@ spawn budget or an executable grant; shared buffer is required of any instance
 with a budget entry; clock is required of any holder the generation's
 `clock-authority/v1` resource names; and IO resource is required of any instance
 granted a `Device`, `MmioRegion`, `InterruptSource`, or `DmaAccount` capability.
-`8` block is still admitted and still derived from a `Block` grant, but no
-surviving label maps to it: B83 deleted `BLOCK TRANSACT`, and only the retained
-pre-P0 `x86_64-qemu-virtio` identity declares `Block` grants at all.
+Service id `8` was block, derived from a `Block` grant; B83 deleted `BLOCK
+TRANSACT` and B90 then deleted the kind, the service, and both rights bits. The
+id is reserved rather than reassigned. Storage authority is declared per ring in
+`contracts/block-authority/v1` and enforced by `virtio-blk-driver`.
 
 ## Child CSpace layout
 

@@ -348,7 +348,6 @@ pub(super) fn launch_instance_graph(
             )
         };
 
-        let mut block_index = 0u8;
         for binding_index in 0..instance.binding_count() {
             let binding = match generation.binding(instance, binding_index) {
                 Ok(binding) => binding,
@@ -380,11 +379,12 @@ pub(super) fn launch_instance_graph(
                 };
                 graph::CapabilityEntry::executable(executable, grant.rights)
             } else {
-                let device = block_index;
-                if grant.capability_kind == CapabilityKind::Block {
-                    block_index = block_index.saturating_add(1);
-                }
-                declared_capability(grant.capability_kind, device, grant.rights)
+                // Every kind this path still constructs is either singular or
+                // carries its per-device identity in the IO-resource authority
+                // table rather than in a launch-order ordinal, so the resource
+                // argument is 0. B90 deleted the one ordinal that was not: the
+                // `Block` counter, whose value no operation ever read.
+                declared_capability(grant.capability_kind, 0, grant.rights)
             };
             let Some(capability) = capability else {
                 fatal!(

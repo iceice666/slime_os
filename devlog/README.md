@@ -375,3 +375,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-29 | [B89: fourteen renderers, one 82-line codec block, three drifts](2026-08-29-b89-shared-codec-emitters/index.md) | Defect | Verified | B89, B88, IO0 |
 | 2026-08-29 | [PR #11 review: two slices printed their conclusions, and nine defects sat under them](2026-08-29-pr11-io-evidence-and-defects/index.md) | Defect | Verified | IO0, IO1, IO2, IO3, IO4, IO5, B85, B86, B88 |
 | 2026-08-30 | [The two docs with update discipline missed the whole I/O track](2026-08-30-io-reference-doc-drift/index.md) | Audit | Verified | IO1, IO2, IO4, B83, B90 |
+| 2026-08-30 | [B90: the `Block` capability kind is deleted, and two of its premises were wrong](2026-08-30-b90-block-kind-retired/index.md) | Change | Verified | B90, B83 |
