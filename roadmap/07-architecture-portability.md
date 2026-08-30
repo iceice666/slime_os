@@ -187,7 +187,7 @@ The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated
 
 ## P3: RV64 QEMU vertical slice
 
-**Status:** Current. Rescoped by P5: this is no longer a custom-kernel port. seL4 supports RV64 upstream, so the S-mode kernel, Sv39 translation tables, trap decoding, `ecall` entry, context switching, interrupt controller, and timer are upstream mechanism to configure and pin, not Slime code to write. What remains Slime's is the exact target profile, the pinned kernel-loader route, immutable selector/root admission, and replaying the semantic corpus that P3.E consumes.
+**Status:** Complete. Rescoped by P5: this is no longer a custom-kernel port. The pinned `riscv64-sel4-qemu-virt` profile now boots upstream seL4 and `slime-root`, admits only target-qualified generation and component images, and replays the selected architecture-neutral root, wait/wake, sample, generation, and rollback corpus. This is the QEMU reference P3.E consumes; it establishes nothing about Milk-V Duo hardware.
 
 **Depends on:** P5. P3.D independently supplies the physical board loop that P3.E consumes after this QEMU reference passes.
 
@@ -205,7 +205,7 @@ The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated
 - unsupported ISA extensions, page modes, firmware handoffs, interrupt profiles, ELF flags, and relocations fail explicitly rather than being guessed from the running machine;
 - no AArch64 register, GIC, firmware, translation-table, or device assumption appears in shared or RV64-specific paths.
 
-### Planned verification target
+### Verification target
 
 ```sh
 just riscv64_qemu_check
@@ -213,7 +213,9 @@ just riscv64_qemu_check
 
 ### Exit condition
 
-The pinned RV64 QEMU profile passes the same architecture-neutral isolation, wait/wake, sample-plane, generation, and rollback corpus as AArch64 without importing x86 or ARM mechanism into its contracts.
+**Observed 2026-08-31:** `just riscv64_qemu_check` passed: the pinned RV64 QEMU profile completed the architecture-neutral root, wait/wake, sample, generation, and rollback corpus without importing x86 or ARM mechanism into its contracts.
+
+**Evidence:** [`devlog/2026-08-31-p3-rv64-qemu-vertical-slice/`](../devlog/2026-08-31-p3-rv64-qemu-vertical-slice/index.md)
 
 ### P3.D — Milk-V Duo physical bring-up loop and firmware handoff evidence
 

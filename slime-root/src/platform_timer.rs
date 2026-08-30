@@ -46,14 +46,17 @@
 //! delay of arbitrary length can still separate the compare condition becoming
 //! true from this task next running.
 
+#[cfg(target_arch = "riscv64")]
+use crate::device::MappedGranule;
 use crate::event::MonotonicInstant;
 use crate::object_allocator::{AllocError, ObjectAllocator};
 use crate::timer::PlatformTimer;
 
-/// EL1 physical timer, non-secure (`CNTP_*`), PPI 30. See the module docs for
-/// why this is the only architected-timer PPI available to a root task under
-/// `KernelArmHypervisorSupport ON`.
+/// Userspace timer interrupt for the selected QEMU `virt` platform.
+#[cfg(target_arch = "aarch64")]
 pub const TIMER_IRQ: sel4::Word = 30;
+#[cfg(target_arch = "riscv64")]
+pub const TIMER_IRQ: sel4::Word = 11;
 
 /// Badge minted onto the notification copy bound to the IRQ handler. The
 /// notification object's own (unbadged, full-rights) capability is used to
@@ -62,6 +65,7 @@ pub const TIMER_IRQ: sel4::Word = 30;
 /// pending yet".
 const SIGNAL_BADGE: sel4::Badge = 1;
 
+#[cfg(target_arch = "aarch64")]
 /// `CNTP_CTL_EL0.ENABLE`: the timer counts down to (and compares against)
 /// `CNTP_CVAL_EL0` and can assert its interrupt line.
 const CNTP_CTL_ENABLE: u64 = 1 << 0;
@@ -83,20 +87,24 @@ pub enum PlatformTimerSetupError {
     BindNotification(sel4::Error),
 }
 
-/// Failure acknowledging a delivered timer IRQ. `monotonic_now`,
-/// `program_deadline`, and `disarm_timer` are plain register accesses that
-/// cannot fail on this hardware, so this is the only error
-/// [`PhysicalTimerAdapter`] can ever report through [`PlatformTimer::Error`].
+/// Failure while operating the platform timer after acquisition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PlatformTimerAckError(pub sel4::Error);
+pub enum PlatformTimerAckError {
+    /// The RV64 adapter was used before its RTC register page was attached.
+    RegistersUnavailable,
+    /// A device-register offset was outside the mapped granule.
+    RegisterAccess,
+    /// seL4 refused the IRQ acknowledgement.
+    Acknowledge(sel4::Error),
+}
 
-/// A live, IRQ-backed EL1 physical timer this root task owns.
+/// A live, IRQ-backed timer source this root task owns.
 pub struct PhysicalTimerAdapter {
     irq_handler: sel4::cap::IrqHandler,
-    /// The unbadged, full-rights notification capability: used to wait/poll,
-    /// never to signal (that authority was minted away to a badged copy
-    /// bound to the IRQ handler and never held outside the kernel).
+    /// The unbadged, full-rights notification capability.
     notification: sel4::cap::Notification,
+    #[cfg(target_arch = "riscv64")]
+    registers: Option<MappedGranule>,
 }
 
 impl PhysicalTimerAdapter {
@@ -150,7 +158,15 @@ impl PhysicalTimerAdapter {
         Ok(Self {
             irq_handler: irq_handler_slot.cap(),
             notification: notification_slot.cap(),
+            #[cfg(target_arch = "riscv64")]
+            registers: None,
         })
+    }
+
+    /// Attach the mapped Goldfish RTC register page used by RV64 QEMU.
+    #[cfg(target_arch = "riscv64")]
+    pub fn attach_registers(&mut self, registers: MappedGranule) {
+        self.registers = Some(registers);
     }
 
     /// The capability a caller waits or polls on to observe delivery. Full
@@ -176,11 +192,16 @@ impl PhysicalTimerAdapter {
         tcb.tcb_bind_notification(self.notification)
     }
 
-    /// `CNTFRQ_EL0`: ticks per second for this counter. Firmware-programmed
-    /// and architecturally constant once set, so this is read fresh on every
-    /// call rather than cached.
+    /// Timer ticks per second for this platform's monotonic source.
     pub fn frequency_hz(&self) -> u64 {
-        read_cntfrq()
+        #[cfg(target_arch = "aarch64")]
+        {
+            read_cntfrq()
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            1_000_000_000
+        }
     }
 }
 
@@ -188,21 +209,48 @@ impl PlatformTimer for PhysicalTimerAdapter {
     type Error = PlatformTimerAckError;
 
     fn monotonic_now(&mut self) -> Result<MonotonicInstant, Self::Error> {
-        Ok(MonotonicInstant(read_cntpct()))
+        #[cfg(target_arch = "aarch64")]
+        {
+            Ok(MonotonicInstant(read_cntpct()))
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            let registers = self
+                .registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
+            Ok(MonotonicInstant(
+                read_rtc(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
+            ))
+        }
     }
 
     fn program_deadline(&mut self, deadline: MonotonicInstant) -> Result<(), Self::Error> {
-        write_cntp_cval(deadline.0);
-        write_cntp_ctl(CNTP_CTL_ENABLE);
+        #[cfg(target_arch = "aarch64")]
+        {
+            write_cntp_cval(deadline.0);
+            write_cntp_ctl(CNTP_CTL_ENABLE);
+        }
+        #[cfg(target_arch = "riscv64")]
+        program_rtc(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+            deadline.0,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
         Ok(())
     }
 
     fn disarm_timer(&mut self) -> Result<(), Self::Error> {
-        // ENABLE = 0 forces the compare condition — and with it the
-        // interrupt line — deasserted regardless of the counter/compare
-        // relationship (Armv8-A architecture reference, generic timer
-        // chapter): there is no queued deadline for it to still fire.
+        #[cfg(target_arch = "aarch64")]
         write_cntp_ctl(0);
+        #[cfg(target_arch = "riscv64")]
+        disarm_rtc(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
         Ok(())
     }
 
@@ -216,15 +264,64 @@ impl PlatformTimer for PhysicalTimerAdapter {
         // clear; acknowledging first could let the kernel unmask a line the
         // device had not actually deasserted yet, which — being
         // level-triggered — would refire it immediately.
+        #[cfg(target_arch = "aarch64")]
         isb();
+        #[cfg(target_arch = "riscv64")]
+        clear_rtc_interrupt(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
         self.irq_handler
             .irq_handler_ack()
-            .map_err(PlatformTimerAckError)
+            .map_err(PlatformTimerAckError::Acknowledge)
     }
+}
+#[cfg(target_arch = "riscv64")]
+const RTC_TIME_LOW: usize = 0x00;
+#[cfg(target_arch = "riscv64")]
+const RTC_TIME_HIGH: usize = 0x04;
+#[cfg(target_arch = "riscv64")]
+const RTC_ALARM_LOW: usize = 0x08;
+#[cfg(target_arch = "riscv64")]
+const RTC_ALARM_HIGH: usize = 0x0c;
+#[cfg(target_arch = "riscv64")]
+const RTC_IRQ_ENABLED: usize = 0x10;
+#[cfg(target_arch = "riscv64")]
+const RTC_CLEAR_ALARM: usize = 0x14;
+#[cfg(target_arch = "riscv64")]
+const RTC_CLEAR_INTERRUPT: usize = 0x1c;
+
+#[cfg(target_arch = "riscv64")]
+fn read_rtc(registers: MappedGranule) -> Option<u64> {
+    let low = registers.read32(RTC_TIME_LOW)? as u64;
+    let high = registers.read32(RTC_TIME_HIGH)? as u64;
+    Some(low | (high << 32))
+}
+
+#[cfg(target_arch = "riscv64")]
+fn program_rtc(registers: MappedGranule, deadline: u64) -> bool {
+    registers.write32(RTC_ALARM_HIGH, (deadline >> 32) as u32)
+        && registers.write32(RTC_ALARM_LOW, deadline as u32)
+        && registers.write32(RTC_IRQ_ENABLED, 1)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn disarm_rtc(registers: MappedGranule) -> bool {
+    registers.write32(RTC_IRQ_ENABLED, 0)
+        && registers.write32(RTC_CLEAR_ALARM, 1)
+        && registers.write32(RTC_CLEAR_INTERRUPT, 1)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn clear_rtc_interrupt(registers: MappedGranule) -> bool {
+    registers.write32(RTC_CLEAR_INTERRUPT, 1)
 }
 
 /// Reads the EL1 physical counter (`CNTPCT_EL0`), the free-running clock the
 /// EL1 physical timer's compare register is measured against.
+#[cfg(target_arch = "aarch64")]
 #[inline]
 fn read_cntpct() -> u64 {
     let value: u64;
@@ -243,9 +340,9 @@ fn read_cntpct() -> u64 {
     }
     value
 }
-
 /// Reads `CNTFRQ_EL0`, the counter frequency firmware programmed for
 /// [`read_cntpct`]'s domain.
+#[cfg(target_arch = "aarch64")]
 #[inline]
 fn read_cntfrq() -> u64 {
     let value: u64;
@@ -262,8 +359,8 @@ fn read_cntfrq() -> u64 {
     }
     value
 }
-
 /// Writes the EL1 physical timer's compare value (`CNTP_CVAL_EL0`).
+#[cfg(target_arch = "aarch64")]
 #[inline]
 fn write_cntp_cval(value: u64) {
     // SAFETY: `msr` to `cntp_cval_el0` only changes this timer's own compare
@@ -279,8 +376,8 @@ fn write_cntp_cval(value: u64) {
         );
     }
 }
-
 /// Writes the EL1 physical timer's control register (`CNTP_CTL_EL0`).
+#[cfg(target_arch = "aarch64")]
 #[inline]
 fn write_cntp_ctl(value: u64) {
     // SAFETY: `msr` to `cntp_ctl_el0` only toggles this timer's own
@@ -295,10 +392,10 @@ fn write_cntp_ctl(value: u64) {
         );
     }
 }
-
 /// Instruction Synchronization Barrier: forces every instruction before it
 /// (in particular, the `msr` writes above) to complete and become visible to
 /// the timer hardware before anything after it executes.
+#[cfg(target_arch = "aarch64")]
 #[inline]
 fn isb() {
     // SAFETY: `isb` reads and writes no memory; it only orders instruction

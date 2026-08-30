@@ -20,7 +20,10 @@ commit = "1ef65fb100051a54c74eecc03050fa48ac0dec69"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
+riscv64_root_target = "deps/rust-sel4/support/targets/riscv64imac-sel4-roottask-minimal.json"
+riscv64_root_target_sha256 = "1ba7236f7df19f49777dc2f3bc189ea06ce30d7af1e3746c0183fe94467f64c9"
 loader_target = "aarch64-unknown-none"
+riscv64_loader_target = "riscv64imac-unknown-none-elf"
 
 [qemu_arm_virt]
 platform = "qemu-arm-virt"
@@ -41,6 +44,31 @@ qemu_version = "11.0.1"
 # physical counter/frequency and physical timer control/compare registers.
 export_pcnt_user = true
 export_ptmr_user = true
+
+# P3's architecture reference. These are QEMU's explicit machine facts and
+# seL4's qemu-riscv-virt defaults, pinned so the port never inherits a newer
+# emulator's ISA, interrupt, timer, or memory profile silently.
+[qemu_riscv_virt]
+platform = "qemu-riscv-virt"
+sel4_arch = "riscv64"
+isa = "rv64imac_zicsr_zifencei"
+mmu = "sv39"
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+machine = "virt"
+cpu = "rv64"
+cpus = 1
+memory_mib = 3072
+qemu_version = "11.0.1"
+firmware = "rust-sel4 kernel loader with embedded OpenSBI"
+interrupt_controller = "sifive-plic-1.0.0"
+timer_frequency_hz = 10000000
+uart = "ns16550a-0x10000000"
+virtio_mmio_base = "0x10001000"
+virtio_mmio_count = 8
 
 # P4's physical target. Every value here is read from seL4's own platform
 # description or the board's firmware device tree, never asserted by Slime:
@@ -171,6 +199,16 @@ usb_ncm_address = "192.168.42.1"
 # exports an absolute `CROSS_COMPILER_PREFIX`, so every host runs the same
 # driver and assembler (B21) — which is what makes this a toolchain gate rather
 # than a host gate.
+# P3's RV64 QEMU reference prefix. The input DTB is normalized by deleting
+# QEMU's runtime-only `/chosen/rng-seed`; all remaining hashes bind the pinned
+# seL4 source, QEMU machine facts, config, and GNU RISC-V toolchain.
+[observed_prefix_qemu_riscv_virt]
+kernel_sha256 = "24eced1913d0374ddf9b70df35f8f2acd861bc3a363b023a2897674143aa3064"
+kernel_config_sha256 = "e6dd5b8a0974e722c96a231bcfcb5f9c214551141dc0c069cf3321f27ffe158b"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
+dtb_sha256 = "7e60b8954a02e149a36e3e58eb70af2f4853ae347e9d8df0194c3fcb5f1e9c87"
+platform_info_sha256 = "1433a46cdc40b51d91b3f6c2dc7a7d5d1692fe2aae3c401c02d12622d5fb85e2"
+
 [observed_prefix]
 kernel_sha256 = "97dcb029127bcc0fac1fd6cc83950ba878040a773a380e2d000b0ebc20d875ce"
 kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8aed444c4"

@@ -64,7 +64,7 @@ pub const MAX_TEARDOWN_ACTIONS: usize = MAX_MAPPING_PAGES + MAX_FRAME_ANCHORS * 
 /// space across committed mappings and orphans before any adapter call.
 pub const MAX_ORPHANS: usize = MAX_MAPPING_PAGES;
 const MAX_CHARGE_HOLDERS: usize = MAX_SHARED_BUFFERS + MAX_MAPPINGS;
-const AARCH64_USER_TOP: usize = 1usize << 40;
+const USER_ADDRESS_CEILING: usize = 1usize << 38;
 
 /// A supervision-subtree identity local to one generation epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1873,7 +1873,7 @@ impl SharedBufferTable {
         let end = base
             .checked_add(length)
             .ok_or(SharedBufferError::BadRange)?;
-        if base >= AARCH64_USER_TOP || end > AARCH64_USER_TOP {
+        if base >= USER_ADDRESS_CEILING || end > USER_ADDRESS_CEILING {
             return Err(SharedBufferError::BadRange);
         }
         Self::validate_page_range(offset, length, region.anchors.len())

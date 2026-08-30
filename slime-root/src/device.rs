@@ -83,6 +83,17 @@ pub enum DeviceError {
     Irq(sel4::Error),
 }
 
+fn uncached_attributes() -> sel4::VmAttributes {
+    #[cfg(target_arch = "aarch64")]
+    {
+        sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        sel4::VmAttributes::NONE
+    }
+}
+
 impl DeviceRegion {
     /// A borrowed handle on this mapping, for another transport in the same
     /// granule.
@@ -118,12 +129,7 @@ impl DeviceRegion {
             .write(writable)
             .build();
         self.frame
-            .frame_map(
-                vspace,
-                base,
-                rights,
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
-            )
+            .frame_map(vspace, base, rights, uncached_attributes())
             .map_err(DeviceError::Map)?;
         self.base = base;
         Ok(())
@@ -150,10 +156,9 @@ impl DeviceRegion {
                 vspace,
                 base,
                 sel4::CapRights::read_write(),
-                // Device memory: the mapping must not be cached, or a register
-                // read can return a stale line and a write can sit in one. seL4
-                // spells that as clearing the page-cacheable attribute.
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+                // Device memory must be uncached, or register accesses can be
+                // stale or delayed.
+                uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
         Ok(Self { base, paddr, frame })
@@ -175,7 +180,7 @@ impl DeviceRegion {
                 vspace,
                 base,
                 sel4::CapRights::read_write(),
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+                uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
         Ok(Self {
@@ -477,7 +482,7 @@ impl DmaPage {
                 vspace,
                 base,
                 sel4::CapRights::read_write(),
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+                uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
         // Zeroed: a virtqueue's available and used rings are read by the device

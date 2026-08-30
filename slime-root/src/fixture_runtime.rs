@@ -403,34 +403,36 @@ fn classify_probe(record: &fault::FaultRecord) -> Option<Probe> {
 
 /// Step a probing thread past the instruction that faulted, then let it run.
 ///
-/// The two probes need different resumption points, because AArch64 reports
-/// them differently:
-///
-/// - a data abort reports the faulting *store*, so the thread resumes at the
-///   following instruction (`pc + 4`; every A64 instruction is 4 bytes);
-/// - an instruction abort reports the branch *target*, so `pc + 4` would land
-///   inside the same non-executable page and fault forever. The thread resumes
-///   at its link register instead, which `blr` set to the instruction after the
-///   branch.
-///
-/// Either way the thread advances, so a repeating fault cannot loop: the
-/// `SHARED_EXPECTED_PROBES` ceiling in `serve_fault` bounds it a second time.
+/// Data faults report the store itself. AArch64 instructions are fixed-width;
+/// the RV64 fixture emits its probing store inside an explicit `.option norvc`
+/// block, so this one instruction is fixed-width even though the image otherwise
+/// uses the compressed extension. Execute faults report the non-executable
+/// branch target, so resume at the link register the indirect call set.
 fn resume_past_probe(
     tasks: &TaskTable<MAX_TASKS>,
     id: TaskId,
     probe: Probe,
 ) -> Result<(), sel4::Error> {
-    const A64_INSTRUCTION_BYTES: sel4::Word = 4;
-    const LINK_REGISTER: usize = 30;
+    const DATA_INSTRUCTION_BYTES: sel4::Word = 4;
 
     let Some(task) = tasks.get(id) else {
         return Err(sel4::Error::InvalidCapability);
     };
     let mut context = task.tcb.tcb_read_all_registers(false)?;
     let resume_at = match probe {
-        Probe::ReadOnlyWrite => context.pc().wrapping_add(A64_INSTRUCTION_BYTES),
-        Probe::Execute => *context.gpr(LINK_REGISTER),
+        Probe::ReadOnlyWrite => context.pc().wrapping_add(DATA_INSTRUCTION_BYTES),
+        Probe::Execute => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                *context.gpr(30)
+            }
+            #[cfg(target_arch = "riscv64")]
+            {
+                context.inner().ra
+            }
+        }
     };
+
     *context.pc_mut() = resume_at;
     // `resume = true`: the thread is blocked on its fault endpoint, and this is
     // the reply that releases it.

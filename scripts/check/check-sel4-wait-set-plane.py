@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """C9.2 gate: one wake per ready set, recovered from one badge word, in order."""
+
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -9,24 +11,46 @@ import shutil
 import subprocess
 import sys
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
+from harness import (
+    GENERATION_COMPOSITIONS,
+    load_qemu_profile,
+    profile_integer,
+    profile_text,
+    qemu_kernel_arguments,
+    sha256_file,
+)  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = ROOT / "build" / "slime-sel4-wait-set.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-wait-set.identity.json"
 BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-wait-set.zti"
 IMAGE_VARIANT = "wait-set"
+PLATFORMS = {
+    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
+    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
+
+TARGET_PROFILES = {
+    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
+    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
+}
 TIMEOUT = 240
+
+
+def artifact_paths(platform: str) -> tuple[Path, Path]:
+    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
+    return (
+        ROOT / "build" / f"slime-sel4-wait-set{suffix}.elf",
+        ROOT / "build" / f"slime-sel4-wait-set{suffix}.identity.json",
+    )
+
 
 # The three declared sources, by the badge bit each names and the kind it is
 # declared as. Read from the fixture too (`check_fixture_shape`), so a mutation
@@ -111,45 +135,62 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 wait-set plane check: {message}")
 
 
-def build_image() -> None:
+def build_image(platform: str, image_path: Path, manifest_path: Path) -> None:
     process = subprocess.run(
-        [sys.executable, str(BUILD), "--wait-set-plane"],
+        [
+            sys.executable,
+            str(BUILD),
+            "--wait-set-plane",
+            "--platform",
+            platform,
+        ],
         cwd=ROOT,
         check=False,
     )
-    if process.returncode != 0 or not IMAGE.is_file():
+    if process.returncode != 0 or not image_path.is_file():
         fail("image build failed")
-    if not MANIFEST.is_file():
+    if not manifest_path.is_file():
         fail("identity manifest missing")
-    identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    identity = json.loads(manifest_path.read_text(encoding="utf-8"))
     if identity.get("variant") != IMAGE_VARIANT:
         fail(f"wrong image variant {identity.get('variant')!r}")
-    if identity.get("target_profile") != "aarch64-sel4-qemu-virt":
-        fail(f"wrong target profile {identity.get('target_profile')!r}")
+    if identity.get("platform") != platform:
+        fail(f"identity platform is {identity.get('platform')!r}, not {platform!r}")
+    expected_profile = TARGET_PROFILES[platform]
+    if identity.get("target_profile") != expected_profile:
+        fail(
+            f"identity target profile is {identity.get('target_profile')!r}, "
+            f"not {expected_profile!r}"
+        )
     image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
+    if not isinstance(image, dict) or image.get("sha256") != sha256_file(image_path, fail):
         fail("packaged image digest does not match identity manifest")
 
 
-def boot(profile: dict[str, object]) -> str:
-    qemu = shutil.which("qemu-system-aarch64")
+def boot(
+    profile: dict[str, object],
+    *,
+    section: str,
+    qemu_binary: str,
+    image_path: Path,
+) -> str:
+    qemu = shutil.which(qemu_binary)
     if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
+        fail(f"{qemu_binary} is not on PATH")
     command = [
         qemu,
         "-machine",
-        str(profile["machine"]),
+        profile_text(profile, "machine", fail, section),
         "-cpu",
-        str(profile["cpu"]),
+        profile_text(profile, "cpu", fail, section),
         "-smp",
-        str(profile["cpus"]),
+        str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile['memory_mib']}M",
+        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-kernel",
-        str(IMAGE),
+        *qemu_kernel_arguments(qemu_binary, image_path, fail),
     ]
     process = subprocess.Popen(
         command,
@@ -222,10 +263,7 @@ def check_fixture_shape() -> None:
         fail(f"fixture declares wait-set waiters {sorted(waiters)}, expected one")
     declared = {(entry["kind"], entry["badgeBit"]) for entry in sources}
     if declared != set(DECLARED_SOURCES):
-        fail(
-            f"fixture declares sources {sorted(declared)}, "
-            f"expected {sorted(DECLARED_SOURCES)}"
-        )
+        fail(f"fixture declares sources {sorted(declared)}, expected {sorted(DECLARED_SOURCES)}")
     # Every source is on the one notification the waiter waits on. That is the
     # whole mechanism — one `seL4_Wait`, one badge word — so a fixture spreading
     # them across objects would make the plane assert something else.
@@ -284,7 +322,9 @@ def check_semantics(transcript: str) -> None:
 
     # The waiter read its own sources and nothing else did. `WAIT_SOURCES` is
     # self-scoped, so a non-empty answer to any other task would be a disclosure.
-    reads = re.findall(r"SLIME_WAIT sources task=(\d+) instance=(\S+) cursor=\d+ rows=(\d+)", transcript)
+    reads = re.findall(
+        r"SLIME_WAIT sources task=(\d+) instance=(\S+) cursor=\d+ rows=(\d+)", transcript
+    )
     if not reads:
         fail("no component read its declared sources")
     for task, instance, rows in reads:
@@ -331,13 +371,26 @@ def check_semantics(transcript: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Boot the seL4 wait-set plane on one pinned QEMU profile"
+    )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+    )
+    arguments = parser.parse_args()
     check_fixture_shape()
-    build_image()
-    pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
-    profile = pins.get("qemu_arm_virt")
-    if not isinstance(profile, dict):
-        fail("missing qemu profile")
-    transcript = boot(profile)
+    section, qemu_binary = PLATFORMS[arguments.platform]
+    image_path, manifest_path = artifact_paths(arguments.platform)
+    build_image(arguments.platform, image_path, manifest_path)
+    profile = load_qemu_profile(fail, PINS, section)
+    transcript = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image_path=image_path,
+    )
     match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
     for pattern in EXPECTED_UNORDERED:
         if re.search(pattern, transcript) is None:
@@ -346,7 +399,7 @@ def main() -> None:
     print(
         "seL4 wait-set plane check: bounded registration, one-wake badge "
         "demultiplexing, deterministic dispatch, refused ceilings, and "
-        "declared peer-death delivery observed"
+        f"declared peer-death delivery observed on {arguments.platform}"
     )
 
 

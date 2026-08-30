@@ -383,8 +383,8 @@ fn native_receive_slot() -> sel4::AbsoluteCPtr {
 
 /// This thread's IPC buffer, as an explicit invocation context (B47).
 ///
-/// `sel4`'s ambient buffer is one process-wide static — `has-thread-local` is
-/// absent from `aarch64-sel4-minimal`, so there is no per-thread slot to set.
+/// `sel4`'s ambient buffer is one process-wide static — native target specs do
+/// not declare `has-thread-local`, so there is no per-thread slot to set.
 /// The main thread installs its own and uses the ambient path; every other
 /// thread reaches its buffer through this, because overwriting the static
 /// would repoint the main thread's syscalls at the wrong buffer.
@@ -425,8 +425,8 @@ fn console_service() -> cap::Endpoint {
 /// Per thread rather than per process (B47): each thread stages payloads
 /// through its own window, so sharing one entry would let a `recv` on one
 /// thread overwrite a `send` staging on the other. Every access indexes by
-/// `runtime::thread_index()`, which comes from `TPIDR_EL0` — per-thread in
-/// hardware — so no two threads ever touch the same entry and the atomics
+/// `runtime::thread_index()`, read from the architecture's software thread
+/// pointer, so no two threads ever touch the same entry and the atomics
 /// carry no contention.
 static WINDOW_BASE: [AtomicU64; MAX_THREADS] = [const { AtomicU64::new(0) }; MAX_THREADS];
 static WINDOW_LEN: [AtomicUsize; MAX_THREADS] = [const { AtomicUsize::new(0) }; MAX_THREADS];

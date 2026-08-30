@@ -1,0 +1,7 @@
+set(KernelPlatform "qemu-riscv-virt" CACHE STRING "")
+set(KernelSel4Arch "riscv64" CACHE STRING "")
+set(KernelIsMCS OFF CACHE BOOL "")
+set(KernelMaxNumNodes 1 CACHE STRING "")
+set(KernelVerificationBuild OFF CACHE BOOL "")
+set(KernelDebugBuild ON CACHE BOOL "")
+set(KernelPrinting ON CACHE BOOL "")

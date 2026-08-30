@@ -42,13 +42,17 @@ from release_trust import build_release
 from zutai_cli import STDLIB, binary
 
 BUILD_GENERATION = load_script("architecture_contract_builder", "build/build-generation.py")
-CHECK_GENERATION = load_script("architecture_contract_generation_check", "check/check-generation.py")
+CHECK_GENERATION = load_script(
+    "architecture_contract_generation_check", "check/check-generation.py"
+)
 
 EXPECTED_PROFILES = {
     "x86_64-qemu-virtio",
     "aarch64-qemu-virt",
     "aarch64-rpi5",
     "riscv64-qemu-virt",
+    "aarch64-sel4-qemu-virt",
+    "riscv64-sel4-qemu-virt",
 }
 UNKNOWN_TARGET = "unknown-architecture-profile"
 NEUTRAL_RESOURCE = b"architecture-neutral-resource-v1"
@@ -128,7 +132,6 @@ def check_cross_profile_rejection() -> None:
         fail("no same-ISA profiles exercise exact profile-id separation")
 
 
-
 def kernel_image(profile) -> bytes:
     payload_offset = KERNEL_HEADER.size + KERNEL_SEGMENT.size
     payload = b"\x90" * 8
@@ -171,7 +174,9 @@ def component_image(profile) -> bytes:
         profile.id,
         profile.required_features,
     )
-    segment = COMPONENT_IMAGE_SEGMENT.pack(0, len(payload), 0, len(payload), COMPONENT_SEGMENT_FLAG_EXEC, 0)
+    segment = COMPONENT_IMAGE_SEGMENT.pack(
+        0, len(payload), 0, len(payload), COMPONENT_SEGMENT_FLAG_EXEC, 0
+    )
     return header + segment + payload
 
 
@@ -191,9 +196,7 @@ def target_manifest(name: str) -> dict:
         # key, so the builder raised `KeyError: 'instances'` and this gate
         # could not run at all -- the cutover moved every real fixture and
         # left the one synthesized here behind.
-        "executables": [
-            {"name": "init", "object": "init-image", "role": "init", "spawnBudget": 0}
-        ],
+        "executables": [{"name": "init", "object": "init-image", "role": "init", "spawnBudget": 0}],
         "instances": [
             {
                 "name": "init",
@@ -212,15 +215,9 @@ def target_manifest(name: str) -> dict:
 
 
 def object_payload(generation: bytes, object_id: str) -> bytes:
-    object_count = struct.unpack_from(
-        "<I", generation, GENERATION_HEADER_OBJECT_COUNT_OFFSET
-    )[0]
-    object_offset = struct.unpack_from(
-        "<Q", generation, GENERATION_HEADER_OBJECT_OFFSET_OFFSET
-    )[0]
-    string_offset = struct.unpack_from(
-        "<Q", generation, GENERATION_HEADER_STRING_OFFSET_OFFSET
-    )[0]
+    object_count = struct.unpack_from("<I", generation, GENERATION_HEADER_OBJECT_COUNT_OFFSET)[0]
+    object_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_OBJECT_OFFSET_OFFSET)[0]
+    string_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_STRING_OFFSET_OFFSET)[0]
     for index in range(object_count):
         name_offset, _kind, payload_offset, payload_len, _digest = GENERATION_OBJECT.unpack_from(
             generation, object_offset + index * GENERATION_OBJECT.size
@@ -259,6 +256,7 @@ def check_target_identity_and_neutral_resources() -> None:
         fail("changing only the exact target did not change release identity")
     if resources != [NEUTRAL_RESOURCE, NEUTRAL_RESOURCE]:
         fail("architecture-neutral resource bytes changed across target builds")
+
 
 def check_generated_bindings() -> None:
     require_command(

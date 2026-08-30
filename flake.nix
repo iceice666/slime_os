@@ -60,6 +60,10 @@
           # *native* `gcc-wrapper` whose `targetPrefix` is empty. Only the
           # derivation differs; the wrappers inject the same flags.
           crossCC = pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc;
+          # P3's upstream seL4 reference kernel and loader use the matching GNU
+          # RISC-V toolchain, pinned by an absolute wrapper path for the same
+          # reproducibility reason as AArch64.
+          riscvCrossCC = pkgs.pkgsCross.riscv64.stdenv.cc;
           # The seL4 build drives host Python generators (bitfield, invocation,
           # hardware/DTS) through a bare `python3`.
           sel4Python = pkgs.python3.withPackages (ps: [
@@ -98,6 +102,7 @@
                 dtc
                 libxml2.bin
                 crossCC
+                riscvCrossCC
                 sel4Python
               ];
 
@@ -118,6 +123,7 @@
             # wrapper's `bin/` by store path makes every host run the same
             # compiler driver and the same assembler (B21).
             CROSS_COMPILER_PREFIX = "${crossCC}/bin/${crossCC.targetPrefix}";
+            RISCV64_CROSS_COMPILER_PREFIX = "${riscvCrossCC}/bin/${riscvCrossCC.targetPrefix}";
 
             # Freestanding C components use Clang's target driver and LLD.
             # Do not inherit mkShell's ambient CC: on Linux it is GCC, which

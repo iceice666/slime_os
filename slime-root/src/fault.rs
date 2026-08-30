@@ -153,9 +153,9 @@ pub fn normalize_fault(fault: sel4::Fault) -> Result<FaultRecord, FaultError> {
             }),
             sel4::Fault::UnknownSyscall(fault) => Ok(FaultRecord {
                 kind: FaultKind::UnknownSyscall {
-                    number: fault.syscall(),
+                    number: fault.inner().get_Syscall(),
                 },
-                instruction: Some(fault.fault_ip()),
+                instruction: Some(fault.inner().get_FaultIP()),
                 address: None,
             }),
             sel4::Fault::UserException(fault) => Ok(FaultRecord {
@@ -166,21 +166,24 @@ pub fn normalize_fault(fault: sel4::Fault) -> Result<FaultRecord, FaultError> {
                 instruction: Some(fault.inner().get_FaultIP()),
                 address: None,
             }),
-            sel4::Fault::VmFault(fault) => Ok(FaultRecord {
-                kind: FaultKind::VirtualMemory {
-                    access: normalize_vm_access(&fault),
-                    status: fault.fsr(),
-                },
-                instruction: Some(fault.ip()),
-                address: Some(fault.addr()),
-            }),
-            #[sel4_cfg(ARM_HYPERVISOR_SUPPORT)]
+            sel4::Fault::VmFault(fault) => {
+                let raw = fault.inner();
+                Ok(FaultRecord {
+                    kind: FaultKind::VirtualMemory {
+                        access: normalize_vm_access(raw),
+                        status: raw.get_FSR(),
+                    },
+                    instruction: Some(raw.get_IP()),
+                    address: Some(raw.get_Addr()),
+                })
+            },
+            #[sel4_cfg(all(ARCH_ARM, ARM_HYPERVISOR_SUPPORT))]
             sel4::Fault::VGicMaintenance(_) => Ok(FaultRecord {
                 kind: FaultKind::VirtualInterruptMaintenance,
                 instruction: None,
                 address: None,
             }),
-            #[sel4_cfg(ARM_HYPERVISOR_SUPPORT)]
+            #[sel4_cfg(all(ARCH_ARM, ARM_HYPERVISOR_SUPPORT))]
             sel4::Fault::VCpuFault(fault) => Ok(FaultRecord {
                 kind: FaultKind::VirtualCpu {
                     syndrome: fault.hsr(),
@@ -188,7 +191,7 @@ pub fn normalize_fault(fault: sel4::Fault) -> Result<FaultRecord, FaultError> {
                 instruction: None,
                 address: None,
             }),
-            #[sel4_cfg(ARM_HYPERVISOR_SUPPORT)]
+            #[sel4_cfg(all(ARCH_ARM, ARM_HYPERVISOR_SUPPORT))]
             sel4::Fault::VPpiEvent(fault) => Ok(FaultRecord {
                 kind: FaultKind::VirtualPpi { irq: fault.irq() },
                 instruction: None,
@@ -219,29 +222,36 @@ fn normalize_lookup_failure(raw: sel4::Word) -> CapabilityLookupFailure {
     }
 }
 
-/// AArch64 delivers `ESR_EL1`/`ESR_EL2` as the VM-fault status word. An
-/// instruction abort is an execute access; for a data abort the ISS `WnR` bit
-/// distinguishes read from write. Any other exception class stays `Unknown`
-/// rather than being reported as a write.
-fn normalize_vm_access(fault: &sel4::VmFault) -> AccessKind {
-    const EXCEPTION_CLASS_SHIFT: sel4::Word = 26;
-    const DATA_ABORT_LOWER_EL: sel4::Word = 0x24;
-    const DATA_ABORT_CURRENT_EL: sel4::Word = 0x25;
-    const WRITE_NOT_READ: sel4::Word = 1 << 6;
-
-    if fault.is_prefetch() {
+/// Normalize the architecture-specific VM-fault status into the portable
+/// read/write/execute vocabulary supervision exposes.
+fn normalize_vm_access(fault: &sel4::sys::seL4_Fault_VMFault) -> AccessKind {
+    if fault.get_PrefetchFault() != 0 {
         return AccessKind::Execute;
     }
-    let status = fault.fsr();
-    match status >> EXCEPTION_CLASS_SHIFT {
-        DATA_ABORT_LOWER_EL | DATA_ABORT_CURRENT_EL => {
-            if status & WRITE_NOT_READ == 0 {
-                AccessKind::Read
-            } else {
-                AccessKind::Write
+    #[cfg(target_arch = "aarch64")]
+    {
+        const EXCEPTION_CLASS_SHIFT: sel4::Word = 26;
+        const DATA_ABORT_LOWER_EL: sel4::Word = 0x24;
+        const DATA_ABORT_CURRENT_EL: sel4::Word = 0x25;
+        const WRITE_NOT_READ: sel4::Word = 1 << 6;
+        match fault.get_FSR() >> EXCEPTION_CLASS_SHIFT {
+            DATA_ABORT_LOWER_EL | DATA_ABORT_CURRENT_EL => {
+                if fault.get_FSR() & WRITE_NOT_READ == 0 {
+                    AccessKind::Read
+                } else {
+                    AccessKind::Write
+                }
             }
+            _ => AccessKind::Unknown,
         }
-        _ => AccessKind::Unknown,
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        match fault.get_FSR() {
+            5 | 13 => AccessKind::Read,
+            7 | 15 => AccessKind::Write,
+            _ => AccessKind::Unknown,
+        }
     }
 }
 

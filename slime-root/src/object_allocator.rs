@@ -41,7 +41,15 @@ pub const MAX_TASK_SLOTS: usize =
 const SLOT_WORD_BITS: usize = usize::BITS as usize;
 const SLOT_WORDS: usize = MAX_ROOT_CSLOTS.div_ceil(SLOT_WORD_BITS);
 const GRANULE_BYTES: usize = 4096;
-const MAX_DEVICE_FRAME_SKIP: usize = 64;
+/// Maximum queue pages allocated as one physically contiguous run.
+const MAX_CONTIGUOUS_GRANULES: usize = 64;
+/// Maximum objects in one seL4 untyped retype invocation.
+const MAX_RETYPE_FAN_OUT: usize = 256;
+
+fn device_retype_chunks(retyped: usize, target: usize) -> Option<(usize, usize)> {
+    let count = target.checked_sub(retyped)?.checked_add(1)?;
+    Some((count.div_ceil(MAX_RETYPE_FAN_OUT), count))
+}
 
 /// Root CSlots whose allocation-time physical base is retained at once.
 ///
@@ -832,7 +840,7 @@ impl ObjectAllocator {
         &mut self,
         count: usize,
     ) -> Result<(usize, usize), AllocError> {
-        if count == 0 || count > MAX_DEVICE_FRAME_SKIP {
+        if count == 0 || count > MAX_CONTIGUOUS_GRANULES {
             return Err(AllocError::SlotsExhausted {
                 allocated: self.slots_allocated,
             });
@@ -1226,21 +1234,14 @@ impl ObjectAllocator {
             })
             .ok_or(AllocError::NoDeviceUntyped { paddr })?;
         let target = (paddr - region.paddr) / GRANULE_BYTES;
-        let count = target
-            .checked_sub(region.retyped)
-            .and_then(|distance| distance.checked_add(1))
+        let (chunk_count, count) = device_retype_chunks(region.retyped, target)
             .ok_or(AllocError::DeviceFramePassed { paddr })?;
-        if count > MAX_DEVICE_FRAME_SKIP {
-            return Err(AllocError::NoDeviceUntyped { paddr });
-        }
         let (first, reused) = self
             .slots
             .allocate_contiguous(count, self.slots_allocated)?;
-        // Only the target granule, exactly as before: the skipped frames ahead
-        // of the watermark are retained rather than deleted, and no caller can
-        // name them, so recording them would spend the bounded table on
-        // addresses nothing reads. Recorded before the retype for the reason
-        // `allocate_from_global` states.
+        // Only the target granule is externally nameable. The earlier slots are
+        // retained because the device untyped is monotonic, but they deliberately
+        // carry no physical-provenance entries: no caller can receive them.
         let target_slot = first + count - 1;
         if let Err(error) = self.physical.insert(target_slot, paddr) {
             for slot in first..first + count {
@@ -1248,22 +1249,42 @@ impl ObjectAllocator {
             }
             return Err(error);
         }
-        if let Err(error) = region.cap.untyped_retype(
-            &sel4::ObjectBlueprint::Arch(sel4::ObjectBlueprintArch::SmallPage),
-            &sel4::init_thread::slot::CNODE
-                .cap()
-                .absolute_cptr_for_self(),
-            first,
-            count,
-        ) {
-            self.physical.remove(target_slot);
-            for slot in first..first + count {
-                self.slots.release(slot);
+        for chunk in 0..chunk_count {
+            let chunk_start = chunk * MAX_RETYPE_FAN_OUT;
+            let chunk_len = core::cmp::min(MAX_RETYPE_FAN_OUT, count - chunk_start);
+            if let Err(error) = region.cap.untyped_retype(
+                &sel4::FrameObjectType::GRANULE.blueprint(),
+                &sel4::init_thread::slot::CNODE
+                    .cap()
+                    .absolute_cptr_for_self(),
+                first + chunk_start,
+                chunk_len,
+            ) {
+                // Device untypeds are monotonic. Earlier chunks succeeded and
+                // now hold real device frames; retain those caps and reserve
+                // their slots rather than deleting them. Deleting the last
+                // child resets seL4's untyped free index to zero and would make
+                // this userspace watermark lie about the next physical page.
+                self.physical.remove(target_slot);
+                for slot in first + chunk_start..first + count {
+                    self.slots.release(slot);
+                }
+                self.slots_allocated += chunk_start;
+                // The public allocation failed, so reuse accounting remains a
+                // count of completed allocations; the retained caps are only
+                // the device-untyped watermark made concrete.
+                self.objects_allocated += chunk_start;
+                self.live_objects += chunk_start;
+                self.bytes_allocated += chunk_start * GRANULE_BYTES;
+                self.live_bytes += chunk_start * GRANULE_BYTES;
+                if let Some(region) = self.devices[region_index].as_mut() {
+                    region.retyped += chunk_start;
+                }
+                return Err(AllocError::Retype {
+                    size_bits: 12,
+                    error,
+                });
             }
-            return Err(AllocError::Retype {
-                size_bits: 12,
-                error,
-            });
         }
         self.slots_allocated += count;
         self.slots_reused += reused;
@@ -1287,7 +1308,7 @@ impl ObjectAllocator {
 mod tests {
     use super::{
         AllocError, ArenaPlan, ArenaRecord, MAX_PHYSICAL_PROVENANCE, MAX_TASK_SLOTS,
-        PROVENANCE_SLOTS, ProvenanceTable, SlotPool, plan_allocation,
+        PROVENANCE_SLOTS, ProvenanceTable, SlotPool, device_retype_chunks, plan_allocation,
     };
 
     /// Physical provenance is retained for a live frame, dropped when the frame
@@ -1454,6 +1475,15 @@ mod tests {
                 limit: super::MAX_TASK_SLOTS
             })
         );
+    }
+
+    #[test]
+    fn sparse_device_retype_is_chunked_at_the_kernel_fanout_limit() {
+        assert_eq!(device_retype_chunks(0, 0), Some((1, 1)));
+        assert_eq!(device_retype_chunks(0, 255), Some((1, 256)));
+        assert_eq!(device_retype_chunks(0, 256), Some((2, 257)));
+        assert_eq!(device_retype_chunks(0, 0x101), Some((2, 0x102)));
+        assert_eq!(device_retype_chunks(7, 6), None);
     }
 
     #[test]

@@ -136,9 +136,11 @@ from generation_resources import (
 from generation_fabric import *  # noqa: F403
 from generation_fabric import resolve_fabric_profile as _resolve_fabric_profile
 
+
 def declared_boot_profiles(manifest: dict) -> list[str]:
     """Every boot profile the manifest names, selected or not."""
     return [profile["name"] for profile in manifest.get("bootProfiles", [])]
+
 
 def boot_profile(manifest: dict, name: str) -> dict:
     """The one boot profile `name` selects."""
@@ -151,6 +153,7 @@ def boot_profile(manifest: dict, name: str) -> dict:
         fail(f"boot profile: expected exactly one {name} profile")
     return matches[0]
 
+
 def resolve_boot_profile(manifest: dict, name: str) -> dict:
     """Narrow the manifest to the instances one boot profile declares."""
     profile = boot_profile(manifest, name)
@@ -162,9 +165,7 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
     if unknown:
         fail(f"boot profile {name}: undeclared instance(s) {', '.join(unknown)}")
     scaffolding_everywhere = {
-        instance
-        for entry in manifest.get("bootProfiles", [])
-        for instance in entry["instances"]
+        instance for entry in manifest.get("bootProfiles", []) for instance in entry["instances"]
     }
     kept = (declared - scaffolding_everywhere) | set(scaffolding)
     resolved = copy.deepcopy(manifest)
@@ -258,13 +259,17 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
         graph["routes"] = routes
     return resolved
 
-def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) -> ResolvedFabricProfile:
+
+def resolve_fabric_profile(
+    manifest: dict, interfaces: list, profile_name: str
+) -> ResolvedFabricProfile:
     import generation_fabric
 
     generation_fabric.MAX_FABRIC_GRAPH_INGRESS_SOURCES = MAX_FABRIC_GRAPH_INGRESS_SOURCES
     generation_fabric.FABRIC_TRACE_MAX_DEPTH = FABRIC_TRACE_MAX_DEPTH
     generation_fabric.FABRIC_TRACE_TERMINAL_RESERVE = FABRIC_TRACE_TERMINAL_RESERVE
     return _resolve_fabric_profile(manifest, interfaces, profile_name, resolve_boot_profile)
+
 
 # Imported lazily for compatibility with host checks that load this script as a
 # module and call the resource identity helpers directly. The builder itself
@@ -279,10 +284,10 @@ def __getattr__(name: str):
 
 
 SOURCE = GENERATION_FIXTURES / "valid.zti"
-# P5.2: the `aarch64-sel4-qemu-virt` graph is a sibling manifest rather than a
-# boot profile of `valid.zti`, because `resolve_boot_profile` narrows by
-# subtraction and naming a component in a new profile would drop it from
-# `default`, changing the frozen product generation. See `sel4.md` beside it.
+# P5.2: seL4 graphs are sibling manifests rather than boot profiles of
+# `valid.zti`, because `resolve_boot_profile` narrows by subtraction and naming
+# a component in a new profile would drop it from `default`, changing the frozen
+# product generation. See `sel4.md` beside it.
 SEL4_SOURCE = GENERATION_COMPOSITIONS / "sel4.zti"
 SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
 # P4's physical target. It builds the same seL4 manifests from the same graph
@@ -290,7 +295,14 @@ SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
 # `manifest["target"]` is rewritten and immutable root admission refuses QEMU-
 # qualified components on the board and board-qualified ones under QEMU.
 SEL4_BOARD_TARGET_PROFILE = "aarch64-rpi5"
-SEL4_TARGET_PROFILES = (SEL4_TARGET_PROFILE, SEL4_BOARD_TARGET_PROFILE)
+# P3's RV64 reference uses the same generated graph and native seL4 transport,
+# but every executable is rebuilt and qualified for a distinct ABI/profile.
+SEL4_RISCV64_TARGET_PROFILE = "riscv64-sel4-qemu-virt"
+SEL4_TARGET_PROFILES = (
+    SEL4_TARGET_PROFILE,
+    SEL4_BOARD_TARGET_PROFILE,
+    SEL4_RISCV64_TARGET_PROFILE,
+)
 # Additional seL4 manifests carry distinct authenticated boot actions and
 # generation-derived component tables while sharing the same target profile.
 SEL4_MANIFESTS = {
@@ -367,9 +379,7 @@ SEL4_EXTERNAL_MANIFESTS = {
     "sel4-slisp": GENERATION_COMPOSITIONS / "sel4-slisp.zti",
 }
 SEL4_SELECTABLE_MANIFESTS = SEL4_MANIFESTS | SEL4_EXTERNAL_MANIFESTS
-COMPONENTS_TARGET_DIR = Path(
-    os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
-)
+COMPONENTS_TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components")
 # The components whose crates declare `boot-contracts/gpt` and `slime-rt/heap`,
 # and so link a `#[global_allocator]`. CP3 scoped that allocator to exactly
 # these six by moving the feature declaration into their own manifests; this set
@@ -600,9 +610,10 @@ POLICY = {
 }
 
 
-
 def fail(message: str) -> None:
     raise SystemExit(message)
+
+
 def parse_external_components(values: list[str]) -> dict[str, Path]:
     """Parse the explicit external implementation-name to ELF-path mapping."""
     mappings: dict[str, Path] = {}
@@ -617,8 +628,6 @@ def parse_external_components(values: list[str]) -> dict[str, Path]:
             fail(f"external component {name!r}: no regular ELF file at {path}")
         mappings[name] = path
     return mappings
-
-
 
 
 def component_specs_for_manifest(
@@ -662,6 +671,7 @@ def resolve_component_sources(
     component_spec_root: Path | None = None,
 ) -> tuple[dict[str, dict], set[str]]:
     import component_spec_contract
+
     specs = component_specs_for_manifest(manifest, component_spec_root)
 
     manifest_names = {executable["name"] for executable in manifest["executables"]}
@@ -819,7 +829,9 @@ def resolved_slot_table(manifest: dict) -> dict[tuple[str, str, str], int]:
     for minted in resolved.get("mintedBindings", []) or []:
         table[(minted["holder"], "capability", minted["name"])] = minted["slot"]
     for notification in resolved.get("notificationBindings", []) or []:
-        table[(notification["holder"], "notification", notification["grant"])] = notification["slot"]
+        table[(notification["holder"], "notification", notification["grant"])] = notification[
+            "slot"
+        ]
     return table
 
 
@@ -924,9 +936,13 @@ def declared_pin_effects(manifest: dict) -> dict[tuple[str, str], str]:
     """
     combined = pin_removal_effects(manifest)
     for profile in manifest.get("bootProfiles") or []:
-        narrowed = pin_removal_effects(resolve_boot_profile(copy.deepcopy(manifest), profile["name"]))
+        narrowed = pin_removal_effects(
+            resolve_boot_profile(copy.deepcopy(manifest), profile["name"])
+        )
         for key, effect in narrowed.items():
-            if PIN_EFFECT_ORDER.index(effect) > PIN_EFFECT_ORDER.index(combined.get(key, "nothing")):
+            if PIN_EFFECT_ORDER.index(effect) > PIN_EFFECT_ORDER.index(
+                combined.get(key, "nothing")
+            ):
                 combined[key] = effect
     return combined
 
@@ -983,22 +999,27 @@ def validate_slot_reasons(manifest: dict, source: str) -> None:
                     f"expected {classify_slot_pin(holder, grant, layout_rows, effects)}"
                 )
             if declared not in SLOT_REASONS:
-                fail(f"{where}: unknown slotReason {declared!r}; expected one of {', '.join(SLOT_REASONS)}")
+                fail(
+                    f"{where}: unknown slotReason {declared!r}; expected one of {', '.join(SLOT_REASONS)}"
+                )
             expected = classify_slot_pin(holder, grant, layout_rows, effects)
             if declared != expected:
-                fail(f"{where}: declares slotReason {declared!r} but this manifest implies {expected!r}")
+                fail(
+                    f"{where}: declares slotReason {declared!r} but this manifest implies {expected!r}"
+                )
 
 
 def resolve_target_profile(target: object) -> TargetProfile:
     if not isinstance(target, str):
-        fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
+        fail(
+            f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}"
+        )
     profile = TARGET_PROFILES_BY_NAME.get(target)
     if profile is None:
-        fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
+        fail(
+            f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}"
+        )
     return profile
-
-
-
 
 
 def component_target_dir(root: Path, target_profile: TargetProfile, name: str) -> Path:
@@ -1050,15 +1071,15 @@ def cargo_target_directory_name(target_profile: TargetProfile) -> str:
     return target_profile.cargo_target
 
 
-def sel4_component_environment(environment: dict[str, str]) -> dict[str, str]:
-    """Add what a `slime-components` build for the seL4 profile needs.
+def sel4_component_environment(
+    environment: dict[str, str], target_profile: TargetProfile
+) -> dict[str, str]:
+    """Add what a `slime-components` build for one seL4 profile needs.
 
-    `slime-rt`'s seL4 transport compiles against the installed libsel4, whose
-    bindings `sel4-sys` generates with bindgen at build time, so the prefix and
-    libclang must both be present and named. The toolchain is pinned by
-    `sel4/pins.toml` because `build-std` requires the matching `rust-src`.
-    Mirrors `scripts/build/build-sel4.py::cargo_environment`, which is the
-    working precedent for building against these pins.
+    The generated bindings select their syscall ABI from the installed libsel4
+    configuration, so the prefix must match the target profile. Reusing the
+    AArch64 prefix for an RV64 JSON target compiles AArch64 syscall helpers as
+    RISC-V inline assembly and fails only after Cargo has built most crates.
     """
     pins_path = ROOT / "sel4" / "pins.toml"
     if not pins_path.is_file():
@@ -1067,12 +1088,16 @@ def sel4_component_environment(environment: dict[str, str]) -> dict[str, str]:
 
     pins = tomllib.loads(pins_path.read_text(encoding="utf-8"))
     environment["RUSTUP_TOOLCHAIN"] = pins["rust_sel4"]["toolchain"]
-    prefix = ROOT / "build" / "sel4-prefix"
+    prefix_by_profile = {
+        SEL4_TARGET_PROFILE: ROOT / "build" / "sel4-prefix",
+        SEL4_BOARD_TARGET_PROFILE: ROOT / "build" / "sel4-rpi5-prefix",
+        SEL4_RISCV64_TARGET_PROFILE: ROOT / "build" / "sel4-riscv64-prefix",
+    }
+    prefix = prefix_by_profile.get(target_profile.name)
+    if prefix is None:
+        fail(f"no seL4 prefix route for target {target_profile.name!r}")
     if not (prefix / "libsel4" / "include" / "kernel" / "gen_config.json").is_file():
-        fail(
-            f"no installed seL4 prefix at {prefix.relative_to(ROOT)}; "
-            "run `just sel4_qemu_image_check` first"
-        )
+        fail(f"no installed seL4 prefix at {prefix.relative_to(ROOT)} for {target_profile.name}")
     environment["SEL4_PREFIX"] = str(prefix)
     if not environment.get("LIBCLANG_PATH"):
         fail(
@@ -1205,7 +1230,7 @@ def build_rust_components(
                 f"--remap-path-prefix={ROOT}=.",
             ]
         )
-        environment = sel4_component_environment(environment)
+        environment = sel4_component_environment(environment, target_profile)
     else:
         # B12: `components/.cargo/config.toml` carried a hardcoded
         # `--remap-path-prefix` naming one developer's checkout. Any other
@@ -1265,15 +1290,9 @@ def _elf64_load_segments(
         if header < phoff or header > len(data) - 56:
             fail(f"{name}: truncated program header")
         p_type, p_flags = struct.unpack_from("<II", data, header)
-        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from(
-            "<QQQQQ", data, header + 8
-        )
+        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from("<QQQQQ", data, header + 8)
         if p_type == 1 and p_memsz:
-            if (
-                p_filesz > p_memsz
-                or p_offset > len(data)
-                or p_filesz > len(data) - p_offset
-            ):
+            if p_filesz > p_memsz or p_offset > len(data) or p_filesz > len(data) - p_offset:
                 fail(f"{name}: malformed load segment")
             segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
     if not segments:
@@ -1281,9 +1300,7 @@ def _elf64_load_segments(
     return entry, segments
 
 
-def _admit_sel4_elf(
-    name: str, data: bytes, stack_bytes: int, profile: TargetProfile
-) -> bytes:
+def _admit_sel4_elf(name: str, data: bytes, stack_bytes: int, profile: TargetProfile) -> bytes:
     """Apply the canonical component and root-loader checks before signing."""
     if len(data) > MAX_COMPONENT_IMAGE_BYTES:
         fail(f"{name}: image exceeds the component image bound")
@@ -1359,7 +1376,11 @@ def component_image(
     entry, segments = _elf64_load_segments(name, data, profile)
     segments = [segment for segment in segments if segment[3]]
     segments.sort()
-    if not 1 <= len(segments) <= COMPONENT_IMAGE_MAX_SEGMENTS or segments[0][0] != profile.component_base or entry < profile.component_base:
+    if (
+        not 1 <= len(segments) <= COMPONENT_IMAGE_MAX_SEGMENTS
+        or segments[0][0] != profile.component_base
+        or entry < profile.component_base
+    ):
         fail(f"{name}: invalid component load layout")
     records = bytearray()
     payload = bytearray()
@@ -1368,13 +1389,22 @@ def component_image(
     entry_ok = False
     total_pages = 0
     for vaddr, offset, filesz, memsz, elf_flags in segments:
-        if filesz > memsz or vaddr % profile.page_bytes or vaddr < previous_end or offset + filesz > len(data):
+        if (
+            filesz > memsz
+            or vaddr % profile.page_bytes
+            or vaddr < previous_end
+            or offset + filesz > len(data)
+        ):
             fail(f"{name}: invalid or overlapping segment")
-        flags = (COMPONENT_SEGMENT_FLAG_EXEC if elf_flags & 1 else 0) | (COMPONENT_SEGMENT_FLAG_WRITE if elf_flags & 2 else 0)
+        flags = (COMPONENT_SEGMENT_FLAG_EXEC if elf_flags & 1 else 0) | (
+            COMPONENT_SEGMENT_FLAG_WRITE if elf_flags & 2 else 0
+        )
         if flags == COMPONENT_SEGMENT_FLAG_EXEC | COMPONENT_SEGMENT_FLAG_WRITE:
             fail(f"{name}: writable executable segment")
         relative = vaddr - profile.component_base
-        entry_ok |= bool(flags & COMPONENT_SEGMENT_FLAG_EXEC and relative <= entry_offset < relative + memsz)
+        entry_ok |= bool(
+            flags & COMPONENT_SEGMENT_FLAG_EXEC and relative <= entry_offset < relative + memsz
+        )
         records += COMPONENT_IMAGE_SEGMENT.pack(relative, memsz, len(payload), filesz, flags, 0)
         payload += data[offset : offset + filesz]
         previous_end = vaddr + memsz
@@ -1397,6 +1427,7 @@ def component_image(
         profile.required_features,
     )
     return header + records + payload
+
 
 def validate_interface_schemas(entries: object) -> list:
     """Admit the manifest's declared interface set and return it compiled.
@@ -1508,6 +1539,7 @@ NOTIFICATION_ROLE_SIGNAL = 1
 NOTIFICATION_ROLE_WAIT = 2
 CAP_RIGHT_ALL = (1 << 64) - 1
 
+
 def declared_services(
     instance: dict,
     executable: dict,
@@ -1535,11 +1567,7 @@ def declared_services(
         services.add(SERVICE_CLOCK)
     capability_declarations = [
         grants_by_name[binding["grant"]] for binding in instance["bindings"]
-    ] + [
-        minted
-        for minted in minted_bindings
-        if minted["holder"] == instance["name"]
-    ]
+    ] + [minted for minted in minted_bindings if minted["holder"] == instance["name"]]
     for declaration in capability_declarations:
         service = SERVICE_BY_CAPABILITY_KIND.get(declaration["capabilityKind"])
         if service is not None:
@@ -1642,14 +1670,26 @@ def build_sel4_plan(
         object_index[(name, "ipc-buffer")] = ipc
         kernel_records.extend(
             GENERATION_KERNEL_OBJECT.pack(
-                string_offset(f"{name}:ipc-buffer"), KERNEL_OBJECT_FRAME, process, 12, 1, PLAN_NONE, 0
+                string_offset(f"{name}:ipc-buffer"),
+                KERNEL_OBJECT_FRAME,
+                process,
+                12,
+                1,
+                PLAN_NONE,
+                0,
             )
         )
         fault_endpoint = len(object_index)
         object_index[(name, "fault-endpoint")] = fault_endpoint
         kernel_records.extend(
             GENERATION_KERNEL_OBJECT.pack(
-                string_offset(f"{name}:fault-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
+                string_offset(f"{name}:fault-endpoint"),
+                KERNEL_OBJECT_ENDPOINT,
+                process,
+                4,
+                1,
+                PLAN_NONE,
+                0,
             )
         )
 
@@ -1733,7 +1773,13 @@ def build_sel4_plan(
         object_index[(name, "console-endpoint")] = console_endpoint
         kernel_records.extend(
             GENERATION_KERNEL_OBJECT.pack(
-                string_offset(f"{name}:console-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
+                string_offset(f"{name}:console-endpoint"),
+                KERNEL_OBJECT_ENDPOINT,
+                process,
+                4,
+                1,
+                PLAN_NONE,
+                0,
             )
         )
         for service in sorted(
@@ -1779,11 +1825,7 @@ def build_sel4_plan(
         # magnitude: the 48-instance stress plane declared 6 slots per instance
         # and consumed 81 (B49).
         executable_object = next(
-            (
-                e["object"]
-                for e in manifest["executables"]
-                if e["name"] == instance["executable"]
-            ),
+            (e["object"] for e in manifest["executables"] if e["name"] == instance["executable"]),
             None,
         )
         image_frame_count = image_pages.get(executable_object, 0)
@@ -1793,18 +1835,16 @@ def build_sel4_plan(
             "tcb": thread_total,
             # One IPC-buffer/window pair per thread, plus the image itself.
             "frame": thread_total + image_frame_count,
-            "endpoint": 2 + sum(
+            "endpoint": 2
+            + sum(
                 1
                 for grant in grants
-                if grant["capabilityKind"] == "endpoint"
-                and grant["source"] == name
+                if grant["capabilityKind"] == "endpoint" and grant["source"] == name
             ),
             # Each static notification object is owned once, by its declared
             # signal source; wait holders receive capabilities to that object.
             "notification": sum(
-                1
-                for grant in manifest.get("notificationGrants", [])
-                if grant["source"] == name
+                1 for grant in manifest.get("notificationGrants", []) if grant["source"] == name
             ),
         }
         quota_records.extend(
@@ -1946,30 +1986,63 @@ def build_sel4_plan(
             target = executable_index[grant["target"]]
             spawn_records.extend(
                 GENERATION_SPAWN_TEMPLATE.pack(
-                    string_offset(grant["name"]), target, source_process, source_process, source_process, source_process, 1, 0
+                    string_offset(grant["name"]),
+                    target,
+                    source_process,
+                    source_process,
+                    source_process,
+                    source_process,
+                    1,
+                    0,
                 )
             )
             cap_records.extend(
-                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, 0)
+                GENERATION_CAP_BINDING.pack(
+                    source_process,
+                    bound["slot"],
+                    object_index[(grant["source"], "tcb")],
+                    rights,
+                    0,
+                    grant_index,
+                    0,
+                )
             )
         elif grant["capabilityKind"] == "endpoint":
             endpoint = len(object_index)
             object_index[(grant["name"], "endpoint")] = endpoint
             kernel_records.extend(
                 GENERATION_KERNEL_OBJECT.pack(
-                    string_offset(f"{grant['name']}:endpoint"), KERNEL_OBJECT_ENDPOINT, source_process, 4, 1, PLAN_NONE, 0
+                    string_offset(f"{grant['name']}:endpoint"),
+                    KERNEL_OBJECT_ENDPOINT,
+                    source_process,
+                    4,
+                    1,
+                    PLAN_NONE,
+                    0,
                 )
             )
             cap_records.extend(
-                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], endpoint, rights, 0, grant_index, 0)
+                GENERATION_CAP_BINDING.pack(
+                    source_process, bound["slot"], endpoint, rights, 0, grant_index, 0
+                )
             )
         else:
             cap_records.extend(
-                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, GRANT_POLICY_ONLY)
+                GENERATION_CAP_BINDING.pack(
+                    source_process,
+                    bound["slot"],
+                    object_index[(grant["source"], "tcb")],
+                    rights,
+                    0,
+                    grant_index,
+                    GRANT_POLICY_ONLY,
+                )
             )
     notification_grant_records = bytearray()
     notification_binding_records = bytearray()
-    notification_grants = sorted(manifest.get("notificationGrants", []), key=lambda grant: grant["name"])
+    notification_grants = sorted(
+        manifest.get("notificationGrants", []), key=lambda grant: grant["name"]
+    )
     notification_index = {grant["name"]: index for index, grant in enumerate(notification_grants)}
     if len(notification_index) != len(notification_grants):
         fail("notification grant names must be unique")
@@ -1978,11 +2051,17 @@ def build_sel4_plan(
     for binding in manifest.get("notificationBindings", []):
         grant = notification_index.get(binding["grant"])
         holder = instance_index.get(binding["holder"])
-        role = {"signal": NOTIFICATION_ROLE_SIGNAL, "wait": NOTIFICATION_ROLE_WAIT}.get(binding["role"])
+        role = {"signal": NOTIFICATION_ROLE_SIGNAL, "wait": NOTIFICATION_ROLE_WAIT}.get(
+            binding["role"]
+        )
         slot = binding["slot"]
         if grant is None or holder is None or role is None:
             fail("notification binding names unknown grant, holder, or role")
-        if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < MAX_DECLARED_NATIVE_SLOT:
+        if (
+            not isinstance(slot, int)
+            or isinstance(slot, bool)
+            or not 0 <= slot < MAX_DECLARED_NATIVE_SLOT
+        ):
             fail(f"notification binding {binding['grant']}: relative slot outside 0..30")
         if (holder, slot) in seen_notification_slots:
             fail(f"notification binding {binding['grant']}: duplicate holder slot")
@@ -2027,7 +2106,10 @@ def build_sel4_plan(
                 string_offset(grant["name"]), source, target, object_, 0
             )
         )
-    if len(notification_grants) > MAX_NOTIFICATION_GRANTS or len(manifest.get("notificationBindings", [])) > MAX_NOTIFICATION_BINDINGS:
+    if (
+        len(notification_grants) > MAX_NOTIFICATION_GRANTS
+        or len(manifest.get("notificationBindings", [])) > MAX_NOTIFICATION_BINDINGS
+    ):
         fail("notification topology count exceeds bound")
 
     # Minted bindings: a capability the owner creates at runtime and hands to
@@ -2068,7 +2150,6 @@ def build_sel4_plan(
             )
         )
 
-
     counts = (
         len(process_records) // GENERATION_PROCESS.size,
         len(thread_records) // GENERATION_THREAD.size,
@@ -2085,20 +2166,38 @@ def build_sel4_plan(
         len(notification_binding_records) // GENERATION_NOTIFICATION_BINDING.size,
     )
     limits = (
-        MAX_PROCESSES, MAX_THREADS, MAX_KERNEL_OBJECTS, MAX_MAPPINGS, MAX_CAP_BINDINGS,
-        MAX_SERVICE_BINDINGS, MAX_SCHEDULES, MAX_FAULT_POLICIES, MAX_SPAWN_TEMPLATES,
-        MAX_RESOURCE_QUOTAS, MAX_MINTED_BINDINGS, MAX_NOTIFICATION_GRANTS,
+        MAX_PROCESSES,
+        MAX_THREADS,
+        MAX_KERNEL_OBJECTS,
+        MAX_MAPPINGS,
+        MAX_CAP_BINDINGS,
+        MAX_SERVICE_BINDINGS,
+        MAX_SCHEDULES,
+        MAX_FAULT_POLICIES,
+        MAX_SPAWN_TEMPLATES,
+        MAX_RESOURCE_QUOTAS,
+        MAX_MINTED_BINDINGS,
+        MAX_NOTIFICATION_GRANTS,
         MAX_NOTIFICATION_BINDINGS,
     )
     if any(count > limit for count, limit in zip(counts, limits, strict=True)):
         fail("seL4 execution plan count exceeds bound")
     return (
-        process_records, thread_records, kernel_records, mapping_records, cap_records,
-        service_records, schedule_records, fault_records, spawn_records, quota_records,
-        minted_records, notification_grant_records, notification_binding_records, counts,
+        process_records,
+        thread_records,
+        kernel_records,
+        mapping_records,
+        cap_records,
+        service_records,
+        schedule_records,
+        fault_records,
+        spawn_records,
+        quota_records,
+        minted_records,
+        notification_grant_records,
+        notification_binding_records,
+        counts,
     )
-
-
 
 
 def layout_executables(manifest: dict) -> set[str]:
@@ -2113,7 +2212,13 @@ def layout_executables(manifest: dict) -> set[str]:
     return names
 
 
-def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int, profile: TargetProfile) -> bytes:
+def build_generation(
+    manifest: dict,
+    payloads: dict[str, bytes],
+    parent: bytes | None,
+    number: int,
+    profile: TargetProfile,
+) -> bytes:
     if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
         payloads = dict(payloads)
         # Derived from the manifest's own `InstanceBinding` records rather than
@@ -2162,11 +2267,19 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             pages += -(-memsz // profile.page_bytes)
         image_pages[object_id] = pages
     instances = unique_sorted(manifest["instances"], "name", "instance names")
-    grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))
+    grants = sorted(
+        manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"])
+    )
     states = unique_sorted(manifest["state"], "name", "state names")
     if len({(grant["name"], grant["source"], grant["target"]) for grant in grants}) != len(grants):
         fail("grant identities must be unique")
-    if not 1 <= len(objects) <= MAX_OBJECTS or not 1 <= len(executables) <= MAX_EXECUTABLES or not 1 <= len(instances) <= MAX_INSTANCES or len(grants) > MAX_GRANTS or len(states) > MAX_STATES:
+    if (
+        not 1 <= len(objects) <= MAX_OBJECTS
+        or not 1 <= len(executables) <= MAX_EXECUTABLES
+        or not 1 <= len(instances) <= MAX_INSTANCES
+        or len(grants) > MAX_GRANTS
+        or len(states) > MAX_STATES
+    ):
         fail("manifest count exceeds bound")
     validate_acyclic(instances)
     object_index = {object_["id"]: index for index, object_ in enumerate(objects)}
@@ -2176,13 +2289,16 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     if len(grant_index) != len(grants):
         fail("grant names must be unique")
     if manifest["target"] != profile.name:
-        fail(f"manifest target {manifest['target']!r} does not match resolved profile {profile.name!r}")
+        fail(
+            f"manifest target {manifest['target']!r} does not match resolved profile {profile.name!r}"
+        )
     bootstrap = instance_index.get(manifest["bootstrapInstance"])
     if bootstrap is None:
         fail("bootstrapInstance must name an instance")
 
     strings = bytearray()
     offsets: dict[str, int] = {}
+
     def string_offset(value: str) -> int:
         if value in offsets:
             return offsets[value]
@@ -2199,11 +2315,16 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
 
     target_offset = string_offset(manifest["target"])
     boot_action_offset = string_offset(manifest["bootAction"])
-    for object_ in objects: string_offset(object_["id"])
-    for executable in executables: string_offset(executable["name"])
-    for instance in instances: string_offset(instance["name"])
-    for grant in grants: string_offset(grant["name"])
-    for state in states: string_offset(state["name"])
+    for object_ in objects:
+        string_offset(object_["id"])
+    for executable in executables:
+        string_offset(executable["name"])
+    for instance in instances:
+        string_offset(instance["name"])
+    for grant in grants:
+        string_offset(grant["name"])
+    for state in states:
+        string_offset(state["name"])
 
     grant_rights: list[int] = []
     for grant in grants:
@@ -2271,11 +2392,20 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         slots = [binding["slot"] for binding in declared]
         if len(set(names)) != len(names) or len(set(slots)) != len(slots):
             fail(f"instance {instance['name']}: duplicate binding grant or slot")
-        if any(not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < 32 for slot in slots):
+        if any(
+            not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < 32
+            for slot in slots
+        ):
             fail(f"instance {instance['name']}: logical binding slot outside 0..31")
         for binding in declared:
-            grant = grants[grant_index[binding["grant"]]] if binding["grant"] in grant_index else None
-            if grant is not None and set(grant["rights"]) & {"send", "recv"} and binding["slot"] >= MAX_DECLARED_NATIVE_SLOT:
+            grant = (
+                grants[grant_index[binding["grant"]]] if binding["grant"] in grant_index else None
+            )
+            if (
+                grant is not None
+                and set(grant["rights"]) & {"send", "recv"}
+                and binding["slot"] >= MAX_DECLARED_NATIVE_SLOT
+            ):
                 fail(f"instance {instance['name']}: endpoint-relative slot outside 0..30")
         expected = expected_bindings[instance["name"]]
         extra = set(names) - expected
@@ -2294,7 +2424,12 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
                 child["owner"] == instance["name"] and child["executable"] == grant["target"]
                 for child in instances
             )
-            if not delegated_from_owner and not delegated_to_instance and not delegated_to_owned_instance and not delegated_to_owned_executable:
+            if (
+                not delegated_from_owner
+                and not delegated_to_instance
+                and not delegated_to_owned_instance
+                and not delegated_to_owned_executable
+            ):
                 fail(f"instance {instance['name']}: binding names unrelated grant")
         if not expected.issubset(names):
             fail(f"instance {instance['name']}: bindings do not close over related grants")
@@ -2310,13 +2445,31 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         health = int(instance["health"] == "required")
         if health:
             required_from_instances.add(instance["name"])
-        instance_rows.append((string_offset(instance["name"]), executable, owner_kind, owner_index, int(autostart), dependency_start, len(dependencies), binding_start, len(declared), health))
+        instance_rows.append(
+            (
+                string_offset(instance["name"]),
+                executable,
+                owner_kind,
+                owner_index,
+                int(autostart),
+                dependency_start,
+                len(dependencies),
+                binding_start,
+                len(declared),
+                health,
+            )
+        )
     if dependency_count > MAX_DEPENDENCIES or binding_count > MAX_BINDINGS:
         fail("dependency or binding count exceeds bound")
 
     health = manifest["health"]
     required = sorted(health["requiredInstances"])
-    if health["bootAttempts"] <= 0 or len(required) > MAX_HEALTH_INSTANCES or len(set(required)) != len(required) or set(required) != required_from_instances:
+    if (
+        health["bootAttempts"] <= 0
+        or len(required) > MAX_HEALTH_INSTANCES
+        or len(set(required)) != len(required)
+        or set(required) != required_from_instances
+    ):
         fail("invalid health policy")
 
     object_records = bytearray()
@@ -2410,12 +2563,22 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         )
     bootstrap_instance = instances[bootstrap]
     bootstrap_executable = executables[executable_index[bootstrap_instance["executable"]]]
-    if bootstrap_instance["owner"] != "root" or not bootstrap_instance["autostart"] or bootstrap_executable["role"] != "init" or objects[object_index[bootstrap_executable["object"]]]["kind"] != "bootstrap":
+    if (
+        bootstrap_instance["owner"] != "root"
+        or not bootstrap_instance["autostart"]
+        or bootstrap_executable["role"] != "init"
+        or objects[object_index[bootstrap_executable["object"]]]["kind"] != "bootstrap"
+    ):
         fail("bootstrap instance must be root-owned autostart init/bootstrap")
-    for row in instance_rows: instance_records += GENERATION_INSTANCE.pack(*row)
+    for row in instance_rows:
+        instance_records += GENERATION_INSTANCE.pack(*row)
     for grant, rights in zip(grants, grant_rights, strict=True):
         source = instance_index[grant["source"]]
-        target = executable_index[grant["target"]] if grant["capabilityKind"] == "executable" else instance_index[grant["target"]]
+        target = (
+            executable_index[grant["target"]]
+            if grant["capabilityKind"] == "executable"
+            else instance_index[grant["target"]]
+        )
         grant_records += GENERATION_GRANT.pack(
             string_offset(grant["name"]),
             source,
@@ -2429,8 +2592,11 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         owner = instance_index.get(state["owner"])
         if owner is None or state["schemaVersion"] <= 0 or state["policy"] not in POLICY:
             fail(f"invalid state {state['name']}")
-        state_records += GENERATION_STATE.pack(string_offset(state["name"]), owner, state["schemaVersion"], POLICY[state["policy"]])
-    for name in required: health_records += GENERATION_HEALTH.pack(instance_index[name])
+        state_records += GENERATION_STATE.pack(
+            string_offset(state["name"]), owner, state["schemaVersion"], POLICY[state["policy"]]
+        )
+    for name in required:
+        health_records += GENERATION_HEALTH.pack(instance_index[name])
 
     object_offset = GENERATION_HEADER.size
     executable_offset = object_offset + len(object_records)
@@ -2461,25 +2627,78 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     if total_len > MAX_GENERATION_BYTES:
         fail("generation exceeds bound")
     header = GENERATION_HEADER.pack(
-        GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number,
-        parent or bytes(32), target_offset, boot_action_offset, bootstrap, health["bootAttempts"], len(objects),
-        len(executables), len(instances), dependency_count, binding_count, len(grants),
-        len(states), len(required), *plan_counts, 0, object_offset, executable_offset,
-        instance_offset, dependency_offset, binding_offset, grant_offset, state_offset,
-        health_offset, process_offset, thread_offset, kernel_object_offset, mapping_offset,
-        cap_binding_offset, service_binding_offset, schedule_offset, fault_policy_offset,
-        spawn_template_offset, resource_quota_offset, minted_binding_offset,
-        notification_grant_offset, notification_binding_offset,
-        string_table_offset, len(strings),
-        actual_payload_offset, total_len,
+        GENERATION_MAGIC,
+        GENERATION_VERSION,
+        GENERATION_HEADER.size,
+        0,
+        bytes(32),
+        number,
+        parent or bytes(32),
+        target_offset,
+        boot_action_offset,
+        bootstrap,
+        health["bootAttempts"],
+        len(objects),
+        len(executables),
+        len(instances),
+        dependency_count,
+        binding_count,
+        len(grants),
+        len(states),
+        len(required),
+        *plan_counts,
+        0,
+        object_offset,
+        executable_offset,
+        instance_offset,
+        dependency_offset,
+        binding_offset,
+        grant_offset,
+        state_offset,
+        health_offset,
+        process_offset,
+        thread_offset,
+        kernel_object_offset,
+        mapping_offset,
+        cap_binding_offset,
+        service_binding_offset,
+        schedule_offset,
+        fault_policy_offset,
+        spawn_template_offset,
+        resource_quota_offset,
+        minted_binding_offset,
+        notification_grant_offset,
+        notification_binding_offset,
+        string_table_offset,
+        len(strings),
+        actual_payload_offset,
+        total_len,
     )
     generation = bytearray(
-        header + object_records + executable_records + instance_records + dependency_records
-        + binding_records + grant_records + state_records + health_records + process_records
-        + thread_records + kernel_object_records + mapping_records + cap_binding_records
-        + service_binding_records + schedule_records + fault_policy_records
-        + spawn_template_records + resource_quota_records + minted_binding_records
-        + notification_grant_records + notification_binding_records + strings + blobs
+        header
+        + object_records
+        + executable_records
+        + instance_records
+        + dependency_records
+        + binding_records
+        + grant_records
+        + state_records
+        + health_records
+        + process_records
+        + thread_records
+        + kernel_object_records
+        + mapping_records
+        + cap_binding_records
+        + service_binding_records
+        + schedule_records
+        + fault_policy_records
+        + spawn_template_records
+        + resource_quota_records
+        + minted_binding_records
+        + notification_grant_records
+        + notification_binding_records
+        + strings
+        + blobs
     )
     generation[24:56] = generation_identity(generation)
     return bytes(generation)
@@ -2503,7 +2722,9 @@ def encode_bootstate(
     struct.pack_into("<II", slot, BOOTSTATE_REMAINING_ATTEMPTS_OFFSET, remaining_attempts, 0)
     slot[BOOTSTATE_GENERATION_ROOT_OFFSET:BOOTSTATE_GENERATION_ROOT_END] = generation_root
     slot[BOOTSTATE_STATE_ROOT_OFFSET:BOOTSTATE_STATE_ROOT_END] = state_root or sha256(b"")
-    struct.pack_into("<Q", slot, BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET, accepted_release_sequence)
+    struct.pack_into(
+        "<Q", slot, BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET, accepted_release_sequence
+    )
     slot[BOOTSTATE_CHECKSUM_OFFSET:BOOTSTATE_CHECKSUM_END] = bootstate_checksum(slot)
     return bytes(slot)
 
@@ -2602,16 +2823,13 @@ def build_bootstore(generations: list[bytes]) -> bytes:
     )
     image[BOOTSTORE_DIRECTORY_OFFSET : BOOTSTORE_DIRECTORY_OFFSET + len(header)] = header
     image[
-        BOOTSTORE_DIRECTORY_OFFSET
-        + len(header) : BOOTSTORE_DIRECTORY_OFFSET
+        BOOTSTORE_DIRECTORY_OFFSET + len(header) : BOOTSTORE_DIRECTORY_OFFSET
         + len(header)
         + len(directory)
     ] = directory
     checksum = bootstore_checksum(image)
     image[BOOTSTORE_DIRECTORY_OFFSET + 48 : BOOTSTORE_DIRECTORY_OFFSET + 80] = checksum
     return bytes(image)
-
-
 
 
 def bootstrap_binding_projection(manifest: dict) -> tuple[dict[str, int], dict[str, int]]:
@@ -2712,9 +2930,7 @@ def build_sel4_generation(
     declared_private_memory = manifest.get("privateMemoryBudget") or []
     if "private-memory-budget" in object_ids:
         validated_private_memory_quotas(declared_private_memory)
-        payloads["private-memory-budget"] = build_private_memory_budget(
-            declared_private_memory
-        )
+        payloads["private-memory-budget"] = build_private_memory_budget(declared_private_memory)
     elif declared_private_memory:
         # A quota nothing carries is a promise the generation cannot keep: the
         # root reads the ceiling from the resource object, so a manifest
@@ -2728,9 +2944,7 @@ def build_sel4_generation(
         fail("ioResourceBudget declared without an io-resource-budget resource object")
     declared_network_destinations = manifest.get("networkDestinations") or []
     if "network-destinations" in object_ids:
-        payloads["network-destinations"] = build_network_destinations(
-            declared_network_destinations
-        )
+        payloads["network-destinations"] = build_network_destinations(declared_network_destinations)
     elif declared_network_destinations:
         fail("networkDestinations declared without a network-destinations resource object")
     declared_block_rings = manifest.get("blockRingAuthority") or []
@@ -3009,9 +3223,7 @@ def main() -> None:
         if len(routes) != 1:
             fail(f"SLIME_FABRIC_QOS_OVERRIDE names undeclared route {route_name!r}")
         members = [
-            member
-            for member in routes[0]["participants"]
-            if member.get("component") == component
+            member for member in routes[0]["participants"] if member.get("component") == component
         ]
         if len(members) != 1:
             fail(

@@ -919,27 +919,21 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                         worker_priority,
                     )
                     .map_err(TaskError::SchedParams)?;
-                // The thread index, in the register the runtime reads through
-                // `TPIDR_EL0`. This is what lets a thread find its own IPC
-                // buffer and transfer window without any shared state: the
-                // kernel context-switches this register, so no two threads can
-                // observe each other's value.
-
+                // The per-thread index lives in the architecture's software
+                // thread-pointer register. seL4 saves and restores it with the
+                // user context, so no two threads observe each other's value.
                 let mut worker_context = sel4::UserContext::default();
                 *worker_context.pc_mut() = worker.entry;
                 *worker_context.sp_mut() = worker.stack_top;
                 *worker_context.c_param_mut(0) = sel4::Word::from(startup_arg);
-                // The thread index, in `TPIDR_EL0`. Set here rather than
-                // through `seL4_TCB_SetTLSBase` because seL4 counts that
-                // register in the general-purpose set: a later
-                // `WriteRegisters` writes the whole set, so a separately
-                // invoked TLS base is overwritten with this context's zero.
-                //
-                // This is what lets a thread find its own IPC buffer and
-                // transfer window with no shared state — the kernel
-                // context-switches the register, so no two threads can observe
-                // each other's value.
-                worker_context.inner_mut().tpidr_el0 = index as sel4::Word;
+                #[cfg(target_arch = "aarch64")]
+                {
+                    worker_context.inner_mut().tpidr_el0 = index as sel4::Word;
+                }
+                #[cfg(target_arch = "riscv64")]
+                {
+                    worker_context.inner_mut().tp = index as sel4::Word;
+                }
                 worker_tcb
                     .tcb_write_all_registers(false, &mut worker_context)
                     .map_err(TaskError::WriteRegisters)?;

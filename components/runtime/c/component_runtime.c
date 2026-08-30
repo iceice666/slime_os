@@ -1,5 +1,30 @@
 #include <slime/component_runtime.h>
 
+void *memset(void *destination, int value, size_t len)
+{
+    uint8_t *bytes = destination;
+    for (size_t index = 0; index < len; ++index) {
+        bytes[index] = (uint8_t)value;
+    }
+    return destination;
+}
+
+void __assert_fail(
+    const char *expression, const char *file, int line, const char *function)
+{
+    (void)expression;
+    (void)file;
+    (void)line;
+    (void)function;
+    for (;;) {
+#if defined(CONFIG_ARCH_RISCV64)
+        __asm__ volatile("nop");
+#else
+        __asm__ volatile("yield");
+#endif
+    }
+}
+
 extern unsigned char _end[];
 
 
@@ -35,8 +60,7 @@ static void console_write_chunk(const uint8_t *bytes, size_t len)
         : pack_word(bytes + SLIME_WORD_BYTES, len - SLIME_WORD_BYTES);
     seL4_MessageInfo_t info = seL4_MessageInfo_new(
         SLIME_CONSOLE_LABEL_WRITE, 0, 0, SLIME_FAST_REGISTERS);
-    arm_sys_send(
-        seL4_SysSend, SLIME_CONSOLE_SERVICE_SLOT, info.words[0], mr0, mr1, mr2, mr3);
+    seL4_SendWithMRs(SLIME_CONSOLE_SERVICE_SLOT, info, &mr0, &mr1, &mr2, &mr3);
 }
 
 void slime_debug_write(const uint8_t *bytes, size_t len)
@@ -68,7 +92,6 @@ int64_t slime_endpoint_exchange(
     size_t request_words;
     size_t reply_len;
     seL4_Word badge = 0;
-    seL4_Word reply_info = 0;
     seL4_Word mr0 = 0;
     seL4_Word mr1 = 0;
     seL4_Word mr2 = 0;
@@ -85,29 +108,25 @@ int64_t slime_endpoint_exchange(
     }
     copy_bytes((uint8_t *)ipc_buffer->msg, request, request_len);
     info = seL4_MessageInfo_new(request_len, 0, 0, request_words);
-    arm_sys_send(
-        seL4_SysSend,
+    seL4_SendWithMRs(
         SLIME_NATIVE_ENDPOINT_BASE + slot,
-        info.words[0],
-        ipc_buffer->msg[0],
-        ipc_buffer->msg[1],
-        ipc_buffer->msg[2],
-        ipc_buffer->msg[3]);
-    arm_sys_recv(
-        seL4_SysRecv,
+        info,
+        &ipc_buffer->msg[0],
+        &ipc_buffer->msg[1],
+        &ipc_buffer->msg[2],
+        &ipc_buffer->msg[3]);
+    answer = seL4_RecvWithMRs(
         SLIME_NATIVE_ENDPOINT_BASE + slot,
         &badge,
-        &reply_info,
         &mr0,
         &mr1,
         &mr2,
-        &mr3,
-        0);
+        &mr3);
     ipc_buffer->msg[0] = mr0;
     ipc_buffer->msg[1] = mr1;
     ipc_buffer->msg[2] = mr2;
     ipc_buffer->msg[3] = mr3;
-    answer.words[0] = reply_info;
+    seL4_Word reply_info = answer.words[0];
     reply_len = seL4_MessageInfo_get_label(answer);
     if (seL4_MessageInfo_get_extraCaps(answer) != 0
         || reply_len > reply_capacity
@@ -120,24 +139,14 @@ int64_t slime_endpoint_exchange(
 
 int64_t slime_input_read(uint32_t slot, SlimeInputEvent *event)
 {
-    seL4_Word badge = SLIME_CONSOLE_SERVICE_SLOT;
     seL4_Word mr0 = slot;
     seL4_Word mr1 = 0;
     seL4_Word mr2 = 0;
     seL4_Word mr3 = 0;
     seL4_MessageInfo_t info = seL4_MessageInfo_new(SLIME_CONSOLE_LABEL_INPUT_READ, 0, 0, 1);
-    seL4_Word reply_info = info.words[0];
-    arm_sys_send_recv(
-        seL4_SysCall,
-        SLIME_CONSOLE_SERVICE_SLOT,
-        &badge,
-        info.words[0],
-        &reply_info,
-        &mr0,
-        &mr1,
-        &mr2,
-        &mr3,
-        0);
+    seL4_MessageInfo_t answer = seL4_CallWithMRs(
+        SLIME_CONSOLE_SERVICE_SLOT, info, &mr0, &mr1, &mr2, &mr3);
+    (void)answer;
     if ((int64_t)mr0 == SLIME_ERR_WOULDBLOCK) {
         return SLIME_ERR_WOULDBLOCK;
     }
@@ -156,24 +165,18 @@ void slime_exit(int64_t status)
 {
     seL4_Word mr0 = (seL4_Word)status;
     seL4_MessageInfo_t info = seL4_MessageInfo_new(SLIME_LIFECYCLE_EXIT, 0, 0, 1);
-    seL4_Word badge = SLIME_ROOT_SERVICE_SLOT;
-    seL4_Word reply_info = info.words[0];
     seL4_Word mr1 = 0;
     seL4_Word mr2 = 0;
     seL4_Word mr3 = 0;
-    arm_sys_send_recv(
-        seL4_SysCall,
-        SLIME_ROOT_SERVICE_SLOT,
-        &badge,
-        info.words[0],
-        &reply_info,
-        &mr0,
-        &mr1,
-        &mr2,
-        &mr3,
-        0);
+    seL4_MessageInfo_t answer = seL4_CallWithMRs(
+        SLIME_ROOT_SERVICE_SLOT, info, &mr0, &mr1, &mr2, &mr3);
+    (void)answer;
     for (;;) {
+#if defined(CONFIG_ARCH_RISCV64)
+        __asm__ volatile("nop");
+#else
         __asm__ volatile("yield");
+#endif
     }
 }
 

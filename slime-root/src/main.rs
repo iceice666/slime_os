@@ -120,8 +120,8 @@ use graph_runtime::{RootEndpoints, RuntimeDevices, launch_instance_graph};
 /// The generation this root task admits and launches.
 ///
 /// Supplied by the build harness through `SLIME_GENERATION`, which
-/// `scripts/build/build-sel4.py` points at the `aarch64-sel4-qemu-virt`
-/// generation it just built. The checked-in fixture is the fallback, and it is
+/// `scripts/build/build-sel4.py` points at the generation for this build's
+/// exact seL4 target profile. The checked-in fixture is the fallback, and it is
 /// the retained x86 generation P5.1 admitted: its component payloads are the
 /// retired kernel's segment-carrying images, which are admitted for authority
 /// derivation and never activated. Which one is compiled in therefore decides
@@ -158,14 +158,13 @@ const GENERATION_BYTES: &[u8] = &GENERATION.0;
 #[cfg(slime_boot_selector)]
 const BOOT_BUNDLE_IDENTITY: [u8; 32] = decode_hex32(env!("SLIME_BOOT_BUNDLE_IDENTITY"));
 
-/// The target profile this root task admits executables for. Named rather than
-/// inferred: an image is admitted by equality on every axis the profile
-/// declares, so the profile has to be a stated fact the build can be checked
-/// against, not something derived from whatever happens to be running.
-const TARGET_PROFILE: &str = "aarch64-sel4-qemu-virt";
+/// The target profile this root task admits executables for. The build harness
+/// states it explicitly for the root, child, generation, and loader together;
+/// admission then compares every serialized target axis before mapping bytes.
+const TARGET_PROFILE: &str = env!("SLIME_TARGET_PROFILE");
 
-/// The native child fixture, built for `aarch64-sel4-minimal.json`. Supplied by
-/// the build harness; see `slime-root/child`. `include_bytes!` only guarantees
+/// The native child fixture, built for this platform's seL4 userspace target.
+/// Supplied by the build harness; see `slime-root/child`. `include_bytes!` only guarantees
 /// byte alignment, but `object`'s ELF64 parser requires an 8-byte-aligned
 /// buffer; `Aligned` forces that without a runtime copy into a new allocation.
 #[repr(align(8))]
@@ -263,6 +262,10 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
+/// Standing window for QEMU RV64's Goldfish RTC register page.
+#[cfg(target_arch = "riscv64")]
+static mut RTC_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
 /// Standing MMIO windows for the userspace-authority inventory, one per
 /// granule in QEMU's virtio-mmio transport range.
 ///
@@ -282,30 +285,39 @@ static mut BOOT_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
 static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
     [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
 
-/// Base of qemu-arm-virt's virtio-mmio transport window.
+#[cfg(target_arch = "riscv64")]
+const RTC_PADDR: usize = 0x0010_1000;
+/// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
-/// A *fixture* constant, not a discovery mechanism. The platform declares
-/// thirty-two identical transports at `0x0a00_0000 + n * 0x200` and its own
-/// device tree is the authority; the driver that eventually owns a device walks
-/// the FDT BootInfo extra to find it. This slice proves the mapping and probe
-/// mechanism, and for that the window only has to be one the machine declares.
+/// These are pinned machine facts, not discovery. The generation's userspace
+/// driver owns device semantics; root uses the constants only for the bounded
+/// bootstrap inventory and IRQ-capability handoff.
+#[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
 /// Bytes between consecutive transports.
+#[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
-/// How many fit in one granule: 4096 / 0x200.
-const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = 8;
-/// Granules covering all thirty-two declared transports: 32 / 8.
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_STRIDE: usize = 0x1000;
+const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
+/// Number of transport granules to scan.
+#[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_GRANULES: usize = 4;
-/// SPI number of the first transport's interrupt, from the platform device tree.
-const VIRTIO_MMIO_FIRST_SPI: sel4::Word = 0x10;
-/// GIC SPIs are numbered from 32 in the kernel's IRQ space.
-const GIC_SPI_BASE: sel4::Word = 32;
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_GRANULES: usize = 8;
+/// Interrupt number of the first transport in seL4's IRQ namespace.
+#[cfg(target_arch = "aarch64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
 /// Badge the device notification carries, distinct from the timer's.
 const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
 
 const fn virtio_irq(paddr: usize) -> sel4::Word {
     let index = ((paddr - VIRTIO_MMIO_BASE) / VIRTIO_MMIO_STRIDE) as sel4::Word;
-    GIC_SPI_BASE + VIRTIO_MMIO_FIRST_SPI + index
+    VIRTIO_MMIO_FIRST_IRQ + index
 }
 
 /// What one fixture task is expected to demonstrate.
@@ -536,6 +548,23 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(adapter) => adapter,
         Err(error) => fatal!("timer source unavailable: {error:?}"),
     };
+    #[cfg(target_arch = "riscv64")]
+    {
+        let rtc_addr = ptr::addr_of!(RTC_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, rtc_addr) {
+            fatal!("RTC page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            rtc_addr,
+            RTC_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("RTC registers unavailable: {error:?}"),
+        };
+        timer_adapter.attach_registers(registers);
+    }
     sel4::debug_println!(
         "SLIME_TIMER acquired irq={TIMER_IRQ} freq_hz={}",
         timer_adapter.frequency_hz(),

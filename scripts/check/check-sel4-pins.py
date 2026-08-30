@@ -18,14 +18,21 @@ from harness import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-QEMU_CONFIG_PATH = ROOT / "sel4" / "config" / "qemu-arm-virt.cmake"
+QEMU_CONFIG_PATHS = {
+    "qemu-arm-virt": ROOT / "sel4" / "config" / "qemu-arm-virt.cmake",
+    "qemu-riscv-virt": ROOT / "sel4" / "config" / "qemu-riscv-virt.cmake",
+}
 RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
 RUST_SEL4_PATH = ROOT / "deps" / "rust-sel4"
 # Each platform installs its own prefix and pins its own artifact hashes: the
-# two build different kernels, so one hash set cannot describe both.
+# platforms build different kernels, so one hash set cannot describe all.
 PREFIX_PATHS = {
     "qemu-arm-virt": (ROOT / "build" / "sel4-prefix", "observed_prefix"),
+    "qemu-riscv-virt": (
+        ROOT / "build" / "sel4-riscv64-prefix",
+        "observed_prefix_qemu_riscv_virt",
+    ),
     "bcm2712-rpi5": (
         ROOT / "build" / "sel4-rpi5-prefix",
         "observed_prefix_bcm2712_rpi5",
@@ -185,9 +192,7 @@ def parse_cmake_cache(path: Path) -> dict[str, str]:
             continue
         match = CMAKE_SET.fullmatch(line)
         if match is None:
-            fail(
-                f"unsupported statement in {path.relative_to(ROOT)}:{line_number}: {line!r}"
-            )
+            fail(f"unsupported statement in {path.relative_to(ROOT)}:{line_number}: {line!r}")
         key = match.group(1)
         value = match.group(2) if match.group(2) is not None else match.group(3)
         if key in values:
@@ -196,34 +201,33 @@ def parse_cmake_cache(path: Path) -> dict[str, str]:
     return values
 
 
-def expected_cmake_values(profile: dict[str, object]) -> dict[str, str]:
-    return {
-        "KernelPlatform": text(profile, "platform", "qemu_arm_virt"),
-        "KernelSel4Arch": text(profile, "sel4_arch", "qemu_arm_virt"),
-        "KernelArmHypervisorSupport": "ON"
-        if boolean(profile, "hypervisor", "qemu_arm_virt")
-        else "OFF",
-        "KernelIsMCS": "ON" if boolean(profile, "mcs", "qemu_arm_virt") else "OFF",
-        "KernelMaxNumNodes": str(integer(profile, "nodes", "qemu_arm_virt")),
+def expected_cmake_values(profile: dict[str, object], section: str) -> dict[str, str]:
+    values = {
+        "KernelPlatform": text(profile, "platform", section),
+        "KernelSel4Arch": text(profile, "sel4_arch", section),
+        "KernelIsMCS": "ON" if boolean(profile, "mcs", section) else "OFF",
+        "KernelMaxNumNodes": str(integer(profile, "nodes", section)),
         "KernelVerificationBuild": "ON"
-        if boolean(profile, "verification_build", "qemu_arm_virt")
+        if boolean(profile, "verification_build", section)
         else "OFF",
-        "KernelDebugBuild": "ON"
-        if boolean(profile, "debug_build", "qemu_arm_virt")
-        else "OFF",
-        "KernelPrinting": "ON" if boolean(profile, "printing", "qemu_arm_virt") else "OFF",
-        # `slime-root`'s timer phase reads/writes the EL1 physical
-        # counter/timer registers directly from EL0; see
-        # `slime-root/src/platform_timer.rs` for why this is the one
-        # architected-timer PPI available to it under
-        # `KernelArmHypervisorSupport ON`.
-        "KernelArmExportPCNTUser": "ON"
-        if boolean(profile, "export_pcnt_user", "qemu_arm_virt")
-        else "OFF",
-        "KernelArmExportPTMRUser": "ON"
-        if boolean(profile, "export_ptmr_user", "qemu_arm_virt")
-        else "OFF",
+        "KernelDebugBuild": "ON" if boolean(profile, "debug_build", section) else "OFF",
+        "KernelPrinting": "ON" if boolean(profile, "printing", section) else "OFF",
     }
+    if section == "qemu_arm_virt":
+        values.update(
+            {
+                "KernelArmHypervisorSupport": "ON"
+                if boolean(profile, "hypervisor", section)
+                else "OFF",
+                "KernelArmExportPCNTUser": "ON"
+                if boolean(profile, "export_pcnt_user", section)
+                else "OFF",
+                "KernelArmExportPTMRUser": "ON"
+                if boolean(profile, "export_ptmr_user", section)
+                else "OFF",
+            }
+        )
+    return values
 
 
 def check_submodules(pins: dict[str, object]) -> None:
@@ -234,9 +238,7 @@ def check_submodules(pins: dict[str, object]) -> None:
             fail(f"[{section_name}].commit is not a full 40-character commit")
         actual_commit = git_commit(path)
         if actual_commit != expected_commit:
-            fail(
-                f"{path.relative_to(ROOT)} is at {actual_commit}, expected {expected_commit}"
-            )
+            fail(f"{path.relative_to(ROOT)} is at {actual_commit}, expected {expected_commit}")
         expected_repository = normalized_repository(text(section, "repository", section_name))
         actual_repository = normalized_repository(git_origin(path))
         if actual_repository != expected_repository:
@@ -252,9 +254,9 @@ def check_submodules(pins: dict[str, object]) -> None:
             )
 
     sel4_release = text(table(pins, "sel4"), "release", "sel4")
-    version = require_file(SEL4_PATH / "VERSION", "seL4 VERSION").read_text(
-        encoding="utf-8"
-    ).strip()
+    version = (
+        require_file(SEL4_PATH / "VERSION", "seL4 VERSION").read_text(encoding="utf-8").strip()
+    )
     if version != sel4_release:
         fail(f"deps/sel4/VERSION is {version!r}, expected {sel4_release!r}")
 
@@ -274,8 +276,7 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
     workspace_toolchain = parse_toolchain(ROOT / "rust-toolchain.toml")
     if not DATED_NIGHTLY.fullmatch(workspace_toolchain):
         fail(
-            f"rust-toolchain.toml pins {workspace_toolchain!r}, which is not an "
-            "exact dated nightly"
+            f"rust-toolchain.toml pins {workspace_toolchain!r}, which is not an exact dated nightly"
         )
     # The dev shell must install both toolchains. It reads the seL4 pin from
     # this file rather than repeating it, so the assertion is that the flake
@@ -307,63 +308,93 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
             '"${crossCC}/bin/${crossCC.targetPrefix}" path; a bare triple '
             "prefix resolves per-host and silently changes kernel.elf (B21)"
         )
+    if (
+        'RISCV64_CROSS_COMPILER_PREFIX = "${riscvCrossCC}/bin/${riscvCrossCC.targetPrefix}"'
+        not in flake
+    ):
+        fail("flake.nix must export an absolute RISCV64_CROSS_COMPILER_PREFIX")
 
-    root_target_text = text(rust_sel4, "root_target", "rust_sel4")
-    root_target = (ROOT / root_target_text).resolve()
-    try:
-        root_target.relative_to(ROOT)
-    except ValueError:
-        fail("[rust_sel4].root_target escapes the repository root")
-    require_file(root_target, "root-task target specification")
-    expected_target_hash = require_sha256(
-        text(rust_sel4, "root_target_sha256", "rust_sel4"), "root target"
+    target_specs = (
+        ("root_target", "root_target_sha256", "aarch64-unknown-none"),
+        ("riscv64_root_target", "riscv64_root_target_sha256", "riscv64"),
     )
-    actual_target_hash = sha256_file(root_target, fail)
-    if actual_target_hash != expected_target_hash:
-        fail(
-            f"{root_target.relative_to(ROOT)} SHA-256 is {actual_target_hash}, "
-            f"expected {expected_target_hash}"
-        )
-    try:
-        target = json.loads(root_target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {root_target.relative_to(ROOT)}: {error}")
-    if target.get("llvm-target") != "aarch64-unknown-none":
-        fail("root target llvm-target must be aarch64-unknown-none")
-    if target.get("panic-strategy") != "abort" or target.get("exe-suffix") != ".elf":
-        fail("root target must use panic=abort and the .elf executable suffix")
+    for target_key, hash_key, llvm_target in target_specs:
+        target_text = text(rust_sel4, target_key, "rust_sel4")
+        target_path = (ROOT / target_text).resolve()
+        try:
+            target_path.relative_to(ROOT)
+        except ValueError:
+            fail(f"[rust_sel4].{target_key} escapes the repository root")
+        require_file(target_path, "root-task target specification")
+        expected_hash = require_sha256(text(rust_sel4, hash_key, "rust_sel4"), target_key)
+        actual_hash = sha256_file(target_path, fail)
+        if actual_hash != expected_hash:
+            fail(
+                f"{target_path.relative_to(ROOT)} SHA-256 is {actual_hash}, "
+                f"expected {expected_hash}"
+            )
+        try:
+            target = json.loads(target_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            fail(f"cannot parse {target_path.relative_to(ROOT)}: {error}")
+        if target.get("llvm-target") != llvm_target:
+            fail(f"{target_key} llvm-target must be {llvm_target}")
+        if target.get("panic-strategy") != "abort" or target.get("exe-suffix") != ".elf":
+            fail(f"{target_key} must use panic=abort and the .elf executable suffix")
 
-    loader_target = text(rust_sel4, "loader_target", "rust_sel4")
-    if loader_target != "aarch64-unknown-none":
-        fail(f"unsupported loader target pin: {loader_target}")
+    if text(rust_sel4, "loader_target", "rust_sel4") != "aarch64-unknown-none":
+        fail("unsupported AArch64 loader target pin")
+    if text(rust_sel4, "riscv64_loader_target", "rust_sel4") != "riscv64imac-unknown-none-elf":
+        fail("unsupported RISC-V loader target pin")
 
 
 def check_profile(pins: dict[str, object]) -> None:
-    profile = table(pins, "qemu_arm_virt")
-    expected = expected_cmake_values(profile)
-    actual = parse_cmake_cache(QEMU_CONFIG_PATH)
-    if actual != expected:
+    arm = table(pins, "qemu_arm_virt")
+    arm_expected = expected_cmake_values(arm, "qemu_arm_virt")
+    arm_actual = parse_cmake_cache(QEMU_CONFIG_PATHS["qemu-arm-virt"])
+    if arm_actual != arm_expected:
         details = [
-            f"{key}: expected {expected.get(key)!r}, got {actual.get(key)!r}"
-            for key in sorted(set(expected) | set(actual))
-            if expected.get(key) != actual.get(key)
+            f"{key}: expected {arm_expected.get(key)!r}, got {arm_actual.get(key)!r}"
+            for key in sorted(set(arm_expected) | set(arm_actual))
+            if arm_expected.get(key) != arm_actual.get(key)
         ]
         fail("qemu-arm-virt CMake config disagrees with pins.toml:\n" + "\n".join(details))
-    if expected["KernelArmHypervisorSupport"] != "ON":
+    if arm_expected["KernelArmHypervisorSupport"] != "ON":
         fail("qemu-arm-virt product profile must enable hypervisor support")
-    if expected["KernelIsMCS"] != "OFF":
-        fail("qemu-arm-virt product profile must disable MCS")
-    if expected["KernelMaxNumNodes"] != "1":
-        fail("qemu-arm-virt product profile must configure exactly one node")
-    if text(profile, "machine", "qemu_arm_virt") != "virt,virtualization=on":
+    if arm_expected["KernelIsMCS"] != "OFF" or arm_expected["KernelMaxNumNodes"] != "1":
+        fail("qemu-arm-virt product profile must be non-MCS and single-node")
+    if text(arm, "machine", "qemu_arm_virt") != "virt,virtualization=on":
         fail("qemu-arm-virt machine pin must be virt,virtualization=on")
-    if text(profile, "cpu", "qemu_arm_virt") != "cortex-a53":
+    if text(arm, "cpu", "qemu_arm_virt") != "cortex-a53":
         fail("qemu-arm-virt CPU pin must be cortex-a53")
-    if integer(profile, "cpus", "qemu_arm_virt") != 1:
-        fail("qemu-arm-virt QEMU CPU count must be one")
-    if integer(profile, "memory_mib", "qemu_arm_virt") != 2048:
-        fail("qemu-arm-virt QEMU memory must be 2048 MiB")
+    if (
+        integer(arm, "cpus", "qemu_arm_virt") != 1
+        or integer(arm, "memory_mib", "qemu_arm_virt") != 2048
+    ):
+        fail("qemu-arm-virt QEMU shape must be one CPU and 2048 MiB")
 
+    riscv = table(pins, "qemu_riscv_virt")
+    riscv_expected = expected_cmake_values(riscv, "qemu_riscv_virt")
+    riscv_actual = parse_cmake_cache(QEMU_CONFIG_PATHS["qemu-riscv-virt"])
+    if riscv_actual != riscv_expected:
+        details = [
+            f"{key}: expected {riscv_expected.get(key)!r}, got {riscv_actual.get(key)!r}"
+            for key in sorted(set(riscv_expected) | set(riscv_actual))
+            if riscv_expected.get(key) != riscv_actual.get(key)
+        ]
+        fail("qemu-riscv-virt CMake config disagrees with pins.toml:\n" + "\n".join(details))
+    if riscv_expected["KernelIsMCS"] != "OFF" or riscv_expected["KernelMaxNumNodes"] != "1":
+        fail("qemu-riscv-virt product profile must be non-MCS and single-node")
+    if (
+        text(riscv, "machine", "qemu_riscv_virt") != "virt"
+        or text(riscv, "cpu", "qemu_riscv_virt") != "rv64"
+    ):
+        fail("qemu-riscv-virt machine/CPU pins must be virt/rv64")
+    if (
+        integer(riscv, "cpus", "qemu_riscv_virt") != 1
+        or integer(riscv, "memory_mib", "qemu_riscv_virt") != 3072
+    ):
+        fail("qemu-riscv-virt QEMU shape must be one CPU and 3072 MiB")
     rpi5 = parse_cmake_cache(RPI5_CONFIG_PATH)
     include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/AARCH64_bcm2712_verified.cmake"
     # The inherited verified profile supplies platform/architecture, turns
@@ -415,9 +446,7 @@ def check_rustup_policy(pins: dict[str, object]) -> None:
             f"run `rustup toolchain install {expected} --profile minimal "
             "--component rust-src` or enter `nix develop`"
         )
-    components = run_output(
-        [rustup, "component", "list", "--toolchain", expected, "--installed"]
-    )
+    components = run_output([rustup, "component", "list", "--toolchain", expected, "--installed"])
     if not any(line.startswith("rust-src") for line in components.splitlines()):
         fail(
             f"toolchain {expected} lacks the rust-src component required by "
@@ -426,16 +455,20 @@ def check_rustup_policy(pins: dict[str, object]) -> None:
 
 
 def check_qemu_version(pins: dict[str, object]) -> None:
-    expected = text(table(pins, "qemu_arm_virt"), "qemu_version", "qemu_arm_virt")
-    qemu = shutil.which("qemu-system-aarch64")
-    if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
-    output = run_output([qemu, "--version"])
-    match = re.search(r"QEMU emulator version ([0-9]+(?:\.[0-9]+)+)", output)
-    if match is None:
-        fail(f"cannot parse QEMU version from: {output!r}")
-    if match.group(1) != expected:
-        fail(f"QEMU version is {match.group(1)}, expected {expected}")
+    for section, executable in (
+        ("qemu_arm_virt", "qemu-system-aarch64"),
+        ("qemu_riscv_virt", "qemu-system-riscv64"),
+    ):
+        expected = text(table(pins, section), "qemu_version", section)
+        qemu = shutil.which(executable)
+        if qemu is None:
+            fail(f"{executable} is not on PATH")
+        output = run_output([qemu, "--version"])
+        match = re.search(r"QEMU emulator version ([0-9]+(?:\.[0-9]+)+)", output)
+        if match is None:
+            fail(f"cannot parse QEMU version from: {output!r}")
+        if match.group(1) != expected:
+            fail(f"{executable} version is {match.group(1)}, expected {expected}")
 
 
 def check_prefix(pins: dict[str, object], platform: str) -> None:
@@ -443,24 +476,16 @@ def check_prefix(pins: dict[str, object], platform: str) -> None:
     observed = table(pins, section)
     files = {
         "kernel_sha256": prefix / "bin" / "kernel.elf",
-        "kernel_config_sha256": prefix
-        / "libsel4"
-        / "include"
-        / "kernel"
-        / "gen_config.json",
-        "libsel4_config_sha256": prefix
-        / "libsel4"
-        / "include"
-        / "sel4"
-        / "gen_config.json",
+        "kernel_config_sha256": prefix / "libsel4" / "include" / "kernel" / "gen_config.json",
+        "libsel4_config_sha256": prefix / "libsel4" / "include" / "sel4" / "gen_config.json",
         "dtb_sha256": prefix / "support" / "kernel.dtb",
         "platform_info_sha256": prefix / "support" / "platform_gen.yaml",
     }
-    rebuild = (
-        "just sel4_qemu_image_check"
-        if platform == "qemu-arm-virt"
-        else "just sel4_rpi5_image_check"
-    )
+    rebuild = {
+        "qemu-arm-virt": "just sel4_qemu_image_check",
+        "qemu-riscv-virt": "just riscv64_qemu_image_check",
+        "bcm2712-rpi5": "just sel4_rpi5_image_check",
+    }[platform]
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")
         expected = require_sha256(text(observed, key, section), key)

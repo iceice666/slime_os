@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include <sel4/types.h>
-#include <sel4/sel4_arch/syscalls.h>
+#include <sel4/arch/syscalls.h>
 
 #include <slime/component_runtime_abi.h>
 #include <slime/syscall_abi.h>

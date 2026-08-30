@@ -25,22 +25,44 @@ import shutil
 import subprocess
 import sys
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from component_paths import source_path  # noqa: E402
-from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import (
+    GENERATION_COMPOSITIONS,
+    load_qemu_profile,
+    profile_integer,
+    profile_text,
+    qemu_kernel_arguments,
+    sha256_file,
+)  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-sample.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-sample.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-sample.zti"
 IMAGE_VARIANT = "sample"
+PLATFORMS = {
+    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
+    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
+
+TARGET_PROFILES = {
+    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
+    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
+}
+
+
+def artifact_paths(platform: str) -> tuple[Path, Path]:
+    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
+    return (
+        ROOT / "build" / f"slime-sel4-sample{suffix}.elf",
+        ROOT / "build" / f"slime-sel4-sample{suffix}.identity.json",
+    )
+
 
 BOOT_TIMEOUT_SECONDS = 180
 
@@ -342,22 +364,14 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 sample plane check: {message}")
 
 
-def load_pins() -> dict[str, object]:
-    if not PINS_PATH.is_file():
-        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
-    try:
-        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
-    if pins.get("schema") != 1:
-        fail("unsupported sel4/pins.toml schema (expected 1)")
-    if not isinstance(pins.get("qemu_arm_virt"), dict):
-        fail("sel4/pins.toml is missing [qemu_arm_virt]")
-    return pins
-
-
-def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--sample-plane"]
+def build_image(platform: str) -> None:
+    command = [
+        sys.executable,
+        str(BUILD_SCRIPT),
+        "--sample-plane",
+        "--platform",
+        platform,
+    ]
     print(f"[build] {' '.join(command)}", flush=True)
     try:
         process = subprocess.run(command, cwd=ROOT, check=False)
@@ -367,42 +381,47 @@ def build_image() -> None:
         fail(f"seL4 image build failed with exit status {process.returncode}")
 
 
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_sample_check`"
-        )
+def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> None:
+    if not manifest_path.is_file():
+        fail(f"missing identity manifest {manifest_path.relative_to(ROOT)}")
     try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
+        fail(f"cannot parse {manifest_path.relative_to(ROOT)}: {error}")
     if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    # The six images are built from the same sources and differ only in which
-    # generation the root task embeds, so booting the wrong one would fail on
-    # markers rather than on identity. Checking the variant reports the actual
-    # cause instead.
+        fail(f"{manifest_path.relative_to(ROOT)} is not a Slime seL4 identity manifest")
     if manifest.get("variant") != IMAGE_VARIANT:
+        fail(f"{manifest_path.relative_to(ROOT)} records variant {manifest.get('variant')!r}")
+    if manifest.get("platform") != platform:
         fail(
-            f"{MANIFEST.relative_to(ROOT)} records variant "
-            f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
-            "rebuild with `--sample-plane`"
+            f"{manifest_path.relative_to(ROOT)} describes {manifest.get('platform')!r}, not {platform!r}"
+        )
+    expected_profile = TARGET_PROFILES[platform]
+    if manifest.get("target_profile") != expected_profile:
+        fail(
+            f"{manifest_path.relative_to(ROOT)} describes target profile "
+            f"{manifest.get('target_profile')!r}, not {expected_profile!r}"
         )
     image = manifest.get("image")
     if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
         fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    actual = sha256_file(IMAGE, fail)
+    if not image_path.is_file():
+        fail(f"missing packaged image {image_path.relative_to(ROOT)}")
+    actual = sha256_file(image_path, fail)
     if actual != image["sha256"]:
         fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
+            f"{image_path.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
             f"records {image['sha256']}; rebuild before booting"
         )
 
 
-def boot(profile: dict[str, object]) -> str:
+def boot(
+    profile: dict[str, object],
+    *,
+    section: str,
+    qemu_binary: str,
+    image_path: Path,
+) -> str:
     """Boot the image and return the serial transcript.
 
     The root task suspends itself once the graph has drained, so QEMU stays
@@ -410,24 +429,23 @@ def boot(profile: dict[str, object]) -> str:
     output is read line by line and the guest is killed as soon as the terminal
     or any failure marker appears.
     """
-    qemu = shutil.which("qemu-system-aarch64")
+    qemu = shutil.which(qemu_binary)
     if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
+        fail(f"{qemu_binary} is not on PATH")
     command = [
         qemu,
         "-machine",
-        profile_text(profile, "machine", fail),
+        profile_text(profile, "machine", fail, section),
         "-cpu",
-        profile_text(profile, "cpu", fail),
+        profile_text(profile, "cpu", fail, section),
         "-smp",
-        str(profile_integer(profile, "cpus", fail)),
+        str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail)}M",
+        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-kernel",
-        str(IMAGE),
+        *qemu_kernel_arguments(qemu_binary, image_path, fail),
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
     terminal = re.compile(REQUIRED_MARKERS[-1][1])
@@ -511,6 +529,7 @@ def check_transcript(transcript: str) -> None:
     if len(exports) != 1 or exports != imports:
         fail(f"loan export/import evidence was {exports!r}/{imports!r}, expected one exact pair")
 
+
 def check_sample_transcript(transcript: str) -> None:
     """The x86 gate's own ordered transcript, produced by the same binaries.
 
@@ -527,9 +546,7 @@ def check_sample_transcript(transcript: str) -> None:
     # anchor also no longer has to exclude unconfigured copies — both instances
     # declare `autostart = false`, so the only copies that exist are the ones
     # init spawned.
-    start = transcript.find(
-        "SLIME_GRAPH spawn authorized task=0 slot=2 component=sample-receiver"
-    )
+    start = transcript.find("SLIME_GRAPH spawn authorized task=0 slot=2 component=sample-receiver")
     if start < 0:
         report_transcript(transcript)
         fail("init never spawned the receiver, so no sample composition ran")
@@ -626,22 +643,35 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+        help="the pinned QEMU profile and image to build and boot",
+    )
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    pins = load_pins()
+    section, qemu_binary = PLATFORMS[arguments.platform]
+    image_path, manifest_path = artifact_paths(arguments.platform)
+    profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
-        build_image()
-    check_manifest()
-    profile = pins["qemu_arm_virt"]
-    assert isinstance(profile, dict)
-    check_transcript(boot(profile))
+        build_image(arguments.platform)
+    check_manifest(image_path, manifest_path, arguments.platform)
+    check_transcript(
+        boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image_path=image_path,
+        )
+    )
     print(
         "seL4 sample plane check: the unmodified sample-lender and sample-receiver "
         "exchanged and returned a payload larger than the control-message bound over "
-        "seL4, running the transcript the x86 oracle records, with quota exhaustion "
-        "and peer death reclaiming every resource"
+        f"seL4 on {arguments.platform}, running the transcript the x86 oracle records, "
+        "with quota exhaustion and peer death reclaiming every resource"
     )
 
 
