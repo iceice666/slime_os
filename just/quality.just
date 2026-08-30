@@ -1,12 +1,7 @@
-# Prove the seL4 plane gates fail when their evidence is absent. This drives
-# each gate's own marker table with a deleted marker, a transposition, and an
-# appended failure marker. Needs no build and no QEMU: it asserts that the
-# assertions have teeth, not that any image boots.
 [group('quality')]
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py
 
-# === Development Tools ===
 
 [group('quality')]
 fmt:
@@ -18,18 +13,8 @@ fmt_check:
     cargo fmt --all --check
     cargo fmt --manifest-path slime-root/child/Cargo.toml --check
 
-# The runtime, the protocol library, the shared component library, the
-# build-support crate, and all 52 component crates.
-#
-# The package list is derived from `cargo metadata` rather than written out,
-# because neither shortcut works: there is no `components/Cargo.toml` — the
-# component crates are members of the *root* workspace through the
-# `components/bins/*` glob — so `cargo fmt --all` from here resolves the root
-# manifest and would also format `slime-root`, duplicating `fmt_sel4_root` and
-# making this recipe's name a lie. And unlike `cargo build`/`clippy`, `cargo fmt`
-# accepts neither a `-p` glob ("package `slime-component-*` is not a member of
-# the workspace") nor `--exclude` ("unexpected argument"). Deriving the list
-# keeps a new component crate from having to edit this recipe.
+# Derive root-workspace component packages because `cargo fmt` supports neither
+# package globs nor `--exclude`; metadata also picks up newly added components.
 [group('quality')]
 [private]
 _component_packages:
@@ -65,8 +50,6 @@ fmt_check_sel4_root:
 [group('quality')]
 fmt_check_all: fmt_check
 
-# Validate devlog structure: entry layout, front matter, kind-required sections,
-# roadmap/Justfile identifier resolution, index agreement, and link health.
 [group('quality')]
 devlog_check:
     python3 scripts/check/check-devlog.py
@@ -79,11 +62,6 @@ x86_portability_check:
 framework_safety_check:
     python3 scripts/check/check-framework-authority.py
 
-# Physical Framework image production is intentionally unavailable. P4's board
-# image now builds (`just sel4_rpi5_image_check`, `just rpi5_media_check`); what
-# P4 still lacks is the observed removable-media boot, which `just
-# rpi5_boot_check` requires and never emulates.
-# Historical devlog identifiers remain explicit aliases to their product gates.
 [group('quality')]
 test: sel4_root_boot_check sel4_component_graph_check sel4_gate_control_check
 
@@ -94,8 +72,7 @@ lint: lint_all
 lint_boot_contracts:
     cd boot-contracts && cargo clippy --all-features -- -D warnings
 
-# Host-target clippy for every cutover component crate that does not require a
-# built seL4 prefix. The product-target pass remains `lint_sel4_root`.
+# Host-target lint excludes crates that require the built seL4 prefix.
 [group('quality')]
 lint_components_host:
     #!/usr/bin/env bash
@@ -103,13 +80,8 @@ lint_components_host:
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cargo clippy -p slime-proto --target "$host" -- -D warnings
 
-# Clippy for the seL4 product crates: the root task, its child, and the
-# seL4-enabled component runtime. Unlike the format gates these compile, so
-# they need the installed seL4 prefix (libsel4 headers and config), the
-# rust-sel4 toolchain pin, the custom target specs, and the child ELF the root
-# task embeds at compile time. `sel4_qemu_image_check` produces both; this gate
-# refuses to run against a missing one rather than silently linting a
-# different configuration.
+# Product-target lint requires the installed seL4 prefix, pinned toolchain,
+# custom targets, and embedded child ELF; missing prerequisites fail closed.
 [group('quality')]
 lint_sel4_root clippy_flags='-D warnings':
     #!/usr/bin/env bash
@@ -119,11 +91,7 @@ lint_sel4_root clippy_flags='-D warnings':
         echo "lint_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    # Platform-qualified since `0dd7d0c` gave the builder a second platform:
-    # `build-sel4.py` writes each platform's child under
-    # `build/sel4-cargo/<platform>/child/`. The unqualified path this named
-    # before only resolved on a checkout still holding a pre-`0dd7d0c` build,
-    # so the gate passed locally and refused on any clean tree.
+    # Child artifacts are platform-qualified; never accept a stale legacy path.
     child_elf="$PWD/build/sel4-cargo/qemu-arm-virt/child/aarch64-sel4-minimal/release/slime-root-child.elf"
     if [ ! -f "$child_elf" ]; then
         echo "lint_sel4_root: no root child ELF at $child_elf; run 'just sel4_qemu_image_check' first" >&2
@@ -139,17 +107,8 @@ lint_sel4_root clippy_flags='-D warnings':
         --target "$targets/aarch64-sel4-minimal.json" \
         --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- {{ clippy_flags }}
     cd components
-    # Three invocations, not one, for the same reason the *builder* uses three:
-    # Cargo unifies features across every package named in one invocation, and
-    # `slime-rt`'s two allocators are mutually exclusive — `heap` and
-    # `private-heap` each register a `#[global_allocator]`, and one link holds
-    # one. A single `-p 'slime-component-*'` pass therefore enables both and dies
-    # on "cannot define a new global allocator" rather than reporting lints.
-    #
-    # The groups are derived from `cargo metadata`, not listed here: a component
-    # declaring an allocator moves group by editing its own manifest, and
-    # `just component_crate_split_check` pins that the builder's grouping agrees
-    # with what the crates declare.
+    # Keep allocator feature groups separate: `heap` and `private-heap` each
+    # define a global allocator. Derive groups from package manifests.
     groups="$(cargo metadata --format-version 1 --no-deps | python3 -c '
     import json, sys
     packages = json.load(sys.stdin)["packages"]
@@ -173,14 +132,8 @@ lint_sel4_root clippy_flags='-D warnings':
     fi
     while read -r group packages; do
         [ -n "$group" ] || continue
-        # `slime-rt` is named in *every* group, deliberately. Its two allocator
-        # modules are behind the features this grouping exists to separate, so
-        # naming it only in the plain group would cfg both of them out of every
-        # lint pass — including the new unsafe pointer arithmetic in
-        # `private_heap.rs`, which is the code in this tree that most needs
-        # `just lint_pedantic`'s `undocumented_unsafe_blocks`. A path dependency
-        # cargo merely checks is not linted. `slime-proto`/`slime-components`
-        # declare no allocator feature, so they stay with the plain group alone.
+        # Lint `slime-rt` in every feature group so allocator-gated modules are
+        # checked; shared crates without allocator features stay in `plain`.
         shared="-p slime-rt"
         if [ "$group" = plain ]; then
             shared="$shared -p slime-proto -p slime-components"
@@ -191,30 +144,24 @@ lint_sel4_root clippy_flags='-D warnings':
             --target-dir "../build/sel4-cargo/lint-components-$group" "${build_std[@]}" -- {{ clippy_flags }}
     done <<< "$groups"
 
-# Every surviving workspace crate plus the seL4 product crates.
 [group('quality')]
 lint_all: lint_boot_contracts lint_components_host lint_sel4_root
 
-# Historical component lint identifiers now resolve to the product lint.
 [group('quality')]
 lint_components: lint_sel4_root
 
 [group('quality')]
 lint_fix_components: lint_sel4_root
 
-# Dependency advisories (RUSTSEC), duplicate/wildcard bans, license
-# allowlist, and source pinning. Config in deny.toml.
 [group('quality')]
 deny:
     cargo-deny check
 
-# Unused-dependency scan; scoped to surviving workspace crates.
 [group('quality')]
 machete:
     cargo-machete boot-contracts components slime-root
 
-# UB check for the host-testable crates, on the actual host triple. Components
-# has a bare-metal default target, so both invocations override it explicitly.
+# Override the components bare-metal default with the actual host target.
 [group('quality')]
 miri:
     #!/usr/bin/env bash
@@ -225,42 +172,18 @@ miri:
     cd ../components
     cargo miri test --target "$host" -p slime-proto
 
-# Bit-precise proofs of the IO substrate's pure logic, over all inputs of the
-# declared types rather than the cases a `#[test]` names.
-#
-# This is the third layer of the IO verification stack and it is not
-# interchangeable with the other two. The plane gates observe one real schedule
-# on real hardware queues; `just io_model_check` settles all interleavings of an
-# abstraction; this settles all *values* flowing through the shipped Rust. Each
-# closes what the others structurally cannot: the models explicitly disclaim
-# wire arithmetic and bounds, which is exactly what these harnesses own.
-#
-# Kani ships its own pinned toolchain (nightly-2025-11-21), older than this
-# repository's. `verification/io-proofs/Cargo.toml` exists solely to present
-# `slime-proto`'s own `src/lib.rs` under a manifest with no `rust-version`, so
-# the *shipped* source is what gets verified -- there is no second copy to
-# drift. The harnesses live in `components/proto/src/io_queue_proofs.rs` behind
-# `#[cfg(kani)]`, so no product build, lint, or Miri run ever sees them.
-#
-# Not part of `contracts_check`: it needs a separate toolchain plus CBMC, the
-# same reason `miri` stands alone above. `nix develop .#kani` is a distinct
-# shell for the same reason -- the bundle is ~325 MB and nothing else uses it.
+# Keep Kani proofs separate: `cargo-kani` uses its bundled toolchain.
 [group('quality')]
 kani_io_proofs:
     #!/usr/bin/env bash
     set -euo pipefail
-    # `cargo-kani`, not `cargo kani`: the latter needs an ambient `cargo` to
-    # dispatch the subcommand, and the `.#kani` shell deliberately ships none
-    # (`kani-driver` uses its bundle's own toolchain). Both forms behave
-    # identically otherwise.
+    # Use `cargo-kani`: the Kani shell intentionally has no ambient `cargo`.
     if ! command -v cargo-kani >/dev/null 2>&1; then
         echo "kani_io_proofs: cargo-kani not found." >&2
         echo "  run: nix develop .#kani --command just kani_io_proofs" >&2
         exit 1
     fi
-    # Every harness must run. A pass here is only evidence if the harness count
-    # is the expected one: a proof file that silently stopped being compiled
-    # would otherwise report success by verifying nothing.
+    # Enforce the harness count so a proof file cannot silently stop compiling.
     expected=18
     log="$(mktemp)"
     trap 'rm -f "$log"' EXIT
@@ -276,20 +199,8 @@ kani_io_proofs:
     fi
     echo "kani_io_proofs: $got harnesses verified"
 
-# IO7: bit-precise proofs of the *device*-boundary arithmetic in
-# `components/lib/src/virtio_mmio.rs`.
-#
-# Separate from `kani_io_proofs` above because it proves a different trust
-# boundary. Those harnesses cover `slime-proto`, whose inputs arrive from a
-# client across a capability-checked contract; these cover the bytes a *device*
-# writes into a shared used ring, which no capability constrains and no plane
-# gate can drive adversarially — QEMU's virtio device is well behaved, which is
-# exactly why B86 and B87 stayed latent under every green gate.
-#
-# Two proof crates rather than one because Kani takes a single `[lib] path`, and
-# these two properties live in different packages. See
-# `verification/virtio-proofs/Cargo.toml` for why it points at the module rather
-# than at `slime-components`' `lib.rs`.
+# Device-boundary proofs use separate manifests because Kani accepts one
+# `[lib] path` per proof crate.
 [group('quality')]
 kani_virtio_proofs:
     #!/usr/bin/env bash
@@ -299,7 +210,7 @@ kani_virtio_proofs:
         echo "  run: nix develop .#kani --command just kani_virtio_proofs" >&2
         exit 1
     fi
-    # As above: a proof gate that can silently verify nothing is not a gate.
+    # Enforce the harness count so the gate cannot silently verify nothing.
     expected=13
     log="$(mktemp)"
     trap 'rm -f "$log"' EXIT
@@ -315,17 +226,8 @@ kani_virtio_proofs:
     fi
     echo "kani_virtio_proofs: $got harnesses verified"
 
-# Host-side unit tests for the crates that need neither QEMU nor a built seL4
-# prefix. Use the actual host triple: hardcoding Linux makes the gate fail on
-# Darwin, while omitting `--target` makes components pick its bare-metal default.
-#
-# `slime-build-support` is a host crate, so its tests need no `--target`
-# override. They are here because CP3 is what made them runnable at all: while
-# the manifest parser lived in `components/bins/build.rs`, `cargo test` never
-# built it as a test target, so its two `#[test]`s were compiled and run by
-# nothing — and had rotted into asserting real slot numbers against a fixture
-# that parsed as a single block, so they could only have failed. A parser with
-# no test is how a wrong slot number reaches a component image.
+# Override the components bare-metal default with the actual host target;
+# host-only build-support tests need no target override.
 [group('quality')]
 test_host:
     #!/usr/bin/env bash
@@ -333,29 +235,12 @@ test_host:
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cargo test --manifest-path boot-contracts/Cargo.toml --all-features
     (cd components && cargo test --target "$host" -p slime-proto)
-    # `--no-default-features` drops `component-runtime`, whose syscall wrappers
-    # only link on a seL4 target. What remains is the device-boundary
-    # arithmetic a userspace driver applies to bytes the *device* wrote, which
-    # is exactly the part no plane gate can drive adversarially: QEMU's virtio
-    # device is well behaved, so a driver trusting it passes every plane.
+    # Disable the seL4-only runtime while testing host-safe device arithmetic.
     (cd components && cargo test --target "$host" -p slime-components --no-default-features)
     cargo test -p slime-build-support
 
-# B23: `slime-root`'s mechanism modules, run on the host.
-#
-# They were compiled by nothing and run by nothing until the crate grew a lib
-# target: `main.rs` is unconditionally `no_std`/`no_main`, and the package built
-# only for a seL4 JSON target with no `libtest`. The library is the same code
-# the seL4 image links, so a pass here is evidence about the shipped root.
-#
-# Needs the installed seL4 prefix because `sel4` reads `libsel4`'s generated
-# config at build time even on a host target; the gate refuses rather than
-# silently skipping, on `lint_sel4_root`'s rule. It runs no seL4 syscall — the
-# tests exercise the state machines, and behavior needing a live kernel stays
-# the `sel4_*` gates' job.
-#
-# The count is asserted so a module that stops being covered is visible, which
-# is B23's exit condition. Raise it deliberately when tests are added.
+# Run shipped root mechanism modules on the host. The generated seL4 config is
+# still required at build time, so a missing installed prefix fails closed.
 [group('quality')]
 test_sel4_root:
     #!/usr/bin/env bash
@@ -365,144 +250,14 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    # B70: 129 -> 130. `generation` gained
-    # `an_interposition_hop_resolves_to_the_declared_component_name`, covering
-    # the root's resolution of a declared interposition hop's identity back to
-    # a generation instance name. It replaces an `assert_declared_chain` that
-    # lived in each fabric broker and compared a build-time table against a
-    # constant compiled beside it.
-    #
-    # B70: 130 -> 131. `ipc` gained
-    # `owned_minted_names_are_their_own_namespace`, covering the
-    # `owned-minted:` axis that answers `mintedBindings` from the owner's side
-    # rather than the holder's. It pins the dispatch property the two arms
-    # depend on -- neither prefix is a prefix of the other -- so an owner's
-    # question cannot be answered against a holder's instance index.
-    #
-    # C10.1: 131 -> 146. The new `private_memory` module contributes twelve
-    # tests over the growth admission ordering, the deny-by-default region, the
-    # quota clamp, the root-wide ceiling, reclamation idempotence, and the
-    # arena frame plan; `child_vspace` goes from eight to nine for the reserved
-    # window's guard and alignment; and `object_allocator` gains two for the
-    # arena slot table's release invariant, which had no inverse before the
-    # growth unwind needed one. Two of `child_vspace`'s existing headroom tests
-    # were rewritten rather than added to, because the mapped span a child
-    # receives now includes that window.
-    #
-    # C10.2: 146 -> 149. `generation` gains three, covering the private-memory
-    # budget's admission against this root's own ceilings: a satisfiable budget
-    # at exactly the per-task reservation is admitted, a quota above that
-    # reservation is refused rather than clamped at growth, and B8's aggregate
-    # arm refuses holders that each fit but cannot all peak at once.
-    #
-    # C10.4: 149 -> 152. `private_memory` gains three, covering the one shared
-    # resource the two memory planes still have — the child's address space.
-    # A mapping anywhere in the reservation overlaps even where no page is
-    # backed yet (so the answer cannot depend on how far an allocator has
-    # grown), a mapping touching either boundary from outside does not (so the
-    # guard granule below the window stays usable), and a denied region
-    # overlaps nothing (so a component with no declared quota is not a
-    # component that may not map).
-    #
-    # C9.1: 152 -> 158. The new `clock` module contributes five tests over
-    # independently grantable authorities, per-task timer quota isolation,
-    # termination cleanup, reuse of live-authority slots across lifetime task
-    # ids, and stale expiry suppression; `ipc` adds the sixth for exact clock
-    # request shapes.
-    #
-    # C9.2: 158 -> 160. The new `wait_set` module contributes both: a task is
-    # declared once and its row survives a source-free declaration (so
-    # `clear_task` answers about a live task rather than about whether it was
-    # ever declared), and the per-waiter supervision ceiling is the contract's
-    # own source ceiling rather than a second number this module picked.
-    # Direction 24: 183 -> 184. `graph` gains the capability-rights partition
-    # test for root-only supervision rights and declared-but-ungated rights.
-    # IO DMA join: 195 -> 200. `io_resource` gains four tests covering queue
-    # and payload reclamation, lease-first and driver-first teardown, and queue
-    # adapter rollback; `shared_buffer` gains the authenticated live-loan frame
-    # accessor test.
-    # IO1 restart: 200 -> 203. `io_resource` gains the three crash/restart
-    # reclamation tests: every live MMIO mapping and IRQ binding emits its
-    # teardown action in unbind-then-unmap order, repeated reclamation is
-    # idempotent without re-issuing effects, and a predecessor-epoch handle
-    # fails closed under the fresh epoch a replacement rebinds at.
-    # IO2 spawn grants: 203 -> 205. `generation` gains the two crossing-grant
-    # tests, and they exist because this rule cost two IO2 passes. Both had
-    # concluded the root could not carry a crossing spawn grant to a
-    # dynamically spawned child and reverted working migrations on that basis.
-    # It can: `only_owner_supplied_authority_crosses_a_spawn` pins which
-    # declarations an owner supplies -- owner-to-child yes, endpoint and
-    # self-loop no, because those are authority the root places itself -- and
-    # `a_declaration_the_root_places_is_never_charged_to_the_owner` pins the
-    # direction that makes widening unrepresentable: the count comes from
-    # declarations, so there is no index at which an owner can place a grant
-    # the generation never declared.
-    # Root slot budget: 205 -> 206. `object_allocator` gains
-    # `physical_provenance_is_freed_on_release_and_fails_closed_when_full`. The
-    # DMA join retained a frame's allocation-time physical base in a
-    # `[usize; MAX_ROOT_CSLOTS]` array -- 2 MB of `.bss`, and since the loader
-    # creates one root CSlot per `.bss` page, 512 root CSlots -- which dropped
-    # free slots to 2185 and made the boot plane's 2313-slot generation
-    # inadmissible. The replacement is bounded by the DMA-participating frame
-    # population instead, so unlike the array it can fill, and this test pins
-    # the three properties that makes load-bearing: a live frame's address is
-    # retrievable, a released frame's is not, and a full table refuses the
-    # allocation rather than losing a record and letting a device be handed
-    # some other frame's address.
-    # B83: 206 -> 207. `ipc` gains
-    # `the_ordinal_notification_query_requires_a_role`. Removing the root's
-    # block path needs the userspace driver declared once per device, and a
-    # service declared twice cannot resolve its notifications by grant name:
-    # grant names are globally unique with exactly one waiter each, so the two
-    # instances are necessarily bound to differently-named grants and a driver
-    # spelling one name would serve only the instance that got it. The
-    # `notification:@<ordinal>+<role>` query answers positionally instead, and
-    # this test pins the part that makes it safe: the role is required, because
-    # "my first binding" spans two roles and identifies no slot.
-    # B84: 207 -> 208. `io_resource` gains
-    # `two_drivers_each_hold_their_own_device`. Two instances of one driver
-    # executable, one device each, is the shape both two-disk planes boot; the
-    # test pins that every per-device identity is derived from the declared
-    # ordinal, because two instances asking for region 1 and source 1 -- what
-    # the old fixed identities produced -- collide on the table's uniqueness
-    # checks and the second install fails outright.
-    # PR #11 review findings 7, 8, and N3: 208 -> 211. `io_resource` gains
-    # `failed_mmio_map_leaves_device_usable`, pinning that an adapter map
-    # failure commits no MMIO authority and leaves the device mappable and
-    # readable afterwards -- the region used to be moved out of the inventory
-    # and dropped after its frame was already unmapped, so the lost frame
-    # capability was observable only as an unrelated later syscall failing for
-    # the rest of the boot.
-    #
-    # `failed_queue_request_begin_leaves_mapping_destroyable`, pinning that
-    # `REQUEST_BEGIN` against a queue DMA mapping -- which carries no lease,
-    # while its identifier is handed to the driver as the `QUEUE_MAP` success
-    # value -- commits no request charge, so `destroy_dma_mapping` still
-    # succeeds. The charge used to be committed before the two fallible
-    # lookups, leaving a mapping permanently `MappingBusy` behind a refusal the
-    # caller will never settle.
-    #
-    # `mediated_mmio_refuses_in_granule_offset_outside_grant`, pinning that an
-    # aligned offset inside the 4 KiB granule but outside the granted subrange
-    # is refused before the device's granule offset is added. Containment
-    # previously rested on QEMU packing transports top-down with the top one
-    # ending exactly at the granule edge, which is an allocation accident
-    # rather than an authority bound.
     expected=211
-    # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
-    # consumes the installed seL4 prefix, so it must use the toolchain that
-    # prefix was produced against. `rust-toolchain.toml`'s default is a
-    # different nightly, and a gate whose result depends on which shell you are
-    # in is the property `sel4_pin_check` exists to prevent.
+    # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"
     mkdir -p build
     capture="build/slime-root-host-tests.txt"
-    # Not captured by a command substitution: a build failure must surface as
-    # itself. `set -e` ends the recipe here rather than letting an empty capture
-    # become a count mismatch reporting "ran  tests" for a compile error. The
-    # transcript lands under `build/` rather than a fixed `/tmp` name, which two
-    # checkouts or two concurrent runs would share.
+    # Do not use command substitution: `set -e` must preserve build failures,
+    # and the per-checkout capture under `build/` avoids concurrent-run clashes.
     SEL4_PREFIX="$prefix" RUSTUP_TOOLCHAIN="$toolchain" \
         cargo test -p slime-root --target "$host" --lib -- --format=terse \
         | tee "$capture"
@@ -513,19 +268,16 @@ test_sel4_root:
         exit 1
     fi
     if [ "$actual" != "$expected" ]; then
-        echo "test_sel4_root: ran $actual tests, expected $expected; a module lost or gained coverage (B23)" >&2
+        echo "test_sel4_root: ran $actual tests, expected $expected; a module lost or gained coverage" >&2
         exit 1
     fi
-    # Belt and braces: the count says the harness found them, this says they
-    # passed. `cargo test`'s own exit status covers it, but a filtered or
-    # ignored run would still print a count.
+    # Require both discovery of the expected count and a fully passing result.
     if ! printf '%s\n' "$output" | grep -q "^test result: ok\. $expected passed; 0 failed"; then
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
     echo "slime-root host tests: $actual/$expected across 19 modules"
 
-# Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 [group('quality')]
 ruff:
     ruff check scripts/
@@ -534,12 +286,10 @@ ruff:
 ruff_fix:
     ruff check scripts/ --fix
 
-# Spell-check sources and docs. Config in _typos.toml.
 [group('quality')]
 typos:
     typos
 
-# Advisory correctness lint set documented by the workspace policy.
 [group('quality')]
 lint_pedantic:
     just lint_sel4_root '-D warnings -W clippy::undocumented_unsafe_blocks -W clippy::cast_possible_truncation'

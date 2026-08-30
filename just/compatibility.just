@@ -1,13 +1,12 @@
+# Legacy aliases remain resolvable for roadmap/devlog gate references;
+# new dependencies use canonical recipes.
+
 [group('compatibility')]
 recovery_check: sel4_recovery_plane_check
 
-# Historical architecture gate backed by a real neutral-source boundary scan.
 [group('compatibility')]
 aarch64_boot_check: sel4_root_boot_check
 
-# Historical trap gate. seL4 owns exception entry and the trap instruction;
-# `slime-root/src/fault.rs` decodes its fault messages, which the root boot
-# gate observes as `SLIME_ROOT child fault observed ... kind=VirtualMemory`.
 [group('compatibility')]
 aarch64_trap_check: sel4_root_boot_check
 
@@ -53,23 +52,18 @@ fabric_visibility_check: sel4_visibility_check
 [group('compatibility')]
 data_fabric_boot_check: sel4_boot_check
 
-# C8.12's roadmap-named gate.
 [group('compatibility')]
 data_fabric_matrix_check: sel4_matrix_check
 
-# C8.13's roadmap-named gate.
 [group('compatibility')]
 data_fabric_traffic_check: sel4_traffic_check
 
-# C8.13's roadmap-named gate for the saturation half.
 [group('compatibility')]
 data_fabric_saturation_check: sel4_saturation_check
 
-# C8.14's roadmap-named gate.
 [group('compatibility')]
 data_fabric_fault_check: sel4_fault_check
 
-# C8.15's roadmap-named gate, and the C8 parent close.
 [group('compatibility')]
 data_fabric_check: sel4_fabric_aggregate_check
 
@@ -85,24 +79,16 @@ boot_layout_check: sel4_boot_layout_check
 [group('compatibility')]
 spawn_service_check: sel4_spawn_check
 
-# RP2's roadmap identifier, an alias onto the plane gate it names, the same way
-# `data_fabric_matrix_check` aliases `sel4_matrix_check`. The roadmap's
-# "Planned verification target" spelled this name before the plane existed, so it
-# stays resolvable while the plane keeps the `sel4_<stem>_check` convention.
 [group('compatibility')]
 rpi5_arm_slice_check: sel4_demo_check
 
-# Historical M5/M6 verification identifiers. The custom-kernel recipes are
-# retired; these names resolve to the seL4 gates that now own the contracts.
 [group('compatibility')]
 spawn_prereq_check: sel4_spawn_check
 
 [group('compatibility')]
 storage_cap_check: sel4_storage_check sel4_generation_check sel4_transfer_check
 
-# Physical Framework/NVMe qualification did not move to the seL4 QEMU product.
-# Keep the documented identifiers, but fail closed rather than turning a
-# missing physical transport/evidence gate into a false pass.
+# Fail closed when physical Framework or NVMe evidence is unavailable.
 [group('compatibility')]
 storage_nvme_read_check:
     @echo "storage_nvme_read_check: unavailable after custom-kernel retirement; M5.7 requires a seL4 NVMe path and observed Framework evidence" >&2
@@ -134,9 +120,6 @@ storage_store_check: sel4_store_check
 [group('compatibility')]
 rollback_check: sel4_rollback_check
 
-# Historical devlog identifiers. The implementation and dedicated plane are
-# retired; both names now validate the active Slisp shell paths without keeping
-# Dango build or runtime wiring alive.
 [group('compatibility')]
 dango_check: slisp_core_check
 
