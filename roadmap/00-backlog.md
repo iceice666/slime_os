@@ -59,6 +59,12 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B91 — composition binding slots still duplicate component-local positional ABI
+
+**Status:** Resolved 2026-08-30. **Class:** Unmasked debt (616 pinned numbers, no machine-readable reason).
+**Was:** 616 of 679 composition instance binding slots were explicitly pinned with nothing distinguishing a number a `*.layout` fixture freezes, a number a neighbouring binding's allocation depends on, a number the encoded layout would change without, and a number the allocator reproduces exactly — so no gate could tell a load-bearing pin from leftover noise and the only way to find out was to delete one and boot.
+**Exit condition (observed):** `InstanceBinding.slotReason` and `SlotPin.reason` are required exactly when a slot is pinned and closed to four values the builder measures rather than trusts, over the source manifest and every boot profile built from it; all 611 surviving pins are labelled (152 `bootLayout`, 12 `allocatorOrder`, 187 `encodedLayout`, 260 `componentAbi`), the five pins the gate proved both redundant and name-resolved were removed, all 1084 resolved slots and every affected `generation.bin` are byte-identical before and after, and `just contracts_check` now refuses a missing, unknown, wrong, or unjustified label — including a `componentAbi` pin whose holder resolves that grant by name and compiles no such slot number.
+**Evidence:** [`devlog/2026-08-30-b91-slot-pin-reasons/`](../devlog/2026-08-30-b91-slot-pin-reasons/index.md).
 ### B90 — the `Block` capability kind and its two rights bits survive B83 with no operation to gate
 
 **Status:** Resolved 2026-08-30. **Class:** Unmasked debt (enforcement machinery naming no operation).

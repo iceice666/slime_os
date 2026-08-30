@@ -87,10 +87,12 @@
         {
           grant = "wait-set-message";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "wait-set-peer-executable";
           slot = 2;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -105,6 +107,7 @@
         {
           grant = "wait-set-message";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];

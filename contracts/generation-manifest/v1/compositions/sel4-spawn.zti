@@ -157,46 +157,57 @@
         {
           grant = "init-console";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-sysinfo";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "console-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "sysinfo-context";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "console-view";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-1";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-2";
           slot = 7;
+          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-3";
           slot = 8;
+          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-4";
           slot = 9;
+          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-5";
           slot = 10;
+          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-6";
           slot = 11;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -211,10 +222,12 @@
         {
           grant = "console-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "console-view";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -231,30 +244,37 @@
         {
           grant = "sysinfo-context";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "sysinfo-view-1";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "sysinfo-view-2";
           slot = 2;
+          slotReason = "componentAbi";
         };
         {
           grant = "sysinfo-view-3";
           slot = 3;
+          slotReason = "componentAbi";
         };
         {
           grant = "sysinfo-view-4";
           slot = 4;
+          slotReason = "componentAbi";
         };
         {
           grant = "sysinfo-view-5";
           slot = 5;
+          slotReason = "componentAbi";
         };
         {
           grant = "sysinfo-view-6";
           slot = 6;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

@@ -95,10 +95,12 @@
         {
           grant = "init-powerbox-chooser";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-powerbox-probe";
           slot = 2;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -113,14 +115,17 @@
         {
           grant = "powerbox-a-root";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "powerbox-b-input";
           slot = 2;
+          slotReason = "componentAbi";
         };
         {
           grant = "powerbox-rpc";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -137,6 +142,7 @@
         {
           grant = "powerbox-rpc";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

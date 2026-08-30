@@ -363,6 +363,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-28 | [IO3: userspace virtio-net and LinkDevice duplex validation](2026-08-28-io3-userspace-virtio-net/index.md) | Change | Verified | IO3 |
 | 2026-08-28 | [B83: six storage planes leave the root's virtio-blk path](2026-08-28-b83-userspace-block-cutover/index.md) | Change | Verified | B83, B84 |
 | 2026-08-28 | [B84: two driver instances of one executable, one device each](2026-08-28-b84-two-device-driver-instances/index.md) | Change | Verified | B84, B83 |
+| 2026-08-28 | [First automatic instance-binding slots](2026-08-28-automatic-binding-slots/index.md) | Change | Verified | none |
 | 2026-08-29 | [B83: the root's virtio-blk product path is deleted](2026-08-29-b83-root-block-path-deleted/index.md) | Change | Verified | B83, B84, IO2 |
 | 2026-08-29 | [IO5: checked models of the IO0/IO1 lifetime and accounting rules](2026-08-29-io5-substrate-models/index.md) | Change | Verified | IO5, IO0, IO1, A0 |
 | 2026-08-29 | [IO6: bit-precise proofs of the IO substrate's wire arithmetic](2026-08-29-io6-kani-wire-proofs/index.md) | Change | Verified | IO6, IO5, IO0 |
@@ -376,3 +377,5 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-29 | [PR #11 review: two slices printed their conclusions, and nine defects sat under them](2026-08-29-pr11-io-evidence-and-defects/index.md) | Defect | Verified | IO0, IO1, IO2, IO3, IO4, IO5, B85, B86, B88 |
 | 2026-08-30 | [The two docs with update discipline missed the whole I/O track](2026-08-30-io-reference-doc-drift/index.md) | Audit | Verified | IO1, IO2, IO4, B83, B90 |
 | 2026-08-30 | [B90: the `Block` capability kind is deleted, and two of its premises were wrong](2026-08-30-b90-block-kind-retired/index.md) | Change | Verified | B90, B83 |
+| 2026-08-30 | [B91: 611 pinned slots, four reasons, and the label that was false for 185 of them](2026-08-30-b91-slot-pin-reasons/index.md) | Change | Verified | B91 |
+| 2026-08-30 | [B91 follow-ups: two proposed gates measured, refuted, and replaced by one](2026-08-30-b91-followups-audit/index.md) | Audit | Verified | B91 |

@@ -87,10 +87,12 @@
         {
           grant = "init-sel4-input-probe";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "sel4-input-probe-run-token";
           slot = 2;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -105,10 +107,12 @@
         {
           grant = "input-probe-source";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "sel4-input-probe-run-token";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -125,10 +129,12 @@
         {
           grant = "input-probe-idle-source";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "sel4-input-probe-idle-token";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

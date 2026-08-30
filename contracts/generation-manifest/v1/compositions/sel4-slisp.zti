@@ -37,6 +37,7 @@
         {
           grant = "slisp-input";
           slot = 1;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];

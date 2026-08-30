@@ -886,86 +886,107 @@
         {
           grant = "init-fabric-call-client";
           slot = 12;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-call-client-b";
           slot = 13;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-call-server";
           slot = 14;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-call-time";
           slot = 15;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-observer";
           slot = 9;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-client";
           slot = 16;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-client-b";
           slot = 17;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-client-b-restart";
           slot = 20;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-server";
           slot = 18;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-time";
           slot = 19;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-probe";
           slot = 10;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-proxy";
           slot = 11;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher-b";
           slot = 7;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-service";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber-b";
           slot = 8;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 22;
+          slotReason = "bootLayout";
         };
         {
           grant = "fabric-call-worker-executable";
           slot = 3;
+          slotReason = "bootLayout";
         };
         {
           grant = "fabric-op-worker-executable";
           slot = 4;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -980,6 +1001,7 @@
         {
           grant = "fabric-call-client-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -996,6 +1018,7 @@
         {
           grant = "fabric-call-client-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1012,6 +1035,7 @@
         {
           grant = "fabric-call-server-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1028,6 +1052,7 @@
         {
           grant = "fabric-call-time-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1044,18 +1069,22 @@
         {
           grant = "fabric-call-client-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-call-client-b-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-call-server-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-call-time-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [
@@ -1072,6 +1101,7 @@
         {
           grant = "fabric-observer-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1088,10 +1118,12 @@
         {
           grant = "fabric-op-client-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-client-backup";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1108,6 +1140,7 @@
         {
           grant = "fabric-op-client-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1124,6 +1157,7 @@
         {
           grant = "fabric-op-client-b-restart-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1140,6 +1174,7 @@
         {
           grant = "fabric-op-server-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1156,6 +1191,7 @@
         {
           grant = "fabric-op-time-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1172,26 +1208,32 @@
         {
           grant = "fabric-op-client-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-client-b-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-server-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-time-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-client-b-restart-control";
           slot = 6;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-client-backup";
           slot = 7;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [
@@ -1208,6 +1250,7 @@
         {
           grant = "fabric-probe-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1224,6 +1267,7 @@
         {
           grant = "fabric-proxy-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1240,6 +1284,7 @@
         {
           grant = "fabric-publisher-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1256,6 +1301,7 @@
         {
           grant = "fabric-publisher-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1272,34 +1318,42 @@
         {
           grant = "fabric-publisher-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-b-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-b-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-observer-control";
           slot = 6;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-probe-control";
           slot = 7;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-proxy-control";
           slot = 8;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 1;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [
@@ -1316,6 +1370,7 @@
         {
           grant = "fabric-subscriber-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -1332,6 +1387,7 @@
         {
           grant = "fabric-subscriber-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

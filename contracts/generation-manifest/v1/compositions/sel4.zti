@@ -187,26 +187,32 @@
         {
           grant = "init-console";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-spawn-service";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "spawn-service-sysinfo";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "spawn-service-echo";
           slot = 7;
+          slotReason = "bootLayout";
         };
         {
           grant = "spawn-service-shared-buffer-factory";
           slot = 8;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-slisp";
           slot = 9;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -221,6 +227,7 @@
         {
           grant = "slisp-console-rpc";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -236,27 +243,27 @@
       bindings = [
         {
           grant = "spawn-service-rpc";
-          slot = 0;
         };
         {
           grant = "spawn-service-sysinfo";
-          slot = 1;
         };
         {
           grant = "spawn-service-echo";
           slot = 2;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "spawn-service-sysinfo-context";
-          slot = 3;
         };
         {
           grant = "spawn-service-shared-buffer-factory";
           slot = 4;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "spawn-service-echo-context";
           slot = 5;
+          slotReason = "allocatorOrder";
         };
       ];
       dependencies = [
@@ -273,14 +280,17 @@
         {
           grant = "slisp-console-rpc";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "slisp-input";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "spawn-service-rpc";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -298,6 +308,7 @@
         {
           grant = "spawn-service-sysinfo-context";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -314,6 +325,7 @@
         {
           grant = "spawn-service-echo-context";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

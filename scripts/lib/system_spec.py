@@ -305,6 +305,14 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
             )
         if pin["slot"] < 0:
             _fail(f"slotPins: {pin['holder']}/{pin['grant']}: negative slot")
+        # Vocabulary only. Whether the stated reason is *true* is a property of
+        # the derived manifest, not of this spec, so the generation builder
+        # re-derives it and refuses a mislabelled pin (B91).
+        if pin["reason"] not in _builder.SLOT_REASONS:
+            _fail(
+                f"slotPins: {pin['holder']}/{pin['grant']}: unknown reason {pin['reason']!r}; "
+                f"expected one of {', '.join(_builder.SLOT_REASONS)}"
+            )
     pin_keys = [(pin["holder"], pin["grant"]) for pin in spec["slotPins"]]
     if len(set(pin_keys)) != len(pin_keys):
         _fail("slotPins: duplicate (holder, grant)")
@@ -636,7 +644,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
     commands = {entry["component"]: entry["commands"] for entry in spec["commandBindings"]}
     sizes = {entry["component"]: entry["bytes"] for entry in spec["imageSizes"]}
     bindings = derive_bindings(spec["grants"], admitted)
-    pins = {(pin["holder"], pin["grant"]): pin["slot"] for pin in spec["slotPins"]}
+    pins = {(pin["holder"], pin["grant"]): pin for pin in spec["slotPins"]}
 
     executables = []
     objects = []
@@ -674,7 +682,11 @@ def derive_manifest(system: CompiledSystem) -> dict:
         instance = {
             "autostart": placement.get("autostart", True),
             "bindings": [
-                {"grant": grant, "slot": pins[(name, grant)]}
+                {
+                    "grant": grant,
+                    "slot": pins[(name, grant)]["slot"],
+                    "slotReason": pins[(name, grant)]["reason"],
+                }
                 if (name, grant) in pins
                 else {"grant": grant}
                 for grant in sorted(bindings[name])

@@ -73,10 +73,12 @@
         {
           grant = "io-queue-peer";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "io-queue-client-shared-buffer-factory";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];
@@ -91,6 +93,7 @@
         {
           grant = "io-queue-peer";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];

@@ -104,23 +104,22 @@
       bindings = [
         {
           grant = "dango-output";
-          slot = 0;
         };
         {
           grant = "init-sample-receiver";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
-          slot = 2;
         };
         {
           grant = "powerbox-client";
           slot = 3;
+          slotReason = "componentAbi";
         };
         {
           grant = "sample-receiver-side";
-          slot = 4;
         };
       ];
       dependencies = [];
@@ -135,6 +134,7 @@
         {
           grant = "sample-receiver-side";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -150,15 +150,16 @@
       bindings = [
         {
           grant = "console-shared-buffer-factory";
-          slot = 1;
         };
         {
           grant = "dango-output";
           slot = 0;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "powerbox-client";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

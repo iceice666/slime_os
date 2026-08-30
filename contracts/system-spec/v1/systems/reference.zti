@@ -543,207 +543,236 @@
     {
       grant = "console-input";
       holder = "dango";
+      reason = "componentAbi";
       slot = 1;
     };
     {
       grant = "console-output";
       holder = "dango";
+      reason = "componentAbi";
       slot = 0;
     };
     {
       grant = "dango-shared-buffer-factory";
       holder = "dango";
+      reason = "encodedLayout";
       slot = 4;
     };
     {
       grant = "spawn-service-rpc";
       holder = "dango";
+      reason = "encodedLayout";
       slot = 5;
     };
     {
       grant = "filesystem-root";
       holder = "directory-probe";
+      reason = "componentAbi";
       slot = 1;
     };
     {
       grant = "filesystem-rpc";
       holder = "directory-probe";
+      reason = "componentAbi";
       slot = 0;
     };
     {
       grant = "fabric-call-worker-shared-buffer-factory";
       holder = "fabric-call-worker";
+      reason = "encodedLayout";
       slot = 2;
     };
     {
       grant = "fabric-call-client-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 3;
     };
     {
       grant = "fabric-call-server-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 4;
     };
     {
       grant = "fabric-call-time-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 5;
     };
     {
       grant = "fabric-clock-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 6;
     };
     {
       grant = "fabric-intruder-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 7;
     };
     {
       grant = "fabric-observer-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 8;
     };
     {
       grant = "fabric-op-client-b-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 9;
     };
     {
       grant = "fabric-op-client-b-restart-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 10;
     };
     {
       grant = "fabric-op-client-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 11;
     };
     {
       grant = "fabric-op-server-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 12;
     };
     {
       grant = "fabric-op-time-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 13;
     };
     {
       grant = "fabric-probe-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 14;
     };
     {
       grant = "fabric-proxy-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 15;
     };
     {
       grant = "fabric-publisher-b-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 16;
     };
     {
       grant = "fabric-publisher-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 17;
     };
     {
       grant = "fabric-shared-buffer-factory";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 2;
     };
     {
       grant = "fabric-subscriber-b-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 18;
     };
     {
       grant = "fabric-subscriber-control";
       holder = "fabric-service";
+      reason = "encodedLayout";
       slot = 19;
     };
     {
       grant = "generation-management-rpc";
       holder = "generation-manager";
+      reason = "encodedLayout";
       slot = 6;
     };
     {
       grant = "generation-management-rpc-generation-inspect";
       holder = "generation-manager";
+      reason = "componentAbi";
       slot = 0;
     };
     {
       holder = "generation-manager";
       grant = "generation-management-rpc-generation-rollback";
+      reason = "encodedLayout";
       slot = 2;
     };
     {
       holder = "generation-manager";
       grant = "generation-management-rpc-generation-select";
+      reason = "encodedLayout";
       slot = 3;
     };
     {
       holder = "generation-manager";
       grant = "generation-management-rpc-generation-stage";
+      reason = "encodedLayout";
       slot = 4;
     };
     {
       grant = "fabric-call-worker-executable";
       holder = "init";
+      reason = "bootLayout";
       slot = 1;
     };
     {
       grant = "fabric-op-worker-executable";
       holder = "init";
+      reason = "bootLayout";
       slot = 2;
     };
     {
       grant = "powerbox-input";
       holder = "powerbox-chooser";
+      reason = "encodedLayout";
       slot = 1;
     };
     {
       grant = "powerbox-root";
       holder = "powerbox-chooser";
+      reason = "encodedLayout";
       slot = 2;
     };
     {
       grant = "powerbox-rpc";
       holder = "powerbox-chooser";
+      reason = "componentAbi";
       slot = 0;
     };
     {
       grant = "sample-lender-shared-buffer-factory";
       holder = "sample-lender";
+      reason = "componentAbi";
       slot = 1;
     };
     {
       grant = "sample-plane-channel";
       holder = "sample-lender";
+      reason = "componentAbi";
       slot = 0;
-    };
-    {
-      grant = "spawn-service-echo";
-      holder = "spawn-service";
-      slot = 1;
     };
     {
       grant = "spawn-service-rpc";
       holder = "spawn-service";
+      reason = "allocatorOrder";
       slot = 0;
     };
     {
       grant = "spawn-service-shared-buffer-factory";
       holder = "spawn-service";
+      reason = "allocatorOrder";
       slot = 4;
-    };
-    {
-      grant = "spawn-service-sysinfo";
-      holder = "spawn-service";
-      slot = 2;
     };
   ];
   commandBindings = [

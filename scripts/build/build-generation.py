@@ -113,7 +113,7 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
-from boot_layout import build_boot_layout, layout_from_manifest
+from boot_layout import LAYOUT_KIND_ROLES, build_boot_layout, layout_from_manifest
 from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_interface_paths
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
@@ -718,15 +718,21 @@ def manifest_source() -> Path:
 def load_manifest() -> dict:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    source = manifest_source()
     output = subprocess.run(
-        [str(binary()), "json", str(manifest_source())],
+        [str(binary()), "json", str(source)],
         cwd=ROOT,
         env=environment,
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
-    return assign_declared_slots(json.loads(output))
+    manifest = json.loads(output)
+    # Before allocation, so an omitted `slot` is still visibly omitted: the
+    # labels describe what the *source* pins, and every product build is
+    # therefore a check on them (B91).
+    validate_slot_reasons(manifest, source.name)
+    return assign_declared_slots(manifest)
 
 
 def assign_declared_slots(manifest: dict) -> dict:
@@ -776,6 +782,213 @@ def assign_declared_slots(manifest: dict) -> dict:
         15,
     )
     return manifest
+
+
+# The closed `InstanceBinding.slotReason` vocabulary, ordered strongest first.
+# Order is meaningful: a pin is labelled with the strongest external invariant
+# that forces its number, so a weaker claim beside a stronger truth is refused
+# rather than accepted as merely incomplete.
+#
+# The first three are decidable from the manifest alone and are therefore
+# verified rather than trusted. Only `componentAbi` rests on a claim about
+# component source, which is why it is the one class
+# `scripts/check/check-slot-pin-reasons.py` audits against the components.
+SLOT_REASON_BOOT_LAYOUT = "bootLayout"
+SLOT_REASON_ALLOCATOR_ORDER = "allocatorOrder"
+SLOT_REASON_ENCODED_LAYOUT = "encodedLayout"
+SLOT_REASON_COMPONENT_ABI = "componentAbi"
+SLOT_REASONS = (
+    SLOT_REASON_BOOT_LAYOUT,
+    SLOT_REASON_ALLOCATOR_ORDER,
+    SLOT_REASON_ENCODED_LAYOUT,
+    SLOT_REASON_COMPONENT_ABI,
+)
+
+
+def resolved_slot_table(manifest: dict) -> dict[tuple[str, str, str], int]:
+    """Every slot this manifest resolves to, keyed by holder, namespace, name.
+
+    The comparison basis for `allocatorOrder`: two manifests differing only in
+    which pins are written down resolve to equal tables exactly when the omitted
+    pins were redundant. Keyed by namespace as well as holder because a
+    notification at 0 and a capability at 0 are different slots.
+    """
+    resolved = assign_declared_slots(copy.deepcopy(manifest))
+    table: dict[tuple[str, str, str], int] = {}
+    for instance in resolved.get("instances", []):
+        for binding in instance.get("bindings", []):
+            table[(instance["name"], "capability", binding["grant"])] = binding["slot"]
+    for minted in resolved.get("mintedBindings", []) or []:
+        table[(minted["holder"], "capability", minted["name"])] = minted["slot"]
+    for notification in resolved.get("notificationBindings", []) or []:
+        table[(notification["holder"], "notification", notification["grant"])] = notification["slot"]
+    return table
+
+
+def boot_layout_row_bindings(manifest: dict) -> set[tuple[str, str]]:
+    """The `(holder, grant)` pairs a `contracts/boot-layout/v1` row is derived from.
+
+    Reads `boot_layout.layout_from_manifest`'s own inputs rather than restating
+    its rule: the bootstrap instance is the one the manifest *names*, not one
+    inferred from executable roles, and a row exists only for the capability
+    kinds `LAYOUT_KIND_ROLES` maps. Inferring the instance instead would be a
+    second statement of a fact the manifest already declares — the drift B71
+    deleted — and would silently mislabel every pin in any composition where the
+    two disagreed.
+
+    Endpoint bindings deliberately produce no row, so pinning one is never
+    justified by the layout.
+    """
+    if not any(entry["id"] == "boot-layout" for entry in manifest.get("objects", [])):
+        return set()
+    bootstrap = manifest.get("bootstrapInstance")
+    instance = next(
+        (entry for entry in manifest.get("instances", []) if entry["name"] == bootstrap),
+        None,
+    )
+    if instance is None:
+        return set()
+    kinds = {grant["name"]: grant["capabilityKind"] for grant in manifest.get("grants", [])}
+    return {
+        (bootstrap, binding["grant"])
+        for binding in instance.get("bindings", [])
+        if kinds.get(binding["grant"]) in LAYOUT_KIND_ROLES
+    }
+
+
+# Effects a pin's removal can have, weakest first. A pin's reason must hold for
+# every generation built from its source, so where the source and one of its boot
+# profiles disagree the *stronger* effect wins: the number is load-bearing if any
+# admitted narrowing needs it.
+PIN_EFFECT_ORDER = ("nothing", "self", "neighbour")
+
+
+def pin_removal_effects(manifest: dict) -> dict[tuple[str, str], str]:
+    """What each pin actually holds in place, measured one removal at a time.
+
+    Returns `(holder, grant) -> "neighbour" | "self" | "nothing"`:
+
+      `neighbour` -- dropping this pin moves some *other* binding's resolved
+                     slot, because the freed number goes to the next binding in
+                     grant-name order. The strongest manifest-internal reason.
+      `self`      -- only this binding's own encoded slot changes. Nothing else
+                     in the manifest depends on the number, but the generation
+                     bytes and the capability layout the root installs do, so it
+                     cannot be dropped without changing what boots.
+      `nothing`   -- the allocator reproduces the number exactly. The manifest
+                     has no stake in it at all, so whatever keeps it must be
+                     outside the manifest: a positional consumer in source.
+
+    Separating `self` from `neighbour` is the point. Collapsing them calls 185 of
+    this corpus's 196 pins load-bearing-for-others when only 11 are; collapsing
+    `self` into `nothing` instead claims 185 numbers are reproduced by the
+    allocator when removing them changes the encoded layout. Both collapses hide
+    the residue B91 exists to expose, in opposite directions.
+
+    One pin at a time, because that is the question a per-pin label answers:
+    joint removability is a separate, stronger claim and is not implied.
+    """
+    baseline = resolved_slot_table(manifest)
+    effects: dict[tuple[str, str], str] = {}
+    for position, instance in enumerate(manifest.get("instances", [])):
+        for index, binding in enumerate(instance.get("bindings", [])):
+            if binding.get("slot") is None:
+                continue
+            trial = copy.deepcopy(manifest)
+            del trial["instances"][position]["bindings"][index]["slot"]
+            trial["instances"][position]["bindings"][index].pop("slotReason", None)
+            after = resolved_slot_table(trial)
+            own = (instance["name"], "capability", binding["grant"])
+            if any(value != after.get(key) for key, value in baseline.items() if key != own):
+                effect = "neighbour"
+            elif baseline[own] != after.get(own):
+                effect = "self"
+            else:
+                effect = "nothing"
+            effects[(instance["name"], binding["grant"])] = effect
+    return effects
+
+
+def declared_pin_effects(manifest: dict) -> dict[tuple[str, str], str]:
+    """Each pin's strongest effect across this source and every boot profile.
+
+    A `slotReason` is a claim about the source manifest, but the manifest is not
+    what boots: `resolve_boot_profile` drops instances and filters each
+    survivor's bindings to the retained grants, which changes what the allocator
+    would do. A pin that is redundant in the whole composition can be
+    load-bearing in a narrowing of it, so measuring the source alone would label
+    such a pin `componentAbi` and invite a migration that breaks a real profile.
+
+    Taking the maximum over the source and all of its profiles makes one label
+    true of every generation the source can produce, which is what a single
+    per-binding field can honestly mean. Bindings a profile drops keep whatever
+    the wider manifest said about them.
+    """
+    combined = pin_removal_effects(manifest)
+    for profile in manifest.get("bootProfiles") or []:
+        narrowed = pin_removal_effects(resolve_boot_profile(copy.deepcopy(manifest), profile["name"]))
+        for key, effect in narrowed.items():
+            if PIN_EFFECT_ORDER.index(effect) > PIN_EFFECT_ORDER.index(combined.get(key, "nothing")):
+                combined[key] = effect
+    return combined
+
+
+def classify_slot_pin(holder: str, grant: str, layout_rows: set, effects: dict) -> str:
+    """The strongest reason this manifest itself can prove for pinning a slot.
+
+    `componentAbi` is the residue, and the only label that is not a fact about
+    the manifest: the allocator reproduces the number and nothing encoded moves
+    if it goes, so the only remaining justification is a positional consumer in
+    the holder's source. That is why it is the class
+    `scripts/check/check-slot-pin-reasons.py` audits against the components.
+    """
+    if (holder, grant) in layout_rows:
+        return SLOT_REASON_BOOT_LAYOUT
+    effect = effects.get((holder, grant))
+    if effect == "neighbour":
+        return SLOT_REASON_ALLOCATOR_ORDER
+    if effect == "self":
+        return SLOT_REASON_ENCODED_LAYOUT
+    return SLOT_REASON_COMPONENT_ABI
+
+
+def validate_slot_reasons(manifest: dict, source: str) -> None:
+    """Refuse a manifest whose pin labels disagree with what it actually implies.
+
+    Three separate failures, because they are three different mistakes:
+    a pin with no reason (or a reason with no pin) is an incomplete edit; an
+    unknown reason is a typo the closed vocabulary should catch; and a reason
+    that is merely *wrong* is the one this whole field exists to prevent — a
+    number claimed to be frozen by an artifact that does not freeze it, or
+    claimed to be reproduced by the allocator when removing it would move a
+    neighbour's slot or change this binding's own encoded position.
+
+    Called on the source manifest before allocation fills anything in, so
+    `slot is None` really means the source omitted it, and the expected reason is
+    taken over this source *and* every boot profile it declares — one label has
+    to be true of every generation the source can produce.
+    """
+    layout_rows = boot_layout_row_bindings(manifest)
+    effects = declared_pin_effects(manifest)
+    for instance in manifest.get("instances", []):
+        for binding in instance.get("bindings", []):
+            holder, grant = instance["name"], binding["grant"]
+            where = f"{source}: {holder}/{grant}"
+            declared = binding.get("slotReason")
+            if binding.get("slot") is None:
+                if declared is not None:
+                    fail(f"{where}: slotReason declared for an unpinned binding")
+                continue
+            if declared is None:
+                fail(
+                    f"{where}: pins slot {binding['slot']} without a slotReason; "
+                    f"expected {classify_slot_pin(holder, grant, layout_rows, effects)}"
+                )
+            if declared not in SLOT_REASONS:
+                fail(f"{where}: unknown slotReason {declared!r}; expected one of {', '.join(SLOT_REASONS)}")
+            expected = classify_slot_pin(holder, grant, layout_rows, effects)
+            if declared != expected:
+                fail(f"{where}: declares slotReason {declared!r} but this manifest implies {expected!r}")
 
 
 def resolve_target_profile(target: object) -> TargetProfile:

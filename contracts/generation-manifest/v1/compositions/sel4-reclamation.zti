@@ -63,10 +63,12 @@
         {
           grant = "init-supervision-child";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-reclamation-fault";
           slot = 2;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];

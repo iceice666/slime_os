@@ -217,14 +217,13 @@
         {
           grant = "network-probe-service";
           slot = 0;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "network-intruder-service";
-          slot = 1;
         };
         {
           grant = "network-service-link-device";
-          slot = 2;
         };
       ];
       dependencies = [
@@ -240,6 +239,7 @@
         {
           grant = "network-probe-service";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -255,6 +255,7 @@
         {
           grant = "network-intruder-service";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -269,7 +270,6 @@
       bindings = [
         {
           grant = "network-service-link-device";
-          slot = 0;
         };
       ];
       dependencies = [

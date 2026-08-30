@@ -22,10 +22,10 @@
   ];
   health = { bootAttempts = 3; requiredInstances = ["init";"virtio-blk-driver";]; };
   instances = [
-    { autostart = true; bindings = [ { grant = "init-sel4-store-probe"; slot = 1; }; { grant = "sel4-store-probe-run-token"; slot = 2; }; { grant = "store-init-buffer-factory"; slot = 4; }; ]; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
-    { autostart = false; bindings = [ { grant = "sel4-store-probe-run-token"; slot = 0; }; { grant = "store-block-peer"; slot = 8; }; { grant = "store-probe-buffer-factory"; slot = 3; }; ]; dependencies = ["init";]; executable = "sel4-store-probe"; health = "optional"; name = "sel4-store-probe"; owner = "init"; };
-    { autostart = true; bindings = [ { grant = "sel4-store-probe-idle-token"; slot = 0; }; ]; dependencies = ["init";]; executable = "sel4-store-probe"; health = "optional"; name = "sel4-store-probe-idle"; owner = "root"; };
-    { autostart = true; bindings = [ { grant = "store-block-peer"; slot = 0; }; { grant = "store-block-device"; slot = 1; }; { grant = "store-block-mmio"; slot = 2; }; { grant = "store-block-interrupt"; slot = 3; }; { grant = "store-block-dma"; slot = 4; }; ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
+    { autostart = true; bindings = [ { grant = "init-sel4-store-probe"; slot = 1; slotReason = "bootLayout"; }; { grant = "sel4-store-probe-run-token"; slot = 2; slotReason = "encodedLayout"; }; { grant = "store-init-buffer-factory"; slot = 4; slotReason = "bootLayout"; }; ]; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
+    { autostart = false; bindings = [ { grant = "sel4-store-probe-run-token"; slot = 0; slotReason = "componentAbi"; }; { grant = "store-block-peer"; slot = 8; slotReason = "encodedLayout"; }; { grant = "store-probe-buffer-factory"; slot = 3; slotReason = "encodedLayout"; }; ]; dependencies = ["init";]; executable = "sel4-store-probe"; health = "optional"; name = "sel4-store-probe"; owner = "init"; };
+    { autostart = true; bindings = [ { grant = "sel4-store-probe-idle-token"; slot = 0; slotReason = "componentAbi"; }; ]; dependencies = ["init";]; executable = "sel4-store-probe"; health = "optional"; name = "sel4-store-probe-idle"; owner = "root"; };
+    { autostart = true; bindings = [ { grant = "store-block-peer"; slot = 0; slotReason = "componentAbi"; }; { grant = "store-block-device"; slot = 1; slotReason = "componentAbi"; }; { grant = "store-block-mmio"; slot = 2; slotReason = "componentAbi"; }; { grant = "store-block-interrupt"; slot = 3; slotReason = "componentAbi"; }; { grant = "store-block-dma"; slot = 4; slotReason = "componentAbi"; }; ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
   ];
   mintedBindings = [];
   interfaceSchemas = [];

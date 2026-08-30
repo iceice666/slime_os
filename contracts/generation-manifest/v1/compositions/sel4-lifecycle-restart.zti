@@ -69,6 +69,7 @@
         {
           grant = "lifecycle-worker-executable";
           slot = 2;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];

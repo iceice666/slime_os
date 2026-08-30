@@ -549,70 +549,87 @@
         {
           grant = "init-console";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "console-output";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "init-spawn-service";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "spawn-service-sysinfo";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "spawn-service-echo";
           slot = 7;
+          slotReason = "bootLayout";
         };
         {
           grant = "spawn-service-rpc";
           slot = 13;
+          slotReason = "encodedLayout";
         };
         {
           grant = "spawn-service-shared-buffer-factory";
           slot = 8;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-sample-lender";
           slot = 14;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-sample-receiver";
           slot = 15;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 16;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-service";
           slot = 17;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher";
           slot = 18;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher-b";
           slot = 19;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber";
           slot = 20;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber-b";
           slot = 21;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-intruder";
           slot = 22;
+          slotReason = "bootLayout";
         };
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 23;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -627,6 +644,7 @@
         {
           grant = "console-output";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -642,27 +660,27 @@
       bindings = [
         {
           grant = "spawn-service-rpc";
-          slot = 0;
         };
         {
           grant = "spawn-service-sysinfo";
-          slot = 1;
         };
         {
           grant = "spawn-service-echo";
           slot = 2;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "spawn-service-sysinfo-context";
-          slot = 3;
         };
         {
           grant = "spawn-service-shared-buffer-factory";
           slot = 4;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "spawn-service-echo-context";
           slot = 5;
+          slotReason = "allocatorOrder";
         };
       ];
       dependencies = [
@@ -679,6 +697,7 @@
         {
           grant = "spawn-service-sysinfo-context";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -695,6 +714,7 @@
         {
           grant = "spawn-service-echo-context";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -711,10 +731,12 @@
         {
           grant = "sample-lender-shared-buffer-factory";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "demo-sample-channel";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -731,6 +753,7 @@
         {
           grant = "demo-sample-channel";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -747,34 +770,42 @@
         {
           grant = "fabric-intruder-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-b-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 1;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-b-control";
           slot = 6;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-probe";
           slot = 11;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-probe";
           slot = 12;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [

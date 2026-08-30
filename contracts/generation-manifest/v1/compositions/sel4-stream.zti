@@ -361,30 +361,37 @@
         {
           grant = "init-fabric-intruder";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher-b";
           slot = 3;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-service";
           slot = 4;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber-b";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 8;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -399,34 +406,42 @@
         {
           grant = "fabric-intruder-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-b-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 1;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-b-control";
           slot = 6;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-probe";
           slot = 11;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-probe";
           slot = 12;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [
