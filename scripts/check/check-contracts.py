@@ -11,7 +11,7 @@ import subprocess
 import sys
 from zutai_cli import STDLIB, binary
 
-from harness import GENERATION_CONTRACT, ROOT
+from harness import GENERATION_CONTRACT, ROOT, load_script
 
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-block-bindings.py"
@@ -112,6 +112,9 @@ DATA_FABRIC_PROFILE_CONTRACT = ROOT / "contracts" / "data-fabric-profile" / "v1"
 NORMALIZED_INTERFACE_SCHEMAS_CONTRACT = ROOT / "contracts" / "normalized-interface-schemas" / "v1"
 RPI5_ROS2_DEMO_CONTRACT = ROOT / "contracts" / "rpi5-ros2-demo" / "v1"
 
+SLOT_PIN_REASON_CHECK = load_script(
+    "generation_manifest_slot_pin_reasons", "check/contracts/slot_pin_reasons.py"
+)
 
 def run(*arguments: str) -> str:
     environment = os.environ.copy()
@@ -387,6 +390,8 @@ for contract in (GENERATION_V2_CONTRACT, GENERATION_V3_CONTRACT):
     invalid_boot_layout = run("run", str(contract / "check-invalid-layout.zt"))
     if "INVALID_GENERATION_SCHEMA" not in invalid_boot_layout:
         raise SystemExit("generation wire-layout mismatch was not rejected")
+SLOT_PIN_REASON_CHECK.main()
+
 subprocess.run(
     [sys.executable, str(BOOT_BINDING_GENERATOR), "--check"],
     cwd=ROOT,

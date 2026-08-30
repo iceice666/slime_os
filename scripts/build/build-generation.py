@@ -728,9 +728,8 @@ def load_manifest() -> dict:
         stdout=subprocess.PIPE,
     ).stdout
     manifest = json.loads(output)
-    # Before allocation, so an omitted `slot` is still visibly omitted: the
-    # labels describe what the *source* pins, and every product build is
-    # therefore a check on them (B91).
+    # Validate reasons before allocation fills omitted slots, so every product
+    # build enforces exactly what the source manifest declares.
     validate_slot_reasons(manifest, source.name)
     return assign_declared_slots(manifest)
 
@@ -791,8 +790,7 @@ def assign_declared_slots(manifest: dict) -> dict:
 #
 # The first three are decidable from the manifest alone and are therefore
 # verified rather than trusted. Only `componentAbi` rests on a claim about
-# component source, which is why it is the one class
-# `scripts/check/check-slot-pin-reasons.py` audits against the components.
+# component source, which the contract check audits against the components.
 SLOT_REASON_BOOT_LAYOUT = "bootLayout"
 SLOT_REASON_ALLOCATOR_ORDER = "allocatorOrder"
 SLOT_REASON_ENCODED_LAYOUT = "encodedLayout"
@@ -883,7 +881,7 @@ def pin_removal_effects(manifest: dict) -> dict[tuple[str, str], str]:
     this corpus's 196 pins load-bearing-for-others when only 11 are; collapsing
     `self` into `nothing` instead claims 185 numbers are reproduced by the
     allocator when removing them changes the encoded layout. Both collapses hide
-    the residue B91 exists to expose, in opposite directions.
+    the distinction the reason vocabulary must preserve, in opposite directions.
 
     One pin at a time, because that is the question a per-pin label answers:
     joint removability is a separate, stronger claim and is not implied.
@@ -939,8 +937,8 @@ def classify_slot_pin(holder: str, grant: str, layout_rows: set, effects: dict) 
     `componentAbi` is the residue, and the only label that is not a fact about
     the manifest: the allocator reproduces the number and nothing encoded moves
     if it goes, so the only remaining justification is a positional consumer in
-    the holder's source. That is why it is the class
-    `scripts/check/check-slot-pin-reasons.py` audits against the components.
+    the holder's source. The contract check audits that class against component
+    source.
     """
     if (holder, grant) in layout_rows:
         return SLOT_REASON_BOOT_LAYOUT

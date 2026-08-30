@@ -1,329 +1,68 @@
 #!/usr/bin/env python3
-"""Prove that the seL4 plane gates actually fail when their evidence is absent.
+"""Prove seL4 gates fail closed when evidence or shared execution breaks.
 
-Every seL4 plane gate is a marker-matching Python checker: it boots an image and
-asserts that an ordered sequence of serial markers appears and that no failure
-marker does. Nothing in-repo demonstrated that a *missing* marker makes one of
-them red. The oracle had `should_panic.rs` for exactly this — proof that a failing
-assertion is observable at all — and the seL4 side had no equivalent, leaving
-per-slice fault injection (per-change discipline) as the only mitigation.
-
-This is that standing guard. For each gate it builds a synthetic transcript from
-the gate's own `REQUIRED_MARKERS`, checks the gate accepts it, and then checks the
-gate rejects three mutations of it:
-
-* one required marker deleted,
-* the first two required markers transposed,
-* a failure marker appended.
-
-The transcripts are synthetic on purpose. A negative control must be able to
-produce evidence that is *wrong in one specific way*, which no real boot can be
-asked to do — and building them from each gate's own marker table means the
-control cannot drift out of step with the gate it guards.
-
-What this does not claim: that the markers are the right markers, or that a real
-boot emits them. The plane gates themselves assert that. This asserts only that
-those assertions have teeth.
+Marker controls synthesize each gate's declared evidence, then delete, reorder,
+or poison it. Runtime controls call ``sel4_plane`` directly with temporary images,
+identity manifests, pins, and QEMU executables. Product gates retain ownership of
+their concrete boot claims; this checker proves the mechanisms enforcing those
+claims reject invalid inputs.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import sys as _sys
+import tempfile
+from collections.abc import Callable
 from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import ROOT, load_script  # noqa: E402
 from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E402
+from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 
-# Gate module name -> checker path, for every plane gate that shares the
-# `REQUIRED_MARKERS` / `FAILURE_MARKERS` / `check_transcript` shape.
-#
-# `check-sel4-boot-layout.py` is absent deliberately: it compares frozen fixtures
-# rather than markers, so it does not expose the surface this control drives. The
-# stream gate declares `CHAINS` instead of a flat table and is handled by
-# `required_of`.
-# Third element is the number of required markers the gate is expected to declare.
-#
-# Pinned rather than derived, because the whole point is to notice when a gate
-# gets *weaker*: deleting a marker from a gate's table would otherwise just make
-# this control report a smaller number and still pass. Raising a count here is a
-# deliberate act that shows up in review; silently losing coverage is not.
-#
-# B46 deliberately shortened the channel and call contracts when the logical
-# ChannelTable/WaitSet paths disappeared. The replacement contracts assert the
-# native endpoint lifecycle instead; their lower counts are therefore pinned
-# here rather than mistaken for accidental coverage loss. The larger counts on
-# the other affected gates pin the additional native-authority evidence added
-# during the same cutover.
-#
-# B50's minted-endpoint deletion lowers ten gates. Every one of them asserted at
-# least one marker the cutover left with no subject: an `endpoint minted` /
-# `channel copied` pair no operation produces, a `capability transfer …
-# channel=… side=…` line replaced by an export/import pair, a `parked …
-# reason=wait` / `supervision woken` pair `WaitSet` used to emit, or an
-# `idle root copy` a `startup_arg` discriminator the root no longer feeds.
-#
-# None of the compositions lost coverage. The spawn plane's wide array is now
-# six narrowed directory views instead of six endpoint halves, and its grant
-# counts are still pinned at the spawn marker; the supervision plane's B25
-# derive scenario is restored and its two-collections-per-child check is
-# stronger than the export/import pair it replaced; each probe plane's
-# `idle without a run token` line moved from an ordered marker to a presence
-# assertion, because the idle instance concludes it holds no peer only after a
-# bounded wait and so lands wherever the scheduler puts it.
+# Counts are pinned rather than derived so deleting a required marker cannot
+# silently weaken a gate. Boot-layout fixture equality is controlled separately.
 GATES: tuple[tuple[str, str, int], ...] = (
-    # 16 -> 18 for CP2's two runtime-binding markers: the root's own
-    # `SLIME_GRAPH binding unresolved` line and console's `ungranted binding
-    # denied`. The pin exists to make a marker-count change deliberate, and this
-    # one is: the channel plane now also guards that a component cannot resolve a
-    # binding its instance was never granted.
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
-    # PR #11 review finding 1: 27 -> 16. IO4's reset/restart/reclamation
-    # markers were unconditional literals asserting evidence the plane cannot
-    # produce -- it declares an empty `sharedBufferBudget`, no notifications,
-    # and no supervision grant, so there is no queue, buffer, or lease to
-    # reclaim and no restart to observe. The banner's packet-stack and
-    # `backend=LinkDevice` claims went the same way. What replaces them is
-    # computed: per-destination socket/listener/DNS ceilings read from the
-    # decoded authority table, and refusal counts observed per arm.
     ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 16),
-    # C10.2: 30 -> 31. This generation declares no `privateMemoryBudget`, which
-    # is the case 22 of the 33 fixtures are in and the private-memory plane
-    # cannot state — it exists to carry a budget. The new marker is the root
-    # reporting it found none, paired with two failure markers that make "and
-    # therefore every component is denied" an assertion rather than an
-    # inference.
-    #
-    # QEMU Slisp input raises the current product contract from 23 to 29: the
-    # second declared service endpoint, uninterrupted expression input, the
-    # generation-authorized sysinfo request and child output, clean child exit,
-    # and detached supervision collection. These markers make command dispatch
-    # and reclamation observable rather than implied by the shell response.
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 29),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_io_queue_plane", "check/check-sel4-io-queue-plane.py", 15),
     ("sel4_io_link_plane", "check/check-sel4-io-link-plane.py", 28),
-    # PR #11 review finding 12 and finding 9: 15 -> 16. Two IO1 markers were
-    # unconditional -- no interrupt spoof was attempted and no physical address
-    # was checked -- and are replaced by markers computed from an observed
-    # refusal and an observed address comparison. The added marker is the
-    # stale-epoch refusal on `map_mmio`, which the probe previously exercised
-    # only on `read32` because `MAP_MMIO` never transmitted the caller's epoch.
     ("sel4_io_driver_authority_plane", "check/check-sel4-io-driver-authority-plane.py", 16),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 2),
-    # C10.1: 43 -> 58. Fifteen private-memory markers, each a root record paired
-    # with the child observation it cannot itself make: the size query, both
-    # growths, the zeroed pages read at the reported base, the surviving pattern
-    # and the address it was read back from, the quota refusal and its named
-    # cause, the refusal having had no effect, the child's full report, the
-    # root's adjudication against its own page accounting, and the teardown
-    # returning every page. Raised deliberately: the count going *up* is the
-    # milestone's evidence, and the pin is what makes a later reduction visible.
     ("sel4_root_boot", "check/check-sel4-root-boot.py", 56),
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    # C10.2: eleven markers, pairing what the root enforced with what the two
-    # probes observed — the admitted budget, all three installed ceilings
-    # (including init's zero), the granted holder's size query, its quota
-    # refusal and named cause, its measured ceiling with the zeroed reads and
-    # surviving pattern, the omitted holder's reservation refusal, and the
-    # unchanged region afterwards.
-    #
-    # C10.3: 11 -> 19. The same plane gains a second pair of instances, this one
-    # allocating through `Vec`/`Box`/`String` over the declared region rather
-    # than growing raw pages: both instances' installed ceilings, the granted
-    # holder's reuse-phase boundary and its self-check reporting nothing leaked,
-    # its refusal past the ceiling with the cause named, its post-refusal report
-    # proving it survived, and the omitted holder's two lines showing an
-    # allocator that found no region at all. The boundary line is pinned here as
-    # well as consumed by the gate's reuse window, so a probe that stopped
-    # emitting it fails rather than leaving that window empty.
-    # C10.4: 19 -> 22. One ceiling record for the new both-planes instance in
-    # chain 1 (6 -> 7 markers), plus that instance's own two-marker chain, which
-    # asserts that exhausting either memory plane leaves the other's declared
-    # ceiling intact and that a shared buffer cannot land in the private window.
     ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 22),
-    # C9.1: 19 markers across five root-attributed authority installs,
-    # cancellation/quota/expiry, live-timer teardown, a distinct malformed
-    # request, the undeclared holder, three observations, and terminal cleanup.
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
-    # C9.2: 15 markers over five causal chains and three order-independent ones
-    # — bounded registration with its refused ceilings, the whole declared source
-    # set observed through one wait set, the peer that signalled the stream
-    # source, the undeclared instance registering nothing, terminal cleanup, and
-    # the root-attributed supervision/clock installs plus the coalesced wake.
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
-    # C9.3: 25 markers over five causal chains and eight order-independent ones
-    # — the declared band mapping the root resolved and one line per band, a
-    # promotion applying within its ceiling, refused above it and refused to the
-    # unassignable `undeclared` name, the
-    # self-promotion refusal with the promoter's own class unchanged, the
-    # unnamed instance reading back as `undeclared` at the root's child priority
-    # rather than at any band, terminal cleanup, and each
-    # instance's root-attributed class cross-checked against the schedule record
-    # the builder wrote for the same thread. All four instances appear on both
-    # sides, including the one the policy does not name: that is the pair a
-    # review found disagreeing.
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
-    # C9.4: 55 markers — 47 over eight causal chains plus eight counted as the
-    # order-independent pseudo-chain `chains_from_gate` appends. The chains are
-    # the declared policy the root resolved plus one line per transition edge
-    # (6); a health dependency refusing a start until it is satisfied (4); a
-    # fault observed, its predecessor handle refused, the restart admitted, the
-    # backoff refused early and then waited (12); the three terminal causes
-    # driving different policy from both sides (8); exhaustion refusing both the
-    # admission and the following spawn (7); the transition graph refusing an
-    # undeclared edge without moving (5); the deny-by-default answers (3); and
-    # the terminal close (2). The graph chain carries five rather than seven
-    # because the two advance lines it used to order on carry no role prefix:
-    # they are bound to one task by `check_graph_walk` instead, which is coverage
-    # the marker framework cannot express. The order-independent eight are the
-    # root's own per-instance state installs, the parameter-authority asymmetry,
-    # and the unset-key refusal that must stay distinguishable from an authority
-    # one — all of which interleave with component output and so fix no order.
     ("sel4_lifecycle_restart_plane", "check/check-sel4-lifecycle-restart-plane.py", 55),
-    # C9.5: 26 markers — 23 over seven causal chains plus three order-independent
-    # ones. The chains are the recorded run capturing every declared input and
-    # deriving its outputs (4); the three refusals a replayer applies before
-    # exposing a single input, which is what "refused rather than partially
-    # replayed" means (4); the deterministic replay reproducing the recorded
-    # outputs, with its replayed inputs printed so the agreement is checkable
-    # rather than asserted (5); the unrecorded-source holder carrying no
-    # determinism claim (3); the deny-by-default answer to an instance the
-    # resource omits (2); the terminal close (2); and the runtime authority gate
-    # (3), where the recorder genuinely offers a capability carrying an unrecorded
-    # right, the root refuses the deterministic receiver's import of it naming the
-    # rights, and the receiver observes that refusal rather than a widened table —
-    # which is what keeps the determinism claim true after launch rather than only
-    # at it. The order-independent three
-    # are the root's own clock-authority installs for the recorder and the
-    # replayer — the recorder holds the plane's only clock, so the replayer's
-    # zeroes are what make its answers the recording's rather than the hardware's
-    # — and the observer that pairs the second stream.
-    # B83: 26 -> 29. The plane's unrecorded source now reaches its device
-    # through the userspace virtio-blk driver rather than the root, so the gate
-    # gained three markers covering that path: the driver reading its
-    # generation-declared per-ring authority, the device coming up with its
-    # capacity, and the driver releasing cleanly on its peer's command. Each is
-    # coverage the root path could not have: the root emitted no authority read
-    # at all, and its block service had no lifecycle to observe.
     ("sel4_replay_plane", "check/check-sel4-replay-plane.py", 29),
-    # C9.6. 45 required markers over twelve causal chains plus three
-    # order-independent ones: the declared bands installed before traffic (3),
-    # the sensor's role and first tick (3), the dependency-gated controller
-    # launch and its seeded configuration (4), the chain carrying data before the
-    # restart (5), the injected fault through to reissued fabric authority (6),
-    # the resumed graph (3), the orderly stream end (2), the cancellation (2),
-    # the refusal, which is a settlement rather than a deadline miss (2), the
-    # deadline settling an unanswered command *after* an advance that must not
-    # settle it and *before* the server may exit (6), the attempt bound spent
-    # (3), and the terminal close (3). The order-independent three are the
-    # clock's own end — its exit is what lets the call broker close at all — and
-    # the root's clock-authority installs for the two timer holders, without
-    # which a cadence or a backoff could be any wake at all.
     ("sel4_robot_runtime_plane", "check/check-sel4-robot-runtime-plane.py", 45),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
-    # RP2. 29 markers over five causal chains: the generation's declared shape,
-    # the C7 exchange, the C8 provisioning, the product graph, and the drain.
-    # That is the slice arm only, and the count pins exactly it.
-    #
-    # The gate's other two arms are *uncovered by this control*, stated plainly
-    # rather than implied covered. Both expect a root fatal instead of the
-    # healthy terminal: the wrong-target arm matches its own
-    # `WRONG_TARGET_MARKERS` table, and the rollback arm declares no table at all
-    # — its assertions are an inline regex in `expect_selected` plus terminal
-    # strings passed to `boot`. Neither is a `CHAINS`-shaped surface, which is
-    # the only surface this control drives.
+    # Only the demo slice arm exposes CHAINS; wrong-target and rollback use
+    # separate validators owned by that checker.
     ("sel4_demo_plane", "check/check-sel4-demo-plane.py", 29),
-    # C8.11. Six rather than seven: the peer-death chain dropped its trailing
-    # "and then a clock advance" marker when the gate grew from one plane to all
-    # three. That marker asserted a *scenario* shape -- on the call plane the
-    # death is at the final instant and nothing follows it -- while the
-    # arrangement of records within an instant is checked structurally by the
-    # gate's own `check_order` on every plane. Coverage went up, not down: the
-    # gate now reads three workers instead of one.
     ("sel4_trace_plane", "check/check-sel4-trace-plane.py", 6),
     ("sel4_call_plane", "check/check-sel4-call-plane.py", 47),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
-    # B70: +1 each. Both gates gained "SLIME_ROOT fabric interposition
-    # hop=<name>", the root's own resolution of the declared chain's hop
-    # identity back to a generation instance name. It replaces an
-    # `assert_declared_chain` inside each broker that compared a
-    # build-time table against a constant compiled beside it -- a check
-    # that stayed green when the fixture named a different proxy.
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 26),
-    # B73 raised this from 25: the graph-wide view's route order is now
-    # asserted by `fabric-publisher`, the half the plane never read.
     ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 26),
-    # C8.13: three chains -- admission, init's single-threaded spawn order, and
-    # the close -- deliberately short. Everything a genuinely concurrent
-    # schedule cannot guarantee an order for (per-plane traffic markers,
-    # resource evidence, which of three workers settles first) is checked as
-    # membership by `check_resources`/`check_concurrency`/`check_task_lifecycle`
-    # instead, on B55's rule: a chain that pinned a scheduling accident would
-    # be a flaky gate, not a stronger one.
     ("sel4_traffic_plane", "check/check-sel4-traffic-plane.py", 10),
-    # C8.13's saturation fixture reuses the traffic plane's exact `CHAINS`
-    # shape (declared ceilings tightened, not the admitted structure), so it
-    # is pinned at the same count.
     ("sel4_saturation_plane", "check/check-sel4-saturation-plane.py", 10),
-    # C8.14's fault fixture likewise reuses the traffic plane's exact `CHAINS`
-    # shape -- it is the same graph with the interposition hop compiled to die,
-    # not a restructured composition -- so it is pinned at the same count. Its
-    # fault-specific tables are asserted outside `CHAINS`, since a concurrent
-    # schedule fixes no order among them.
     ("sel4_fault_plane", "check/check-sel4-fault-plane.py", 10),
-    # B55: the full-graph boot restoration moved the seven racy cross-task
-    # stream markers (a broker per-edge print racing a participant's own
-    # summary print differently for one-route vs two-route participants) out
-    # of CHAINS and into `EXPECTED_ROLE_HOLDERS`/`EXPECTED_PROVISIONED_EDGES`,
-    # order-independent membership checks exactly like the pre-existing
-    # `EXPECTED_IDLE_WITHOUT_ROLE`. Real coverage did not shrink: every one of
-    # those markers is still required by `check_composition`, just no longer
-    # asserted as a fixed scheduling interleaving that was never true.
     ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 30),
-    # PR #11 review finding 1: 18 -> 10. Nine of IO2's markers were
-    # unconditional string literals in `io-block-probe` -- seven fault-injection
-    # arms, a restart, and a stale-completion refusal -- asserting evidence the
-    # plane structurally cannot produce: the driver has no fault, timeout,
-    # cancellation, or crash path, and the composition declares no supervision
-    # grant, so nothing can restart the driver. Mutating those transcripts
-    # proved only that the checker reads strings. They are deleted, and the
-    # surviving markers are computed from observed counters and byte
-    # comparisons: five real block operations, an initial/readback byte
-    # verification, and five real refusal arms.
     ("sel4_io_block_plane", "check/check-sel4-io-block-plane.py", 10),
-    # B83 raised five of these six pins. Each migrated plane's client now
-    # reaches its device through the supervised userspace virtio-blk driver over
-    # IO0 rings instead of the root's `BlockTransact`, and each gate gained the
-    # same three markers for that path -- the driver reading its
-    # generation-declared per-ring authority, the device coming up with its
-    # capacity, and the driver releasing cleanly on its peer's command -- plus,
-    # where the plane had one, a replacement for the root's retired
-    # `SLIME_GRAPH block served` corroboration.
-    #
-    # Coverage grew rather than moved. The root emitted no authority read at all
-    # and its block service had no lifecycle to observe, so these are properties
-    # the previous path could not state. Each gate additionally parses the
-    # root's numeric `SLIME_IO reclaim` line, which is stronger than the boolean
-    # marker it replaced: it names how many DMA pages and mappings the driver
-    # held, that all of them came back, and that none remained.
-    #
-    # B84: `sel4_recovery_plane` 11 -> 12 and `sel4_transfer_plane` 11 -> 12.
-    # Both two-disk planes are now migrated, each gaining one marker for the
-    # driver-produced rights refusal on its read-only disk — recovery's guard
-    # and transfer's source. That refusal used to be the root checking the
-    # caller's own block capability; it is now the driver checking the ring's
-    # declared authority, so the marker names who refused as well as that a
-    # refusal happened. Recovery keeps its host-side whole-image SHA-256 and
-    # signature checks unchanged, and transfer keeps its source byte-identity
-    # check, so the disks are still proven readable rather than merely
-    # unreachable.
     ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 12),
     ("sel4_store_plane", "check/check-sel4-store-plane.py", 17),
     ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 19),
@@ -334,12 +73,6 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 12),
-    # P4: the physical Raspberry Pi 5 gate. Registered here for exactly the
-    # reason a hardware gate needs it most — this control imports the checker
-    # and exercises synthetic transcripts, so the marker table stays proven
-    # non-vacuous without a board, an adapter, or a boot. Eleven markers: the
-    # allocator, the admitted generation, three timer markers, two activations,
-    # two reclamations, the drained graph, and the ready state.
     ("rpi5_boot", "check/check-rpi5-boot.py", 11),
 )
 
@@ -446,14 +179,9 @@ def transcript_for(gate) -> str:
 def boot_plane_transcript(gate, marker_transcript: str) -> str:
     """Add the structural composition evidence required by the boot-plane gate.
 
-    Init is the sole spawning parent (B55): the stream broker and both bounded
-    route workers are among its nineteen children, not spawned by a second
-    parent. The chain still names three positions in that one sequence —
-    `fabric-service`, `fabric-call-worker`, `fabric-op-worker` — each preceded
-    by every sibling init spawns before it, so the synthesis slices
-    `EXPECTED_INIT_CHILDREN` at those same two names and drops each slice in
-    at its own chain-required line rather than bundling all nineteen at the
-    first one.
+    Init is the sole spawning parent. The three chain positions divide its child
+    sequence, so each required spawn marker must be expanded with the preceding
+    siblings instead of emitting the full sequence at the first position.
     """
     lines = marker_transcript.splitlines()
     children = list(gate.EXPECTED_INIT_CHILDREN)
@@ -668,10 +396,8 @@ def check_layout_gate() -> int:
         ("header removed", "\n".join(lines[1:]) + "\n"),
         ("terminator removed", "\n".join(lines[:-1]) + "\n"),
         (
-            # Derived from the fixture rather than hardcoded: the channel
-            # plane's layout has grown before and will again, and a literal
-            # `slots=N` that no longer appears makes this mutation a no-op —
-            # a control that silently stops controlling.
+            # Derive the mutation from the fixture so a layout-size change cannot
+            # turn the control into a no-op.
             "declared count disagrees with the rows carried",
             re.sub(
                 r"slots=(\d+)",
@@ -681,11 +407,8 @@ def check_layout_gate() -> int:
             ),
         ),
         (
-            # Derived, for the reason the mutation above is: this hardcoded
-            # `[layout] 3 endpoint`, and the channel plane's layout no longer
-            # reaches slot 3, so the mutation replaced nothing and the control
-            # passed a transcript it had not mutated. Dropping the slot number
-            # from whichever row is first is malformed in every layout.
+            # Removing the first row's slot number is malformed for every layout
+            # shape and does not depend on a particular blessed slot.
             "row is malformed",
             re.sub(r"\[layout\] \d+ ", "[layout] ", baseline, count=1),
         ),
@@ -699,6 +422,248 @@ def check_layout_gate() -> int:
             fail(f"boot-layout gate accepted a layout whose {description}")
     return len(mutations)
 
+class ControlRejection(Exception):
+    pass
+
+
+def reject_control(message: str) -> None:
+    raise ControlRejection(message)
+
+
+def require_rejection(
+    description: str, expected_message: str, action: Callable[[], object]
+) -> None:
+    try:
+        action()
+    except ControlRejection as error:
+        if expected_message not in str(error):
+            fail(f"{description} was rejected for the wrong reason: {error}")
+    else:
+        fail(f"{description} was accepted")
+
+
+def check_image_identity_controls(root: _Path) -> int:
+    image = root / "plane.img"
+    manifest = root / "plane.identity.json"
+    image.write_bytes(b"temporary seL4 plane image\n")
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+
+    def write_identity(identity: object) -> None:
+        manifest.write_text(json.dumps(identity), encoding="utf-8")
+
+    valid_identity = {"variant": "control", "image": {"sha256": digest}}
+    write_identity(valid_identity)
+    verify_image_identity(
+        image=image, manifest=manifest, variant="control", fail=reject_control
+    )
+
+    missing_image = root / "missing.img"
+    controls: tuple[tuple[str, str, Callable[[], object]], ...] = (
+        (
+            "missing image identity control",
+            "image missing",
+            lambda: verify_image_identity(
+                image=missing_image,
+                manifest=manifest,
+                variant="control",
+                fail=reject_control,
+            ),
+        ),
+        (
+            "missing manifest identity control",
+            "identity manifest missing",
+            lambda: verify_image_identity(
+                image=image,
+                manifest=root / "missing.identity.json",
+                variant="control",
+                fail=reject_control,
+            ),
+        ),
+    )
+    for description, expected, action in controls:
+        require_rejection(description, expected, action)
+
+    malformed = root / "malformed.identity.json"
+    malformed.write_text("{not json", encoding="utf-8")
+    require_rejection(
+        "malformed JSON identity control",
+        "cannot parse identity manifest",
+        lambda: verify_image_identity(
+            image=image, manifest=malformed, variant="control", fail=reject_control
+        ),
+    )
+
+    invalid_identities: tuple[tuple[str, object, str], ...] = (
+        ("non-object identity control", [], "must contain an object"),
+        (
+            "wrong variant identity control",
+            {"variant": "wrong", "image": {"sha256": digest}},
+            "wrong image variant",
+        ),
+        (
+            "missing image record identity control",
+            {"variant": "control"},
+            "has no image record",
+        ),
+        (
+            "wrong digest identity control",
+            {"variant": "control", "image": {"sha256": "0" * 64}},
+            "digest does not match",
+        ),
+    )
+    for description, identity, expected in invalid_identities:
+        write_identity(identity)
+        require_rejection(
+            description,
+            expected,
+            lambda: verify_image_identity(
+                image=image, manifest=manifest, variant="control", fail=reject_control
+            ),
+        )
+
+    print("seL4 gate control check: image identity accepted 1 valid pair and rejected 7 invalid pairs")
+    return 8
+
+
+def write_qemu_stub(path: _Path) -> None:
+    path.write_text(
+        f"""#!{_sys.executable}
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+pid_path = Path(os.environ["SLIME_QEMU_CONTROL_PID"])
+stop_path = Path(os.environ["SLIME_QEMU_CONTROL_STOP"])
+pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+def stop(_signal, _frame):
+    stop_path.write_text("stopped", encoding="utf-8")
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+mode = os.environ["SLIME_QEMU_CONTROL_MODE"]
+if mode == "terminal":
+    print("SLIME CONTROL TERMINAL", flush=True)
+elif mode == "failure":
+    print("SLIME CONTROL EARLY FAILURE", flush=True)
+    raise SystemExit(7)
+while True:
+    time.sleep(1)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def with_environment(updates: dict[str, str], action: Callable[[], object]) -> object:
+    previous = {key: os.environ.get(key) for key in updates}
+    os.environ.update(updates)
+    try:
+        return action()
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def require_stopped(pid_path: _Path, stop_path: _Path, description: str) -> None:
+    if not stop_path.is_file():
+        fail(f"{description} left the fake QEMU process without termination evidence")
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return
+    fail(f"{description} left fake QEMU process {pid} alive")
+
+
+def check_plane_runtime_controls(root: _Path) -> int:
+    executable_dir = root / "bin"
+    executable_dir.mkdir()
+    qemu = executable_dir / "qemu-system-aarch64"
+    write_qemu_stub(qemu)
+    image = root / "runtime.img"
+    image.write_bytes(b"runtime control image\n")
+    pins = root / "pins.toml"
+    pins.write_text(
+        """[qemu_arm_virt]
+machine = "virt"
+cpu = "cortex-a53"
+cpus = 1
+memory_mib = 64
+""",
+        encoding="utf-8",
+    )
+    terminal = re.compile(r"SLIME CONTROL TERMINAL")
+
+    def run(mode: str, timeout: int) -> str:
+        pid_path = root / f"{mode}.pid"
+        stop_path = root / f"{mode}.stopped"
+        try:
+            result = with_environment(
+                {
+                    "PATH": str(executable_dir),
+                    "SLIME_QEMU_CONTROL_MODE": mode,
+                    "SLIME_QEMU_CONTROL_PID": str(pid_path),
+                    "SLIME_QEMU_CONTROL_STOP": str(stop_path),
+                },
+                lambda: run_plane(
+                    image=image,
+                    timeout=timeout,
+                    terminal_condition=terminal,
+                    fail=reject_control,
+                    pins_path=pins,
+                    cwd=root,
+                ),
+            )
+            return str(result)
+        finally:
+            if mode in {"terminal", "timeout"} and pid_path.is_file():
+                require_stopped(pid_path, stop_path, f"{mode} runtime control")
+
+    transcript = run("terminal", 2)
+    if "SLIME CONTROL TERMINAL" not in transcript:
+        fail("terminal runtime control returned no terminal evidence")
+
+    require_rejection(
+        "timeout runtime control",
+        "timed out after 1s",
+        lambda: run("timeout", 1),
+    )
+    require_rejection(
+        "early process failure runtime control",
+        "exited with status 7",
+        lambda: run("failure", 2),
+    )
+    empty_path = root / "empty-path"
+    empty_path.mkdir()
+    require_rejection(
+        "missing QEMU runtime control",
+        "not on PATH",
+        lambda: with_environment(
+            {"PATH": str(empty_path)},
+            lambda: run_plane(
+                image=image,
+                timeout=1,
+                terminal_condition=terminal,
+                fail=reject_control,
+                pins_path=pins,
+                cwd=root,
+            ),
+        ),
+    )
+
+    print(
+        "seL4 gate control check: runtime returned terminal evidence and rejected "
+        "timeout, early process failure, and missing QEMU"
+    )
+    return 4
+
+
 
 def main() -> None:
     if Path_cwd() != ROOT:
@@ -707,9 +672,14 @@ def main() -> None:
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
     total += check_layout_gate()
+    with tempfile.TemporaryDirectory(prefix="slime-sel4-gate-controls-") as temporary:
+        control_root = _Path(temporary)
+        identity_controls = check_image_identity_controls(control_root)
+        runtime_controls = check_plane_runtime_controls(control_root)
     print(
         f"seL4 gate control check: {len(GATES) + 1} gates reject "
-        f"{total} mutated transcripts and layouts"
+        f"{total} mutated transcripts and layouts; "
+        f"{identity_controls} identity cases and {runtime_controls} runtime cases passed"
     )
 
 
