@@ -98,16 +98,8 @@ def run_qemu(
     return process.stdout
 
 
-# The pinned QEMU machine profile every seL4 plane gate boots against. Before
-# B63 each gate carried its own `load_pins`/`profile_text`/`profile_integer` —
-# 33, 31, and 31 copies, differing only in the wording of their refusals. A pin
-# reader duplicated 33 times is 33 chances for one gate to accept a profile the
-# others reject, which is the opposite of what pinning is for.
-#
-# `fail` is passed in rather than imported: each gate raises `SystemExit` with
-# its own prefix (`seL4 boot plane check: …`), and that prefix is how a failure
-# in a suite of 30-odd gates is attributable. These helpers borrow it instead of
-# imposing one.
+# All seL4 plane gates must read the same pinned QEMU profile. The caller's
+# failure function retains each gate's attributable error prefix.
 QEMU_PROFILE_SECTION = "qemu_arm_virt"
 
 
@@ -133,18 +125,14 @@ def load_qemu_profile(
     return profile
 
 
-def profile_text(
-    profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]
-) -> str:
+def profile_text(profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]) -> str:
     value = profile.get(key)
     if not isinstance(value, str) or not value:
         fail(f"sel4/pins.toml [{QEMU_PROFILE_SECTION}].{key} must be non-empty text")
     return value
 
 
-def profile_integer(
-    profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]
-) -> int:
+def profile_integer(profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]) -> int:
     value = profile.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
         fail(f"sel4/pins.toml [{QEMU_PROFILE_SECTION}].{key} must be an integer")

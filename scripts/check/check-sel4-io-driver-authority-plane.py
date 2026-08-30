@@ -9,23 +9,16 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import (
-    GENERATION_COMPOSITIONS,
-    load_qemu_profile,
-    profile_integer,
-    profile_text,
-    sha256_file,
-)  # noqa: E402
+from harness import GENERATION_COMPOSITIONS  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
+from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -174,78 +167,6 @@ def build_image() -> None:
         fail(f"image build failed with exit status {process.returncode}")
 
 
-def check_manifest() -> None:
-    if not IMAGE.is_file() or not MANIFEST.is_file():
-        fail("image or identity manifest missing")
-    try:
-        identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse identity manifest: {error}")
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
-
-
-def boot(profile: dict[str, object]) -> str:
-    qemu = shutil.which("qemu-system-aarch64")
-    if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail),
-        "-cpu",
-        profile_text(profile, "cpu", fail),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        "-kernel",
-        str(IMAGE),
-        "-drive",
-        "if=none,file=/dev/zero,format=raw,id=d0",
-        "-device",
-        "virtio-blk-device,drive=d0",
-    ]
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    watchdog = threading.Timer(TIMEOUT, process.kill)
-    watchdog.start()
-    lines: list[str] = []
-    terminal = re.compile(CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
-            if terminal.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    transcript = "\n".join(lines)
-    if timed_out and re.search(CHAINS[-1][1][-1], transcript) is None:
-        fail("QEMU timed out before terminal cleanup")
-    return transcript
-
-
 def check_fixture() -> None:
     text = FIXTURE.read_text(encoding="utf-8")
     for declaration in (
@@ -273,9 +194,27 @@ def main() -> None:
     check_automatic_binding_slots()
     if not arguments.no_build:
         build_image()
-    check_manifest()
-    profile = load_qemu_profile(fail, PINS)
-    match_marker_contract(boot(profile), CHAINS, FAILURE_MARKERS, fail)
+    verify_image_identity(
+        image=IMAGE,
+        manifest=MANIFEST,
+        variant=IMAGE_VARIANT,
+        fail=fail,
+    )
+    terminal = re.compile(CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
+    transcript = run_plane(
+        image=IMAGE,
+        timeout=TIMEOUT,
+        terminal_condition=terminal,
+        fail=fail,
+        pins_path=PINS,
+        additional_arguments=(
+            "-drive",
+            "if=none,file=/dev/zero,format=raw,id=d0",
+            "-device",
+            "virtio-blk-device,drive=d0",
+        ),
+    )
+    match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
     print(
         "seL4 I/O driver authority plane check: exact mediated MMIO, bounded IRQ authority, and ungranted denial proved"
     )

@@ -5,15 +5,15 @@
 | Date | 2026-08-30 |
 | Kind | Change |
 | Status | Verified |
-| Scope | PR templates, documentation ownership, verification checker ownership, generation-manifest slot-pin contract checks, Just orchestration |
+| Scope | PR templates, documentation ownership, verification checker ownership, generation-manifest slot-pin contract checks, Just orchestration, seL4 plane execution runtime |
 | Roadmap | none |
-| Gates | `just contracts_check`, `just devlog_check`, `just fmt_check_all` |
-| Trigger | Repository hygiene plans for artifact ownership and Just orchestration |
-| Baseline | PRs and comments had no concise ownership rule, the B91 slot-pin invariant remained a backlog-shaped top-level checker, and Justfiles duplicated roadmap, checker, and investigation prose |
+| Gates | `just contracts_check`, `just sel4_gate_control_check`, `just io_network_check`, `just io_queue_check`, `just io_block_check`, `just io_driver_authority_check`, `just ruff`, `just devlog_check`, `just fmt_check_all` |
+| Trigger | Repository hygiene plans for artifact ownership, Just orchestration, and seL4 gate runtime consolidation |
+| Baseline | PRs and comments had no concise ownership rule, the B91 slot-pin invariant remained a backlog-shaped top-level checker, Justfiles duplicated roadmap, checker, and investigation prose, and the inspected I/O plane gates each carried their own image identity and QEMU lifecycle implementation |
 
 ## Summary
 
-Repository guidance now assigns local invariants to code comments, review surface to PR descriptions, and investigation and evidence to devlogs. Verification guidance requires new invariants to extend their owning mechanism. The slot-pin reason checks now live as a generation-manifest contract case while `just contracts_check` remains the public interface. Justfiles now retain command orchestration and short execution invariants instead of duplicating system semantics or development history.
+Repository guidance now assigns local invariants to code comments, review surface to PR descriptions, and investigation and evidence to devlogs. Verification guidance requires new invariants to extend their owning mechanism. The slot-pin reason checks now live as a generation-manifest contract case while `just contracts_check` remains the public interface. Justfiles now retain command orchestration and short execution invariants instead of duplicating system semantics or development history. Four materially different I/O planes now share one image-identity and pinned-QEMU runtime while retaining their fixture, marker, device, and post-boot claims in each gate.
 
 ## Changes
 
@@ -26,6 +26,7 @@ Repository guidance now assigns local invariants to code comments, review surfac
 | Slot-pin checks | Moved the implementation under `scripts/check/contracts/slot_pin_reasons.py` and invoked it from `contracts_check` | Generation-manifest slot reasons are owned by contract verification, not by the backlog item that introduced them |
 | Checker comments | Replaced B91 and migration-history framing with current invariants and automatic-slot expectations | Checker documentation states what must remain true; investigation history remains in the B91 devlogs |
 | Just orchestration | Removed narrative comments across `just/`, converted compatibility recipes into a concise alias registry, and parameterized repeated Zutai model-check commands | Justfiles describe commands and dependency order while contracts, checkers, and devlogs retain semantic ownership |
+| seL4 plane runtime | Inspected five I/O gates; four pilot gates now use `scripts/lib/sel4_plane.py` for identity verification, the pinned QEMU command, timeout, transcript capture, terminal stopping, and terminate/wait/kill cleanup | One execution mechanism serves kernel-only, disposable-disk, and fixed-device boots without absorbing plane assertions |
 
 ## Regression guards
 
@@ -35,6 +36,7 @@ Repository guidance now assigns local invariants to code comments, review surfac
 | A name-resolved binding is unnecessarily re-pinned or its automatic slot drifts | `just contracts_check` | The automatic-slot expectation names the changed binding and expected slot |
 | Devlog structure or links drift | `just devlog_check` | The checker reports the malformed entry or missing index row |
 | Public recipe or dependency behavior drifts during comment cleanup | `just --list`, `just --summary`, and Zutai dry runs | Parsing fails, the 187-recipe inventory changes, or a model path/command differs |
+| Shared runtime weakens a pilot gate | Public I/O recipes, identity and timeout controls, plus `just sel4_gate_control_check` | Wrong variants, timeouts, failure markers, and missing/out-of-order markers still reject the gate |
 
 ## Verification
 
@@ -54,6 +56,13 @@ Repository guidance now assigns local invariants to code comments, review surfac
 | Public recipe comparison before and after Just cleanup | Identical 187 recipe names in identical order | Direct |
 | `just --dry-run bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check` | Emitted the original build command and exact four model paths | Direct |
 | `just fmt_check_all` | Passed | Direct |
+| Pre-refactor pilot gates | `io_network_check`, `io_queue_check`, and `io_block_check` passed; the concurrently launched `io_driver_authority_check` failed during seL4 installation because another build removed `kernel.dtb`, then passed when rerun serially | Direct |
+| Post-refactor no-build pilot gates | Network, queue, and block gates passed against the built images; driver authority passed after a full serial rebuild | Direct |
+| Post-refactor public pilot recipes | `just io_network_check`, `just io_queue_check`, `just io_block_check`, and `just io_driver_authority_check` passed serially | Direct |
+| Identity negative control | A temporary manifest declaring variant `wrong` was rejected with `wrong image variant 'wrong'` | Direct |
+| Runtime negative controls | A missing-QEMU PATH was rejected, and a temporary QEMU stub that ignored progress was terminated and rejected after the one-second bound | Direct |
+| `just sel4_gate_control_check` after runtime extraction | Passed all marker mutation controls | Direct |
+| Pilot duplication measurement | Five I/O gates inspected; five identity implementations and five QEMU lifecycle implementations existed before. Four gates migrated, leaving zero such implementations in those four entrypoints and one independent implementation in the unselected I/O link gate | Direct |
 
 ## Decisions
 
@@ -67,15 +76,19 @@ Repository guidance now assigns local invariants to code comments, review surfac
 - Decision: keep the `quality.just` cleanup bounded to comments and obvious orchestration.
 - Rationale: Kani result handling, host-triple discovery, seL4 prerequisite loading, component allocator grouping, and root-test transcript validation are reusable mechanisms, but moving them safely requires an existing owning checker or library boundary rather than new one-off scripts.
 - Rejected alternative: create helper scripts solely to shorten `quality.just`. That would move code without clarifying ownership and would violate the cleanup's behavior-preserving scope.
+- Decision: pilot the shared runtime in network, queue, block, and driver-authority gates, leaving the I/O link gate local.
+- Rationale: the four migrated gates cover a kernel-only boot, disposable writable and read-only disks with byte-for-byte postconditions, and a fixed virtio device. The link gate also owns a UDP echo thread and socket lifecycle, so retaining it avoids forcing case cleanup hooks into the first mechanism API.
+- Decision: keep `CHAINS`, `FAILURE_MARKERS`, fixture checks, additional device arguments, backing-image verification, and success messages in each gate.
+- Rationale: `scripts/lib/sel4_plane.py` owns only identity and process mechanics; `sel4_gate_markers.py` remains the sole marker-contract owner.
 
 ## Open risks and follow-ups
 
-- [ ] Shared QEMU invocation and transcript machinery remains distributed across plane scripts. Future changes should extract only repeated concrete mechanisms into the documented `scripts/check/sel4/` shape while retaining public `just` targets.
+- [ ] The remaining plane scripts still carry local QEMU lifecycles; migrate the next homogeneous set only after the pilot API proves sufficient, and keep cases with background services or specialized settling behavior local until a concrete shared hook exists.
 - [ ] Repeated quality-shell mechanisms should migrate only when an existing `scripts/lib/` or owning checker can provide one clear reusable boundary.
 
 ## Artifacts and provenance
 
 - Focused report: this entry.
 - Raw transcript: none.
-- Serial/debugger/model output: none; this change moved a host-side contract case and did not alter QEMU behavior.
+- Serial/debugger/model output: direct public-gate and control-path results are summarized above; no raw transcript artifact was added.
 - Related roadmap item: none.

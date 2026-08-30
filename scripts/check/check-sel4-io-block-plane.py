@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """IO2 gate: computed virtio-blk operations, refusals, and async settlement."""
+
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from harness import load_qemu_profile, profile_integer, profile_text, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
+from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
@@ -33,29 +31,46 @@ WRITTEN_PREFIX = b"SLIMEIO2-WRITTEN"
 WRITTEN_FILL = 0xA5
 
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("generation and driver authority", (
-        r"SLIME_ROOT generation admitted number=51 ",
-        r"\[virtio-blk-driver\] mmio mechanism=mediated-bounded-read32-write32",
-        r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+",
-    )),
-    ("bounded asynchronous identity", (
-        r"\[io-block-probe\] backpressure full_refusals=1 overwrite=0",
-        r"\[io-block-probe\] async queued=8 completed=8 identities=8 overwrite=0",
-    )),
-    ("observed block operations", (
-        r"\[io-block-probe\] operations read=2 write=1 flush=1 geometry=1",
-        r"\[io-block-probe\] byte-verification readback=512 mismatches=0",
-    )),
-    ("observed refusal arms", (
-        r"\[io-block-probe\] refusals out_of_range=1 malformed=1 short_buffer=1 unsupported=1 missing_right=1",
-        r"\[io-block-probe\] io block plane complete observed_operations=5 observed_refusals=5",
-        r"SLIME_GRAPH HEALTHY generation=51 required=4 live=0 completed=4 failed=0",
-    )),
+    (
+        "generation and driver authority",
+        (
+            r"SLIME_ROOT generation admitted number=51 ",
+            r"\[virtio-blk-driver\] mmio mechanism=mediated-bounded-read32-write32",
+            r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+",
+        ),
+    ),
+    (
+        "bounded asynchronous identity",
+        (
+            r"\[io-block-probe\] backpressure full_refusals=1 overwrite=0",
+            r"\[io-block-probe\] async queued=8 completed=8 identities=8 overwrite=0",
+        ),
+    ),
+    (
+        "observed block operations",
+        (
+            r"\[io-block-probe\] operations read=2 write=1 flush=1 geometry=1",
+            r"\[io-block-probe\] byte-verification readback=512 mismatches=0",
+        ),
+    ),
+    (
+        "observed refusal arms",
+        (
+            r"\[io-block-probe\] refusals out_of_range=1 malformed=1 short_buffer=1 unsupported=1 missing_right=1",
+            r"\[io-block-probe\] io block plane complete observed_operations=5 observed_refusals=5",
+            r"SLIME_GRAPH HEALTHY generation=51 required=4 live=0 completed=4 failed=0",
+        ),
+    ),
 )
 
 FAILURE_MARKERS = (
-    r"SLIME_ROOT FATAL", r"SLIME_GRAPH FAIL", r"\[virtio-blk-driver\] fail: ",
-    r"\[io-block-probe\] fail: ", r"Caught cap fault", r"Caught vm fault", r"panicked at ",
+    r"SLIME_ROOT FATAL",
+    r"SLIME_GRAPH FAIL",
+    r"\[virtio-blk-driver\] fail: ",
+    r"\[io-block-probe\] fail: ",
+    r"Caught cap fault",
+    r"Caught vm fault",
+    r"panicked at ",
 )
 
 
@@ -64,62 +79,24 @@ def fail(message: str) -> NoReturn:
 
 
 def build_image() -> None:
-    result = subprocess.run([sys.executable, str(BUILD_SCRIPT), "--io-block-plane"], cwd=ROOT, check=False)
+    result = subprocess.run(
+        [sys.executable, str(BUILD_SCRIPT), "--io-block-plane"], cwd=ROOT, check=False
+    )
     if result.returncode != 0:
         fail(f"image build failed with exit status {result.returncode}")
 
 
-def check_manifest() -> None:
-    if not IMAGE.is_file() or not MANIFEST.is_file():
-        fail("image or identity manifest missing")
-    identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
-
-
-def boot(profile: dict[str, object], disk: Path, readonly_disk: Path) -> str:
-    qemu = shutil.which("qemu-system-aarch64")
-    if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
-    command = [qemu, "-machine", profile_text(profile, "machine", fail), "-cpu", profile_text(profile, "cpu", fail),
-               "-smp", str(profile_integer(profile, "cpus", fail)), "-m", f"size={profile_integer(profile, 'memory_mib', fail)}M",
-               "-nographic", "-serial", "mon:stdio", "-kernel", str(IMAGE), "-drive",
-               f"if=none,id=slimeio2,format=raw,file={disk}", "-device", "virtio-blk-device,drive=slimeio2",
-               "-drive", f"if=none,id=slimeio2ro,format=raw,file={readonly_disk},readonly=on",
-               "-device", "virtio-blk-device,drive=slimeio2ro"]
-    process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, bufsize=1)
-    watchdog = threading.Timer(TIMEOUT, process.kill)
-    watchdog.start()
-    terminal = re.compile(CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
-    lines: list[str] = []
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\r\n"))
-            if terminal.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try: process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill(); process.wait()
-    transcript = "\n".join(lines)
-    if timed_out and re.search(CHAINS[-1][1][-1], transcript) is None:
-        fail("QEMU timed out before terminal cleanup")
-    return transcript
-
-
 def check_fixture() -> None:
     text = FIXTURE.read_text(encoding="utf-8")
-    for declaration in ('generation = 51;', 'name = "virtio-blk-driver";', 'name = "io-block-probe";',
-                        'capabilityKind = "device";', 'capabilityKind = "mmioRegion";',
-                        'capabilityKind = "interruptSource";', 'capabilityKind = "dmaAccount";'):
+    for declaration in (
+        "generation = 51;",
+        'name = "virtio-blk-driver";',
+        'name = "io-block-probe";',
+        'capabilityKind = "device";',
+        'capabilityKind = "mmioRegion";',
+        'capabilityKind = "interruptSource";',
+        'capabilityKind = "dmaAccount";',
+    ):
         if declaration not in text:
             fail(f"fixture is missing {declaration!r}")
 
@@ -133,22 +110,47 @@ def main() -> None:
     check_fixture()
     if not args.no_build:
         build_image()
-    check_manifest()
-    profile = load_qemu_profile(fail, PINS)
+    verify_image_identity(
+        image=IMAGE,
+        manifest=MANIFEST,
+        variant=IMAGE_VARIANT,
+        fail=fail,
+    )
     with tempfile.TemporaryDirectory(prefix="slime-io-block-") as temporary:
         disk = Path(temporary) / "disk.img"
         readonly_disk = Path(temporary) / "readonly-disk.img"
         image = bytearray(DISK_BYTES)
-        image[FRESH_LBA * SECTOR_BYTES:FRESH_LBA * SECTOR_BYTES + len(FRESH_MARKER)] = FRESH_MARKER
+        image[FRESH_LBA * SECTOR_BYTES : FRESH_LBA * SECTOR_BYTES + len(FRESH_MARKER)] = (
+            FRESH_MARKER
+        )
         disk.write_bytes(image)
         readonly_disk.write_bytes(bytearray(DISK_BYTES))
-        transcript = boot(profile, disk, readonly_disk)
+        terminal = re.compile(CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
+        transcript = run_plane(
+            image=IMAGE,
+            timeout=TIMEOUT,
+            terminal_condition=terminal,
+            fail=fail,
+            pins_path=PINS,
+            additional_arguments=(
+                "-drive",
+                f"if=none,id=slimeio2,format=raw,file={disk}",
+                "-device",
+                "virtio-blk-device,drive=slimeio2",
+                "-drive",
+                f"if=none,id=slimeio2ro,format=raw,file={readonly_disk},readonly=on",
+                "-device",
+                "virtio-blk-device,drive=slimeio2ro",
+            ),
+        )
         match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
-        written = disk.read_bytes()[FRESH_LBA * SECTOR_BYTES:(FRESH_LBA + 1) * SECTOR_BYTES]
+        written = disk.read_bytes()[FRESH_LBA * SECTOR_BYTES : (FRESH_LBA + 1) * SECTOR_BYTES]
         expected = WRITTEN_PREFIX + bytes([WRITTEN_FILL]) * (SECTOR_BYTES - len(WRITTEN_PREFIX))
         if written != expected:
             fail("flushed write did not reach the backing disk byte-for-byte")
-    print("seL4 I/O block plane check: computed operations, byte readback, async identity, and refusal arms proved")
+    print(
+        "seL4 I/O block plane check: computed operations, byte readback, async identity, and refusal arms proved"
+    )
 
 
 if __name__ == "__main__":
