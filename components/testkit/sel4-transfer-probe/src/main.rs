@@ -5,7 +5,7 @@
 //!
 //! A generation crosses a persistence boundary. The manifest sits on a *source*
 //! device this component may only read; the receiving BootState lives on a
-//! *receiver* device it may write. Two capabilities, two rights masks, and the
+//! *receiver* device it may write. Two IO0 rings, two authority rows, and the
 //! separation between them is the milestone:
 //!
 //! * the source device refuses a write, checked first — every later claim about
@@ -22,10 +22,9 @@
 //! * the generation stages **pending**, leaving the existing known-good root
 //!   intact, and only health confirmation promotes it.
 //!
-//! The oracle does this in `kernel/src/storage/transfer.rs` behind a syscall
-//! requiring both devices by capability. Here the two capabilities are the
-//! whole gate: there is no operation this component can phrase that writes the
-//! source.
+//! B84 makes these independently supervised IO0 transports. Their per-ring
+//! authority rows are the whole gate: the receiver permits reads and writes,
+//! while the source permits reads only.
 
 extern crate alloc;
 
@@ -33,17 +32,22 @@ use boot_contracts::bootstate::{
     BootState, SLOT_BYTES, SelectionError, Slot, empty_state_root, select_bootstate,
 };
 use boot_contracts::gpt::{self, GptError};
-use boot_contracts::object_store::{BlockIo, IoError};
+use boot_contracts::object_store::{BlockIo as ObjectBlockIo, IoError};
 use boot_contracts::recovery::binding_identity;
 use boot_contracts::transfer::{self, STATE_FLAG_READ_ONLY, TransferError, TransferManifest};
-use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
+use slime_components::block_io::{BlockError, BlockIo};
+use slime_proto::io_queue;
 
-/// The receiver device: read and write.
-const RECEIVER_SLOT: u32 = 1;
-/// The source device: read only. A write through it is refused by rights, which
-/// is what makes "leave every ungranted device byte-identical" a property of
-/// the capability rather than of this component's restraint.
-const SOURCE_SLOT: u32 = 2;
+/// Shared-buffer factory and the two driver peer endpoints.
+const FACTORY_SLOT: u32 = 3;
+const RECEIVER_PEER_SLOT: u32 = 8;
+const SOURCE_PEER_SLOT: u32 = 9;
+
+/// Each client owns a disjoint ring page and eight-page payload range.
+const RECEIVER_RING_BASE: u64 = 0x0000_001f_0000_0000;
+const RECEIVER_DATA_BASE: u64 = 0x0000_001f_0001_0000;
+const SOURCE_RING_BASE: u64 = 0x0000_001f_0010_0000;
+const SOURCE_DATA_BASE: u64 = 0x0000_001f_0011_0000;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -68,19 +72,49 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0);
     }
 
-    let mut receiver = Device {
-        slot: RECEIVER_SLOT,
-    };
-    let mut source = Device { slot: SOURCE_SLOT };
+    let receiver_request = binding(b"notification:transfer-receiver-request-ready+signal");
+    let receiver_completion = binding(b"notification:transfer-receiver-completion-ready+wait");
+    let source_request = binding(b"notification:transfer-source-request-ready+signal");
+    let source_completion = binding(b"notification:transfer-source-completion-ready+wait");
+    // SAFETY: all four bases are page-aligned, pairwise disjoint addresses in
+    // this component's free VSpace, and nothing else maps them.
+    let receiver_io = unsafe {
+        BlockIo::attach(
+            FACTORY_SLOT,
+            RECEIVER_PEER_SLOT,
+            receiver_request,
+            receiver_completion,
+            RECEIVER_RING_BASE,
+            RECEIVER_DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"receiver block attach"));
+    // SAFETY: covered by the disjoint mapping invariant above.
+    let source_io = unsafe {
+        BlockIo::attach(
+            FACTORY_SLOT,
+            SOURCE_PEER_SLOT,
+            source_request,
+            source_completion,
+            SOURCE_RING_BASE,
+            SOURCE_DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"source block attach"));
+    let mut receiver = Device { io: receiver_io };
+    let mut source = Device { io: source_io };
 
-    // Read-only, checked before anything else.
+    // Read-only, checked before anything else. The write crosses IO0 and is
+    // refused by the driver's generation-declared authority table.
     let mut probe = [0u8; SECTOR_BYTES];
     if source.read_sector(0, &mut probe).is_err() {
         fail(b"source read");
     }
-    if source.write_sector(0, &probe).is_ok() {
-        fail(b"the source device accepted a write");
+    match source.io.write(0, &probe) {
+        Err(BlockError::Refused { status, .. }) if status == io_queue::STATUS_BAD_RIGHTS => {}
+        _ => fail(b"the source device accepted a write"),
     }
+    slime_rt::debug_write(b"[sel4-transfer-probe] source write refused by driver rights\n");
     slime_rt::debug_write(b"[sel4-transfer-probe] the source device refuses writes\n");
 
     // The receiver's existing root: a known-good generation with nothing
@@ -276,6 +310,14 @@ fn main(_startup_arg: u32) {
     }
     report(b"promoted", &live.state);
 
+    source
+        .io
+        .shutdown()
+        .unwrap_or_else(|_| fail(b"source driver shutdown"));
+    receiver
+        .io
+        .shutdown()
+        .unwrap_or_else(|_| fail(b"receiver driver shutdown"));
     slime_rt::debug_write(b"[sel4-transfer-probe] transfer plane complete\n");
 }
 
@@ -334,44 +376,35 @@ impl StateSlots {
     }
 }
 
-/// One device, named by the capability slot the generation placed it at.
-struct Device {
-    slot: u32,
+/// One synchronous userspace block transport.
+struct Device<'a> {
+    io: BlockIo<'a>,
 }
 
-impl BlockIo for Device {
+impl ObjectBlockIo for Device<'_> {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = block_request(block::OP_READ, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status = slime_rt::block_transact_sector(self.slot, &request.encode(), &mut reply, out);
-        if status < 0 || decode_block_reply(&reply).sectors_done != 1 {
+        let reply = self.io.read(lba, out).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn write_sector(&mut self, lba: u64, data: &[u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = block_request(block::OP_WRITE, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status = slime_rt::block_transact_write(self.slot, &request.encode(), data, &mut reply);
-        if status < 0 || decode_block_reply(&reply).sectors_done != 1 {
+        let reply = self.io.write(lba, data).map_err(|_| IoError::Device)?;
+        if reply.sectors_done != 1 {
             return Err(IoError::Device);
         }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        let request = block_request(block::OP_FLUSH, 0);
-        let mut reply = [0u8; block::REPLY_LEN];
-        if slime_rt::block_transact(self.slot, &request.encode(), &mut reply) < 0 {
-            return Err(IoError::Device);
-        }
-        Ok(())
+        self.io.flush().map(|_| ()).map_err(|_| IoError::Device)
     }
 }
 
-fn locate_partition(io: &mut Device) -> Option<gpt::Partition> {
-    let capacity = device_capacity(io)?;
+fn locate_partition(io: &mut Device<'_>) -> Option<gpt::Partition> {
+    let capacity = io.io.capacity();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_BYTES]| -> Result<(), GptError> {
         io.read_sector(lba, out).map_err(|_| GptError::Device)
     };
@@ -380,49 +413,8 @@ fn locate_partition(io: &mut Device) -> Option<gpt::Partition> {
         .map(|selected| selected.partition)
 }
 
-/// The device's sector count, measured by binary search over readable LBAs.
-/// Reads only, so it is safe on the source.
-fn device_capacity(io: &mut Device) -> Option<u64> {
-    let mut sector = [0u8; SECTOR_BYTES];
-    io.read_sector(0, &mut sector).ok()?;
-    let mut low = 0u64;
-    let mut high = 1u64;
-    while io.read_sector(high, &mut sector).is_ok() {
-        low = high;
-        high = high.checked_mul(2)?;
-    }
-    while high - low > 1 {
-        let middle = low + (high - low) / 2;
-        if io.read_sector(middle, &mut sector).is_ok() {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(low + 1)
-}
-
-fn block_request(op: u8, lba: u64) -> WireBlockRequest {
-    WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op,
-        flags: 0,
-        reserved: 0,
-        lba,
-        sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
-        buffer_phys: 0,
-        buffer_pages: 0,
-    }
-}
-
-fn decode_block_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    WireBlockReply::decode(bytes).unwrap_or(WireBlockReply {
-        magic: 0,
-        version: 0,
-        status: -1,
-        sectors_done: 0,
-    })
+fn binding(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 
 fn report_transfer(error: TransferError) {

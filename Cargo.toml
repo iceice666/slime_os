@@ -207,6 +207,52 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-io-driver-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-driver-intruder]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-queue-client]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-queue-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-block-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-virtio-blk-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-virtio-net-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-link-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-link-intruder]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+
 [profile.release.package.slime-component-powerbox-chooser]
 opt-level = "s"
 codegen-units = 1
@@ -302,21 +348,6 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
-[profile.release.package.slime-component-storage-fault-probe]
-opt-level = "s"
-codegen-units = 1
-debug = false
-
-[profile.release.package.slime-component-storage-probe]
-opt-level = "s"
-codegen-units = 1
-debug = false
-
-[profile.release.package.slime-component-storage-writer]
-opt-level = "s"
-codegen-units = 1
-debug = false
-
 [profile.release.package.slime-component-supervision-child]
 opt-level = "s"
 codegen-units = 1
@@ -373,6 +404,26 @@ codegen-units = 1
 debug = false
 
 [profile.release.package.slime-component-robot-clock]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-network-service]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-network-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-network-intruder]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-link-loopback]
 opt-level = "s"
 codegen-units = 1
 debug = false

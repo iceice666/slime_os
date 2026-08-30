@@ -9,6 +9,7 @@
 #[cfg(feature = "gpt")]
 extern crate alloc;
 
+pub mod block_authority;
 pub mod boot_layout;
 pub mod bootstate;
 pub mod clock_authority;
@@ -19,8 +20,10 @@ pub mod fabric_graph;
 pub mod generation;
 #[cfg(feature = "gpt")]
 pub mod gpt;
+pub mod io_resource;
 pub mod kernel_image;
 pub mod lifecycle_policy;
+pub mod network_destination;
 pub mod normalized_interface_schemas;
 #[cfg(feature = "gpt")]
 pub mod object_store;

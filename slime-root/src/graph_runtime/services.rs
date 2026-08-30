@@ -1,4 +1,5 @@
 use super::*;
+use slime_proto::syscall_abi::io_resource_labels;
 
 /// Serve the declared root mechanisms used by the component graph.
 ///
@@ -22,6 +23,8 @@ pub(super) fn serve_instance_graph(
     timer_adapter: &mut PhysicalTimerAdapter,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
+    io_service: &mut IoResourceService,
+    io_authority: &mut platform::AuthorityInventory,
     // The fabric graph's declared `capabilitySlots` ceiling, or 0 when this
     // generation declares no graph (C8.13.3). Passed in rather than re-decoded
     // per request: the graph object is admission's, and the dispatch loop
@@ -34,7 +37,7 @@ pub(super) fn serve_instance_graph(
     // because it also writes the caller's capability table, which this loop
     // writes on `cap_drop` and on a spawn's result (B45).
     scopes: &mut directory::ScopeTable,
-    #[cfg(slime_boot_selector)] block_devices: &mut BlockDevices,
+    #[cfg(slime_boot_selector)] block_devices: &mut device::BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
     let mut terminations = supervision::Terminations::new();
@@ -183,6 +186,11 @@ pub(super) fn serve_instance_graph(
                 );
             }
             lifecycle_service.release(id);
+            if let Err(error) =
+                io_resource::reclaim_driver(io_service, io_authority, allocator, tasks, id)
+            {
+                sel4::debug_println!("SLIME_IO FAIL reclaim task={} error={error:?}", id.0);
+            }
             reclaim_dead_task(buffers, allocator, id);
             windows.release(id);
             reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -248,6 +256,10 @@ pub(super) fn serve_instance_graph(
             ipc::reply(Response::error(IpcError::InvalidLength));
             continue;
         }
+        if ipc::io_resource_request_len(label).is_some_and(|expected| request.len != expected) {
+            ipc::reply(Response::error(IpcError::InvalidLength));
+            continue;
+        }
         let authorized = generation
             .instance_has_service(instance, required_service)
             .unwrap_or(false);
@@ -261,6 +273,32 @@ pub(super) fn serve_instance_graph(
             continue;
         }
 
+        if matches!(
+            label,
+            io_resource_labels::BIND
+                | io_resource_labels::MAP_MMIO
+                | io_resource_labels::MMIO_READ32
+                | io_resource_labels::MMIO_WRITE32
+                | io_resource_labels::DMA_MAP
+                | io_resource_labels::DMA_RELEASE
+                | io_resource_labels::QUEUE_MAP
+                | io_resource_labels::IRQ_ACK
+                | io_resource_labels::REQUEST_BEGIN
+                | io_resource_labels::REQUEST_SETTLE
+        ) {
+            ipc::reply(serve_io_resource(
+                io_service,
+                io_authority,
+                allocator,
+                buffers,
+                tasks,
+                id,
+                slime_root::io_resource::DriverId(u64::from(id.0)),
+                label,
+                &words,
+            ));
+            continue;
+        }
         match label {
             // M6.3: the three directory operations (P5.4.3).
             //
@@ -347,6 +385,11 @@ pub(super) fn serve_instance_graph(
                     );
                 }
                 lifecycle_service.release(id);
+                if let Err(error) =
+                    io_resource::reclaim_driver(io_service, io_authority, allocator, tasks, id)
+                {
+                    sel4::debug_println!("SLIME_IO FAIL reclaim task={} error={error:?}", id.0);
+                }
                 reclaim_dead_task(buffers, allocator, id);
                 windows.release(id);
                 reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -377,6 +420,8 @@ pub(super) fn serve_instance_graph(
                     lifecycle_service,
                     lifecycle_policy,
                     timer_adapter,
+                    io_service,
+                    io_authority,
                     allocator,
                     scratch,
                     endpoint,
@@ -613,6 +658,67 @@ pub(super) fn serve_instance_graph(
                                 );
                                 Response::error(IpcError::InvalidOperation)
                             }
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
+            capability_table_labels::NETWORK_DESTINATIONS_READ => {
+                let cursor = words.first().copied().unwrap_or(0) as usize;
+                let response = match words.get(2).copied() {
+                    Some(transfer) => {
+                        let mut rows = [0u8; ipc::NETWORK_DESTINATION_ROWS_PER_CALL
+                            * ipc::NETWORK_DESTINATION_ROW_BYTES];
+                        match ipc::read_network_destinations(
+                            generation, instance, cursor, &mut rows,
+                        ) {
+                            Some(count) => {
+                                let bytes = &rows[..count * ipc::NETWORK_DESTINATION_ROW_BYTES];
+                                match transfer_window::write_staged_region(
+                                    windows.bound(id, descriptor_thread(transfer)),
+                                    bytes,
+                                    scratch,
+                                ) {
+                                    Ok(descriptor) => Response::success(count as i64, descriptor),
+                                    Err(error) => Response::error(error),
+                                }
+                            }
+                            None => Response::error(IpcError::InvalidOperation),
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
+            // B83's per-ring block authority, answered only to the declared
+            // block driver.
+            //
+            // Paged like the IO4 destination table and gated the same way: the
+            // root authenticates who may read the table and bounds the bytes,
+            // and reads no block right itself. Refusing a write on a read-only
+            // ring is the driver's decision, because that is device policy.
+            capability_table_labels::BLOCK_RING_AUTHORITY_READ => {
+                let cursor = words.first().copied().unwrap_or(0) as usize;
+                let response = match words.get(2).copied() {
+                    Some(transfer) => {
+                        let mut rows = [0u8; ipc::BLOCK_RING_AUTHORITY_ROWS_PER_CALL
+                            * ipc::BLOCK_RING_AUTHORITY_ROW_BYTES];
+                        match ipc::read_block_ring_authority(
+                            generation, instance, cursor, &mut rows,
+                        ) {
+                            Some(count) => {
+                                let bytes = &rows[..count * ipc::BLOCK_RING_AUTHORITY_ROW_BYTES];
+                                match transfer_window::write_staged_region(
+                                    windows.bound(id, descriptor_thread(transfer)),
+                                    bytes,
+                                    scratch,
+                                ) {
+                                    Ok(descriptor) => Response::success(count as i64, descriptor),
+                                    Err(error) => Response::error(error),
+                                }
+                            }
+                            None => Response::error(IpcError::InvalidOperation),
                         }
                     }
                     None => Response::error(IpcError::InvalidLength),
@@ -1075,6 +1181,8 @@ pub(super) fn serve_instance_graph(
                     operation,
                     buffers,
                     allocator,
+                    io_service,
+                    io_authority,
                     tasks,
                     id,
                     &words,
@@ -1229,6 +1337,8 @@ pub(super) fn serve_instance_graph(
                     operation,
                     buffers,
                     allocator,
+                    io_service,
+                    io_authority,
                     tasks,
                     id,
                     &words,
@@ -1448,6 +1558,9 @@ pub(super) fn serve_instance_graph(
 use slime_proto::syscall_abi::{
     GRANT_RECORD_BYTES as SPAWN_GRANT_RECORD_BYTES, GRANT_RIGHTS_OFFSET, GRANT_SLOT_OFFSET,
 };
+pub(super) mod io_resource;
+pub(super) use io_resource::{IoResourceService, install_driver};
+use io_resource::{revoke_buffer_lease, serve_io_resource};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.

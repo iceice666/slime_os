@@ -1,3 +1,28 @@
+# IO3: supervised userspace virtio-net over duplex IO0 queues and IO1 authority.
+[group('planes / mechanism')]
+io_link_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-link-plane.py
+
+# IO1: userspace hardware authority, exact MMIO bounds, and denial proof.
+[group('planes / mechanism')]
+io_driver_authority_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-driver-authority-plane.py
+
+# IO4: bounded userspace network service over a backend-independent LinkDevice.
+[group('planes / mechanism')]
+io_network_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-network-plane.py
+
+# IO0: build and boot the shared I/O queue proof plane.
+[group('planes / mechanism')]
+io_queue_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-queue-plane.py
+
+# IO2: build and boot the userspace virtio-blk parity and fault plane.
+[group('planes / mechanism')]
+io_block_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-block-plane.py
+
 # P5.3.1: build the channel-plane image, boot it, and require the ordered
 # markers proving that channels are materialized from the generation's declared
 # send/recv grants, that a component parked in `recv` is woken by its peer's

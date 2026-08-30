@@ -97,6 +97,37 @@ impl DeviceRegion {
     pub const fn paddr(&self) -> usize {
         self.paddr
     }
+    /// Current virtual address of this frame's mapping.
+    pub const fn mapped_base(&self) -> usize {
+        self.base
+    }
+    /// Map this exact device frame into a child VSpace. The caller has already
+    /// proved page exclusivity; this function never rounds or widens a region.
+    /// A failed map leaves the frame capability owned by this region and marks
+    /// it unmapped, so the inventory can retain it for a later retry.
+    pub fn map_child(
+        &mut self,
+        vspace: sel4::cap::VSpace,
+        base: usize,
+        writable: bool,
+    ) -> Result<(), DeviceError> {
+        self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        self.base = 0;
+        let rights = sel4::CapRightsBuilder::none()
+            .read(true)
+            .write(writable)
+            .build();
+        self.frame
+            .frame_map(
+                vspace,
+                base,
+                rights,
+                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+            )
+            .map_err(DeviceError::Map)?;
+        self.base = base;
+        Ok(())
+    }
 
     /// Retype the granule containing `paddr` and map it at `base`.
     ///
@@ -160,8 +191,10 @@ impl DeviceRegion {
     /// space it came from is a device untyped this root has no second use for.
     /// What this frees is the *virtual* window, so one claimed root-image page
     /// can scan a region larger than a granule.
-    pub fn unmap(self) -> Result<(), DeviceError> {
-        self.frame.frame_unmap().map_err(DeviceError::Map)
+    pub fn unmap(&mut self) -> Result<(), DeviceError> {
+        self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        self.base = 0;
+        Ok(())
     }
 
     /// Read one 32-bit register at `offset` bytes into the bank.
@@ -300,6 +333,7 @@ impl VirtioMmio {
 pub struct DeviceIrq {
     irq_handler: sel4::cap::IrqHandler,
     notification: sel4::cap::Notification,
+    signal: sel4::cap::Notification,
     irq: sel4::Word,
 }
 
@@ -350,6 +384,7 @@ impl DeviceIrq {
         Ok(Self {
             irq_handler: irq_handler_slot.cap(),
             notification: notification_slot.cap(),
+            signal: signal_slot.cap(),
             irq,
         })
     }
@@ -374,6 +409,29 @@ impl DeviceIrq {
     /// cleared, or a level-triggered line fires again immediately.
     pub fn acknowledge(&self) -> Result<(), DeviceError> {
         self.irq_handler.irq_handler_ack().map_err(DeviceError::Irq)
+    }
+
+    /// Clear the kernel binding and delete every root capability that kept this
+    /// interrupt live. Deletion and clear are safe to repeat, which lets a
+    /// higher-level deterministic teardown retry after a later action failed.
+    pub fn release(&self, allocator: &mut ObjectAllocator) -> Result<(), DeviceError> {
+        self.irq_handler
+            .irq_handler_clear()
+            .map_err(DeviceError::Irq)?;
+        let root = sel4::init_thread::slot::CNODE.cap();
+        for cap in [
+            self.signal.bits(),
+            self.notification.bits(),
+            self.irq_handler.bits(),
+        ] {
+            root.absolute_cptr(sel4::cap::Unspecified::from_bits(cap))
+                .delete()
+                .map_err(DeviceError::Irq)?;
+        }
+        allocator.release_slot(self.signal.bits() as usize);
+        allocator.release_slot(self.notification.bits() as usize);
+        allocator.release_slot(self.irq_handler.bits() as usize);
+        Ok(())
     }
 }
 
@@ -407,14 +465,13 @@ impl DmaPage {
         vspace: sel4::cap::VSpace,
         base: usize,
     ) -> Result<Self, DeviceError> {
-        let frame = allocator
+        let slot = allocator
             .allocate_fixed::<sel4::cap_type::Granule>()
-            .map_err(DeviceError::Allocate)?
-            .cap();
-        // Read immediately after the allocation that produced it: the allocator
-        // records one physical base, so anything allocated in between would
-        // overwrite it.
-        let paddr = allocator.last_physical_address();
+            .map_err(DeviceError::Allocate)?;
+        let paddr = allocator
+            .physical_address_of(slot.index())
+            .ok_or(DeviceError::Allocate(AllocError::NoKernelUntyped))?;
+        let frame = slot.cap();
         frame
             .frame_map(
                 vspace,
@@ -433,6 +490,59 @@ impl DmaPage {
         Ok(Self { base, paddr, frame })
     }
 
+    /// Retype one DMA page directly into a child VSpace. The shared-buffer
+    /// mapping mechanism supplies missing intermediate translation tables.
+    pub fn allocate_child(
+        allocator: &mut ObjectAllocator,
+        vspace: sel4::cap::VSpace,
+        base: usize,
+    ) -> Result<Self, DeviceError> {
+        use crate::shared_buffer::SharedBufferAdapter;
+
+        let slot = allocator
+            .allocate_fixed::<sel4::cap_type::Granule>()
+            .map_err(DeviceError::Allocate)?;
+        let paddr = allocator
+            .physical_address_of(slot.index())
+            .ok_or(DeviceError::Allocate(AllocError::NoKernelUntyped))?;
+        let frame = slot.cap();
+        let mut adapter = crate::buffer_adapter::BufferAdapter::new(allocator);
+        adapter
+            .map_frame(
+                crate::shared_buffer::FrameCap(slot.index()),
+                crate::shared_buffer::VSpaceCap(vspace.bits() as usize),
+                base,
+                crate::shared_buffer::MappingRights::ReadWrite,
+            )
+            .map_err(|_| DeviceError::Map(sel4::Error::FailedLookup))?;
+        Ok(Self { base, paddr, frame })
+    }
+
+    /// Map an already-retyped contiguous granule CSlot into a child VSpace.
+    pub fn map_child_slot(
+        allocator: &mut ObjectAllocator,
+        slot: usize,
+        vspace: sel4::cap::VSpace,
+        base: usize,
+    ) -> Result<Self, DeviceError> {
+        use crate::shared_buffer::SharedBufferAdapter;
+
+        let paddr = allocator
+            .physical_address_of(slot)
+            .ok_or(DeviceError::Allocate(AllocError::NoKernelUntyped))?;
+        let frame = sel4::init_thread::Slot::<sel4::cap_type::Granule>::from_index(slot).cap();
+        let mut adapter = crate::buffer_adapter::BufferAdapter::new(allocator);
+        adapter
+            .map_frame(
+                crate::shared_buffer::FrameCap(slot),
+                crate::shared_buffer::VSpaceCap(vspace.bits() as usize),
+                base,
+                crate::shared_buffer::MappingRights::ReadWrite,
+            )
+            .map_err(|_| DeviceError::Map(sel4::Error::FailedLookup))?;
+        Ok(Self { base, paddr, frame })
+    }
+
     /// Guest-physical base, the address a descriptor carries.
     pub fn physical_address(&self) -> usize {
         self.paddr
@@ -443,43 +553,64 @@ impl DmaPage {
         self.base
     }
 
-    /// A mutable view of the page.
-    ///
-    /// `&mut self` so Rust's own aliasing rule covers the CPU side; the `unsafe`
-    /// is about the device, which may be reading these bytes concurrently and
-    /// which the borrow checker cannot see.
+    /// Mutable bytes for queue construction. The device and root intentionally
+    /// write the same bytes.
     ///
     /// # Safety
     ///
-    /// The caller must not hold this view across a point where the device may
-    /// write the same bytes.
+    /// The returned slice aliases memory a device may be reading or writing
+    /// concurrently through DMA, so it is not an exclusive reference in the way
+    /// its type suggests. The caller must only touch bytes the device is not
+    /// currently using — in practice, ring entries the device has not been
+    /// notified about, or ones it has already completed. The compiler cannot
+    /// check that, which is the whole reason this is `unsafe`.
     pub unsafe fn bytes_mut(&mut self) -> &mut [u8] {
         // SAFETY: `base` names one granule mapped read-write by `allocate` and
         // owned by this value; `&mut self` makes this the only CPU-side view.
         unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, GRANULE_BYTES) }
     }
+
+    /// Tear down a driver-owned DMA page and return its root CSlot. The value
+    /// remains available to the caller when an effect fails, so teardown can
+    /// retry without losing the capability that names the live mapping.
+    pub fn release(&self, allocator: &mut ObjectAllocator) -> Result<(), DeviceError> {
+        self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        let slot = self.frame.bits() as usize;
+        sel4::init_thread::slot::CNODE
+            .cap()
+            .absolute_cptr(self.frame)
+            .delete()
+            .map_err(DeviceError::Map)?;
+        allocator.release_slot(slot);
+        Ok(())
+    }
 }
 
-/// Block devices this cutover brings up, in stable physical-address order.
+/// Device ordinals admitted by the userspace IO-resource mechanism.
 ///
-/// Two, because M6.7 transfers a generation from a source device to a receiver
-/// and needs both at once. The bound is a table size rather than a policy: a
-/// generation grants authority over a device by index, and an index the boot
-/// did not fill is authority the root cannot back.
-pub const MAX_BLOCK_DEVICES: usize = 2;
+/// Two, because the recovery and transfer planes use a source and receiver at
+/// once. This bounds raw device authority; only the boot-selector build turns
+/// an ordinal into a root-owned block driver.
+pub const MAX_IO_DEVICES: usize = 2;
 
+#[cfg(slime_boot_selector)]
+pub const MAX_BLOCK_DEVICES: usize = MAX_IO_DEVICES;
+
+#[cfg(slime_boot_selector)]
 /// The brought-up devices.
 pub struct BlockDevices {
-    devices: [Option<crate::virtio_blk::VirtioBlock>; MAX_BLOCK_DEVICES],
+    devices: [Option<crate::boot_selector_block::VirtioBlock>; MAX_BLOCK_DEVICES],
     len: usize,
 }
 
+#[cfg(slime_boot_selector)]
 impl Default for BlockDevices {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(slime_boot_selector)]
 impl BlockDevices {
     pub const fn new() -> Self {
         Self {
@@ -488,7 +619,7 @@ impl BlockDevices {
         }
     }
 
-    pub fn push(&mut self, device: crate::virtio_blk::VirtioBlock) {
+    pub fn push(&mut self, device: crate::boot_selector_block::VirtioBlock) {
         if self.len < MAX_BLOCK_DEVICES {
             self.devices[self.len] = Some(device);
             self.len += 1;
@@ -503,7 +634,10 @@ impl BlockDevices {
         self.len == 0
     }
 
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut crate::virtio_blk::VirtioBlock> {
+    pub fn get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut crate::boot_selector_block::VirtioBlock> {
         self.devices.get_mut(index)?.as_mut()
     }
 }

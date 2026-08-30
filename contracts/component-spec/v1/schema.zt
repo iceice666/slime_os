@@ -242,17 +242,30 @@ identityDomain :: Text = "slime-component-spec-v1:";
 -- the same terms as every other contract here: a spec corpus is host-side
 -- input, and host-side input that is not bounded is unbounded input.
 --
--- `maxSpecs` is `contracts/generation-manifest/v1`'s admitted instance ceiling
--- (`MAX_ADMITTED_INSTANCES = 48`): a corpus larger than the number of
--- instances a generation can admit cannot be fully composed anyway.
-maxSpecs :: Int = 48;
+-- `maxSpecs` bounds the repository's spec *corpus*, which is a different thing
+-- from the number of instances one generation can admit. It was originally
+-- pinned to `contracts/generation-manifest/v1`'s `MAX_ADMITTED_INSTANCES = 48`
+-- on the reasoning that a larger corpus could not be fully composed anyway --
+-- but that conflates a catalogue with a composition. No generation instantiates
+-- every component in the tree; each plane admits the handful it declares, and
+-- the corpus is the union across every plane. Tying the two meant that adding
+-- the 49th component anywhere in the repository failed a bound describing a
+-- constraint it does not actually violate, which is what the IO track hit.
+--
+-- 64 leaves headroom over the current corpus without becoming unbounded. The
+-- per-generation instance ceiling stays where it is and is enforced separately,
+-- by the generation manifest, which is the contract that genuinely owns it.
+maxSpecs :: Int = 64;
 maxSourceBytes :: Int = 65536;
 maxNormalizedBytes :: Int = 65536;
 maxNameBytes :: Int = 64;
 maxPurposeBytes :: Int = 160;
 maxTextBytes :: Int = 256;
 maxContentHashBytes :: Int = 64;
-maxCapabilityKinds :: Int = 9;
+-- One entry per capability kind a spec's `requires` list may name. IO1 added
+-- `device`, `mmioRegion`, `interruptSource`, and `dmaAccount` to the
+-- generation's kind vocabulary (kinds 10-13), so the ceiling moves with it.
+maxCapabilityKinds :: Int = 13;
 maxInterfaces :: Int = 16;
 maxQosPolicies :: Int = 16;
 maxDependencies :: Int = 8;

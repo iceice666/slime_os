@@ -4,16 +4,14 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Injects request, timeout, reset, and flush block faults and asserts each returns its structured error status.";
+  purpose = "Declared frozen CP1 storage fault probe; its implementation retired with the root block transaction path.";
   implementation = {
-    provider = "workspace";
-    binary = "storage-fault-probe";
+    provider = "undeclared";
+    binary = "";
     contentHash = "";
   };
   provides = [];
-  requires = [
-    "block";
-  ];
+  requires = [];
   interfaces = [];
   dependencies = [];
   communication = {
@@ -39,9 +37,7 @@
       loanCount = 0;
       privatePageQuota = 0;
     };
-    devices = [
-      "block";
-    ];
+    devices = [];
   };
   health = "optional";
   compatibility = {
@@ -53,8 +49,8 @@
     qos = "none";
   };
   test = {
-    testCondition = "the generation_check gate boots a generation declaring storage-fault-probe";
-    expectedResult = "storage-fault-probe reaches its declared behavior under that gate";
+    testCondition = "the generation_check gate validates the frozen reference manifest declaring storage-fault-probe";
+    expectedResult = "storage-fault-probe remains declared for fixture compatibility but no implementation is admitted";
     passFailCriteria = "generation determinism check";
     requiredTestEnvironment = "generation_check";
   };

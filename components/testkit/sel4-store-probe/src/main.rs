@@ -1,28 +1,26 @@
 #![no_std]
 #![no_main]
 
-//! The seL4 store plane's subject: M5.4 policy in userspace (P5.4.2c).
+//! The seL4 store plane's subject: M5.4 policy in userspace (P5.4.2c, migrated by B83).
 //!
-//! The oracle put GPT validation, root selection, the object index, content
-//! hashing, and commit ordering *inside the kernel* — `store_service` owns a
-//! global store and `sys_store_transact` is syscall 7. That placement is what
-//! this port does not reproduce. The root here mediates one thing, sectors, and
-//! everything above them is this component:
+//! GPT validation, root selection, the object index, content hashing, and commit
+//! ordering remain in this component. Only sector transport changed: requests
+//! now cross an IO0 ring to the userspace `virtio-blk-driver`, whose per-ring
+//! authority comes from the generation's `block-ring-authority` table.
 //!
-//! * validate the protective MBR, both GPT copies, and the entry-array CRCs,
-//!   and select the store partition;
-//! * pick the newest valid superblock root, tolerating a damaged slot;
-//! * index the committed records and retrieve one by content hash, verifying
+//! The component:
+//!
+//! * validates the protective MBR, both GPT copies, and the entry-array CRCs,
+//!   and selects the store partition;
+//! * picks the newest valid superblock root, tolerating a damaged slot;
+//! * indexes committed records and retrieves one by content hash, verifying
 //!   its complete SHA-256 before the bytes are used;
-//! * append and seal a new object, then prove the commit is durable by
+//! * appends and seals a new object, then proves the commit is durable by
 //!   re-opening the store from disk;
-//! * refuse a payload whose hash does not match what was asked for.
+//! * refuses a payload whose hash does not match what was asked for.
 //!
-//! None of that is root code. `boot_contracts::{gpt, object_store}` is the same
-//! implementation the oracle links, driven here over `BlockTransact` through a
-//! capability the generation granted — which is the whole claim: M5.4's
-//! properties do not need kernel residence, they need a block device and an
-//! allocator.
+//! The idle instance intentionally receives neither a ring nor block authority.
+//! Its run-token discrimination therefore remains an independent denial arm.
 //!
 //! This is the first component that allocates: `ObjectStore` reads a GPT entry
 //! table and builds an object index in `Vec`s. The heap comes from the
@@ -32,13 +30,13 @@
 extern crate alloc;
 
 use boot_contracts::gpt::{self, GptError, Recovery};
-use boot_contracts::object_store::{BlockIo, IoError, ObjectStore, StoreError};
-use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
+use boot_contracts::object_store::{BlockIo as StoreBlockIo, IoError, ObjectStore, StoreError};
+use slime_components::block_io::BlockIo as DriverBlockIo;
 
-/// The block capability, numbered as in `sel4-storage-probe`: the generation
-/// grants it to this component, and the root places it above the component's
-/// executables — of which it has none.
-const BLOCK_SLOT: u32 = 1;
+const PEER_SLOT: u32 = 8;
+const FACTORY_SLOT: u32 = 3;
+const RING_BASE: u64 = 0x0000_001f_0000_0000;
+const DATA_BASE: u64 = 0x0000_001f_0001_0000;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -61,16 +59,23 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0);
     }
 
-    let mut io = BlockCapability;
-
-    // GPT: protective MBR, both header copies, entry-array CRCs, bounds, and
-    // overlap — then the store partition selected by type GUID. A conflicting
-    // pair of valid copies is a hard reject rather than a false recovery, which
-    // is the property the `gpt-conflict` fixture exercises.
-    let capacity = match device_capacity(&mut io) {
-        Some(sectors) => sectors,
-        None => fail(b"device capacity"),
-    };
+    let request_ready = binding(b"notification:io-block-request-ready+signal");
+    let completion_ready = binding(b"notification:io-block-completion-ready+wait");
+    // SAFETY: both bases are page-aligned addresses in this component's free
+    // VSpace range, do not alias each other, and nothing else maps them.
+    let driver = unsafe {
+        DriverBlockIo::attach(
+            FACTORY_SLOT,
+            PEER_SLOT,
+            request_ready,
+            completion_ready,
+            RING_BASE,
+            DATA_BASE,
+        )
+    }
+    .unwrap_or_else(|_| fail(b"block attach"));
+    let mut io = BlockCapability { driver };
+    let capacity = io.driver.capacity();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_BYTES]| -> Result<(), GptError> {
         io.read_sector(lba, out).map_err(|_| GptError::Device)
     };
@@ -84,6 +89,7 @@ fn main(_startup_arg: u32) {
             // a component that treated every refusal as failure could not tell
             // "rejected correctly" from "broke".
             report_gpt(error);
+            io.shutdown();
             slime_rt::debug_write(b"[sel4-store-probe] store plane refused\n");
             slime_rt::exit(0);
         }
@@ -119,6 +125,7 @@ fn main(_startup_arg: u32) {
             // `no-valid-superblock`: neither root decodes, so the store fails
             // closed rather than inventing one.
             report_store(error);
+            io.shutdown();
             slime_rt::debug_write(b"[sel4-store-probe] store plane refused\n");
             slime_rt::exit(0);
         }
@@ -266,108 +273,45 @@ fn main(_startup_arg: u32) {
         b" capacity=",
         slime_rt::HEAP_BYTES as u64,
     );
+    io.shutdown();
     slime_rt::debug_write(b"[sel4-store-probe] store plane complete\n");
 }
 
-/// The device, reached through the granted capability.
-///
-/// This is the whole adapter: `BlockIo` is three methods, and each is one
-/// `BlockTransact`. The oracle satisfies the same trait with a direct driver
-/// handle inside the kernel; satisfying it from userspace over a mediated
-/// capability is what moves the policy above without changing it.
-struct BlockCapability;
+/// The object-store trait adapted to the shared synchronous IO0 client.
+struct BlockCapability {
+    driver: DriverBlockIo<'static>,
+}
 
-impl BlockIo for BlockCapability {
+impl BlockCapability {
+    fn shutdown(&mut self) {
+        self.driver
+            .shutdown()
+            .unwrap_or_else(|_| fail(b"driver shutdown"));
+    }
+}
+
+impl StoreBlockIo for BlockCapability {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = request(block::OP_READ, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_sector(BLOCK_SLOT, &request.encode(), &mut reply, out);
-        if status < 0 || decode_reply(&reply).sectors_done != 1 {
-            return Err(IoError::Device);
+        match self.driver.read(lba, out) {
+            Ok(reply) if reply.sectors_done == 1 => Ok(()),
+            _ => Err(IoError::Device),
         }
-        Ok(())
     }
 
     fn write_sector(&mut self, lba: u64, data: &[u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = request(block::OP_WRITE, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_write(BLOCK_SLOT, &request.encode(), data, &mut reply);
-        if status < 0 || decode_reply(&reply).sectors_done != 1 {
-            return Err(IoError::Device);
+        match self.driver.write(lba, data) {
+            Ok(reply) if reply.sectors_done == 1 => Ok(()),
+            _ => Err(IoError::Device),
         }
-        Ok(())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        let request = request(block::OP_FLUSH, 0);
-        let mut reply = [0u8; block::REPLY_LEN];
-        if slime_rt::block_transact(BLOCK_SLOT, &request.encode(), &mut reply) < 0 {
-            return Err(IoError::Device);
-        }
-        Ok(())
+        self.driver.flush().map(|_| ()).map_err(|_| IoError::Device)
     }
 }
 
-/// The device's sector count, needed by GPT validation to bound the backup
-/// header and to reject an entry array that runs off the end.
-///
-/// Measured rather than declared. The block protocol's reply carries status and
-/// a completion count, not geometry, and adding a capacity field would change a
-/// record the frozen oracle also encodes. What the protocol *does* expose is the
-/// bound itself: the root refuses `lba >= capacity`, so the largest readable LBA
-/// is the last sector, and a binary search over the 64-bit space finds it in
-/// bounded probes. Reads only, so measuring cannot damage the disk.
-fn device_capacity(io: &mut BlockCapability) -> Option<u64> {
-    let mut sector = [0u8; SECTOR_BYTES];
-    if io.read_sector(0, &mut sector).is_err() {
-        return None;
-    }
-    // Grow until a read is refused, so the search starts with a known-bad
-    // upper bound instead of assuming a device size.
-    let mut low = 0u64;
-    let mut high = 1u64;
-    while io.read_sector(high, &mut sector).is_ok() {
-        low = high;
-        high = high.checked_mul(2)?;
-    }
-    // `low` reads, `high` does not. Converge on the boundary between them.
-    while high - low > 1 {
-        let middle = low + (high - low) / 2;
-        if io.read_sector(middle, &mut sector).is_ok() {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(low + 1)
-}
-
-fn request(op: u8, lba: u64) -> WireBlockRequest {
-    WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op,
-        flags: 0,
-        reserved: 0,
-        lba,
-        sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
-        // Zero, deliberately: there is no ambient addressing here. The oracle's
-        // kernel dereferences this pointer on the caller's behalf; the payload
-        // crosses in this component's own transfer window instead.
-        buffer_phys: 0,
-        buffer_pages: 0,
-    }
-}
-
-fn decode_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    WireBlockReply::decode(bytes).unwrap_or(WireBlockReply {
-        magic: 0,
-        version: 0,
-        status: -1,
-        sectors_done: 0,
-    })
+fn binding(name: &[u8]) -> u32 {
+    slime_rt::resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 
 /// The payload the fixture seeds: a fixed-length record whose head is a known

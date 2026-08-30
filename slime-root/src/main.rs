@@ -34,7 +34,7 @@ use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
     platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
-    transfer_window, virtio_blk, wait_set,
+    transfer_window, wait_set,
 };
 
 use core::ptr;
@@ -50,7 +50,8 @@ use sel4_root_task::root_task;
 use boot_contracts::generation::{RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
 use buffer_adapter::BufferAdapter;
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
-use device::{BlockDevices, MAX_BLOCK_DEVICES};
+#[cfg(slime_boot_selector)]
+use device::MAX_BLOCK_DEVICES;
 use event::{TaskEpoch, TimerId};
 use fault::{LifecycleEventKind, SupervisionTable};
 use generation::{Admission, Authority, bound_authority};
@@ -112,9 +113,9 @@ macro_rules! fatal {
     }};
 }
 mod graph_runtime;
+use graph_runtime::private_memory_cause;
 #[cfg(not(slime_root_fixture))]
 use graph_runtime::{RootEndpoints, RuntimeDevices, launch_instance_graph};
-use graph_runtime::{private_memory_cause, probe_devices};
 
 /// The generation this root task admits and launches.
 ///
@@ -262,23 +263,23 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing windows for each attached block device's register bank (P5.4.2b),
-/// one per device since P5.4.3.
+/// Standing MMIO windows for the userspace-authority inventory, one per
+/// granule in QEMU's virtio-mmio transport range.
 ///
-/// Separate from `DEVICE_PAGE`, which the probe reuses granule by granule as it
-/// scans: a live device's registers must stay mapped, and two live devices need
-/// two windows.
-///
-/// Arrays rather than a second set of named statics: the bound is
-/// `MAX_BLOCK_DEVICES`, and duplicating three names per device would make the
-/// table's size a property of how many statics someone remembered to add.
-static mut BLOCK_MMIO_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+/// The scan page is transient; a granule containing an attached transport must
+/// remain mapped until its generation-declared userspace driver binds it.
+#[cfg(not(slime_boot_selector))]
+static mut AUTHORITY_MMIO_PAGES: [FreePage; VIRTIO_MMIO_GRANULES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; VIRTIO_MMIO_GRANULES];
+
+#[cfg(slime_boot_selector)]
+static mut BOOT_MMIO_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
     [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
-/// Each block device's virtqueue rings.
-static mut BLOCK_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+#[cfg(slime_boot_selector)]
+static mut BOOT_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
     [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
-/// Each device's request header, data buffer, and status byte.
-static mut BLOCK_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+#[cfg(slime_boot_selector)]
+static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
     [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
 
 /// Base of qemu-arm-virt's virtio-mmio transport window.
@@ -295,20 +296,13 @@ const VIRTIO_MMIO_STRIDE: usize = 0x200;
 const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = 8;
 /// Granules covering all thirty-two declared transports: 32 / 8.
 const VIRTIO_MMIO_GRANULES: usize = 4;
-/// SPI number of the first transport's interrupt, from the platform's own
-/// device tree (`interrupts = <0x00 0x10 0x01>` on `virtio_mmio@a000000`).
-/// Transport `n` uses SPI `0x10 + n`.
+/// SPI number of the first transport's interrupt, from the platform device tree.
 const VIRTIO_MMIO_FIRST_SPI: sel4::Word = 0x10;
 /// GIC SPIs are numbered from 32 in the kernel's IRQ space.
 const GIC_SPI_BASE: sel4::Word = 32;
 /// Badge the device notification carries, distinct from the timer's.
 const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
 
-/// The kernel IRQ number of the virtio-mmio transport at `paddr`.
-///
-/// The device tree is the authority and a driver will read it; this is the same
-/// arithmetic it encodes — transport `n` at `VIRTIO_MMIO_BASE + n * 0x200` takes
-/// SPI `VIRTIO_MMIO_FIRST_SPI + n`, and seL4 numbers an SPI from 32.
 const fn virtio_irq(paddr: usize) -> sel4::Word {
     let index = ((paddr - VIRTIO_MMIO_BASE) / VIRTIO_MMIO_STRIDE) as sel4::Word;
     GIC_SPI_BASE + VIRTIO_MMIO_FIRST_SPI + index
@@ -690,19 +684,15 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     #[cfg(all(not(slime_qemu_keyboard), not(slime_root_fixture)))]
     let qemu_input: Option<device::Pl011Input> = None;
 
-    // ---- device phase (P5.4.2a) ----
+    // ---- device phase ----
     //
-    // Not conditional on a generation flag: the probe reports what BootInfo and
-    // the platform actually declare, and a machine with no device untyped or no
-    // attached transport reports exactly that. Storage *policy* stays userspace
-    // and stays absent until P5.4.2b; what this establishes is the mechanism —
-    // the root can name a device region, map it non-cacheably, and read a
-    // register out of it.
-    //
-    // Every seL4 gate boots this path, so the markers are unconditional and
-    // every plane's transcript carries them.
-    #[cfg_attr(not(slime_boot_selector), allow(unused_mut, unused_variables))]
-    let mut block_devices = probe_devices(bootinfo, allocator);
+    // The immutable boot selector is the one ordering exception: it must read
+    // the generation from the boot disk before decoded generation policy can
+    // assign that device. Ordinary embedded-generation images never construct
+    // the retired root block driver; after admission, an IO-resource budget
+    // grants raw MMIO/IRQ/DMA authority to supervised userspace drivers.
+    #[cfg(slime_boot_selector)]
+    let mut block_devices = graph_runtime::platform::probe_devices(bootinfo, allocator);
     #[cfg(slime_boot_selector)]
     let selected = {
         let device = block_devices
@@ -742,6 +732,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(admission) => admission,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
+    #[cfg(all(not(slime_boot_selector), not(slime_root_fixture)))]
+    let mut io_authority = if admission.io_resource_drivers.is_some() {
+        graph_runtime::probe_authority_devices(bootinfo, allocator)
+    } else {
+        graph_runtime::platform::AuthorityInventory::new()
+    };
+    #[cfg(all(slime_boot_selector, not(slime_root_fixture)))]
+    let mut io_authority = graph_runtime::platform::AuthorityInventory::new();
     // The plan's total against the root's actual CSpace, which only the
     // allocator knows (B49). Per-instance ceilings say each process fits; this
     // says they all fit together, before any component starts rather than
@@ -846,8 +844,10 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             },
             RuntimeDevices {
                 timer: &mut timer_adapter,
-                blocks: &mut block_devices,
+                #[cfg(slime_boot_selector)]
+                boot_blocks: &mut block_devices,
                 input: qemu_input,
+                io_authority: &mut io_authority,
             },
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,

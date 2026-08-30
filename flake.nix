@@ -3,10 +3,20 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Kani's release bundle ships pre-built binaries linked against one exact
+    # nightly (`rustc-version` in the bundle), which no nixpkgs channel
+    # carries. `rust-bin.nightly."<date>"` is the only pinned source of that
+    # build, so the proof gate's toolchain comes from here rather than from the
+    # imperative `rustup` installs the shell hook does for the product
+    # toolchains.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { nixpkgs, rust-overlay, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -19,7 +29,14 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+          # Kani is a separate shell, not a `default` package: the bundle is
+          # ~325 MB and only one gate uses it, so every other `nix develop`
+          # (and the five CI jobs that never run a proof) must not pay for it.
+          kani = pkgs.callPackage ./nix/kani.nix { };
           # Workspace host crates use this toolchain. The seL4 root, child,
           # and loader use the independent pin in `sel4/pins.toml`.
           rustToolchain = "nightly-2026-05-26";
@@ -84,7 +101,6 @@
                 sel4Python
               ];
 
-
             # `sel4-sys` generates the libsel4 bindings with bindgen, which
             # resolves libclang at run time rather than at link time.
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -126,6 +142,35 @@
                 --no-self-update
             '';
           };
+
+          # `nix develop .#kani --command just kani_io_proofs`. Deliberately
+          # minimal: the proof gate needs `just`, `cargo-kani`, and the
+          # bundle's own toolchain, and nothing it verifies touches libsel4,
+          # QEMU, or the cross compiler. `RUSTUP_TOOLCHAIN` is left unset on
+          # purpose — `kani-driver` selects the toolchain its bundle links
+          # against, and an inherited value from the default shell would send
+          # it at the wrong nightly.
+          kani = pkgs.mkShell {
+            packages = [
+              pkgs.just
+              kani
+            ];
+          };
+        }
+      );
+
+      # Exposed so CI can realize and cache the bundle as its own step, and so
+      # `nix build .#kani` reports the pin's integrity without entering a shell.
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+        in
+        {
+          kani = pkgs.callPackage ./nix/kani.nix { };
         }
       );
 

@@ -51,23 +51,10 @@ impl DeclaredCapability<'_> {
 /// Whether a grant-backed binding is one the child's *owner* must supply at
 /// spawn.
 ///
-/// Two classes are excluded, and both are authority the root places itself:
-///
-/// * an **endpoint**, which is a generation-owned seL4 Endpoint object the root
-///   materializes and installs into both declared ends, and
-/// * a **self-loop**, whose source and target are the child itself — authority
-///   it holds in its own right, installed by `construct_child`.
-///
-/// Neither crosses the spawn boundary, so neither is counted in the total a
-/// request must match nor given a position in the ordering that pairs requests
-/// with declarations. Those two must agree: a count that skips a declaration the
-/// ordering still numbers makes every child holding one unspawnable, because the
-/// request at index 0 resolves to a declaration its owner was never asked for.
-pub(super) fn grant_crosses_spawn(grant: Grant<'_>, child_instance: usize) -> bool {
-    grant.capability_kind != CapabilityKind::Endpoint
-        && (grant.source != GrantEndpoint::Instance(child_instance)
-            || grant.target != GrantEndpoint::Instance(child_instance))
-}
+/// Re-exported from [`crate::generation`], which owns the rule: it is pure over
+/// decoded generation data, so it belongs where `just test_sel4_root` can reach
+/// it. This is the same function the image links, not a copy.
+pub(super) use slime_root::generation::grant_crosses_spawn;
 
 pub(super) fn nth_declared_capability<'a>(
     generation: &Generation<'a>,
@@ -186,6 +173,10 @@ pub(super) fn preflight_spawn_grants(
     if count > MAX_SPAWN_GRANTS {
         return Err(IpcError::InvalidLength);
     }
+    // The declared total, from the one function that computes it
+    // (`declared_crossing_grants`). `parent_supplied` and `minted_count` are
+    // still reported separately below because a mismatch is nearly always a
+    // fixture defect, and knowing which half moved is what makes it findable.
     let minted_count = (0..generation.minted_binding_count())
         .filter(|index| {
             generation
@@ -193,18 +184,10 @@ pub(super) fn preflight_spawn_grants(
                 .is_ok_and(|m| m.holder == child_instance)
         })
         .count();
-    let mut parent_supplied = 0;
-    for index in 0..child.binding_count() {
-        let binding = generation
-            .binding(child, index)
+    let declared =
+        slime_root::generation::declared_crossing_grants(generation, child, child_instance)
             .map_err(|_| IpcError::BadCapability)?;
-        let grant = generation
-            .grant(binding.grant)
-            .map_err(|_| IpcError::BadCapability)?;
-        if grant_crosses_spawn(grant, child_instance) {
-            parent_supplied += 1;
-        }
-    }
+    let parent_supplied = declared - minted_count;
     let respawn = launched.ever_launched(child_instance);
     if count != parent_supplied + minted_count && !(respawn && count == 0) {
         sel4::debug_println!(
@@ -272,6 +255,58 @@ pub(super) fn preflight_spawn_grants(
             narrowed,
             minted,
         ));
+    }
+    if respawn && count == 0 {
+        for (index, slot) in granted.iter_mut().enumerate().take(parent_supplied) {
+            let declaration = nth_declared_capability(generation, child, child_instance, index)?;
+            let DeclaredCapability::Granted(destination, declared) = declaration else {
+                return Err(IpcError::BadCapability);
+            };
+            let resource = match declared.capability_kind {
+                CapabilityKind::Device
+                | CapabilityKind::MmioRegion
+                | CapabilityKind::InterruptSource
+                | CapabilityKind::DmaAccount => 0,
+                _ => return Err(IpcError::BadCapability),
+            };
+            let held = table.slots().any(|(_, capability)| {
+                matches!(
+                    (declared.capability_kind, capability),
+                    (
+                        CapabilityKind::Device,
+                        Some(graph::CapabilityEntry::Device(_))
+                    ) | (
+                        CapabilityKind::MmioRegion,
+                        Some(graph::CapabilityEntry::MmioRegion(_))
+                    ) | (
+                        CapabilityKind::InterruptSource,
+                        Some(graph::CapabilityEntry::InterruptSource(_))
+                    ) | (
+                        CapabilityKind::DmaAccount,
+                        Some(graph::CapabilityEntry::DmaAccount(_))
+                    )
+                )
+            });
+            if !held {
+                return Err(IpcError::BadCapability);
+            }
+            let capability =
+                declared_capability(declared.capability_kind, resource, declared.rights)
+                    .ok_or(IpcError::BadCapability)?;
+            *slot = Some((
+                0,
+                u32::try_from(destination).map_err(|_| IpcError::BadCapability)?,
+                capability,
+                false,
+            ));
+        }
+        return Ok(SpawnPlan {
+            executable: executable_index,
+            instance: child_instance,
+            granted,
+            count: parent_supplied,
+            transferable_supervision: executable.rights.allows(RIGHT_TRANSFER),
+        });
     }
     Ok(SpawnPlan {
         executable: executable_index,
@@ -504,8 +539,6 @@ pub(super) fn construct_child(
         release_child(tasks, windows, buffers, allocator, id);
         return Err(IpcError::BadCapability);
     };
-    // Counts the block devices placed into *this* child, in declaration order.
-    let mut block_index = 0u8;
     for index in 0..child.binding_count() {
         let Ok(binding) = generation.binding(child, index) else {
             release_child(tasks, windows, buffers, allocator, id);
@@ -520,12 +553,10 @@ pub(super) fn construct_child(
         {
             continue;
         }
-        let device = block_index;
-        if grant.capability_kind == CapabilityKind::Block {
-            block_index = block_index.saturating_add(1);
-        }
-        let Some(capability) = declared_capability(grant.capability_kind, device, grant.rights)
-        else {
+        // Resource 0 for every kind: B90 deleted the `Block` launch-order
+        // ordinal, and the IO kinds carry their device identity in the
+        // IO-resource authority table rather than here.
+        let Some(capability) = declared_capability(grant.capability_kind, 0, grant.rights) else {
             continue;
         };
         if tasks
@@ -614,6 +645,8 @@ pub(super) fn serve_spawn(
     lifecycle_service: &mut lifecycle::LifecycleService,
     lifecycle_policy: Option<&boot_contracts::lifecycle_policy::LifecyclePolicy<'_>>,
     timer_adapter: &mut PhysicalTimerAdapter,
+    io_service: &mut IoResourceService,
+    io_authority: &platform::AuthorityInventory,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -1073,6 +1106,45 @@ pub(super) fn serve_spawn(
             id.0,
         );
         return Response::error(IpcError::DestinationSlotsExhausted);
+    }
+    if let Some(quota) = crate::generation::io_resource_budget_object(generation)
+        .and_then(Result::ok)
+        .and_then(|budget| budget.quota_for(&boot_contracts::io_resource::driver_identity(name)))
+    {
+        let shared = io_authority.device(0).is_some_and(|device| {
+            io_authority
+                .device(1)
+                .is_some_and(|other| other.region == device.region)
+        });
+        if let Err(error) = install_driver(
+            io_service,
+            slime_root::io_resource::DriverId(u64::from(child.0)),
+            plan.instance,
+            quota,
+            shared,
+        ) {
+            if let Some(table) = tasks.authority_mut(id) {
+                table.drop_slot(handle);
+            }
+            lifecycle_service.release(child);
+            scheduling_service.release(child);
+            wait_set_service.clear_task(child);
+            clock_service.clear_task(child);
+            release_child(tasks, windows, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_IO FAIL spawned quota install task={} instance={} error={error:?}",
+                child.0,
+                name
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+        sel4::debug_println!(
+            "SLIME_IO quota task={} instance={} devices={} shared_granule={}",
+            child.0,
+            name,
+            io_authority.len(),
+            shared as u8
+        );
     }
     if launched
         .record(plan.instance, plan.executable, child)

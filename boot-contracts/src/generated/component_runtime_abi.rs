@@ -36,7 +36,6 @@ pub const TRANSFERRED_ENDPOINT_HANDLE_TAG: u32 = 2147483648;
 pub mod console_labels {
     pub const WRITE: u64 = 0;
     pub const INPUT_READ: u64 = 1;
-    pub const BLOCK_TRANSACT: u64 = 2;
-    pub const DIRECTORY_INSPECT: u64 = 3;
-    pub const DIRECTORY_COMMIT: u64 = 4;
+    pub const DIRECTORY_INSPECT: u64 = 2;
+    pub const DIRECTORY_COMMIT: u64 = 3;
 }

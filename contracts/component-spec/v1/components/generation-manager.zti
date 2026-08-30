@@ -4,7 +4,7 @@
   componentType = "service";
   version = "1.0.0";
   owner = "root";
-  purpose = "Serves the generation plane's list, inspect, stage, select, and rollback operations over its block capability.";
+  purpose = "Serves the generation plane's list, inspect, stage, select, and rollback operations through a generation-authorized IO0 block ring.";
   implementation = {
     provider = "workspace";
     binary = "sel4-generation-manager";

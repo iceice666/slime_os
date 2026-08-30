@@ -262,6 +262,12 @@ impl<'a> BufferAdapter<'a> {
         }
     }
 
+    /// Root-mechanism access for the binary's resource adapters. This is not a
+    /// component ABI and exposes no allocator state to ordinary clients.
+    pub fn allocator_mut(&mut self) -> &mut ObjectAllocator {
+        self.allocator
+    }
+
     /// Capabilities minted so one frame could be mapped into a second VSpace.
     pub const fn aliased(&self) -> usize {
         self.aliased
@@ -465,6 +471,16 @@ impl<'a> BufferAdapter<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Ensure the translation tables needed for a non-buffer mapping exist.
+    /// Device mappings use this before installing their own non-cacheable leaf.
+    pub fn ensure_mapping_tables(
+        &mut self,
+        vspace: sel4::cap::VSpace,
+        vaddr: usize,
+    ) -> Result<(), BufferAdapterError> {
+        self.ensure_tables(vspace, vaddr)
     }
 
     fn map_frame_inner(

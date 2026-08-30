@@ -28,7 +28,7 @@ This demonstrates the marker contract from the
    just sel4_component_graph_check
    ```
 
-2. Open `components/bins/spawn-service/src/main.rs`, find the
+2. Open `components/services/spawn-service/src/main.rs`, find the
    `[spawn-service] ready` debug line, and change the text — even one
    character.
 

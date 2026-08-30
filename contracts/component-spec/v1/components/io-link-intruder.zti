@@ -1,0 +1,57 @@
+{
+  formatVersion = 1;
+  name = "io-link-intruder";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves a component omitted from LinkDevice grants resolves none of the plane's declared bindings.";
+  implementation = {
+    provider = "workspace";
+    binary = "io-link-intruder";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the io_link_check gate boots an instance with no LinkDevice grant";
+    expectedResult = "every declared binding name fails to resolve, so the component holds no link authority to attempt an operation with";
+    passFailCriteria = "[io-link-intruder] binding-resolution refused=8";
+    requiredTestEnvironment = "io_link_check";
+  };
+}

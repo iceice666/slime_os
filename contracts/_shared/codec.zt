@@ -1,0 +1,175 @@
+-- Shared Rust codec mechanics for wire records containing byte-array fields.
+--
+-- Why this module exists: fourteen protocol renderers carried a byte-identical
+-- 82-line copy of the same offset/struct emitters, differing only in the label
+-- text baked into their `expect(...)` messages. The duplication was forced,
+-- not careless -- `wire.rust`'s own `WireField` has no `byteArray` flag, so its
+-- `offsetConsts`/`wireStruct` cannot describe a `[u8; N]` field, and every
+-- contract with an array field had to restate the mechanics locally.
+--
+-- The clone had already drifted in the two ways clones do. `fabric-qos` and
+-- `fabric-time` emitted `expect("generated fabric-stream layout")`, naming the
+-- contract they were copied from rather than themselves; `fabric-trace`
+-- emitted a three-line `if` body where every sibling emitted one line; and
+-- `block/v2` collapsed its source formatting. None of that was a defect a test
+-- could see, which is exactly why it accumulated.
+--
+-- `WireField` here is `wire.python`'s shape, because that is what every schema
+-- already declares in its `*Layout` lists. This module takes those values
+-- directly rather than projecting them, so a renderer needs no adapter.
+--
+-- Scope: emitters only. Validity predicates stay with each contract, since
+-- what makes a layout admissible is contract-specific (signedness rules,
+-- size equalities, field-count bounds).
+
+t ::= import stdlib.text;
+n ::= import stdlib.num;
+base ::= import "base.zt";
+r ::= import "rust.zt";
+
+-- The same record shape `wire.python` uses, so schema `*Layout` lists feed
+-- straight in.
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+join :: List Text -> Text = base.join;
+
+layoutNames :: List WireField -> List Text = fields => map _.name fields;
+
+addWidth :: Int -> WireField -> Int = total field => total + field.width;
+
+wireBytes :: List WireField -> Int = fields => fold addWidth 0 fields;
+
+-- A byte array is unsigned and non-empty at any width; a scalar keeps
+-- `wire.rust`'s signed-only-at-4 rule.
+validField :: WireField -> Bool
+  = field => if field.byteArray
+    then field.width > 0 && not field.signed
+    else r.validWidthSigned4 { name = field.name; width = field.width; signed = field.signed; };
+
+allValid :: List WireField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } => validField field && allValid rest;
+  };
+
+constName :: Text -> Text -> Text
+  = prefix name => join { "OFF_"; prefix; "_"; t.toUpper name; };
+
+offsetConsts :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "pub const "; constName prefix field.name; ": usize = "; n.toText offset; ";\n";
+      offsetConsts prefix (offset + field.width) rest;
+    };
+  };
+
+-- Emits the `_END` companion alongside each offset. Callers that read
+-- byte-array fields as ranges need the end bound; without it every call site
+-- writes `OFF_X + 64`, putting the width back into the consumer.
+offsetConstsWithEnds :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "pub const "; constName prefix field.name; ": usize = "; n.toText offset; ";\n";
+      "pub const "; constName prefix field.name; "_END: usize = "; n.toText (offset + field.width); ";\n";
+      offsetConstsWithEnds prefix (offset + field.width) rest;
+    };
+  };
+
+rustType :: WireField -> Text
+  = field => if field.byteArray
+    then join { "[u8; "; n.toText field.width; "]"; }
+    else r.rustType { name = field.name; width = field.width; signed = field.signed; };
+
+fieldDecls :: List WireField -> Text
+  = fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "    pub "; field.name; ": "; rustType field; ",\n";
+      fieldDecls rest;
+    };
+  };
+
+decodeExpr :: Text -> Text -> WireField -> Text
+  = label prefix field => if field.byteArray
+    then join {
+      "buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].try_into().expect(\"generated "; label; " layout\")";
+    }
+    else if field.width == 1
+      then join { "buf["; constName prefix field.name; "]"; }
+      else join {
+        rustType field; "::from_le_bytes(buf["; constName prefix field.name; ".."; constName prefix field.name;
+        " + "; n.toText field.width; "].try_into().expect(\"generated "; label; " layout\"))";
+      };
+
+decodeFields :: Text -> Text -> List WireField -> Text
+  = label prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "            "; field.name; ": "; decodeExpr label prefix field; ",\n";
+      decodeFields label prefix rest;
+    };
+  };
+
+encodeField :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then join {
+      "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + ";
+      n.toText field.width; "].copy_from_slice(&self."; field.name; ");\n";
+    }
+    else if field.width == 1
+      then join { "        buf["; constName prefix field.name; "] = self."; field.name; ";\n"; }
+      else join {
+        "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + ";
+        n.toText field.width; "].copy_from_slice(&self."; field.name; ".to_le_bytes());\n";
+      };
+
+encodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join { encodeField prefix field; encodeFields prefix rest; };
+  };
+
+wireStruct :: Text -> Text -> Text -> Text -> List WireField -> Text
+  = label name prefix lengthName fields => join {
+    "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n";
+    "pub struct "; name; " {\n";
+    fieldDecls fields;
+    "}\n\n";
+    "impl "; name; " {\n";
+    "    pub fn decode(buf: &[u8]) -> Option<Self> {\n";
+    "        if buf.len() < "; lengthName; " {\n";
+    "            return None;\n";
+    "        }\n";
+    "        Some(Self {\n";
+    decodeFields label prefix fields;
+    "        })\n";
+    "    }\n\n";
+    "    pub fn encode(self) -> [u8; "; lengthName; "] {\n";
+    "        let mut buf = [0u8; "; lengthName; "];\n";
+    encodeFields prefix fields;
+    "        buf\n";
+    "    }\n";
+    "}\n";
+  };
+
+{
+  WireField =;
+  join =;
+  layoutNames =;
+  wireBytes =;
+  validField =;
+  allValid =;
+  constName =;
+  offsetConsts =;
+  offsetConstsWithEnds =;
+  rustType =;
+  fieldDecls =;
+  decodeExpr =;
+  decodeFields =;
+  encodeField =;
+  encodeFields =;
+  wireStruct =;
+}

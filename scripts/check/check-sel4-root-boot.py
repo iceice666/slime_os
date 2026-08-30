@@ -73,41 +73,23 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 "
         r"bytes_delta=8192 caps_deleted=2",
     ),
-    # P5.4.2a: the root can reach a device. Placed after the timer phase
-    # because that is where the device probe runs — the ordering in this list
-    # is the boot's, not a grouping by subject.
-    #
-    # `untypeds=[1-9]` is BootInfo naming device regions at all: before this
-    # slice the allocator discarded them, so the count was structurally zero.
-    # `granules=4 slots=32` is thirty-two register banks mapped non-cacheably
-    # into the root's own VSpace and read back; a mapping that faulted, or a
-    # watermark mistake landing past its target, produces no line at all.
-    #
-    # `found=0` is asserted, not tolerated. This gate boots with no `-drive`,
-    # so every transport must report device id 0 — a probe that "found"
-    # something here would be reading a constant rather than a register.
-    (
-        "BootInfo named device untyped memory",
-        r"SLIME_ROOT devices untypeds=[1-9]\d*",
-    ),
-    (
-        "every declared virtio transport was mapped and probed, and none is attached",
-        r"SLIME_ROOT virtio probed granules=4 slots=32 found=0",
-    ),
+    # Product images no longer pre-probe or claim device transports. Admission
+    # decides whether a declared userspace IO driver receives raw authority;
+    # this no-disk fixture has no such budget, so the device phase is silent.
     ("generation admitted", r"SLIME_ROOT generation admitted number=\d+"),
-    # The default seL4 fixture embeds the same synthetic v5 generation as every
-    # other seL4 build variant. Its small launch catalogue has no fabric graph;
-    # the standalone native child exercise below remains independent.
+    # The default fixture uses the product composition's six-entry catalogue
+    # but keeps graph launch disabled so the standalone native child exercise
+    # below remains independent.
     (
-        "the v5 fixture declares no fabric graph",
+        "the fixture declares no fabric graph",
         r"SLIME_ROOT fabric graph=absent schemas=0 routes=0 "
         r"participants=0 interpositions=0",
     ),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
     (
-        "the v5 executable catalogue is admitted",
-        r"SLIME_ROOT graph admitted executables=5 instances=5 "
-        r"slimecm=0 elf=5 unrecognized=0",
+        "the product executable catalogue is admitted",
+        r"SLIME_ROOT graph admitted executables=6 instances=6 "
+        r"slimecm=0 elf=6 unrecognized=0",
     ),
     (
         "clean-exit task staged",

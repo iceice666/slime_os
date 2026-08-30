@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import struct
+import ipaddress
 
 from boot_contracts import (
+    BLOCK_AUTHORITY_ENTRY,
+    BLOCK_AUTHORITY_ENTRY_BYTES,
+    BLOCK_AUTHORITY_HEADER,
+    BLOCK_AUTHORITY_HEADER_BYTES,
+    BLOCK_AUTHORITY_MAGIC,
+    BLOCK_AUTHORITY_VERSION,
+    BLOCK_RIGHT_READ,
+    BLOCK_RIGHT_WRITE,
     CLOCK_AUTHORITY_ENTRY,
     CLOCK_AUTHORITY_ENTRY_BYTES,
     CLOCK_AUTHORITY_HEADER,
@@ -42,8 +51,25 @@ from boot_contracts import (
     LIFECYCLE_STATE_ID_BY_MANIFEST_NAME,
     LIFECYCLE_TRANSITION,
     LIFECYCLE_TRANSITION_BYTES,
+    IO_RESOURCE_ENTRY,
+    IO_RESOURCE_HEADER,
+    IO_RESOURCE_HEADER_BYTES,
+    IO_RESOURCE_MAGIC,
+    IO_RESOURCE_VERSION,
+    MAX_BLOCK_RINGS,
+    MAX_BLOCK_RINGS_PER_HOLDER,
+    MAX_IO_RESOURCE_DRIVERS,
     MAX_PRIVATE_MEMORY_BUDGET_HOLDERS,
     MAX_SHARED_BUFFER_BUDGET_HOLDERS,
+    MAX_NETWORK_DESTINATIONS,
+    MAX_NETWORK_DESTINATIONS_PER_HOLDER,
+    MAX_NETWORK_NAME_BYTES,
+    NETWORK_DESTINATION_ENTRY,
+    NETWORK_DESTINATION_ENTRY_BYTES,
+    NETWORK_DESTINATION_HEADER,
+    NETWORK_DESTINATION_HEADER_BYTES,
+    NETWORK_DESTINATION_MAGIC,
+    NETWORK_DESTINATION_VERSION,
     PRIVATE_MEMORY_BUDGET_ENTRY,
     PRIVATE_MEMORY_BUDGET_ENTRY_BYTES,
     PRIVATE_MEMORY_BUDGET_HEADER,
@@ -102,8 +128,41 @@ from boot_contracts import (
     sha256,
 )
 
+NETWORK_SERVICE_MAX_NAME_BYTES = 24
+
 RIGHT = GENERATION_RIGHT_BY_MANIFEST_NAME
 DEFAULT_CHILD_PRIORITY = 254
+
+
+def io_resource_driver_identity(name: str) -> bytes:
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-io-resource-driver-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def build_io_resource_budget(holders: list[dict]) -> bytes:
+    if len(holders) > MAX_IO_RESOURCE_DRIVERS:
+        fail("ioResourceBudget exceeds driver ceiling")
+    names = [entry["holder"] for entry in holders]
+    if len(names) != len(set(names)):
+        fail("ioResourceBudget holder must be unique")
+    # A device is exclusive: two driver instances programming one transport's
+    # queue would each observe the other's completions (B84). The decoder
+    # refuses this too; catching it here names the offending holder.
+    devices = [entry.get("device", 0) for entry in holders]
+    if len(devices) != len(set(devices)):
+        fail("ioResourceBudget device must be unique per driver")
+    rows = []
+    for entry in sorted(holders, key=lambda item: io_resource_driver_identity(item["holder"])):
+        values = [entry[name] for name in ("mmioBytes", "mmioMappings", "dmaPages", "dmaMappings", "irqSources", "outstandingRequests", "bufferLoans")]
+        # Zero-based ordinal into the platform's stable device order. Optional in
+        # the manifest because a single-device plane has nothing to choose, and
+        # requiring it would make every existing composition restate a default.
+        values.append(entry.get("device", 0))
+        if any(value < 0 or value > 0xFFFFFFFF for value in values):
+            fail(f"ioResourceBudget holder {entry['holder']}: quota out of range")
+        rows.append(IO_RESOURCE_ENTRY.pack(io_resource_driver_identity(entry["holder"]), *values))
+    total = IO_RESOURCE_HEADER_BYTES + len(rows) * IO_RESOURCE_ENTRY.size
+    return IO_RESOURCE_HEADER.pack(IO_RESOURCE_MAGIC, IO_RESOURCE_VERSION, IO_RESOURCE_HEADER_BYTES, 0, len(rows), total) + b"".join(rows)
 
 
 def fail(message: str) -> None:
@@ -187,6 +246,159 @@ def validated_shared_buffer_quotas(holders: list[dict]) -> dict[str, dict]:
         if totals[key] > ceiling:
             fail(f"shared-buffer budget: aggregate {key} exceeds the kernel ceiling")
     return by_name
+
+def network_destination_holder_identity(name: str) -> bytes:
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-network-destination-holder-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def build_network_destinations(declarations: list[dict]) -> bytes:
+    """Encode IO4's exact, wildcard-free destination authority table."""
+    if len(declarations) > MAX_NETWORK_DESTINATIONS:
+        fail("network destinations exceed entry bound")
+    transports = {"tcp": 1, "udp": 2}
+    address_kinds = {"ipv4": 1, "ipv6": 2, "dns": 3}
+    right_bits = {"connect": 1, "send": 2, "recv": 4, "listen": 8}
+    entries = []
+    holder_counts: dict[bytes, int] = {}
+    for declaration in declarations:
+        holder = network_destination_holder_identity(declaration["holder"])
+        transport = transports.get(declaration["transport"])
+        kind = address_kinds.get(declaration["addressKind"])
+        if transport is None or kind is None:
+            fail("network destination: unknown transport or address kind")
+        rights = 0
+        for right in declaration["rights"]:
+            bit = right_bits.get(right)
+            if bit is None or rights & bit:
+                fail("network destination: unknown or duplicate right")
+            rights |= bit
+        port = declaration["port"]
+        if rights == 0 or not 1 <= port <= 65535 or (rights & 8 and transport != 1):
+            fail("network destination: invalid rights or port")
+        raw_address = bytes(16)
+        raw_name = bytes(64)
+        address = declaration["address"]
+        if kind == 1:
+            try:
+                raw_address = ipaddress.IPv4Address(address).packed + bytes(12)
+            except ipaddress.AddressValueError:
+                fail("network destination: invalid IPv4 address")
+        elif kind == 2:
+            try:
+                raw_address = ipaddress.IPv6Address(address).packed
+            except ipaddress.AddressValueError:
+                fail("network destination: invalid IPv6 address")
+        else:
+            try:
+                encoded = address.encode("ascii")
+            except UnicodeEncodeError:
+                fail("network destination: non-ASCII DNS name")
+            if not encoded or len(encoded) > MAX_NETWORK_NAME_BYTES or encoded.startswith(b".") or encoded.endswith(b".") or b".." in encoded or any(not (byte in b".-" or chr(byte).isalnum()) for byte in encoded):
+                fail("network destination: invalid exact DNS name")
+            if len(encoded) > NETWORK_SERVICE_MAX_NAME_BYTES:
+                fail(
+                    "network destination contract permits this DNS name, but "
+                    "network-service/v1 maxNameBytes is 24; destination is unreachable"
+                )
+            raw_name = encoded + bytes(64 - len(encoded))
+        keys = ("queueDepth", "byteBudget", "timerBudget", "retryLimit", "reconnectLimit", "socketLimit", "listenerLimit", "dnsRecordLimit")
+        limits = tuple(declaration[key] for key in keys)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in limits):
+            fail("network destination: invalid bound")
+        queue_depth, byte_budget, timer_budget, retry_limit, reconnect_limit, socket_limit, listener_limit, dns_record_limit = limits
+        if not (1 <= queue_depth <= 256 and 1 <= byte_budget <= 16_777_216 and timer_budget <= 256 and retry_limit <= 16 and reconnect_limit <= 16 and 1 <= socket_limit <= 64 and listener_limit <= min(socket_limit, 16) and dns_record_limit <= 64):
+            fail("network destination: bound exceeds contract")
+        holder_counts[holder] = holder_counts.get(holder, 0) + 1
+        if holder_counts[holder] > MAX_NETWORK_DESTINATIONS_PER_HOLDER:
+            fail("network destinations exceed per-holder bound")
+        packed = NETWORK_DESTINATION_ENTRY.pack(holder, transport, kind, rights, port, len(address.encode("ascii")) if kind == 3 else 0, raw_address, raw_name, *limits)
+        key_address = raw_address + raw_name
+        entries.append(((holder, transport, kind, key_address, port), packed))
+    entries.sort(key=lambda value: value[0])
+    # Adjacent pairs over a sorted list, so the second sequence is deliberately
+    # one shorter: `strict=False` is the intent, not an oversight.
+    if any(left[0] == right[0] for left, right in zip(entries, entries[1:], strict=False)):
+        fail("network destination: duplicate exact tuple")
+    total_len = NETWORK_DESTINATION_HEADER_BYTES + len(entries) * NETWORK_DESTINATION_ENTRY_BYTES
+    header = NETWORK_DESTINATION_HEADER.pack(NETWORK_DESTINATION_MAGIC, NETWORK_DESTINATION_VERSION, NETWORK_DESTINATION_HEADER_BYTES, 0, len(entries), total_len)
+    return header + b"".join(entry for _, entry in entries)
+
+
+def block_ring_holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching `boot_contracts::block_authority`.
+
+    Its own domain tag: an identity computed for a network destination must not
+    be replayable as a block-ring identity, or a grant in either table would be
+    forgeable from the other.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-block-authority-holder-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def build_block_ring_authority(declarations: list[dict]) -> bytes:
+    """Encode B83's exact per-ring block authority table.
+
+    Rights are a property of the `(holder, device, ring)` triple, not of a
+    submission: an IO0 ring is shared memory carrying no rights identity, so a
+    driver reading this table is the only place a read-only ring's write can be
+    refused. Two clients whose rights differ therefore declare two rings, and
+    the strictly ascending sort makes a duplicate triple unrepresentable rather
+    than resolved by whichever row a lookup reaches first.
+    """
+    if len(declarations) > MAX_BLOCK_RINGS:
+        fail("block ring authority exceeds entry bound")
+    right_bits = {"blockRead": BLOCK_RIGHT_READ, "blockWrite": BLOCK_RIGHT_WRITE}
+    entries = []
+    holder_counts: dict[bytes, int] = {}
+    for declaration in declarations:
+        holder = block_ring_holder_identity(declaration["holder"])
+        rights = 0
+        for right in declaration["rights"]:
+            bit = right_bits.get(right)
+            if bit is None or rights & bit:
+                fail("block ring authority: unknown or duplicate right")
+            rights |= bit
+        numbers = (declaration["device"], declaration["ring"], declaration["sectorLimit"])
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in numbers
+        ):
+            fail("block ring authority: invalid device, ring, or sector limit")
+        device, ring, sector_limit = numbers
+        if rights == 0 or sector_limit == 0:
+            fail("block ring authority: a ring must carry a right and a nonzero limit")
+        if device > 0xFFFFFFFF or ring > 0xFFFFFFFF or sector_limit > 0xFFFFFFFFFFFFFFFF:
+            fail("block ring authority: field exceeds contract width")
+        holder_counts[holder] = holder_counts.get(holder, 0) + 1
+        if holder_counts[holder] > MAX_BLOCK_RINGS_PER_HOLDER:
+            fail("block ring authority exceeds per-holder bound")
+        packed = BLOCK_AUTHORITY_ENTRY.pack(
+            holder, device, ring, rights, sector_limit, bytes(14)
+        )
+        entries.append(((device, ring), packed))
+    entries.sort(key=lambda value: value[0])
+    # Adjacent pairs over a sorted list, so the second sequence is deliberately
+    # one shorter: `strict=False` is the intent, not an oversight.
+    #
+    # Keyed on `(device, ring)` without the holder, matching the decoder: one
+    # ring may carry exactly one row, even for two different holders. A ring
+    # shared by two holders would leave the driver unable to say whose rights a
+    # submission carries, which is the defect this table closes.
+    if any(left[0] == right[0] for left, right in zip(entries, entries[1:], strict=False)):
+        fail("block ring authority: two holders named one device and ring")
+    total_len = BLOCK_AUTHORITY_HEADER_BYTES + len(entries) * BLOCK_AUTHORITY_ENTRY_BYTES
+    header = BLOCK_AUTHORITY_HEADER.pack(
+        BLOCK_AUTHORITY_MAGIC,
+        BLOCK_AUTHORITY_VERSION,
+        BLOCK_AUTHORITY_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
+    return header + b"".join(entry for _, entry in entries)
 
 
 def private_memory_holder_identity(name: str) -> bytes:

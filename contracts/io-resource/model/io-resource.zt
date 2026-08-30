@@ -1,0 +1,455 @@
+-- A bounded model of the IO1 hardware-resource authority and charge lifetime:
+-- the rules `contracts/io-resource/v1/schema.zt` budgets and
+-- `slime-root/src/{device,io_resource}.rs` enforce when it constructs, charges,
+-- and reclaims a driver's device, MMIO, DMA, and interrupt authority.
+--
+-- What this adds over the existing gates. `just io_driver_authority_check`
+-- observes one death schedule and reports the root's own numeric reclamation
+-- (`post_dma_pages=0 post_dma_mappings=0 post_requests=0`). That is a real
+-- observation of one interleaving. The property IO1 actually claims is stronger
+-- and quantified over all of them: no reachable sequence of map, charge, bind,
+-- acknowledge, fault, reclaim, and respawn leaves a charge outstanding, exceeds
+-- a declared bound, or carries authority across an epoch boundary. A serial
+-- transcript cannot express "no reachable sequence".
+--
+-- Abstraction: one driver instance against one device, with a budget of one
+-- MMIO mapping, two DMA pages, one DMA mapping, and one interrupt source. Those
+-- are the `sel4-io-driver` plane's own declared numbers, and one is the
+-- interesting bound: it is the smallest value at which a duplicate-mapping
+-- refusal is observable rather than absorbed by slack. DMA pages are two so
+-- that partial reclamation is representable -- a model where every charge is
+-- zero-or-one cannot distinguish "returned every page" from "returned a page".
+--
+-- Charges are counted, not held as booleans, for the reason
+-- `capability-rights.zt` counts installs: the honest guards make an
+-- over-charge unreachable, so a boolean would record the guard. Counting lets
+-- `overCharge` exhibit the violation as state.
+--
+-- What is deliberately *not* modelled, because another gate decides it and a
+-- model would only restate it: the exact-subrange MMIO arithmetic, page
+-- exclusivity versus mediated `read32`/`write32`, and the opacity of the DMA
+-- token. Those are per-access bounds checks on concrete addresses, pinned by
+-- the root's host tests and by the plane's out-of-range refusal arm. This model
+-- owns lifetime and accounting, which is what no schedule can cover.
+--
+-- `reclaimed` is a counter on a dead instance for the same reason: root
+-- reclamation running twice would return charges twice, and the honest guard
+-- makes that unreachable. `ReclaimRunsAtMostOnce` states it, `doubleReclaim`
+-- breaks it, and the pair is what makes the guard load-bearing rather than
+-- incidental.
+
+l ::= import stdlib.list;
+
+Page :: type { #p1; #p2; };
+Life :: type { #running; #faulted; #dead; };
+PageState :: type { #unmapped; #mapped; };
+
+Dma :: type {
+  page : Page;
+  state : PageState;
+  -- The epoch that charged this page, not the epoch now current.
+  epoch : Int;
+};
+State :: type {
+  life : Life;
+  epoch : Int;
+  previousEpoch : Int;
+  -- Bound to a device instance. Every other authority below is meaningless
+  -- without it, which is why nothing charges before it.
+  bound : Bool;
+  mmioMappings : Int;
+  dmaMappings : Int;
+  irqSources : Int;
+  -- Acknowledgements owed to the interrupt source. Bounded, because an
+  -- unbounded pending count is itself a charge leak.
+  pendingAcks : Int;
+  outstanding : Int;
+  dma : List Dma;
+  reclaimed : Int;
+  -- An acknowledgement the root admitted from an epoch it no longer serves.
+  -- Zero under honest rules; the property is that it stays zero.
+  staleAcksAdmitted : Int;
+};
+Transition :: type { action : Text; state : State; };
+Safety :: type { name : Text; holds : State -> Bool; };
+Reachability :: type { name : Text; reached : State -> Bool; };
+Liveness :: type { name : Text; premise : State -> Bool; consequence : State -> Bool; };
+Model :: type {
+  initial : List State;
+  next : State -> List Transition;
+  safety : List Safety;
+  reachability : List Reachability;
+  terminal : State -> Bool;
+  leadsTo : List Liveness;
+};
+Expectation :: type { #safe; #violates : { property : Text; }; };
+Scenario :: type { name : Text; model : Model; expect : Expectation; };
+Faults :: type {
+  -- Mapping ignores the declared MMIO/DMA/IRQ ceilings.
+  overCharge : Bool;
+  -- Reclamation returns mapping counts but leaves DMA pages mapped.
+  leakDmaOnDeath : Bool;
+  -- Reclamation leaves in-flight requests unsettled.
+  leakRequestsOnDeath : Bool;
+  -- Reclamation may run twice on one dead instance.
+  doubleReclaim : Bool;
+  -- Respawn reuses the epoch it is replacing.
+  epochReuse : Bool;
+  -- The interrupt path admits an acknowledgement from a prior epoch.
+  acceptStaleAck : Bool;
+  -- Authority may be charged before the device is bound.
+  chargeBeforeBind : Bool;
+};
+
+-- The `sel4-io-driver` plane's declared budget.
+mmioMappingBudget :: Int = 1;
+dmaMappingBudget :: Int = 1;
+dmaPageBudget :: Int = 2;
+irqSourceBudget :: Int = 1;
+ackBudget :: Int = 1;
+outstandingBudget :: Int = 1;
+maxEpoch :: Int = 2;
+pages :: List Page = { #p1; #p2; };
+
+unmappedPage :: Page -> Dma
+  = page => { page =; state = #unmapped; epoch = 0; };
+freshPages :: List Dma = l.map unmappedPage pages;
+
+isMapped :: Dma -> Bool
+  = d => d.state == #mapped;
+mappedPages :: State -> Int
+  = s => l.countBy isMapped s.dma;
+-- Every charge the root accounts for this instance, as one number. The claim
+-- IO1 makes on death is that this reaches exactly zero.
+totalCharges :: State -> Int
+  = s => s.mmioMappings + s.dmaMappings + s.irqSources + s.pendingAcks + s.outstanding + mappedPages s;
+
+replaceIfPage :: Page -> (Dma -> Dma) -> Dma -> Dma
+  = page update d => if d.page == page then update d else d;
+replacePage :: Page -> (Dma -> Dma) -> List Dma -> List Dma
+  = page update ds => l.map (replaceIfPage page update) ds;
+step :: Text -> State -> Transition
+  = action state => { action =; state =; };
+
+-- Nothing charges before the device is bound, and nothing charges on an
+-- instance that is not running. Both are preconditions rather than properties:
+-- the corresponding mutations relax them.
+chargeable :: Faults -> State -> Bool
+  = f s => s.life == #running && (s.bound || f.chargeBeforeBind);
+
+bindDevice :: State -> List Transition
+  = s => cond {
+      not (s.life == #running) => l.empty ();
+      s.bound => l.empty ();
+      _ => l.singleton (step "bind-device" (s with { bound = true; }));
+    };
+
+mapMmio :: Faults -> State -> List Transition
+  = f s => cond {
+      not (chargeable f s) => l.empty ();
+      s.mmioMappings >= mmioMappingBudget && not f.overCharge => l.empty ();
+      _ => l.singleton (step "map-mmio" (s with { mmioMappings = s.mmioMappings + 1; }));
+    };
+unmapMmio :: State -> List Transition
+  = s => cond {
+      not (s.life == #running) => l.empty ();
+      s.mmioMappings <= 0 => l.empty ();
+      _ => l.singleton (step "unmap-mmio" (s with { mmioMappings = s.mmioMappings - 1; }));
+    };
+
+mapDmaPage :: Faults -> State -> Dma -> List Transition
+  = f s d => cond {
+      not (chargeable f s) => l.empty ();
+      isMapped d => l.empty ();
+      mappedPages s >= dmaPageBudget && not f.overCharge => l.empty ();
+      -- Only a new region needs mapping headroom; a second page joins the
+      -- mapping that is already charged.
+      mappedPages s == 0 && s.dmaMappings >= dmaMappingBudget && not f.overCharge => l.empty ();
+      _ => l.singleton (step "map-dma" (s with {
+          -- One mapping covers the region, so the charge lands when the region
+          -- first becomes live rather than once per page. This is the IO1
+          -- transcript's own shape: two DMA pages, one DMA mapping.
+          dmaMappings = if mappedPages s == 0 then s.dmaMappings + 1 else s.dmaMappings;
+          dma = replacePage d.page (\q. q with { state = #mapped; epoch = s.epoch; }) s.dma;
+        }));
+    };
+releaseDmaPage :: State -> Dma -> List Transition
+  = s d => cond {
+      not (s.life == #running) => l.empty ();
+      not (isMapped d) => l.empty ();
+      _ => l.singleton (step "release-dma" (s with {
+          -- The region charge returns with its last page, for the same reason.
+          dmaMappings = if mappedPages s == 1 then s.dmaMappings - 1 else s.dmaMappings;
+          dma = replacePage d.page (\q. q with { state = #unmapped; epoch = 0; }) s.dma;
+        }));
+    };
+
+bindIrq :: Faults -> State -> List Transition
+  = f s => cond {
+      not (chargeable f s) => l.empty ();
+      s.irqSources >= irqSourceBudget && not f.overCharge => l.empty ();
+      _ => l.singleton (step "bind-irq" (s with { irqSources = s.irqSources + 1; }));
+    };
+raiseIrq :: Faults -> State -> List Transition
+  = f s => cond {
+      not (s.life == #running) => l.empty ();
+      s.irqSources <= 0 => l.empty ();
+      s.pendingAcks >= ackBudget && not f.overCharge => l.empty ();
+      _ => l.singleton (step "raise-irq" (s with { pendingAcks = s.pendingAcks + 1; }));
+    };
+ackIrq :: State -> List Transition
+  = s => cond {
+      not (s.life == #running) => l.empty ();
+      s.pendingAcks <= 0 => l.empty ();
+      _ => l.singleton (step "ack-irq" (s with { pendingAcks = s.pendingAcks - 1; }));
+    };
+-- The predecessor instance's acknowledgement, arriving after the epoch moved.
+-- Under honest rules there is nothing to admit it to, so this produces no
+-- transition at all; `acceptStaleAck` is what makes the refusal observable.
+staleAck :: Faults -> State -> List Transition
+  = f s => cond {
+      not f.acceptStaleAck => l.empty ();
+      s.previousEpoch <= 0 => l.empty ();
+      not (s.life == #running) => l.empty ();
+      _ => l.singleton (step "stale-ack" (s with {
+          staleAcksAdmitted = s.staleAcksAdmitted + 1;
+        }));
+    };
+
+beginRequest :: Faults -> State -> List Transition
+  = f s => cond {
+      not (chargeable f s) => l.empty ();
+      s.dmaMappings <= 0 => l.empty ();
+      s.outstanding >= outstandingBudget && not f.overCharge => l.empty ();
+      _ => l.singleton (step "begin-request" (s with { outstanding = s.outstanding + 1; }));
+    };
+settleRequest :: State -> List Transition
+  = s => cond {
+      not (s.life == #running) => l.empty ();
+      s.outstanding <= 0 => l.empty ();
+      _ => l.singleton (step "settle-request" (s with { outstanding = s.outstanding - 1; }));
+    };
+
+-- A fault is not reclamation. The instance stops running immediately, but every
+-- charge is still outstanding until the root reclaims; that gap is exactly
+-- where a leak would hide, so it is a distinct state rather than one step.
+faultDriver :: State -> List Transition
+  = s => if not (s.life == #running) then l.empty () else
+      l.singleton (step "fault" (s with { life = #faulted; }));
+
+clearPage :: Dma -> Dma
+  = d => { page = d.page; state = #unmapped; epoch = 0; };
+reclaim :: Faults -> State -> List Transition
+  = f s => cond {
+      not (s.life == #faulted) => l.empty ();
+      s.reclaimed >= 1 && not f.doubleReclaim => l.empty ();
+      _ => l.singleton (step "reclaim" (s with {
+          life = #dead;
+          bound = false;
+          mmioMappings = 0;
+          dmaMappings = if f.leakDmaOnDeath then s.dmaMappings else 0;
+          irqSources = 0;
+          pendingAcks = 0;
+          outstanding = if f.leakRequestsOnDeath then s.outstanding else 0;
+          dma = if f.leakDmaOnDeath then s.dma else l.map clearPage s.dma;
+          reclaimed = s.reclaimed + 1;
+        }));
+    };
+-- `doubleReclaim` needs a second reachable reclamation, so a dead instance may
+-- re-enter the faulted state only under that fault.
+reReclaim :: Faults -> State -> List Transition
+  = f s => cond {
+      not f.doubleReclaim => l.empty ();
+      not (s.life == #dead) => l.empty ();
+      _ => l.singleton (step "re-reclaim" (s with { life = #faulted; }));
+    };
+
+respawn :: Faults -> State -> List Transition
+  = f s => cond {
+      not (s.life == #dead) => l.empty ();
+      s.epoch >= maxEpoch => l.empty ();
+      _ => l.singleton (step "respawn" {
+          life = #running;
+          epoch = if f.epochReuse then s.epoch else s.epoch + 1;
+          previousEpoch = s.epoch;
+          bound = false;
+          mmioMappings = s.mmioMappings;
+          dmaMappings = s.dmaMappings;
+          irqSources = 0;
+          pendingAcks = 0;
+          outstanding = s.outstanding;
+          dma = s.dma;
+          reclaimed = 0;
+          staleAcksAdmitted = s.staleAcksAdmitted;
+        });
+    };
+
+perPage :: Faults -> State -> Dma -> List Transition
+  = f s d => l.flatten { mapDmaPage f s d; releaseDmaPage s d; };
+nextFor :: Faults -> State -> List Transition
+  = f s => l.flatten {
+      l.flatten (l.map (perPage f s) s.dma);
+      bindDevice s;
+      mapMmio f s;
+      unmapMmio s;
+      bindIrq f s;
+      raiseIrq f s;
+      ackIrq s;
+      staleAck f s;
+      beginRequest f s;
+      settleRequest s;
+      faultDriver s;
+      reclaim f s;
+      reReclaim f s;
+      respawn f s;
+    };
+terminalFor :: Faults -> State -> Bool
+  = f s => l.length (nextFor f s) == 0;
+
+withinBudget :: State -> Bool
+  = s => s.mmioMappings <= mmioMappingBudget
+      && s.dmaMappings <= dmaMappingBudget
+      && mappedPages s <= dmaPageBudget
+      && s.irqSources <= irqSourceBudget
+      && s.pendingAcks <= ackBudget
+      && s.outstanding <= outstandingBudget;
+deathReturnsEveryCharge :: State -> Bool
+  = s => not (s.life == #dead) || totalCharges s == 0;
+reclaimRunsAtMostOnce :: State -> Bool
+  = s => s.reclaimed <= 1;
+pageWithinEpoch :: Int -> Dma -> Bool
+  = epoch d => not (isMapped d) || d.epoch == epoch;
+noChargeAcrossEpoch :: State -> Bool
+  = s => l.all (pageWithinEpoch s.epoch) s.dma;
+epochStrictlyAdvances :: State -> Bool
+  = s => s.previousEpoch <= 0 || s.epoch > s.previousEpoch;
+staleAckRefused :: State -> Bool
+  = s => s.staleAcksAdmitted == 0;
+-- Authority is meaningless without the device it applies to. A charge on an
+-- unbound instance is authority the root cannot attribute, so it cannot
+-- reclaim it either.
+noAuthorityWithoutDevice :: State -> Bool
+  = s => not (s.life == #running) || s.bound || totalCharges s == 0;
+
+fullyCharged :: State -> Bool
+  = s => s.mmioMappings == mmioMappingBudget
+      && mappedPages s == dmaPageBudget
+      && s.irqSources == irqSourceBudget;
+requestInFlight :: State -> Bool
+  = s => s.outstanding > 0;
+ackPending :: State -> Bool
+  = s => s.pendingAcks > 0;
+faultedWithCharges :: State -> Bool
+  = s => s.life == #faulted && totalCharges s > 0;
+reclaimedToZero :: State -> Bool
+  = s => s.life == #dead && totalCharges s == 0;
+freshEpochRunning :: State -> Bool
+  = s => s.epoch == maxEpoch && s.life == #running;
+
+-- The premise is a *faulted* instance, not any outstanding charge, and the
+-- distinction is the whole content of the property. A running driver may map
+-- and release forever, so "every charge is eventually returned" is false
+-- without a fairness assumption the checker deliberately does not make -- the
+-- unrestricted form fails with a two-step map/release lasso, which is honest
+-- driver behaviour rather than a leak. What IO1 actually claims is that a
+-- driver which has stopped running cannot escape reclamation: once faulted, no
+-- reachable path avoids reaching zero charges. That is the no-leak rule, and
+-- unlike the safety predicate `DeathReturnsEveryCharge` -- which only says a
+-- dead instance holds nothing -- it also forbids getting stuck faulted while
+-- still holding authority.
+faultedHoldingCharges :: State -> Bool
+  = s => s.life == #faulted;
+noCharge :: State -> Bool
+  = s => totalCharges s == 0;
+
+initial :: State = {
+  life = #running;
+  epoch = 1;
+  previousEpoch = 0;
+  bound = false;
+  mmioMappings = 0;
+  dmaMappings = 0;
+  irqSources = 0;
+  pendingAcks = 0;
+  outstanding = 0;
+  dma = freshPages;
+  reclaimed = 0;
+  staleAcksAdmitted = 0;
+};
+
+noFaults :: Faults = {
+  overCharge = false;
+  leakDmaOnDeath = false;
+  leakRequestsOnDeath = false;
+  doubleReclaim = false;
+  epochReuse = false;
+  acceptStaleAck = false;
+  chargeBeforeBind = false;
+};
+
+resourceModel :: Faults -> Model
+  = f => {
+      initial = { initial; };
+      next = nextFor f;
+      terminal = terminalFor f;
+      safety = {
+        { name = "WithinDeclaredBudget"; holds = withinBudget; };
+        { name = "DeathReturnsEveryCharge"; holds = deathReturnsEveryCharge; };
+        { name = "ReclaimRunsAtMostOnce"; holds = reclaimRunsAtMostOnce; };
+        { name = "NoChargeAcrossEpoch"; holds = noChargeAcrossEpoch; };
+        { name = "EpochStrictlyAdvances"; holds = epochStrictlyAdvances; };
+        { name = "StaleAckRefused"; holds = staleAckRefused; };
+        { name = "NoAuthorityWithoutDevice"; holds = noAuthorityWithoutDevice; };
+      };
+      reachability = {
+        { name = "fully-charged"; reached = fullyCharged; };
+        { name = "request-in-flight"; reached = requestInFlight; };
+        { name = "ack-pending"; reached = ackPending; };
+        { name = "faulted-holding-charges"; reached = faultedWithCharges; };
+        { name = "reclaimed-to-zero"; reached = reclaimedToZero; };
+        { name = "fresh-epoch-running"; reached = freshEpochRunning; };
+      };
+      leadsTo = {
+        { name = "FaultedDriverAlwaysReachesZeroCharges"; premise = faultedHoldingCharges; consequence = noCharge; };
+      };
+    };
+
+scenarios :: List Scenario = {
+  { name = "main"; model = resourceModel noFaults; expect = #safe; };
+  {
+    name = "over-charge";
+    model = resourceModel (noFaults with { overCharge = true; });
+    expect = #violates { property = "WithinDeclaredBudget"; };
+  };
+  {
+    name = "leak-dma-on-death";
+    model = resourceModel (noFaults with { leakDmaOnDeath = true; });
+    expect = #violates { property = "DeathReturnsEveryCharge"; };
+  };
+  {
+    name = "leak-requests-on-death";
+    model = resourceModel (noFaults with { leakRequestsOnDeath = true; });
+    expect = #violates { property = "DeathReturnsEveryCharge"; };
+  };
+  {
+    name = "double-reclaim";
+    model = resourceModel (noFaults with { doubleReclaim = true; });
+    expect = #violates { property = "ReclaimRunsAtMostOnce"; };
+  };
+  {
+    name = "epoch-reuse";
+    model = resourceModel (noFaults with { epochReuse = true; });
+    expect = #violates { property = "EpochStrictlyAdvances"; };
+  };
+  {
+    name = "accept-stale-ack";
+    model = resourceModel (noFaults with { acceptStaleAck = true; });
+    expect = #violates { property = "StaleAckRefused"; };
+  };
+  {
+    name = "charge-before-bind";
+    model = resourceModel (noFaults with { chargeBeforeBind = true; });
+    expect = #violates { property = "NoAuthorityWithoutDevice"; };
+  };
+};
+{ scenarios =; }

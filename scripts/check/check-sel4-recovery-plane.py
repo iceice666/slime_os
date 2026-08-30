@@ -45,8 +45,8 @@ IMAGE = ROOT / "build" / "slime-sel4-recovery.elf"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-recovery.zti"
 BOOT_TIMEOUT_SECONDS = 240
 
-# The guard disk: attached and granted read-only. Signed so a comparison
-# distinguishes "unchanged" from "both empty".
+# The guard disk: attached and reachable through a read-only userspace-driver
+# ring. Signed so a comparison distinguishes "unchanged" from "both empty".
 GUARD_BYTES = 1 << 20
 GUARD_SIGNATURE = b"GUARDDSK"
 
@@ -59,8 +59,8 @@ CLOSURE_OBJECTS = 1
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        "the spawned instance received its declared device authority",
-        r"SLIME_GRAPH declared placed task=\d+ child=\d+ slot=\d+ kind=block",
+        "the spawned instance received its declared crossing authority",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sel4-recovery-probe .*buffer_factory_grants=1",
     ),
     (
         "init spawned the probe",
@@ -104,8 +104,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sel4-recovery-probe\] recovery rerun from durable index converged",
     ),
     (
-        # A real read-only block capability names the guard disk; the attempted
-        # write must be rejected by rights, not by an unrelated endpoint kind.
+        # This marker is emitted only after BlockIo returned STATUS_BAD_RIGHTS,
+        # making the refusal explicitly driver-produced rather than a generic
+        # failure to reach the second disk.
+        "the guard driver refused a write outside its ring authority",
+        r"\[sel4-recovery-probe\] guard write refused by driver rights",
+    ),
+    (
+        # The same arm first completed a read on the guard ring, then observed
+        # the driver-produced refusal above. This preserves the old reachable
+        # read-only-device invariant while moving enforcement out of the root.
         "the reachable guard disk refused a write",
         r"\[sel4-recovery-probe\] reachable guard disk write refused",
     ),
@@ -128,7 +136,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] recovery plane fail: .*",
     r"\[sel4-recovery-probe\] fail: .*",
-    r"SLIME_ROOT block bring-up failed",
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -201,9 +209,10 @@ def boot(profile: dict[str, object], disk: Path, guard: Path) -> str:
         f"if=none,id=slimedisk,format=raw,file={disk}",
         "-device",
         "virtio-blk-device,drive=slimedisk",
-        # The guard disk. Attached to the machine and named only by a read-only
-        # capability, so the attempted write reaches the correct object and is
-        # refused on authority. The image comparison proves containment.
+        # The guard disk. Attached as the second transport and granted only a
+        # read-authorized ring, so the attempted write reaches the correct
+        # object and is refused by the driver's authority table. The image
+        # comparison proves containment.
         "-drive",
         f"if=none,id=guarddisk,format=raw,file={guard}",
         "-device",
@@ -294,6 +303,66 @@ def check_transcript(transcript: str) -> None:
     if completions != 1:
         report_transcript(transcript)
         fail(f"{completions} instances ran the scenario, expected 1")
+    # Each instance must read its own filtered generation authority table. The
+    # driver's current summary text names the superset of supported operations;
+    # the guard probe's STATUS_BAD_RIGHTS arm below proves its actual row is
+    # read-only.
+    authority = re.findall(
+        r"\[virtio-blk-driver\] authority rings=1 rights=[^ ]+ source=generation",
+        transcript,
+    )
+    if len(authority) != 2:
+        report_transcript(transcript)
+        fail(f"{len(authority)} userspace block drivers read authority, expected 2")
+    ready = re.findall(r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+", transcript)
+    if len(ready) != 2:
+        report_transcript(transcript)
+        fail(f"{len(ready)} userspace block transports came up, expected 2")
+    exits = transcript.count("[virtio-blk-driver] peer complete, exiting")
+    if exits != 2:
+        report_transcript(transcript)
+        fail(f"{exits} userspace block drivers exited cleanly, expected 2")
+
+    # Primary reconstruction needs both DMA directions: DeviceWrite carries
+    # disk reads into client memory, while DeviceRead carries BootState writes
+    # out. The guard arm contributes another DeviceWrite through its proven read.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace drivers")
+
+    reclaims = re.findall(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if len(reclaims) != 2:
+        report_transcript(transcript)
+        fail(f"the root recorded {len(reclaims)} IO-resource reclaims, expected 2")
+    for index, groups in enumerate(reclaims, 1):
+        pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+            int(value) for value in groups
+        )
+        if pre_pages == 0 or pre_mappings == 0:
+            report_transcript(transcript)
+            fail(f"driver {index} held no DMA pages or mappings, so it moved no bytes")
+        if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+            report_transcript(transcript)
+            fail(
+                f"driver {index}: the root reclaimed {back_pages}/{back_mappings} of "
+                f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+            )
+        if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+            report_transcript(transcript)
+            fail(
+                f"driver {index} left {post_pages} DMA pages, {post_mappings} mappings, "
+                f"and {post_requests} requests outstanding"
+            )
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; two corrupt slots "
         f"refused, a signed index decoded, {CLOSURE_OBJECTS} state object verified "
@@ -327,8 +396,8 @@ def check_reconstructed(disk: Path, partition_first_lba: int) -> None:
 def check_guard_untouched(guard: Path, before: str) -> None:
     """The read-only guard device is byte-identical.
 
-    This is M5.9's containment requirement. A serial refusal is insufficient
-    without comparing the reachable device before and after.
+    This is M5.9's containment requirement. The driver's STATUS_BAD_RIGHTS
+    marker is insufficient without comparing the reachable device before and after.
     """
     after = hashlib.sha256(guard.read_bytes()).hexdigest()
     if after != before:
@@ -339,7 +408,7 @@ def check_guard_untouched(guard: Path, before: str) -> None:
     if guard.read_bytes()[: len(GUARD_SIGNATURE)] != GUARD_SIGNATURE:
         fail("the guard disk lost its signature")
     print(
-        "guard: the second disk, reachable only through a read-only capability, "
+        "guard: the second disk, reachable through a read-only driver ring, "
         "is byte-identical after the boot",
         flush=True,
     )

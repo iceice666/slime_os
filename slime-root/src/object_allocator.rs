@@ -43,6 +43,55 @@ const SLOT_WORDS: usize = MAX_ROOT_CSLOTS.div_ceil(SLOT_WORD_BITS);
 const GRANULE_BYTES: usize = 4096;
 const MAX_DEVICE_FRAME_SKIP: usize = 64;
 
+/// Root CSlots whose allocation-time physical base is retained at once.
+///
+/// This bounds the **DMA-participating frame population, not the CSpace**.
+/// Only a granule retyped from ordinary RAM, or an MMIO page retyped from a
+/// device untyped, can be handed to a device, so only those need a physical
+/// base remembered. The root holds at most: one frame-cap anchor per page of
+/// every live shared buffer, IO1's contiguous device-queue pages, one frame per
+/// declared MMIO region the probe reaches and per mapping IO1 hands out, the
+/// userspace IO service's declared DMA and MMIO ceilings, and — only in the
+/// immutable selector image — two bootstrap DMA pages per admitted boot device.
+/// Every term is another module's own declared ceiling rather than a number
+/// chosen here, so a plane that raises its bound raises this with it instead of
+/// silently overrunning it.
+///
+/// Sizing this by root CSlot instead cost a boot, and the reason is the same
+/// one recorded at length above `boot_selector::SELECTOR_GENERATION_BYTES`: in
+/// this root a large static is not merely memory, it is *capacity*. The seL4
+/// loader creates one root CSlot per page of the root image's `.bss` before the
+/// root runs, so the `[usize; MAX_ROOT_CSLOTS]` this replaced — 2 MB of `.bss`
+/// for 262_144 conceivable slots — spent 512 root CSlots and made a previously
+/// admissible generation unbootable, refused with
+/// `PlanExceedsRootSlots { required: 2313, available: 2185 }`.
+///
+/// The live bound below is 448 entries, or 452 in the immutable selector image,
+/// whose two bootstrap DMA pages per admitted boot device are the only terms
+/// this product path no longer contributes. [`PROVENANCE_SLOTS`] rounds either
+/// to a 1024-position open table of two-word records: 16 KiB of `.bss`, four
+/// root CSlots, against the 512 the array spent.
+#[cfg(slime_boot_selector)]
+const SELECTOR_PHYSICAL_PROVENANCE: usize = 2 * crate::device::MAX_BLOCK_DEVICES;
+#[cfg(not(slime_boot_selector))]
+const SELECTOR_PHYSICAL_PROVENANCE: usize = 0;
+
+const MAX_PHYSICAL_PROVENANCE: usize = crate::shared_buffer::MAX_FRAME_ANCHORS
+    + crate::io_resource::MAX_DMA_MAPPINGS
+    + crate::io_resource::MAX_MMIO_REGIONS
+    + crate::io_resource::MAX_MMIO_MAPPINGS
+    + SELECTOR_PHYSICAL_PROVENANCE;
+
+/// Positions in the open-addressed provenance table.
+///
+/// A power of two so the probe start is a mask rather than a division, and
+/// twice the live bound so the table never runs at a load factor that turns
+/// linear probing into a scan. Never equal to the live bound: [`insert`]'s
+/// walk to a free position relies on at least one entry always being empty.
+///
+/// [`insert`]: ProvenanceTable::insert
+const PROVENANCE_SLOTS: usize = (2 * MAX_PHYSICAL_PROVENANCE).next_power_of_two();
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocError {
     NoKernelUntyped,
@@ -92,6 +141,16 @@ pub enum AllocError {
     ArenaCleanup {
         slot: usize,
         error: sel4::Error,
+    },
+    /// The physical-provenance table has no free position for a frame this
+    /// allocation just retyped.
+    ///
+    /// Fails the allocation rather than losing the record. A frame whose
+    /// physical base the root cannot recover would be mapped into a device's
+    /// descriptor with a *wrong* address, which is worse than not existing:
+    /// the device would read or write memory nothing granted it.
+    ProvenanceTableFull {
+        limit: usize,
     },
 }
 
@@ -180,6 +239,155 @@ impl Default for ArenaPlan {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One live root CSlot's allocation-time physical base.
+///
+/// `slot` doubles as the occupancy flag. [`ProvenanceTable::EMPTY`] is
+/// `usize::MAX`, which no root CSlot index can be — [`SlotPool::new`] refuses a
+/// BootInfo span wider than [`MAX_ROOT_CSLOTS`] — so the sentinel costs no
+/// discriminant word, and the record stays two words rather than the three an
+/// `Option` would take.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProvenanceEntry {
+    slot: usize,
+    paddr: usize,
+}
+
+/// Allocation-time physical provenance for the frames a device may be handed.
+///
+/// Open-addressed on the root CSlot index with linear probing, sized by
+/// [`MAX_PHYSICAL_PROVENANCE`] rather than by the CSpace. Deletion shifts the
+/// probe chain back rather than leaving a tombstone, so a root that allocates
+/// and releases DMA frames indefinitely never degrades: the table's cost is its
+/// live population, not its history.
+struct ProvenanceTable {
+    entries: [ProvenanceEntry; PROVENANCE_SLOTS],
+    len: usize,
+}
+
+impl ProvenanceTable {
+    const EMPTY: usize = usize::MAX;
+    const MASK: usize = PROVENANCE_SLOTS - 1;
+
+    const fn new() -> Self {
+        Self {
+            entries: [ProvenanceEntry {
+                slot: Self::EMPTY,
+                paddr: 0,
+            }; PROVENANCE_SLOTS],
+            len: 0,
+        }
+    }
+
+    const fn home(slot: usize) -> usize {
+        slot & Self::MASK
+    }
+
+    const fn step(probe: usize) -> usize {
+        (probe + 1) & Self::MASK
+    }
+
+    /// Cyclic probe distance from a chain's start to one of its positions.
+    const fn distance(home: usize, probe: usize) -> usize {
+        probe.wrapping_sub(home) & Self::MASK
+    }
+
+    fn position(&self, slot: usize) -> Option<usize> {
+        let mut probe = Self::home(slot);
+        // Bounded by the table rather than by reaching an empty position, so a
+        // corrupted chain is a miss instead of a hang.
+        for _ in 0..PROVENANCE_SLOTS {
+            let entry = self.entries[probe];
+            if entry.slot == Self::EMPTY {
+                return None;
+            }
+            if entry.slot == slot {
+                return Some(probe);
+            }
+            probe = Self::step(probe);
+        }
+        None
+    }
+
+    fn get(&self, slot: usize) -> Option<usize> {
+        self.position(slot).map(|probe| self.entries[probe].paddr)
+    }
+
+    /// Record `slot`'s physical base, or refuse when the table is at its bound.
+    ///
+    /// Refusing is the whole point: a frame whose physical address the root
+    /// cannot recover must fail its allocation, never reach a device descriptor
+    /// carrying some other frame's address. Re-recording a slot already present
+    /// overwrites in place and cannot fail, so a slot the pool reissued after a
+    /// release that did not reach here still ends up with its current base.
+    fn insert(&mut self, slot: usize, paddr: usize) -> Result<(), AllocError> {
+        let mut probe = Self::home(slot);
+        // Terminates: `len <= MAX_PHYSICAL_PROVENANCE < PROVENANCE_SLOTS`, so
+        // some position is always empty.
+        loop {
+            let entry = self.entries[probe];
+            if entry.slot == Self::EMPTY {
+                break;
+            }
+            if entry.slot == slot {
+                self.entries[probe].paddr = paddr;
+                return Ok(());
+            }
+            probe = Self::step(probe);
+        }
+        if self.len >= MAX_PHYSICAL_PROVENANCE {
+            return Err(AllocError::ProvenanceTableFull {
+                limit: MAX_PHYSICAL_PROVENANCE,
+            });
+        }
+        self.entries[probe] = ProvenanceEntry { slot, paddr };
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Forget `slot`'s physical base, reporting whether one was held.
+    ///
+    /// The vacated position is closed by pulling back every following entry
+    /// whose own chain runs through it, which keeps [`Self::position`]'s
+    /// stop-at-empty walk correct without tombstones.
+    fn remove(&mut self, slot: usize) -> bool {
+        let Some(mut hole) = self.position(slot) else {
+            return false;
+        };
+        self.entries[hole].slot = Self::EMPTY;
+        self.len -= 1;
+        let mut probe = Self::step(hole);
+        loop {
+            let entry = self.entries[probe];
+            if entry.slot == Self::EMPTY {
+                return true;
+            }
+            let home = Self::home(entry.slot);
+            // Movable exactly when a walk from this entry's own chain start
+            // reaches the hole before it reaches the entry: then filling the
+            // hole keeps the entry findable, and leaving it would strand it
+            // behind the empty position.
+            if Self::distance(home, hole) < Self::distance(home, probe) {
+                self.entries[hole] = entry;
+                self.entries[probe].slot = Self::EMPTY;
+                hole = probe;
+            }
+            probe = Self::step(probe);
+        }
+    }
+}
+
+/// Whether an object of this shape can be handed to a device, and therefore
+/// needs its physical base retained.
+///
+/// A base page of ordinary RAM and nothing else: a TCB, endpoint, CNode or
+/// translation table has no physical identity any caller of
+/// [`ObjectAllocator::physical_address_of`] can use, and admitting them would
+/// spend the bounded table on records no one reads — which would then refuse a
+/// frame that genuinely needed one.
+fn records_provenance(blueprint: sel4::ObjectBlueprint) -> bool {
+    blueprint == <sel4::cap_type::Granule as sel4::CapTypeForObjectOfFixedSize>::object_blueprint()
 }
 
 struct SlotPool {
@@ -398,6 +606,7 @@ pub struct ObjectAllocator {
     slots_reused: usize,
     arena_reuses: usize,
     last_paddr: usize,
+    physical: ProvenanceTable,
 }
 
 impl ObjectAllocator {
@@ -470,6 +679,7 @@ impl ObjectAllocator {
             slots_reused: 0,
             arena_reuses: 0,
             last_paddr: 0,
+            physical: ProvenanceTable::new(),
         })
     }
 
@@ -506,8 +716,20 @@ impl ObjectAllocator {
     pub const fn device_untyped_count(&self) -> usize {
         self.device_len
     }
-    pub const fn last_physical_address(&self) -> usize {
-        self.last_paddr
+    /// Physical base retained for a live root CSlot allocated from ordinary RAM.
+    /// This root-only mechanism seam is public because the binary links the
+    /// allocator through the library crate; no component ABI exposes it.
+    ///
+    /// `None` for a slot that never held a DMA-capable frame, and for one whose
+    /// frame has been released: a caller reaching for an address the root no
+    /// longer owns must be refused, not answered from a stale record.
+    pub fn physical_address_of(&self, slot: usize) -> Option<usize> {
+        self.physical.get(slot)
+    }
+
+    /// Live entries in the bounded physical-provenance table.
+    pub const fn physical_provenance_len(&self) -> usize {
+        self.physical.len
     }
 
     pub fn untyped_bytes_remaining(&self) -> usize {
@@ -549,21 +771,35 @@ impl ObjectAllocator {
             size_bits,
             remaining: 0,
         })?;
-        region
-            .cap
-            .untyped_retype(
-                &blueprint,
-                &sel4::init_thread::slot::CNODE
-                    .cap()
-                    .absolute_cptr_for_self(),
-                slot_index,
-                1,
-            )
-            .map_err(|error| AllocError::Retype { size_bits, error })?;
+        let paddr = region.paddr.saturating_add(start);
+        // Recorded *before* the retype, so an exhausted table refuses the
+        // allocation while it is still free to refuse: the slot is not yet
+        // occupied, so releasing it back to the pool leaves nothing behind. The
+        // retype's own failure path undoes the record below. Recording
+        // afterwards would mean either a live capability with no recoverable
+        // physical base, or a slot released while still holding one — the
+        // `DeleteFirst` hazard [`Self::release_slot`] documents.
+        let recorded = records_provenance(blueprint);
+        if recorded {
+            self.physical.insert(slot_index, paddr)?;
+        }
+        if let Err(error) = region.cap.untyped_retype(
+            &blueprint,
+            &sel4::init_thread::slot::CNODE
+                .cap()
+                .absolute_cptr_for_self(),
+            slot_index,
+            1,
+        ) {
+            if recorded {
+                self.physical.remove(slot_index);
+            }
+            return Err(AllocError::Retype { size_bits, error });
+        }
         if let Some(region) = self.untypeds[region_index].as_mut() {
             region.watermark = watermark;
-            self.last_paddr = region.paddr.saturating_add(start);
         }
+        self.last_paddr = paddr;
         self.objects_allocated += 1;
         self.live_objects += 1;
         self.bytes_allocated += 1usize << size_bits;
@@ -587,6 +823,95 @@ impl ObjectAllocator {
         &mut self,
     ) -> Result<sel4::init_thread::Slot<T>, AllocError> {
         Ok(self.allocate(T::object_blueprint())?.cast())
+    }
+
+    /// Retype `count` adjacent base pages from one ordinary untyped in one
+    /// kernel operation. This is the provenance required by legacy virtqueues,
+    /// whose PFN names one physically contiguous queue area.
+    pub fn allocate_contiguous_granules(
+        &mut self,
+        count: usize,
+    ) -> Result<(usize, usize), AllocError> {
+        if count == 0 || count > MAX_DEVICE_FRAME_SKIP {
+            return Err(AllocError::SlotsExhausted {
+                allocated: self.slots_allocated,
+            });
+        }
+        let blueprint =
+            <sel4::cap_type::Granule as sel4::CapTypeForObjectOfFixedSize>::object_blueprint();
+        let size_bits = blueprint.physical_size_bits();
+        let page_bytes = 1usize << size_bits;
+        let total = page_bytes
+            .checked_mul(count)
+            .ok_or(AllocError::UntypedExhausted {
+                size_bits,
+                remaining: self.untyped_bytes_remaining(),
+            })?;
+        let (region_index, start, watermark) = self
+            .untypeds
+            .iter()
+            .take(self.untyped_len)
+            .enumerate()
+            .find_map(|(index, region)| {
+                let region = region.as_ref()?;
+                let start = region.watermark.checked_next_multiple_of(page_bytes)?;
+                let end = start.checked_add(total)?;
+                (end <= region.capacity()).then_some((index, start, end))
+            })
+            .ok_or(AllocError::UntypedExhausted {
+                size_bits,
+                remaining: self.untyped_bytes_remaining(),
+            })?;
+        let region = self.untypeds[region_index].ok_or(AllocError::UntypedExhausted {
+            size_bits,
+            remaining: 0,
+        })?;
+        let (first, reused) = self
+            .slots
+            .allocate_contiguous(count, self.slots_allocated)?;
+        let paddr = region.paddr.saturating_add(start);
+        // Every page's provenance, recorded before the retype for the reason
+        // `allocate_from_global` states, and unwound as a unit. A queue whose
+        // pages are only partly recoverable is not a usable queue: the caller
+        // maps all `count` of them into one contiguous device area, so a hole
+        // would surface later as a mapping at the wrong address.
+        for index in 0..count {
+            if let Err(error) = self
+                .physical
+                .insert(first + index, paddr + index * page_bytes)
+            {
+                for done in 0..index {
+                    self.physical.remove(first + done);
+                }
+                for slot in first..first + count {
+                    self.slots.release(slot);
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = region.cap.untyped_retype(
+            &blueprint,
+            &sel4::init_thread::slot::CNODE
+                .cap()
+                .absolute_cptr_for_self(),
+            first,
+            count,
+        ) {
+            for slot in first..first + count {
+                self.physical.remove(slot);
+                self.slots.release(slot);
+            }
+            return Err(AllocError::Retype { size_bits, error });
+        }
+        self.untypeds[region_index].as_mut().unwrap().watermark = watermark;
+        self.slots_allocated += count;
+        self.slots_reused += reused;
+        self.objects_allocated += count;
+        self.live_objects += count;
+        self.bytes_allocated += total;
+        self.live_bytes += total;
+        self.last_paddr = paddr + (count - 1) * page_bytes;
+        Ok((first, paddr))
     }
 
     pub fn allocate_variable<T: sel4::CapTypeForObjectOfVariableSize>(
@@ -751,7 +1076,12 @@ impl ObjectAllocator {
     /// capability makes the next allocation of that index fail `DeleteFirst`.
     /// Used by the shared-buffer adapter for frame aliases, which are the one
     /// root capability minted outside the arena path.
+    ///
+    /// Any physical-provenance record the slot held is dropped here, which is
+    /// what keeps a root that allocates and releases DMA frames indefinitely
+    /// from exhausting a table sized to the *live* population.
     pub fn release_slot(&mut self, slot: usize) -> bool {
+        self.physical.remove(slot);
         self.slots.release(slot)
     }
 
@@ -862,6 +1192,7 @@ impl ObjectAllocator {
                 .delete()
                 .map_err(|error| AllocError::ArenaCleanup { slot, error })?;
             self.slots.release(slot);
+            self.physical.remove(slot);
         }
         self.live_objects = self.live_objects.saturating_sub(arena.objects);
         self.live_bytes = self.live_bytes.saturating_sub(arena.bytes);
@@ -905,6 +1236,18 @@ impl ObjectAllocator {
         let (first, reused) = self
             .slots
             .allocate_contiguous(count, self.slots_allocated)?;
+        // Only the target granule, exactly as before: the skipped frames ahead
+        // of the watermark are retained rather than deleted, and no caller can
+        // name them, so recording them would spend the bounded table on
+        // addresses nothing reads. Recorded before the retype for the reason
+        // `allocate_from_global` states.
+        let target_slot = first + count - 1;
+        if let Err(error) = self.physical.insert(target_slot, paddr) {
+            for slot in first..first + count {
+                self.slots.release(slot);
+            }
+            return Err(error);
+        }
         if let Err(error) = region.cap.untyped_retype(
             &sel4::ObjectBlueprint::Arch(sel4::ObjectBlueprintArch::SmallPage),
             &sel4::init_thread::slot::CNODE
@@ -913,6 +1256,7 @@ impl ObjectAllocator {
             first,
             count,
         ) {
+            self.physical.remove(target_slot);
             for slot in first..first + count {
                 self.slots.release(slot);
             }
@@ -931,7 +1275,7 @@ impl ObjectAllocator {
         self.bytes_allocated += count * GRANULE_BYTES;
         self.live_bytes += count * GRANULE_BYTES;
         self.last_paddr = paddr;
-        Ok(sel4::init_thread::Slot::from_index(first + count - 1))
+        Ok(sel4::init_thread::Slot::from_index(target_slot))
     }
 
     fn regions(&self) -> &[Option<UntypedRegion>] {
@@ -941,7 +1285,97 @@ impl ObjectAllocator {
 
 #[cfg(test)]
 mod tests {
-    use super::{AllocError, ArenaPlan, ArenaRecord, MAX_TASK_SLOTS, SlotPool, plan_allocation};
+    use super::{
+        AllocError, ArenaPlan, ArenaRecord, MAX_PHYSICAL_PROVENANCE, MAX_TASK_SLOTS,
+        PROVENANCE_SLOTS, ProvenanceTable, SlotPool, plan_allocation,
+    };
+
+    /// Physical provenance is retained for a live frame, dropped when the frame
+    /// is released, and refused rather than lost when the table is full.
+    ///
+    /// The third arm is why this exists. This table replaced a
+    /// `[usize; MAX_ROOT_CSLOTS]` array whose 2 MB of `.bss` spent 512 root
+    /// CSlots and made an admissible generation unbootable, and the array's one
+    /// virtue was that it could not fill. A bounded table can, and the *only*
+    /// acceptable behaviour there is to fail closed: a frame whose physical base
+    /// the root cannot recover, silently mapped from a stale or absent record,
+    /// would put some other frame's address in a device descriptor and let the
+    /// device touch memory nothing granted it.
+    ///
+    /// Driven through the table rather than through `ObjectAllocator`, whose
+    /// every allocation path needs a live kernel to retype against; the seL4
+    /// gates cover the join. The reuse arm is the one that would catch a
+    /// `release_slot` that forgot to free its entry: a root allocating and
+    /// releasing DMA frames in a loop must not exhaust a table sized to the
+    /// live population.
+    #[test]
+    fn physical_provenance_is_freed_on_release_and_fails_closed_when_full() {
+        const PAGE: usize = 4096;
+        let mut table = ProvenanceTable::new();
+
+        // An allocated frame's address is retrievable; an unrecorded slot's is
+        // not, so `None` means "the root does not own this" rather than zero.
+        assert_eq!(table.insert(7, 0x4000_0000), Ok(()));
+        assert_eq!(table.get(7), Some(0x4000_0000));
+        assert_eq!(table.get(8), None);
+
+        // A released frame's address is gone. Answering from a stale record
+        // would hand a device an address the root no longer owns.
+        assert!(table.remove(7));
+        assert_eq!(table.get(7), None);
+        assert!(!table.remove(7));
+        assert_eq!(table.len, 0);
+
+        // Colliding slots stay individually findable and individually
+        // removable: `PROVENANCE_SLOTS` apart is the same probe start, so
+        // removing the first must not strand the second behind an empty
+        // position. This is the property that lets deletion avoid tombstones.
+        let (a, b, c) = (5, 5 + PROVENANCE_SLOTS, 5 + 2 * PROVENANCE_SLOTS);
+        for (index, slot) in [a, b, c].into_iter().enumerate() {
+            assert_eq!(table.insert(slot, index * PAGE), Ok(()));
+        }
+        assert!(table.remove(a));
+        assert_eq!(table.get(b), Some(PAGE));
+        assert_eq!(table.get(c), Some(2 * PAGE));
+        assert!(table.remove(b));
+        assert_eq!(table.get(c), Some(2 * PAGE));
+        assert!(table.remove(c));
+        assert_eq!(table.len, 0);
+
+        // Full to its declared bound, then refused. Not dropped, not
+        // overwritten: the record the caller would have read is still the one
+        // it gets, and the new frame's allocation fails.
+        for slot in 0..MAX_PHYSICAL_PROVENANCE {
+            assert_eq!(table.insert(slot, slot * PAGE), Ok(()), "slot {slot}");
+        }
+        assert_eq!(table.len, MAX_PHYSICAL_PROVENANCE);
+        assert_eq!(
+            table.insert(MAX_PHYSICAL_PROVENANCE, 0xdead_0000),
+            Err(AllocError::ProvenanceTableFull {
+                limit: MAX_PHYSICAL_PROVENANCE
+            })
+        );
+        assert_eq!(table.get(MAX_PHYSICAL_PROVENANCE), None);
+        // And every prior record survived the refusal.
+        for slot in 0..MAX_PHYSICAL_PROVENANCE {
+            assert_eq!(table.get(slot), Some(slot * PAGE), "slot {slot}");
+        }
+
+        // A full table that releases one frame accepts one more, which is what
+        // makes long-running reuse bounded by the live population rather than
+        // by the number of frames the root has ever allocated.
+        assert!(table.remove(0));
+        assert_eq!(table.insert(MAX_PHYSICAL_PROVENANCE, 0x9000_0000), Ok(()));
+        assert_eq!(table.get(MAX_PHYSICAL_PROVENANCE), Some(0x9000_0000));
+
+        // Re-recording a live slot overwrites in place rather than consuming a
+        // second position, so a pool that reissued an index still answers with
+        // that index's current frame.
+        assert_eq!(table.len, MAX_PHYSICAL_PROVENANCE);
+        assert_eq!(table.insert(MAX_PHYSICAL_PROVENANCE, 0xa000_0000), Ok(()));
+        assert_eq!(table.len, MAX_PHYSICAL_PROVENANCE);
+        assert_eq!(table.get(MAX_PHYSICAL_PROVENANCE), Some(0xa000_0000));
+    }
 
     /// `release_last` is the inverse `push_slot` lacked, and it shrinks the
     /// table only from its top: the released entry is cleared, the watermark and

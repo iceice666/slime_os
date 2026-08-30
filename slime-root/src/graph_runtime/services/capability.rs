@@ -1,4 +1,5 @@
 use super::*;
+use slime_root::io_resource::LeaseId;
 
 pub(super) fn capability_kind(capability: graph::CapabilityEntry) -> u32 {
     use slime_proto::capability_transfer::*;
@@ -430,14 +431,13 @@ pub(super) fn serve_buffer_create(
         .ok_or(shared_buffer::SharedBufferError::BadSize)?;
     let mut adapter = BufferAdapter::new(allocator);
     let mut allocated = 0;
-    // `create` documents that a refused admission leaves the caller owning every
-    // anchor it supplied, so the frames are released here on both failure paths.
-    // A partial allocation is the same case seen earlier.
     let outcome = (|| {
-        for frame in requested.iter_mut() {
-            *frame = adapter
-                .allocate_frame()
-                .map_err(|_| shared_buffer::SharedBufferError::BytesExhausted)?;
+        let (first, _) = adapter
+            .allocator_mut()
+            .allocate_contiguous_granules(pages)
+            .map_err(|_| shared_buffer::SharedBufferError::BytesExhausted)?;
+        for (index, frame) in requested.iter_mut().enumerate() {
+            *frame = shared_buffer::FrameCap(first + index);
             allocated += 1;
         }
         let anchors = shared_buffer::FrameAnchors::from_slice(requested)?;
@@ -649,6 +649,8 @@ pub(super) fn serve_loan_lifecycle(
     operation: LoanLifecycleRequest,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
+    io_service: &mut IoResourceService,
+    io_authority: &mut platform::AuthorityInventory,
     tasks: &mut TaskTable<MAX_TASKS>,
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
@@ -682,9 +684,9 @@ pub(super) fn serve_loan_lifecycle(
         return Response::error(IpcError::InvalidOperation);
     };
     let vspace = VSpaceCap(task.vspace.vspace.bits() as usize);
-    let mut adapter = BufferAdapter::new(allocator);
     let outcome = match operation {
         LoanLifecycleRequest::Map => {
+            let mut adapter = BufferAdapter::new(allocator);
             match admit_mapping_destination(task, words[1] as usize, words[3] as usize) {
                 Ok(()) => buffers.map_loan(
                     &mut adapter,
@@ -698,8 +700,29 @@ pub(super) fn serve_loan_lifecycle(
                 Err(response) => return response,
             }
         }
-        LoanLifecycleRequest::Return => buffers.return_loan(&mut adapter, holder, handle),
-        LoanLifecycleRequest::Revoke => buffers.revoke_loan(&mut adapter, holder, handle),
+        LoanLifecycleRequest::Return => {
+            let mut adapter = BufferAdapter::new(allocator);
+            buffers.return_loan(&mut adapter, holder, handle)
+        }
+        LoanLifecycleRequest::Revoke => {
+            if let Err(error) = revoke_buffer_lease(
+                io_service,
+                io_authority,
+                allocator,
+                tasks,
+                id,
+                LeaseId(handle.id.0),
+            ) {
+                sel4::debug_println!(
+                    "SLIME_IO loan revoke accounting failed task={} lease={} error={error:?}",
+                    id.0,
+                    handle.id.0,
+                );
+                return Response::error(IpcError::InvalidOperation);
+            }
+            let mut adapter = BufferAdapter::new(allocator);
+            buffers.revoke_loan(&mut adapter, holder, handle)
+        }
     };
     match outcome {
         Ok(()) => {

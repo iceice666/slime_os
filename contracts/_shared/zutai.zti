@@ -6,6 +6,7 @@
     { name = "base"; path = "base.zt"; };
     { name = "rust"; path = "rust.zt"; };
     { name = "python"; path = "python.zt"; };
+    { name = "codec"; path = "codec.zt"; };
   ];
   dependencies = [];
 }

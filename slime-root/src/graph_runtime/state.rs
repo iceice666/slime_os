@@ -45,6 +45,72 @@ pub(super) static mut SCHEDULING_SERVICE: scheduling::SchedulingService =
 pub(super) static mut LIFECYCLE_SERVICE: lifecycle::LifecycleService =
     lifecycle::LifecycleService::new();
 
+/// The launch phase's task and transfer-window tables, and its record of which
+/// declared instances were launched.
+///
+/// Statics rather than `launch_instance_graph` locals, for exactly the reason
+/// stated above [`ELF_SCRATCH`] and recorded at length above `main`'s
+/// `#[root_task]` attribute — and this is the fourth time that hazard has been
+/// paid for. Together these three are ~488 KiB, which `launch_instance_graph`
+/// took as a single stack frame: the disassembled prologue subtracted `0x7a000`
+/// from `sp` in one step, past the guard page a 1 MiB stack leaves.
+///
+/// It faulted only by luck of layout. The overflow lands on `FREE_PAGE`, the
+/// page [`crate::child_vspace::ScratchPage`] deliberately leaves unmapped, only
+/// when preceding `.bss` places the stack low enough; with a larger `.bss`
+/// above it the same overflow wrote into mapped slack and corrupted whatever
+/// was there, silently and invisibly to every gate. Shrinking the allocator's
+/// physical-provenance table from 2 MB to 16 KiB is what moved the stack down
+/// far enough to turn that silent corruption into an honest VM fault at
+/// `0x3e2ab0`.
+///
+/// The generation's own tables are generation-lived, like the catalogues above,
+/// so nothing is lost by giving them a fixed home: one launch phase runs, once.
+///
+/// `MaybeUninit` rather than `TaskTable::new()` directly, for the same reason
+/// and by the same pattern as `main`'s `OBJECT_ALLOCATOR`. `Option<Task>`'s
+/// niche makes `None` the byte `0x2`, not zero, so a `const`-initialized
+/// `[Option<Task>; 48]` is not all-zero and the linker must place it in
+/// `.data` — 163 KiB of image, and therefore ~40 root CSlots, to store 48
+/// non-zero tag bytes. Uninitialized storage is `.bss`, costs nothing in the
+/// image, and is written exactly once by [`init_launch_tables`] before any
+/// reference is handed out.
+pub(super) static mut LAUNCH_TASKS: core::mem::MaybeUninit<TaskTable<MAX_TASKS>> =
+    core::mem::MaybeUninit::uninit();
+pub(super) static mut LAUNCH_WINDOWS: core::mem::MaybeUninit<WindowTable<MAX_WINDOW_ENTRIES>> =
+    core::mem::MaybeUninit::uninit();
+pub(super) static mut LAUNCH_INSTANCES: LaunchedInstances = LaunchedInstances::new();
+
+/// Initialize the launch tables and borrow them for the rest of the phase.
+///
+/// Called once, from the one place that owns the launch phase. Returning the
+/// references from the same call that writes them is what keeps "initialized
+/// before use" a property of the code rather than a rule a caller must
+/// remember.
+pub(super) fn init_launch_tables() -> (
+    &'static mut TaskTable<MAX_TASKS>,
+    &'static mut WindowTable<MAX_WINDOW_ENTRIES>,
+    &'static mut LaunchedInstances,
+) {
+    // SAFETY: root startup is single-threaded and `launch_instance_graph` runs
+    // once, so this is the only writer and the only borrow of each static.
+    unsafe {
+        (&raw mut LAUNCH_TASKS).write(core::mem::MaybeUninit::new(TaskTable::new()));
+        (&raw mut LAUNCH_WINDOWS).write(core::mem::MaybeUninit::new(WindowTable::new()));
+        (
+            (&raw mut LAUNCH_TASKS)
+                .cast::<TaskTable<MAX_TASKS>>()
+                .as_mut()
+                .unwrap(),
+            (&raw mut LAUNCH_WINDOWS)
+                .cast::<WindowTable<MAX_WINDOW_ENTRIES>>()
+                .as_mut()
+                .unwrap(),
+            (&raw mut LAUNCH_INSTANCES).as_mut().unwrap(),
+        )
+    }
+}
+
 pub(super) const MAX_CAPABILITY_EXPORTS: usize = 64;
 #[derive(Clone, Copy)]
 pub(super) struct CapabilityExport {

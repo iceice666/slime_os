@@ -12,7 +12,12 @@ every product plane.
 
 A layout entry names a role, not a concrete mechanism object. Slot 9 is storage
 authority; whether it resolves to a block device or an object store depends on
-the admitted generation and discovered devices.
+the admitted generation and discovered devices. That indirection is why the
+retained x86 tables below still carry `storage-capability` rows after B90
+retired the `block` capability kind: a role is a position in the bootstrap
+component's CSpace, not a capability kind, and these rows are a frozen
+transcription of what the retired custom kernel resolved rather than something
+any current generation derives.
 """
 
 import struct
@@ -422,38 +427,56 @@ SEL4_BOOT_LAYOUT = (
     (22, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# The seL4 M5 storage plane (P5.4.2c). Init's endpoint factory, the probe's
-# executable, and the block capability the probe holds.
+# The seL4 M5 storage plane (P5.4.2c). Init's executable for the probe, and
+# init's own shared-buffer factory.
 #
 # The block capability is *not* here, and that is the point: it is granted to
 # the probe rather than to init, so the root places it in the probe's own table
 # at its runtime cursor. A boot layout numbers the bootstrap component's slots;
 # a non-bootstrap component's are numbered `1..=n` above its executables, which
 # is the rule every other grant to a child follows.
+#
+# The factory at slot 4 is init's own, and it is here because IO2's probe
+# reaches its device through the IO0 rings rather than a root-mediated
+# `BlockTransact`. A ring is a shared buffer the client allocates, so the
+# factory is the plane's one *crossing* spawn grant: declared source `init`,
+# target the probe, handed over at spawn. It appears in init's table rather
+# than the probe's precisely because init is the holder that passes it on.
 SEL4_STORAGE_LAYOUT = (
     (1, 'executable', 'sel4-storage-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# Generation 24, the store plane. Same two rows as the storage plane and for the
-# same reason: the block capability is granted to the probe, so the root places
-# it in the probe's own table rather than init's.
+# Generation 24, the store plane. Init's executable for the probe and init's own
+# shared-buffer factory. B83: the probe reaches its device through IO0 rings
+# served by the userspace driver, so the block capability it used to hold is
+# gone and the factory it builds its ring from is the plane's crossing spawn
+# grant — declared source `init`, target the probe, handed over at spawn.
 SEL4_STORE_LAYOUT = (
     (1, 'executable', 'sel4-store-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 
-# Generation 29, the M6.3 filesystem plane. Three rows: init's factory and both
-# executables. Neither the block capability nor the namespace views are here —
-# both are granted to the components that hold them.
+# Generation 29, the M6.3 filesystem plane. Init's factory and both
+# executables. B83: the service reaches its device through IO0 rings served by
+# the userspace driver, so the block capability it used to hold is gone and the
+# factory it builds its ring from is the plane's crossing spawn grant. Neither
+# the namespace views nor any device capability is here -- both are granted to
+# the components that hold them.
 SEL4_FILESYSTEM_LAYOUT = (
     (1, 'executable', 'directory-probe', 0x10008),
     (2, 'executable', 'sel4-filesystem-service', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# Generation 33, the M6.7 transfer plane. Two rows; both device capabilities
-# are the probe's own declared grants.
+# Generation 33, the M6.7 transfer plane. B84: the probe reaches both its disks
+# through IO0 rings served by two instances of the userspace driver, so the two
+# block capabilities it used to hold are gone and the factory it builds its
+# rings from is the plane's crossing spawn grant.
 SEL4_TRANSFER_LAYOUT = (
     (1, 'executable', 'sel4-transfer-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 # Generation 32, the M6.6 powerbox plane. Init's factory and both executables;
@@ -476,22 +499,32 @@ SEL4_DIRECTORY_LAYOUT = (
     (1, 'executable', 'sel4-directory-probe', 0x10008),
 )
 
-# Generation 27, the M6.5 generation-command plane. Three rows: init's factory
-# plus both executables. The block capability is the manager's, so it is placed
-# in the manager's own table rather than here.
+# Generation 27, the M6.5 generation-command plane. Init's factory plus both
+# executables. B83: the manager reaches its device through IO0 rings served by
+# the userspace driver, so the block capability it used to hold is gone and the
+# factory it builds its ring from is the plane's crossing spawn grant. It sits
+# at slot 5 rather than 4 because this plane's two run tokens already occupy 3
+# and 4, and renumbering a working discriminator to match another plane's habit
+# would be churn.
 SEL4_GENERATION_LAYOUT = (
     (1, 'executable', 'sel4-generation-client', 0x10008),
     (2, 'executable', 'sel4-generation-manager', 0x10008),
+    (5, 'shared-buffer-factory', None, 0x1000000),
 )
 
-# Generation 26, the recovery plane.
+# Generation 26, the recovery plane. B84: same two-device cutover as transfer.
+# The read-only guard disk is now a read-only IO0 ring rather than a read-only
+# block capability, and the driver refuses a write against its declared ring
+# authority where the root used to refuse it against the caller's capability.
 SEL4_RECOVERY_LAYOUT = (
     (1, 'executable', 'sel4-recovery-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 # Generation 25, the rollback plane. Same shape again.
 SEL4_ROLLBACK_LAYOUT = (
     (1, 'executable', 'sel4-rollback-probe', 0x10008),
+    (4, 'shared-buffer-factory', None, 0x1000000),
 )
 
 # Generations 34 and 35, the C8.12 matrix plane and its incompatible-QoS

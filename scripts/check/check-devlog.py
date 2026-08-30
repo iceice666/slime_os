@@ -9,8 +9,8 @@ layout and front-matter contract documented in ``devlog/README.md``:
 * every entry is a ``YYYY-MM-DD-short-topic/`` folder holding ``index.md``;
 * front matter carries the exact field set, in order, with ``Kind``/``Status``
   drawn from the declared vocabularies;
-* ``Roadmap`` ids resolve to a real roadmap heading and ``Gates`` name real
-  Justfile targets;
+* ``Roadmap`` ids resolve to one real roadmap heading (apart from two frozen
+  historical backlog collisions) and ``Gates`` name real Justfile targets;
 * required ``##`` sections are present for the entry's kind, in template order;
 * the README index lists every entry once, with matching date and status;
 * every devlog path referenced anywhere in the repository exists, and every
@@ -35,6 +35,42 @@ TEMPLATE = DEVLOG / "TEMPLATE.md"
 ROADMAP = ROOT / "roadmap"
 
 ENTRY_NAME = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+ROADMAP_HEADING = re.compile(r"^#{2,3} (?P<identifier>\S+)")
+ROADMAP_ID_DECLARATION = re.compile(
+    r"^#{2,3} (?P<identifier>[A-Z]+[0-9]+(?:\.(?:[0-9]+[a-z]?|[a-z]+))*)"
+    r"(?:\s+(?:—|--)\s+|:\s+)"
+)
+
+# B29 and B30 were each allocated twice before the backlog made heading text
+# immutable. Preserve those four historical anchors, but reject any changed or
+# additional declaration. New roadmap ids must always be unique.
+LEGACY_ROADMAP_ID_COLLISIONS: dict[str, frozenset[tuple[str, str]]] = {
+    "B29": frozenset(
+        {
+            (
+                "roadmap/00-backlog.md",
+                "### B29 — one block device per granule",
+            ),
+            (
+                "roadmap/00-backlog.md",
+                "### B29 — `ParkedReplies::wake` never deleted the reply CSlot it counted as recycled — **resolved 2026-08-07**",
+            ),
+        }
+    ),
+    "B30": frozenset(
+        {
+            (
+                "roadmap/00-backlog.md",
+                "### B30 — the dango plane launched no commands",
+            ),
+            (
+                "roadmap/00-backlog.md",
+                "### B30 — `release_trust_check` was red, unregistered, and its rotation refusals never reached Rust",
+            ),
+        }
+    ),
+}
 
 FIELD_ORDER = ["Date", "Kind", "Status", "Scope", "Roadmap", "Gates", "Trigger", "Baseline"]
 
@@ -139,12 +175,63 @@ def ragged_rows(text: str) -> list[tuple[str, int, int]]:
     return ragged
 
 
+def roadmap_id_declarations(
+    path: str, text: str
+) -> list[tuple[str, int, str, str]]:
+    declarations: list[tuple[str, int, str, str]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        match = ROADMAP_ID_DECLARATION.match(line)
+        if match is not None:
+            declarations.append((match.group("identifier"), line_number, path, line))
+    return declarations
+
+
+def duplicate_roadmap_ids(
+    declarations: list[tuple[str, int, str, str]],
+) -> dict[str, list[tuple[str, int, str]]]:
+    occurrences: dict[str, list[tuple[str, int, str]]] = {}
+    for identifier, line_number, path, heading in declarations:
+        occurrences.setdefault(identifier, []).append((path, line_number, heading))
+    return {
+        identifier: found
+        for identifier, found in occurrences.items()
+        if len(found) > 1
+    }
+
+
+def prove_roadmap_collision_guard() -> None:
+    probe = roadmap_id_declarations(
+        "first.md", "## Z99 — first\n### Z99 acceptance and verification stack\n"
+    )
+    probe += roadmap_id_declarations("second.md", "### Z99: second\n")
+    collisions = duplicate_roadmap_ids(probe)
+    if list(collisions) != ["Z99"] or len(collisions["Z99"]) != 2:
+        raise SystemExit("devlog check's roadmap id collision guard failed its probe")
+
+
 def roadmap_ids() -> set[str]:
     ids: set[str] = set()
+    declarations: list[tuple[str, int, str, str]] = []
     for path in ROADMAP.glob("*.md"):
-        for heading in re.findall(r"^#{2,3} (\S+)", path.read_text(), re.M):
-            ids.add(heading.rstrip(":").rstrip("—").strip())
+        text = path.read_text()
+        relative = path.relative_to(ROOT).as_posix()
+        declarations.extend(roadmap_id_declarations(relative, text))
+        for line in text.splitlines():
+            match = ROADMAP_HEADING.match(line)
+            if match is not None:
+                ids.add(match.group("identifier").rstrip(":").rstrip("—").strip())
+
+    for identifier, found in sorted(duplicate_roadmap_ids(declarations).items()):
+        signatures = frozenset((path, heading) for path, _, heading in found)
+        legacy = LEGACY_ROADMAP_ID_COLLISIONS.get(identifier)
+        if legacy == signatures and len(found) == len(legacy):
+            continue
+        locations = ", ".join(f"{path}:{line}" for path, line, _ in found)
+        fail(f"Roadmap id {identifier!r} is declared more than once: {locations}")
     return ids
+
+
+prove_roadmap_collision_guard()
 
 
 def declared_just_targets() -> set[str]:

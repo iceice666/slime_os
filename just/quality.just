@@ -225,6 +225,96 @@ miri:
     cd ../components
     cargo miri test --target "$host" -p slime-proto
 
+# Bit-precise proofs of the IO substrate's pure logic, over all inputs of the
+# declared types rather than the cases a `#[test]` names.
+#
+# This is the third layer of the IO verification stack and it is not
+# interchangeable with the other two. The plane gates observe one real schedule
+# on real hardware queues; `just io_model_check` settles all interleavings of an
+# abstraction; this settles all *values* flowing through the shipped Rust. Each
+# closes what the others structurally cannot: the models explicitly disclaim
+# wire arithmetic and bounds, which is exactly what these harnesses own.
+#
+# Kani ships its own pinned toolchain (nightly-2025-11-21), older than this
+# repository's. `verification/io-proofs/Cargo.toml` exists solely to present
+# `slime-proto`'s own `src/lib.rs` under a manifest with no `rust-version`, so
+# the *shipped* source is what gets verified -- there is no second copy to
+# drift. The harnesses live in `components/proto/src/io_queue_proofs.rs` behind
+# `#[cfg(kani)]`, so no product build, lint, or Miri run ever sees them.
+#
+# Not part of `contracts_check`: it needs a separate toolchain plus CBMC, the
+# same reason `miri` stands alone above. `nix develop .#kani` is a distinct
+# shell for the same reason -- the bundle is ~325 MB and nothing else uses it.
+[group('quality')]
+kani_io_proofs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # `cargo-kani`, not `cargo kani`: the latter needs an ambient `cargo` to
+    # dispatch the subcommand, and the `.#kani` shell deliberately ships none
+    # (`kani-driver` uses its bundle's own toolchain). Both forms behave
+    # identically otherwise.
+    if ! command -v cargo-kani >/dev/null 2>&1; then
+        echo "kani_io_proofs: cargo-kani not found." >&2
+        echo "  run: nix develop .#kani --command just kani_io_proofs" >&2
+        exit 1
+    fi
+    # Every harness must run. A pass here is only evidence if the harness count
+    # is the expected one: a proof file that silently stopped being compiled
+    # would otherwise report success by verifying nothing.
+    expected=18
+    log="$(mktemp)"
+    trap 'rm -f "$log"' EXIT
+    cargo-kani --manifest-path verification/io-proofs/Cargo.toml 2>&1 | tee "$log"
+    if ! grep -q "^VERIFICATION:- SUCCESSFUL" "$log"; then
+        echo "kani_io_proofs: verification did not succeed" >&2
+        exit 1
+    fi
+    got="$(sed -n 's/^Complete - \([0-9]*\) successfully verified harnesses.*/\1/p' "$log" | tail -1)"
+    if [ "$got" != "$expected" ]; then
+        echo "kani_io_proofs: expected $expected harnesses, ran ${got:-0}" >&2
+        exit 1
+    fi
+    echo "kani_io_proofs: $got harnesses verified"
+
+# IO7: bit-precise proofs of the *device*-boundary arithmetic in
+# `components/lib/src/virtio_mmio.rs`.
+#
+# Separate from `kani_io_proofs` above because it proves a different trust
+# boundary. Those harnesses cover `slime-proto`, whose inputs arrive from a
+# client across a capability-checked contract; these cover the bytes a *device*
+# writes into a shared used ring, which no capability constrains and no plane
+# gate can drive adversarially — QEMU's virtio device is well behaved, which is
+# exactly why B86 and B87 stayed latent under every green gate.
+#
+# Two proof crates rather than one because Kani takes a single `[lib] path`, and
+# these two properties live in different packages. See
+# `verification/virtio-proofs/Cargo.toml` for why it points at the module rather
+# than at `slime-components`' `lib.rs`.
+[group('quality')]
+kani_virtio_proofs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-kani >/dev/null 2>&1; then
+        echo "kani_virtio_proofs: cargo-kani not found." >&2
+        echo "  run: nix develop .#kani --command just kani_virtio_proofs" >&2
+        exit 1
+    fi
+    # As above: a proof gate that can silently verify nothing is not a gate.
+    expected=13
+    log="$(mktemp)"
+    trap 'rm -f "$log"' EXIT
+    cargo-kani --manifest-path verification/virtio-proofs/Cargo.toml 2>&1 | tee "$log"
+    if ! grep -q "^VERIFICATION:- SUCCESSFUL" "$log"; then
+        echo "kani_virtio_proofs: verification did not succeed" >&2
+        exit 1
+    fi
+    got="$(sed -n 's/^Complete - \([0-9]*\) successfully verified harnesses.*/\1/p' "$log" | tail -1)"
+    if [ "$got" != "$expected" ]; then
+        echo "kani_virtio_proofs: expected $expected harnesses, ran ${got:-0}" >&2
+        exit 1
+    fi
+    echo "kani_virtio_proofs: $got harnesses verified"
+
 # Host-side unit tests for the crates that need neither QEMU nor a built seL4
 # prefix. Use the actual host triple: hardcoding Linux makes the gate fail on
 # Darwin, while omitting `--target` makes components pick its bare-metal default.
@@ -243,6 +333,12 @@ test_host:
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cargo test --manifest-path boot-contracts/Cargo.toml --all-features
     (cd components && cargo test --target "$host" -p slime-proto)
+    # `--no-default-features` drops `component-runtime`, whose syscall wrappers
+    # only link on a seL4 target. What remains is the device-boundary
+    # arithmetic a userspace driver applies to bytes the *device* wrote, which
+    # is exactly the part no plane gate can drive adversarially: QEMU's virtio
+    # device is well behaved, so a driver trusting it passes every plane.
+    (cd components && cargo test --target "$host" -p slime-components --no-default-features)
     cargo test -p slime-build-support
 
 # B23: `slime-root`'s mechanism modules, run on the host.
@@ -321,7 +417,78 @@ test_sel4_root:
     # own source ceiling rather than a second number this module picked.
     # Direction 24: 183 -> 184. `graph` gains the capability-rights partition
     # test for root-only supervision rights and declared-but-ungated rights.
-    expected=184
+    # IO DMA join: 195 -> 200. `io_resource` gains four tests covering queue
+    # and payload reclamation, lease-first and driver-first teardown, and queue
+    # adapter rollback; `shared_buffer` gains the authenticated live-loan frame
+    # accessor test.
+    # IO1 restart: 200 -> 203. `io_resource` gains the three crash/restart
+    # reclamation tests: every live MMIO mapping and IRQ binding emits its
+    # teardown action in unbind-then-unmap order, repeated reclamation is
+    # idempotent without re-issuing effects, and a predecessor-epoch handle
+    # fails closed under the fresh epoch a replacement rebinds at.
+    # IO2 spawn grants: 203 -> 205. `generation` gains the two crossing-grant
+    # tests, and they exist because this rule cost two IO2 passes. Both had
+    # concluded the root could not carry a crossing spawn grant to a
+    # dynamically spawned child and reverted working migrations on that basis.
+    # It can: `only_owner_supplied_authority_crosses_a_spawn` pins which
+    # declarations an owner supplies -- owner-to-child yes, endpoint and
+    # self-loop no, because those are authority the root places itself -- and
+    # `a_declaration_the_root_places_is_never_charged_to_the_owner` pins the
+    # direction that makes widening unrepresentable: the count comes from
+    # declarations, so there is no index at which an owner can place a grant
+    # the generation never declared.
+    # Root slot budget: 205 -> 206. `object_allocator` gains
+    # `physical_provenance_is_freed_on_release_and_fails_closed_when_full`. The
+    # DMA join retained a frame's allocation-time physical base in a
+    # `[usize; MAX_ROOT_CSLOTS]` array -- 2 MB of `.bss`, and since the loader
+    # creates one root CSlot per `.bss` page, 512 root CSlots -- which dropped
+    # free slots to 2185 and made the boot plane's 2313-slot generation
+    # inadmissible. The replacement is bounded by the DMA-participating frame
+    # population instead, so unlike the array it can fill, and this test pins
+    # the three properties that makes load-bearing: a live frame's address is
+    # retrievable, a released frame's is not, and a full table refuses the
+    # allocation rather than losing a record and letting a device be handed
+    # some other frame's address.
+    # B83: 206 -> 207. `ipc` gains
+    # `the_ordinal_notification_query_requires_a_role`. Removing the root's
+    # block path needs the userspace driver declared once per device, and a
+    # service declared twice cannot resolve its notifications by grant name:
+    # grant names are globally unique with exactly one waiter each, so the two
+    # instances are necessarily bound to differently-named grants and a driver
+    # spelling one name would serve only the instance that got it. The
+    # `notification:@<ordinal>+<role>` query answers positionally instead, and
+    # this test pins the part that makes it safe: the role is required, because
+    # "my first binding" spans two roles and identifies no slot.
+    # B84: 207 -> 208. `io_resource` gains
+    # `two_drivers_each_hold_their_own_device`. Two instances of one driver
+    # executable, one device each, is the shape both two-disk planes boot; the
+    # test pins that every per-device identity is derived from the declared
+    # ordinal, because two instances asking for region 1 and source 1 -- what
+    # the old fixed identities produced -- collide on the table's uniqueness
+    # checks and the second install fails outright.
+    # PR #11 review findings 7, 8, and N3: 208 -> 211. `io_resource` gains
+    # `failed_mmio_map_leaves_device_usable`, pinning that an adapter map
+    # failure commits no MMIO authority and leaves the device mappable and
+    # readable afterwards -- the region used to be moved out of the inventory
+    # and dropped after its frame was already unmapped, so the lost frame
+    # capability was observable only as an unrelated later syscall failing for
+    # the rest of the boot.
+    #
+    # `failed_queue_request_begin_leaves_mapping_destroyable`, pinning that
+    # `REQUEST_BEGIN` against a queue DMA mapping -- which carries no lease,
+    # while its identifier is handed to the driver as the `QUEUE_MAP` success
+    # value -- commits no request charge, so `destroy_dma_mapping` still
+    # succeeds. The charge used to be committed before the two fallible
+    # lookups, leaving a mapping permanently `MappingBusy` behind a refusal the
+    # caller will never settle.
+    #
+    # `mediated_mmio_refuses_in_granule_offset_outside_grant`, pinning that an
+    # aligned offset inside the 4 KiB granule but outside the granted subrange
+    # is refused before the device's granule offset is added. Containment
+    # previously rested on QEMU packing transports top-down with the top one
+    # ending exactly at the granule edge, which is an allocation accident
+    # rather than an authority bound.
+    expected=211
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

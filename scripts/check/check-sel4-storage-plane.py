@@ -2,10 +2,11 @@
 
 """P5.4.2c gate: a userspace component reaches a real disk (M5.2, M5.3).
 
-`just sel4_device_check` proves the root can drive a virtio block device.
-This gate proves the layer that matters: a *component* moving sectors through
-nothing but a capability its generation granted it, mediated by
-`BlockTransact`.
+`just sel4_device_check` proves the product root does *not* touch an attached
+disk. This gate proves the layer that matters: a *component* moving sectors
+through nothing but a capability its generation granted it, served by the
+supervised userspace `virtio-blk-driver` over an IO0 ring whose rights the
+generation declares (B83).
 
 Six arms, and each fails differently:
 
@@ -61,19 +62,38 @@ SECTOR_BYTES = 512
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        # The spawned instance's own block capability, placed by the root above
-        # the parent's grants. Before P5.4.2c a spawned child received only what
-        # its parent handed it, so this line did not exist and the arms below
-        # could not run.
-        "the spawned instance received its declared device authority",
-        r"SLIME_GRAPH declared placed task=\d+ child=\d+ slot=\d+ kind=block",
+        # The spawned instance's crossing authority, placed by the root above
+        # the parent's grants. Post-B83 that authority is the shared-buffer
+        # factory it builds its IO0 ring from, which is what
+        # `buffer_factory_grants` counts; before P5.4.2c a spawned child
+        # received only what its parent handed it, so this evidence did not
+        # exist and the arms below could not run.
+        "the spawned instance received its declared crossing authority",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sel4-storage-probe .*buffer_factory_grants=1",
     ),
     (
         "init spawned the probe",
         r"\[init\] storage probe spawned",
     ),
     (
-        # M5.2: a read through the capability, returning the fixture's bytes.
+        # B83: the probe's device authority is no longer a root-placed `block`
+        # capability. It is a declared row in the generation's
+        # `block-ring-authority` table, read by the userspace driver through the
+        # root's identity-gated paged path. This line is that read: a driver
+        # serving zero rings would refuse every request, and one that never read
+        # the table would not have started. It follows the spawn because the
+        # driver reads the table after receiving its client's ring loan.
+        "the userspace driver read its generation-declared per-ring authority",
+        r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
+    ),
+    (
+        # The device is reached by the driver, not the root: this capacity is
+        # read out of virtio config space through IO1's mediated MMIO.
+        "the userspace driver brought up the device and announced its capacity",
+        r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+",
+    ),
+    (
+        # M5.2: a read through the ring, returning the fixture's bytes.
         "a sector was read through the capability and carries the fixture's bytes",
         r"\[sel4-storage-probe\] sector 0 verified",
     ),
@@ -91,8 +111,18 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sel4-storage-probe\] malformed refused",
     ),
     (
-        "a slot holding no block capability was refused",
+        # B83's replacement for the root's rights refusal. The root used to gate
+        # each request on the badge-derived caller's own `BlockDevice`; a ring
+        # carries no rights identity, so the gate is now the generation's
+        # declared per-ring authority and this is the `STATUS_BAD_RIGHTS` it
+        # produces. Before B83 that status existed in `io-queue/v1` and nothing
+        # ever emitted it.
+        "a request outside the ring's declared authority was refused",
         r"\[sel4-storage-probe\] ungranted slot refused",
+    ),
+    (
+        "the driver released cleanly on its peer's command",
+        r"\[virtio-blk-driver\] peer complete, exiting",
     ),
     (
         "the probe ran every arm and exited cleanly",
@@ -113,9 +143,11 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] storage plane fail: .*",
     r"\[sel4-storage-probe\] fail: .*",
-    r"SLIME_ROOT block bring-up failed",
-    r"SLIME_ROOT block read failed",
-    r"SLIME_ROOT block write failed",
+    # The root's `SLIME_ROOT block *` failures are gone with its driver. The
+    # userspace driver's own refusals take their place, and the plane must fail
+    # on them for the same reason: a driver that cannot serve must not be read
+    # as a plane that had nothing to serve.
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -263,19 +295,66 @@ def check_transcript(transcript: str) -> None:
     if completions != 1:
         report_transcript(transcript)
         fail(f"{completions} instances ran the scenario, expected 1")
-    # The root's own record of what it served, so the component's claims are
-    # corroborated by the mediation rather than only self-reported.
-    served = re.findall(r"SLIME_GRAPH block served task=\d+ device=\d+ op=(\d+) lba=\d+ status=(-?\d+)", transcript)
-    if not any(op == "1" and status == "0" for op, status in served):
-        fail("the root served no successful read")
-    if not any(op == "2" and status == "0" for op, status in served):
-        fail("the root served no successful write")
-    if not any(op == "3" and status == "0" for op, status in served):
-        fail("the root served no successful flush")
+    # Corroboration by the root, so the component's claims are not merely
+    # self-reported. B83 moved the driver out of the root, so the root no longer
+    # records `block served` lines -- it never sees an opcode. What it does
+    # record is the mediation it still owns, and that is what a fabricated
+    # transcript could not produce: the DMA mappings the driver's transfers went
+    # through, and their reclamation.
+    #
+    # Both directions are required. A driver that mapped only `DeviceRead` could
+    # not have served the read whose bytes the probe verified, and one that
+    # mapped only `DeviceWrite` could not have served the write the host-side
+    # durability check finds on the disk.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace driver")
+    # The root's numeric account of the driver's hardware charges, taken at
+    # driver teardown. This is the strongest root-side evidence available after
+    # the cutover: it names how many DMA pages and mappings the driver held and
+    # how many came back, and it is produced by the root's own resource table
+    # rather than by any component's claim.
+    #
+    # Nonzero before, zero after: a driver that mapped nothing could not have
+    # moved the bytes the probe verified, and one that leaked a mapping would
+    # leave a nonzero `post_`. Both readings must fail the plane.
+    reclaim = re.search(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if reclaim is None:
+        report_transcript(transcript)
+        fail("the root recorded no IO-resource reclamation for the userspace driver")
+    pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+        int(value) for value in reclaim.groups()
+    )
+    if pre_pages == 0 or pre_mappings == 0:
+        report_transcript(transcript)
+        fail("the driver held no DMA pages or mappings, so it moved no bytes")
+    if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+        report_transcript(transcript)
+        fail(
+            f"the root reclaimed {back_pages}/{back_mappings} of "
+            f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+        )
+    if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+        report_transcript(transcript)
+        fail(
+            f"the driver left {post_pages} DMA pages, {post_mappings} mappings, "
+            f"and {post_requests} requests outstanding"
+        )
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; a component read, wrote, "
-        "flushed, and verified a sector through a granted block capability, and "
-        "three refusal arms held",
+        "flushed, and verified a sector through a userspace virtio-blk driver over "
+        "IO0 rings, a request outside its ring's declared authority was refused, "
+        "and two further refusal arms held",
         flush=True,
     )
 

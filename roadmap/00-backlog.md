@@ -24,6 +24,7 @@ full and says why.
 
 ## Open
 
+*No open items.*
 
 ## Deferred follow-ups
 
@@ -58,6 +59,61 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B90 — the `Block` capability kind and its two rights bits survive B83 with no operation to gate
+
+**Status:** Resolved 2026-08-30. **Class:** Unmasked debt (enforcement machinery naming no operation).
+**Was:** B83 deleted `BLOCK TRANSACT`, the only operation that ever resolved a `Block` capability, but the kind and its two rights bits kept their teeth on the admission path: `capability_rights_valid` admitted bits 10/11 on `CapabilityKind::Block`, `service_for_capability` derived `SERVICE_BLOCK` so a holder had to declare service `8` or fail decode, both launch paths assigned per-device ordinals to `Block` grants, and `CapabilityEntry::Block` was materialized, narrowable, and transferable — while `AuthorityTable::resolve_block` had no caller outside its own module's tests and no root label mapped to service `8`. Two premises in the original entry were wrong and are corrected in the devlog: `capability_rights_valid` never required *both* bits (the predicate is `rights & required != 0`), and full deletion was never blocked by roadmap invariant 7, which refuses superseded generation formats by header rather than migrating them. The real coupling was the frozen CP1 baseline chain, exactly as B83's own deferred follow-ups recorded it.
+**Exit condition (observed):** the kind, both rights bits, `SERVICE_BLOCK`, `BlockRights`, `BlockCapability`, `CapabilityEntry::Block`, `resolve_block`, and both duplicated launch-order ordinal counters are deleted; `RIGHT_ALL` fell by exactly 3072 to `17179735039`; wire discriminant 4, service id 8, and bits 10/11 are documented as reserved, never reassigned; `declared_rights_partition_into_manifest_declarable_and_root_only` now enumerates all twelve declared kinds with IO1's four bits moved to `MANIFEST_DECLARABLE`, so its two classes partition the vocabulary rather than a nine-kind subset; `docs/capability-matrix.md` carries no row whose gate status is "ungated in the root"; and the frozen `x86_64-qemu-virtio` baseline's three `block` grants are excused by a named `RETIRED_CAPABILITY_KINDS` exemption that asserts both its own non-vacuity and that the kind is genuinely unspellable, rather than by re-blessing evidence that is never regenerated.
+**Evidence:** [`devlog/2026-08-30-b90-block-kind-retired/`](../devlog/2026-08-30-b90-block-kind-retired/index.md).
+### B89 — fourteen contract renderers each carried the same 82-line copy of the Rust codec emitters
+
+**Status:** Resolved 2026-08-29. **Class:** Unmasked debt (forced duplication, already drifted in three ways).
+**Was:** `wire.rust`'s `WireField` has no `byteArray` field, so its shared `offsetConsts`/`wireStruct` cannot describe a `[u8; N]` wire field; every contract with an array field therefore restated the whole offset/struct/encode/decode emitter block locally, and fourteen did — byte-identically once the label baked into their `expect(...)` strings was parameterised. The clone had drifted exactly as clones do: `fabric-qos` and `fabric-time` emitted `expect("generated fabric-stream layout")`, naming the contract they were copied from rather than themselves, and `fabric-trace` and `block/v2` had diverged in source formatting. B88 had just added a fifteenth copy for the same forced reason.
+**Exit condition (observed):** `contracts/_shared/codec.zt` (175 lines) owns the byte-array-aware emitters and is registered as `wire.codec`; all fifteen renderers now delegate, deleting 1382 lines for 189 added. Every generated artifact was regenerated and diffed byte-for-byte against a pre-migration snapshot of `components/proto/src` and `boot-contracts/src/generated` with **zero** differences, except the two mislabelled `expect` strings, which now name their own contracts. `just contracts_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just generation_check`, both Kani gates (18 + 13 harnesses), `just sel4_gate_control_check`, and the eight planes consuming these protocols — `io_queue_check`, `io_link_check`, `io_network_check`, `sel4_qos_check`, `sel4_stream_check`, `sel4_call_check`, `sel4_operation_check`, `sel4_powerbox_check` — all passed.
+**Evidence:** [`devlog/2026-08-29-b89-shared-codec-emitters/`](../devlog/2026-08-29-b89-shared-codec-emitters/index.md).
+### B88 — the network-destination decoder read a Zutai-declared layout through hand-written byte literals
+
+**Status:** Resolved 2026-08-29. **Class:** Debt (Zutai-rule violation: a schema-declared layout restated as source literals).
+**Was:** `contracts/network-destination/v1/schema.zt` declared complete `headerLayout`/`entryLayout` records and the Python renderer emitted their offsets, but the Rust renderer emitted only scalar constants — so `boot-contracts/src/network_destination.rs` reached all twenty-two fields of IO4's authority record through hard-coded byte offsets (`entry[32]`, `u16_at(entry, 34)`, `entry[56..120]`, eight budget literals), and its own test encoder restated the same literals a second time, leaving no mechanism by which a schema edit could disagree with either copy. The repository rule requires the bindings to be generated from the contract.
+**Exit condition (observed):** The Rust renderer now emits `OFF_HEADER_*`/`OFF_ENTRY_*` (plus `_END`) constants and a schema-declared `ipv4Bytes`, and every literal in the decoder and its test encoder was replaced by them; `generate-boot-bindings.py --check` reports bindings current, `boot-contracts` grew from 329 to 335 tests with the destination module going from 3 positive-path tests to 9, four parser mutations each fail the new tests, corrupting one generated offset fails them too, and `just io_network_check`, `just contracts_check`, `just lint_all`, and `just fmt_check_all` passed.
+**Evidence:** [`devlog/2026-08-29-b88-network-destination-generated-offsets/`](../devlog/2026-08-29-b88-network-destination-generated-offsets/index.md).
+### B86 — the virtio-net driver trusted the device's used-ring descriptor id, so a device could settle another client's request
+
+**Status:** Resolved 2026-08-29. **Class:** Defect (unvalidated device input indexing driver state).
+**Was:** `drain_used` reduced the device-written used-ring descriptor id with `id as usize / 2` and indexed `request_ids`/`dma`/`frame_lengths` (`IO_SLOTS = 8`) with the result, and `take_used` accepted any published used index differing from its local cursor; an id of 16 or more panicked the driver into `panic = "abort"`, while an *odd in-range* id — one the driver never publishes, since it submits two-descriptor chains at even heads — silently resolved to a live neighbouring slot and settled a different live request of the same client, because the driver has one fixed `PEER_SLOT`.
+**Exit condition (observed):** `used_descriptor_slot` admits only the even ids below `slots * 2` and `used_ring_progress` refuses a used index further ahead than the outstanding chain count; `just io_link_check` passed with the new `tx-stalled=0 device-refused=0` marker, mutating that marker to `device-refused=7` failed the gate, and `just io_block_check`, `just io_queue_check`, and `just sel4_gate_control_check` (45 gates, 1768 mutations) stayed green.
+**Evidence:** [`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md).
+### B87 — a receive completion's reported length was unbounded and silently truncated to `u16`
+
+**Status:** Resolved 2026-08-29. **Class:** Defect (unvalidated device length, reported two different ways).
+**Was:** `drain_used` computed `len.saturating_sub(NET_HEADER_BYTES)` — guarding underflow but not overshoot — and never compared the result against the frame length the client's descriptor actually named; `settle` then reported that value twice, once cast `as u16` into the LinkDevice reply's `frame_len` and once widened `u64::from` into the IO0 completion, so a device reporting more than it was offered made the two disagree and could name bytes outside the client's receive lease.
+**Exit condition (observed):** `received_payload_len` requires the net header to be present and the payload to fit the published frame length, returning `u16` so the reply field and the completion count are the same value by construction; seven host tests in `components/lib/src/virtio_mmio.rs` cover the header-short, exact-fit, one-past, `0x1_0000 + header` truncation, and `u32::MAX` cases, and now run under `just test_host`.
+**Evidence:** [`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md).
+### B85 — `just machete` fails on three stale `slime-proto` dependencies
+
+**Status:** Resolved 2026-08-29. **Class:** Defect (stale dependency declarations leaving a gate permanently red).
+**Was:** `components/testkit/sel4-store-probe`, `components/testkit/sel4-rollback-probe`, and `components/testkit/io-link-intruder` each declared a `slime-proto` path dependency that no source in those crates referenced, so `just machete` exited 1 and could not report the next stale dependency anyone added.
+**Exit condition (observed):** The three named stale declarations were deleted and `just machete` exited 0 for `boot-contracts`, `components`, and `slime-root`; `io-link-loopback`'s dead `_link_contract_bounds` reference was subsequently deleted and its artificial `slime-proto` dependency removed, leaving only dependencies its executable actually uses. `just lint_all`, `just sel4_store_check`, `just sel4_rollback_check`, and `just io_link_check` passed, and `just generation_check` reproduced generation `197c86bc97a57a23051f8681bce453771f662c65a7129cc23e16d3ec2d2e6298` unchanged.
+**Evidence:** [`devlog/2026-08-29-b85-stale-proto-dependencies/`](../devlog/2026-08-29-b85-stale-proto-dependencies/index.md).
+### B83 — The root still owns the product virtio-blk path after IO2's parity proof
+
+**Status:** Resolved 2026-08-29. **Class:** Change (dead-code cutover of an unreachable product path).
+**Was:** `slime-root/src/virtio_blk.rs`, `console.rs::serve_block_transact`, the `ConsoleKind::BlockTransact` label, and the `block_transact*` runtime wrappers were still compiled into every product image and the post-admission `probe_devices` call could still construct a root-owned block driver, so the root retained virtio opcode and descriptor parsing that no seL4 composition could reach.
+**Exit condition (observed):** The parser survives only as `boot_selector_block.rs` under `#[cfg(slime_boot_selector)]` for the acknowledged pre-admission bootstrap read; all eight migrated planes plus `just io_block_check`, `sel4_qemu_image_check`, `sel4_boot_check`, `sel4_device_check`, and `sel4_boot_selection_check` passed, and `sel4_component_graph_check` now fails if any retired symbol returns.
+**Evidence:** [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
+### B84 — a userspace driver instance can serve exactly one device, so a two-disk plane cannot leave the root
+
+**Status:** Resolved 2026-08-28. **Class:** Defect (mechanism gap in IO1 device authority).
+**Was:** One driver instance was bound to one device by literals — `DeviceId(1)`, `MmioRegionId(1)`, `IrqSourceId(1)` in `install_driver` and every device arm of `serve_io_resource` — and the only derived device identity was the caller's positional capability byte, so two instances of one driver executable were indistinguishable and the two-disk planes `sel4-recovery` and `sel4-transfer` could not leave the root's `BlockTransact` path.
+**Exit condition (observed):** Each instance's device was declared in its IO1 budget and threaded through every per-device identity; both planes declared two driver instances, passed their gates with read-only disks refusing writes by the driver's ring authority, and every prior storage gate stayed green.
+**Evidence:** [`devlog/2026-08-28-b84-two-device-driver-instances/`](../devlog/2026-08-28-b84-two-device-driver-instances/index.md).
+### B82 — `launch_instance_graph` overflowed the root stack into mapped `.bss`
+
+**Status:** Resolved 2026-08-28. **Class:** Defect (latent memory corruption, masked by `.bss` layout).
+**Was:** `launch_instance_graph` subtracted 488 KiB from `sp` in one step for three stack locals — `TaskTable<48>`, `WindowTable`, and `LaunchedInstances` — against a 1 MiB stack, so every boot overflowed; whether that landed in mapped `.bss` slack (silent corruption, every gate green) or on `ScratchPage`'s guard page (an honest fault) depended only on where preceding statics placed `STACK`.
+**Exit condition (observed):** The three tables moved to `.bss` as `LAUNCH_TASKS`/`LAUNCH_WINDOWS`/`LAUNCH_INSTANCES`, the prologue fell to 0x51000, and all five IO planes plus `sel4_boot_check` and `sel4_capability_layout_check` passed.
+**Evidence:** [`devlog/2026-08-28-io1-hardware-resource-authority/`](../devlog/2026-08-28-io1-hardware-resource-authority/index.md)
+
 ### B81 — Freestanding C components emitted an unaligned writable load segment
 
 **Status:** Resolved 2026-08-27. **Class:** Defect (linker orphan-section layout).

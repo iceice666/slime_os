@@ -25,6 +25,9 @@ inventry = "inventry"
 # cannot be reworded.
 ba = "ba"
 daa = "daa"
+# Git short hashes cited in devlog entries; `caf` occurs inside `e4caf6c`, which
+# is an identity and cannot be reworded.
+caf = "caf"
 # "mis" prefix in identifiers
 mis = "mis"
 ot = "ot"

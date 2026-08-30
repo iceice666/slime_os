@@ -45,46 +45,46 @@ impl WireQosEvent {
             magic: u32::from_le_bytes(
                 buf[OFF_QOS_MAGIC..OFF_QOS_MAGIC + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             version: u32::from_le_bytes(
                 buf[OFF_QOS_VERSION..OFF_QOS_VERSION + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             event: u32::from_le_bytes(
                 buf[OFF_QOS_EVENT..OFF_QOS_EVENT + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             flags: u32::from_le_bytes(
                 buf[OFF_QOS_FLAGS..OFF_QOS_FLAGS + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             sequence: u64::from_le_bytes(
                 buf[OFF_QOS_SEQUENCE..OFF_QOS_SEQUENCE + 8]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             value: u64::from_le_bytes(
                 buf[OFF_QOS_VALUE..OFF_QOS_VALUE + 8]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             timestamp_ns: u64::from_le_bytes(
                 buf[OFF_QOS_TIMESTAMP_NS..OFF_QOS_TIMESTAMP_NS + 8]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             type_identity: u64::from_le_bytes(
                 buf[OFF_QOS_TYPE_IDENTITY..OFF_QOS_TYPE_IDENTITY + 8]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-qos layout"),
             ),
             reserved: buf[OFF_QOS_RESERVED..OFF_QOS_RESERVED + 16]
                 .try_into()
-                .expect("generated fabric-stream layout"),
+                .expect("generated fabric-qos layout"),
         })
     }
 

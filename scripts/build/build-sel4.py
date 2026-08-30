@@ -95,6 +95,16 @@ CHANNEL_IMAGE = BUILD_ROOT / "slime-sel4-channel.elf"
 CHANNEL_MANIFEST = BUILD_ROOT / "slime-sel4-channel.identity.json"
 LOAN_IMAGE = BUILD_ROOT / "slime-sel4-loan.elf"
 LOAN_MANIFEST = BUILD_ROOT / "slime-sel4-loan.identity.json"
+IO_QUEUE_IMAGE = BUILD_ROOT / "slime-sel4-io-queue.elf"
+IO_QUEUE_MANIFEST = BUILD_ROOT / "slime-sel4-io-queue.identity.json"
+IO_DRIVER_AUTHORITY_IMAGE = BUILD_ROOT / "slime-sel4-io-driver-authority.elf"
+IO_DRIVER_AUTHORITY_MANIFEST = BUILD_ROOT / "slime-sel4-io-driver-authority.identity.json"
+IO_NETWORK_IMAGE = BUILD_ROOT / "slime-sel4-io-network.elf"
+IO_NETWORK_MANIFEST = BUILD_ROOT / "slime-sel4-io-network.identity.json"
+IO_BLOCK_IMAGE = BUILD_ROOT / "slime-sel4-io-block.elf"
+IO_BLOCK_MANIFEST = BUILD_ROOT / "slime-sel4-io-block.identity.json"
+IO_LINK_IMAGE = BUILD_ROOT / "slime-sel4-io-link.elf"
+IO_LINK_MANIFEST = BUILD_ROOT / "slime-sel4-io-link.identity.json"
 SPAWN_IMAGE = BUILD_ROOT / "slime-sel4-spawn.elf"
 SPAWN_MANIFEST = BUILD_ROOT / "slime-sel4-spawn.identity.json"
 SAMPLE_IMAGE = BUILD_ROOT / "slime-sel4-sample.elf"
@@ -178,6 +188,11 @@ FIXTURE_VARIANT = "fixture"
 GRAPH_VARIANT = "graph"
 CHANNEL_VARIANT = "channel"
 LOAN_VARIANT = "loan"
+IO_QUEUE_VARIANT = "io-queue"
+IO_DRIVER_AUTHORITY_VARIANT = "io-driver-authority"
+IO_NETWORK_VARIANT = "io-network"
+IO_BLOCK_VARIANT = "io-block"
+IO_LINK_VARIANT = "io-link"
 SPAWN_VARIANT = "spawn"
 SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
@@ -241,6 +256,11 @@ VARIANT_MANIFESTS = {
     DEMO_VARIANT: "sel4-demo",
     CHANNEL_VARIANT: "sel4-channel",
     LOAN_VARIANT: "sel4-loan",
+    IO_QUEUE_VARIANT: "sel4-io-queue",
+    IO_DRIVER_AUTHORITY_VARIANT: "sel4-io-driver-authority",
+    IO_NETWORK_VARIANT: "sel4-io-network",
+    IO_BLOCK_VARIANT: "sel4-io-block",
+    IO_LINK_VARIANT: "sel4-io-link",
     SPAWN_VARIANT: "sel4-spawn",
     SAMPLE_VARIANT: "sel4-sample",
     STREAM_VARIANT: "sel4-stream",
@@ -312,6 +332,11 @@ VARIANT_TARGET_DIRS = {
     DEMO_VARIANT: "root-demo",
     CHANNEL_VARIANT: "root-channel",
     LOAN_VARIANT: "root-loan",
+    IO_QUEUE_VARIANT: "root-io-queue",
+    IO_DRIVER_AUTHORITY_VARIANT: "root-io-driver-authority",
+    IO_NETWORK_VARIANT: "root-io-network",
+    IO_BLOCK_VARIANT: "root-io-block",
+    IO_LINK_VARIANT: "root-io-link",
     SPAWN_VARIANT: "root-spawn",
     SAMPLE_VARIANT: "root-sample",
     STREAM_VARIANT: "root-stream",
@@ -356,6 +381,11 @@ VARIANT_IMAGES = {
     DEMO_VARIANT: (DEMO_IMAGE, DEMO_MANIFEST),
     CHANNEL_VARIANT: (CHANNEL_IMAGE, CHANNEL_MANIFEST),
     LOAN_VARIANT: (LOAN_IMAGE, LOAN_MANIFEST),
+    IO_QUEUE_VARIANT: (IO_QUEUE_IMAGE, IO_QUEUE_MANIFEST),
+    IO_DRIVER_AUTHORITY_VARIANT: (IO_DRIVER_AUTHORITY_IMAGE, IO_DRIVER_AUTHORITY_MANIFEST),
+    IO_NETWORK_VARIANT: (IO_NETWORK_IMAGE, IO_NETWORK_MANIFEST),
+    IO_BLOCK_VARIANT: (IO_BLOCK_IMAGE, IO_BLOCK_MANIFEST),
+    IO_LINK_VARIANT: (IO_LINK_IMAGE, IO_LINK_MANIFEST),
     SPAWN_VARIANT: (SPAWN_IMAGE, SPAWN_MANIFEST),
     SAMPLE_VARIANT: (SAMPLE_IMAGE, SAMPLE_MANIFEST),
     STREAM_VARIANT: (STREAM_IMAGE, STREAM_MANIFEST),
@@ -1366,6 +1396,26 @@ def main() -> None:
         help="embed the loan-plane generation (P5.3.2), writing a separate image",
     )
     parser.add_argument(
+        "--io-queue-plane",
+        action="store_true",
+        help="embed the shared I/O queue proof generation, writing a separate image",
+    )
+    parser.add_argument(
+        "--io-block-plane",
+        action="store_true",
+        help="embed the userspace virtio-blk parity and fault proof generation",
+    )
+    parser.add_argument(
+        "--io-network-plane",
+        action="store_true",
+        help="embed the bounded network-service proof generation",
+    )
+    parser.add_argument(
+        "--io-link-plane",
+        action="store_true",
+        help="embed the supervised userspace virtio-net LinkDevice proof generation",
+    )
+    parser.add_argument(
         "--spawn-plane",
         action="store_true",
         help="embed the spawn-plane generation (P5.3.3), writing a separate image",
@@ -1610,6 +1660,7 @@ def main() -> None:
             "separate image"
         ),
     )
+    parser.add_argument("--io-driver-authority-plane", action="store_true", help="embed the IO1 userspace hardware-authority proof generation")
     parser.add_argument(
         "--store-plane",
         action="store_true",
@@ -1663,6 +1714,11 @@ def main() -> None:
             (DEMO_VARIANT, arguments.demo_plane),
             (CHANNEL_VARIANT, arguments.channel_plane),
             (LOAN_VARIANT, arguments.loan_plane),
+            (IO_QUEUE_VARIANT, arguments.io_queue_plane),
+            (IO_DRIVER_AUTHORITY_VARIANT, arguments.io_driver_authority_plane),
+            (IO_NETWORK_VARIANT, arguments.io_network_plane),
+            (IO_BLOCK_VARIANT, arguments.io_block_plane),
+            (IO_LINK_VARIANT, arguments.io_link_plane),
             (SPAWN_VARIANT, arguments.spawn_plane),
             (SAMPLE_VARIANT, arguments.sample_plane),
             (STREAM_VARIANT, arguments.stream_plane),

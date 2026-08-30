@@ -1,0 +1,68 @@
+{
+  formatVersion = 1;
+  name = "network-service";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Enforces exact generation-declared NetworkDestination authority at its protocol boundary; packet framing and LinkDevice transport are not implemented.";
+  implementation =  {
+    provider = "workspace";
+    binary = "network-service";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+    "io-link-loopback";
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_network_check boots sel4-io-network";
+    expectedResult = "exact destination authorization and fail-closed denials are observed; packet transfers, reset, restart, and backend attachment are not claimed";
+    passFailCriteria = "[network-service] observed requests=33 packets=7 socket_refusals=1 listener_refusals=0 dns_refusals=1 cross_holder_refusals=4";
+    requiredTestEnvironment = "io_network_check";
+  };
+}

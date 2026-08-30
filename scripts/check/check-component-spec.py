@@ -29,6 +29,7 @@ from pathlib import Path
 
 import component_spec_contract as CONTRACT
 from component_spec import (
+    SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION,
     ComponentSpecError,
     admit_specs,
     compile_spec,
@@ -383,9 +384,17 @@ for name, entry in sorted(BY_NAME.items()):
 # all 42 records.
 
 # 4. Corpus-level implementation facts. The reference generation pins its two
-# original implementation gaps plus the retired Dango identity; specs for newer
-# compositions remain admitted without being projected onto the frozen graph.
-EXPECTED_UNDECLARED = ("dango", "generation-list", "storage-store-probe")
+# original implementation gaps, the retired Dango identity, and B83's three
+# frozen CP1 block clients. Specs for newer compositions remain admitted without
+# being projected onto the frozen graph.
+EXPECTED_UNDECLARED = (
+    "dango",
+    "generation-list",
+    "storage-fault-probe",
+    "storage-probe",
+    "storage-store-probe",
+    "storage-writer",
+)
 observed_undeclared = tuple(
     sorted(
         name
@@ -401,14 +410,27 @@ if observed_undeclared != EXPECTED_UNDECLARED:
     )
 # The pinned set is checked against the recursively discovered component crate
 # manifests rather than only asserted, so it stays a derived fact. Asserting the
-# pair alone would go stale the moment someone lands one of the two missing
+# pair alone would go stale the moment someone lands one of the missing
 # components: the corpus would still say `undeclared`, the pin would still
 # match, and nothing would notice.
+#
+# Both `name` and `sel4-<name>` are candidates, because this corpus's convention
+# is that a `sel4-`-prefixed binary implements the unprefixed identity --
+# `filesystem-service` names `sel4-filesystem-service` and `generation-manager`
+# names `sel4-generation-manager`, both on this same frozen platform profile.
+# `component_spec.SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION` carries the one
+# authority-justified exception (B83), so this gate and the corpus admission
+# cannot disagree about it.
 BINARIES = dict(workspace_binaries())
 for name in EXPECTED_UNDECLARED:
     if name not in declared_instances:
         fail(f"{name} is pinned as implementation-less but the generation no longer declares it")
-    present = [candidate for candidate in (name, f"sel4-{name}") if candidate in BINARIES]
+    candidates = (
+        (name,)
+        if name in SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION
+        else (name, f"sel4-{name}")
+    )
+    present = [candidate for candidate in candidates if candidate in BINARIES]
     if present:
         fail(
             f"{name} is pinned as implementation-less but [[bin]] {present[0]!r} now exists; "
@@ -495,7 +517,10 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         spec["requires"] = ["pciFunction"]
 
     def unsorted_capability_kinds(spec: dict) -> None:
-        spec["provides"] = ["endpoint", "block"]
+        # Two *live* kinds out of order. Naming a retired kind here would be
+        # refused by the membership check that runs before `_sorted_unique`,
+        # leaving the sort rule with no negative control (B90).
+        spec["provides"] = ["input", "directory"]
 
     def wrong_semantic(spec: dict) -> None:
         spec["communication"]["semantic"] = CONTRACT.SEMANTIC_CALL
@@ -590,7 +615,10 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         spec["runtime"]["resource"]["privatePageQuota"] = PRIVATE_MEMORY_ROOT_REGION_PAGES + 1
 
     def undeclared_device(spec: dict) -> None:
-        spec["runtime"]["devices"] = ["block"]
+        # A live device kind this component declares in neither `provides` nor
+        # `requires`, so the refusal is the coverage rule rather than the
+        # membership check ahead of it (B90).
+        spec["runtime"]["devices"] = ["input"]
 
     def bad_version(spec: dict) -> None:
         spec["version"] = "1.0"
@@ -679,13 +707,26 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
 
     # A corpus-level rule needs a corpus-level case: one spec, so every
     # requirement it states is unmet unless the corpus provides it.
+    #
+    # `directory-probe` rather than a storage probe: B90 retired the `block`
+    # kind, leaving the frozen storage records requiring nothing at all, and a
+    # spec that requires nothing cannot exercise a rule about unmet
+    # requirements. This arm needs a spec whose `requires` is non-empty, and
+    # `directory` is provided by `init` alone — which is what makes the paired
+    # arm below a real converse.
     lone = root / "lone"
     lone.mkdir()
-    isolated = source_spec("storage-probe")
+    isolated = source_spec("directory-probe")
     isolated["dependencies"] = []
+    # `compatibility.dependency` is derived from the dependency count, so
+    # clearing one without the other is refused for an unrelated reason and the
+    # arm would prove nothing about capability coverage.
+    isolated["compatibility"]["dependency"] = "none"
+    if not isolated["requires"]:
+        fail("the corpus-coverage arm needs a spec that requires something")
     write_spec(lone, isolated)
     try:
-        admit_specs([lone / "storage-probe.zti"], catalogue=CATALOGUE)
+        admit_specs([lone / "directory-probe.zti"], catalogue=CATALOGUE)
     except ComponentSpecError:
         pass
     else:
@@ -711,7 +752,7 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
         scope.mkdir()
         left_spec = source_spec("init")
         left_spec["dependencies"] = []
-        right_spec = source_spec("storage-probe")
+        right_spec = source_spec("echo-agent")
         right_spec["dependencies"] = []
         admit_specs(
             [write_spec(scope, left_spec), write_spec(scope, right_spec)], catalogue=CATALOGUE

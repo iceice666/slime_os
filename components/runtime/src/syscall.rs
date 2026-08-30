@@ -34,7 +34,8 @@ pub use slime_proto::syscall_abi::{
 };
 use slime_proto::syscall_abi::{
     capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-    lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+    io_resource_labels, lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
+    supervision_labels,
 };
 
 /// Whether delegation consumes the source logical capability or retains it.
@@ -438,6 +439,127 @@ pub fn capability_slot_occupancy() -> Result<SlotOccupancy, i64> {
         populated: field(32),
     })
 }
+/// Direction of a client payload mapping from the device's viewpoint. Queue
+/// control memory is not represented here; use [`io_queue_map`] for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub enum DmaDirection {
+    DeviceRead = 1,
+    DeviceWrite = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IoDevice {
+    pub epoch: u64,
+    /// Which attached transport the generation gave this driver instance,
+    /// zero-based. The root's authenticated answer: an instance's typed
+    /// capabilities carry a positional index identical across two instances of
+    /// one driver executable, so this is the only way to know (B84).
+    pub device: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IoMapping {
+    pub id: u64,
+    pub epoch: u64,
+    pub base: u64,
+    pub length: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DmaMapping {
+    pub id: u64,
+    pub epoch: u64,
+    pub iova: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IrqEvent {
+    pub epoch: u64,
+    pub sequence: u64,
+}
+
+pub fn io_device_bind(device_slot: u32) -> Result<IoDevice, i64> {
+    transport::io_device_bind(device_slot).map(|(epoch, device)| IoDevice { epoch, device })
+}
+
+pub fn io_mmio_map(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    base: u64,
+    offset: u32,
+    length: u32,
+) -> Result<IoMapping, i64> {
+    transport::io_mmio_map(device_slot, region_slot, epoch, base, offset, length).map(|id| {
+        IoMapping {
+            id,
+            epoch,
+            base,
+            length: u64::from(length),
+        }
+    })
+}
+pub fn io_mmio_read32(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    offset: u32,
+) -> Result<u32, i64> {
+    transport::io_mmio_read32(device_slot, region_slot, epoch, offset)
+}
+
+pub fn io_mmio_write32(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    offset: u32,
+    value: u32,
+) -> i64 {
+    transport::io_mmio_write32(device_slot, region_slot, epoch, offset, value)
+}
+
+pub fn io_dma_map(
+    account_slot: u32,
+    loan_slot: u32,
+    epoch: u64,
+    direction: DmaDirection,
+) -> Result<DmaMapping, i64> {
+    transport::io_dma_map(account_slot, loan_slot, epoch, direction as u64)
+        .map(|(id, iova)| DmaMapping { id, epoch, iova })
+}
+
+pub fn io_queue_map(
+    account_slot: u32,
+    epoch: u64,
+    base: u64,
+    pages: u32,
+) -> Result<DmaMapping, i64> {
+    transport::io_queue_map(account_slot, epoch, base, pages).map(|(id, iova)| DmaMapping {
+        id,
+        epoch,
+        iova,
+    })
+}
+
+pub fn io_dma_release(account_slot: u32, mapping: DmaMapping) -> i64 {
+    transport::io_dma_release(account_slot, mapping.id, mapping.epoch)
+}
+
+/// Bind the declared interrupt source when `prior_sequence` is zero, or
+/// acknowledge an already-dispatched sequence. This call does not wait for
+/// hardware arrival; readiness is delivered through the declared notification.
+pub fn io_irq_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<IrqEvent, i64> {
+    transport::io_irq_ack(source_slot, epoch, prior_sequence)
+        .map(|sequence| IrqEvent { epoch, sequence })
+}
+pub fn io_request_begin(account_slot: u32, mapping: DmaMapping, request_id: u64) -> i64 {
+    transport::io_request_begin(account_slot, mapping.id, request_id, mapping.epoch)
+}
+
+pub fn io_request_settle(account_slot: u32, mapping: DmaMapping, request_id: u64) -> i64 {
+    transport::io_request_settle(account_slot, mapping.id, request_id, mapping.epoch)
+}
 
 /// Query a child supervision handle. `Ok(None)` means the child is live; a
 /// completed result consumes the handle slot so it can be reused.
@@ -561,6 +683,31 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
 /// is userspace policy over the ABI rather than part of it.
 pub fn wait_sources(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
     let result = transport::wait_sources(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+/// Read the authenticated IO4 exact-destination entries served to this
+/// generation's network service. The request is self-scoped and names no
+/// holder or destination; policy is decoded and enforced by the service.
+pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::network_destinations_read(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+/// Read the authenticated B83 per-ring block authority entries served to this
+/// generation's block driver. The request is self-scoped and names no holder,
+/// device, or ring; the root reads no block right, so refusing a write on a
+/// read-only ring is decided by the driver that reads this table.
+pub fn block_ring_authority_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::block_ring_authority_read(cursor, out);
     if result < 0 {
         Err(result)
     } else {
@@ -1006,35 +1153,6 @@ pub fn input_read(slot: u32) -> Result<Option<InputEvent>, i64> {
 /// Writes `bytes` to the debug/serial log. Returns the byte count written.
 pub fn debug_write(bytes: &[u8]) -> i64 {
     transport::debug_write(bytes)
-}
-
-/// Issues a 64-byte block-protocol request/reply pair against the block
-/// device capability in slot `slot`. A non-negative return means the
-/// transaction was delivered; the block-protocol outcome is in `reply`
-/// (`OFF_REPLY_STATUS`), not in the return value.
-pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transport::block_transact(slot, request, reply)
-}
-
-/// A read whose sector returns through the caller's transfer window behind the
-/// 64-byte reply record.
-pub fn block_transact_sector(
-    slot: u32,
-    request: &[u8; 64],
-    reply: &mut [u8; 64],
-    sector: &mut [u8; 512],
-) -> i64 {
-    transport::block_transact_sector(slot, request, reply, sector)
-}
-
-/// A write whose sector crosses with the request, on the same rule.
-pub fn block_transact_write(
-    slot: u32,
-    request: &[u8; 64],
-    sector: &[u8; 512],
-    reply: &mut [u8; 64],
-) -> i64 {
-    transport::block_transact_write(slot, request, sector, reply)
 }
 
 /// Terminates the current component with an explicit unhealthy status.

@@ -1,0 +1,32 @@
+# Kani proof harnesses for the IO substrate's pure Rust logic.
+#
+# This crate exists for one reason: Kani 0.67.0 ships its own pinned toolchain
+# (nightly-2025-11-21), and Cargo refuses to build a package whose declared
+# `rust-version` is newer than the compiler in hand. `slime-proto` declares
+# `rust-version = 1.96`, which is true of the toolchain the product uses, so
+# lowering it to suit a verification tool would be a lie in the shipped
+# manifest.
+#
+# Instead, `[lib] path` points at `slime-proto`'s own `src/lib.rs`. Kani
+# compiles the *same source file* the product compiles -- not a copy, not an
+# extract -- under a manifest that declares no MSRV. A drift between the
+# verified code and the shipped code is therefore not possible: there is one
+# file. The harnesses themselves live beside the code they check, gated behind
+# `#[cfg(kani)]`, following `deps/rust-sel4/crates/sel4/bitfield-ops`.
+#
+# Deliberately outside the root workspace (hence the empty `[workspace]`): this
+# package must never be picked up by `cargo build`, `just lint_all`, or
+# `just miri`, all of which run on the product toolchain where the `kani` cfg
+# is inactive and these harnesses do not exist.
+[package]
+name = "slime-io-proofs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+name = "slime_proto"
+path = "../../components/proto/src/lib.rs"
+doctest = false

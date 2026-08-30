@@ -44,6 +44,8 @@ pub mod capability_table_labels {
     pub const BOOT_ACTION: u64 = 40;
     pub const GRAPH_QUERY: u64 = 41;
     pub const SPAWN_BUDGET: u64 = 42;
+    pub const NETWORK_DESTINATIONS_READ: u64 = 64;
+    pub const BLOCK_RING_AUTHORITY_READ: u64 = 69;
 }
 
 pub mod directory_labels {
@@ -81,6 +83,19 @@ pub mod clock_labels {
 pub mod scheduling_labels {
     pub const CLASS_READ: u64 = 50;
     pub const CLASS_PROMOTE: u64 = 51;
+}
+
+pub mod io_resource_labels {
+    pub const BIND: u64 = 58;
+    pub const MAP_MMIO: u64 = 59;
+    pub const DMA_MAP: u64 = 60;
+    pub const DMA_RELEASE: u64 = 61;
+    pub const IRQ_ACK: u64 = 62;
+    pub const QUEUE_MAP: u64 = 63;
+    pub const REQUEST_BEGIN: u64 = 65;
+    pub const REQUEST_SETTLE: u64 = 66;
+    pub const MMIO_READ32: u64 = 67;
+    pub const MMIO_WRITE32: u64 = 68;
 }
 
 pub const ERR_SUCCESS: i64 = 0;

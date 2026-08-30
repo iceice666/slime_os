@@ -1,0 +1,66 @@
+{
+  formatVersion = 1;
+  name = "io-link-loopback";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Resolves its one declared endpoint binding on the IO4 network plane; it performs no LinkDevice protocol operation.";
+  implementation =  {
+    provider = "workspace";
+    binary = "io-link-loopback";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_network_check boots sel4-io-network";
+    expectedResult = "the component resolves its declared endpoint binding and performs zero protocol operations";
+    passFailCriteria = "[io-link-loopback] declared endpoint bindings=1 protocol operations=0";
+    requiredTestEnvironment = "io_network_check";
+  };
+}

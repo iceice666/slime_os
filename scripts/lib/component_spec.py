@@ -55,6 +55,19 @@ _BIN_ENTRY = re.compile(
     r"\[\[bin\]\]\s*\nname\s*=\s*\"([^\"]+)\"\s*\npath\s*=\s*\"([^\"]+)\""
 )
 
+# Frozen CP1 identities whose `sel4-<name>` crate is a distinct component rather
+# than the missing implementation, so the `sel4-` candidate below must not be
+# treated as one. Exactly one entry, and it is justified by authority rather
+# than by naming: `sel4-storage-probe` requires `["endpoint"]` and reaches its
+# device over an IO0 ring served by the userspace driver (B83), while the frozen
+# `storage-probe` record reached a block device directly. B90 then retired the
+# `block` kind, so that record's projected `requires` is now empty — the two
+# identities still need different capabilities, and the frozen one needs none at
+# all, which is a stronger reason to keep them apart rather than a weaker one.
+# Every other `sel4-`-prefixed binary in this corpus *is* its record's
+# implementation, which is why the general guard stays.
+SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION = frozenset({"storage-probe"})
+
 _SPEC_FIELDS = {
     "formatVersion",
     "name",
@@ -451,8 +464,23 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         if binary_name or content_hash:
             _fail("implementation: an undeclared provider names no binary or content hash")
         # An undeclared provider is a recorded gap, so it must be a real one: a
-        # component whose binary does exist must not claim to be missing.
-        for candidate in (name, f"sel4-{name}"):
+        # component whose binary does exist must not claim to be missing. Both
+        # candidates are checked, because this corpus's own convention is that a
+        # `sel4-`-prefixed binary implements the unprefixed spec identity --
+        # `filesystem-service` names `sel4-filesystem-service`, and
+        # `generation-manager` names `sel4-generation-manager`.
+        #
+        # `storage-probe` is the one exception, and it is a fact about authority
+        # rather than a naming convention. `sel4-storage-probe` requires
+        # `["endpoint"]` and reaches its device over an IO0 ring, while the
+        # frozen record reached a block device directly; B90 retired that kind,
+        # so the record now projects no requirement at all. Either way the two
+        # identities need different capabilities, so the seL4 crate cannot be
+        # the missing implementation of this record (B83, B90).
+        candidates = (
+            (name,) if name in SEL4_REPLACEMENT_IS_NOT_AN_IMPLEMENTATION else (name, f"sel4-{name}")
+        )
+        for candidate in candidates:
             if candidate in binaries:
                 _fail(
                     f"implementation: declared undeclared, but [[bin]] {candidate!r} "
@@ -779,14 +807,25 @@ _builder = load_script("component_spec_generation_builder", "build/build-generat
 _CAPABILITY_KINDS = tuple(sorted(_builder.CAPABILITY_KIND))
 # Which of those kinds are device authority rather than component-to-component
 # authority. Derived, not listed: `boot-contracts/src/generation.rs`'s
-# `service_for_capability` routes exactly `Block` to `SERVICE_BLOCK` and `Input`
-# to `SERVICE_INPUT`, the two services that front a platform device; every other
-# kind is either unmediated (endpoint, executable) or a root-owned memory object.
+# `service_for_capability` routes `Input` to `SERVICE_INPUT`, the service that
+# fronts a platform device, and IO1's
+# `device`/`mmioRegion`/`interruptSource`/`dmaAccount` to `SERVICE_IO_RESOURCE`,
+# which fronts the hardware itself. Every other kind is either unmediated
+# (endpoint, executable) or a root-owned memory object.
+#
+# Deriving this from the service routing rather than naming the kinds is what
+# made IO1's four new kinds land here without an edit to a second list, and what
+# made B90's removal of `block` land the same way — except for this tuple of
+# services, which is the one thing the routing cannot tell us: whether a service
+# fronts a device or a peer.
 _DEVICE_KINDS = tuple(
     kind
     for kind in _CAPABILITY_KINDS
     if _builder.SERVICE_BY_CAPABILITY_KIND.get(kind)
-    in (_builder.SERVICE_BLOCK, _builder.SERVICE_INPUT)
+    in (
+        _builder.SERVICE_INPUT,
+        _builder.SERVICE_IO_RESOURCE,
+    )
 )
 # Resource ceilings, imported from the constants that already enforce them rather
 # than retyped: `COMPONENT_MAX_STACK_BYTES` from the generated

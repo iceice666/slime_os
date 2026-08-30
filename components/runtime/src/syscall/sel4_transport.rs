@@ -25,8 +25,8 @@ use super::wire::{
 use super::{
     CapabilityDisposition, ERR_INVALID_ARG, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
     MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SpawnGrant, capability_table_labels,
-    capability_transfer_labels, clock_labels, directory_labels, lifecycle_labels,
-    scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+    capability_transfer_labels, clock_labels, directory_labels, io_resource_labels,
+    lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
 };
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word. Generated from `contracts/syscall-abi/v1`; the root decodes the same
@@ -49,7 +49,6 @@ pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits =
     boot_contracts::component_runtime_abi::CONSOLE_SERVICE_SLOT as sel4::CPtrBits;
 
 use boot_contracts::component_runtime_abi::console_labels::{
-    BLOCK_TRANSACT as CONSOLE_LABEL_BLOCK_TRANSACT,
     DIRECTORY_COMMIT as CONSOLE_LABEL_DIRECTORY_COMMIT,
     DIRECTORY_INSPECT as CONSOLE_LABEL_DIRECTORY_INSPECT, INPUT_READ as CONSOLE_LABEL_INPUT_READ,
     WRITE as CONSOLE_LABEL_WRITE,
@@ -57,9 +56,6 @@ use boot_contracts::component_runtime_abi::console_labels::{
 
 /// Bytes of the immutable directory root in an inspect reply frame.
 const DIRECTORY_ROOT_BYTES: usize = 32;
-
-/// Bytes of a block, store, or generation protocol frame.
-const TRANSACT_BYTES: usize = 64;
 
 /// The root service endpoint. Reconstructed per call from a constant slot, so
 /// no capability is cached in component-writable state.
@@ -922,6 +918,156 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
 pub fn shared_buffer_occupancy() -> (i64, u64) {
     pair_of(shared_buffer_labels::OCCUPANCY, &[0])
 }
+/// Bind this driver to its declared device, answering the epoch and which
+/// transport the generation gave it.
+///
+/// The device is the root's authenticated answer, not the caller's guess (B84):
+/// a driver declared twice for two disks has identical capability bytes in both
+/// instances, so it cannot know which disk it holds until the root says.
+pub fn io_device_bind(device_slot: u32) -> Result<(u64, u32), i64> {
+    let (result, device) = pair_of(io_resource_labels::BIND, &[device_slot as Word]);
+    (result >= 0)
+        .then_some((result as u64, device as u32))
+        .ok_or(result)
+}
+
+pub fn io_mmio_map(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    base: u64,
+    offset: u32,
+    length: u32,
+) -> Result<u64, i64> {
+    let slots = u64::from(device_slot) | (u64::from(region_slot) << 32);
+    let range = u64::from(offset) | (u64::from(length) << 32);
+    let result = result_of(
+        io_resource_labels::MAP_MMIO,
+        &[slots as Word, epoch as Word, base as Word, range as Word],
+    );
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+pub fn io_mmio_read32(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    offset: u32,
+) -> Result<u32, i64> {
+    let result = result_of(
+        io_resource_labels::MMIO_READ32,
+        &[
+            device_slot as Word,
+            region_slot as Word,
+            epoch as Word,
+            offset as Word,
+        ],
+    );
+    (result >= 0).then_some(result as u32).ok_or(result)
+}
+
+pub fn io_mmio_write32(
+    device_slot: u32,
+    region_slot: u32,
+    epoch: u64,
+    offset: u32,
+    value: u32,
+) -> i64 {
+    let packed = u64::from(offset) | (u64::from(value) << 32);
+    result_of(
+        io_resource_labels::MMIO_WRITE32,
+        &[
+            device_slot as Word,
+            region_slot as Word,
+            epoch as Word,
+            packed as Word,
+        ],
+    )
+}
+
+pub fn io_dma_map(
+    account_slot: u32,
+    loan_slot: u32,
+    epoch: u64,
+    direction: u64,
+) -> Result<(u64, u64), i64> {
+    let (result, iova) = pair_of(
+        io_resource_labels::DMA_MAP,
+        &[
+            account_slot as Word,
+            loan_slot as Word,
+            direction as Word,
+            epoch as Word,
+        ],
+    );
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((result as u64, iova))
+    }
+}
+
+pub fn io_queue_map(
+    account_slot: u32,
+    epoch: u64,
+    base: u64,
+    pages: u32,
+) -> Result<(u64, u64), i64> {
+    let (result, iova) = pair_of(
+        io_resource_labels::QUEUE_MAP,
+        &[
+            account_slot as Word,
+            pages as Word,
+            epoch as Word,
+            base as Word,
+        ],
+    );
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok((result as u64, iova))
+    }
+}
+
+pub fn io_dma_release(account_slot: u32, mapping_id: u64, epoch: u64) -> i64 {
+    result_of(
+        io_resource_labels::DMA_RELEASE,
+        &[account_slot as Word, mapping_id as Word, epoch as Word],
+    )
+}
+pub fn io_irq_ack(source_slot: u32, epoch: u64, prior_sequence: u64) -> Result<u64, i64> {
+    let result = result_of(
+        io_resource_labels::IRQ_ACK,
+        &[source_slot as Word, epoch as Word, prior_sequence as Word],
+    );
+    (result >= 0).then_some(result as u64).ok_or(result)
+}
+pub fn io_request_begin(account_slot: u32, mapping_id: u64, request_id: u64, epoch: u64) -> i64 {
+    result_of(
+        io_resource_labels::REQUEST_BEGIN,
+        &[
+            account_slot as Word,
+            mapping_id as Word,
+            request_id as Word,
+            epoch as Word,
+        ],
+    )
+}
+
+pub fn io_request_settle(account_slot: u32, mapping_id: u64, request_id: u64, epoch: u64) -> i64 {
+    result_of(
+        io_resource_labels::REQUEST_SETTLE,
+        &[
+            account_slot as Word,
+            mapping_id as Word,
+            request_id as Word,
+            epoch as Word,
+        ],
+    )
+}
 
 pub fn supervision_status(slot: u32) -> (i64, u64) {
     pair_of(supervision_labels::STATUS, &[slot as Word])
@@ -1048,6 +1194,51 @@ pub fn graph_read(cursor: usize, out: &mut [u8]) -> i64 {
     };
     let (result, returned) = match outcome(&call(
         capability_table_labels::GRAPH_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
+/// Read authenticated IO4 destination entries into the transfer window.
+pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::NETWORK_DESTINATIONS_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
+/// Read authenticated B83 per-ring block authority entries into the transfer
+/// window. `network_destinations_read`'s exact shape, on this table's label.
+pub fn block_ring_authority_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::BLOCK_RING_AUTHORITY_READ,
         &[cursor as Word, 0, transfer as Word],
     )) {
         Ok(pair) => pair,
@@ -1262,129 +1453,6 @@ pub fn input_read(slot: u32) -> (i64, u64) {
     }
 }
 
-/// The shape of a 64-byte request/reply protocol: the request crosses in the
-/// transfer window and the reply is written back over it.
-///
-/// `endpoint` is a parameter because block requests go to the console
-/// endpoint rather than the root's (B43), and after B44 removed the
-/// generation and recovery labels they are the only caller left.
-fn transact_on(
-    endpoint: cap::Endpoint,
-    label: u64,
-    slot: u32,
-    request: &[u8; 64],
-    reply_out: &mut [u8; 64],
-) -> i64 {
-    let transfer = match stage(request.as_slice(), &[]) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
-    };
-    let (result, returned) =
-        match outcome(&call_on(endpoint, label, &[slot as Word, transfer as Word])) {
-            Ok(pair) => pair,
-            Err(error) => return error,
-        };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, reply_out.as_mut_slice(), None) {
-        Ok(TRANSACT_BYTES) => result,
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
-}
-
-pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    // The console endpoint, not the root's: a block request is a device
-    // request, and the device tables live with whoever answers them (B43).
-    // Without this capability there is no path to a device at all.
-    transact_on(
-        console_service(),
-        CONSOLE_LABEL_BLOCK_TRANSACT,
-        slot,
-        request,
-        reply,
-    )
-}
-
-/// A block request whose reply carries a sector behind the record (P5.4.2c).
-///
-/// [`transact`]'s reply is exactly 64 bytes, which is right for the store,
-/// generation, and directory protocols and wrong for a read: the sector has
-/// nowhere to go. On the retired kernel the caller passed a buffer pointer in
-/// `buffer_phys` and the kernel wrote through it; there is no such ambient
-/// addressing here, so the sector comes back in the same window the request
-/// went out through, immediately after the reply record.
-const fn exact_sector_reply_len(length: usize) -> bool {
-    length == TRANSACT_BYTES + 512
-}
-
-pub fn block_transact_sector(
-    slot: u32,
-    request: &[u8; 64],
-    reply_out: &mut [u8; 64],
-    sector: &mut [u8; 512],
-) -> i64 {
-    let mut staged = [0u8; 64 + 512];
-    staged[..64].copy_from_slice(request);
-    let transfer = match stage(staged[..64].as_ref(), &[]) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
-    };
-    let (result, returned) = match outcome(&call_on(
-        console_service(),
-        CONSOLE_LABEL_BLOCK_TRANSACT,
-        &[slot as Word, transfer as Word],
-    )) {
-        Ok(pair) => pair,
-        Err(error) => return error,
-    };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, staged.as_mut_slice(), None) {
-        Ok(length) if exact_sector_reply_len(length) => {
-            reply_out.copy_from_slice(&staged[..TRANSACT_BYTES]);
-            sector.copy_from_slice(&staged[TRANSACT_BYTES..TRANSACT_BYTES + 512]);
-            result
-        }
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
-}
-
-/// A block write, whose sector crosses in the request rather than the reply.
-pub fn block_transact_write(
-    slot: u32,
-    request: &[u8; 64],
-    sector: &[u8; 512],
-    reply_out: &mut [u8; 64],
-) -> i64 {
-    let mut staged = [0u8; 64 + 512];
-    staged[..64].copy_from_slice(request);
-    staged[64..].copy_from_slice(sector);
-    let transfer = match stage(staged.as_slice(), &[]) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
-    };
-    let (result, returned) = match outcome(&call_on(
-        console_service(),
-        CONSOLE_LABEL_BLOCK_TRANSACT,
-        &[slot as Word, transfer as Word],
-    )) {
-        Ok(pair) => pair,
-        Err(error) => return error,
-    };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, reply_out.as_mut_slice(), None) {
-        Ok(TRANSACT_BYTES) => result,
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
-}
-
 pub fn unhealthy() -> ! {
     let _ = call(lifecycle_labels::UNHEALTHY, &[]);
     // Exit after recording the unhealthy transition so this diverging API
@@ -1460,16 +1528,4 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
             .send_with_mrs(info, mrs);
     }
     bytes.len() as i64
-}
-#[cfg(test)]
-mod tests {
-    use super::exact_sector_reply_len;
-
-    #[test]
-    fn sector_reply_requires_record_and_sector() {
-        assert!(exact_sector_reply_len(64 + 512));
-        assert!(!exact_sector_reply_len(64));
-        assert!(!exact_sector_reply_len(64 + 511));
-        assert!(!exact_sector_reply_len(64 + 513));
-    }
 }

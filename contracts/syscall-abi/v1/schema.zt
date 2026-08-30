@@ -347,6 +347,34 @@ operations :: List Operation = {
   -- shared buffer between the two participants; this operation only reports what
   -- the generation already decided about the caller.
   operation "lifecycle" "RECORDING_SOURCES" 57;
+  -- IO4's authenticated exact-destination table, paged through the transfer
+  -- window. The request names only a cursor; the root derives the caller from
+  -- its badge and answers rows only when that instance is the declared network
+  -- service. Destination matching and all protocol policy remain userspace.
+  operation "capabilityTable" "NETWORK_DESTINATIONS_READ" 64;
+  -- B83's authenticated per-ring block authority table, paged through the
+  -- transfer window exactly as `NETWORK_DESTINATIONS_READ` is. The request
+  -- names only a cursor; the root derives the caller from its badge and answers
+  -- rows only when that instance is the generation's declared block driver.
+  --
+  -- The root reads no block right here and enforces none: it authenticates who
+  -- may read the table and bounds the bytes. Deciding that a write on a
+  -- read-only ring is refused is the driver's, because that is device policy.
+  operation "capabilityTable" "BLOCK_RING_AUTHORITY_READ" 69;
+  -- IO1's root-brokered hardware-resource mechanism. Every object operand is a
+  -- logical capability slot from the authenticated caller's own authority
+  -- table; no task, driver, device, physical address, or interrupt number is
+  -- accepted from application bytes.
+  operation "ioResource" "BIND" 58;
+  operation "ioResource" "MAP_MMIO" 59;
+  operation "ioResource" "DMA_MAP" 60;
+  operation "ioResource" "DMA_RELEASE" 61;
+  operation "ioResource" "IRQ_ACK" 62;
+  operation "ioResource" "QUEUE_MAP" 63;
+  operation "ioResource" "REQUEST_BEGIN" 65;
+  operation "ioResource" "REQUEST_SETTLE" 66;
+  operation "ioResource" "MMIO_READ32" 67;
+  operation "ioResource" "MMIO_WRITE32" 68;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.
@@ -372,6 +400,7 @@ services :: List Service = {
   service "capabilityTransfer" "capability_transfer_labels";
   service "clock" "clock_labels";
   service "scheduling" "scheduling_labels";
+  service "ioResource" "io_resource_labels";
 };
 
 -- The status a root service returns in reply MR0. Deliberately coarse: a

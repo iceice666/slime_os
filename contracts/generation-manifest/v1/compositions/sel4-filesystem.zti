@@ -2,216 +2,70 @@
   bootAction = "filesystem";
   bootstrapInstance = "init";
   executables = [
-    {
-      commandProfile = [];
-      name = "init";
-      object = "sha256:init";
-      role = "init";
-      spawnBudget = 2;
-    };
-    {
-      commandProfile = [];
-      name = "sel4-filesystem-service";
-      object = "sha256:sel4-filesystem-service";
-      role = "service";
-      spawnBudget = 0;
-    };
-    {
-      commandProfile = [];
-      name = "directory-probe";
-      object = "sha256:directory-probe";
-      role = "application";
-      spawnBudget = 0;
-    };
+    { commandProfile = []; name = "init"; object = "sha256:init"; role = "init"; spawnBudget = 2; };
+    { commandProfile = []; name = "sel4-filesystem-service"; object = "sha256:sel4-filesystem-service"; role = "service"; spawnBudget = 0; };
+    { commandProfile = []; name = "directory-probe"; object = "sha256:directory-probe"; role = "application"; spawnBudget = 0; };
+    { commandProfile = []; name = "virtio-blk-driver"; object = "sha256:virtio-blk-driver"; role = "service"; spawnBudget = 0; };
   ];
   formatVersion = 1;
   generation = 29;
   grants = [
-    {
-      name = "init-sel4-filesystem-service";
-      capabilityKind = "executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
-      source = "init";
-      target = "sel4-filesystem-service";
-      transferable = false;
-    };
-    {
-      name = "init-directory-probe";
-      capabilityKind = "executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
-      source = "init";
-      target = "directory-probe";
-      transferable = false;
-    };
-    {
-      name = "filesystem-service-a-namespace";
-      capabilityKind = "directory";
-      rights = [
-        "directoryRead";
-        "directoryWrite";
-        "directoryList";
-        "directoryDerive";
-      ];
-      source = "sel4-filesystem-service";
-      target = "sel4-filesystem-service";
-      transferable = false;
-    };
-    {
-      name = "filesystem-service-b-device";
-      capabilityKind = "block";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "sel4-filesystem-service";
-      target = "sel4-filesystem-service";
-      transferable = false;
-    };
-    {
-      name = "directory-probe-namespace";
-      capabilityKind = "directory";
-      rights = [
-        "directoryRead";
-        "directoryWrite";
-        "directoryList";
-        "directoryDerive";
-      ];
-      source = "directory-probe";
-      target = "directory-probe";
-      transferable = true;
-    };
-    {
-      name = "filesystem-rpc";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "directory-probe";
-      target = "sel4-filesystem-service";
-      transferable = true;
-    };
-    {
-      name = "filesystem-service-ready";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "sel4-filesystem-service";
-      target = "init";
-      transferable = false;
-    };
+    { name = "init-sel4-filesystem-service"; capabilityKind = "executable"; rights = ["exec";"spawn";]; source = "init"; target = "sel4-filesystem-service"; transferable = false; };
+    { name = "init-directory-probe"; capabilityKind = "executable"; rights = ["exec";"spawn";]; source = "init"; target = "directory-probe"; transferable = false; };
+    { name = "filesystem-init-buffer-factory"; capabilityKind = "sharedBufferFactory"; rights = ["bufferCreate";]; source = "init"; target = "init"; transferable = false; };
+    { name = "filesystem-service-buffer-factory"; capabilityKind = "sharedBufferFactory"; rights = ["bufferCreate";]; source = "init"; target = "sel4-filesystem-service"; transferable = true; };
+    { name = "filesystem-block-peer"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "sel4-filesystem-service"; target = "virtio-blk-driver"; transferable = true; };
+    { name = "filesystem-block-device"; capabilityKind = "device"; rights = ["mapMmio";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "filesystem-block-mmio"; capabilityKind = "mmioRegion"; rights = ["mapMmio";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "filesystem-block-interrupt"; capabilityKind = "interruptSource"; rights = ["irqAck";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "filesystem-block-dma"; capabilityKind = "dmaAccount"; rights = ["dmaPin";"dmaRelease";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "filesystem-service-a-namespace"; capabilityKind = "directory"; rights = ["directoryRead";"directoryWrite";"directoryList";"directoryDerive";]; source = "sel4-filesystem-service"; target = "sel4-filesystem-service"; transferable = false; };
+    { name = "directory-probe-namespace"; capabilityKind = "directory"; rights = ["directoryRead";"directoryWrite";"directoryList";"directoryDerive";]; source = "directory-probe"; target = "directory-probe"; transferable = true; };
+    { name = "filesystem-rpc"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "directory-probe"; target = "sel4-filesystem-service"; transferable = true; };
+    { name = "filesystem-service-ready"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "sel4-filesystem-service"; target = "init"; transferable = false; };
   ];
-  health = {
-    bootAttempts = 3;
-    requiredInstances = [
-      "init";
-    ];
-  };
+  health = { bootAttempts = 3; requiredInstances = ["init";"virtio-blk-driver";]; };
   instances = [
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "init-directory-probe";
-          slot = 1;
-        };
-        {
-          grant = "init-sel4-filesystem-service";
-          slot = 2;
-        };
-        {
-          grant = "filesystem-service-ready";
-          slot = 3;
-        };
-      ];
-      dependencies = [];
-      executable = "init";
-      health = "required";
-      name = "init";
-      owner = "root";
-    };
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "filesystem-rpc";
-          slot = 0;
-        };
-        {
-          grant = "filesystem-service-a-namespace";
-          slot = 1;
-        };
-        {
-          grant = "filesystem-service-b-device";
-          slot = 2;
-        };
-        {
-          grant = "filesystem-service-ready";
-          slot = 3;
-        };
-      ];
-      dependencies = [
-        "init";
-      ];
-      executable = "sel4-filesystem-service";
-      health = "optional";
-      name = "sel4-filesystem-service";
-      owner = "init";
-    };
-    {
-      autostart = false;
-      bindings = [
-        {
-          grant = "filesystem-rpc";
-          slot = 0;
-        };
-        {
-          grant = "directory-probe-namespace";
-          slot = 1;
-        };
-      ];
-      dependencies = [
-        "init";
-      ];
-      executable = "directory-probe";
-      health = "optional";
-      name = "directory-probe";
-      owner = "init";
-    };
+    { autostart = true; bindings = [ { grant = "init-directory-probe"; slot = 1; }; { grant = "init-sel4-filesystem-service"; slot = 2; }; { grant = "filesystem-service-ready"; slot = 3; }; { grant = "filesystem-init-buffer-factory"; slot = 4; }; ]; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
+    { autostart = true; bindings = [ { grant = "filesystem-rpc"; slot = 0; }; { grant = "filesystem-service-a-namespace"; slot = 1; }; { grant = "filesystem-service-ready"; slot = 3; }; { grant = "filesystem-service-buffer-factory"; slot = 4; }; { grant = "filesystem-block-peer"; slot = 8; }; ]; dependencies = ["init";]; executable = "sel4-filesystem-service"; health = "optional"; name = "sel4-filesystem-service"; owner = "init"; };
+    { autostart = false; bindings = [ { grant = "filesystem-rpc"; slot = 0; }; { grant = "directory-probe-namespace"; slot = 1; }; ]; dependencies = ["init";]; executable = "directory-probe"; health = "optional"; name = "directory-probe"; owner = "init"; };
+    { autostart = true; bindings = [ { grant = "filesystem-block-peer"; slot = 0; }; { grant = "filesystem-block-device"; slot = 1; }; { grant = "filesystem-block-mmio"; slot = 2; }; { grant = "filesystem-block-interrupt"; slot = 3; }; { grant = "filesystem-block-dma"; slot = 4; }; ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
-  objects = [
-    {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
-    };
-    {
-      id = "sha256:sel4-filesystem-service";
-      kind = "component";
-      size = 131072;
-    };
-    {
-      id = "sha256:directory-probe";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
+  notificationGrants = [
+    { name = "filesystem-block-request-ready"; source = "sel4-filesystem-service"; target = "virtio-blk-driver"; };
+    { name = "filesystem-block-completion-ready"; source = "virtio-blk-driver"; target = "sel4-filesystem-service"; };
+    { name = "filesystem-block-state-changed"; source = "virtio-blk-driver"; target = "sel4-filesystem-service"; };
   ];
-  sharedBufferBudget = [];
+  notificationBindings = [
+    { grant = "filesystem-block-request-ready"; holder = "sel4-filesystem-service"; role = "signal"; slot = 0; };
+    { grant = "filesystem-block-request-ready"; holder = "virtio-blk-driver"; role = "wait"; slot = 0; };
+    { grant = "filesystem-block-completion-ready"; holder = "virtio-blk-driver"; role = "signal"; slot = 1; };
+    { grant = "filesystem-block-completion-ready"; holder = "sel4-filesystem-service"; role = "wait"; slot = 1; };
+    { grant = "filesystem-block-state-changed"; holder = "virtio-blk-driver"; role = "signal"; slot = 2; };
+    { grant = "filesystem-block-state-changed"; holder = "sel4-filesystem-service"; role = "wait"; slot = 2; };
+  ];
+  objects = [
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:sel4-filesystem-service"; kind = "component"; size = 131072; };
+    { id = "sha256:directory-probe"; kind = "component"; size = 65536; };
+    { id = "sha256:virtio-blk-driver"; kind = "component"; size = 65536; };
+    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "io-resource-budget"; kind = "resource"; size = 4096; };
+    { id = "block-ring-authority"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  ];
+  sharedBufferBudget = [
+    { bufferCount = 2; bytePages = 10; holder = "sel4-filesystem-service"; loanCount = 2; mappingCount = 2; };
+    { bufferCount = 0; bytePages = 0; holder = "virtio-blk-driver"; loanCount = 2; mappingCount = 2; };
+  ];
+  ioResourceBudget = [
+    { holder = "virtio-blk-driver"; mmioBytes = 4096; mmioMappings = 1; dmaPages = 12; dmaMappings = 3; irqSources = 1; outstandingRequests = 8; bufferLoans = 4; };
+  ];
+  blockRingAuthority = [
+    { holder = "sel4-filesystem-service"; device = 0; ring = 0; rights = ["blockRead";"blockWrite";]; sectorLimit = 2048; };
+  ];
   state = [];
   target = "aarch64-sel4-qemu-virt";
 }

@@ -56,8 +56,9 @@ automatically.
 
 Generation *management* — staging, selection, promotion, rollback commands,
 recovery — is deliberately not root mechanism. It is userspace components
-holding block capabilities, mediated like any other client
-(`components/bins/sel4-generation-manager/` and its siblings).
+reaching storage through the supervised userspace block driver's rings, each
+ring gated by rights the generation declares for it
+(`components/services/sel4-generation-manager/` and its siblings).
 
 ## State crosses generations deliberately
 

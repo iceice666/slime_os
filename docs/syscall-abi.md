@@ -28,18 +28,19 @@ call/reply pairing, and rendezvous are the kernel's. `yield_now` is
 
 **Root-served.** Everything the root owns as mechanism — lifecycle, spawn,
 supervision, the capability table, capability transfer, shared buffers,
-directories, input, blocks, debug output — crosses as `seL4_Call` with an
-operation *label* on one of two badged endpoints. The badge authenticates the
-caller; a component cannot forge or relabel another task's identity.
+directories, the clock, hardware I/O resources, input, debug output — crosses as
+`seL4_Call` with an operation *label* on one of two badged endpoints. The badge
+authenticates the caller; a component cannot forge or relabel another task's
+identity.
 
 | Endpoint | Child CSpace slot | Served by | Carries |
 | --- | --- | --- | --- |
-| Root service | 1 (`ROOT_SERVICE_SLOT`) | the graph dispatcher thread | lifecycle, spawn, supervision, capability table, capability transfer, shared buffer, directory derive |
-| Console service | 32 (`CONSOLE_SERVICE_SLOT`) | the console dispatcher thread (B41) | debug write, input read, block transact, directory inspect/commit |
+| Root service | 1 (`ROOT_SERVICE_SLOT`) | the graph dispatcher thread | lifecycle, spawn, supervision, capability table, capability transfer, shared buffer, directory derive, clock, IO resource |
+| Console service | 32 (`CONSOLE_SERVICE_SLOT`) | the console dispatcher thread (B41) | debug write, input read, directory inspect/commit |
 
-Two endpoints because one thread serves each: a slow disk or a noisy console
-must not queue behind lifecycle traffic, and a console defect must not share the
-system dispatcher's fault domain.
+Two endpoints because one thread serves each: a noisy console must not queue
+behind lifecycle traffic, and a console defect must not share the system
+dispatcher's fault domain.
 
 ## Root service operations
 
@@ -94,6 +95,18 @@ Labels are the operation numbers. Operands are the fast message registers
 | 55 | `SUPERVISION PARAMETER READ` | `MR0=slot`, a supervision capability slot naming the subject, or `0xffffffff` (`PARAMETER_SELF_SLOT`) naming the caller's own instance; `MR1=key`, a parameter key id; `MR2=0` | Primary is the parameter's current value. Authority is twofold and both must hold — the caller must hold the `parameterRead` right on that handle, and the generation must declare a parameter edge from this holder to that subject carrying read. Absent authority is `-2`; a key the subject has never set is `-1`, so a refusal for want of authority and a missing key are distinguishable, which is what makes parameter state an authority rather than a namespace. The self slot is the only shape that reaches a *reflexive* parameter edge, and it is not a widening: no component holds a supervision capability naming itself, the declared reflexive edge remains the whole authority, and a component the generation grants no reflexive edge cannot reach even its own parameters. |
 | 56 | `SUPERVISION PARAMETER WRITE` | `MR0=slot`, as for label 55 including `PARAMETER_SELF_SLOT`; `MR1=key`; `MR2=value` | Primary is the value the key held before the write, or `0` when it was unset. Requires the `parameterWrite` right on that handle plus a declared parameter edge carrying write; `parameterRead` does not imply it, because a supervisor that must observe a component's configuration to decide a restart does not thereby get to change it. Absent authority is `-2`; a full per-subject parameter table is `-5`. Parameter state is per declared *instance* and survives a restart of that instance deliberately: it is the configuration a replacement is started with, which is why it is generation-declared authority rather than task-private memory. |
 | 57 | `LIFECYCLE RECORDING SOURCES` | `MR0=0` | Primary is the caller's own recording role (`record` = 1, `replay` = 2, or `0` for an instance the generation's recording resource does not name); auxiliary packs the declared record capacity in the low 32 bits and the deterministic flag in bit 32. A nonzero role also means the stream is paired — the resource cannot decode otherwise — so a replayer learns its input is bounded by `record_capacity * 64` bytes before it maps anything, which is how C9.5's "bound recorded trace bytes before allocation" holds on the consuming side. Read-only and self-scoped like `LIFECYCLE STATE READ`: the instance resolved is the badge's, so no component can read another's participation, and the stream identity is deliberately *not* reported — it is the generation's join key, not a handle, and answering it would tell a caller about a peer it may not name. Never refused for want of authority: an instance the resource omits is answered role `0`, which is what lets one component image run in a generation that records it and one that does not. Gated on `lifecycle` because whether the generation claims you deterministic is a property of being that instance rather than of any grant. |
+| 58 | `IO RESOURCE BIND` | `MR0=device_slot` | Primary is the fresh nonzero driver epoch. The device is resolved from the authenticated caller's own authority table; no device id or physical address crosses. |
+| 59 | `IO RESOURCE MAP MMIO` | `MR0=device_slot`, `MR1=mmio_region_slot`, `MR2=user_base`, `MR3=range`, where `range` packs 32-bit offset low and 32-bit length high | Primary is an opaque mapping id. The mapping is installed only after the device and exact region capabilities both authorize it; a wider, offset-past-end, duplicate, or rights-widening request is refused. |
+| 60 | `IO RESOURCE DMA MAP` | `MR0=dma_account_slot`, `MR1=loan_slot`, `MR2=direction`, `MR3=epoch` | Primary is an opaque mapping id and auxiliary is the opaque IOVA. The loan must be live and belong to this driver epoch; shared-buffer possession alone cannot reach this operation. |
+| 61 | `IO RESOURCE DMA RELEASE` | `MR0=dma_account_slot`, `MR1=mapping_id`, `MR2=epoch` | `0` after the direction-scoped mapping is destroyed and every DMA-page charge is returned. |
+| 62 | `IO RESOURCE IRQ ACK` | `MR0=interrupt_source_slot`, `MR1=epoch`, `MR2=prior_sequence` | Acknowledges exactly the holder's pending declared interrupt sequence and returns the resulting sequence. It does not wait for hardware arrival. A zero prior sequence binds without acknowledging; spoofed, duplicate, wrong-source, and stale acknowledgements are refused. Label number 62 is unchanged. |
+| 63 | `IO RESOURCE QUEUE MAP` | `MR0=dma_account_slot`, `MR1=pages`, `MR2=epoch` | Primary is an opaque mapping id and auxiliary is its opaque IOVA. This allocates driver-owned bidirectional queue control memory, never a client lease; it charges the same DMA account as payload mappings and is reclaimed with them. Payload mapping remains strictly `DeviceRead` or `DeviceWrite` with no widening value. |
+| 64 | `CAPABILITY NETWORK DESTINATIONS READ` | `MR0=cursor`, `MR1=0`, `MR2=transfer descriptor` | Primary is the number of `network-destination/v1` entries written to the caller's transfer window. The caller is badge-derived and must be the generation's declared `network-service`; no operand names a holder or destination. The root copies authenticated bytes only; exact tuple matching and protocol policy remain in userspace. |
+| 65 | `IO RESOURCE REQUEST BEGIN` | `MR0=dma_account_slot`, `MR1=mapping_id`, `MR2=request_id`, `MR3=epoch` | `0` after charging one nonzero request id against a live payload mapping. Queue mappings and duplicate ids are refused. |
+| 66 | `IO RESOURCE REQUEST SETTLE` | `MR0=dma_account_slot`, `MR1=mapping_id`, `MR2=request_id`, `MR3=epoch` | `0` after settling exactly one live request and returning its outstanding-request charge. A second or stale settlement is refused. |
+| 67 | `IO RESOURCE MMIO READ32` | `MR0=device_slot`, `MR1=mmio_region_slot`, `MR2=epoch`, `MR3=offset` | Primary is the 32-bit volatile value. For a shared-granule region this enforces the exact declared subrange per access, which is tighter than page-granular direct mapping. |
+| 68 | `IO RESOURCE MMIO WRITE32` | `MR0=device_slot`, `MR1=mmio_region_slot`, `MR2=epoch`, `MR3` packs 32-bit offset low and value high | `0` after one bounded volatile write. Out-of-range, read-only, stale, or ungranted access is refused before the effect. |
+| 69 | `CAPABILITY BLOCK RING AUTHORITY READ` | `MR0=cursor`, `MR1=0`, `MR2=transfer descriptor` | Primary is the number of `block-authority/v1` entries written to the caller's transfer window. The caller is badge-derived and must be the generation's declared block driver; no operand names a holder, device, or ring. The root copies authenticated bytes and enforces no block right — refusing a write on a read-only ring is the driver's decision, because that is device policy. |
 
 A label with no surviving mechanism is refused with `-4` and reported as
 `SLIME_GRAPH unsupported service`; the caller survives.
@@ -149,21 +162,37 @@ versioned together with them. A component reaches them only through `slime-rt`,
 which is why the SDK pins a `slime-rt` commit rather than reimplementing the
 transport.
 
-`just contracts_check` enforces the documentation half of this: every label the
-contract declares is documented here, and every numeric row here is a declared
-label (`scripts/generate/generate-syscall-abi-bindings.py --check`). It compares
-label coverage, not prose, so the policy above is enforced by review and by the
-frozen-label test, not by that gate.
+`just contracts_check` enforces the documentation half of this for *both* label
+tables below: every label either contract declares is documented here, and every
+numeric row here is a declared label. Each table is checked by the generator for
+the contract that owns it — `generate-syscall-abi-bindings.py --check` for the
+root section, `generate-component-runtime-abi-bindings.py --check` for the
+console section, which also compares each console row's *name*. Both compare
+labels, not prose, so the policy above is enforced by review and by the
+frozen-label test, not by those gates.
 
 ## Console service operations
+
+Labels are the `consoleOperations` numbering declared by
+`contracts/component-runtime-abi/v1/schema.zt` and generated into
+`boot-contracts/src/generated/component_runtime_abi.rs`. This is a *separate*
+numbering from the root service's, so label 2 here and label 2 there are
+unrelated operations.
 
 | Label | Operation | Operands | Result convention |
 | --- | --- | --- | --- |
 | 0 | `WRITE` | `MR0`=transfer descriptor (or inline registers) over the bytes | Bytes written. One line is emitted as one uninterruptible unit (B18), bounded by `MAX_STAGED_ARRAY_BYTES` (1024) rather than by `MAX_MSG`. |
 | 1 | `INPUT READ` | `MR0=input_slot` | Primary `0` with the encoded event in the auxiliary word, `-3` when no event is ready. Requires `RIGHT_INPUT_READ`. |
-| 2 | `BLOCK TRANSACT` | `MR0=block_slot`, `MR1=transfer descriptor` over the 64-byte request | `0` means delivered; the block outcome is in the returned reply record. Sector payloads ride behind the record in the same window. |
-| 3 | `DIRECTORY INSPECT` | `MR0=slot_pair(directory_slot, required_rights)`, `MR1=reserved window descriptor` | Nonnegative scope byte length; the immutable root and scope return through the window. |
-| 4 | `DIRECTORY COMMIT` | `MR0=directory_slot`, `MR1=transfer descriptor` over expected‖new root | `0` on commit, `-3` when the expected root is stale. |
+| 2 | `DIRECTORY INSPECT` | `MR0=slot_pair(directory_slot, required_rights)`, `MR1=reserved window descriptor` | Nonnegative scope byte length; the immutable root and scope return through the window. |
+| 3 | `DIRECTORY COMMIT` | `MR0=directory_slot`, `MR1=transfer descriptor` over expected‖new root | `0` on commit, `-3` when the expected root is stale. |
+
+B83 retired label 2's previous occupant, `BLOCK TRANSACT`, and *renumbered* the
+two directory operations down from 3 and 4 — the one place in this ABI where a
+label was reassigned rather than left frozen, because the console numbering is
+internal to the runtime transport and not part of the frozen root-label
+contract. A component reaches storage through the userspace virtio-blk driver's
+IO0 rings instead; the surviving read/write gate is per ring
+(`contracts/block-authority/v1`), not a root-checked capability.
 
 Directory *derive* is deliberately on the root service instead: it is the only
 one of the three that writes the caller's capability table, which the graph
@@ -201,22 +230,38 @@ own `IpcError` onto the same values in `slime-root/src/ipc.rs`.
 | -5 | `ERR_OUT_OF_MEMORY` | A task, capability, frame, object, byte, mapping, loan, or declared quota bound is exhausted. |
 
 `SUPERVISION STATUS` uses nonnegative primaries as typed terminations rather
-than plain success. `BLOCK TRANSACT` uses `0` to mean delivered, with the device
-outcome inside the reply record.
+than plain success. `SUPERVISION RESTART ADMIT` answers `0` remaining attempts
+as a success rather than a refusal. The `IO RESOURCE` operations that answer an
+identity — bind, the two mapping calls, and queue map — answer a *nonzero* one
+(`slime-root/src/io_resource.rs` starts both mapping counters at 1 and rejects a
+zero epoch), so an id can never be confused with the `0` the void operations
+return.
 
 ## Declared service admission
 
 An operation label is not reachable merely because it exists. Each label maps to
-a service id (`service_for_root_label` in `slime-root/src/main.rs`), and the
+a service id (`service_for_root_label` in `slime-root/src/ipc.rs`), and the
 caller's generation must carry a service binding for that id at the endpoint's
 slot, or the request is refused with `-1` before any argument is read. The ids
 are generated from the generation contract
 (`boot-contracts/src/generated/generation.rs`): `1` lifecycle, `2` spawn,
 `3` supervision, `4` capability transfer, `5` shared buffer, `6` directory,
-`7` input, `8` block, `9` console. Lifecycle and console are required of every
-instance; spawn, supervision, and capability transfer are required of any
-instance holding a spawn budget or an executable grant; shared buffer is
-required of any instance with a budget entry.
+`7` input, `9` console, `10` clock, `11` IO resource. Id `8` was block and is
+reserved, never reassigned; see below.
+
+Which services an instance must declare is derived from what it holds, by
+`boot-contracts/src/generation.rs`, and a mismatch in either direction fails
+admission — an undeclared service *and* a declared one the instance has no
+authority for. Lifecycle and console are required of every instance; spawn,
+supervision, and capability transfer are required of any instance holding a
+spawn budget or an executable grant; shared buffer is required of any instance
+with a budget entry; clock is required of any holder the generation's
+`clock-authority/v1` resource names; and IO resource is required of any instance
+granted a `Device`, `MmioRegion`, `InterruptSource`, or `DmaAccount` capability.
+Service id `8` was block, derived from a `Block` grant; B83 deleted `BLOCK
+TRANSACT` and B90 then deleted the kind, the service, and both rights bits. The
+id is reserved rather than reassigned. Storage authority is declared per ring in
+`contracts/block-authority/v1` and enforced by `virtio-blk-driver`.
 
 ## Child CSpace layout
 

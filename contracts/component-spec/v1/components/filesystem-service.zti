@@ -4,7 +4,7 @@
   componentType = "service";
   version = "1.0.0";
   owner = "root";
-  purpose = "Resolves paths in a snapshot tree and reads, writes, and derives directory objects over its block capability.";
+  purpose = "Resolves paths in a snapshot tree and reads, writes, and derives directory objects over a userspace virtio block driver.";
   implementation = {
     provider = "workspace";
     binary = "sel4-filesystem-service";

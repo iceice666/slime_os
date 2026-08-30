@@ -31,31 +31,31 @@ impl WireTimeAdvance {
             magic: u32::from_le_bytes(
                 buf[OFF_TIME_MAGIC..OFF_TIME_MAGIC + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-time layout"),
             ),
             version: u32::from_le_bytes(
                 buf[OFF_TIME_VERSION..OFF_TIME_VERSION + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-time layout"),
             ),
             flags: u32::from_le_bytes(
                 buf[OFF_TIME_FLAGS..OFF_TIME_FLAGS + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-time layout"),
             ),
             reserved0: u32::from_le_bytes(
                 buf[OFF_TIME_RESERVED0..OFF_TIME_RESERVED0 + 4]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-time layout"),
             ),
             now_ns: u64::from_le_bytes(
                 buf[OFF_TIME_NOW_NS..OFF_TIME_NOW_NS + 8]
                     .try_into()
-                    .expect("generated fabric-stream layout"),
+                    .expect("generated fabric-time layout"),
             ),
             reserved: buf[OFF_TIME_RESERVED..OFF_TIME_RESERVED + 40]
                 .try_into()
-                .expect("generated fabric-stream layout"),
+                .expect("generated fabric-time layout"),
         })
     }
 

@@ -27,7 +27,7 @@ pub(super) const fn input_script(generation: u64) -> &'static [u8] {
 /// Construct one typed root-mediated capability from a declared kind.
 pub(super) const fn declared_capability(
     kind: CapabilityKind,
-    device: u8,
+    resource: u8,
     rights: u64,
 ) -> Option<graph::CapabilityEntry> {
     match kind {
@@ -36,7 +36,12 @@ pub(super) const fn declared_capability(
         }
         CapabilityKind::Input => graph::CapabilityEntry::input(rights),
         CapabilityKind::SharedBufferFactory => graph::CapabilityEntry::buffer_factory(rights),
-        CapabilityKind::Block => graph::CapabilityEntry::block(device, rights),
+        CapabilityKind::Device => graph::CapabilityEntry::device(resource, rights),
+        CapabilityKind::MmioRegion => graph::CapabilityEntry::mmio_region(resource, rights),
+        CapabilityKind::InterruptSource => {
+            graph::CapabilityEntry::interrupt_source(resource, rights)
+        }
+        CapabilityKind::DmaAccount => graph::CapabilityEntry::dma_account(resource, rights),
         CapabilityKind::Endpoint
         | CapabilityKind::Executable
         | CapabilityKind::Supervision
@@ -88,7 +93,6 @@ pub(super) struct ConsoleTables<'a> {
     pub(super) tasks: &'a TaskTable<MAX_TASKS>,
     pub(super) script: &'static [u8],
     pub(super) input: Option<device::Pl011Input>,
-    pub(super) devices: &'a mut BlockDevices,
     pub(super) namespaces: &'a mut directory::Namespaces,
     pub(super) scopes: &'a directory::ScopeTable,
 }
@@ -104,7 +108,6 @@ pub(super) fn start_console_dispatcher(
         tasks,
         script,
         input,
-        devices,
         namespaces,
         scopes,
     } = tables;
@@ -142,7 +145,6 @@ pub(super) fn start_console_dispatcher(
             buffer: ptr::addr_of_mut!(CONSOLE_IPC_BUFFER) as *mut sel4::IpcBuffer,
             input,
             tasks: tasks as *const _,
-            devices: ptr::addr_of_mut!(*devices),
             namespaces: ptr::addr_of_mut!(*namespaces),
             scopes: scopes as *const _,
         });

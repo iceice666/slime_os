@@ -1,0 +1,66 @@
+{
+  formatVersion = 1;
+  name = "virtio-blk-driver";
+  componentType = "service";
+  version = "2.0.0";
+  owner = "root";
+  purpose = "Supervised userspace legacy virtio-mmio block driver serving bounded asynchronous BlockDevice v2 requests over IO0 and IO1.";
+  implementation = {
+    provider = "workspace";
+    binary = "virtio-blk-driver";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "device";
+    "dmaAccount";
+    "endpoint";
+    "interruptSource";
+    "mmioRegion";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+      privatePageQuota = 0;
+    };
+    devices = [
+      "device";
+    ];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/block/v2";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "io_block_check boots generation 51 with two real virtio-blk-devices";
+    expectedResult = "every observed request settles exactly once against validated used-ring progress, and a read-only ring refuses a write";
+    passFailCriteria = "[io-block-probe] io block plane complete";
+    requiredTestEnvironment = "io_block_check";
+  };
+}

@@ -46,7 +46,10 @@
 
 extern crate alloc;
 
+#[cfg(slime_boot_selector)]
 pub mod boot_selector;
+#[cfg(slime_boot_selector)]
+pub mod boot_selector_block;
 pub mod buffer_adapter;
 pub mod child_vspace;
 pub mod clock;
@@ -58,6 +61,7 @@ pub mod event;
 pub mod fault;
 pub mod generation;
 pub mod graph;
+pub mod io_resource;
 pub mod ipc;
 pub mod launched;
 pub mod lifecycle;
@@ -72,5 +76,4 @@ pub mod supervision;
 pub mod task;
 pub mod timer;
 pub mod transfer_window;
-pub mod virtio_blk;
 pub mod wait_set;

@@ -49,15 +49,25 @@ pub const MAX_NOTIFICATION_BINDINGS: usize = 512;
 pub const MAX_STRING_BYTES: usize = 255;
 pub const MAX_STRING_TABLE_BYTES: usize = 65536;
 pub const MAX_OBJECT_PAYLOAD_BYTES: usize = 8388608;
+
+/// Declared capability-class discriminants. Value 4 was `CAPABILITY_BLOCK`,
+/// retired with B90; the number stays reserved rather than reassigned,
+/// because a discriminant is wire identity.
 pub const CAPABILITY_ENDPOINT: u32 = 1;
 pub const CAPABILITY_EXECUTABLE: u32 = 2;
 pub const CAPABILITY_SHARED_BUFFER_FACTORY: u32 = 3;
-pub const CAPABILITY_BLOCK: u32 = 4;
 pub const CAPABILITY_DIRECTORY: u32 = 5;
 pub const CAPABILITY_INPUT: u32 = 6;
 pub const CAPABILITY_SUPERVISION: u32 = 7;
 pub const CAPABILITY_SHARED_BUFFER: u32 = 8;
 pub const CAPABILITY_LOAN: u32 = 9;
+pub const CAPABILITY_DEVICE: u32 = 10;
+pub const CAPABILITY_MMIO_REGION: u32 = 11;
+pub const CAPABILITY_INTERRUPT_SOURCE: u32 = 12;
+pub const CAPABILITY_DMA_ACCOUNT: u32 = 13;
+
+/// Declared root service ids. Value 8 was `SERVICE_BLOCK`, retired with
+/// B90 once no label mapped to it; reserved rather than reassigned.
 pub const SERVICE_LIFECYCLE: u32 = 1;
 pub const SERVICE_SPAWN: u32 = 2;
 pub const SERVICE_SUPERVISION: u32 = 3;
@@ -65,9 +75,9 @@ pub const SERVICE_CAPABILITY_TRANSFER: u32 = 4;
 pub const SERVICE_SHARED_BUFFER: u32 = 5;
 pub const SERVICE_DIRECTORY: u32 = 6;
 pub const SERVICE_INPUT: u32 = 7;
-pub const SERVICE_BLOCK: u32 = 8;
 pub const SERVICE_CONSOLE: u32 = 9;
 pub const SERVICE_CLOCK: u32 = 10;
+pub const SERVICE_IO_RESOURCE: u32 = 11;
 pub const RIGHT_SEND: u64 = 1;
 pub const RIGHT_RECV: u64 = 2;
 pub const RIGHT_TRANSFER: u64 = 4;
@@ -78,8 +88,6 @@ pub const RIGHT_DMA_RELEASE: u64 = 64;
 pub const RIGHT_IRQ_ACK: u64 = 128;
 pub const RIGHT_BUFFER_WRITE: u64 = 256;
 pub const RIGHT_BUFFER_MAP: u64 = 512;
-pub const RIGHT_BLOCK_READ: u64 = 1024;
-pub const RIGHT_BLOCK_WRITE: u64 = 2048;
 pub const RIGHT_STORE_READ: u64 = 4096;
 pub const RIGHT_STORE_WRITE: u64 = 8192;
 pub const RIGHT_HEALTH_CONFIRM: u64 = 16384;
@@ -101,7 +109,7 @@ pub const RIGHT_SCHEDULING_PROMOTE: u64 = 1073741824;
 pub const RIGHT_LIFECYCLE_RESTART: u64 = 2147483648;
 pub const RIGHT_PARAMETER_READ: u64 = 4294967296;
 pub const RIGHT_PARAMETER_WRITE: u64 = 8589934592;
-pub const RIGHT_ALL: u64 = 17179738111;
+pub const RIGHT_ALL: u64 = 17179735039;
 
 /// C9.5's nondeterminism classification, as masks over the same
 /// `rightBits` table `RIGHT_*` comes from.
@@ -114,7 +122,7 @@ pub const RIGHT_ALL: u64 = 17179738111;
 /// refuses to emit otherwise, so a right added without a classification is
 /// a build failure rather than a source silently treated as harmless.
 pub const RIGHT_RECORDED: u64 = 469762048;
-pub const RIGHT_UNRECORDED: u64 = 8103247091;
+pub const RIGHT_UNRECORDED: u64 = 8103244019;
 
 /// The rights bit a generation manifest spells `name`, or `None`.
 ///
@@ -134,8 +142,6 @@ pub fn right_named(name: &str) -> Option<u64> {
         "irqAck" => RIGHT_IRQ_ACK,
         "bufferWrite" => RIGHT_BUFFER_WRITE,
         "bufferMap" => RIGHT_BUFFER_MAP,
-        "blockRead" => RIGHT_BLOCK_READ,
-        "blockWrite" => RIGHT_BLOCK_WRITE,
         "storeRead" => RIGHT_STORE_READ,
         "storeWrite" => RIGHT_STORE_WRITE,
         "healthConfirm" => RIGHT_HEALTH_CONFIRM,

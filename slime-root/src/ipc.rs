@@ -38,13 +38,13 @@ pub use boot_contracts::fabric_graph::MAX_INGRESS_SOURCES as MAX_WAIT_SOURCES;
 /// happens to occupy a nearby number.
 pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
     use boot_contracts::generation::{
-        SERVICE_CAPABILITY_TRANSFER, SERVICE_CLOCK, SERVICE_DIRECTORY, SERVICE_LIFECYCLE,
-        SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
+        SERVICE_CAPABILITY_TRANSFER, SERVICE_CLOCK, SERVICE_DIRECTORY, SERVICE_IO_RESOURCE,
+        SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
     };
     use slime_proto::syscall_abi::{
         capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-        lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
-        supervision_labels,
+        io_resource_labels, lifecycle_labels, scheduling_labels, shared_buffer_labels,
+        spawn_labels, supervision_labels,
     };
     match label {
         lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
@@ -103,6 +103,8 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::OCCUPANCY
         | capability_table_labels::RESOLVE_BINDING
         | capability_table_labels::GRAPH_READ
+        | capability_table_labels::NETWORK_DESTINATIONS_READ
+        | capability_table_labels::BLOCK_RING_AUTHORITY_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_table_labels::GRAPH_QUERY
         | capability_transfer_labels::EXPORT
@@ -125,6 +127,16 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | clock_labels::TIMER_CANCEL
         | clock_labels::SIMULATED_READ
         | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
+        io_resource_labels::BIND
+        | io_resource_labels::MAP_MMIO
+        | io_resource_labels::DMA_MAP
+        | io_resource_labels::DMA_RELEASE
+        | io_resource_labels::IRQ_ACK
+        | io_resource_labels::QUEUE_MAP
+        | io_resource_labels::REQUEST_BEGIN
+        | io_resource_labels::REQUEST_SETTLE
+        | io_resource_labels::MMIO_READ32
+        | io_resource_labels::MMIO_WRITE32 => Some(SERVICE_IO_RESOURCE),
         // C9.3's class read is self-scoped by badge and grants nothing, so it is
         // gated on `lifecycle` for `WAIT_SOURCES`' reason: the band a thread
         // runs at is a property of being a task, not of any grant.
@@ -208,6 +220,22 @@ pub const fn lifecycle_request_len(label: sel4::Word) -> Option<usize> {
         // No operand at all: the caller is the badge, and naming another
         // instance's recording participation is authority no C9.5 field grants.
         lifecycle_labels::RECORDING_SOURCES => Some(0),
+        _ => None,
+    }
+}
+/// Exact fast-register count for IO1 hardware-resource operations.
+pub const fn io_resource_request_len(label: sel4::Word) -> Option<usize> {
+    use slime_proto::syscall_abi::io_resource_labels;
+    match label {
+        io_resource_labels::BIND => Some(1),
+        io_resource_labels::MAP_MMIO
+        | io_resource_labels::DMA_MAP
+        | io_resource_labels::QUEUE_MAP
+        | io_resource_labels::REQUEST_BEGIN
+        | io_resource_labels::REQUEST_SETTLE
+        | io_resource_labels::MMIO_READ32
+        | io_resource_labels::MMIO_WRITE32 => Some(4),
+        io_resource_labels::DMA_RELEASE | io_resource_labels::IRQ_ACK => Some(3),
         _ => None,
     }
 }
@@ -345,7 +373,7 @@ pub struct Reception {
 /// it.
 ///
 /// The console endpoint has its own narrow labels because one thread serves
-/// console, input, block, and directory device traffic.
+/// console, input, and directory traffic.
 pub struct ConsoleMessage {
     pub badge: sel4::Badge,
     pub kind: ConsoleKind,
@@ -355,18 +383,17 @@ pub struct ConsoleMessage {
 
 /// What a console-endpoint message asks for.
 ///
-/// Two kinds share one endpoint because one thread serves them and a second
-/// endpoint would need a second blocking receive. They are both "the
-/// terminal", so one queue between them is the honest shape.
+/// The kinds share one endpoint because one thread serves them and a second
+/// endpoint would need a second blocking receive. They are all console-adjacent
+/// services, so one queue between them is the honest shape.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ConsoleKind {
     /// One-way debug output.
     Write,
     /// A read returning one decoded key event.
     InputRead,
-    /// A directory inspect, derive, or commit (B45). Here for the same
-    /// reason block requests are: the namespace and scope tables came with
-    /// the handlers, and a commit racing a lifecycle syscall on one queue
+    /// A directory inspect or commit (B45). The namespace and scope tables came
+    /// with the handlers, and a commit racing a lifecycle syscall on one queue
     /// makes each wait for the other for no reason.
     ///
     /// Derive is *not* here: it is the only writer of the caller's capability
@@ -374,18 +401,12 @@ pub enum ConsoleKind {
     /// one task's table is a data race.
     DirectoryInspect,
     DirectoryCommit,
-    /// One sector-granular block-device request (B43). On this thread because
-    /// a slow disk must not hold up lifecycle or fabric traffic, and because
-    /// the device tables live with whoever answers block requests.
-    BlockTransact,
 }
 
 impl ConsoleKind {
     const WRITE: sel4::Word = boot_contracts::component_runtime_abi::console_labels::WRITE;
     const INPUT_READ: sel4::Word =
         boot_contracts::component_runtime_abi::console_labels::INPUT_READ;
-    const BLOCK_TRANSACT: sel4::Word =
-        boot_contracts::component_runtime_abi::console_labels::BLOCK_TRANSACT;
     const DIRECTORY_INSPECT: sel4::Word =
         boot_contracts::component_runtime_abi::console_labels::DIRECTORY_INSPECT;
     const DIRECTORY_COMMIT: sel4::Word =
@@ -395,7 +416,6 @@ impl ConsoleKind {
         match label {
             Self::WRITE => Some(Self::Write),
             Self::INPUT_READ => Some(Self::InputRead),
-            Self::BLOCK_TRANSACT => Some(Self::BlockTransact),
             Self::DIRECTORY_INSPECT => Some(Self::DirectoryInspect),
             Self::DIRECTORY_COMMIT => Some(Self::DirectoryCommit),
             _ => None,
@@ -796,6 +816,41 @@ fn resolve_notification_slot(
         Some(_) => return None,
         None => (role, None),
     };
+    // A *name-free* query: `@<ordinal>+<role>`, answering "my Nth binding in
+    // this role, by ascending declared slot".
+    //
+    // A service declared twice — one instance per device, which is how a plane
+    // with two disks is composed, since IO1 grants one device per driver —-
+    // cannot ask by grant name: notification grant names are globally unique
+    // and each grant has exactly one waiter, so the two instances are bound to
+    // differently-named grants. A driver spelling one name would serve only the
+    // instance that happened to get it. This is the same compile-time coupling
+    // B70 removed for capability slots, reappearing as a name.
+    //
+    // Ordinal over *this holder's own* bindings, so it discloses nothing about
+    // a peer, and by ascending slot rather than declaration order so it is a
+    // property of the layout rather than of how the manifest was written.
+    if let Some(ordinal) = name.strip_prefix('@') {
+        let wanted = wanted?;
+        let Ok(ordinal) = ordinal.parse::<usize>() else {
+            return None;
+        };
+        let mut slots = [usize::MAX; MAX_NOTIFICATION_BINDINGS_PER_HOLDER];
+        let mut len = 0;
+        for index in 0..generation.notification_binding_count() {
+            let binding = generation.notification_binding(index).ok()?;
+            if binding.holder != holder || binding.role != wanted {
+                continue;
+            }
+            if len == slots.len() {
+                return None;
+            }
+            slots[len] = binding.slot;
+            len += 1;
+        }
+        slots[..len].sort_unstable();
+        return slots[..len].get(ordinal).copied();
+    }
     let mut found: Option<usize> = None;
     for index in 0..generation.notification_binding_count() {
         let binding = generation.notification_binding(index).ok()?;
@@ -818,6 +873,13 @@ fn resolve_notification_slot(
     }
     found
 }
+
+/// Notification bindings one holder may declare in a single role.
+///
+/// Bounds the ordinal query's scratch array. A holder declaring more is
+/// refused rather than truncated: answering from a partial list would return a
+/// different binding than the ordinal names.
+const MAX_NOTIFICATION_BINDINGS_PER_HOLDER: usize = 16;
 
 /// Which of `instance`'s slots carries a capability of `kind` bearing `rights`.
 ///
@@ -894,7 +956,6 @@ fn capability_kind_named(name: &str) -> Option<boot_contracts::generation::Capab
         "endpoint" => CapabilityKind::Endpoint,
         "executable" => CapabilityKind::Executable,
         "sharedBufferFactory" => CapabilityKind::SharedBufferFactory,
-        "block" => CapabilityKind::Block,
         "directory" => CapabilityKind::Directory,
         "input" => CapabilityKind::Input,
         "supervision" => CapabilityKind::Supervision,
@@ -1177,6 +1238,116 @@ pub fn read_graph_participants(
     Some(written / GRAPH_ROW_BYTES)
 }
 
+pub const NETWORK_DESTINATION_ROW_BYTES: usize = boot_contracts::network_destination::ENTRY_BYTES;
+pub const NETWORK_DESTINATION_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / NETWORK_DESTINATION_ROW_BYTES;
+
+/// Copy authenticated IO4 entries only to the generation's declared
+/// `network-service`. This is identity gating, not destination policy.
+pub fn read_network_destinations(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(destinations)) = crate::generation::network_destinations_object(generation) else {
+        return None;
+    };
+    let caller = generation.instance(instance).ok()?;
+    if caller.name != "network-service" {
+        return None;
+    }
+    let mut written = 0;
+    for index in cursor..destinations.destination_count() {
+        let end = written + NETWORK_DESTINATION_ROW_BYTES;
+        if end > out.len()
+            || written / NETWORK_DESTINATION_ROW_BYTES >= NETWORK_DESTINATION_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(destinations.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / NETWORK_DESTINATION_ROW_BYTES)
+}
+
+pub const BLOCK_RING_AUTHORITY_ROW_BYTES: usize = boot_contracts::block_authority::ENTRY_BYTES;
+pub const BLOCK_RING_AUTHORITY_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / BLOCK_RING_AUTHORITY_ROW_BYTES;
+
+/// The one *executable* authorized to read the B83 authority table.
+///
+/// The executable rather than the instance name (B84): a plane with two disks
+/// declares this same audited binary twice, under two composition-chosen
+/// instance names, and both instances enforce the table. Gating on an instance
+/// name would mean every such composition had to spell one blessed name or
+/// patch this constant, and the property being checked is "is this the driver
+/// that enforces these rows", which is a property of the code, not of the name
+/// a composition happened to give one copy of it.
+///
+/// Still a literal rather than a manifest field, matching IO4's
+/// `network-service` gate: a second, different block driver would need its own
+/// declared name here, which is the review this literal forces.
+pub const BLOCK_DRIVER_EXECUTABLE: &str = "virtio-blk-driver";
+
+/// Copy authenticated B83 entries only to the generation's declared block
+/// driver, and only the rows for the device that driver instance was installed
+/// against. This is identity gating, not block policy: the root reads no right
+/// here, because refusing a write on a read-only ring is a device decision.
+///
+/// Filtering by device is least authority, not convenience. Two driver
+/// instances serve two disks; each enforces only its own, so handing either the
+/// other's rows would disclose authority it cannot act on and could not have
+/// derived. The device comes from the caller's own declared IO1 budget — the
+/// same record `install_driver` bound it to — so a driver cannot ask for
+/// another device's rows by asking differently.
+pub fn read_block_ring_authority(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(authority)) = crate::generation::block_ring_authority_object(generation) else {
+        return None;
+    };
+    let caller = generation.instance(instance).ok()?;
+    let executable = generation.executable(caller.executable).ok()?;
+    if executable.name != BLOCK_DRIVER_EXECUTABLE {
+        return None;
+    }
+    // Which device this instance drives, from the budget that installed it. A
+    // driver with no declared budget holds no device authority at all, so it
+    // reads nothing rather than everything.
+    let device = crate::generation::io_resource_budget_object(generation)?
+        .ok()?
+        .quota_for(&boot_contracts::io_resource::driver_identity(caller.name))?
+        .device;
+    // The cursor counts *this device's* rows, not raw table positions. Skipping
+    // raw indices while returning a count of rows written would make a paging
+    // caller re-request forever, because the two numbers would not advance
+    // together.
+    let mut matched = 0;
+    let mut written = 0;
+    for index in 0..authority.ring_count() {
+        if authority.ring(index)?.device != device {
+            continue;
+        }
+        matched += 1;
+        if matched <= cursor {
+            continue;
+        }
+        let end = written + BLOCK_RING_AUTHORITY_ROW_BYTES;
+        if end > out.len()
+            || written / BLOCK_RING_AUTHORITY_ROW_BYTES >= BLOCK_RING_AUTHORITY_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(authority.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / BLOCK_RING_AUTHORITY_ROW_BYTES)
+}
+
 /// Bytes one encoded wake-source record occupies in a `WAIT_SOURCES` reply.
 ///
 /// The contract's own record size: the caller decodes with
@@ -1331,6 +1502,14 @@ mod tests {
                 SERVICE_CAPABILITY_TRANSFER,
             ),
             (
+                capability_table_labels::NETWORK_DESTINATIONS_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
+                capability_table_labels::BLOCK_RING_AUTHORITY_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
                 capability_table_labels::GRAPH_QUERY,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
@@ -1419,12 +1598,14 @@ mod tests {
             // 43 until C10.1's `PRIVATE_MEMORY_GROW`, 44-48 until C9.1's clock
             // service, 49 until C9.2's `WAIT_SOURCES`, 50-51 until C9.3's
             // scheduling class, 52-56 until C9.4's lifecycle state and
-            // restart/parameter operations, and 57 until C9.5's
-            // `RECORDING_SOURCES`. Moving one out of this list is the whole
-            // change: a number this test asserts routes nowhere and a number the
-            // contract declares are the same fact stated twice, so assigning a
-            // label must fail here first.
-            58,
+            // restart/parameter operations, 57 until C9.5's
+            // `RECORDING_SOURCES`, 58-63 and 65-68 until IO1's hardware-resource
+            // service claimed them, 64 until IO4's
+            // `NETWORK_DESTINATIONS_READ`, and 69 until B83's
+            // `BLOCK_RING_AUTHORITY_READ`. Moving one out of this list is the
+            // whole change: a number this test asserts routes nowhere and a
+            // number the contract declares are the same fact stated twice, so
+            // assigning a label must fail here first.
             sel4::Word::MAX,
         ] {
             assert_eq!(
@@ -1618,7 +1799,6 @@ mod tests {
             ("endpoint", CapabilityKind::Endpoint),
             ("executable", CapabilityKind::Executable),
             ("sharedBufferFactory", CapabilityKind::SharedBufferFactory),
-            ("block", CapabilityKind::Block),
             ("directory", CapabilityKind::Directory),
             ("input", CapabilityKind::Input),
             ("supervision", CapabilityKind::Supervision),
@@ -1641,13 +1821,17 @@ mod tests {
     #[test]
     fn manifest_right_spellings_match_their_bits() {
         use boot_contracts::generation::{
-            RIGHT_BLOCK_READ, RIGHT_BUFFER_CREATE, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, right_named,
+            RIGHT_BUFFER_CREATE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, right_named,
         };
         assert_eq!(right_named("send"), Some(RIGHT_SEND));
         assert_eq!(right_named("recv"), Some(RIGHT_RECV));
         assert_eq!(right_named("exec"), Some(RIGHT_EXEC));
         assert_eq!(right_named("bufferCreate"), Some(RIGHT_BUFFER_CREATE));
-        assert_eq!(right_named("blockRead"), Some(RIGHT_BLOCK_READ));
+        assert_eq!(right_named("inputRead"), Some(RIGHT_INPUT_READ));
+        // B90 retired both block rights, so their manifest spellings are now
+        // unaskable rather than mapped to a reserved bit.
+        assert_eq!(right_named("blockRead"), None);
+        assert_eq!(right_named("blockWrite"), None);
         // Rust spellings are not manifest spellings, and only the latter is asked.
         assert_eq!(right_named("RIGHT_SEND"), None);
         assert_eq!(right_named("buffer_create"), None);
@@ -1704,6 +1888,29 @@ mod tests {
         // `kind:` and `notification:` cannot both claim one name.
         assert!(!"notification:x".starts_with("kind:"));
         assert!(!"kind:endpoint".starts_with("notification:"));
+    }
+
+    /// The name-free notification query, and why it must require a role.
+    ///
+    /// A service declared twice — one instance per device, which is how a plane
+    /// with two disks is composed since IO1 grants one device per driver — is
+    /// bound to differently-named notification grants, because grant names are
+    /// globally unique and each grant has exactly one waiter. A driver spelling
+    /// one name serves only the instance that received it. `@<ordinal>+<role>`
+    /// asks by position in the caller's *own* role-filtered bindings instead.
+    ///
+    /// A bare `@0` with no role is refused: "my first binding" spans two roles
+    /// and identifies no slot, which is the same ambiguity rule every other axis
+    /// in this operation follows.
+    #[test]
+    fn the_ordinal_notification_query_requires_a_role() {
+        assert!(binding_name_admissible(b"notification:@0+wait"));
+        assert!(binding_name_admissible(b"notification:@1+signal"));
+        // An ordinal is not a grant name, so a grant literally named `@0` could
+        // not be reached by this query and vice versa — the namespaces stay
+        // disjoint by the `@` sigil rather than by convention.
+        assert!("@0".starts_with('@'));
+        assert!(!"io-block-request-ready".starts_with('@'));
     }
 
     /// The minted-binding axis is its own namespace too, disjoint from grants

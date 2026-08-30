@@ -1,3 +1,4 @@
-[layout] path=init slots=1 max=64
+[layout] path=init slots=2 max=64
 [layout] 1 executable sel4-storage-probe 0x10008
+[layout] 4 shared-buffer-factory - 0x1000000
 [layout] end

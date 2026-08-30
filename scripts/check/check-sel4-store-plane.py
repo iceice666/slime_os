@@ -61,12 +61,27 @@ OLDER_OBJECTS = 0
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        "the spawned instance received its declared device authority",
-        r"SLIME_GRAPH declared placed task=\d+ child=\d+ slot=\d+ kind=block",
+        # B83 replaces the root-placed block capability with the crossing
+        # shared-buffer factory from which the spawned client creates its IO0
+        # ring and payload buffer.
+        "the spawned instance received its declared crossing authority",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sel4-store-probe .*buffer_factory_grants=1",
     ),
     (
         "init spawned the probe",
         r"\[init\] store probe spawned",
+    ),
+    (
+        # The userspace driver reads the generation's sole ring-authority row.
+        # The idle instance has no ring and therefore contributes no row.
+        "the userspace driver read the spawned instance's per-ring authority",
+        r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
+    ),
+    (
+        # Capacity comes from virtio config space through the root-mediated IO1
+        # resources, not from the retired root block ABI.
+        "the userspace driver brought up the 1 MiB device",
+        r"\[virtio-blk-driver\] ready capacity=2048 epoch=\d+",
     ),
     (
         # Protective MBR, both header copies, entry-array CRCs, bounds, overlap,
@@ -124,6 +139,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sel4-store-probe\] heap used=\d+ capacity=\d+",
     ),
     (
+        "the driver released cleanly on its peer's command",
+        r"\[virtio-blk-driver\] peer complete, exiting",
+    ),
+    (
         "the probe ran every arm and exited cleanly",
         r"\[sel4-store-probe\] store plane complete",
     ),
@@ -142,8 +161,9 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] store plane fail: .*",
     r"\[sel4-store-probe\] fail: .*",
-
-    r"SLIME_ROOT block bring-up failed",
+    # Root-side block-driver failures disappear with the retired synchronous
+    # ABI; the userspace driver's own failure marker is the equivalent gate.
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -308,6 +328,45 @@ def check_happy(transcript: str) -> None:
     if completions != 1:
         report_transcript(transcript)
         fail(f"{completions} instances ran the scenario, expected 1")
+    # Root-side corroboration after B83: the root no longer sees block opcodes,
+    # but it still owns DMA mediation and resource reclamation. Require both
+    # transfer directions because this scenario verifies reads and durable
+    # writes, then require every DMA charge to return to zero at driver exit.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace driver")
+    reclaim = re.search(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if reclaim is None:
+        report_transcript(transcript)
+        fail("the root recorded no IO-resource reclamation for the userspace driver")
+    pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+        int(value) for value in reclaim.groups()
+    )
+    if pre_pages == 0 or pre_mappings == 0:
+        report_transcript(transcript)
+        fail("the driver held no DMA pages or mappings, so it moved no bytes")
+    if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+        report_transcript(transcript)
+        fail(
+            f"the root reclaimed {back_pages}/{back_mappings} of "
+            f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+        )
+    if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+        report_transcript(transcript)
+        fail(
+            f"the driver left {post_pages} DMA pages, {post_mappings} mappings, "
+            f"and {post_requests} requests outstanding"
+        )
     # The heap bound is declared in the runtime; the component reports what it
     # actually used. A footprint at or above the bound means the next object
     # would fail to allocate, which is worth catching before it does.

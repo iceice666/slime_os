@@ -2,7 +2,51 @@
 
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
-**Status:** Not started. IO0 is the first slice. Existing C7 shared-buffer/loan accounting, C9.2 bounded WaitSets, C9.4 supervised restart, and the root-owned virtio-blk path are prerequisites and regression evidence, not completion of this track.
+**Status:** IO0–IO3 and IO5–IO7 complete; IO4 is complete only for its exact-
+destination authority boundary, while its network data plane remains unfinished.
+IO2's root cutover closed 2026-08-29, and IO5, IO6, and IO7 added the track's host verification layers. Each
+implementation slice is observed under QEMU by its own gate — `just
+io_queue_check`, `just io_driver_authority_check`, `just io_block_check`, `just
+io_link_check`, `just io_network_check` — and every gate is registered in `just
+sel4_gate_control_check`, which proves each fails on missing, reordered, or
+failure evidence. IO5 adds `just io_queue_model_check` and `just
+io_resource_model_check`, which quantify IO0's lease/epoch rules and IO1's
+charge conservation over every interleaving rather than one schedule. IO6 adds
+`just kani_io_proofs`, which closes the wire arithmetic IO5's models explicitly
+disclaimed — slot indexing, cursor subtraction, and slice bounds — over every
+value of the declared types. IO7 adds `just kani_virtio_proofs` over the one
+input class the other three cannot reach: the bytes a *device* writes. The
+layers are complements — one real schedule, all interleavings of an
+abstraction, all values through the shipped Rust on the client side, then all
+values on the device side.
+
+What is **not** done, stated plainly so no consumer assumes otherwise:
+
+- **IO2's root cutover is complete and the root's block implementation is gone.**
+  All eight block-holding compositions — `sel4-storage`, `sel4-store`,
+  `sel4-rollback`, `sel4-replay`, `sel4-generation`, `sel4-filesystem`,
+  `sel4-recovery`, and `sel4-transfer` — reach their devices through the
+  userspace driver over IO0 rings, each gated on generation-declared per-ring
+  rights (`contracts/block-authority/v1`). The last two, the two-disk planes,
+  were unblocked by B84 (resolved 2026-08-28), which declared a per-instance
+  device ordinal in the IO1 budget and threaded it through every per-device
+  identity. B83 (resolved 2026-08-29) then deleted `slime-root`'s virtio-blk
+  command/descriptor implementation, `console.rs::serve_block_transact`, the
+  `ConsoleKind::BlockTransact` label, and the `block_transact*` runtime
+  wrappers; the parser survives only as `boot_selector_block.rs` under
+  `#[cfg(slime_boot_selector)]`, serving the immutable selector's
+  pre-admission bootstrap read. Evidence:
+  [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
+- **IO4's unimplemented network data plane:** Ethernet framing, ARP, IPv4,
+  ICMP, UDP, TCP, exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC,
+  and the TCP listener/accept data path are not implemented. DHCP, SLAAC, and
+  NDP are not declared by the current contracts, so the earlier claim that
+  they were "declared and refused" and could later land without a contract
+  change is withdrawn.
+- **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
+  so no containment claim is made; H4 owns AMD-IOMMU proof and a future Arm milestone
+  owns any SMMU proof.
+- **Physical link and storage qualification** remain H6/H12/RP and Framework work.
 
 **Dependencies:** [Foundations](01-foundations.md), especially M5 block semantics and M6 capability/supervision machinery; [Core runtime](02-core-runtime.md), especially C7 shared buffers and loans, C9.2 Notification-backed WaitSets, and C9.4 restart/reclamation; [Architecture portability](07-architecture-portability.md), especially P1's source boundary and P5's current seL4 product path. Platform tracks supply concrete resource descriptions and physical containment evidence: Framework PCI/ACPI/APIC/AMD-IOMMU data remains in [H](04-platform-hardware.md), while Raspberry Pi 5 device-tree/controller qualification remains in P4/RP milestones.
 
@@ -63,7 +107,11 @@ P5.4.2 established device-untyped/MMIO/IRQ/DMA construction in `slime-root`, a b
 
 ## IO0 — Queue, identity, and buffer-lease contract
 
-**Status:** Not started.
+**Status:** Complete 2026-08-28. The contract, the `no_std` queue/lease library, and
+the two-component QEMU proof all landed; `just io_queue_check` boots the plane and
+asserts round trip, backpressure, late-completion rejection, reset epoch cutover,
+and malformed-slice refusal, with 54 host tests behind the structural refusals.
+**Evidence:** [`devlog/2026-08-28-io0-queue-substrate/`](../devlog/2026-08-28-io0-queue-substrate/index.md)
 
 **Depends on:** C7 shared-buffer identities, mappings, loans, quotas, and fault reclamation; C9.2 bounded WaitSets; C9.4 supervised restart terminal states.
 
@@ -99,8 +147,25 @@ just io_queue_check
 Two supervised components exchange protocol-specific requests and completions through fixed shared rings, buffer leases, Notifications, and a WaitSet; full queues backpressure, cancellation and peer death settle every request, restart creates a fresh epoch, and stale or malformed completions cannot reclaim or resurrect memory.
 
 ## IO1 — Hardware resource authority and DMA accounts
-
-**Status:** Not started.
+**Status:** Complete. Observed under QEMU by `just io_driver_authority_check`:
+generation-declared device binding, exact-subrange mediated MMIO with out-of-range
+refusal, refusal to widen a shared-granule region to its page, and an ungranted
+component's computed denials for device, MMIO, two DMA operations, and interrupt
+authority. The probe forges `u64::MAX` as a prior interrupt sequence and observes
+`interrupt spoof refused=1`; it also compares both the opaque DMA mapping id and
+returned IOVA against the authenticated device ordinal's QEMU transport physical
+address and observes `dma token differs from device physical address=1`. Interrupt
+operation 62 is honestly named `IRQ_ACK`: it acknowledges a pending declared
+sequence but does not wait for hardware arrival. A stale-epoch map is also observed
+refused.
+The owner-spawned driver now faults with live MMIO, IRQ, and driver-owned queue-DMA
+authority; task death performs real unmap, IRQ unbind, DMA destruction, charge return,
+and request settlement before task-object reclamation. The boot transcript reports
+4096 MMIO bytes, one MMIO mapping, one IRQ source, two DMA pages, one DMA mapping,
+and zero outstanding requests reclaimed to exact zero, then respawns the driver at
+epoch 2 and refuses predecessor epoch 1. IO1's restart tally includes DMA charges now
+that live-loan payload DMA and driver-owned contiguous queue DMA have landed.
+**Evidence:** [`devlog/2026-08-28-io1-hardware-resource-authority/`](../devlog/2026-08-28-io1-hardware-resource-authority/index.md)
 
 **Depends on:** IO0, C7 generation-v3 rights and quotas, C9.4 supervision/reclamation, and the P1/P5 architecture boundary.
 
@@ -118,9 +183,9 @@ Two supervised components exchange protocol-specific requests and completions th
 ### Required checks
 
 - a component without the exact device resource cannot enumerate devices, map MMIO, allocate/map DMA memory, receive or acknowledge an interrupt, or map another holder's buffer;
-- a driver maps only its granted region and requested bounded subrange; wrong device, offset, length, cache/access mode, or duplicate mapping fails before touching the VSpace;
+- a driver maps only its granted region and requested bounded subrange; direct mapping additionally requires page exclusivity, while shared-granule regions use mediated `read32`/`write32` whose per-access bounds are stricter than page-granular mapping; wrong device, offset, length, cache/access mode, or duplicate mapping fails before touching the VSpace;
 - DMA allocation and live mappings cannot exceed the generation account, and memory remains charged and unreclaimable while a hardware request owns it;
-- one driver receives only its declared interrupt; spoofed, wrong-source, duplicate, and stale acknowledgements are rejected;
+- one driver receives only its declared interrupt; wrong-source, duplicate, spoofed, and stale acknowledgements are rejected, while hardware-arrival waiting remains outside `IRQ_ACK`;
 - crash/restart revokes mappings and interrupt authority, settles IO0 requests, returns every charge, and starts with a fresh epoch;
 - ordinary service clients observe only typed semantic capabilities and buffer descriptors, never physical addresses, IOVAs, BDFs, vectors, or global enumeration results;
 - no device-specific opcode, descriptor parser, or retry policy enters `slime-root`.
@@ -135,9 +200,52 @@ just io_driver_authority_check
 
 A manifest-declared userspace driver receives exactly one device instance, its bounded MMIO, DMA account, interrupt, shared-data endpoints, and supervision handle; an ungranted component receives none of them, crash/restart returns every charge with a fresh epoch, and the root remains unaware of device semantics.
 
-## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
 
-**Status:** Not started.
+## IO2 — Userspace virtio-blk and asynchronous BlockDevice plane
+**Status:** Complete for the userspace-driver cutover and the IO2 behavior directly exercised by generation 51. All eight block-holding compositions reach their devices through the userspace driver, the authenticated per-ring rights prerequisite is landed, B84 supplies per-instance authority for the two two-disk planes, and B83 deleted the product root's block implementation; only the boot selector's pre-admission parser remains. The plane computes one full-ring refusal without overwrite and eight identity-matched completions. It observes two reads, one write, one flush, and one geometry reply; verifies a 512-byte same-boot readback with zero mismatches; and observes out-of-range, malformed, short-buffer, unsupported-opcode, and missing-write-right refusals. The host gate also verifies the flushed sector reached the backing image byte-for-byte. Fresh-boot readback, seven injected fault settlements, numeric zero-leak reclamation for those absent paths, supervised restart/fresh epoch, and stale-completion rejection remain withdrawn. `just io_block_check` gates the surviving computed evidence.
+
+**Spawn-grant prerequisite: landed, and the previous diagnosis corrected.** Two earlier passes reported that a dynamically spawned storage client could not receive its crossing bindings because init's spawn supplied zero grant records, and each reverted a working migration believing the root lacked the mechanism. That conclusion was wrong. The root already derives crossing grants from the generation: adding a declared `sharedBufferFactory` grant (source `init`, target `sel4-storage-probe`) to `sel4-storage.zti` made preflight report `requested=0 parent=1 minted=0 respawn=false` — it had counted the declaration correctly and refused only because init passed nothing. The gap was entirely init-side. `drive_probe_plane_with_token` now takes the exact grant vector its manifest declares, and the storage plane boots with `SLIME_GRAPH spawn authorized task=0 slot=1 component=sel4-storage-probe grants=1` and `buffer_factory_grants=1`. The same idiom was already in production on the sample plane (`sample-lender-shared-buffer-factory`), so this is a use of the existing mechanism rather than a second one.
+
+The rule is now pinned where a host gate can reach it. `grant_crosses_spawn` and the new `declared_crossing_grants` moved from the binary-only dispatcher into `slime-root/src/generation.rs`, so the dispatcher and the tests share one implementation; `just test_sel4_root` is 205. Widening stays unrepresentable because the count comes from declarations, leaving no index at which an owner can place an undeclared grant.
+
+**Per-ring rights prerequisite: landed 2026-08-28.** The root's
+`serve_block_transact` identified the caller from the endpoint badge and checked that
+caller's `BlockDevice` for `blockRead` or `blockWrite` on every request. A userspace
+driver sees only submissions in shared ring memory, and neither the IO0 envelope nor a
+submission binds a ring to authenticated client rights — so `STATUS_BAD_RIGHTS` was
+defined by `io-queue/v1` and produced by nothing.
+
+`contracts/block-authority/v1` closes that on IO4's precedent. Each entry binds one
+holder, on one device, to one ring, with independent read and write bits and a sector
+ceiling; the driver reads its own table through the root's identity-gated cursor-paged
+path (label 69) and refuses a submission outside it. Two properties are structural
+rather than checked: `(device, ring)` is ordered strictly ascending *without* the
+holder, so one ring can never carry two holders' rows — which is what lets the driver
+say whose rights a submission carries — and no field can express a wildcard holder,
+a device range, or an "all rights" value. The root reads no block right at any point;
+it authenticates who may read the table and bounds the bytes.
+
+**All eight planes are migrated.** `sel4-storage`, `sel4-store`, `sel4-rollback`,
+`sel4-replay`, `sel4-generation`, `sel4-filesystem`, `sel4-recovery`, and
+`sel4-transfer` reach their devices only through the userspace driver, over one shared
+`components/lib/src/block_io.rs` adapter, and each gate asserts the driver's authority
+read, its device bring-up, its clean release, and the root's numeric DMA reclamation in
+place of the retired `SLIME_GRAPH block served` corroboration. `just
+sel4_gate_control_check` rejects 1781 mutated transcripts and layouts, so coverage grew
+rather than moved.
+
+**The two-disk planes were the last mechanism gap, and B84 closed it.**
+`sel4-recovery` holds a writable recovery disk and a read-only guard disk whose
+byte-identity its gate asserts; `sel4-transfer` holds a source and a receiver. IO1
+previously bound one driver instance to one device through `DeviceId(1)` literals and a
+per-instance positional capability index, so two devices were inexpressible even by
+declaring the driver twice. B84 (resolved 2026-08-28) declared a per-instance device
+ordinal in the IO1 budget and threaded it through every per-device identity; both planes
+now declare two driver instances, and their read-only disks refuse writes by the driver's
+ring authority rather than the root's capability check. An earlier attempt to give
+`device` grants their own counter was reverted: the shared index meant incrementing on
+`Device` shifted each driver's `mmioRegion` index and broke every plane's virtio
+handshake at once.
 
 **Depends on:** IO0, IO1, and the existing M5/P5 block behavior and QEMU storage gates.
 
@@ -153,10 +261,9 @@ A manifest-declared userspace driver receives exactly one device instance, its b
 
 ### Required checks
 
-- read, write, flush, geometry, rights denial, out-of-range LBA, malformed request, short buffer, unsupported feature, and durable fresh-boot behavior match the existing storage-plane oracle;
+- the plane observes read, write, flush, geometry, rights denial, out-of-range LBA, malformed request, short buffer, unsupported opcode, and same-boot write/flush/readback; fresh-boot durability remains unproved by this gate;
 - multiple queued requests complete without overwrite or identity confusion, and a full ring backpressures the caller;
-- injected descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, and peer death settle every request and reclaim every descriptor, DMA mapping, lease, and charge;
-- a restarted driver has a fresh epoch, and a deliberately injected old-epoch completion is rejected without modifying the new request or buffer;
+- descriptor failure, timeout, cancellation, reset, interrupt loss/coalescing, driver crash, peer death, supervised restart, and stale-completion injection remain required follow-up evidence rather than completed IO2 claims;
 - filesystem, object-store, generation, rollback, and recovery clients still reach storage only through their declared `BlockDevice` capability;
 - the product root contains no virtio-blk opcode or descriptor parsing after cutover.
 
@@ -168,11 +275,47 @@ just io_block_check
 
 ### Exit condition
 
-A supervised userspace virtio-blk driver provides the existing capability-gated read/write/flush behavior through asynchronous bounded buffers and completions, survives injected reset/crash/stale-completion cases without leaked authority or memory, and leaves `slime-root` responsible only for IO1 resource construction and reclamation.
+A userspace virtio-blk driver provides capability-gated block operations through asynchronous bounded buffers and completions, and every block-holding composition uses it; the IO2 plane directly establishes operation/refusal behavior, identity-safe queueing, and backpressure, but does not yet establish the fault/restart/stale-epoch portion of the original exit condition.
 
 ## IO3 — Userspace virtio-net and LinkDevice validation
 
-**Status:** Not started.
+**Status:** Complete. `just io_link_check` builds, boots generation 52 under QEMU, and
+passes: the supervised userspace `virtio-net-driver` negotiates the legacy transport
+with no optional feature, programs two 16-slot virtqueues, and serves one bounded
+`LinkDevice` over the same IO0 queues and IO1 authority as virtio-blk. Observed in the
+transcript: link state up; one 60-byte frame transmitted and its address-swapped echo
+received and byte-verified from the deterministic UDP backend; eight transmits accepted
+then a ninth refused `Full` with the ring's submitted count unchanged; receive
+replenishment paused rather than reusing a device-owned buffer; eight completions
+drained from a single wake (`max-per-wake=8`); undersized and oversized frames refused
+with `device-programmed=0`; a frame longer than the slice it names refused
+`STATUS_BAD_SLICE` with `device-programmed=0`; reset settling one transmit and one
+receive request (`tx=1 rx=1 leases=2`); restart reclaiming every charge numerically
+(`dma=0 requests=0 leases=0`, corroborated by the root's own
+`SLIME_IO reclaim … post_dma_pages=0 post_dma_mappings=0 post_requests=0`); a fresh
+epoch `old=1 new=2` with one stale transmit and one stale receive completion refused;
+and the intruder denied all four raw-link operations with no packet emitted. The MMIO
+mechanism exercised is **mediated** bounded `read32`/`write32` — QEMU packs eight
+0x200 transports into one 4KiB granule, so the region is not page-exclusive and the
+direct-map path is not admitted. Interrupt *authority* is granted and reclaimed
+(`reclaimed_irq_sources`), but this device completes faster than the line is
+dispatched, so completions are serviced by draining the used ring; no
+interrupt-sequence marker is claimed.
+**Evidence:** [`devlog/2026-08-28-io3-userspace-virtio-net/`](../devlog/2026-08-28-io3-userspace-virtio-net/index.md)
+
+**Device-boundary hardening, 2026-08-29 (B86, B87).** IO3's original driver
+validated its client and largely trusted its device: the used-ring descriptor
+id was reduced with `id as usize / 2` and used to index the per-slot tables, so
+an odd in-range id — one this driver never publishes, since it submits
+two-descriptor chains at even heads — silently settled a different live request
+of the same client, and a receive length past the published descriptor was truncated into
+the reply's `u16` while the completion reported it in full. Neither was
+reachable under this plane, because QEMU's device is well behaved; that is the
+point. The rules are now three pure helpers in `components/lib/src/virtio_mmio.rs`
+covered by seven host tests under `just test_host`, and the plane's reset marker
+asserts `tx-stalled=0 device-refused=0` so a refusal of legitimate traffic
+becomes visible. **Evidence:**
+[`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
 
 **Depends on:** IO0, IO1, and IO2 as the first complete substrate proof.
 
@@ -206,7 +349,44 @@ A userspace virtio-net driver exposes one bounded `LinkDevice` with duplex queue
 
 ## IO4 — Network service and exact destination authority
 
-**Status:** Not started.
+**Status:** Complete only for the exact-destination authority boundary exercised by
+the generation-53 fixture; it is not a network data-plane implementation. The
+service computes five decoded destinations with CONNECT/SEND/RECV authority and
+reports declared socket/listener/DNS-record ceilings. The probe observes two
+successful capability operations plus exact-destination, DNS-budget, and
+socket-budget refusals; the intruder observes exact-authority, cross-holder, and
+rights-mask refusals. Socket, listener, and DNS-record charging are enforced from
+generation data; the other five declared bounds remain decoded but unenforced. The
+earlier transfer, packet-stack, reset, restart, reclamation, stale-completion,
+`LinkDevice` backend, and backend-independence conclusions are withdrawn.
+
+**Authority-decoder hardening, 2026-08-29 (B88).** The destination-authority
+record's layout is declared by `contracts/network-destination/v1/schema.zt`, but
+only the Python renderer emitted its offsets, so
+`boot-contracts/src/network_destination.rs` read all twenty-two fields through
+hand-written byte literals — and its test encoder restated them, so neither copy
+could be checked against the schema. The Rust renderer now emits
+`OFF_HEADER_*`/`OFF_ENTRY_*` constants and a schema-declared `ipv4Bytes`, every
+literal is gone from the decoder and its encoder, and the module went from 3
+positive-path tests to 9 covering the refusal arms that previously had none.
+Four parser mutations and one corrupted generated offset each fail the suite.
+**Evidence:**
+[`devlog/2026-08-29-b88-network-destination-generated-offsets/`](../devlog/2026-08-29-b88-network-destination-generated-offsets/index.md)
+
+**Unimplemented and not claimed:** Ethernet framing, ARP, IPv4, ICMP, UDP, TCP,
+exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC, and the TCP
+listener/accept data path. DHCP, SLAAC, and NDP are not declared by the current
+contracts; the earlier statement that they were declared and structurally refused,
+and therefore could be added without a contract change, is withdrawn. Consumers
+needing a network byte stream, datagrams, name resolution, address configuration,
+or listening must treat IO4 as unfinished.
+**Backend:** none is exercised by the IO4 service plane. The composition's
+`io-link-loopback` fixture now resolves its declared endpoint and computes
+`declared endpoint bindings=1 protocol operations=0`; it intentionally performs no
+`LinkDevice` operation. The service therefore does not demonstrate a backend boundary
+or backend independence. IO3 separately qualifies virtio-net `LinkDevice`; physical
+link qualification remains H6/H12/RP.
+**Evidence:** [`devlog/2026-08-28-io4-network-service/`](../devlog/2026-08-28-io4-network-service/index.md)
 
 **Depends on:** IO3, C9 clocks/WaitSets/restart where timers and reconnect use them, and generation/capability introspection.
 
@@ -222,12 +402,11 @@ A userspace virtio-net driver exposes one bounded `LinkDevice` with duplex queue
 
 ### Required checks
 
-- a component granted one destination reaches only that exact name/address, transport, port, and rights set; alternate address, port, DNS name, raw packet, resolver, and listen attempts fail closed;
-- malformed frames, DHCP options, DNS messages, fragments, TCP options, sequence/window state, retransmission exhaustion, and peer loss cannot exceed declared bounds or wedge unrelated connections;
-- the manifest and authority-diff tooling enumerate every reachable destination and distinguish connection, send, receive, and listen authority;
-- QEMU transfers deterministic data to one allowed endpoint while a simultaneous denied endpoint receives no packet;
-- link unplug/reset and network-service or driver restart invalidate stale connection/request epochs, reclaim queues and buffers, and reconnect only where the declared policy permits it;
-- R0/RP5 can obtain the one bounded TCP byte stream they declare without acquiring discovery, router, wildcard, or raw-link authority.
+- a component granted one destination is admitted only for that exact holder, name/address, transport, port, and rights set; alternate address, port, DNS name, raw packet, resolver, and listen attempts fail closed at the authority boundary;
+- Ethernet/ARP/IP/ICMP/UDP/TCP/DNS framing, malformed-packet bounds, deterministic transfers, and peer-loss behavior remain unimplemented and unverified;
+- the manifest enumerates reachable destinations and distinguishes connection, send, receive, and listen authority;
+- link unplug/reset and network-service or driver restart reclamation remain unimplemented and unverified in IO4;
+- R0/RP5 cannot yet obtain a TCP byte stream from this service and must treat IO4 as unfinished.
 
 ### Planned verification target
 
@@ -237,7 +416,380 @@ just io_network_check
 
 ### Exit condition
 
-Native components obtain bounded TCP/UDP services only for generation-declared exact destinations over a backend-independent `LinkDevice`; the virtio-net reference path survives malformed traffic, denial, link reset, and restart, and no client receives ambient socket or packet authority.
+Native components can be admitted or refused at the exact generation-declared destination-authority boundary without receiving ambient socket or packet authority. The network packet/data plane, `LinkDevice` attachment, transfers, bounded protocol state, reset/restart reclamation, and backend independence remain unfinished.
+
+## IO5 — Checked models of the substrate's lifetime and accounting rules
+
+**Status:** Complete 2026-08-29. Two bounded transition models, fifteen
+scenarios, thirteen must-fail mutations, and two negative controls, guarded by
+`just io_queue_model_check`, `just io_resource_model_check`, and
+`just contracts_check`.
+
+**Depends on:** IO0 and IO1 as the implemented contracts being modelled; the
+M5.6a/A0 checked-contract methodology this reuses.
+
+### Why a model rather than another plane gate
+
+IO0–IO4's QEMU gates are the right instrument for *this schedule works*: they
+boot real components over real rings and observe real reclamation. What they
+structurally cannot express is *no schedule works otherwise*. `io_queue_check`
+observes one interleaving of submit/take/complete/cancel/reset/drain;
+`io_driver_authority_check` observes one death schedule and reports the root's
+numeric reclamation for it. IO0's contract, however, claims properties
+quantified over every interleaving — every terminal transition is
+single-assignment, every lease releases exactly once, no ring overwrites an
+unconsumed entry, no request outlives the epoch that admitted it — and IO1
+claims that *no* reachable sequence leaves a charge outstanding. A serial
+transcript cannot carry a universally quantified claim, and adding more QEMU
+arms samples more schedules without ever closing the quantifier.
+
+### Tooling decision
+
+`zutai model-check` over pure `.zt`, not seL4-style refinement proof. The
+reasons are ordered by weight:
+
+- **The seL4 route is unavailable here, not merely expensive.** The proof chain
+  is Isabelle/HOL from abstract spec to the *kernel's* C, and
+  `deps/sel4/CAVEATS.md` scopes it to listed verified platforms and
+  configurations. This product's own kernel build is already outside that set
+  by its own admission — `sel4/config/qemu-arm-virt.cmake` sets
+  `KernelVerificationBuild OFF` with `KernelDebugBuild`/`KernelPrinting ON`,
+  and `qemu-arm-virt` appears in no verified-platform list. More decisively,
+  the code under discussion is `no_std` Rust in `slime-root` and
+  `components/`, which no part of the l4v chain covers. Adopting "seL4's kind"
+  of verification would mean standing up an Isabelle refinement proof for Rust
+  userspace from scratch: a multi-year effort whose first deliverable arrives
+  after the RPi5 demo, for properties the bounded checker settles in seconds.
+- **The methodology is already this repository's.** M5.6a/M5.6b froze BootState
+  semantics this way, and A0 did the same for the rights algebra, both with the
+  must-fail-mutation discipline. A third mechanism beside two working ones
+  would be a second convention.
+- **Measured cost is negligible.** Both models together explore 2520 states in
+  under three seconds, against BootState's 5416 states in about 80 seconds.
+  There is no budget argument for deferring.
+- **A Rust-level bounded prover was considered and rejected for now.** Kani
+  is already vendored transitively (`deps/rust-sel4/hacking/nix/scope/kani/`)
+  and would check the *implementation* rather than an abstraction — genuinely
+  stronger where it applies. It is not the right first step: the ring
+  discipline's interesting properties are temporal and cross-party
+  (`leadsTo` over a driver/client interleaving), which a per-function harness
+  does not express, and the shared-memory rings would need a harness modelling
+  an adversarial peer, which is the transition system above by another name.
+  Recorded as a follow-up, not a rejection: `Outstanding`'s
+  single-assignment settlement in `components/proto/src/io_queue_ring.rs` is a
+  genuinely good Kani target once a model says what to prove.
+
+### Delivered
+
+- `contracts/io-queue/model/io-queue.zt` models the IO0 lifecycle over one
+  queue, three request identities, two ring slots, and two epochs:
+  submit/take/complete/cancel/drain, begin-reset, reset settlement, peer death,
+  and epoch advance. Seven safety properties —
+  `RingNeverOverwrites`, `SingleTerminalAssignment`,
+  `LeaseReleasedAtMostOnce`, `LeaseHeldUntilTerminal`, `LeaseSettledOnDrain`,
+  `NoLiveRequestAcrossEpoch`, `EpochStrictlyAdvances` — plus six reachability
+  obligations and one `leadsTo` liveness rule,
+  `EveryLiveRequestSettlesAndReleases`. Six mutations must each produce the
+  named counterexample. Observed: main scenario 2322 states, 6039 transitions,
+  zero deadlocks; 7/7 scenarios in 2.3 s.
+- `contracts/io-resource/model/io-resource.zt` models the IO1 charge lifetime
+  over one driver instance against the `sel4-io-driver` plane's own declared
+  budget — one MMIO mapping, one DMA mapping over two pages, one interrupt
+  source, one pending acknowledgement, one outstanding request — across bind,
+  map, charge, raise/acknowledge, fault, reclaim, and respawn. Seven safety
+  properties — `WithinDeclaredBudget`, `DeathReturnsEveryCharge`,
+  `ReclaimRunsAtMostOnce`, `NoChargeAcrossEpoch`, `EpochStrictlyAdvances`,
+  `StaleAckRefused`, `NoAuthorityWithoutDevice` — plus six reachability
+  obligations and the liveness rule
+  `FaultedDriverAlwaysReachesZeroCharges`. Seven mutations must each produce
+  the named counterexample. Observed: main scenario 198 states, 667
+  transitions, zero deadlocks; 8/8 scenarios in 0.3 s.
+- Both models make `terminal` total (`nextFor` producing nothing), so deadlock
+  is unrepresentable by construction and the `leadsTo` obligations carry real
+  content rather than restating a guard.
+
+### Findings the models produced
+
+Two, both recorded because a model that only confirms what its author assumed
+has not been exercised:
+
+- **IO1's DMA accounting is per-region, not per-page.** The first model charged
+  one DMA mapping per mapped page, and the `fully-charged` reachability
+  obligation failed — the declared budget of one mapping made a two-page region
+  unreachable. The plane's own transcript reports two DMA pages under one
+  mapping; the model was wrong and now charges the region on its first page and
+  returns it with its last.
+- **Unconditional charge-return liveness is false without fairness, and should
+  not be claimed.** `premise = any outstanding charge` fails with a two-step
+  map/release lasso, which is honest driver behaviour rather than a leak: a
+  running driver may cycle forever, and the checker assumes no fairness. The
+  defensible property is the one IO1 actually needs — a driver that has stopped
+  running cannot escape reclamation — so the premise is a *faulted* instance.
+  This is strictly stronger than the safety predicate `DeathReturnsEveryCharge`,
+  which only says a dead instance holds nothing and would be satisfied by never
+  reclaiming at all.
+
+### Verification targets
+
+```sh
+just io_queue_model_check
+just io_resource_model_check
+```
+
+### Exit condition (observed)
+
+Two bounded models check fourteen named safety properties, twelve reachability
+obligations, and two liveness rules over IO0's request/epoch/lease contract and
+IO1's charge lifetime; thirteen mutations each produce their named
+counterexample; and two negative controls confirm the gate fails closed — a
+mutation scenario whose fault is disabled exits non-zero with
+`FAILED (expected violation of "SingleTerminalAssignment", none found)`, and an
+injected requeue cycle exits non-zero with a `leadsTo` lasso counterexample
+rather than passing silently.
+
+### Boundary
+
+These models are abstractions, and the gap is stated rather than implied. They
+do not check the concrete wire layout — magics, slot lengths, reserved bytes,
+absolute-sequence encoding, offset/length overflow — because
+`components/proto/tests/io_queue.rs` and the generated codec's structural
+validators already decide those, and restating them in a model would weaken
+rather than strengthen the boundary. They do not check MMIO subrange
+arithmetic, page exclusivity versus mediated `read32`/`write32`, or DMA token
+opacity, which are per-access checks on concrete addresses owned by the root's
+host tests and the plane's out-of-range arm. They are not a refinement proof:
+that the Rust in `io_queue_ring.rs` and `slime-root/src/io_resource.rs`
+implements these transition systems is argued by construction and pinned by the
+QEMU gates, not machine-checked. A model passing cannot complete an IO slice,
+and an IO QEMU pass cannot complete IO5.
+
+## IO6 — Bit-precise proofs of the substrate's wire arithmetic
+
+**Status:** Complete 2026-08-29. Eighteen Kani harnesses over the shipped
+`slime-proto` source, eighteen must-fail mutations, and two gate controls,
+guarded by `just kani_io_proofs`.
+
+**Depends on:** IO0 as the implemented contract being proved; IO5 for the
+boundary it declared and this closes.
+
+### Why this exists
+
+IO5 closed the *all-interleavings* quantifier and explicitly disclaimed the
+wire layer: sequence encoding, slot arithmetic, and bounds were left to the
+generated codec's validators and `components/proto/tests/io_queue.rs`. That
+disclaimer was correct — a model restating field offsets would be a second,
+drifting copy of the contract — but it left a real gap, because the remaining
+obligations are *all-values* claims that a fixed-input `#[test]` cannot close
+either.
+
+`queue_slot_index` is the sharp case. It reduces a `u64` sequence with
+`(sequence as usize) & (slot_count - 1)`, which is modular reduction only when
+`slot_count` is a power of two and underflows at zero. Its own doc comment says
+the precondition "is validated by different code" — `admissible_slot_count` and
+`valid_queue_header`, in another module. Nothing mechanically tied the two
+halves together: each side reads as locally correct, which is exactly how a
+bounds bug survives review.
+
+The same shape recurs. `Queue::submitted` and `Queue::completions_pending`
+subtract shared-memory cursors with no local check, relying entirely on
+`valid_queue_header` having ordered them at attach; release profiles wrap on
+overflow, so an admitted `tail > head` would not panic — it would report a
+near-`u64::MAX` occupancy and every downstream "ring is full" comparison would
+silently read false.
+
+### Tooling decision
+
+Kani, at the 0.67.0 already pinned by `deps/rust-sel4/hacking/nix/scope/kani/`,
+following the `#[cfg(kani)]` harness placement of
+`deps/rust-sel4/crates/sel4/bitfield-ops`. Unlike the IO5 models this checks
+the implementation rather than an abstraction, so there is no
+model-to-code correspondence left to argue. This is also why it is not a
+substitute for IO5: Kani reasons about one entry point's value space, not about
+two parties interleaving over time, so the `leadsTo` liveness rules and the
+all-schedules reachability obligations remain the models' to own.
+
+### Verified source, not a copy
+
+Kani 0.67.0 ships its own toolchain (nightly-2025-11-21), older than this
+repository's `nightly-2026-05-26`, and Cargo refuses a package whose declared
+`rust-version` exceeds the compiler in hand. Lowering `slime-proto`'s declared
+MSRV to suit a verification tool would put a falsehood in a shipped manifest,
+and copying the code under proof into a proof crate would create exactly the
+drift this repository's generated-code rule exists to prevent.
+
+`verification/io-proofs/Cargo.toml` instead points `[lib] path` at
+`components/proto/src/lib.rs` itself, under a manifest declaring no MSRV, and
+sits outside the root workspace so no product build, lint, or Miri run picks it
+up. Kani compiles the same file the product compiles; there is one source, so
+verified-versus-shipped drift is not representable.
+
+### What is proved
+
+Eighteen harnesses, quantified over symbolic inputs rather than enumerated
+cases. Slot depth is a symbolic `slot_count` constrained to the admissible
+range, so the ring properties hold for every accepted depth at once:
+
+- **Slot arithmetic.** Every index a validated ring produces is in bounds for
+  all of `u64`, including the wraparound a long-lived queue reaches; the mask is
+  genuine modular reduction, not merely something small; and two distinct
+  sequences within one ring depth never alias onto one slot.
+- **Cursor safety.** Any header `valid_queue_header` believes makes both
+  occupancy subtractions non-underflowing and ring-bounded, never claims more
+  completions than submissions, and never presents an active driver at epoch
+  zero.
+- **Mapping arithmetic.** `mapping_bytes` is exact, the two rings do not
+  overlap, and the request ring ends precisely where the completion ring begins.
+- **Status totality.** `terminal_state_for_status` agrees exactly with
+  `valid_completion_status` in both directions, and every state it yields is
+  genuinely terminal — a defined status yielding `None` would be a completion
+  the client must refuse to settle, which leaks the lease.
+- **Slice bounds.** Every accepted slice names bytes inside the lease mapping
+  with a non-overflowing `offset + length`; a `DIRECTION_NONE` control slice
+  carries no lease identity; an unknown direction is always refused.
+- **Lease lifetime in the real table.** Over `Outstanding`'s hand-written entry
+  search: settle is single-assignment and returns the retained lease exactly
+  once, duplicate identities are refused rather than merged, capacity is never
+  exceeded, an epoch never advances over a live request, epoch adoption is
+  strictly monotonic, `settle_all` releases every lease once or nothing at all,
+  a request cannot be started twice, and a foreign-epoch completion never
+  resolves a live request.
+
+### Verification target
+
+```sh
+nix develop .#kani --command just kani_io_proofs
+```
+
+Kani entered the flake on 2026-08-29 as a dedicated `.#kani` devShell plus a
+`packages.<system>.kani` output, so the gate needs no imperative install and
+runs against a bundle pinned by its published sha256 and a toolchain pinned as
+a store path. Bare `just kani_io_proofs` still works wherever `cargo-kani` is
+already on `PATH`. Evidence:
+[`devlog/2026-08-29-kani-in-flake/`](../devlog/2026-08-29-kani-in-flake/index.md).
+
+### Exit condition (observed)
+
+Eighteen harnesses verify in 14 s (57 checks including Kani's implicit
+arithmetic-overflow and pointer-validity checks). Eighteen mutations of the
+shipped source each produce a concrete counterexample in the matching harness,
+including two — dividing the computed index by two — that keep every index *in
+bounds* and are caught only by the modularity and slot-distinctness harnesses.
+Two gate controls confirm fail-closed behavior: disabling the proof module
+fails the gate, and deleting a single `#[kani::proof]` attribute is caught by
+the gate's harness-count assertion while Kani itself still reports
+`VERIFICATION:- SUCCESSFUL` — which is why that assertion exists.
+
+### Boundary
+
+These proofs are bit-precise about values and say nothing about time. They do
+not cover the two-party interleavings, reachability, or liveness that IO5's
+models own, and cannot: a Kani harness drives one entry point, not a schedule.
+
+`Outstanding` proofs are evidence about `Outstanding<2>`, because `N` is a const
+generic that must be fixed at compile time; the capacity-independent lifetime
+argument stays with the IO5 model. Reachability of the *shared-memory* paths —
+`Queue::submit`, `take_request`, `complete`, `take_completion` — is proved
+indirectly, through the header invariants and slot arithmetic every one of them
+depends on, rather than by symbolically executing a full mapping.
+
+Nothing here is a refinement proof of the substrate as a whole, and no
+`slime-root` code is covered: `io_resource.rs` charge accounting remains
+IO5-modelled and plane-observed.
+
+## IO7 — Proofs of the device trust boundary
+
+**Status:** Complete 2026-08-29. Thirteen Kani harnesses over the shipped
+`components/lib/src/virtio_mmio.rs`, eight must-fail mutations, and two gate
+controls, guarded by `just kani_virtio_proofs`.
+
+**Depends on:** IO3 as the driver whose device boundary is proved; B86/B87 as
+the defects that showed the boundary was unguarded; IO6 for the proof-crate
+mechanism this reuses.
+
+### Why this exists
+
+IO0–IO6 quantify over inputs that arrive from a *client*: a request crosses a
+capability, is decoded by a generated codec, and is validated before use. IO6
+proves that arithmetic over every value. None of it constrains the other
+direction. A driver also consumes bytes written by a **device**, into shared
+memory, under no capability at all — and that input class was checked by
+nothing.
+
+B86 and B87 are what that costs. The IO3 driver reduced a device-written
+used-ring descriptor id with `id as usize / 2` and indexed its per-slot tables
+with the result; an odd id — one `submit` can never publish, since it writes
+two-descriptor chains at even heads — mapped onto a *live neighbouring slot*
+and silently settled another client's lease. Separately, a receive length past
+the published descriptor was truncated into the reply's `u16` while the
+completion reported it in full. Both passed `just io_link_check` indefinitely,
+because a plane gate can only observe the schedule its device produces and
+QEMU's virtio device is well behaved. That is the structural gap: **no plane
+gate can be adversarial about its own device.**
+
+### What is proved
+
+Thirteen harnesses over symbolic inputs. Slot depth is a symbolic `slots`, so
+the ring properties hold for every depth a driver could declare, not just
+IO3's eight:
+
+- **Slot resolution.** Every accepted used id is a valid index into a
+  `slots`-length table — the obligation that makes the driver's unchecked
+  `request_ids[slot]` sound. Acceptance coincides *exactly* with the ids
+  `submit` can publish (even, below `slots * 2`) for every `u32`; no odd id is
+  ever accepted; distinct accepted ids never name one slot; and an accepted id
+  round-trips to the head that was programmed.
+- **Used-index progress.** Reported progress never exceeds the outstanding
+  chain count, is exact modular distance or an explicit refusal, treats an idle
+  ring as zero rather than an error, and admits nothing at all when the driver
+  has no chains in flight.
+- **Receive length.** An accepted length fits the published frame, is the exact
+  payload rather than a truncation (`u32::from(payload) == reported - header`,
+  which the old `as u16` cast violated), matches the declared rule in both
+  directions, and refuses a header-short report rather than saturating it to a
+  successful empty receive.
+
+### Verification target
+
+```sh
+nix develop .#kani --command just kani_virtio_proofs
+```
+
+`verification/virtio-proofs/Cargo.toml` points `[lib] path` at
+`components/lib/src/virtio_mmio.rs` itself — the module, not the crate root,
+because `slime-components` pulls in `boot-contracts`/`sha2` and `slime_rt`,
+neither of which builds under Kani's toolchain and neither of which is under
+proof. The module imports only `core`, and `MediatedMmio` is behind
+`component-runtime`, which the proof manifest never enables. One source file,
+so verified-versus-shipped drift is not representable.
+
+### Exit condition (observed)
+
+Thirteen harnesses verify in under a second. Eight mutations of the shipped
+source each produce a counterexample in the matching harness, including two
+subtle ones: replacing `wrapping_sub` with `saturating_sub` in the progress
+rule keeps every value in range and is caught only by the exact-distance
+harness, and dropping the frame-fit check is caught by the exactness assertion
+that B87's cast violated. Two gate controls confirm fail-closed behavior:
+disabling the proof module fails the gate, and deleting a single
+`#[kani::proof]` attribute is caught by the harness-count assertion while Kani
+itself still reports `VERIFICATION:- SUCCESSFUL`.
+
+**Evidence:** [`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
+
+### Boundary
+
+These proofs cover three pure functions, not the driver. That the driver
+*calls* them on every used-ring entry is argued by construction and pinned by
+`just io_link_check`; a harness cannot reach `drain_used`, which is
+`no_std`/`no_main` and syscall-bound. No adversarial device exists in this
+repository, so the refusal arms are proved over all values but never observed
+on a booted plane.
+
+`ControlQueue::submit`'s own descriptor and ring arithmetic is not proved here:
+it writes through `write_descriptor`/`write_u16`, which bounds-check
+internally, and its slot argument is driver-derived rather than device-derived.
+The virtio-blk driver needs none of this — it is single-outstanding and reads
+only the used *index* — so IO7 is IO3-scoped by fact, not by omission.
 
 ## Consumption by later subsystems
 
@@ -268,7 +820,33 @@ just io_link_check
 just io_network_check
 ```
 
-Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support.
+Host model gates, which are quantified over interleavings rather than observing
+one schedule, and are therefore complements to the plane gates above rather
+than substitutes for them:
+
+```sh
+just io_queue_model_check
+just io_resource_model_check
+```
+
+Host proof gate, quantified over every value of the declared types rather than
+over schedules, and complementary to both layers above — it checks the shipped
+Rust rather than an abstraction of it, and owns exactly the wire arithmetic the
+models disclaim:
+
+```sh
+nix develop .#kani --command just kani_io_proofs
+```
+
+Host proof gate for the *device* side of the same boundary — the only input
+class no capability constrains and no plane gate can drive adversarially,
+since a plane observes only the schedule its own device produces:
+
+```sh
+nix develop .#kani --command just kani_virtio_proofs
+```
+
+Physical target checks belong to the consuming platform milestone and cannot complete an IO slice by substitution. Conversely, an IO QEMU pass cannot complete Framework or Raspberry Pi 5 peripheral support, and neither a passing model nor a passing proof can complete any slice whose exit condition names observed QEMU behavior.
 
 ## I/O track definition of done
 
@@ -281,4 +859,7 @@ The common substrate is complete only when:
 - userspace virtio-blk preserves the existing block behavior and removes device-specific parsing from the root product path;
 - userspace virtio-net proves the same substrate under duplex readiness/replenishment without protocol-specific substrate hooks;
 - the network service enforces exact destination authority over a backend-independent link service;
+- the lifetime and accounting rules the plane gates observe one schedule of are additionally checked over every interleaving of a bounded model, with each rule's negation exhibited as a counterexample;
+- the wire arithmetic those models disclaim — slot indexing over all of `u64`, cursor subtraction against what the header validator actually admits, mapping and slice bounds including their overflow cases — is proved of the shipped source over every value of the declared types, with each proof shown non-vacuous by a mutation that breaks it;
+- a driver's handling of bytes written by its **device** — used-ring indices, descriptor ids, and reported transfer lengths — is proved over every value of the declared types, since no capability constrains that input and no plane gate can make its own device misbehave;
 - future USB, audio, display, and GPU work can consume queue/buffer/lease/completion mechanisms without adding a universal opcode or moving device semantics into `slime-root`.

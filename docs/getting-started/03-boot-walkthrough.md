@@ -95,7 +95,7 @@ as another.
 
 Only after every allocation has succeeded does anything run. The root
 activates `init`, and from here **policy leaves the root**: `init`
-(`components/bins/init/src/main.rs`) reads its own declared bindings, and
+(`components/system/init/src/main.rs`) reads its own declared bindings, and
 launches the graph the generation declares by asking the root to `SPAWN`
 each child from a granted executable capability.
 

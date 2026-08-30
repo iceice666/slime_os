@@ -49,25 +49,31 @@ Every new object kind or right must satisfy these rules before it ships:
 
 ## Capability kinds
 
-The nine declared kinds are `CapabilityKind` in `boot-contracts/src/generation.rs`,
-numbered by `boot-contracts/src/generated/generation.rs`.
+The twelve declared kinds are `CapabilityKind` in `boot-contracts/src/generation.rs`,
+numbered by `boot-contracts/src/generated/generation.rs`. Discriminant 4 was
+`Block` until B90 retired it; the number stays reserved rather than reassigned,
+because a discriminant is wire identity.
 
 | Kind | Number | What it names | Where its operations are served |
 | --- | --- | --- | --- |
 | `Endpoint` | 1 | one side of a declared native seL4 Endpoint edge | the kernel; no root mediation |
 | `Executable` | 2 | generation-module bytes verified at boot | root service `SPAWN` |
 | `SharedBufferFactory` | 3 | authority to mint shared buffers | root service `SHARED BUFFER CREATE` |
-| `Block` | 4 | one enumerated block device | console service `BLOCK TRANSACT` |
 | `Directory` | 5 | a namespace root, possibly scoped | console service inspect/commit, root service derive |
 | `Input` | 6 | the decoded key source | console service `INPUT READ` |
 | `Supervision` | 7 | one spawned task's outcome | root service `SUPERVISION STATUS` / `DERIVE` |
 | `SharedBuffer` | 8 | one allocated buffer | root service shared-buffer operations |
 | `Loan` | 9 | a receiver-bound loan of a subrange | root service loan operations |
+| `Device` | 10 | one enumerated hardware device assigned to a driver | root service `IO RESOURCE` |
+| `MmioRegion` | 11 | one bounded register region of the device | root service `IO RESOURCE` |
+| `InterruptSource` | 12 | one declared interrupt source | root service `IO RESOURCE` |
+| `DmaAccount` | 13 | one driver's bounded DMA authority and accounting | root service `IO RESOURCE` |
 
 ## Current matrix
 
 Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
-33, excluding the deliberate gap at bit 17; bits 34–63 are free.
+33, excluding the reserved gaps at bits 10, 11, and 17; bits 34–63 are free.
+Bits 10 and 11 were `BLOCK_READ`/`BLOCK_WRITE` until B90 retired them.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -75,10 +81,12 @@ Rights are a flat `u64`. `RIGHT_ALL` is the union of the named bits through bit
 | Endpoint | RECV (1) | `seL4_Recv` on the declared edge; the root mints at receive-only rights | same | gated |
 | *(meta, most kinds)* | TRANSFER (2) | `CAPABILITY EXPORT` and transferable derived spawn grants | — | gated on both paths |
 | Executable | EXEC (3) | executable slot validation in `SPAWN` | generation module only, hash-verified at boot | gated |
+| Device / MmioRegion | MAP_MMIO (4) | map only the capability's bounded subrange at its declared access mode, and bound each `IO RESOURCE MMIO READ32` / `WRITE32` to the exact declared subrange. Both capabilities must carry the bit: `MAP MMIO` and the two register accessors each check the device *and* the region (`slime-root/src/graph_runtime/services/io_resource.rs`) | root bootstrap from the generation's device assignment | gated (IO1) |
+| DmaAccount | DMA_PIN (5) | `IO RESOURCE DMA MAP`, `QUEUE MAP`, and `REQUEST BEGIN`; creates one direction-scoped DMA mapping for a live shared-buffer lease and returns only an opaque IOVA | generation `io-resource/v1`; a shared-buffer capability alone grants no DMA authority | gated (IO1) |
+| DmaAccount | DMA_RELEASE (6) | `IO RESOURCE DMA RELEASE` and `REQUEST SETTLE`; destroys an idle DMA mapping, and memory remains charged while a hardware request owns it | same | gated (IO1) |
+| InterruptSource | IRQ_ACK (7) | `IO RESOURCE IRQ ACK` for the holder's pending, declared interrupt source and epoch only | root bootstrap from the generation's device assignment | gated (IO1) |
 | SharedBuffer | BUFFER_WRITE (8) | writable `SHARED BUFFER MAP`; irreversible `SHARED BUFFER SEAL` | `SHARED BUFFER CREATE` via a `SharedBufferFactory`; root-assigned identity | gated (C7.4) |
 | SharedBuffer | BUFFER_MAP (9) | read-only `SHARED BUFFER MAP`; exact `SHARED BUFFER UNMAP` | same | gated (C7.4) |
-| Block | BLOCK_READ (10) | read requests in `BLOCK TRANSACT` for the capability's exact device | root bootstrap from the generation's declared device | gated |
-| Block | BLOCK_WRITE (11) | write and flush requests in `BLOCK TRANSACT` | same | gated (M5.3) |
 | Executable | SPAWN (16) | instance launch in `SPAWN`; always travels with EXEC | generation manifest | gated (M6.1) |
 | Supervision | SUPERVISE (18) | `SUPERVISION STATUS` and `SUPERVISION DERIVE` | returned by a successful `SPAWN` | gated (M6.1/B25) |
 | Directory | DIRECTORY_READ (19) | `DIRECTORY INSPECT` before filesystem reads | root bootstrap from the generation's declared root | gated (M6.3) |
@@ -113,28 +121,53 @@ disclose no more: that table describes exactly that component's CSpace. The
 `mintedBindings` for the caller's own holder index, which is the same disclosure
 bound in two further separate tables.
 
-Bits 4–7 and 12–15 are declared and named in the canonical schema, with the
-manifest spellings `mapMmio`, `dmaPin`, `dmaRelease`, `irqAck`, `storeRead`,
-`storeWrite`, `healthConfirm`, and `bootUpdate`; all eight are inside
-`RIGHT_ALL`. No `CapabilityKind` allowed mask admits any of them, so
-`capability_rights_valid` rejects them for every manifest grant or minted
-binding, and no runtime `rights_type!` can carry one. They are named but ungated:
-the one shape Grammar rule 2 forbids for a new right, and a condition these bits
-predate.
+Bits 4–7 (`mapMmio`, `dmaPin`, `dmaRelease`, `irqAck`) were named-but-ungated
+until IO1, and are neither now. `capability_rights_valid` admits them on
+`Device`/`MmioRegion`, `DmaAccount`, and `InterruptSource`
+(`boot-contracts/src/generation.rs`); `slime-root/src/graph.rs` carries the four
+matching `rights_type!` declarations; and each of the ten `IO RESOURCE`
+operations checks the bit its row above names. They are declared on real
+manifest grants — every seL4 composition with a driver spells them out, for
+example `contracts/generation-manifest/v1/compositions/sel4-storage.zti`.
 
-`MAP_MMIO`, `DMA_PIN`, and `IRQ_ACK` correspond to the Horizon row “Device/IRQ
-authority for userspace drivers.” `DMA_RELEASE`, `STORE_READ`, `STORE_WRITE`,
-`HEALTH_CONFIRM`, and `BOOT_UPDATE` are residue of the retired custom kernel's
-`ObjectStore` and `GenerationControl` kinds. Those mechanisms now live in
-userspace components over a `Block` capability
-(`components/bins/sel4-{store,generation-manager,rollback,recovery}-*/src/main.rs`,
-`boot-contracts/src/object_store.rs`).
+Bits 12–15 (`storeRead`, `storeWrite`, `healthConfirm`, `bootUpdate`) are the
+four that remain named but ungated: inside `RIGHT_ALL`, admitted by no
+`CapabilityKind` mask, carried by no `rights_type!`, and checked by no
+operation. They are residue of the retired custom kernel's `ObjectStore` and
+`GenerationControl` kinds; those mechanisms are now userspace components
+(`components/services/sel4-generation-manager/`,
+`components/testkit/sel4-{store,rollback,recovery}-probe/`,
+`boot-contracts/src/object_store.rs`) reaching storage over the IO0 rings B83
+cut them over to, so nothing is waiting on these bits. This is the one shape
+Grammar rule 2 forbids for a *new* right, and a condition these four predate.
+Reassign them deliberately; do not assume they still mean what a pre-cutover
+document says.
+
+Bits 10 and 11 were a fifth and sixth such bit until B90. They were
+`blockRead`/`blockWrite` on a `Block` kind whose only operation, `BLOCK
+TRANSACT`, B83 had already deleted — so the kind was admitted at decode,
+materialized into a typed root entry, and resolvable by nothing. B90 deleted the
+kind, both bits, `BlockRights`, `resolve_block`, `SERVICE_BLOCK`, and the
+launch-order ordinal that numbered `Block` grants. Storage authority is declared
+per ring in `contracts/block-authority/v1`, whose `rightRead`/`rightWrite` are an
+independent two-bit `u16` vocabulary that never shared these positions. Bits 10,
+11, and discriminants 4 (kind) and 8 (service) are reserved, never reassigned:
+each is an ABI a component may still name.
 
 `boot-contracts`'s
-`declared_rights_partition_into_manifest_declarable_and_root_only` pins this
-`capability_rights_valid` partition. Wiring one of these bits to a capability
-kind fails that test until this matrix is updated with it. Reassign the bits
-deliberately; do not assume they still mean what a pre-cutover document says.
+`declared_rights_partition_into_manifest_declarable_and_root_only` enumerates all
+twelve declared kinds, so its two classes partition the vocabulary rather than an
+arbitrary subset of it. Until B90 its `BASELINES` named nine — the four IO kinds
+were absent — and `NOT_MANIFEST_DECLARABLE` therefore meant "rejected for those
+nine" rather than "declarable by no manifest": bits 4–7 sat in that list while
+real manifest grants declared them, on kinds the test did not enumerate. They are
+now in `MANIFEST_DECLARABLE`, where the grants that spell them always implied they
+belonged. Bits 26–33 remain in the rejected class for the opposite reason: no
+grant names them because their source is a declared resource
+(`clock-authority/v1`, `lifecycle-policy/v1`, `scheduling-class/v1`) that the root
+reads to mint the bit onto a service or supervision handle. Wiring one of bits
+12–15 to any declared kind fails the test, and a *new* kind must still be added to
+`BASELINES` in the same change — that is what keeps the partition total.
 
 Semantics not visible in the table:
 
@@ -289,6 +322,10 @@ Semantics not visible in the table:
 | Live shared-buffer mappings | `MAX_MAPPINGS = 64` | `SharedBufferTable::map`; `MappingsExhausted` |
 | Live shared-buffer loans | `MAX_LOANS = 64` plus generation `loan_count` per lender | `SharedBufferTable::loan`; `LoansExhausted` / `QuotaExceeded` |
 | Declared holders per budget | `MAX_HOLDERS = 32` | `SharedBufferBudget::decode` |
+| Driver hardware-resource quota | generation `io-resource/v1`: MMIO bytes/mappings, DMA pages/mappings, IRQ sources, outstanding requests, and buffer loans; omission denies all | `ResourceTable` prepare/effect/commit transitions and `IoResourceBudget::validate_against` |
+| Live IO resource tables | drivers 32, MMIO regions/mappings 64, DMA mappings 64, IRQ sources 64, live leases/requests 128 | `slime-root/src/io_resource.rs` |
+| IO0 ring geometry / outstanding requests | `contracts/io-queue/v1`: `minQueueSlots = 2`, `maxQueueSlots = 256`, `maxOutstanding = 256`, with the 128-byte header, 128-byte request slot, and 64-byte completion slot fixed by the schema | generated `components/proto/src/io_queue.rs` and the ring library's slot arithmetic, proved over every value of the declared types by `just kani_io_proofs` (IO6) |
+| Per-ring block rights and sector ceiling | generation `block-authority/v1` per (holder, device, ring): `blockRead`/`blockWrite` plus `sectorLimit`; omission denies the ring | `boot-contracts/src/block_authority.rs` decode plus `virtio-blk-driver`'s refusal. The root copies the authenticated table and enforces no block right of its own, because which sector a ring may touch is device policy |
 | Directory path bytes / depth | `MAX_DIRECTORY_PATH = 128`, `MAX_DIRECTORY_DEPTH = 8` root-side; the userspace ABI and filesystem schema admit 48 bytes and depth 4 | `slime-root/src/directory.rs`; `components/runtime/src/syscall.rs`; `components/proto/src/fs.rs` |
 | Directory scopes | `MAX_SCOPES = 64` | `slime-root/src/directory.rs` |
 | Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |
@@ -305,9 +342,8 @@ observe the graph returning to zero live tasks.
 
 | Candidate object | Candidate rights | Trigger | Open questions |
 | --- | --- | --- | --- |
-| Generation-update authority as an object | possibly STAGE_PENDING | a generation service that must not hold raw block write | Boundary between userspace staging and immutable selector-owned slot writes, now that management is entirely a component over `Block` |
-| NetworkDestination | CONNECT / SEND / RECV / LISTEN | the RPi5 transport route ([RP5](../roadmap/09-rpi5-ros2-demo.md)) and [Hardware H6](../roadmap/04-platform-hardware.md) | Object shape: (protocol, address, port) declared in the generation? |
-| Device/IRQ authority for userspace drivers | MAP_MMIO / DMA_PIN / IRQ_ACK | a driver outside the root ([H1](../roadmap/04-platform-hardware.md)) | Whether these are Slime kinds at all or thin wrappers over seL4's own frame and IRQ handler capabilities |
+| Generation-update authority as an object | possibly STAGE_PENDING | a generation service that must not hold raw block write | Boundary between userspace staging and immutable selector-owned slot writes, now that management is a component reaching storage over an IO0 ring whose write right is declared per ring in `contracts/block-authority/v1` |
+| NetworkDestination | CONNECT / SEND / RECV / LISTEN | the RPi5 transport route ([RP5](../roadmap/09-rpi5-ros2-demo.md)) and [Hardware H6](../roadmap/04-platform-hardware.md) | IO4 answered the shape question *without* a capability kind: exact (protocol, address, port) tuples are a declared resource (`contracts/network-destination/v1`) that the root copies to the declared `network-service` through `CAPABILITY NETWORK DESTINATIONS READ`, with tuple matching in userspace. Whether a per-connection object and rights bits are ever needed is now the open question, and IO4's unfinished data plane is what would decide it |
 | EnergyAccount | READ? | [Hardware H track](../roadmap/04-platform-hardware.md) | Whether accounting is authority at all or read-only telemetry |
 
 M6.1 landed non-consuming narrow derive-copy spawn grants, per-spawner

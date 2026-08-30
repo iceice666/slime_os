@@ -50,12 +50,22 @@ GENESIS_SEQUENCE = 1
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        "the spawned instance received its declared device authority",
-        r"SLIME_GRAPH declared placed task=\d+ child=\d+ slot=\d+ kind=block",
+        # Post-B83 the spawned child receives the shared-buffer factory it uses
+        # to create its IO0 ring, rather than a root-placed block capability.
+        "the spawned instance received its declared crossing authority",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sel4-rollback-probe .*buffer_factory_grants=1",
     ),
     (
         "init spawned the probe",
         r"\[init\] rollback probe spawned",
+    ),
+    (
+        "the userspace driver read its generation-declared per-ring authority",
+        r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
+    ),
+    (
+        "the userspace driver brought up the device and announced its capacity",
+        r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+",
     ),
     (
         # A disk with no BootState must produce no root. Inventing one would
@@ -129,6 +139,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sel4-rollback-probe\] both slots decode",
     ),
     (
+        "the driver released cleanly on its peer's command",
+        r"\[virtio-blk-driver\] peer complete, exiting",
+    ),
+    (
         "the probe ran every transition and exited cleanly",
         r"\[sel4-rollback-probe\] rollback plane complete",
     ),
@@ -147,7 +161,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] rollback plane fail: .*",
     r"\[sel4-rollback-probe\] fail: .*",
-    r"SLIME_ROOT block bring-up failed",
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -318,6 +332,44 @@ def check_transcript(transcript: str) -> None:
     ]
     if sequences != sorted(set(sequences)):
         fail(f"committed sequences are not strictly increasing: {sequences}")
+    # Root-side corroboration after the block driver moved to userspace. The
+    # root no longer sees block opcodes, but it still mediates the payload DMA
+    # and accounts the driver's hardware resources through teardown.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace driver")
+    reclaim = re.search(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if reclaim is None:
+        report_transcript(transcript)
+        fail("the root recorded no IO-resource reclamation for the userspace driver")
+    pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+        int(value) for value in reclaim.groups()
+    )
+    if pre_pages == 0 or pre_mappings == 0:
+        report_transcript(transcript)
+        fail("the driver held no DMA pages or mappings, so it moved no bytes")
+    if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+        report_transcript(transcript)
+        fail(
+            f"the root reclaimed {back_pages}/{back_mappings} of "
+            f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+        )
+    if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+        report_transcript(transcript)
+        fail(
+            f"the driver left {post_pages} DMA pages, {post_mappings} mappings, "
+            f"and {post_requests} requests outstanding"
+        )
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; "
         f"{len(sequences)} durable transitions at strictly increasing sequences "
@@ -402,11 +454,12 @@ def main() -> None:
 
     print(
         "seL4 rollback plane check: a component walked the BootState transition "
-        "model on two durable slots — staged a pending generation, consumed both "
-        "attempts, rolled back to known-good when they were exhausted, found "
-        "rollback idempotent, refused unauthorized promotion, and promoted the "
-        "running generation — with M5.6 policy entirely in userspace and every "
-        "commit written older-slot-first"
+        "model on two durable slots through a userspace virtio-blk driver over "
+        "IO0 rings — staged a pending generation, consumed both attempts, rolled "
+        "back to known-good when they were exhausted, found rollback idempotent, "
+        "refused unauthorized promotion, and promoted the running generation — "
+        "with M5.6 policy entirely in userspace and every commit written "
+        "older-slot-first"
     )
 
 

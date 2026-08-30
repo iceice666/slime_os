@@ -339,6 +339,11 @@ def check_deleted_compatibility_surface() -> None:
         "RETIRED_POLICY_LABELS",
         "RETIRED_INPUT_READ_LABEL",
         "RETIRED_BLOCK_TRANSACT_LABEL",
+        "block_transact",
+        "block_transact_sector",
+        "block_transact_write",
+        "serve_block_transact",
+        "BlockTransaction",
         "RETIRED_STORE_TRANSACT_LABEL",
         "RETIRED_DIRECTORY_LABEL",
         "GraphTables",
@@ -370,6 +375,12 @@ def check_deleted_compatibility_surface() -> None:
                     f"{path.relative_to(ROOT)} retains deleted compatibility "
                     f"surface {symbol!r} (B50)"
                 )
+    if (ROOT / "slime-root" / "src" / "virtio_blk.rs").exists():
+        fail("slime-root/src/virtio_blk.rs retains the retired product block driver (B83)")
+    selector = ROOT / "slime-root" / "src" / "boot_selector_block.rs"
+    if not selector.is_file():
+        fail("the boot selector's bounded pre-admission block reader is missing (B83)")
+    print("repository block surface: root product transaction path deleted", flush=True)
     print("repository service surface: compatibility model deleted", flush=True)
 
 

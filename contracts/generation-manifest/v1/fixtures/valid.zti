@@ -307,38 +307,6 @@
   generation = 1;
   grants = [
     {
-      name = "block-fault-check";
-      capabilityKind = "block";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "init";
-      target = "storage-fault-probe";
-      transferable = false;
-    };
-    {
-      name = "block-read";
-      capabilityKind = "block";
-      rights = [
-        "blockRead";
-      ];
-      source = "init";
-      target = "storage-probe";
-      transferable = false;
-    };
-    {
-      name = "block-write-check";
-      capabilityKind = "block";
-      rights = [
-        "blockRead";
-        "blockWrite";
-      ];
-      source = "init";
-      target = "storage-writer";
-      transferable = false;
-    };
-    {
       name = "console-input";
       capabilityKind = "input";
       rights = [
@@ -1535,12 +1503,7 @@
     };
     {
       autostart = true;
-      bindings = [
-        {
-          grant = "block-fault-check";
-          slot = 1;
-        };
-      ];
+      bindings = [];
       dependencies = [];
       executable = "storage-fault-probe";
       health = "optional";
@@ -1549,12 +1512,7 @@
     };
     {
       autostart = true;
-      bindings = [
-        {
-          grant = "block-read";
-          slot = 1;
-        };
-      ];
+      bindings = [];
       dependencies = [];
       executable = "storage-probe";
       health = "required";
@@ -1572,12 +1530,7 @@
     };
     {
       autostart = true;
-      bindings = [
-        {
-          grant = "block-write-check";
-          slot = 1;
-        };
-      ];
+      bindings = [];
       dependencies = [];
       executable = "storage-writer";
       health = "optional";

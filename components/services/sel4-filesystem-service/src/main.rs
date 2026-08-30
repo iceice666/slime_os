@@ -22,8 +22,8 @@
 extern crate alloc;
 
 use boot_contracts::gpt::{self, GptError};
-use boot_contracts::object_store::{BlockIo, IoError, ObjectStore};
-use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
+use boot_contracts::object_store::{BlockIo as StoreBlockIo, IoError, ObjectStore};
+use slime_components::block_io::BlockIo as DriverBlockIo;
 use slime_proto::{
     capability_transfer::OBJECT_KIND_DIRECTORY,
     fs::{
@@ -52,14 +52,10 @@ const RIGHT_DIRECTORY_DERIVE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_
 slime_rt::entry!(main);
 
 const RPC_SLOT: u32 = 0;
-/// The block device, granted to this component by the generation.
-///
-/// Slot 2, not 1: the root installs a child's declared authority in a fixed
-/// order — input, directory, factories, block — and this component is declared
-/// both a directory view and the device, so the view takes 1 and the device
-/// follows. The oracle holds a store *endpoint* at its equivalent slot; the
-/// store itself lives in this component.
-const BLOCK_SLOT: u32 = 2;
+const BLOCK_FACTORY_SLOT: u32 = 4;
+const BLOCK_PEER_SLOT: u32 = 8;
+const BLOCK_RING_BASE: u64 = 0x0000_001f_0000_0000;
+const BLOCK_DATA_BASE: u64 = 0x0000_001f_0001_0000;
 /// The declared edge back to init, on which this service announces that its
 /// store is open. Init waits on it before spawning the client: opening the
 /// store is hundreds of block round trips, and a client that sent its first
@@ -105,6 +101,7 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(1);
     }
     if slime_rt::send(READY_SLOT, b"ready", &[]) != slime_rt::ERR_SUCCESS {
+        shutdown_store();
         slime_rt::debug_write(b"[filesystem] fail: ready announce\n");
         slime_rt::exit(1);
     }
@@ -115,7 +112,10 @@ fn main(_startup_arg: u32) {
         match slime_rt::recv(READY_SLOT, &mut message, &mut received_caps) {
             ERR_WOULDBLOCK => {}
             n if n < 0 => slime_rt::exit(1),
-            n if message[..n as usize] == *CLOSE => slime_rt::exit(0),
+            n if message[..n as usize] == *CLOSE => {
+                shutdown_store();
+                slime_rt::exit(0)
+            }
             _ => slime_rt::exit(1),
         }
         match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
@@ -464,8 +464,27 @@ static mut STORE: Option<(ObjectStore, BlockCapability)> = None;
 
 /// Open the store. Called once, before any request is served.
 fn open_store() -> Result<(), i32> {
-    let mut io = BlockCapability;
-    let capacity = device_capacity(&mut io).ok_or(-1)?;
+    let request_ready =
+        slime_rt::resolve_binding(b"notification:filesystem-block-request-ready+signal")
+            .map_err(|_| -1)?;
+    let completion_ready =
+        slime_rt::resolve_binding(b"notification:filesystem-block-completion-ready+wait")
+            .map_err(|_| -1)?;
+    // SAFETY: both bases are page-aligned addresses in this component's free
+    // VSpace range, do not alias each other, and nothing else maps them.
+    let driver = unsafe {
+        DriverBlockIo::attach(
+            BLOCK_FACTORY_SLOT,
+            BLOCK_PEER_SLOT,
+            request_ready,
+            completion_ready,
+            BLOCK_RING_BASE,
+            BLOCK_DATA_BASE,
+        )
+    }
+    .map_err(|_| -1)?;
+    let mut io = BlockCapability { driver };
+    let capacity = io.driver.capacity();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_BYTES]| -> Result<(), GptError> {
         io.read_sector(lba, out).map_err(|_| GptError::Device)
     };
@@ -484,6 +503,13 @@ fn with_store<T>(body: impl FnOnce(&mut ObjectStore, &mut BlockCapability) -> T)
     body(store, io)
 }
 
+fn shutdown_store() {
+    // SAFETY: the component is single-threaded and shutdown ends its serve loop.
+    if let Some((_, io)) = unsafe { (&raw mut STORE).as_mut() }.and_then(Option::as_mut) {
+        io.driver.shutdown().unwrap_or_else(|_| slime_rt::exit(1));
+    }
+}
+
 fn store_stat(hash: [u8; 32]) -> Result<(u32, u32), i32> {
     with_store(|store, _| store.stat(&hash).ok_or(-2))
 }
@@ -500,84 +526,29 @@ fn store_put(object_type: u32, payload: &[u8]) -> Result<[u8; 32], i32> {
     with_store(|store, io| store.put(io, object_type, payload).map_err(|_| -1))
 }
 
-/// The device, reached through the granted capability.
-struct BlockCapability;
+/// The object-store trait adapted to the shared synchronous IO0 client.
+struct BlockCapability {
+    driver: DriverBlockIo<'static>,
+}
 
-impl BlockIo for BlockCapability {
+impl StoreBlockIo for BlockCapability {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = block_request(block::OP_READ, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_sector(BLOCK_SLOT, &request.encode(), &mut reply, out);
-        if status < 0 || decode_block_reply(&reply).sectors_done != 1 {
-            return Err(IoError::Device);
+        match self.driver.read(lba, out) {
+            Ok(reply) if reply.sectors_done == 1 => Ok(()),
+            _ => Err(IoError::Device),
         }
-        Ok(())
     }
 
     fn write_sector(&mut self, lba: u64, data: &[u8; SECTOR_BYTES]) -> Result<(), IoError> {
-        let request = block_request(block::OP_WRITE, lba);
-        let mut reply = [0u8; block::REPLY_LEN];
-        let status =
-            slime_rt::block_transact_write(BLOCK_SLOT, &request.encode(), data, &mut reply);
-        if status < 0 || decode_block_reply(&reply).sectors_done != 1 {
-            return Err(IoError::Device);
+        match self.driver.write(lba, data) {
+            Ok(reply) if reply.sectors_done == 1 => Ok(()),
+            _ => Err(IoError::Device),
         }
-        Ok(())
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        let request = block_request(block::OP_FLUSH, 0);
-        let mut reply = [0u8; block::REPLY_LEN];
-        if slime_rt::block_transact(BLOCK_SLOT, &request.encode(), &mut reply) < 0 {
-            return Err(IoError::Device);
-        }
-        Ok(())
+        self.driver.flush().map(|_| ()).map_err(|_| IoError::Device)
     }
-}
-
-/// The device's sector count, measured by binary search over readable LBAs.
-fn device_capacity(io: &mut BlockCapability) -> Option<u64> {
-    let mut sector = [0u8; SECTOR_BYTES];
-    io.read_sector(0, &mut sector).ok()?;
-    let mut low = 0u64;
-    let mut high = 1u64;
-    while io.read_sector(high, &mut sector).is_ok() {
-        low = high;
-        high = high.checked_mul(2)?;
-    }
-    while high - low > 1 {
-        let middle = low + (high - low) / 2;
-        if io.read_sector(middle, &mut sector).is_ok() {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(low + 1)
-}
-
-fn block_request(op: u8, lba: u64) -> WireBlockRequest {
-    WireBlockRequest {
-        magic: block::BLOCK_MAGIC,
-        version: block::FORMAT_VERSION,
-        op,
-        flags: 0,
-        reserved: 0,
-        lba,
-        sector_count: if op == block::OP_FLUSH { 0 } else { 1 },
-        buffer_phys: 0,
-        buffer_pages: 0,
-    }
-}
-
-fn decode_block_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
-    WireBlockReply::decode(bytes).unwrap_or(WireBlockReply {
-        magic: 0,
-        version: 0,
-        status: -1,
-        sectors_done: 0,
-    })
 }
 
 fn reply(

@@ -356,3 +356,23 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-27 | [B81: the freestanding C linker emitted an unaligned writable segment](2026-08-27-b81-rpi5-c-segment-layout/index.md) | Defect | Verified | B81, P4 |
 | 2026-08-27 | [m3air becomes the credential-isolated SDK publication runner](2026-08-27-m3air-sdk-runner/index.md) | Change | Verified | CP7 |
 | 2026-08-27 | [Two hand-written SHA-256 implementations replaced by one RustCrypto facade](2026-08-27-sha256-rustcrypto-facade/index.md) | Change | Verified | none |
+| 2026-08-28 | [IO0: the shared queue, identity, and buffer-lease substrate](2026-08-28-io0-queue-substrate/index.md) | Change | Verified | IO0 |
+| 2026-08-28 | [IO4: the bounded network service and exact destination authority](2026-08-28-io4-network-service/index.md) | Change | Verified | IO4 |
+| 2026-08-28 | [IO2: userspace virtio-blk parity over the IO0 substrate](2026-08-28-io2-userspace-virtio-blk/index.md) | Change | Verified | IO2 |
+| 2026-08-28 | [IO1: hardware-resource authority, DMA accounts, and reclamation on death](2026-08-28-io1-hardware-resource-authority/index.md) | Change | Verified | IO1, B82 |
+| 2026-08-28 | [IO3: userspace virtio-net and LinkDevice duplex validation](2026-08-28-io3-userspace-virtio-net/index.md) | Change | Verified | IO3 |
+| 2026-08-28 | [B83: six storage planes leave the root's virtio-blk path](2026-08-28-b83-userspace-block-cutover/index.md) | Change | Verified | B83, B84 |
+| 2026-08-28 | [B84: two driver instances of one executable, one device each](2026-08-28-b84-two-device-driver-instances/index.md) | Change | Verified | B84, B83 |
+| 2026-08-29 | [B83: the root's virtio-blk product path is deleted](2026-08-29-b83-root-block-path-deleted/index.md) | Change | Verified | B83, B84, IO2 |
+| 2026-08-29 | [IO5: checked models of the IO0/IO1 lifetime and accounting rules](2026-08-29-io5-substrate-models/index.md) | Change | Verified | IO5, IO0, IO1, A0 |
+| 2026-08-29 | [IO6: bit-precise proofs of the IO substrate's wire arithmetic](2026-08-29-io6-kani-wire-proofs/index.md) | Change | Verified | IO6, IO5, IO0 |
+| 2026-08-29 | [B85: three stale `slime-proto` dependencies left `just machete` red](2026-08-29-b85-stale-proto-dependencies/index.md) | Defect | Fixed | B85 |
+| 2026-08-29 | [Devlog roadmap ID collision guard](2026-08-29-devlog-roadmap-id-collisions/index.md) | Change | Verified | none |
+| 2026-08-29 | [Kani enters the flake, and the false pass it exposed](2026-08-29-kani-in-flake/index.md) | Change | Verified | IO6 |
+| 2026-08-29 | [The storage-write allowlist still read the pre-IO2 grant shape](2026-08-29-framework-authority-ring-form/index.md) | Defect | Fixed | IO2 |
+| 2026-08-29 | [B86/B87: the virtio-net driver trusted the device's used ring](2026-08-29-b86-virtio-net-device-boundary/index.md) | Defect | Verified | B86, B87, IO3, IO6 |
+| 2026-08-29 | [B88: the network-destination decoder read a Zutai layout through byte literals](2026-08-29-b88-network-destination-generated-offsets/index.md) | Defect | Verified | B88, IO4 |
+| 2026-08-29 | [B89: fourteen renderers, one 82-line codec block, three drifts](2026-08-29-b89-shared-codec-emitters/index.md) | Defect | Verified | B89, B88, IO0 |
+| 2026-08-29 | [PR #11 review: two slices printed their conclusions, and nine defects sat under them](2026-08-29-pr11-io-evidence-and-defects/index.md) | Defect | Verified | IO0, IO1, IO2, IO3, IO4, IO5, B85, B86, B88 |
+| 2026-08-30 | [The two docs with update discipline missed the whole I/O track](2026-08-30-io-reference-doc-drift/index.md) | Audit | Verified | IO1, IO2, IO4, B83, B90 |
+| 2026-08-30 | [B90: the `Block` capability kind is deleted, and two of its premises were wrong](2026-08-30-b90-block-kind-retired/index.md) | Change | Verified | B90, B83 |

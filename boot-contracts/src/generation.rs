@@ -40,8 +40,11 @@ fn service_for_capability(kind: CapabilityKind) -> Option<u32> {
         | CapabilityKind::Loan => Some(SERVICE_SHARED_BUFFER),
         CapabilityKind::Directory => Some(SERVICE_DIRECTORY),
         CapabilityKind::Input => Some(SERVICE_INPUT),
-        CapabilityKind::Block => Some(SERVICE_BLOCK),
         CapabilityKind::Supervision => Some(SERVICE_SUPERVISION),
+        CapabilityKind::Device
+        | CapabilityKind::MmioRegion
+        | CapabilityKind::InterruptSource
+        | CapabilityKind::DmaAccount => Some(SERVICE_IO_RESOURCE),
         CapabilityKind::Endpoint | CapabilityKind::Executable => None,
     }
 }
@@ -58,12 +61,15 @@ pub enum CapabilityKind {
     Endpoint = CAPABILITY_ENDPOINT,
     Executable = CAPABILITY_EXECUTABLE,
     SharedBufferFactory = CAPABILITY_SHARED_BUFFER_FACTORY,
-    Block = CAPABILITY_BLOCK,
     Directory = CAPABILITY_DIRECTORY,
     Input = CAPABILITY_INPUT,
     Supervision = CAPABILITY_SUPERVISION,
     SharedBuffer = CAPABILITY_SHARED_BUFFER,
     Loan = CAPABILITY_LOAN,
+    Device = CAPABILITY_DEVICE,
+    MmioRegion = CAPABILITY_MMIO_REGION,
+    InterruptSource = CAPABILITY_INTERRUPT_SOURCE,
+    DmaAccount = CAPABILITY_DMA_ACCOUNT,
 }
 
 impl CapabilityKind {
@@ -72,12 +78,15 @@ impl CapabilityKind {
             CAPABILITY_ENDPOINT => Ok(Self::Endpoint),
             CAPABILITY_EXECUTABLE => Ok(Self::Executable),
             CAPABILITY_SHARED_BUFFER_FACTORY => Ok(Self::SharedBufferFactory),
-            CAPABILITY_BLOCK => Ok(Self::Block),
             CAPABILITY_DIRECTORY => Ok(Self::Directory),
             CAPABILITY_INPUT => Ok(Self::Input),
             CAPABILITY_SUPERVISION => Ok(Self::Supervision),
             CAPABILITY_SHARED_BUFFER => Ok(Self::SharedBuffer),
             CAPABILITY_LOAN => Ok(Self::Loan),
+            CAPABILITY_DEVICE => Ok(Self::Device),
+            CAPABILITY_MMIO_REGION => Ok(Self::MmioRegion),
+            CAPABILITY_INTERRUPT_SOURCE => Ok(Self::InterruptSource),
+            CAPABILITY_DMA_ACCOUNT => Ok(Self::DmaAccount),
             _ => Err(DecodeError::BadBounds),
         }
     }
@@ -88,7 +97,6 @@ fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
         CapabilityKind::Endpoint => RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
         CapabilityKind::SharedBufferFactory => RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
-        CapabilityKind::Block => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
         CapabilityKind::Directory => {
             RIGHT_DIRECTORY_READ
                 | RIGHT_DIRECTORY_WRITE
@@ -102,12 +110,14 @@ fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
             RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN | RIGHT_TRANSFER
         }
         CapabilityKind::Loan => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
+        CapabilityKind::Device | CapabilityKind::MmioRegion => RIGHT_MAP_MMIO,
+        CapabilityKind::InterruptSource => RIGHT_IRQ_ACK,
+        CapabilityKind::DmaAccount => RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
     };
     let required = match kind {
         CapabilityKind::Endpoint => RIGHT_SEND | RIGHT_RECV,
         CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN,
         CapabilityKind::SharedBufferFactory => RIGHT_BUFFER_CREATE,
-        CapabilityKind::Block => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
         CapabilityKind::Directory => {
             RIGHT_DIRECTORY_READ
                 | RIGHT_DIRECTORY_WRITE
@@ -118,6 +128,9 @@ fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
         CapabilityKind::Supervision => RIGHT_SUPERVISE,
         CapabilityKind::SharedBuffer => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN,
         CapabilityKind::Loan => RIGHT_BUFFER_MAP,
+        CapabilityKind::Device | CapabilityKind::MmioRegion => RIGHT_MAP_MMIO,
+        CapabilityKind::InterruptSource => RIGHT_IRQ_ACK,
+        CapabilityKind::DmaAccount => RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
     };
     rights != 0
         && rights & !allowed == 0
@@ -2140,7 +2153,7 @@ impl<'a> Generation<'a> {
                 return Err(DecodeError::BadBinding);
             }
         }
-        let mut seen_services = [[false; 11]; MAX_PROCESSES];
+        let mut seen_services = [[false; 12]; MAX_PROCESSES];
         for index in 0..self.service_binding_count {
             let binding = self.service_binding(index)?;
             let object_kind = if binding.object < self.kernel_object_count {
@@ -2157,9 +2170,9 @@ impl<'a> Generation<'a> {
                     | SERVICE_SHARED_BUFFER
                     | SERVICE_DIRECTORY
                     | SERVICE_INPUT
-                    | SERVICE_BLOCK
                     | SERVICE_CONSOLE
                     | SERVICE_CLOCK
+                    | SERVICE_IO_RESOURCE
             );
             let expected_slot = if binding.service == SERVICE_CONSOLE {
                 CONSOLE_SERVICE_SLOT
@@ -2183,7 +2196,7 @@ impl<'a> Generation<'a> {
             let process = self.process(process_index)?;
             let instance = self.instance(process.instance)?;
             let executable = self.executable(instance.executable)?;
-            let mut required = [false; 11];
+            let mut required = [false; 12];
             required[SERVICE_LIFECYCLE as usize] = true;
             required[SERVICE_CONSOLE as usize] = true;
             let holder_identity = shared_buffer_budget::holder_identity(instance.name);
@@ -2677,17 +2690,30 @@ mod tests {
             CapabilityKind::Executable,
             RIGHT_EXEC | RIGHT_SPAWN
         ));
-        assert!(!capability_rights_valid(CapabilityKind::Input, 1 << 10));
-        assert!(!capability_rights_valid(CapabilityKind::Block, 1 << 23));
+        // Named constants, never bare literals: the old form of this assertion
+        // read `1 << 10` for `BLOCK_READ`, and when B90 retired that right the
+        // literal silently became a bit outside `RIGHT_ALL` — turning a
+        // cross-class refusal into a trivially true one that nothing flagged. A
+        // named constant makes the next such retirement a build error here.
+        assert!(!capability_rights_valid(
+            CapabilityKind::Input,
+            RIGHT_BUFFER_MAP
+        ));
+        assert!(!capability_rights_valid(
+            CapabilityKind::Directory,
+            RIGHT_INPUT_READ
+        ));
     }
 
-    /// B57: `RIGHT_ALL` is the union of the *named* rights, not a bit-width
-    /// mask. Bit 17 is a gap in the numbering — nothing names it and nothing
-    /// uses it — so `(1 << 26) - 1` would admit a grant carrying authority no
-    /// contract defines. Every validator that masks with `!RIGHT_ALL` inherits
-    /// this, so pinning the mask is what keeps the hole closed.
+    /// B57/B90: `RIGHT_ALL` is the union of the *named* rights, not a bit-width
+    /// mask. Bits 10, 11, and 17 are gaps in the numbering — nothing names them
+    /// and nothing uses them — so `(1 << 34) - 1` would admit a grant carrying
+    /// authority no contract defines. Every validator that masks with
+    /// `!RIGHT_ALL` inherits this, so pinning the mask is what keeps the holes
+    /// closed. Bits 10 and 11 became gaps when B90 retired
+    /// `BLOCK_READ`/`BLOCK_WRITE`; their positions are reserved, never reused.
     #[test]
-    fn right_all_is_a_union_of_named_bits_and_excludes_the_gap_at_17() {
+    fn right_all_is_a_union_of_named_bits_and_excludes_the_reserved_gaps() {
         let named = [
             RIGHT_SEND,
             RIGHT_RECV,
@@ -2699,8 +2725,6 @@ mod tests {
             RIGHT_IRQ_ACK,
             RIGHT_BUFFER_WRITE,
             RIGHT_BUFFER_MAP,
-            RIGHT_BLOCK_READ,
-            RIGHT_BLOCK_WRITE,
             RIGHT_STORE_READ,
             RIGHT_STORE_WRITE,
             RIGHT_HEALTH_CONFIRM,
@@ -2727,23 +2751,38 @@ mod tests {
             .iter()
             .fold(0, |accumulator, right| accumulator | right);
         assert_eq!(union, RIGHT_ALL);
-        assert_eq!(RIGHT_ALL & (1 << 17), 0);
-        assert_ne!(RIGHT_ALL, (1 << 33) - 1);
+        for gap in [10, 11, 17] {
+            assert_eq!(RIGHT_ALL & (1u64 << gap), 0, "bit {gap} is reserved");
+        }
+        assert_ne!(RIGHT_ALL, (1 << 34) - 1);
         // The mask is what every grant, mapping, and minted-binding check
         // applies, so an undefined bit must survive none of them.
-        assert_ne!((RIGHT_SEND | RIGHT_RECV | 1 << 17) & !RIGHT_ALL, 0);
+        for gap in [10, 11, 17] {
+            assert_ne!(
+                (RIGHT_SEND | RIGHT_RECV | 1u64 << gap) & !RIGHT_ALL,
+                0,
+                "bit {gap} escaped the mask"
+            );
+        }
+        // Every declared kind, so a reserved bit cannot be admitted by one the
+        // loop forgot to name.
         for kind in [
             CapabilityKind::Endpoint,
             CapabilityKind::Executable,
             CapabilityKind::SharedBufferFactory,
-            CapabilityKind::Block,
             CapabilityKind::Directory,
             CapabilityKind::Input,
             CapabilityKind::Supervision,
             CapabilityKind::SharedBuffer,
             CapabilityKind::Loan,
+            CapabilityKind::Device,
+            CapabilityKind::MmioRegion,
+            CapabilityKind::InterruptSource,
+            CapabilityKind::DmaAccount,
         ] {
-            assert!(!capability_rights_valid(kind, 1 << 17));
+            for gap in [10, 11, 17] {
+                assert!(!capability_rights_valid(kind, 1u64 << gap));
+            }
         }
     }
 
@@ -2754,28 +2793,39 @@ mod tests {
     /// right moving between classes must move here and in
     /// `docs/capability-matrix.md` in the same change. This test is scoped to
     /// `capability_rights_valid`; other decoder fields have their own masks.
+    ///
+    /// B90 completed `BASELINES` to all twelve declared kinds. It previously
+    /// named nine, omitting IO1's four hardware-resource kinds, so
+    /// `NOT_MANIFEST_DECLARABLE` meant "rejected for those nine" while bits 4-7
+    /// sat in it and were declared by real manifest grants on kinds the test did
+    /// not enumerate. Enumerating every kind is what makes the two classes a
+    /// partition of the vocabulary rather than of an arbitrary subset of it.
     #[test]
     fn declared_rights_partition_into_manifest_declarable_and_root_only() {
-        const BASELINES: [(CapabilityKind, Rights); 9] = [
+        const BASELINES: [(CapabilityKind, Rights); 12] = [
             (CapabilityKind::Endpoint, RIGHT_SEND | RIGHT_RECV),
             (CapabilityKind::Executable, RIGHT_EXEC | RIGHT_SPAWN),
             (CapabilityKind::SharedBufferFactory, RIGHT_BUFFER_CREATE),
-            (CapabilityKind::Block, RIGHT_BLOCK_READ),
             (CapabilityKind::Directory, RIGHT_DIRECTORY_READ),
             (CapabilityKind::Input, RIGHT_INPUT_READ),
             (CapabilityKind::Supervision, RIGHT_SUPERVISE),
             (CapabilityKind::SharedBuffer, RIGHT_BUFFER_WRITE),
             (CapabilityKind::Loan, RIGHT_BUFFER_MAP),
+            (CapabilityKind::Device, RIGHT_MAP_MMIO),
+            (CapabilityKind::MmioRegion, RIGHT_MAP_MMIO),
+            (CapabilityKind::InterruptSource, RIGHT_IRQ_ACK),
+            (
+                CapabilityKind::DmaAccount,
+                RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
+            ),
         ];
-        const MANIFEST_DECLARABLE: [Rights; 17] = [
+        const MANIFEST_DECLARABLE: [Rights; 19] = [
             RIGHT_SEND,
             RIGHT_RECV,
             RIGHT_TRANSFER,
             RIGHT_EXEC,
             RIGHT_SPAWN,
             RIGHT_SUPERVISE,
-            RIGHT_BLOCK_READ,
-            RIGHT_BLOCK_WRITE,
             RIGHT_BUFFER_WRITE,
             RIGHT_BUFFER_MAP,
             RIGHT_BUFFER_CREATE,
@@ -2785,8 +2835,14 @@ mod tests {
             RIGHT_DIRECTORY_LIST,
             RIGHT_DIRECTORY_DERIVE,
             RIGHT_INPUT_READ,
+            // IO1's four, declarable on the kinds `BASELINES` now names. They
+            // sat in the rejected class only because no baseline admitted them.
+            RIGHT_MAP_MMIO,
+            RIGHT_DMA_PIN,
+            RIGHT_DMA_RELEASE,
+            RIGHT_IRQ_ACK,
         ];
-        const NOT_MANIFEST_DECLARABLE: [Rights; 16] = [
+        const NOT_MANIFEST_DECLARABLE: [Rights; 12] = [
             RIGHT_SCHEDULING_PROMOTE,
             RIGHT_LIFECYCLE_RESTART,
             RIGHT_PARAMETER_READ,
@@ -2795,10 +2851,6 @@ mod tests {
             RIGHT_CLOCK_TIMER_USE,
             RIGHT_CLOCK_SIMULATED_READ,
             RIGHT_CLOCK_SIMULATED_ADVANCE,
-            RIGHT_MAP_MMIO,
-            RIGHT_DMA_PIN,
-            RIGHT_DMA_RELEASE,
-            RIGHT_IRQ_ACK,
             RIGHT_STORE_READ,
             RIGHT_STORE_WRITE,
             RIGHT_HEALTH_CONFIRM,
@@ -2866,7 +2918,6 @@ mod tests {
             RIGHT_SEND,
             RIGHT_RECV,
             RIGHT_BUFFER_LOAN,
-            RIGHT_BLOCK_READ,
             RIGHT_STORE_READ,
             RIGHT_DIRECTORY_READ,
             RIGHT_INPUT_READ,

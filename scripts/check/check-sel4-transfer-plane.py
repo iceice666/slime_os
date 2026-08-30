@@ -69,8 +69,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] transfer probe spawned",
     ),
     (
+        # The write crossed IO0 and the source driver's generation-declared
+        # authority table answered STATUS_BAD_RIGHTS before virtio saw it.
+        "the source driver refused a write outside its ring authority",
+        r"\[sel4-transfer-probe\] source write refused by driver rights",
+    ),
+    (
         # Checked before anything else: every later claim about the source
-        # being untouched rests on the capability refusing the write.
+        # being untouched rests on the driver's ring authority refusing the write.
         "the source device refuses writes",
         r"\[sel4-transfer-probe\] the source device refuses writes",
     ),
@@ -130,7 +136,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] transfer plane fail: .*",
     r"\[sel4-transfer-probe\] fail: .*",
-    r"SLIME_ROOT block bring-up failed",
+    r"\[virtio-blk-driver\] fail: .*",
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
@@ -295,55 +301,75 @@ def check_transcript(transcript: str) -> None:
     if completions != 1:
         report_transcript(transcript)
         fail(f"{completions} instances ran the scenario, expected 1")
-    # Both devices came up. B29 was that only one did — two QEMU transports
-    # share a granule and the frame maps once — so a regression there leaves
-    # this plane with one device and no source to read.
-    ready = re.findall(r"SLIME_ROOT block ready transport=(\S+) sectors=\d+", transcript)
-    if len(ready) != 2:
-        report_transcript(transcript)
-        fail(f"{len(ready)} block devices were brought up, expected 2; saw {ready}")
-    # The root refused the write the probe attempted on its read-only source.
-    if not re.search(r"SLIME_GRAPH block refused task=\d+ op=2 class=rights", transcript):
-        fail("the root recorded no rights refusal on the read-only source")
-    # B43: multi-device selection is exact. This is the only plane holding two
-    # device capabilities, so it is the only place the claim can be observed —
-    # and the defect it guards against was real: `declared_resource` answers
-    # `Block { device: 0 }` for every grant, because only the installer knows
-    # how many it has placed, so a path that forgets to renumber gives a
-    # component two capabilities that both name device 0.
-    served = re.findall(
-        r"SLIME_GRAPH block served task=\d+ device=(\d+) op=(\d+) lba=\d+ status=(-?\d+)",
+    # Two independently declared driver quotas tie the composition's device 0
+    # and device 1 budget rows to distinct runtime instances. Together with the
+    # two distinct authority tables and two ready announcements above, this is
+    # the userspace replacement for the root's old per-request device numbers.
+    for instance in ("virtio-blk-receiver", "virtio-blk-source"):
+        if not re.search(
+            rf"SLIME_IO quota task=\d+ instance={instance}\b",
+            transcript,
+        ):
+            report_transcript(transcript)
+            fail(f"the root recorded no distinct IO quota for {instance}")
+    # Driver output is scheduler-independent, so assert presence/count here
+    # rather than forcing either instance ahead of the probe in the marker chain.
+    authority = re.findall(
+        r"\[virtio-blk-driver\] authority rings=1 rights=read,write source=generation",
         transcript,
     )
-    if not served:
+    if len(authority) != 2:
         report_transcript(transcript)
-        fail("no block request was served; the console thread answered nothing")
-    devices = {device for device, _, _ in served}
-    if devices != {"0", "1"}:
+        fail(f"{len(authority)} driver instances read their authority table, expected 2")
+    ready = re.findall(r"\[virtio-blk-driver\] ready capacity=\d+ epoch=\d+", transcript)
+    if len(ready) != 2:
         report_transcript(transcript)
-        fail(
-            f"block requests reached devices {sorted(devices)}, expected both 0 and 1; "
-            "a capability that should name the source resolved to the receiver"
+        fail(f"{len(ready)} userspace block transports came up, expected 2")
+    exits = transcript.count("[virtio-blk-driver] peer complete, exiting")
+    if exits != 2:
+        report_transcript(transcript)
+        fail(f"{exits} userspace block drivers exited cleanly, expected 2")
+
+    # Root-side corroboration after the block data path left the root. Both DMA
+    # directions are indispensable: DeviceWrite carried source and receiver
+    # reads into client memory, while DeviceRead carried receiver writes out.
+    payload_dma = re.findall(
+        r"SLIME_IO payload dma pages=\d+ frames=\d+ writable=\w+ direction=(\w+)",
+        transcript,
+    )
+    for direction in ("DeviceRead", "DeviceWrite"):
+        if direction not in payload_dma:
+            report_transcript(transcript)
+            fail(f"the root mediated no {direction} payload DMA for the userspace drivers")
+
+    reclaims = re.findall(
+        r"SLIME_IO reclaim task=\d+ .*pre_dma_pages=(\d+) pre_dma_mappings=(\d+) .*"
+        r"reclaimed_dma_pages=(\d+) reclaimed_dma_mappings=(\d+) .*"
+        r"post_dma_pages=(\d+) post_dma_mappings=(\d+) post_requests=(\d+)",
+        transcript,
+    )
+    if len(reclaims) != 2:
+        report_transcript(transcript)
+        fail(f"the root recorded {len(reclaims)} IO-resource reclaims, expected 2")
+    for index, groups in enumerate(reclaims, 1):
+        pre_pages, pre_mappings, back_pages, back_mappings, post_pages, post_mappings, post_requests = (
+            int(value) for value in groups
         )
-    # Reads on the source (device 1) must have *mostly* succeeded, or the
-    # transfer read zeroes and every later digest check compared nothing
-    # against nothing. Not "all": the probe sizes each device by reading past
-    # its end on purpose, so a handful of refusals are the capacity search
-    # working, and demanding zero of them would assert the search never ran.
-    source_reads = [status for device, op, status in served if device == "1" and op == "1"]
-    successful = sum(1 for status in source_reads if status == "0")
-    if successful < 2:
-        report_transcript(transcript)
-        fail(
-            f"only {successful} reads on the source device succeeded; "
-            "the transfer had no source bytes to copy"
-        )
-    # Writes must never have reached the source: it is the read-only device,
-    # and a rights refusal is recorded above rather than a served write.
-    source_writes = [op for device, op, _ in served if device == "1" and op == "2"]
-    if source_writes:
-        report_transcript(transcript)
-        fail(f"{len(source_writes)} writes were served on the read-only source device")
+        if pre_pages == 0 or pre_mappings == 0:
+            report_transcript(transcript)
+            fail(f"driver {index} held no DMA pages or mappings, so it moved no bytes")
+        if (back_pages, back_mappings) != (pre_pages, pre_mappings):
+            report_transcript(transcript)
+            fail(
+                f"driver {index}: the root reclaimed {back_pages}/{back_mappings} of "
+                f"{pre_pages}/{pre_mappings} DMA pages/mappings"
+            )
+        if (post_pages, post_mappings, post_requests) != (0, 0, 0):
+            report_transcript(transcript)
+            fail(
+                f"driver {index} left {post_pages} DMA pages, {post_mappings} mappings, "
+                f"and {post_requests} requests outstanding"
+            )
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; both devices came "
         "up from one shared granule and each answered under its own index, the "
