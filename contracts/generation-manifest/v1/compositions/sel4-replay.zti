@@ -104,10 +104,12 @@
         {
           grant = "replay-stream-channel";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "replay-recorder-shared-buffer-factory";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];
@@ -122,6 +124,7 @@
         {
           grant = "replay-stream-channel";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];
@@ -133,8 +136,8 @@
     {
       autostart = true;
       bindings = [
-        { grant = "replay-block-peer"; slot = 8; };
-        { grant = "replay-unrecorded-buffer-factory"; slot = 3; };
+        { grant = "replay-block-peer"; slot = 8; slotReason = "encodedLayout"; };
+        { grant = "replay-unrecorded-buffer-factory"; slot = 3; slotReason = "encodedLayout"; };
       ];
       dependencies = [];
       executable = "replay-probe";
@@ -160,7 +163,7 @@
       name = "replay-observer";
       owner = "root";
     };
-    { autostart = true; bindings = [ { grant = "replay-block-peer"; slot = 0; }; { grant = "replay-block-device"; slot = 1; }; { grant = "replay-block-mmio"; slot = 2; }; { grant = "replay-block-interrupt"; slot = 3; }; { grant = "replay-block-dma"; slot = 4; }; ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
+    { autostart = true; bindings = [ { grant = "replay-block-peer"; slot = 0; slotReason = "componentAbi"; }; { grant = "replay-block-device"; slot = 1; slotReason = "componentAbi"; }; { grant = "replay-block-mmio"; slot = 2; slotReason = "componentAbi"; }; { grant = "replay-block-interrupt"; slot = 3; slotReason = "componentAbi"; }; { grant = "replay-block-dma"; slot = 4; slotReason = "componentAbi"; }; ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
   ];
   interfaceSchemas = [];
   lifecyclePolicy = {

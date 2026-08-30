@@ -108,6 +108,7 @@
         {
           grant = "init-sample-receiver";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
@@ -115,6 +116,7 @@
         {
           grant = "powerbox-client";
           slot = 3;
+          slotReason = "componentAbi";
         };
         {
           grant = "sample-receiver-side";
@@ -132,6 +134,7 @@
         {
           grant = "sample-receiver-side";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -151,10 +154,12 @@
         {
           grant = "dango-output";
           slot = 0;
+          slotReason = "allocatorOrder";
         };
         {
           grant = "powerbox-client";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

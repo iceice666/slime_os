@@ -356,26 +356,32 @@
         {
           grant = "init-fabric-service";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-call-worker";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-robot-sensor";
           slot = 3;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-robot-actuator";
           slot = 4;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-robot-clock";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 7;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -390,10 +396,12 @@
         {
           grant = "robot-sensor-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "robot-controller-control";
           slot = 30;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -408,14 +416,17 @@
         {
           grant = "robot-controller-call-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "robot-actuator-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "robot-clock-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -430,6 +441,7 @@
         {
           grant = "robot-sensor-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];
@@ -444,6 +456,7 @@
         {
           grant = "robot-actuator-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];
@@ -458,10 +471,12 @@
         {
           grant = "robot-clock-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "robot-controller-clock-phase";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];
@@ -476,6 +491,7 @@
         {
           grant = "robot-controller-executable";
           slot = 2;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -499,14 +515,17 @@
         {
           grant = "robot-controller-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "robot-controller-call-control";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "robot-controller-clock-phase";
           slot = 5;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [

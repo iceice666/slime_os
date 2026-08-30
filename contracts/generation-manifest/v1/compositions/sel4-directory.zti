@@ -93,10 +93,12 @@
         {
           grant = "init-sel4-directory-probe";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "sel4-directory-probe-run-token";
           slot = 2;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -111,10 +113,12 @@
         {
           grant = "directory-probe-root";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "sel4-directory-probe-run-token";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -131,10 +135,12 @@
         {
           grant = "directory-probe-root-idle";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "sel4-directory-probe-idle-token";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

@@ -54,6 +54,11 @@ contracts_check: bootstate_model_check capability_rights_model_check io_queue_mo
     python3 scripts/generate/generate-spawn-bindings.py --check
     python3 scripts/generate/generate-link-device-bindings.py --check
     python3 scripts/generate/generate-network-service-bindings.py --check
+    # B91: every pinned instance binding slot states why its number is written
+    # down, and the stated reason is re-derived here rather than trusted. A pin
+    # claiming to be frozen by an artifact that does not freeze it, or claiming
+    # a positional consumer its holder does not have, fails.
+    python3 scripts/check/check-slot-pin-reasons.py
     python3 scripts/check/check-boot-layout-resource.py
     # B42: lifecycle authority is a capability, so no wire record or public
     # runtime type may name a bare task id.
@@ -93,7 +98,7 @@ component_spec_check: contracts_check
 
 # CP1's generation derivation: `valid.zti` and `sel4-channel.zti` are generated
 # from `contracts/system-spec/v1` sources plus the component-spec corpus, must
-# regenerate byte-identically, and 17 named malformations are refused.
+# regenerate byte-identically, and 21 named malformations are refused.
 [group('contracts')]
 system_spec_check: component_spec_check
     python3 scripts/check/check-system-spec.py

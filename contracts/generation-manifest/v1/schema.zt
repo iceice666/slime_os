@@ -28,9 +28,47 @@ Executable :: type {
 -- which is what a manifest should do unless a frozen artifact pins the number.
 -- Explicit slots stay authoritative: the boot-layout fixtures are byte-pinned,
 -- so auto-allocation is opt-in per binding rather than a global renumbering.
+--
+-- `slotReason` is the machine-readable answer to "why is this number written
+-- down?" (B91). Before it existed, a pin carried no distinction between a number
+-- some external artifact freezes, a number a neighbouring binding's allocation
+-- depends on, a number the encoded layout would change without, and a number the
+-- allocator reproduces exactly -- so no gate could tell a load-bearing pin from
+-- leftover noise, and the only way to find out was to delete one and boot.
+-- Required exactly when `slot` is present and refused when it is absent, so the
+-- two fields cannot disagree. Closed to four values, ordered strongest first:
+--
+--   `bootLayout`     -- this manifest's `bootstrapInstance` holds the binding and
+--                       it produces a `contracts/boot-layout/v1` row, whose
+--                       `*.layout` fixtures freeze the number byte for byte.
+--   `allocatorOrder` -- removing this one pin would move some *other* resolved
+--                       slot, because the freed number goes to the next binding
+--                       in grant-name order. Load-bearing for its neighbours
+--                       regardless of who consumes it.
+--   `encodedLayout`  -- removing it changes only this binding's own encoded slot.
+--                       Nothing else in the manifest depends on the number, but
+--                       the generation bytes and the capability layout the root
+--                       installs do, so dropping it changes what boots.
+--   `componentAbi`   -- none of the above: the allocator reproduces this number
+--                       exactly and nothing encoded moves if the pin goes, so
+--                       whatever keeps it is outside the manifest -- the holder's
+--                       own source, a spawn-grant order, or a device/protocol
+--                       layout consuming the position rather than the name.
+--
+-- The first three are decidable from the manifest alone, so the builder measures
+-- each pin's removal and refuses any label it cannot confirm. A weaker claim
+-- beside a stronger truth is refused too, which is what makes the vocabulary
+-- ordered rather than free: a pin carries the strongest invariant forcing it.
+--
+-- `componentAbi` is the only reason resting on a claim about component source,
+-- and therefore the only class `just contracts_check` can audit against the
+-- components themselves and the only class a future migration can shrink. That
+-- is the residue B91 leaves deliberately visible instead of hidden among 613
+-- undifferentiated numbers.
 InstanceBinding :: type {
   grant : Text;
   slot? : Int;
+  slotReason? : Text;
 };
 
 -- One statically-created seL4 Notification. `source` is the instance allowed

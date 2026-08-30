@@ -68,14 +68,17 @@
         {
           grant = "init-crossing-peer";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "crossing-carrier";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "crossing-gate";
           slot = 3;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];
@@ -90,10 +93,12 @@
         {
           grant = "crossing-carrier";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "crossing-gate";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

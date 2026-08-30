@@ -22,14 +22,14 @@
         { grant = "io-driver-worker-executable"; };
         { grant = "probe-device"; };
         { grant = "probe-mmio"; };
-        { grant = "probe-irq"; slot = 3; };
-        { grant = "probe-dma"; slot = 4; };
+        { grant = "probe-irq"; slot = 3; slotReason = "allocatorOrder"; };
+        { grant = "probe-dma"; slot = 4; slotReason = "allocatorOrder"; };
       ]; dependencies = []; executable = "io-driver-probe"; health = "required"; name = "io-driver-supervisor"; owner = "root"; };
     { autostart = false; bindings = [
-        { grant = "probe-device"; slot = 0; };
-        { grant = "probe-mmio"; slot = 1; };
-        { grant = "probe-irq"; slot = 2; };
-        { grant = "probe-dma"; slot = 3; };
+        { grant = "probe-device"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "probe-mmio"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "probe-irq"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "probe-dma"; slot = 3; slotReason = "componentAbi"; };
       ]; dependencies = [ "io-driver-supervisor"; ]; executable = "io-driver-probe"; health = "optional"; name = "io-driver-worker"; owner = "io-driver-supervisor"; };
     { autostart = true; bindings = []; dependencies = []; executable = "io-driver-intruder"; health = "required"; name = "io-driver-intruder"; owner = "root"; };
   ];

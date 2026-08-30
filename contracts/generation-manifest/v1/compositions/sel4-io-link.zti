@@ -20,8 +20,8 @@
   health = { bootAttempts = 3; requiredInstances = ["init"; "io-link-probe"; "virtio-net-driver"; "io-link-intruder";]; };
   instances = [
     { autostart = true; bindings = []; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
-    { autostart = true; bindings = [{grant="io-link-peer";slot=0;}; {grant="io-link-buffer-factory";slot=1;};]; dependencies = []; executable = "io-link-probe"; health = "required"; name = "io-link-probe"; owner = "root"; };
-    { autostart = true; bindings = [{grant="io-link-peer";slot=0;}; {grant="virtio-net-device";slot=1;}; {grant="virtio-net-mmio";slot=2;}; {grant="virtio-net-interrupt";slot=3;}; {grant="virtio-net-dma";slot=4;};]; dependencies = []; executable = "virtio-net-driver"; health = "required"; name = "virtio-net-driver"; owner = "root"; };
+    { autostart = true; bindings = [{ grant = "io-link-peer"; slot = 0; slotReason = "componentAbi"; }; { grant = "io-link-buffer-factory"; slot = 1; slotReason = "componentAbi"; };]; dependencies = []; executable = "io-link-probe"; health = "required"; name = "io-link-probe"; owner = "root"; };
+    { autostart = true; bindings = [{ grant = "io-link-peer"; slot = 0; slotReason = "componentAbi"; }; { grant = "virtio-net-device"; slot = 1; slotReason = "componentAbi"; }; { grant = "virtio-net-mmio"; slot = 2; slotReason = "componentAbi"; }; { grant = "virtio-net-interrupt"; slot = 3; slotReason = "componentAbi"; }; { grant = "virtio-net-dma"; slot = 4; slotReason = "componentAbi"; };]; dependencies = []; executable = "virtio-net-driver"; health = "required"; name = "virtio-net-driver"; owner = "root"; };
     { autostart = true; bindings = []; dependencies = []; executable = "io-link-intruder"; health = "required"; name = "io-link-intruder"; owner = "root"; };
   ];
   interfaceSchemas = [];

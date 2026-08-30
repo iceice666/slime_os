@@ -96,6 +96,7 @@
         {
           grant = "both-planes-shared-buffer-factory";
           slot = 1;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];

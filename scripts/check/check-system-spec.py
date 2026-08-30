@@ -88,6 +88,14 @@ SORTED_SECTIONS = {
 POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
 POST_BASELINE_OBJECTS = ("private-memory-budget",)
 
+# `InstanceBinding.slotReason` postdates the frozen baseline too, on the same
+# terms (B91): the baseline's pinned bindings carry a number and no reason, so it
+# has nothing to compare a label against. Lifted out of the comparison and
+# asserted separately below against the generation builder's own re-derivation,
+# which is stricter than a frozen copy would have been — a wrong label fails even
+# though the baseline could not have caught it.
+POST_BASELINE_BINDING_FIELDS = ("slotReason",)
+
 # Bindings the committed `valid.zti` declares that name no grant at all. They are
 # dead text: `resolve_boot_profile` drops any binding whose grant is absent, so
 # every profile — `default`, `test`, `visibility`, `unified` — already boots
@@ -261,10 +269,14 @@ def split_post_baseline(manifest: dict) -> tuple[dict, dict]:
             (removed if entry["id"] in POST_BASELINE_OBJECTS else kept).append(entry)
         value["objects"] = kept
         added["objects"] = removed
+    for instance in value.get("instances", []):
+        for binding in instance.get("bindings", []):
+            for field in POST_BASELINE_BINDING_FIELDS:
+                binding.pop(field, None)
     return value, added
 
 
-def check_post_baseline(name: str, derived: dict, system) -> None:
+def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
     """The post-baseline sections say exactly what the component specs declare.
 
     The baseline predates these, so it cannot check them — and an excusal with
@@ -296,6 +308,11 @@ def check_post_baseline(name: str, derived: dict, system) -> None:
             f"{name}: privateMemoryBudget has {len(budget)} holder(s) but the "
             f"private-memory-budget resource object is {'present' if carried else 'absent'}"
         )
+    # B91: every pin the derivation emits carries the reason its system spec
+    # declared, and that reason is what the derived manifest itself implies. The
+    # builder's own predicate is reused rather than restated, so this gate cannot
+    # disagree with the product build about which label is correct.
+    BUILDER.validate_slot_reasons(source, f"{name} derived manifest")
 
 
 def first_difference(left: object, right: object, label: str) -> str:
@@ -378,7 +395,11 @@ for name, system in sorted(systems.items()):
             f"{name}: derived manifest diverges from {DERIVED_FIXTURES[name]}: "
             f"{first_difference(derived, committed, 'manifest')}"
         )
-    check_post_baseline(name, normalized(derive_manifest(system)), system)
+    # One derivation, passed twice: normalized for the budget comparison, and
+    # unnormalized because `validate_slot_reasons` needs unresolved slots to tell
+    # an omitted pin from an allocated one.
+    source_manifest = derive_manifest(system)
+    check_post_baseline(name, normalized(source_manifest), system, source_manifest)
     # And the removal above must be exactly the dead bindings and the
     # retired-kind ones, never a live grant in a live kind: comparing against
     # the unmodified fixture must fail for those reasons alone.
@@ -525,7 +546,14 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
         spec["targetRequirement"] = "aarch64-imaginary"
 
     def negative_slot_pin(spec: dict) -> None:
-        spec["slotPins"] = [{"holder": "init", "grant": "dango-output", "slot": -1}]
+        spec["slotPins"] = [
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": -1,
+                "reason": "componentAbi",
+            }
+        ]
 
     def grant_to_unadmitted(spec: dict) -> None:
         spec["grants"][0]["target"] = "dango"
@@ -543,12 +571,42 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
         spec["grants"][0]["rights"] = ["directoryRead"]
 
     def stale_slot_pin(spec: dict) -> None:
-        spec["slotPins"] = [{"holder": "console", "grant": "no-such-grant", "slot": 3}]
+        spec["slotPins"] = [
+            {
+                "holder": "console",
+                "grant": "no-such-grant",
+                "slot": 3,
+                "reason": "componentAbi",
+            }
+        ]
 
     def duplicate_slot_pin(spec: dict) -> None:
         spec["slotPins"] = [
-            {"holder": "init", "grant": "dango-output", "slot": 4},
-            {"holder": "init", "grant": "init-console", "slot": 4},
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": 4,
+                "reason": "componentAbi",
+            },
+            {
+                "holder": "init",
+                "grant": "init-console",
+                "slot": 4,
+                "reason": "componentAbi",
+            },
+        ]
+
+    def unknown_slot_pin_reason(spec: dict) -> None:
+        # B91: the reason vocabulary is closed. A pin claiming a reason outside
+        # it cannot be checked against the manifest at all, so it is refused
+        # here rather than reaching the generation builder.
+        spec["slotPins"] = [
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": 4,
+                "reason": "becauseISaidSo",
+            }
         ]
 
     def bootstrap_not_init(spec: dict) -> None:
@@ -586,7 +644,12 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
         # One more pin than the contract's `maxSlotPins` admits. Every pin names
         # a real binding, so only the bound can refuse this.
         spec["slotPins"] = [
-            {"holder": "init", "grant": "dango-output", "slot": index}
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": index,
+                "reason": "componentAbi",
+            }
             for index in range(CONTRACT.MAX_SLOT_PINS + 1)
         ]
 
@@ -642,6 +705,7 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
         ("a grant carrying rights its kind forbids", rights_outside_kind),
         ("a slot pin for a binding the grants do not produce", stale_slot_pin),
         ("two slot pins on one holder slot", duplicate_slot_pin),
+        ("a slot pin whose reason is outside the vocabulary", unknown_slot_pin_reason),
         ("a bootstrap instance that is not an init component", bootstrap_not_init),
         ("a bootstrap instance the system does not admit", bootstrap_unadmitted),
         ("a duplicate grant name", duplicate_grant_name),

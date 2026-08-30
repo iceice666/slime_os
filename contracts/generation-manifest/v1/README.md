@@ -19,7 +19,8 @@ Format 1 serializes enumerated identifiers as text. The builder accepts only:
 
 - object `kind`: `kernel`, `bootstrap`, `component`, `resource`;
 - component `role`: `init`, `service`, `driver`, `application`;
-- state `policy`: `immutable`, `ephemeral`, `preserve`, `snapshotBeforeUpgrade`, `discardOnRollback`.
+- state `policy`: `immutable`, `ephemeral`, `preserve`, `snapshotBeforeUpgrade`, `discardOnRollback`;
+- instance binding `slotReason`: `bootLayout`, `allocatorOrder`, `encodedLayout`, `componentAbi` — required exactly when `slot` is present, and refused when it is absent.
 
 This is intentional: Zutai `.zti` bare atoms decode as atom-singleton types, while a heterogeneous manifest needs one stable field type for each closed set. The builder enforces the closed sets until a later manifest encoding supplies explicit numeric or tagged discriminants.
 
@@ -37,7 +38,8 @@ Zutai decoding validates structural shape. The Slime builder must additionally e
 - grant sources and targets exist;
 - state owners and required health components exist;
 - hashes use a supported algorithm and match object bytes;
-- a parent generation exists when `parent` is present.
+- a parent generation exists when `parent` is present;
+- every pinned instance binding declares a `slotReason`, and the reason is the strongest one the manifest itself implies. The builder removes each pin through the production allocator and measures what moves: `bootLayout` only for a `bootstrapInstance` binding that produces a `contracts/boot-layout/v1` row, `allocatorOrder` only when removal moves another binding's resolved slot, `encodedLayout` only when it moves this binding's own slot and nothing else, `componentAbi` only when nothing moves. `just contracts_check` re-derives all four rather than trusting the declaration, and separately refuses a `componentAbi` pin whose holder resolves that grant by name and compiles no such slot number.
 
 These checks belong to the builder because successful structural decoding must never be confused with authorization or integrity verification.
 

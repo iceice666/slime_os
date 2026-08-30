@@ -25,23 +25,23 @@
   instances = [
     { autostart = true; bindings = []; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
     { autostart = true; bindings = [
-        { grant = "io-block-peer"; slot = 0; };
-        { grant = "io-block-buffer-factory"; slot = 1; };
-        { grant = "io-block-readonly-peer"; slot = 8; };
+        { grant = "io-block-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "io-block-buffer-factory"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-peer"; slot = 8; slotReason = "encodedLayout"; };
       ]; dependencies = []; executable = "io-block-probe"; health = "required"; name = "io-block-probe"; owner = "root"; };
     { autostart = true; bindings = [
-        { grant = "io-block-peer"; slot = 0; };
-        { grant = "io-block-device"; slot = 1; };
-        { grant = "io-block-mmio"; slot = 2; };
-        { grant = "io-block-interrupt"; slot = 3; };
-        { grant = "io-block-dma"; slot = 4; };
+        { grant = "io-block-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "io-block-device"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "io-block-mmio"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "io-block-interrupt"; slot = 3; slotReason = "componentAbi"; };
+        { grant = "io-block-dma"; slot = 4; slotReason = "componentAbi"; };
       ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
     { autostart = true; bindings = [
-        { grant = "io-block-readonly-peer"; slot = 0; };
-        { grant = "io-block-readonly-device"; slot = 1; };
-        { grant = "io-block-readonly-mmio"; slot = 2; };
-        { grant = "io-block-readonly-interrupt"; slot = 3; };
-        { grant = "io-block-readonly-dma"; slot = 4; };
+        { grant = "io-block-readonly-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-device"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-mmio"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-interrupt"; slot = 3; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-dma"; slot = 4; slotReason = "componentAbi"; };
       ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-readonly-driver"; owner = "root"; };
   ];
   interfaceSchemas = [];

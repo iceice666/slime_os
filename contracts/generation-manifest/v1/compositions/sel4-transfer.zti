@@ -37,9 +37,9 @@
     {
       autostart = true;
       bindings = [
-        { grant = "init-sel4-transfer-probe"; slot = 1; };
-        { grant = "sel4-transfer-probe-run-token"; slot = 2; };
-        { grant = "transfer-init-buffer-factory"; slot = 4; };
+        { grant = "init-sel4-transfer-probe"; slot = 1; slotReason = "bootLayout"; };
+        { grant = "sel4-transfer-probe-run-token"; slot = 2; slotReason = "encodedLayout"; };
+        { grant = "transfer-init-buffer-factory"; slot = 4; slotReason = "bootLayout"; };
       ];
       dependencies = [];
       executable = "init";
@@ -50,10 +50,10 @@
     {
       autostart = false;
       bindings = [
-        { grant = "sel4-transfer-probe-run-token"; slot = 0; };
-        { grant = "transfer-probe-buffer-factory"; slot = 3; };
-        { grant = "transfer-receiver-peer"; slot = 8; };
-        { grant = "transfer-source-peer"; slot = 9; };
+        { grant = "sel4-transfer-probe-run-token"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "transfer-probe-buffer-factory"; slot = 3; slotReason = "encodedLayout"; };
+        { grant = "transfer-receiver-peer"; slot = 8; slotReason = "encodedLayout"; };
+        { grant = "transfer-source-peer"; slot = 9; slotReason = "encodedLayout"; };
       ];
       dependencies = [
         "init";
@@ -66,7 +66,7 @@
     {
       autostart = true;
       bindings = [
-        { grant = "sel4-transfer-probe-idle-token"; slot = 0; };
+        { grant = "sel4-transfer-probe-idle-token"; slot = 0; slotReason = "componentAbi"; };
       ];
       dependencies = [
         "init";
@@ -79,11 +79,11 @@
     {
       autostart = true;
       bindings = [
-        { grant = "transfer-receiver-peer"; slot = 0; };
-        { grant = "transfer-receiver-device"; slot = 1; };
-        { grant = "transfer-receiver-mmio"; slot = 2; };
-        { grant = "transfer-receiver-interrupt"; slot = 3; };
-        { grant = "transfer-receiver-dma"; slot = 4; };
+        { grant = "transfer-receiver-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "transfer-receiver-device"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "transfer-receiver-mmio"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "transfer-receiver-interrupt"; slot = 3; slotReason = "componentAbi"; };
+        { grant = "transfer-receiver-dma"; slot = 4; slotReason = "componentAbi"; };
       ];
       dependencies = [];
       executable = "virtio-blk-driver";
@@ -94,11 +94,11 @@
     {
       autostart = true;
       bindings = [
-        { grant = "transfer-source-peer"; slot = 0; };
-        { grant = "transfer-source-device"; slot = 1; };
-        { grant = "transfer-source-mmio"; slot = 2; };
-        { grant = "transfer-source-interrupt"; slot = 3; };
-        { grant = "transfer-source-dma"; slot = 4; };
+        { grant = "transfer-source-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "transfer-source-device"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "transfer-source-mmio"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "transfer-source-interrupt"; slot = 3; slotReason = "componentAbi"; };
+        { grant = "transfer-source-dma"; slot = 4; slotReason = "componentAbi"; };
       ];
       dependencies = [];
       executable = "virtio-blk-driver";

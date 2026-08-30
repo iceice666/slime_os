@@ -115,14 +115,17 @@
         {
           grant = "init-sample-lender";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-sample-receiver";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 4;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -137,10 +140,12 @@
         {
           grant = "sample-lender-shared-buffer-factory";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "sample-plane-channel";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -157,6 +162,7 @@
         {
           grant = "sample-plane-channel";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -173,6 +179,7 @@
         {
           grant = "sample-worker-loopback";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];

@@ -80,10 +80,21 @@ SystemNotificationBinding :: type {
 -- says "this number is load-bearing elsewhere", and the generator refuses a pin
 -- naming a (holder, grant) pair the grant table does not produce, so a stale
 -- pin cannot silently do nothing.
+--
+-- `reason` says *which* of those things holds, in the closed
+-- `generation-manifest` `InstanceBinding.slotReason` vocabulary, and is carried
+-- through to the derived binding unchanged (B91). It is declared here rather
+-- than inferred at derivation time for the same reason the pin itself is: the
+-- derived manifest is compared against a frozen baseline, so a claim about why
+-- a number is fixed belongs in the reviewed source, where changing it is a
+-- visible edit. The generation builder then re-derives the expected value from
+-- the manifest and refuses a pin whose stated reason it cannot confirm, so a
+-- wrong label here fails a gate instead of documenting a fiction.
 SlotPin :: type {
   holder : Text;
   grant : Text;
   slot : Int;
+  reason : Text;
 };
 
 -- Which executables one component may spawn by command name.

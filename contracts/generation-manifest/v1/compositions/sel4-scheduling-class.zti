@@ -95,6 +95,7 @@
         {
           grant = "sched-promotable-executable";
           slot = 2;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [];

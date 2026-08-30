@@ -65,10 +65,12 @@
         {
           grant = "init-supervision-child";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-sysinfo";
           slot = 2;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];

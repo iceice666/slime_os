@@ -372,30 +372,37 @@
         {
           grant = "init-fabric-op-client";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-client-b";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-client-b-restart";
           slot = 3;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-server";
           slot = 4;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-op-time";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-service";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 8;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [];
@@ -410,30 +417,37 @@
         {
           grant = "fabric-op-client-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-client-b-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-server-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-time-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-client-b-restart-control";
           slot = 6;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-client-backup";
           slot = 7;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-op-restart-start";
           slot = 12;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [
@@ -450,22 +464,27 @@
         {
           grant = "fabric-op-client-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-phase-b";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-phase-time";
           slot = 2;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-client-backup";
           slot = 3;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-phase-restart";
           slot = 4;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -482,10 +501,12 @@
         {
           grant = "fabric-op-client-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-phase-b";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -502,14 +523,17 @@
         {
           grant = "fabric-op-client-b-restart-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-phase-restart";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-restart-start";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -526,6 +550,7 @@
         {
           grant = "fabric-op-server-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -542,10 +567,12 @@
         {
           grant = "fabric-op-time-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "fabric-op-phase-time";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [

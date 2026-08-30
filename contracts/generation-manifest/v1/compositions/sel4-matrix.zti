@@ -568,38 +568,47 @@
         {
           grant = "init-fabric-observer";
           slot = 1;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-probe";
           slot = 2;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-proxy";
           slot = 3;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher";
           slot = 4;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-publisher-b";
           slot = 5;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-service";
           slot = 6;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber";
           slot = 7;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-fabric-subscriber-b";
           slot = 8;
+          slotReason = "bootLayout";
         };
         {
           grant = "init-shared-buffer-factory";
           slot = 10;
+          slotReason = "bootLayout";
         };
       ];
       dependencies = [
@@ -615,74 +624,92 @@
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 1;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-control";
           slot = 2;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-control";
           slot = 3;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-publisher-b-control";
           slot = 4;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-subscriber-b-control";
           slot = 5;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-observer-control";
           slot = 6;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-probe-control";
           slot = 7;
+          slotReason = "encodedLayout";
         };
         {
           grant = "fabric-proxy-control";
           slot = 8;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-ingress";
           slot = 16;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-proxy-upstream";
           slot = 17;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-proxy-upstream-ack";
           slot = 18;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-proxy-event";
           slot = 19;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-alt-ingress";
           slot = 20;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-alt-egress";
           slot = 21;
+          slotReason = "encodedLayout";
         };
         {
           grant = "telemetry-alt-ack";
           slot = 22;
+          slotReason = "encodedLayout";
         };
         {
           grant = "diagnostics-ingress";
           slot = 23;
+          slotReason = "encodedLayout";
         };
         {
           grant = "diagnostics-egress";
           slot = 24;
+          slotReason = "encodedLayout";
         };
         {
           grant = "diagnostics-ack";
           slot = 25;
+          slotReason = "encodedLayout";
         };
       ];
       dependencies = [
@@ -699,10 +726,12 @@
         {
           grant = "fabric-publisher-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-ingress";
           slot = 1;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -719,18 +748,22 @@
         {
           grant = "fabric-subscriber-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-downstream";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-downstream-ack";
           slot = 2;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-event";
           slot = 3;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -747,14 +780,17 @@
         {
           grant = "fabric-publisher-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-alt-ingress";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "diagnostics-ingress";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -771,14 +807,17 @@
         {
           grant = "fabric-subscriber-b-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-alt-egress";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-alt-ack";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -795,14 +834,17 @@
         {
           grant = "fabric-observer-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "diagnostics-egress";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "diagnostics-ack";
           slot = 2;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -819,6 +861,7 @@
         {
           grant = "fabric-probe-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
@@ -835,22 +878,27 @@
         {
           grant = "fabric-proxy-control";
           slot = 0;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-upstream";
           slot = 1;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-upstream-ack";
           slot = 2;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-downstream";
           slot = 3;
+          slotReason = "componentAbi";
         };
         {
           grant = "telemetry-proxy-downstream-ack";
           slot = 4;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [
