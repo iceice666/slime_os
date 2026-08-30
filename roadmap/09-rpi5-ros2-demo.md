@@ -1,12 +1,12 @@
 # Raspberry Pi 5 ROS 2 two-node demo track
 
-**Purpose:** Drive the near-term project toward one observed robotics workload: Slime OS running on a Raspberry Pi 5 with two local ROS 2 nodes exchanging bounded topic data through a minimal bounded Zenoh profile with classic CDR payloads.
+**Purpose:** Preserve the defined Raspberry Pi 5 ROS 2 two-node product track and its completed contract, artifact, and AArch64 QEMU evidence while physical execution proceeds on Milk-V Duo.
 
-**Status:** In progress — RP0, RP1, and RP2 complete. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`. RP3 is next and is deferred on hardware with P4: the board image and gate exist, but no working USB-UART adapter does, and seL4 ships no display driver to substitute.
+**Status:** Deferred after RP0, RP1, and RP2 completed. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`. RP3–RP8 retain their original Raspberry Pi 5 exit conditions, but they are not the current execution lane because the available USB-UART adapter yields no serial evidence and seL4 ships no display driver to substitute.
 
 **Acceptance target:** A reproducible Raspberry Pi 5 boot runs a declared publisher node and subscriber node. The publisher emits a bounded ROS 2 topic stream through the admitted transport profile, the subscriber observes the expected samples in order under the declared QoS/profile, and the run records image identity, board/firmware/media identity, generation/release identity, serial transcript, semantic/wire trace, and every device/storage/stream/network capability involved.
 
-This track intentionally does **not** claim full ROS 2 compatibility, arbitrary middleware discovery, unmodified desktop ROS packages, Python support, Gazebo, Wi-Fi, GPU acceleration, or Framework daily-driver support. It is the shortest defensible path to a middleware-backed two-node RPi5 demo while preserving Slime's capability, component, generation, and schema invariants.
+Milk-V Duo architecture work cannot complete this track. RP0–RP2 remain valid completed evidence, but RP3–RP8 resume only when the Raspberry Pi 5 physical evidence path is available and the product demo is explicitly reprioritized.
 
 ## Boundaries
 
@@ -142,12 +142,7 @@ scope.
 
 ## RP3 — Raspberry Pi 5 serial boot and minimum board services
 
-**Status:** Deferred on hardware, not started otherwise. P4 landed the `bcm2712`
-kernel, loader, and removable-media boot files this milestone's first deliverable
-asked for, so what remains here is the observed board boot — blocked on a working
-USB-UART adapter. seL4 ships no display driver (only `serial`, `timer`, `smmu`),
-so the debug header is the only evidence path; see [P4's *Why serial is the only
-evidence path*](07-architecture-portability.md#why-serial-is-the-only-evidence-path).
+**Status:** Deferred on hardware and by current roadmap priority, not started otherwise. P4 landed the `bcm2712` kernel, loader, and removable-media boot files this milestone's first deliverable requested. What remains is the observed board boot, blocked on a working USB-UART adapter; seL4 ships no display driver, so the debug header is the only evidence path. Milk-V Duo serial evidence cannot substitute; see [P4's *Why serial is the only evidence path*](07-architecture-portability.md#why-serial-is-the-only-evidence-path).
 
 **Depends on:** RP2 and P4's Raspberry Pi 5 qualification slice.
 
@@ -359,8 +354,8 @@ The Raspberry Pi 5 two-node ROS 2 demo is repeatable, bounded, and reviewable: n
 
 ## Relationship to later tracks
 
-- R1/R2 broaden the minimal R0 transport path into external peer, service, and action compatibility after RP8 unless explicitly reprioritized. R1's peer target is a pinned `rmw_zenoh` build, which R0's key expression, type hash, and message attachment are already shaped for.
+- R1/R2 broaden the minimal R0 transport path into external peer, service, and action compatibility only after this track resumes and RP8 closes, unless explicitly reprioritized.
 - R3 existing unmodified ROS workloads resume only after deciding whether the demo route should become a broader compatibility route.
-- Framework H1–H14 daily-driver work is deferred and consumes the common IO substrate rather than owning a parallel one; its physical-evidence and storage-safety rules still apply to Framework claims.
-- RV64 and distributed-authority work are deferred until the RPi5 ROS 2 demo is stable.
-- Native development/on-device build work may resume after RP8, with the demo as a target workload for build and live-update validation.
+- Framework H1–H14 daily-driver work remains independently deferred and consumes the common IO substrate rather than owning a parallel one; its physical-evidence and storage-safety rules still apply only to Framework claims.
+- Milk-V Duo P3/P3.E is the current architecture and physical bring-up lane. Its evidence cannot close RP3–RP8, and the decision to host a ROS workload on Duo is deferred until the RV64 component vertical slice is measured.
+- Native development/on-device build work may resume after a selected physical product path is stable, with that workload used for build and live-update validation.

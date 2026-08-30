@@ -2,13 +2,13 @@
 
 **Purpose:** Preserve the deferred x86-64 Framework daily-driver qualification plan: bind the common [Native I/O substrate](11-io-substrate.md) to the target's firmware and buses, implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
 
-**Status:** Deferred relative to the Raspberry Pi 5 ROS 2 two-node demo. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
+**Status:** Deferred while Milk-V Duo is the current physical architecture bring-up lane. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard. No Duo result changes this status.
 
 **Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 shared buffers and C9 scheduling/restart authority; the architecture-neutral [Native I/O substrate](11-io-substrate.md); and [Architecture portability](07-architecture-portability.md), especially P1's x86/platform source boundary. The common I/O track owns queue/epoch/lease semantics, hardware-resource capability classes, userspace virtio reference drivers, `LinkDevice`, and exact-destination network services. H owns only the Framework bindings, drivers, containment, promotion policy, and physical evidence.
 
 The Hardware track promotes each Framework path in two distinct steps: deterministic device/service logic under host or QEMU checks, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs AMD-IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
 
-This track qualifies one named x86-64 Framework platform. It does not own the portable I/O ABI, Raspberry Pi 5, generic Arm, or RISC-V support. ACPI, PCI BDF/BAR, APIC routes, AMD-IOMMU aliases, xHCI/NVMe identities, firmware methods, and physical observations remain Framework profile data and must not become universal Slime contracts. Raspberry Pi 5 is admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
+This track qualifies one named x86-64 Framework platform. It does not own the portable I/O ABI, Raspberry Pi 5, generic Arm, or RISC-V support. ACPI, PCI BDF/BAR, APIC routes, AMD-IOMMU aliases, xHCI/NVMe identities, firmware methods, and physical observations remain Framework profile data and must not become universal Slime contracts. Milk-V Duo is only the current physical architecture bring-up target: its serial, storage, component, or device evidence cannot satisfy H1–H14 or M5.7. Raspberry Pi 5 remains admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
 
 Sequencing:
 
@@ -455,7 +455,7 @@ just daily_driver_check
 
 ## Hardware track definition of done
 
-The Hardware track is complete only when all of the following are observed on the target Framework and backed by the deterministic IO and device checks above:
+The Hardware track is complete only when all of the following are observed on the target Framework and backed by the deterministic IO and device checks above. Evidence from Milk-V Duo, Raspberry Pi 5, or QEMU can validate portable mechanisms but cannot replace any Framework-specific observation:
 
 - every DMA-capable physical driver consumes IO1 resources bound by H2 and runs in an H4 AMD-IOMMU domain that maps only its live IO0 leases, with fault isolation and supervised restart;
 - the built-in or attached keyboard, touchpad, pointer, display, audio, USB storage, USB Ethernet, Wi-Fi, and Bluetooth paths are usable through typed services rather than ambient hardware access;

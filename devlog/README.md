@@ -381,3 +381,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-30 | [B91 follow-ups: two proposed gates measured, refuted, and replaced by one](2026-08-30-b91-followups-audit/index.md) | Audit | Verified | B91 |
 | 2026-08-30 | [Repository hygiene ownership and contract-check consolidation](2026-08-30-repository-hygiene/index.md) | Change | Verified | none |
 | 2026-08-29 | [P3.D: a Milk-V Duo boots a Slime-built S-mode payload, hands-off](2026-08-29-p3d-milkv-duo-bringup/index.md) | Change | Verified | P3.D, P3.E |
+| 2026-08-31 | [Milk-V Duo becomes the current physical bring-up lane](2026-08-31-milkv-duo-physical-lane-pivot/index.md) | Decision | Proposed | P3, P3.D, P3.E, P4, RP3, M5.7, H1 |
