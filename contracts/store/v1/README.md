@@ -13,11 +13,14 @@ Miri-checkable, and both run inside the components that serve the protocol
 (`components/bins/sel4-store-probe/src/main.rs`,
 `components/bins/sel4-filesystem-service/src/main.rs`).
 
-Authority is the `Block` capability the generation grants that component:
-`RIGHT_BLOCK_READ` (bit 10) is required to read sectors and `RIGHT_BLOCK_WRITE`
-(bit 11) to append and flush them (see `docs/capability-matrix.md`). There is no
-`ObjectStore` object kind and no store syscall: a client that holds no block
-capability has no path to the device at all.
+Authority is per-ring rather than a capability kind. B83 moved storage off the
+root's retired `BLOCK TRANSACT` path, and B90 then retired the `Block` kind and
+its two rights bits entirely; a serving component now reaches its device over an
+IO0 ring whose read and write rights the generation declares per
+`(holder, device, ring)` in `contracts/block-authority/v1`, enforced by
+`virtio-blk-driver` (see `docs/capability-matrix.md`). There is no `ObjectStore`
+object kind and no store syscall: a client whose ring the authority table omits
+has no path to the device at all.
 
 ## Layout
 
