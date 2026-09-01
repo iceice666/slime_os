@@ -59,6 +59,12 @@ one binary, or one whose binary and directory names disagree, fails the gate.
 **Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## Resolved
+### B92 — resident product graph stops after 32768 valid requests
+
+**Status:** Resolved 2026-09-01. **Class:** Defect (a verification-plane progress ceiling bounded the product lifetime).
+**Was:** The authenticated `product` graph inherited `MAX_GRAPH_ITERATIONS`, so normal non-blocking input and supervision polling inevitably printed `SLIME_GRAPH exhausted live=4 iterations=32768 certified=1` and stopped root dispatch with all four required residents still live.
+**Exit condition (observed):** Product dispatch no longer has a request-count lifetime while every finite boot action retains the same watchdog; on the named Milk-V Duo the graph crossed request 32768, Slisp then evaluated the retained `answer` binding as `(+ answer 3) => 43`, zero framing errors were observed, and the gate returned to vendor Linux through its explicit terminator.
+**Evidence:** [`devlog/2026-09-01-b92-resident-graph-lifetime/`](../devlog/2026-09-01-b92-resident-graph-lifetime/index.md).
 ### B91 — composition binding slots still duplicate component-local positional ABI
 
 **Status:** Resolved 2026-08-30. **Class:** Unmasked debt (616 pinned numbers, no machine-readable reason).

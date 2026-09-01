@@ -388,3 +388,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-01 | [P3.E left the CV1800B RTC seconds counter stopped](2026-09-01-p3e-rtc-counter-start/index.md) | Defect | Verified | P3.E |
 | 2026-09-01 | [P3.F - Duo Slisp product shell](2026-09-01-p3f-duo-slisp/index.md) | Change | Verified | P3.F |
 | 2026-09-01 | [The SDK publish workflow trusted its operator for three separate things](2026-09-01-sdk-publication-guards/index.md) | Change | Verified | CP7, CP9 |
+| 2026-09-01 | [B92: resident product graph lifetime](2026-09-01-b92-resident-graph-lifetime/index.md) | Defect | Verified | B92, P3.F |

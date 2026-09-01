@@ -29,21 +29,20 @@ TARGET_PROFILE = "riscv64-sel4-milkv-duo"
 PRODUCT_STEM = "slime-sel4-cv1800b-duo"
 STEM = f"{PRODUCT_STEM}-test-terminator"
 IMAGE = ROOT / "build" / "slime-sel4-graph-cv1800b-duo-test-terminator.elf"
-IMAGE_IDENTITY = (
-    ROOT / "build" / "slime-sel4-graph-cv1800b-duo-test-terminator.identity.json"
-)
+IMAGE_IDENTITY = ROOT / "build" / "slime-sel4-graph-cv1800b-duo-test-terminator.identity.json"
 FIT = PAYLOAD_DIR / f"{STEM}.itb"
 FIT_IDENTITY = PAYLOAD_DIR / f"{STEM}.identity.json"
 SLISP_ELF = ROOT / "build" / "slisp-product-riscv64.elf"
 BOOT_TIMEOUT_SECONDS = 180
 SESSION_TIMEOUT_SECONDS = 90
+RESIDENT_BOUNDARY_TIMEOUT_SECONDS = 300
 VENDOR_RECOVERY_SECONDS = 180
 TEST_TERMINATOR = b"\x1d"
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL .*",
     r"SLIME_GRAPH FAIL .*",
-    r"SLIME_TIMER FAIL .*",
+    r"SLIME_GRAPH exhausted live=\d+ iterations=\d+ certified=1",
     r"KERNEL INVALID VECTOR ENTRY",
     r"Kernel init failed",
     r"seL4 called fail",
@@ -88,6 +87,17 @@ SESSION_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
     ),
     ("Slisp accepted the spawn", r"=> spawned sysinfo"),
+)
+
+RESIDENT_BOUNDARY_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        "the resident dispatcher crossed the former request ceiling",
+        r"SLIME_GRAPH resident checkpoint live=4 iterations=32768",
+    ),
+    (
+        "Slisp evaluated input after the former request ceiling",
+        r"\(\+ answer 3\)\r?\n=> 43",
+    ),
 )
 
 
@@ -159,7 +169,10 @@ def check_identity() -> tuple[str, dict[str, object]]:
     image_record = image_identity.get("image")
     if not isinstance(image_record, dict) or image_record.get("sha256") != sha256_file(IMAGE, fail):
         fail("the product image does not match its identity")
-    if fit_identity.get("variant") != "graph" or fit_identity.get("target_profile") != TARGET_PROFILE:
+    if (
+        fit_identity.get("variant") != "graph"
+        or fit_identity.get("target_profile") != TARGET_PROFILE
+    ):
         fail("the FIT identity is not the Duo resident product")
     if not fit_identity.get("duo_test_terminator", False):
         fail("the physical gate FIT lacks its explicit test-only terminator")
@@ -219,9 +232,7 @@ def drive_session(
     def persist_transcript() -> None:
         if evidence_dir is not None:
             evidence_dir.mkdir(parents=True, exist_ok=True)
-            (evidence_dir / "duo-slisp-session.log").write_text(
-                transcript, encoding="utf-8"
-            )
+            (evidence_dir / "duo-slisp-session.log").write_text(transcript, encoding="utf-8")
 
     try:
         duo.reach_uboot(console, str(profile["uboot_prompt"]), 90)
@@ -266,6 +277,37 @@ def drive_session(
         check_ordered(transcript, SESSION_MARKERS)
         if len(re.findall(r"SLIME_GRAPH healthy .*required=4 live=4", transcript)) != 1:
             fail("the resident graph was restarted or recertified during the session")
+        boundary = re.compile(RESIDENT_BOUNDARY_MARKERS[0][1])
+        deadline = time.monotonic() + RESIDENT_BOUNDARY_TIMEOUT_SECONDS
+        while time.monotonic() < deadline and boundary.search(transcript) is None:
+            transcript += console.read_for(0.25)
+            for pattern in FAILURE_MARKERS:
+                match = re.search(pattern, transcript)
+                if match is not None:
+                    fail(
+                        "the resident graph failed before crossing its former request "
+                        f"ceiling: {match.group(0)!r}"
+                    )
+        if boundary.search(transcript) is None:
+            fail(
+                "the resident graph did not reach its former 32768-request ceiling "
+                f"within {RESIDENT_BOUNDARY_TIMEOUT_SECONDS}s"
+            )
+        for character in "(+ answer 3)\n":
+            console.write(character.encode())
+            transcript += console.read_for(0.05)
+        deadline = time.monotonic() + SESSION_TIMEOUT_SECONDS
+        post_boundary = re.compile(RESIDENT_BOUNDARY_MARKERS[-1][1])
+        while time.monotonic() < deadline and post_boundary.search(transcript) is None:
+            transcript += console.read_for(0.25)
+        check_ordered(transcript, RESIDENT_BOUNDARY_MARKERS)
+        if console.framing_errors != 0:
+            persist_transcript()
+            fail(
+                "the post-boundary physical session observed "
+                f"{console.framing_errors} serial framing errors before reset"
+            )
+        persist_transcript()
         console.write(TEST_TERMINATOR)
         reset_terminal = re.compile(r"SLIME_DUO reset request kind=cold")
         deadline = time.monotonic() + 30
@@ -328,8 +370,9 @@ def main() -> None:
     print(
         "duo Slisp check: the target-qualified resident graph accepted real UART0 input "
         "only through InputRead, preserved Slisp state across three commands, launched "
-        "sysinfo through its declared profile, observed zero framing errors, and returned "
-        "to vendor Linux through the explicit gate-only cold-reset terminator"
+        "sysinfo through its declared profile, crossed the former 32768-request ceiling, "
+        "evaluated another stateful expression afterwards, observed zero framing errors, "
+        "and returned to vendor Linux through the explicit gate-only cold-reset terminator"
     )
 
 
