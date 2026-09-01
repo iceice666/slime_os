@@ -41,7 +41,22 @@ pub const MAX_TASK_SLOTS: usize =
 const SLOT_WORD_BITS: usize = usize::BITS as usize;
 const SLOT_WORDS: usize = MAX_ROOT_CSLOTS.div_ceil(SLOT_WORD_BITS);
 const GRANULE_BYTES: usize = 4096;
-const MAX_DEVICE_FRAME_SKIP: usize = 64;
+/// Maximum queue pages allocated as one physically contiguous run.
+const MAX_CONTIGUOUS_GRANULES: usize = 64;
+/// Maximum objects in one seL4 untyped retype invocation.
+const MAX_RETYPE_FAN_OUT: usize = 256;
+
+fn device_retype_plan(
+    retyped: usize,
+    target: usize,
+    free_slots: usize,
+    holding_anchor: bool,
+) -> Option<(usize, usize)> {
+    let remaining = target.checked_sub(retyped)?.checked_add(1)?;
+    let available = free_slots.saturating_sub(usize::from(holding_anchor));
+    let batch = core::cmp::min(remaining, core::cmp::min(available, MAX_RETYPE_FAN_OUT));
+    (batch != 0).then_some((remaining.div_ceil(MAX_RETYPE_FAN_OUT), batch))
+}
 
 /// Root CSlots whose allocation-time physical base is retained at once.
 ///
@@ -126,6 +141,10 @@ pub enum AllocError {
     },
     DeviceFramePassed {
         paddr: usize,
+    },
+    DeviceCleanup {
+        slot: usize,
+        error: sel4::Error,
     },
     ArenaTableFull {
         limit: usize,
@@ -435,6 +454,19 @@ impl SlotPool {
         }
         Err(AllocError::SlotsExhausted {
             allocated: total_allocated,
+        })
+    }
+
+    fn first_contiguous(&self, count: usize, extra_used: Option<usize>) -> Option<usize> {
+        if count == 0 || count > self.len {
+            return None;
+        }
+        (0..=self.len - count).find_map(|start| {
+            let clear = (start..start + count).all(|offset| {
+                self.used[offset / SLOT_WORD_BITS] & (1usize << (offset % SLOT_WORD_BITS)) == 0
+                    && extra_used != Some(self.base + offset)
+            });
+            clear.then_some(self.base + start)
         })
     }
 
@@ -832,7 +864,7 @@ impl ObjectAllocator {
         &mut self,
         count: usize,
     ) -> Result<(usize, usize), AllocError> {
-        if count == 0 || count > MAX_DEVICE_FRAME_SKIP {
+        if count == 0 || count > MAX_CONTIGUOUS_GRANULES {
             return Err(AllocError::SlotsExhausted {
                 allocated: self.slots_allocated,
             });
@@ -1228,54 +1260,120 @@ impl ObjectAllocator {
         let target = (paddr - region.paddr) / GRANULE_BYTES;
         let count = target
             .checked_sub(region.retyped)
-            .and_then(|distance| distance.checked_add(1))
+            .and_then(|count| count.checked_add(1))
             .ok_or(AllocError::DeviceFramePassed { paddr })?;
-        if count > MAX_DEVICE_FRAME_SKIP {
-            return Err(AllocError::NoDeviceUntyped { paddr });
+
+        // Preflight the exact sparse walk before advancing the kernel untyped's
+        // watermark. Each completed chunk leaves only its last slot live, so
+        // the next allocation sees the original pool plus one virtual anchor.
+        // A fragmented or exhausted pool is therefore refused before the first
+        // retype rather than leaving an unreachable consumed prefix behind.
+        let mut planned = 0;
+        let mut planned_anchor = None;
+        while planned < count {
+            let chunk_len = device_retype_plan(
+                region.retyped + planned,
+                target,
+                self.slots.free(),
+                planned_anchor.is_some(),
+            )
+            .map(|(_, batch)| batch)
+            .ok_or(AllocError::SlotsExhausted {
+                allocated: self.slots_allocated,
+            })?;
+            let first = self
+                .slots
+                .first_contiguous(chunk_len, planned_anchor)
+                .ok_or(AllocError::SlotsExhausted {
+                    allocated: self.slots_allocated,
+                })?;
+            planned += chunk_len;
+            planned_anchor = Some(first + chunk_len - 1);
         }
-        let (first, reused) = self
-            .slots
-            .allocate_contiguous(count, self.slots_allocated)?;
-        // Only the target granule, exactly as before: the skipped frames ahead
-        // of the watermark are retained rather than deleted, and no caller can
-        // name them, so recording them would spend the bounded table on
-        // addresses nothing reads. Recorded before the retype for the reason
-        // `allocate_from_global` states.
-        let target_slot = first + count - 1;
-        if let Err(error) = self.physical.insert(target_slot, paddr) {
-            for slot in first..first + count {
-                self.slots.release(slot);
-            }
-            return Err(error);
-        }
-        if let Err(error) = region.cap.untyped_retype(
-            &sel4::ObjectBlueprint::Arch(sel4::ObjectBlueprintArch::SmallPage),
-            &sel4::init_thread::slot::CNODE
-                .cap()
-                .absolute_cptr_for_self(),
-            first,
-            count,
-        ) {
-            self.physical.remove(target_slot);
-            for slot in first..first + count {
-                self.slots.release(slot);
-            }
-            return Err(AllocError::Retype {
-                size_bits: 12,
-                error,
+        if self.physical.len >= MAX_PHYSICAL_PROVENANCE {
+            return Err(AllocError::ProvenanceTableFull {
+                limit: MAX_PHYSICAL_PROVENANCE,
             });
         }
-        self.slots_allocated += count;
-        self.slots_reused += reused;
-        if let Some(region) = self.devices[region_index].as_mut() {
-            region.retyped = target + 1;
+
+        let mut completed = 0;
+        let mut anchor = None;
+        let root = sel4::init_thread::slot::CNODE.cap();
+
+        while completed < count {
+            let chunk_len = device_retype_plan(
+                region.retyped + completed,
+                target,
+                self.slots.free(),
+                anchor.is_some(),
+            )
+            .map(|(_, batch)| batch)
+            .ok_or(AllocError::SlotsExhausted {
+                allocated: self.slots_allocated,
+            })?;
+            let (first, reused) = self
+                .slots
+                .allocate_contiguous(chunk_len, self.slots_allocated)?;
+            let last = first + chunk_len - 1;
+            let final_chunk = completed + chunk_len == count;
+            if final_chunk && let Err(error) = self.physical.insert(last, paddr) {
+                for slot in first..first + chunk_len {
+                    self.slots.release(slot);
+                }
+                return Err(error);
+            }
+            if let Err(error) = region.cap.untyped_retype(
+                &sel4::FrameObjectType::GRANULE.blueprint(),
+                &root.absolute_cptr_for_self(),
+                first,
+                chunk_len,
+            ) {
+                if final_chunk {
+                    self.physical.remove(last);
+                }
+                for slot in first..first + chunk_len {
+                    self.slots.release(slot);
+                }
+                return Err(AllocError::Retype {
+                    size_bits: 12,
+                    error,
+                });
+            }
+
+            completed += chunk_len;
+            self.devices[region_index].as_mut().unwrap().retyped += chunk_len;
+            self.slots_allocated += chunk_len;
+            self.slots_reused += reused;
+            self.objects_allocated += chunk_len;
+            self.live_objects += chunk_len;
+            self.bytes_allocated += chunk_len * GRANULE_BYTES;
+            self.live_bytes += chunk_len * GRANULE_BYTES;
+
+            // Keep one child while advancing to the next chunk. If every cap
+            // disappeared, seL4 would reset the device untyped's free index to
+            // zero and the next retype would recreate the prefix instead of
+            // continuing toward the requested physical page.
+            if let Some(slot) = anchor.take() {
+                root.absolute_cptr(sel4::CPtr::from_bits(slot as sel4::CPtrBits))
+                    .delete()
+                    .map_err(|error| AllocError::DeviceCleanup { slot, error })?;
+                self.slots.release(slot);
+                self.live_objects -= 1;
+                self.live_bytes -= GRANULE_BYTES;
+            }
+            for slot in first..last {
+                root.absolute_cptr(sel4::CPtr::from_bits(slot as sel4::CPtrBits))
+                    .delete()
+                    .map_err(|error| AllocError::DeviceCleanup { slot, error })?;
+                self.slots.release(slot);
+                self.live_objects -= 1;
+                self.live_bytes -= GRANULE_BYTES;
+            }
+            anchor = Some(last);
         }
-        self.objects_allocated += count;
-        self.live_objects += count;
-        self.bytes_allocated += count * GRANULE_BYTES;
-        self.live_bytes += count * GRANULE_BYTES;
+
         self.last_paddr = paddr;
-        Ok(sel4::init_thread::Slot::from_index(target_slot))
+        Ok(sel4::init_thread::Slot::from_index(anchor.unwrap()))
     }
 
     fn regions(&self) -> &[Option<UntypedRegion>] {
@@ -1287,7 +1385,7 @@ impl ObjectAllocator {
 mod tests {
     use super::{
         AllocError, ArenaPlan, ArenaRecord, MAX_PHYSICAL_PROVENANCE, MAX_TASK_SLOTS,
-        PROVENANCE_SLOTS, ProvenanceTable, SlotPool, plan_allocation,
+        PROVENANCE_SLOTS, ProvenanceTable, SlotPool, device_retype_plan, plan_allocation,
     };
 
     /// Physical provenance is retained for a live frame, dropped when the frame
@@ -1454,6 +1552,38 @@ mod tests {
                 limit: super::MAX_TASK_SLOTS
             })
         );
+    }
+
+    #[test]
+    fn sparse_device_retype_is_chunked_without_spending_the_root_cspace() {
+        assert_eq!(device_retype_plan(0, 0, 3_000, false), Some((1, 1)));
+        assert_eq!(device_retype_plan(0, 255, 3_000, false), Some((1, 256)));
+        assert_eq!(device_retype_plan(0, 256, 3_000, false), Some((2, 256)));
+        assert_eq!(device_retype_plan(0, 0x101, 3_000, false), Some((2, 256)));
+        assert_eq!(device_retype_plan(7, 6, 3_000, false), None);
+
+        assert_eq!(device_retype_plan(0, 20_517, 3_000, false), Some((81, 256)));
+        assert_eq!(device_retype_plan(0, 261, 255, false), Some((2, 255)));
+        assert_eq!(device_retype_plan(255, 261, 255, true), Some((1, 7)));
+        assert_eq!(device_retype_plan(0, 0, 0, false), None);
+        assert_eq!(device_retype_plan(0, 1, 1, true), None);
+    }
+    #[test]
+    fn sparse_device_preflight_models_the_live_anchor_without_mutating_slots() {
+        let mut slots = SlotPool::new(100..108).unwrap();
+        for expected in 100..106 {
+            let (allocated, _) = slots.allocate(0).unwrap();
+            assert_eq!(allocated, expected);
+        }
+        assert!(slots.release(100));
+        assert!(slots.release(102));
+        assert!(slots.release(104));
+
+        assert_eq!(slots.first_contiguous(1, None), Some(100));
+        assert_eq!(slots.first_contiguous(1, Some(100)), Some(102));
+        assert_eq!(slots.first_contiguous(2, None), Some(106));
+        assert_eq!(slots.first_contiguous(2, Some(106)), None);
+        assert_eq!(slots.live, 3);
     }
 
     #[test]

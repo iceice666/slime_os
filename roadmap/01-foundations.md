@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve the implemented kernel, isolation, bootstrap, storage/generation, and native-environment contracts that later roadmap tracks build on.
 
-**Status:** Milestones 1–4 and 6 are complete. Milestone 5 is open only because M5.7 still lacks the required physical Framework observation; M5.1–M5.6c, M5.8, and M5.9 are complete, and the M5.7 implementation and QEMU checks are complete.
+**Status:** Milestones 1–4 and 6 are complete. Milestone 5 is open only because M5.7 still lacks a seL4 NVMe transport and the required physical Framework observation; M5.1–M5.6c, M5.8, and M5.9 are complete. Retired custom-kernel/QEMU evidence does not satisfy M5.7.
 
 **Dependencies:** M1 has no roadmap prerequisite. Each later milestone consumes the mechanisms and invariants established before it. M6 consumes M5 storage, generation, state, rollback, release-trust, and recovery mechanisms, but does not depend on M5.7 physical verification. Future tracks must preserve capability-only authority, component isolation, immutable generation semantics, deterministic bounds, and the distinction between QEMU evidence and physical evidence.
 
@@ -12,8 +12,8 @@
 - Components receive only manifest-declared capabilities. Transfers and derivations can narrow authority but never widen it.
 - Protocols and persistent formats are versioned, bounded, deterministically encoded, and reject unknown required versions or flags.
 - Executable objects are immutable and content-verified before execution. Boot state, generation roots, and state roots remain separate concepts.
-- QEMU establishes deterministic logic, bounded error handling, and fault recovery. It does **not** establish Framework firmware behavior, physical DMA containment, device identity, power-loss behavior, or absence of writes to internal hardware.
-- **Internal Framework NVMe writes remain disabled.** Neither recovery media nor a storage-aware generation receives internal-NVMe write authority by default. No such write path may be enabled until all M5.7 promotion gates and the later hardware reliability gate have physical evidence.
+- QEMU establishes deterministic logic, bounded error handling, and fault recovery. It does **not** establish physical firmware behavior, DMA containment, device identity, power-loss behavior, or absence of writes on any named hardware target. Milk-V Duo evidence is likewise target-specific and cannot establish Framework storage behavior.
+- **Internal Framework NVMe writes remain disabled.** Neither recovery media nor a storage-aware generation receives internal-NVMe write authority by default. No such write path may be enabled until all M5.7 promotion gates and the later Framework hardware reliability gate have physical evidence; Duo storage or component evidence cannot substitute.
 
 ## M1 — Kernel foundation
 
@@ -65,7 +65,7 @@
 
 ## M5 — Storage and generations
 
-**Status:** Open only on M5.7 physical verification. M5.1–M5.6c, M5.8, and M5.9 are complete. M5.7's implementation and QEMU evidence are complete.
+**Status:** Open only on M5.7's seL4 transport and physical Framework verification. M5.1–M5.6c, M5.8, and M5.9 are complete; the retired custom-kernel implementation is historical evidence, not the current product path.
 
 **Depends on:** M1–M4.
 
@@ -213,7 +213,7 @@
 
 ### M5.7 — Framework NVMe transport and safety promotion
 
-**Status:** Blocked. The custom-kernel/QEMU implementation was retired with P5; no seL4 NVMe transport or physical Framework evidence exists. This is the only open M5 item.
+**Status:** Deferred and blocked. The custom-kernel/QEMU implementation was retired with P5; no seL4 NVMe transport or physical Framework evidence exists. This is the only open M5 item, and the Milk-V Duo execution pivot does not change or satisfy it.
 
 **Depends on:** M5.1–M5.6c and M4 removable-media safety.
 
@@ -223,7 +223,7 @@
 
 **Promotion gates before any internal NVMe write may be enabled:** deterministic bounds and malformed-command tests; DMA isolation suitable for the physical target; timeout/reset recovery; flush ordering and durable-write tests; interrupted metadata and generation-transition tests; malformed GPT/object-store/generation/BootState tests; an explicit write capability held only by the intended service; and an operator-visible distinction between removable test media and internal NVMe. Production IOMMU enforcement and internal-disk promotion remain a later hardware reliability gate.
 
-**Verification targets:** `just storage_nvme_read_check` currently fails closed to make the missing seL4 NVMe path explicit; `just framework_safety_check` preserves the non-physical contract checks; physical evidence cannot be replaced by QEMU.
+**Verification targets:** `just storage_nvme_read_check` currently fails closed to make the missing seL4 NVMe path explicit; `just framework_safety_check` preserves the non-physical contract checks. QEMU, Milk-V Duo, or another board cannot replace the required Framework observation.
 
 **Exit condition:** A physical Framework runs the storage-aware isolated slice over the common protocol while internal NVMe writes remain disabled unless every physical promotion gate has been observed. No such physical success is claimed yet.
 

@@ -40,9 +40,10 @@
 
 use std::path::{Path, PathBuf};
 
-/// Cargo names a JSON target specification by its file stem, so this is what
-/// `TARGET` reads as for `aarch64-sel4-minimal.json`.
-pub const SEL4_TARGET: &str = "aarch64-sel4-minimal";
+/// Cargo names JSON target specifications by their file stems, so these are
+/// what `TARGET` reads as for the native seL4 component profiles.
+pub const AARCH64_SEL4_TARGET: &str = "aarch64-sel4-minimal";
+pub const RISCV64_SEL4_TARGET: &str = "riscv64imac-sel4-minimal";
 
 /// Compile-time knobs a gate sets to build a deliberately misbehaving component.
 ///
@@ -80,7 +81,7 @@ pub fn configure() {
     let linker_script = match target.as_str() {
         "x86_64-unknown-none" => Some("component.ld"),
         "aarch64-unknown-none" => Some("component-aarch64.ld"),
-        SEL4_TARGET => None,
+        AARCH64_SEL4_TARGET | RISCV64_SEL4_TARGET => None,
         other => panic!("unsupported component target {other}"),
     };
     if let Some(linker_script) = linker_script {
@@ -104,8 +105,12 @@ pub fn configure() {
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
     match std::env::var("SLIME_TARGET_PROFILE") {
         Ok(profile) => println!("cargo:rustc-env=SLIME_TARGET_PROFILE={profile}"),
-        Err(_) if target == "aarch64-unknown-none" || target == SEL4_TARGET => {
-            panic!("SLIME_TARGET_PROFILE is required for AArch64 component builds")
+        Err(_)
+            if target == "aarch64-unknown-none"
+                || target == AARCH64_SEL4_TARGET
+                || target == RISCV64_SEL4_TARGET =>
+        {
+            panic!("SLIME_TARGET_PROFILE is required for native component builds")
         }
         Err(_) => {}
     }

@@ -382,15 +382,25 @@ def collect_traces(output: str) -> list[dict]:
 
 
 def run_scenario() -> tuple[list[dict], dict]:
-    pins = ROLLBACK.load_pins()
-    profile = pins["qemu_arm_virt"]
-    if not isinstance(profile, dict):
-        raise TraceError("invalid seL4 QEMU profile")
-    ROLLBACK.build_image()
+    # The rollback plane became multi-platform, so its pin loading, image path,
+    # and boot all take the platform. This trace is AArch64-only by
+    # construction -- the oracle's sequences are compared against one observed
+    # boot -- so it names that platform explicitly rather than defaulting.
+    platform = "qemu-arm-virt"
+    section, qemu_binary = ROLLBACK.PLATFORMS[platform]
+    profile = ROLLBACK.load_qemu_profile(ROLLBACK.fail, ROLLBACK.PINS_PATH, section)
+    ROLLBACK.build_image(platform)
+    image = ROLLBACK.image_path(platform)
     with tempfile.TemporaryDirectory() as directory:
         disk = Path(directory) / "rollback-plane.img"
         ROLLBACK.build_fixture(disk)
-        transcript = ROLLBACK.boot(profile, disk)
+        transcript = ROLLBACK.boot(
+            profile,
+            disk,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=image,
+        )
         ROLLBACK.check_transcript(transcript)
         ROLLBACK.check_slots_durable(disk, 40)
         records = collect_traces(transcript)

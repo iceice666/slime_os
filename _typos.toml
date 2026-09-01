@@ -5,9 +5,15 @@ extend-exclude = [
     "deps/",
     "target/",
     ".direnv/",
-    # Raw transcripts are frozen evidence; never edit them for spelling.
+    # Raw captures are frozen evidence; never edit them for spelling. The
+    # devlog format admits `.log` and `.jsonl` siblings alongside
+    # `transcript.txt`, and a serial capture carries the vendor firmware's own
+    # words -- including its misspellings and names this dictionary would
+    # "correct" (`Synopsys`).
     "devlog/*/transcript.txt",
     "devlog/*/*.txt",
+    "devlog/*/*.log",
+    "devlog/*/*.jsonl",
 ]
 
 [default.extend-words]

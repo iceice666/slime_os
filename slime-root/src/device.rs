@@ -83,6 +83,17 @@ pub enum DeviceError {
     Irq(sel4::Error),
 }
 
+fn uncached_attributes() -> sel4::VmAttributes {
+    #[cfg(target_arch = "aarch64")]
+    {
+        sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        sel4::VmAttributes::NONE
+    }
+}
+
 impl DeviceRegion {
     /// A borrowed handle on this mapping, for another transport in the same
     /// granule.
@@ -118,12 +129,7 @@ impl DeviceRegion {
             .write(writable)
             .build();
         self.frame
-            .frame_map(
-                vspace,
-                base,
-                rights,
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
-            )
+            .frame_map(vspace, base, rights, uncached_attributes())
             .map_err(DeviceError::Map)?;
         self.base = base;
         Ok(())
@@ -150,10 +156,9 @@ impl DeviceRegion {
                 vspace,
                 base,
                 sel4::CapRights::read_write(),
-                // Device memory: the mapping must not be cached, or a register
-                // read can return a stale line and a write can sit in one. seL4
-                // spells that as clearing the page-cacheable attribute.
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+                // Device memory must be uncached, or register accesses can be
+                // stale or delayed.
+                uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
         Ok(Self { base, paddr, frame })
@@ -175,7 +180,7 @@ impl DeviceRegion {
                 vspace,
                 base,
                 sel4::CapRights::read_write(),
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+                uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
         Ok(Self {
@@ -230,6 +235,55 @@ impl DeviceRegion {
 /// authority, and leaves every physical-machine build without the constant.
 pub const QEMU_PL011_PADDR: usize = 0x0900_0000;
 
+/// One platform receive adapter behind the root's typed input service.
+pub enum TerminalReceiver {
+    Pl011(Pl011Input),
+    DwApb(DwApbInput),
+}
+
+impl TerminalReceiver {
+    fn poll_byte(&self) -> Option<u8> {
+        match self {
+            Self::Pl011(receiver) => receiver.poll_byte(),
+            Self::DwApb(receiver) => receiver.poll_byte(),
+        }
+    }
+}
+
+/// Root-owned terminal input with an optional gate-only control byte.
+///
+/// The callback is installed only in the P3.F physical-test artifact. The
+/// ordinary product has no terminator and forwards every received byte through
+/// the declared `InputRead` capability path.
+pub struct TerminalInput {
+    receiver: TerminalReceiver,
+    test_terminator: Option<(u8, fn() -> !)>,
+}
+
+impl TerminalInput {
+    pub const fn new(receiver: TerminalReceiver) -> Self {
+        Self {
+            receiver,
+            test_terminator: None,
+        }
+    }
+
+    pub const fn with_test_terminator(mut self, byte: u8, trigger: fn() -> !) -> Self {
+        self.test_terminator = Some((byte, trigger));
+        self
+    }
+
+    pub fn poll_byte(&self) -> Option<u8> {
+        let byte = self.receiver.poll_byte()?;
+        if let Some((terminator, trigger)) = self.test_terminator
+            && byte == terminator
+        {
+            trigger()
+        }
+        Some(byte)
+    }
+}
+
 /// Polling receive half of QEMU `virt`'s PL011.
 ///
 /// Output continues through seL4's debug console; this view only drains bytes
@@ -263,6 +317,39 @@ impl Pl011Input {
         if data & Self::DATA_ERRORS != 0 {
             return None;
         }
+        Some(data as u8)
+    }
+}
+
+/// Polling receive half of the CV1800B UART0 DW APB controller.
+///
+/// The board device tree pins a 32-bit register width and a shift of two, so
+/// the 16550 receive buffer and line-status registers are at byte offsets 0x00
+/// and 0x14. Firmware owns configuration; this adapter only observes RX state
+/// and consumes one byte, leaving the shared debug-console TX path untouched.
+pub struct DwApbInput {
+    registers: DeviceRegion,
+}
+
+impl DwApbInput {
+    const RECEIVE_BUFFER: usize = 0x000;
+    const LINE_STATUS: usize = 0x014;
+    const DATA_READY: u32 = 1 << 0;
+    const DATA_ERRORS: u32 = 0x1e;
+
+    pub const fn new(registers: DeviceRegion) -> Self {
+        Self { registers }
+    }
+
+    pub fn poll_byte(&self) -> Option<u8> {
+        let status = self.registers.read32(Self::LINE_STATUS)?;
+        if status & Self::DATA_READY == 0 {
+            return None;
+        }
+        if status & Self::DATA_ERRORS != 0 {
+            return None;
+        }
+        let data = self.registers.read32(Self::RECEIVE_BUFFER)?;
         Some(data as u8)
     }
 }
@@ -477,7 +564,7 @@ impl DmaPage {
                 vspace,
                 base,
                 sel4::CapRights::read_write(),
-                sel4::VmAttributes::DEFAULT & !sel4::VmAttributes::PAGE_CACHEABLE,
+                uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
         // Zeroed: a virtqueue's available and used rings are read by the device

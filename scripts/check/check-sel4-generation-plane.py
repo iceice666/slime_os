@@ -25,21 +25,35 @@ import subprocess
 import sys
 import tempfile
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer  # noqa: E402
+from harness import (
+    GENERATION_COMPOSITIONS,
+    load_qemu_profile,
+    profile_text,
+    profile_integer,
+    qemu_kernel_arguments,
+)  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE_SCRIPT = ROOT / "scripts" / "build" / "build-store-fixture.py"
-IMAGE = ROOT / "build" / "slime-sel4-generation.elf"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-generation.zti"
 BOOT_TIMEOUT_SECONDS = 240
+PLATFORMS = {
+    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
+    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
+
+
+def image_path(platform: str) -> Path:
+    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
+    return ROOT / "build" / f"slime-sel4-generation{suffix}.elf"
+
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
@@ -163,26 +177,19 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\(aborted\)",
 )
 
+
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 generation plane check: {message}")
 
 
-def load_pins() -> dict[str, object]:
-    if not PINS_PATH.is_file():
-        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
-    try:
-        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
-    if pins.get("schema") != 1:
-        fail("unsupported sel4/pins.toml schema (expected 1)")
-    if not isinstance(pins.get("qemu_arm_virt"), dict):
-        fail("sel4/pins.toml is missing [qemu_arm_virt]")
-    return pins
-
-
-def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--generation-plane"]
+def build_image(platform: str) -> None:
+    command = [
+        sys.executable,
+        str(BUILD_SCRIPT),
+        "--generation-plane",
+        "--platform",
+        platform,
+    ]
     print(f"[build] {' '.join(command)}", flush=True)
     try:
         process = subprocess.run(command, cwd=ROOT, check=False)
@@ -204,25 +211,31 @@ def build_fixture(disk: Path) -> None:
         fail(f"store fixture build failed: {process.stderr.decode()}")
 
 
-def boot(profile: dict[str, object], disk: Path) -> str:
-    qemu = shutil.which("qemu-system-aarch64")
+def boot(
+    profile: dict[str, object],
+    disk: Path,
+    *,
+    section: str,
+    qemu_binary: str,
+    image: Path,
+) -> str:
+    qemu = shutil.which(qemu_binary)
     if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
+        fail(f"{qemu_binary} is not on PATH")
     command = [
         qemu,
         "-machine",
-        profile_text(profile, "machine", fail),
+        profile_text(profile, "machine", fail, section),
         "-cpu",
-        profile_text(profile, "cpu", fail),
+        profile_text(profile, "cpu", fail, section),
         "-smp",
-        str(profile_integer(profile, "cpus", fail)),
+        str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail)}M",
+        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-kernel",
-        str(IMAGE),
+        *qemu_kernel_arguments(qemu_binary, image, fail),
         "-drive",
         f"if=none,id=slimedisk,format=raw,file={disk}",
         "-device",
@@ -287,8 +300,6 @@ def report_transcript(transcript: str) -> None:
         sys.stdout.write("\n".join(tail) + "\n")
         sys.stdout.write("--- end transcript ---\n")
         sys.stdout.flush()
-
-
 
 
 def check_transcript(transcript: str) -> None:
@@ -442,25 +453,36 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+    )
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     if not FIXTURE.is_file():
         fail(f"missing generation fixture {FIXTURE.relative_to(ROOT)}")
-    pins = load_pins()
+    section, qemu_binary = PLATFORMS[arguments.platform]
+    image = image_path(arguments.platform)
+    profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
-        build_image()
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    profile = pins["qemu_arm_virt"]
-    assert isinstance(profile, dict)
+        build_image(arguments.platform)
+    if not image.is_file():
+        fail(f"missing packaged image {image.relative_to(ROOT)}")
 
     with tempfile.TemporaryDirectory() as directory:
         disk = Path(directory) / "generation-plane.img"
         build_fixture(disk)
         before = disk.read_bytes()
-        transcript = boot(profile, disk)
+        transcript = boot(
+            profile,
+            disk,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=image,
+        )
         check_transcript(transcript)
         check_only_state_slots(disk, before, 40)
 
@@ -469,7 +491,7 @@ def main() -> None:
         "inspect, stage, select, and rollback through a management service "
         "using the only generation-authorized IO0 block ring, every refusal "
         "left the root untouched, and root-mediated DMA plus exact resource "
-        "reclamation corroborated the userspace virtio-blk path"
+        f"reclamation corroborated the userspace virtio-blk path on {arguments.platform}"
     )
 
 

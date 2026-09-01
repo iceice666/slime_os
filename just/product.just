@@ -14,6 +14,21 @@ sel4_qemu_image_check: sel4_pin_check
 sel4_root_boot_check: sel4_pin_check
     python3 scripts/check/check-sel4-root-boot.py
 
+# P3 replays the architecture-neutral corpus on the pinned RV64 reference.
+[group('product')]
+riscv64_qemu_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform qemu-riscv-virt --skip-pin-check
+
+[group('product')]
+riscv64_qemu_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py --platform qemu-riscv-virt
+    python3 scripts/check/check-sel4-wait-set-plane.py --platform qemu-riscv-virt
+    python3 scripts/check/check-sel4-sample-plane.py --platform qemu-riscv-virt
+    python3 scripts/check/check-sel4-generation-plane.py --platform qemu-riscv-virt
+    python3 scripts/check/check-sel4-rollback-plane.py --platform qemu-riscv-virt
+    python3 scripts/check/check-architecture-portability.py
+
+
 # Each gate must boot its own embedded-generation artifact.
 [group('product')]
 sel4_stress_check: sel4_pin_check

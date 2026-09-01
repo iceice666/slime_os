@@ -1,10 +1,10 @@
 # Architecture portability track
 
-**Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
+**Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
-**Status:** In progress — P0, P1, P2.1, P2.2, and P5 complete. P2.3–P2.6 are superseded by P5. P4's build path landed 2026-08-24 and its board boot is deferred on hardware: the gate and artifacts are ready, the USB-UART adapter on hand does not work, and the debug UART is the only console seL4 has.
+**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
 
-**Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
+**Decision:** Milk-V Duo remains the current physical execution target because P3.D established the observed hands-off deployment loop and P3.E used it to qualify upstream seL4, `slime-root`, a target-qualified generation, repeated sample-plane semantics, timer delivery, bounded fault evidence, and autonomous recovery. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
 
 Slime targets 64-bit little-endian systems with an MMU and user/supervisor isolation. MCU-class targets without that isolation boundary are external bounded companions, not reduced-security ports of this kernel.
 
@@ -13,9 +13,10 @@ Slime targets 64-bit little-endian systems with an MMU and user/supervisor isola
 | Profile | Role | Initial machine | Required baseline |
 | --- | --- | --- | --- |
 | `x86_64-qemu-virtio` | Retired with P5; historical regression oracle only | QEMU q35/UEFI | x86-64, 4 KiB pages, ring 0/ring 3, APIC, virtio |
-| `aarch64-sel4-qemu-virt` | Current product path | QEMU `virt` with upstream seL4 | AArch64, 4 KiB translation granule, EL1/EL0, GICv3, generic timer, PL011, virtio |
-| `aarch64-rpi5` | Near-term physical product target | Raspberry Pi 5, exact board/firmware/media profile selected by RP0/RP3 | AArch64, 4 KiB translation granule, EL1/EL0 or documented firmware entry state, GIC, generic timer, device tree, serial console, reproducible removable media |
-| `riscv64-qemu-virt` | Deferred second architecture profile | Pinned QEMU `virt` machine and firmware | RV64 little-endian, S/U mode, Sv39, atomic operations, pinned interrupt/timer/UART devices, virtio |
+| `aarch64-sel4-qemu-virt` | Established AArch64 reference profile | QEMU `virt` with upstream seL4 | AArch64, 4 KiB translation granule, EL1/EL0, GICv3, generic timer, PL011, virtio |
+| `aarch64-rpi5` | Deferred physical demo target | Raspberry Pi 5, exact board/firmware/media profile selected by RP0/RP3 | AArch64, 4 KiB translation granule, EL1/EL0 or documented firmware entry state, GIC, generic timer, device tree, serial console, reproducible removable media |
+| `riscv64-sel4-qemu-virt` | Current RV64 reference profile | Pinned QEMU `virt` machine and firmware | RV64 little-endian, S/U mode, Sv39, atomic operations, pinned interrupt/timer/UART devices, virtio |
+| `riscv64-sel4-milkv-duo` | Current physical bring-up target | Named Milk-V Duo with CV1800B/C906 and pinned firmware | RV64 little-endian, S/U mode, Sv39 subject to observed MAEE state, PLIC context confirmed before driver selection, 63.25 MiB DRAM window, serial console, FIT handoff |
 
 A profile name identifies a complete executable and platform contract, not only an instruction set. A different page granule, privilege model, interrupt controller, firmware handoff, board revision, or incompatible device topology is a new profile until its own checks pass.
 
@@ -27,17 +28,18 @@ A profile name identifies a complete executable and platform contract, not only 
 - Kernel, component, and ROS node executables are built and authenticated per target. Architecture-neutral resource objects may be shared when their schemas and identities are byte-identical; executable objects are never assumed portable across targets.
 - A logical syscall operation has one semantic contract, error model, bounds, and rights checks. Each architecture has an explicit calling convention and trap instruction; register layouts are not serialized as a cross-architecture ABI.
 - The implementation uses small explicit architecture modules. It does not introduce a broad trait framework merely to hide one call site, and it does not move device or scheduling policy into the kernel.
-- QEMU proves deterministic architecture behavior. It cannot establish a physical Raspberry Pi 5 board, firmware, storage, timing, or device-support claim.
+- QEMU proves deterministic architecture behavior. It cannot establish a physical Milk-V Duo, Raspberry Pi 5, or Framework board, firmware, storage, timing, or device-support claim; evidence from one physical target cannot complete another target's milestone.
 
 ## Sequencing
 
 1. The backlog remains ahead of new roadmap gates.
 2. P0 fixes target and executable-artifact contracts before another architecture emits executable generations.
 3. P1 extracts and verifies the existing x86-64 implementation without changing observable behavior; this prevents x86 trap, APIC, CR3, GDT/IDT, PCI, and firmware assumptions from becoming universal contracts.
-4. P2 establishes the AArch64 QEMU vertical slice and replays the architecture-neutral kernel/component corpus needed by RP2/RP4.
-5. P4 first names and qualifies Raspberry Pi 5, not a generic “ARM board”. RP3/RP7 consume that physical evidence.
-6. C8 and R0 may proceed on the existing reference path where useful, but the demo closes only after AArch64/RPi5 replay.
-7. P3 RV64 is deferred until after the RPi5 ROS 2 demo stabilizes.
+4. P2 preserves the established AArch64 QEMU vertical slice and architecture-neutral corpus used as the first seL4 product reference.
+5. P3 establishes the RV64 QEMU reference profile before any physical Duo kernel claim.
+6. P3.D supplies the observed Duo handoff and deployment loop; P3.E closed the memory-fit, PLIC-layout, C906 memory-attribute, seL4/root, generation, component, timer, and bounded-fault gates on that exact board.
+7. P3.F reuses that qualified board path and P5.2's resident product graph to add an interactive Slisp session without broadening P3.E into storage, USB, network, display, sensor, or actuator qualification.
+8. P4 and RP3–RP8 retain their Raspberry Pi 5 acceptance conditions but are deferred until their physical evidence path is available and reprioritized.
 
 ## P0: Architecture, target, and executable-artifact contracts
 
@@ -186,9 +188,9 @@ The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated
 
 ## P3: RV64 QEMU vertical slice
 
-**Status:** Deferred until after the Raspberry Pi 5 ROS 2 demo stabilizes. Rescoped by P5: this is no longer a custom-kernel port. seL4 supports RV64 upstream, so the S-mode kernel, Sv39 translation tables, trap decoding, `ecall` entry, context switching, interrupt controller, and timer are upstream mechanism to configure and pin, not Slime code to write. What remains Slime's is the exact target profile, the pinned kernel-loader route, immutable selector/root admission, and replaying the semantic corpus.
+**Status:** Complete. Rescoped by P5: this is no longer a custom-kernel port. The pinned `riscv64-sel4-qemu-virt` profile now boots upstream seL4 and `slime-root`, admits only target-qualified generation and component images, and replays the selected architecture-neutral root, wait/wake, sample, generation, and rollback corpus. This is the QEMU reference P3.E consumes; it establishes nothing about Milk-V Duo hardware.
 
-**Depends on:** P5, and P4 for the precedent of qualifying a second seL4 platform.
+**Depends on:** P5. P3.D independently supplies the physical board loop that P3.E consumes after this QEMU reference passes.
 
 ### Deliverables
 
@@ -204,7 +206,7 @@ The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated
 - unsupported ISA extensions, page modes, firmware handoffs, interrupt profiles, ELF flags, and relocations fail explicitly rather than being guessed from the running machine;
 - no AArch64 register, GIC, firmware, translation-table, or device assumption appears in shared or RV64-specific paths.
 
-### Planned verification target
+### Verification target
 
 ```sh
 just riscv64_qemu_check
@@ -212,15 +214,126 @@ just riscv64_qemu_check
 
 ### Exit condition
 
-The pinned RV64 QEMU profile passes the same architecture-neutral isolation, wait/wake, sample-plane, generation, and rollback corpus as AArch64 without importing x86 or ARM mechanism into its contracts.
+**Observed 2026-08-31:** `just riscv64_qemu_check` passed: the pinned RV64 QEMU profile completed the architecture-neutral root, wait/wake, sample, generation, and rollback corpus without importing x86 or ARM mechanism into its contracts.
+
+**Evidence:** [`devlog/2026-08-31-p3-rv64-qemu-vertical-slice/`](../devlog/2026-08-31-p3-rv64-qemu-vertical-slice/index.md)
+
+### P3.D — Milk-V Duo physical bring-up loop and firmware handoff evidence
+
+**Status:** Complete for what it claims — an observed, repeatable custom-payload
+boot on a named physical RISC-V board, with the firmware handoff measured rather
+than assumed. It deliberately does **not** claim seL4, `slime-root`, or any
+Slime generation on this board; P3 still owns the RV64 vertical slice, and the
+seL4 platform port is P3.E below.
+
+**Delivered (2026-08-29):** `cv1800b_duo` is a pinned physical board profile
+(`sel4/pins.toml [cv1800b_duo]`) whose every value was read from the running
+board or the vendor firmware's own source. A 533-byte S-mode payload
+(`tools/duo/payload/smoke.S`) is built reproducibly into the FIT this board's
+firmware accepts (`just duo_payload_check`), deployed to the board's own FAT
+boot partition over its USB-NCM link, started from U-Boot over serial, and
+required to print ordered S-mode evidence (`just duo_boot_check /dev/ttyUSB0`).
+Three consecutive runs passed with no physical contact, 0 framing errors.
+
+**Why this milestone exists separately from P4's pattern:** the operator's
+laptop has no SD card reader, so P4's "copy the media onto the FAT partition and
+reset the board" step is unavailable. Iterating by re-flashing a card is not a
+workflow this board can sustain. P3.D therefore establishes the deployment path
+P3.E will reuse: the card never leaves the board, and the stock vendor image
+stays bootable as the recovery path.
+
+**Depends on:** nothing in-tree; it qualifies a board and a loop, not Slime code.
+
+### Deliverables
+
+- pin the board's SoC, CPU, ISA, MMU mode, DRAM window, firmware reservation,
+  interrupt controller, timer frequency, SBI implementation, U-Boot version,
+  prompt, launch command, staging and payload addresses, boot partition, and
+  USB-NCM address, each sourced from the board or its firmware rather than
+  asserted;
+- build a flat S-mode payload and its FIT wrapper deterministically, with an
+  identity manifest binding the artifact digests to the pinned load address;
+- deploy over the board's own network link and verify the deployed bytes by
+  digest read back from the target;
+- drive the board's U-Boot over serial and require ordered evidence that the
+  payload reached S-mode with translation disabled, received a hart id and a DRAM
+  device-tree pointer, and read a nonzero timebase;
+- prove the marker chain rejects deleted, reordered, and failure-marked evidence.
+
+### Required checks
+
+- the payload's linked base, its ELF entry point, and the pinned
+  `payload_load_address` agree, and a stale FIT is rejected by digest;
+- a missing board, unreachable USB-NCM link, absent serial device, non-tty
+  device, silent wire, missing marker, out-of-order marker, or failure marker
+  each fail nonzero rather than skipping;
+- the payload exits by returning into U-Boot, so no run can strand the board and
+  require physical intervention.
+
+### Verification target
+
+```sh
+just duo_payload_check
+just duo_boot_check /dev/ttyUSB0
+just duo_gate_control_check
+```
+
+### Exit condition (observed)
+
+A named Milk-V Duo booted a pinned Slime-built payload in S-mode at
+`0x82000000` from its own boot partition, printed every ordered marker with zero
+framing errors, and returned control without physical intervention; the same
+loop ran three times consecutively hands-off.
+
+**Evidence:** [`devlog/2026-08-29-p3d-milkv-duo-bringup/`](../devlog/2026-08-29-p3d-milkv-duo-bringup/index.md)
+
+### P3.E — seL4 on the Milk-V Duo
+
+**Status:** Complete and physically verified 2026-09-01. The named Milk-V Duo boots upstream seL4 and `slime-root`, admits only the `riscv64-sel4-milkv-duo` generation, delivers RTC/PLIC timer interrupts before and after graph activation, runs the architecture-neutral sample plane three times with byte-identical normalized traces and zero framing errors, emits a bounded early-fault diagnostic, and autonomously cold-resets to vendor Linux after every boot.
+
+**Depends on:** P3 (the RV64 QEMU profile must pass its corpus first), and P3.D for the board's pinned facts and deployment loop.
+
+### Risk gates and deliverables
+
+The first three gates are go/no-go evidence, not implementation completion:
+
+1. measure elfloader, kernel, `slime-root`, generation, boot structures, and initial kernel-object placement against the observed 63.25 MiB DRAM window; stop rather than silently shrinking the product contract if the minimum vertical slice cannot fit;
+2. confirm the CV1800B PLIC S-mode context layout against the SoC documentation before selecting or modifying an upstream driver layout;
+3. extend the existing minimal payload to observe the T-Head C906 `mxstatus`/`sxstatus` memory-attribute state before trusting standard Sv39 PTEs, because MAEE occupies PTE bits 60–63 and upstream seL4 does not configure it;
+4. add `riscv64-sel4-qemu-virt` and `riscv64-sel4-milkv-duo` to `contracts/target-profile/v1/schema.zt` with distinct ABI/platform identities, and admit both in `scripts/build/build-generation.py`;
+5. add the upstream seL4 RISC-V platform for CV1800B using `deps/sel4/src/plat/spacemit-k1` only as a structural precedent — `config.cmake`, `overlay-*.dts`, and `tools/dts/*.dts` — with timer and interrupt facts taken from observed or sourced board evidence;
+6. add `sel4/config/cv1800b-duo.cmake`, its `[observed_prefix_cv1800b_duo]` hashes, and a platform record in `scripts/build/build-sel4.py` with isolated prefix, cargo target, generation, image, and manifest paths;
+7. reuse P3.D's digest-verified USB-NCM deployment, FIT handoff, serial control, and recovery path rather than introducing a second board-update mechanism.
+
+### Required checks
+
+- the pinned `riscv64-sel4-qemu-virt` profile passes first;
+- a physical `riscv64-sel4-milkv-duo` profile boots elfloader, the seL4 kernel, and `slime-root`, admits a verified target generation, and reaches the same ordered root evidence required of the reference planes;
+- timer and interrupt evidence remains live after the component graph starts, and an early fault produces a bounded serial diagnostic rather than a silent wedge;
+- wrong-target artifacts, unsupported ISA extensions, page modes, firmware handoffs, and interrupt profiles fail explicitly rather than being guessed from the running machine;
+- the physical gate records image, generation, board, firmware, memory-placement, and serial identities, and repeated runs produce the same normalized semantic evidence.
+
+### Exit condition (observed)
+
+**Observed 2026-09-01:** the named Milk-V Duo booted a verified Slime generation on upstream seL4, reached `slime-root` ready, ran the architecture-neutral sample plane three times with byte-identical normalized semantic traces and zero framing errors, diagnosed the bounded early-fault control, and returned to vendor Linux after every boot without physical intervention. This closes only the declared RV64 architecture claim; storage, USB, network, display, sensor, actuator, ROS, and Framework behavior remain unclaimed.
+
+**Evidence:** [`devlog/2026-08-31-p3e-sel4-milkv-duo/`](../devlog/2026-08-31-p3e-sel4-milkv-duo/index.md)
+
+### P3.F — Interactive Slisp shell on the Milk-V Duo
+
+**Status:** Complete and physically verified 2026-09-01. The named Milk-V Duo booted the digest-verified resident-product FIT, accepted three UART0 commands through Slisp's declared `InputRead` authority, retained state, launched `sysinfo` through its declared spawn profile, and returned to vendor Linux through the bounded test terminator.
+
+**Depends on:** P3.E for the qualified physical target and recovery loop, and P5.2 for the resident `init`/`console`/`spawn-service`/Slisp product graph.
+
+### Exit condition (observed)
+
+On the named Milk-V Duo, the digest-verified target-qualified product image reached the resident Slisp prompt, evaluated persistent state across three serial commands, launched `sysinfo` only through its declared spawn profile, and returned to vendor Linux through the bounded test terminator. The committed physical transcript recorded zero framing errors and the image, generation, component, board, firmware, and transcript identities.
+
+**Evidence:** [`devlog/2026-09-01-p3f-duo-slisp/`](../devlog/2026-09-01-p3f-duo-slisp/index.md)
 
 ## P4: Raspberry Pi 5 physical architecture qualification
 
-**Status:** Deferred on hardware — the build path is complete and reproducible;
-the board boot is **not** observed, so P4 is not closed. Blocked on a working
-USB-UART adapter, not on code: the one on hand does not produce bytes, and the
-debug header is the only console this kernel has (see *Why serial is the only
-evidence path* below).
+**Status:** Deferred after its build path completed. The board boot remains unobserved: the available USB-UART adapter produces no bytes and the debug header is the only console this seL4 image has. The current execution pivot selects Duo rather than waiting on this unavailable evidence path; it does not close or weaken P4's Raspberry Pi 5 exit condition.
 
 **Delivered so far (2026-08-24):** `bcm2712` is a second seL4 build platform
 beside `qemu-arm-virt`, with its own prefix, cargo target directories,

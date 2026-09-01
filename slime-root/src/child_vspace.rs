@@ -1,4 +1,4 @@
-//! Child address-space construction from an AArch64 ELF64 payload.
+//! Child address-space construction from a target-qualified ELF64 payload.
 //!
 //! The root task owns every frame and translation table created here. An image
 //! is validated against the pinned target before a single object is allocated,
@@ -25,9 +25,9 @@ const _: () = assert!(GRANULE_SIZE == boot_contracts::component_runtime_abi::GRA
 /// silently truncating.
 pub const MAX_CHILD_IMAGE_PAGES: usize = 512;
 
-/// Highest child virtual address this root task will map. AArch64 user VAs are
-/// 48-bit; the bound keeps footprint arithmetic inside a single `usize`.
-const CHILD_ADDRESS_CEILING: usize = 1usize << 40;
+/// Highest child virtual address this root task will map. Both current seL4
+/// profiles admit addresses below this conservative shared ceiling.
+const CHILD_ADDRESS_CEILING: usize = 1usize << 38;
 
 const FLAG_READ: u8 = 1 << 0;
 const FLAG_WRITE: u8 = 1 << 1;
@@ -37,7 +37,7 @@ const FLAG_EXEC: u8 = 1 << 2;
 pub enum ImageError {
     /// The payload is not a parseable ELF file.
     NotElf,
-    /// The payload is not an AArch64 little-endian ELF64 executable.
+    /// The payload is not a little-endian ELF64 executable for this build's ISA.
     WrongTarget,
     /// The payload declares no loadable segment.
     NoLoadableSegment,
@@ -98,17 +98,22 @@ impl From<AllocError> for VSpaceError {
     }
 }
 
-/// A validated AArch64 child image.
+/// A validated native child image.
 pub struct ChildImage<'a> {
     file: ElfFile64<'a, Endianness>,
     footprint: Range<usize>,
 }
 
 impl<'a> ChildImage<'a> {
-    /// Parse and validate a payload against the pinned AArch64 target.
+    /// Parse and validate a payload against this root task's compiled ISA.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, ImageError> {
         let file = ElfFile64::<Endianness>::parse(bytes).map_err(|_| ImageError::NotElf)?;
-        if file.architecture() != Architecture::Aarch64 || !file.is_little_endian() {
+        let expected = if cfg!(target_arch = "riscv64") {
+            Architecture::Riscv64
+        } else {
+            Architecture::Aarch64
+        };
+        if file.architecture() != expected || !file.is_little_endian() {
             return Err(ImageError::WrongTarget);
         }
         let footprint = footprint(&file)?;
@@ -147,10 +152,8 @@ impl<'a> ChildImage<'a> {
         let (stack_base, stack_size) = self.symbol_with_size(WORKER_STACK_SYMBOL)?;
         Some(WorkerImage {
             entry,
-            // The stack grows down, so the initial pointer is the top. Aligned
-            // to 16 because AArch64's ABI requires it of `sp` at a public
-            // interface, and the symbol's own alignment only guarantees its
-            // base.
+            // Both supported ABIs require a 16-byte stack alignment at public
+            // interfaces; the symbol's own alignment only guarantees its base.
             stack_top: (stack_base + stack_size) & !0xf,
         })
     }
@@ -647,15 +650,8 @@ fn load_segments(
 }
 
 /// Make loaded code visible to the child's instruction fetch.
-///
-/// `load_segments` writes through a data-cached scratch mapping in the *root's*
-/// VSpace. On AArch64 the D-cache and I-cache are not coherent, so without a
-/// clean-to-PoU plus I-cache invalidate the child can fetch stale instructions
-/// from a line that was never written back. `seL4_ARM_Page_Unify_Instruction`
-/// performs exactly that pair. It is invoked after the frame is mapped into
-/// the child VSpace — the kernel resolves the flush range through that mapping
-/// and rejects an unmapped frame — and its offsets are frame-relative.
 fn unify_instruction_cache(pages: &[PageEntry], page_count: usize) -> Result<(), VSpaceError> {
+    #[cfg(target_arch = "aarch64")]
     for entry in pages.iter().take(page_count) {
         if entry.flags & FLAG_EXEC == 0 {
             continue;
@@ -669,6 +665,16 @@ fn unify_instruction_cache(pages: &[PageEntry], page_count: usize) -> Result<(),
         });
         if let Some(error) = sel4::Error::from_sys(error) {
             return Err(VSpaceError::UnifyInstruction(error));
+        }
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let _ = (pages, page_count);
+        // The root wrote the executable bytes itself; order those stores before
+        // instruction fetch on this hart. RISC-V seL4 exposes no page-cache
+        // maintenance invocation because the architecture is coherent here.
+        unsafe {
+            core::arch::asm!("fence.i", options(nostack));
         }
     }
     Ok(())
@@ -806,10 +812,9 @@ fn segment_flags(flags: SegmentFlags) -> Result<u8, ImageError> {
     }
 }
 
-/// seL4 frame rights for a page. AArch64 `maskVMRights`
-/// (`deps/sel4/src/arch/arm/64/kernel/vspace.c`) reads only `capAllowRead` and
-/// `capAllowWrite`; `grant` is endpoint authority and has no effect on a frame
-/// mapping, so executability is NOT expressed here — see [`page_attributes`].
+/// seL4 frame rights for a page. Both current architecture implementations
+/// narrow frame access from the read/write capability bits; `grant` is endpoint
+/// authority and has no effect on a frame mapping.
 fn page_rights(flags: u8) -> sel4::CapRights {
     sel4::CapRightsBuilder::none()
         .read(flags & FLAG_READ != 0)
@@ -817,10 +822,9 @@ fn page_rights(flags: u8) -> sel4::CapRights {
         .build()
 }
 
-/// Executability is the `seL4_ARM_ExecuteNever` attribute, and
-/// `VmAttributes::DEFAULT` does not set it. Without this every child page
-/// would map executable, so a data or stack page is explicitly marked
-/// execute-never and only a `PF_X` segment stays executable.
+/// Executability is the architecture's `EXECUTE_NEVER` VM attribute, while
+/// `VmAttributes::DEFAULT` permits execution. Data and stack pages therefore
+/// set it explicitly; only a `PF_X` segment stays executable.
 fn page_attributes(flags: u8) -> sel4::VmAttributes {
     if flags & FLAG_EXEC != 0 {
         sel4::VmAttributes::DEFAULT

@@ -111,20 +111,20 @@ impl Default for WorkerStack {
     }
 }
 
-/// This thread's index, read from the software thread pointer.
+/// This thread's index, read from the architecture's software thread pointer.
 ///
-/// Components build for `aarch64-sel4-minimal`, which declares no
-/// `has-thread-local`, so `#[thread_local]` is unavailable and `sel4`'s own
-/// IPC-buffer slot is one process-wide static. `TPIDR_EL0` is per-thread in
-/// hardware and the kernel context-switches it, which makes it the one place a
-/// thread can keep a value no other thread can see or race. The root sets it
-/// through `seL4_TCB_SetTLSBase` at thread creation; the main thread's is zero
-/// because that is the register's reset value and the main thread is index 0.
+/// Native seL4 targets declare no `has-thread-local`, so `#[thread_local]` is
+/// unavailable and `sel4`'s IPC-buffer slot is one process-wide static. The
+/// root puts the index in the register seL4 context-switches for TLS.
 pub fn thread_index() -> usize {
     let base: usize;
-    // SAFETY: a register read with no memory operand and no side effects.
+    #[cfg(target_arch = "aarch64")]
     unsafe {
         core::arch::asm!("mrs {base}, tpidr_el0", base = out(reg) base, options(nomem, nostack, preserves_flags));
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!("mv {base}, tp", base = out(reg) base, options(nomem, nostack));
     }
     // A value outside the table means the root set something this runtime does
     // not model; treating it as the main thread would let two threads share a
@@ -150,8 +150,7 @@ pub fn thread_index() -> usize {
 ///
 /// Must be called once, from the runtime entrypoint, on the initial thread.
 pub unsafe fn start(main: fn(u32), startup_arg: u32) -> ! {
-    // The main thread is index 0, which is `TPIDR_EL0`'s reset value, so this
-    // reads correctly without the root having set anything.
+    // The main thread is index 0, which is the thread pointer's reset value.
     let index = thread_index();
     // SAFETY: called once during startup, before any seL4 invocation, and the
     // buffer is mapped for this thread's exclusive use.
@@ -181,8 +180,7 @@ pub unsafe fn start(main: fn(u32), startup_arg: u32) -> ! {
 ///
 /// # Safety
 ///
-/// Must be called once, from the worker entrypoint, on a thread the root
-/// created with a distinct `TPIDR_EL0`.
+/// Must be called once from a worker whose thread-pointer index is distinct.
 pub unsafe fn start_thread(body: fn(u32), startup_arg: u32) -> ! {
     let index = thread_index();
     if index == 0 {

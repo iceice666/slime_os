@@ -52,6 +52,11 @@ class Platform:
     observed_prefix_section: str
     random_seed: str
     qemu_dtb: bool
+    architecture: str
+    root_target_key: str
+    child_target_name: str
+    loader_target_key: str
+    cross_compiler_environment: str
 
 
 QEMU_ARM_VIRT = Platform(
@@ -67,6 +72,11 @@ QEMU_ARM_VIRT = Platform(
     # changing it would move `kernel.elf` and report as toolchain drift.
     random_seed="slime-sel4-qemu-arm-virt",
     qemu_dtb=True,
+    architecture="aarch64",
+    root_target_key="root_target",
+    child_target_name="aarch64-sel4-minimal.json",
+    loader_target_key="loader_target",
+    cross_compiler_environment="CROSS_COMPILER_PREFIX",
 )
 
 # P4's physical target. The kernel is a different build from the one above, so
@@ -81,9 +91,52 @@ BCM2712_RPI5 = Platform(
     observed_prefix_section="observed_prefix_bcm2712_rpi5",
     random_seed="slime-sel4-bcm2712-rpi5",
     qemu_dtb=False,
+    architecture="aarch64",
+    root_target_key="root_target",
+    child_target_name="aarch64-sel4-minimal.json",
+    loader_target_key="loader_target",
+    cross_compiler_environment="CROSS_COMPILER_PREFIX",
 )
 
-PLATFORMS = {platform.name: platform for platform in (QEMU_ARM_VIRT, BCM2712_RPI5)}
+QEMU_RISCV_VIRT = Platform(
+    name="qemu-riscv-virt",
+    config=ROOT / "sel4" / "config" / "qemu-riscv-virt.cmake",
+    build_dir=BUILD_ROOT / "sel4-riscv64-qemu",
+    prefix_dir=BUILD_ROOT / "sel4-riscv64-prefix",
+    target_profile="riscv64-sel4-qemu-virt",
+    pins_section="qemu_riscv_virt",
+    observed_prefix_section="observed_prefix_qemu_riscv_virt",
+    random_seed="slime-sel4-qemu-riscv-virt",
+    qemu_dtb=True,
+    architecture="riscv64",
+    root_target_key="riscv64_root_target",
+    child_target_name="riscv64imac-sel4-minimal.json",
+    loader_target_key="riscv64_loader_target",
+    cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+)
+
+CV1800B_DUO = Platform(
+    name="cv1800b-duo",
+    config=ROOT / "sel4" / "config" / "cv1800b-duo.cmake",
+    build_dir=BUILD_ROOT / "sel4-cv1800b-duo",
+    prefix_dir=BUILD_ROOT / "sel4-cv1800b-duo-prefix",
+    target_profile="riscv64-sel4-milkv-duo",
+    pins_section="cv1800b_duo",
+    observed_prefix_section="observed_prefix_cv1800b_duo",
+    random_seed="slime-sel4-cv1800b-duo",
+    qemu_dtb=False,
+    architecture="riscv64",
+    root_target_key="riscv64_root_target",
+    child_target_name="riscv64imac-sel4-minimal.json",
+    loader_target_key="riscv64_loader_target",
+    cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+)
+
+PLATFORMS = {
+    platform.name: platform
+    for platform in (QEMU_ARM_VIRT, BCM2712_RPI5, QEMU_RISCV_VIRT, CV1800B_DUO)
+}
+
 IMAGE = BUILD_ROOT / "slime-sel4.elf"
 MANIFEST = BUILD_ROOT / "slime-sel4.identity.json"
 # P5.2's component-graph image is written beside the P5.1 one rather than
@@ -564,7 +617,9 @@ def boot_bundle_identity(platform: Platform) -> str:
     digest = hashlib.sha256()
     digest.update(b"slime-sel4-boot-bundle-v1\0")
     digest.update(bytes.fromhex(sha256_file(kernel)))
-    digest.update(bytes.fromhex(directory_digest(RUST_SEL4_SOURCE / "crates" / "sel4-kernel-loader")))
+    digest.update(
+        bytes.fromhex(directory_digest(RUST_SEL4_SOURCE / "crates" / "sel4-kernel-loader"))
+    )
     return digest.hexdigest()
 
 
@@ -575,26 +630,13 @@ def git_commit(path: Path) -> str:
     return commit
 
 
-def cross_compiler_prefix() -> str:
-    """The exact cross toolchain the pinned kernel and loader were built with.
-
-    `CROSS_COMPILER_PREFIX` overrides it for hosts whose GNU AArch64 toolchain
-    carries a different triple; the default matches the `nix develop` shell.
-
-    The shell sets this to an **absolute** `.../bin/<triple>-` path rather than
-    a bare `<triple>-`, because a bare prefix names whatever `PATH` resolves
-    and that is a different derivation per system. On `aarch64-linux`
-    nixpkgs' `pkgsCross.aarch64-multiplatform.stdenv.cc` is a *native* wrapper
-    that exports no `aarch64-unknown-linux-gnu-gcc`, so the prefixed lookup
-    reaches past it to the unwrapped GCC, while Darwin resolves the cross
-    wrapper: different flag injection and a different `as`, hence a different
-    `kernel.elf`. Absolute pinning is what makes `[observed_prefix]` a function
-    of the toolchain rather than of `PATH` order (B21).
-
-    A bare prefix is still accepted: `require_tool` resolves either form, and
-    hosts outside the pinned shell may legitimately have only a `PATH` entry.
-    """
-    prefix = os.environ.get("CROSS_COMPILER_PREFIX") or "aarch64-unknown-linux-gnu-"
+def cross_compiler_prefix(platform: Platform) -> str:
+    """Resolve the GNU cross toolchain selected for one seL4 architecture."""
+    defaults = {
+        "aarch64": "aarch64-unknown-linux-gnu-",
+        "riscv64": "riscv64-unknown-linux-gnu-",
+    }
+    prefix = os.environ.get(platform.cross_compiler_environment) or defaults[platform.architecture]
     require_tool(f"{prefix}gcc")
     return prefix
 
@@ -685,8 +727,7 @@ def sel4_build_environment() -> dict[str, str]:
     return {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith(ENVIRONMENT_FLAG_PREFIXES)
-        and name not in ENVIRONMENT_DROPPED_NAMES
+        if not name.startswith(ENVIRONMENT_FLAG_PREFIXES) and name not in ENVIRONMENT_DROPPED_NAMES
     }
 
 
@@ -708,8 +749,9 @@ def cargo_environment(toolchain: str, platform: Platform) -> dict[str, str]:
         )
     if not Path(libclang).is_dir():
         fail(f"LIBCLANG_PATH does not name a directory: {libclang}")
-    compiler = f"{cross_compiler_prefix()}gcc"
-    environment["CC_aarch64_unknown_none"] = compiler
+    compiler = f"{cross_compiler_prefix(platform)}gcc"
+    target_env = platform.architecture.replace("-", "_") + "_unknown_none"
+    environment[f"CC_{target_env}"] = compiler
     environment["CC"] = compiler
     return environment
 
@@ -798,13 +840,18 @@ def require_sel4_python_modules() -> None:
         )
 
 
-# The exact QEMU machine string the kernel's own platform config would build
-# for this profile, plus `dtb-randomness=off`. Without that switch QEMU seeds
-# `rng-seed` and `kaslr-seed` into the dump, and the installed device tree —
-# and everything derived from it — differs on every configure.
-QEMU_DTB_MACHINE = "virt,secure=off,virtualization=on,gic-version=2,dtb-randomness=off"
-QEMU_DTB_CPU = "cortex-a53"
-QEMU_DTB_MEMORY = "1024"
+# The exact QEMU machine parameters used to dump each emulator-only platform.
+# Random firmware seeds are disabled because the installed DTB is a pinned build
+# input, not runtime entropy.
+QEMU_DTB_PARAMETERS = {
+    "qemu-arm-virt": (
+        "qemu-system-aarch64",
+        "virt,secure=off,virtualization=on,gic-version=2,dtb-randomness=off",
+        "cortex-a53",
+        "1024",
+    ),
+    "qemu-riscv-virt": ("qemu-system-riscv64", "virt", "rv64", "3072"),
+}
 
 
 def dump_device_tree(platform: Platform) -> Path:
@@ -823,21 +870,31 @@ def dump_device_tree(platform: Platform) -> Path:
     """
     dtb = platform.build_dir / f"slime-{platform.name}.dtb"
     dtb.parent.mkdir(parents=True, exist_ok=True)
+    qemu, machine, cpu, memory = QEMU_DTB_PARAMETERS[platform.name]
     run(
         [
-            require_tool("qemu-system-aarch64"),
+            require_tool(qemu),
             "-machine",
-            f"{QEMU_DTB_MACHINE},dumpdtb={dtb}",
+            f"{machine},dumpdtb={dtb}",
             "-cpu",
-            QEMU_DTB_CPU,
+            cpu,
             "-smp",
             "1",
             "-m",
-            QEMU_DTB_MEMORY,
+            memory,
             "-nographic",
+            *(["-bios", "none"] if platform.architecture == "riscv64" else []),
         ],
         description="dump platform device tree",
     )
+    if platform.architecture == "riscv64":
+        # RISC-V `virt` has no `dtb-randomness` machine property. It injects
+        # only `/chosen/rng-seed`; delete that runtime entropy from the build
+        # input after dumping rather than pinning a different DTB each build.
+        run(
+            [require_tool("fdtput"), "-d", str(dtb), "/chosen", "rng-seed"],
+            description="normalize RISC-V platform device tree",
+        )
     return require_file(dtb, "dumped platform device tree")
 
 
@@ -851,14 +908,11 @@ def configure_and_install_sel4(platform: Platform) -> None:
     # exit-127 ninja failure several steps into the build.
     require_tool("xmllint")
     require_sel4_python_modules()
-    cross_prefix = cross_compiler_prefix()
+    cross_prefix = cross_compiler_prefix(platform)
     platform.build_dir.mkdir(parents=True, exist_ok=True)
     platform.prefix_dir.mkdir(parents=True, exist_ok=True)
     dtb = None
     if platform.qemu_dtb:
-        # This platform's config extracts its device tree by invoking QEMU, so
-        # the emulator is a build input, not only a boot input.
-        require_tool("qemu-system-aarch64")
         dtb = dump_device_tree(platform)
     # Four reproducibility leaks in the upstream build, all closed here so the
     # observed prefix hashes in `sel4/pins.toml` mean something:
@@ -873,48 +927,18 @@ def configure_and_install_sel4(platform: Platform) -> None:
     #    dev shell, so the ELF depends on that shell's derivation hash.
     #    `sel4_build_environment` drops them and the fixed `-frandom-seed`
     #    below replaces the seed. See `ENVIRONMENT_FLAG_PREFIXES`.
-    #  * Frame-pointer policy is stated rather than inherited. The recorded
-    #    cause for this (B20) was wrong and is corrected here: it claimed
-    #    Darwin's wrapper injects `-fno-omit-frame-pointer` while
-    #    `aarch64-linux` "forces neither". Both systems' wrappers ship the
-    #    *same* `nix-support/cc-cflags-before`
-    #    (`-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -march=armv8-a`)
-    #    — verified by reading both files. The real divergence was which
-    #    binary ran at all: with a bare `CROSS_COMPILER_PREFIX`, Darwin
-    #    resolved the cross *wrapper* and `aarch64-linux` fell through to the
-    #    *unwrapped* GCC, which injects nothing. `CROSS_COMPILER_PREFIX` is now
-    #    absolute, so both run the wrapper and the injection is uniform (B21).
-    #
-    #    These flags remain load-bearing, for a reason B20 did not identify.
-    #    With the toolchain pinned but the flags removed, the two hosts still
-    #    disagree: every ALLOC section matches byte-for-byte and only
-    #    `.debug_line` differs (observed `e8cbab4f…` vs `4c694979…`, both
-    #    982208 bytes). The frame-pointer prologue makes GAS emit an extra
-    #    line-table row at one address, and GAS's DWARF-5 "view" numbering for
-    #    that row is not host-independent. Keeping the frame pointer omitted
-    #    keeps that row from existing, so the flags close a real residual leak
-    #    rather than merely restating a policy. Do not drop them.
-    #
-    #    They are also a policy this build *chooses*. GCC's aarch64 backend
-    #    disables `-fomit-frame-pointer` at every `-O` level
-    #    (`aarch_option_optimization_table`, `OPT_LEVELS_ALL`), so an aarch64
-    #    kernel keeps its frame pointers at `-O2` unless the flag is passed
-    #    explicitly. `-Q --help=optimizers` reports `-fomit-frame-pointer
-    #    [enabled]` at `-O2` regardless, which is a reporting trap rather than
-    #    the truth: `aarch64.cc` drives codegen off a tri-state where only an
-    #    explicit flag counts. seL4 asks for no frame pointer, nothing in the
-    #    tree walks one, and omitting it is worth a register and the prologue.
-    #
-    #    `-momit-leaf-frame-pointer` is belt and braces: under
-    #    `-fomit-frame-pointer` no function gets a frame pointer, leaf or not,
-    #    and the two flags together emit assembly identical to the first alone.
-    #    It is kept because it names the second of the wrapper's two
-    #    injections.
+    #  * Frame-pointer policy is stated rather than inherited. AArch64's GCC
+    #    backend needs both switches to erase the wrapper's explicit frame
+    #    policy; RISC-V has no leaf-only companion switch.
+    frame_flags = (
+        "-fomit-frame-pointer -momit-leaf-frame-pointer"
+        if platform.architecture == "aarch64"
+        else "-fomit-frame-pointer"
+    )
     common_flags = (
         f"-ffile-prefix-map={SEL4_SOURCE}=/slime/sel4 "
         f"-ffile-prefix-map={platform.build_dir}=/slime/build "
-        f"-frandom-seed={platform.random_seed} "
-        "-fomit-frame-pointer -momit-leaf-frame-pointer"
+        f"-frandom-seed={platform.random_seed} {frame_flags}"
     )
     environment = sel4_build_environment()
     configure = [
@@ -994,13 +1018,15 @@ def build_sel4_generation(
     return require_file(output / "generation.bin", "seL4 generation")
 
 
-def build_product_slisp() -> tuple[Path, str]:
+def build_product_slisp(platform: Platform) -> tuple[Path, str]:
     """Build the in-tree freestanding Slisp ELF for external admission."""
-    output = BUILD_ROOT / "slisp-product.elf"
+    output = BUILD_ROOT / f"slisp-product-{platform.architecture}.elf"
     run(
         [
             sys.executable,
             str(ROOT / "scripts" / "build" / "build-c-component.py"),
+            "--architecture",
+            platform.architecture,
             str(ROOT / "components" / "slisp" / "slisp.c"),
             str(ROOT / "components" / "slisp" / "main.c"),
             str(output),
@@ -1008,6 +1034,7 @@ def build_product_slisp() -> tuple[Path, str]:
         description="build product Slisp component",
     )
     return require_file(output, "product Slisp ELF"), sha256_file(output)
+
 
 def build_application(
     pins: dict[str, object],
@@ -1017,12 +1044,14 @@ def build_application(
     component_spec_root: Path | None = None,
     external_components: list[str] | None = None,
     prebuilt_generation: Path | None = None,
-) -> tuple[Path, Path]:
+    duo_early_fault: bool = False,
+    duo_test_terminator: bool = False,
+) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
     environment = cargo_environment(toolchain, platform)
-    root_target = ROOT / text(rust_sel4, "root_target", "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / "aarch64-sel4-minimal.json"
+    root_target = ROOT / text(rust_sel4, platform.root_target_key, "rust_sel4")
+    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
 
@@ -1036,17 +1065,36 @@ def build_application(
         description="build root child",
         features=child_features(),
     )
-    child_elf = child_target_dir / "aarch64-sel4-minimal" / "release" / "slime-root-child.elf"
+    child_elf = child_target_dir / child_target.stem / "release" / "slime-root-child.elf"
     require_file(child_elf, "root child ELF")
 
     root_environment = environment.copy()
+    root_environment["SLIME_TARGET_PROFILE"] = platform.target_profile
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
+    if platform is CV1800B_DUO:
+        frequency = table(pins, platform.pins_section).get("timer_frequency_hz")
+        if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
+            fail(f"sel4/pins.toml [{platform.pins_section}].timer_frequency_hz must be positive")
+        root_environment["SLIME_DUO_TIMEBASE_HZ"] = str(frequency)
     if platform is QEMU_ARM_VIRT and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011
         # RX FIFO and feeds those bytes through the existing input capability.
         # Plane images keep deterministic scripts, and physical targets do not
         # compile a QEMU address into their root task.
         root_environment["SLIME_QEMU_KEYBOARD"] = "1"
+    if platform is CV1800B_DUO and variant == GRAPH_VARIANT:
+        serial = text(table(pins, platform.pins_section), "serial", platform.pins_section)
+        match = re.fullmatch(r"uart0-dw-apb-(0x[0-9a-fA-F]+)", serial)
+        if match is None:
+            fail(
+                f"sel4/pins.toml [{platform.pins_section}].serial must name "
+                "uart0-dw-apb-<hex-address>"
+            )
+        root_environment["SLIME_DUO_UART_PADDR"] = match.group(1)
+        if duo_test_terminator:
+            root_environment["SLIME_DUO_TEST_TERMINATOR"] = "1"
+    if duo_early_fault:
+        root_environment["SLIME_DUO_EARLY_FAULT"] = "1"
     if variant == BOOT_SELECTION_VARIANT:
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
@@ -1059,7 +1107,7 @@ def build_application(
             and component_spec_root is None
             and not external_components
         ):
-            slisp_elf, slisp_digest = build_product_slisp()
+            slisp_elf, slisp_digest = build_product_slisp(platform)
             generation_environment = dict(os.environ)
             generation_environment["SLIME_PRODUCT_SLISP_SHA256"] = slisp_digest
             external_components = [f"slisp-external={slisp_elf}"]
@@ -1096,17 +1144,16 @@ def build_application(
             # made the fault plane's stream record differ between two boots.
             generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
-        root_environment["SLIME_GENERATION"] = str(
-            build_sel4_generation(
-                manifest,
-                platform=platform,
-                environment=generation_environment,
-                component_spec_root=component_spec_root,
-                external_components=external_components,
-                prebuilt_generation=prebuilt_generation,
-            ).resolve()
-        )
-        if variant == FIXTURE_VARIANT:
+        generation = build_sel4_generation(
+            manifest,
+            platform=platform,
+            environment=generation_environment,
+            component_spec_root=component_spec_root,
+            external_components=external_components,
+            prebuilt_generation=prebuilt_generation,
+        ).resolve()
+        root_environment["SLIME_GENERATION"] = str(generation)
+        if variant == FIXTURE_VARIANT and platform is not CV1800B_DUO:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
     if variant == RECLAMATION_VARIANT:
         rustflags = root_environment.get("RUSTFLAGS", "")
@@ -1119,9 +1166,7 @@ def build_application(
         if mutation not in B40_MUTATIONS:
             fail(f"unknown B40 mutation {mutation!r}")
         rustflags = root_environment.get("RUSTFLAGS", "")
-        root_environment["RUSTFLAGS"] = (
-            f"{rustflags} --cfg slime_b40_mutate_{mutation}".strip()
-        )
+        root_environment["RUSTFLAGS"] = f"{rustflags} --cfg slime_b40_mutate_{mutation}".strip()
     # Separate target directories: the images embed different generations, so
     # sharing one would make each build invalidate the others' artifacts and
     # whichever gate ran last would boot a rebuilt image. Keyed by platform for
@@ -1137,14 +1182,9 @@ def build_application(
         environment=root_environment,
         description="build root task",
     )
-    root_elf = (
-        root_target_dir
-        / "aarch64-sel4-roottask-minimal"
-        / "release"
-        / "slime-root.elf"
-    )
+    root_elf = root_target_dir / root_target.stem / "release" / "slime-root.elf"
     require_file(root_elf, "root task ELF")
-    return child_elf, root_elf
+    return child_elf, root_elf, None if variant == BOOT_SELECTION_VARIANT else generation
 
 
 def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Path]:
@@ -1163,7 +1203,7 @@ def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Pat
     """
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
-    loader_target = text(rust_sel4, "loader_target", "rust_sel4")
+    loader_target = text(rust_sel4, platform.loader_target_key, "rust_sel4")
     environment = cargo_environment(toolchain, platform)
 
     loader_target_dir = CARGO_BUILD / platform.name / "loader"
@@ -1249,6 +1289,8 @@ def write_manifest(
     variant: str = FIXTURE_VARIANT,
     platform: Platform = QEMU_ARM_VIRT,
     generation: Path | None = None,
+    duo_early_fault: bool = False,
+    duo_test_terminator: bool = False,
 ) -> None:
     prefix = platform.prefix_dir
     kernel = require_file(prefix / "bin" / "kernel.elf", "installed seL4 kernel")
@@ -1264,16 +1306,17 @@ def write_manifest(
     platform_info = require_file(
         prefix / "support" / "platform_gen.yaml", "installed platform metadata"
     )
-    root_target = ROOT / text(table(pins, "rust_sel4"), "root_target", "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / "aarch64-sel4-minimal.json"
-
+    root_target = ROOT / text(table(pins, "rust_sel4"), platform.root_target_key, "rust_sel4")
+    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
+    if duo_early_fault:
+        suffix += "-early-fault"
+    if duo_test_terminator:
+        suffix += "-test-terminator"
     stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
     stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
     stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
-    stable_payload_tool = copy_artifact(
-        payload_tool, "sel4-kernel-loader-add-payload", platform
-    )
+    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", platform)
 
     manifest_platform = table(pins, platform.pins_section)
     manifest = {
@@ -1282,9 +1325,9 @@ def write_manifest(
         "source": {
             "sel4": {
                 "commit": git_commit(SEL4_SOURCE),
-                "release": require_file(
-                    SEL4_SOURCE / "VERSION", "seL4 VERSION"
-                ).read_text(encoding="utf-8").strip(),
+                "release": require_file(SEL4_SOURCE / "VERSION", "seL4 VERSION")
+                .read_text(encoding="utf-8")
+                .strip(),
             },
             "rust_sel4": {
                 "commit": git_commit(RUST_SEL4_SOURCE),
@@ -1326,10 +1369,12 @@ def write_manifest(
         "platform": platform.name,
         "target_profile": platform.target_profile,
     }
-    if platform is QEMU_ARM_VIRT:
-        # Emulator launch facts, which existing seL4 gates read to build their
-        # QEMU command line. A physical board has no counterpart, and inventing
-        # one would let a gate believe it could boot the board by emulation.
+    if duo_early_fault:
+        manifest["duo_early_fault"] = True
+    if duo_test_terminator:
+        manifest["duo_test_terminator"] = True
+    if platform.qemu_dtb:
+        # Emulator launch facts, which gates read to build their QEMU command.
         manifest["qemu"] = {
             "machine": text(manifest_platform, "machine", platform.pins_section),
             "cpu": text(manifest_platform, "cpu", platform.pins_section),
@@ -1386,9 +1431,7 @@ def main() -> None:
     parser.add_argument(
         "--channel-plane",
         action="store_true",
-        help=(
-            "embed the channel-plane generation (P5.3.1), writing a separate image"
-        ),
+        help=("embed the channel-plane generation (P5.3.1), writing a separate image"),
     )
     parser.add_argument(
         "--loan-plane",
@@ -1426,6 +1469,16 @@ def main() -> None:
         help="embed the sample-plane generation (P5.3.4), writing a separate image",
     )
     parser.add_argument(
+        "--duo-early-fault",
+        action="store_true",
+        help="build a Duo-only bounded post-timer fault diagnostic image",
+    )
+    parser.add_argument(
+        "--duo-test-terminator",
+        action="store_true",
+        help="build a distinct Duo resident-product image with the gate-only reset trigger",
+    )
+    parser.add_argument(
         "--stream-plane",
         action="store_true",
         help="embed the stream-plane generation (P5.5.2), writing a separate image",
@@ -1442,9 +1495,7 @@ def main() -> None:
     parser.add_argument(
         "--supervision-plane",
         action="store_true",
-        help=(
-            "embed the supervision-plane generation (B16), writing a separate image"
-        ),
+        help=("embed the supervision-plane generation (B16), writing a separate image"),
     )
     parser.add_argument(
         "--reclamation-plane",
@@ -1454,9 +1505,7 @@ def main() -> None:
     parser.add_argument(
         "--private-memory-plane",
         action="store_true",
-        help=(
-            "embed the C10.2 private-memory-budget generation, writing a separate image"
-        ),
+        help=("embed the C10.2 private-memory-budget generation, writing a separate image"),
     )
     parser.add_argument(
         "--clock-authority-plane",
@@ -1486,9 +1535,7 @@ def main() -> None:
     parser.add_argument(
         "--crossing-plane",
         action="store_true",
-        help=(
-            "embed the channel-crossing generation (B22), writing a separate image"
-        ),
+        help=("embed the channel-crossing generation (B22), writing a separate image"),
     )
     parser.add_argument(
         "--robot-runtime-plane",
@@ -1660,7 +1707,11 @@ def main() -> None:
             "separate image"
         ),
     )
-    parser.add_argument("--io-driver-authority-plane", action="store_true", help="embed the IO1 userspace hardware-authority proof generation")
+    parser.add_argument(
+        "--io-driver-authority-plane",
+        action="store_true",
+        help="embed the IO1 userspace hardware-authority proof generation",
+    )
     parser.add_argument(
         "--store-plane",
         action="store_true",
@@ -1762,6 +1813,16 @@ def main() -> None:
     if len(selected) > 1:
         fail("each --*-plane flag selects a different generation; pass one")
     variant = selected[0] if selected else FIXTURE_VARIANT
+    if arguments.duo_early_fault and arguments.platform != CV1800B_DUO.name:
+        fail("--duo-early-fault requires --platform cv1800b-duo")
+    if arguments.duo_early_fault and variant != SAMPLE_VARIANT:
+        fail("--duo-early-fault requires --sample-plane")
+    if arguments.duo_test_terminator and arguments.platform != CV1800B_DUO.name:
+        fail("--duo-test-terminator requires --platform cv1800b-duo")
+    if arguments.duo_test_terminator and variant != GRAPH_VARIANT:
+        fail("--duo-test-terminator requires --component-graph")
+    if arguments.duo_test_terminator and arguments.duo_early_fault:
+        fail("--duo-test-terminator cannot be combined with --duo-early-fault")
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
@@ -1793,13 +1854,15 @@ def main() -> None:
         ],
         description="verify installed seL4 prefix",
     )
-    child_elf, root_elf = build_application(
+    child_elf, root_elf, generation = build_application(
         pins,
         variant=variant,
         platform=platform,
         component_spec_root=arguments.component_spec_root,
         external_components=arguments.external_component,
         prebuilt_generation=arguments.prebuilt_generation,
+        duo_early_fault=arguments.duo_early_fault,
+        duo_test_terminator=arguments.duo_test_terminator,
     )
     loader, payload_tool = build_loader(pins, platform)
     image, manifest_path = VARIANT_IMAGES[variant]
@@ -1810,6 +1873,18 @@ def main() -> None:
         image = image.with_name(f"{image.stem}-{platform.name}{image.suffix}")
         manifest_path = manifest_path.with_name(
             manifest_path.name.replace(".identity.json", f"-{platform.name}.identity.json")
+        )
+    if arguments.duo_early_fault:
+        image = image.with_name(image.name.replace(".elf", "-early-fault.elf"))
+        manifest_path = manifest_path.with_name(
+            manifest_path.name.replace(".identity.json", "-early-fault.identity.json")
+        )
+    if arguments.duo_test_terminator:
+        image = image.with_name(image.name.replace(".elf", "-test-terminator.elf"))
+        manifest_path = manifest_path.with_name(
+            manifest_path.name.replace(
+                ".identity.json", "-test-terminator.identity.json"
+            )
         )
     package_image(payload_tool, loader, root_elf, image, platform)
     write_manifest(
@@ -1822,11 +1897,12 @@ def main() -> None:
         manifest_path=manifest_path,
         variant=variant,
         platform=platform,
-        generation=arguments.prebuilt_generation,
+        generation=generation,
+        duo_early_fault=arguments.duo_early_fault,
+        duo_test_terminator=arguments.duo_test_terminator,
     )
     print(
-        f"seL4 image build: wrote {image.relative_to(ROOT)} and "
-        f"{manifest_path.relative_to(ROOT)}"
+        f"seL4 image build: wrote {image.relative_to(ROOT)} and {manifest_path.relative_to(ROOT)}"
     )
 
 

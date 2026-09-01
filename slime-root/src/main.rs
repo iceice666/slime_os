@@ -120,8 +120,8 @@ use graph_runtime::{RootEndpoints, RuntimeDevices, launch_instance_graph};
 /// The generation this root task admits and launches.
 ///
 /// Supplied by the build harness through `SLIME_GENERATION`, which
-/// `scripts/build/build-sel4.py` points at the `aarch64-sel4-qemu-virt`
-/// generation it just built. The checked-in fixture is the fallback, and it is
+/// `scripts/build/build-sel4.py` points at the generation for this build's
+/// exact seL4 target profile. The checked-in fixture is the fallback, and it is
 /// the retained x86 generation P5.1 admitted: its component payloads are the
 /// retired kernel's segment-carrying images, which are admitted for authority
 /// derivation and never activated. Which one is compiled in therefore decides
@@ -158,14 +158,13 @@ const GENERATION_BYTES: &[u8] = &GENERATION.0;
 #[cfg(slime_boot_selector)]
 const BOOT_BUNDLE_IDENTITY: [u8; 32] = decode_hex32(env!("SLIME_BOOT_BUNDLE_IDENTITY"));
 
-/// The target profile this root task admits executables for. Named rather than
-/// inferred: an image is admitted by equality on every axis the profile
-/// declares, so the profile has to be a stated fact the build can be checked
-/// against, not something derived from whatever happens to be running.
-const TARGET_PROFILE: &str = "aarch64-sel4-qemu-virt";
+/// The target profile this root task admits executables for. The build harness
+/// states it explicitly for the root, child, generation, and loader together;
+/// admission then compares every serialized target axis before mapping bytes.
+const TARGET_PROFILE: &str = env!("SLIME_TARGET_PROFILE");
 
-/// The native child fixture, built for `aarch64-sel4-minimal.json`. Supplied by
-/// the build harness; see `slime-root/child`. `include_bytes!` only guarantees
+/// The native child fixture, built for this platform's seL4 userspace target.
+/// Supplied by the build harness; see `slime-root/child`. `include_bytes!` only guarantees
 /// byte alignment, but `object`'s ELF64 parser requires an 8-byte-aligned
 /// buffer; `Aligned` forces that without a runtime copy into a new allocation.
 #[repr(align(8))]
@@ -227,6 +226,174 @@ const TIMER_PROOF_DEADLINE_DIVISOR: u64 = 100;
 /// of burning the full boot-check timeout.
 const TIMER_PROOF_BOUND_SECONDS: u64 = 3;
 
+/// Run one IRQ-backed deadline and name the phase in every marker.
+fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
+    let mut timer_scheduler = TimerScheduler::<1>::new();
+    const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
+    let timer_start = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => fatal!("timer clock unreadable during {phase}: {error:?}"),
+    };
+    let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
+    let (_, scheduled) =
+        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
+            Ok(scheduled) => scheduled,
+            Err(error) => fatal!("timer proof deadline rejected during {phase}: {error:?}"),
+        };
+    if let Err(error) = apply_deadline_programming(timer_adapter, scheduled.programming) {
+        fatal!("timer deadline could not be programmed during {phase}: {error:?}")
+    }
+
+    let bound_ticks = timer_adapter
+        .frequency_hz()
+        .saturating_mul(TIMER_PROOF_BOUND_SECONDS);
+    let mut polls: u64 = 0;
+    loop {
+        if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
+            break;
+        }
+        let elapsed = match timer_adapter.monotonic_now() {
+            Ok(now) => now.0.wrapping_sub(timer_start.0),
+            Err(error) => fatal!("timer clock unreadable while waiting during {phase}: {error:?}"),
+        };
+        if elapsed > bound_ticks {
+            fatal!(
+                "SLIME_TIMER FAIL phase={phase} timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
+            )
+        }
+        polls += 1;
+    }
+    if phase == "startup" {
+        sel4::debug_println!(
+            "SLIME_TIMER delivered badge={:#x} polls={polls}",
+            timer_adapter.signal_badge(),
+        );
+    } else {
+        sel4::debug_println!(
+            "SLIME_TIMER phase={phase} delivered badge={:#x} polls={polls}",
+            timer_adapter.signal_badge(),
+        );
+    }
+
+    let drained = match timer_scheduler.service_timer_source(timer_adapter, |_| true) {
+        Ok(transition) => transition,
+        Err(ServiceTimerError::Program { error, transition }) => fatal!(
+            "timer deadline reprogramming failed during {phase}: {error:?} wakes={}",
+            transition.events.len()
+        ),
+        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
+            "timer acknowledgement failed during {phase}: {error:?} wakes={}",
+            transition.events.len()
+        ),
+        Err(error) => fatal!("timer service rejected the observed {phase} expiry: {error:?}"),
+    };
+    let timer_end = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => fatal!("timer clock unreadable after {phase} service: {error:?}"),
+    };
+    if phase == "startup" {
+        sel4::debug_println!(
+            "SLIME_TIMER serviced events={} programming={:?}",
+            drained.events.len(),
+            drained.programming,
+        );
+        sel4::debug_println!(
+            "SLIME_TIMER advanced start={} end={} delta={}",
+            timer_start.0,
+            timer_end.0,
+            timer_end.0.wrapping_sub(timer_start.0),
+        );
+        sel4::debug_println!("SLIME_TIMER OK");
+    } else {
+        sel4::debug_println!(
+            "SLIME_TIMER phase={phase} serviced events={} programming={:?}",
+            drained.events.len(),
+            drained.programming,
+        );
+        sel4::debug_println!(
+            "SLIME_TIMER phase={phase} advanced start={} end={} delta={}",
+            timer_start.0,
+            timer_end.0,
+            timer_end.0.wrapping_sub(timer_start.0),
+        );
+        sel4::debug_println!("SLIME_TIMER phase={phase} OK");
+    }
+}
+
+#[cfg(slime_duo_early_fault)]
+fn run_duo_early_fault_control(
+    timer_adapter: &mut PhysicalTimerAdapter,
+    reset_registers: device::MappedGranule,
+) {
+    let refused = timer_adapter.program_deadline(event::MonotonicInstant(u64::MAX));
+    if !matches!(
+        refused,
+        Err(platform_timer::PlatformTimerAckError::RegisterAccess)
+    ) {
+        fatal!("Duo early-fault control did not refuse an out-of-range RTC deadline")
+    }
+    sel4::debug_println!(
+        "SLIME_DUO EARLY_FAULT phase=post-timer cause=timer-range-refused bounded=1"
+    );
+    sel4::debug_println!("SLIME_DUO reset request kind=cold");
+    if !timer_adapter.request_cold_reset(reset_registers) {
+        fatal!("CV1800B cold-reset register access failed after early fault")
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[cfg(slime_cv1800b_duo)]
+fn request_duo_cold_reset(
+    timer_registers: device::MappedGranule,
+    reset_registers: device::MappedGranule,
+) -> ! {
+    sel4::debug_println!("SLIME_DUO reset request kind=cold");
+    if !platform_timer::request_cv1800b_cold_reset(timer_registers, reset_registers) {
+        fatal!("CV1800B cold-reset register access failed")
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[cfg(slime_duo_test_terminator)]
+fn request_duo_test_reset() -> ! {
+    sel4::debug_println!("SLIME_DUO test terminator accepted");
+    // SAFETY: root startup writes both `Some` values before the console thread
+    // starts; the two MMIO mappings remain live for the root's lifetime.
+    let timer = unsafe { ptr::addr_of!(DUO_TIMER_REGISTERS).read() };
+    let reset = unsafe { ptr::addr_of!(DUO_RESET_REGISTERS).read() };
+    match (timer, reset) {
+        (Some(timer), Some(reset)) => request_duo_cold_reset(timer, reset),
+        _ => fatal!("Duo test reset registers unavailable"),
+    }
+}
+
+#[cfg(slime_duo_uart)]
+const fn const_parse_hex_usize(value: &str) -> usize {
+    let bytes = value.as_bytes();
+    assert!(
+        bytes.len() > 2 && bytes[0] == b'0' && bytes[1] == b'x',
+        "hex prefix required"
+    );
+    let mut index = 2;
+    let mut parsed = 0usize;
+    while index < bytes.len() {
+        let digit = match bytes[index] {
+            b'0'..=b'9' => bytes[index] - b'0',
+            b'a'..=b'f' => bytes[index] - b'a' + 10,
+            b'A'..=b'F' => bytes[index] - b'A' + 10,
+            _ => panic!("invalid hexadecimal integer"),
+        };
+        parsed = parsed * 16 + digit as usize;
+        index += 1;
+    }
+    assert!(parsed != 0, "integer must be nonzero");
+    parsed
+}
+
 #[repr(C, align(4096))]
 struct FreePage([u8; GRANULE_SIZE]);
 
@@ -241,12 +408,12 @@ static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// [`FREE_PAGE`], and one shared virtual address cannot hold both.
 static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for QEMU `virt`'s temporary PL011 input driver.
+/// Standing window for the selected product terminal receiver.
 ///
-/// Claimed before the virtio scan: device-untyped retype is monotonic within a
-/// region, and PL011 (`0x0900_0000`) precedes virtio (`0x0a00_0000`).
-#[cfg(slime_qemu_keyboard)]
-static mut QEMU_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+/// QEMU maps PL011 at `0x0900_0000`; the Duo product maps UART0 at the physical
+/// address supplied from the pinned board profile. Plane images map neither.
+#[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
+static mut PRODUCT_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
 /// non-alias probe. Separate from the loader scratch page: the proof needs both
@@ -262,6 +429,20 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// transfer. A device register bank must stay mapped for as long as the driver
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing window for the selected RV64 platform's userspace timer registers.
+#[cfg(target_arch = "riscv64")]
+static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing window for the CV1800B RTC control granule used to reset the board
+/// after an autonomous physical proof completes. It must be mapped before the
+/// timer granule: both come from one device untyped and retype is monotonic.
+#[cfg(slime_cv1800b_duo)]
+static mut RESET_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+#[cfg(slime_duo_test_terminator)]
+static mut DUO_RESET_REGISTERS: Option<device::MappedGranule> = None;
+#[cfg(slime_duo_test_terminator)]
+static mut DUO_TIMER_REGISTERS: Option<device::MappedGranule> = None;
 
 /// Standing MMIO windows for the userspace-authority inventory, one per
 /// granule in QEMU's virtio-mmio transport range.
@@ -282,30 +463,45 @@ static mut BOOT_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
 static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
     [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
 
-/// Base of qemu-arm-virt's virtio-mmio transport window.
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const TIMER_PADDR: usize = 0x0010_1000;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const TIMER_PADDR: usize = 0x0502_6000;
+#[cfg(slime_cv1800b_duo)]
+const RESET_PADDR: usize = 0x0502_5000;
+#[cfg(slime_duo_uart)]
+const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR"));
+/// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
-/// A *fixture* constant, not a discovery mechanism. The platform declares
-/// thirty-two identical transports at `0x0a00_0000 + n * 0x200` and its own
-/// device tree is the authority; the driver that eventually owns a device walks
-/// the FDT BootInfo extra to find it. This slice proves the mapping and probe
-/// mechanism, and for that the window only has to be one the machine declares.
+/// These are pinned machine facts, not discovery. The generation's userspace
+/// driver owns device semantics; root uses the constants only for the bounded
+/// bootstrap inventory and IRQ-capability handoff.
+#[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
 /// Bytes between consecutive transports.
+#[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
-/// How many fit in one granule: 4096 / 0x200.
-const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = 8;
-/// Granules covering all thirty-two declared transports: 32 / 8.
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_STRIDE: usize = 0x1000;
+const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
+/// Number of transport granules to scan.
+#[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_GRANULES: usize = 4;
-/// SPI number of the first transport's interrupt, from the platform device tree.
-const VIRTIO_MMIO_FIRST_SPI: sel4::Word = 0x10;
-/// GIC SPIs are numbered from 32 in the kernel's IRQ space.
-const GIC_SPI_BASE: sel4::Word = 32;
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_GRANULES: usize = 8;
+/// Interrupt number of the first transport in seL4's IRQ namespace.
+#[cfg(target_arch = "aarch64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
+#[cfg(target_arch = "riscv64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
 /// Badge the device notification carries, distinct from the timer's.
 const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
 
 const fn virtio_irq(paddr: usize) -> sel4::Word {
     let index = ((paddr - VIRTIO_MMIO_BASE) / VIRTIO_MMIO_STRIDE) as sel4::Word;
-    GIC_SPI_BASE + VIRTIO_MMIO_FIRST_SPI + index
+    VIRTIO_MMIO_FIRST_IRQ + index
 }
 
 /// What one fixture task is expected to demonstrate.
@@ -524,6 +720,52 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
+    #[cfg(all(any(slime_qemu_keyboard, slime_duo_uart), not(slime_root_fixture)))]
+    let product_input = {
+        let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
+            fatal!("product input page unavailable: {error:?}")
+        }
+        #[cfg(slime_qemu_keyboard)]
+        let (paddr, receiver) = {
+            let registers = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                uart_addr,
+                device::QEMU_PL011_PADDR,
+            ) {
+                Ok(registers) => registers,
+                Err(error) => fatal!("QEMU keyboard UART unavailable: {error:?}"),
+            };
+            (
+                device::QEMU_PL011_PADDR,
+                device::TerminalReceiver::Pl011(device::Pl011Input::new(registers)),
+            )
+        };
+        #[cfg(slime_duo_uart)]
+        let (paddr, receiver) = {
+            let registers = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                uart_addr,
+                DUO_UART_PADDR,
+            ) {
+                Ok(registers) => registers,
+                Err(error) => fatal!("Duo product UART unavailable: {error:?}"),
+            };
+            (
+                DUO_UART_PADDR,
+                device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
+            )
+        };
+        sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
+        let input = device::TerminalInput::new(receiver);
+        #[cfg(slime_duo_test_terminator)]
+        let input = input.with_test_terminator(0x1d, request_duo_test_reset);
+        Some(input)
+    };
+    #[cfg(all(not(any(slime_qemu_keyboard, slime_duo_uart)), not(slime_root_fixture)))]
+    let product_input: Option<device::TerminalInput> = None;
     // ---- timer phase ----
     // Proves `TimerScheduler` (see `timer.rs`) is driven by a real seL4 IRQ
     // before any fixture task exists: acquire the one architected-timer PPI
@@ -536,82 +778,58 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(adapter) => adapter,
         Err(error) => fatal!("timer source unavailable: {error:?}"),
     };
+    #[cfg(slime_cv1800b_duo)]
+    let reset_registers = {
+        let reset_addr = ptr::addr_of!(RESET_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, reset_addr) {
+            fatal!("reset page unavailable: {error:?}")
+        }
+        match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            reset_addr,
+            RESET_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("reset registers unavailable: {error:?}"),
+        }
+    };
+    #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+    let timer_registers;
+    #[cfg(target_arch = "riscv64")]
+    {
+        let timer_addr = ptr::addr_of!(TIMER_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, timer_addr) {
+            fatal!("timer page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            timer_addr,
+            TIMER_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("timer registers unavailable: {error:?}"),
+        };
+        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        {
+            timer_registers = registers;
+        }
+        #[cfg(slime_duo_test_terminator)]
+        unsafe {
+            ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(registers));
+            ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
+        }
+        timer_adapter.attach_registers(registers);
+    }
     sel4::debug_println!(
         "SLIME_TIMER acquired irq={TIMER_IRQ} freq_hz={}",
         timer_adapter.frequency_hz(),
     );
 
-    let mut timer_scheduler = TimerScheduler::<1>::new();
-    const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
-    let timer_start = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable: {error:?}"),
-    };
-    let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
-    let (_, scheduled) =
-        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
-            Ok(scheduled) => scheduled,
-            Err(error) => fatal!("timer proof deadline rejected: {error:?}"),
-        };
-    if let Err(error) = apply_deadline_programming(&mut timer_adapter, scheduled.programming) {
-        fatal!("timer deadline could not be programmed: {error:?}")
-    }
-
-    let bound_ticks = timer_adapter
-        .frequency_hz()
-        .saturating_mul(TIMER_PROOF_BOUND_SECONDS);
-    let mut polls: u64 = 0;
-    loop {
-        if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
-            break;
-        }
-        let elapsed = match timer_adapter.monotonic_now() {
-            Ok(now) => now.0.wrapping_sub(timer_start.0),
-            Err(error) => fatal!("timer clock unreadable while waiting: {error:?}"),
-        };
-        if elapsed > bound_ticks {
-            fatal!(
-                "SLIME_TIMER FAIL timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
-            )
-        }
-        polls += 1;
-    }
-    sel4::debug_println!(
-        "SLIME_TIMER delivered badge={:#x} polls={polls}",
-        timer_adapter.signal_badge(),
-    );
-
-    // The two post-mutation variants carry the transition the expiry already
-    // computed (see `timer.rs`), so even a failing platform step reports how
-    // many wakes were decided instead of dropping them silently.
-    let drained = match timer_scheduler.service_timer_source(&mut timer_adapter, |_| true) {
-        Ok(transition) => transition,
-        Err(ServiceTimerError::Program { error, transition }) => fatal!(
-            "timer deadline reprogramming failed after delivery: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
-            "timer acknowledgement failed after delivery: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(error) => fatal!("timer service rejected the observed expiry: {error:?}"),
-    };
-    let timer_end = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable after service: {error:?}"),
-    };
-    sel4::debug_println!(
-        "SLIME_TIMER serviced events={} programming={:?}",
-        drained.events.len(),
-        drained.programming,
-    );
-    sel4::debug_println!(
-        "SLIME_TIMER advanced start={} end={} delta={}",
-        timer_start.0,
-        timer_end.0,
-        timer_end.0.wrapping_sub(timer_start.0),
-    );
-    sel4::debug_println!("SLIME_TIMER OK");
+    prove_timer(&mut timer_adapter, "startup");
+    #[cfg(slime_duo_early_fault)]
+    run_duo_early_fault_control(&mut timer_adapter, reset_registers);
     if let Err(error) = timer_adapter.bind_to(sel4::init_thread::slot::TCB.cap()) {
         fatal!("timer notification could not bind to root: {error:?}")
     }
@@ -659,30 +877,6 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta={} caps_deleted=2",
         2 * GRANULE_SIZE,
     );
-
-    #[cfg(all(slime_qemu_keyboard, not(slime_root_fixture)))]
-    let qemu_input = {
-        let uart_addr = ptr::addr_of!(QEMU_UART_PAGE) as usize;
-        if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
-            fatal!("QEMU keyboard page unavailable: {error:?}")
-        }
-        let registers = match device::DeviceRegion::map(
-            allocator,
-            sel4::init_thread::slot::VSPACE.cap(),
-            uart_addr,
-            device::QEMU_PL011_PADDR,
-        ) {
-            Ok(registers) => registers,
-            Err(error) => fatal!("QEMU keyboard UART unavailable: {error:?}"),
-        };
-        sel4::debug_println!(
-            "SLIME_ROOT QEMU keyboard ready uart={:#x}",
-            device::QEMU_PL011_PADDR,
-        );
-        Some(device::Pl011Input::new(registers))
-    };
-    #[cfg(all(not(slime_qemu_keyboard), not(slime_root_fixture)))]
-    let qemu_input: Option<device::Pl011Input> = None;
 
     // ---- device phase ----
     //
@@ -846,12 +1040,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 timer: &mut timer_adapter,
                 #[cfg(slime_boot_selector)]
                 boot_blocks: &mut block_devices,
-                input: qemu_input,
+                input: product_input,
                 io_authority: &mut io_authority,
             },
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );
+        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        request_duo_cold_reset(timer_registers, reset_registers);
         loop {
             core::hint::spin_loop();
         }

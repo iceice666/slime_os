@@ -71,6 +71,10 @@ abis :: List Named = {
   -- but how an operation reaches its implementation is exactly what an ABI
   -- identifier names, and an image built for one cannot run under the other.
   { constName = "SLIME_AARCH64_SEL4_V1"; value = 4; };
+  -- P3. The same native seL4 transport as the AArch64 product, with RISC-V's
+  -- register and ELF conventions. Keeping a distinct number is what makes an
+  -- AArch64 seL4 component fail admission before any executable byte is mapped.
+  { constName = "SLIME_RISCV64_SEL4_V1"; value = 5; };
 };
 
 pageProfiles :: List Named = {
@@ -96,6 +100,10 @@ features :: List Named = {
   -- than enumerating GICv2/GICv3 and the generic timer as the custom kernel's
   -- profiles must.
   { constName = "AARCH64_SEL4"; value = 64; };
+  -- P3. RISC-V uses the same separation: PLIC, supervisor timer interrupts,
+  -- Sv39 transitions, and `ecall` entry are upstream seL4 mechanism rather than
+  -- component-visible features.
+  { constName = "RISCV64_SEL4"; value = 128; };
 };
 
 profiles :: List Profile = {
@@ -189,6 +197,41 @@ profiles :: List Profile = {
     componentBaseText = "0x0040_0000";
     cargoTarget = "riscv64gc-unknown-none-elf";
     qemuBinary = "qemu-system-riscv64";
+  };
+  {
+    constName = "RISCV64_SEL4_QEMU_VIRT";
+    name = "riscv64-sel4-qemu-virt";
+    id = 6;
+    architecture = 3;
+    abi = 5;
+    pageProfile = 3;
+    requiredFeatures = 144;
+    elfMachine = 243;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
+    qemuBinary = "qemu-system-riscv64";
+  };
+  {
+    constName = "RISCV64_SEL4_MILKV_DUO";
+    name = "riscv64-sel4-milkv-duo";
+    id = 7;
+    architecture = 3;
+    abi = 5;
+    pageProfile = 3;
+    -- Same userspace ABI as the RV64 seL4 reference, but a distinct exact
+    -- platform identity. The board's C906, firmware handoff, PLIC, timer, and
+    -- 63.25 MiB memory window are not interchangeable with QEMU `virt`.
+    requiredFeatures = 144;
+    elfMachine = 243;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
+    qemuBinary = "";
   };
 };
 

@@ -33,6 +33,7 @@ siblings rather than profiles of one graph.
 `slime-root` mediates the task, IPC, supervision, input, directory, and
 shared-buffer mechanisms this first resident product graph uses. The graph is:
 
+
 | Component | Role |
 | --- | --- |
 | `init` | bootstrap; launches the resident services and supervises them |
@@ -42,6 +43,10 @@ shared-buffer mechanisms this first resident product graph uses. The graph is:
 | `sysinfo` | spawned application; reports its launch context |
 | `echo-agent` | spawned application; echoes its launch context |
 
+On the `riscv64-sel4-milkv-duo` resident product, `slime-root` maps the pinned
+UART0 receive page and feeds bytes through the same `slisp-input` `InputRead`
+grant used by QEMU. Slisp receives no MMIO or device capability; empty UART RX
+remains `WouldBlock`, and output continues through its declared console path.
 The QEMU product build temporarily maps the `virt` machine's PL011 receive FIFO
 inside `slime-root` and presents its bytes through Slisp's existing input
 capability. An empty FIFO still reports `WouldBlock`, so Slisp remains resident

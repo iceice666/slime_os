@@ -1,0 +1,15 @@
+{
+  "board": "milkv-duo",
+  "elf_sha256": "a410bd29323e4e985566d211e9aeb3de22b1a4a86b8487d6ca9192c1c656d46c",
+  "firmware": "2021.10-cvitek_cv180x",
+  "fit_sha256": "887eb0203d599f7ec878289740efeb74cb224f5a7d5c223839bfa23c63435f5f",
+  "framing_errors": 0,
+  "generation_identity": "d761886474e29fad714d582212cda0617a3d380479d5594295580c3043932fa7",
+  "generation_sha256": "c6049420e0c237746da36d9db95fd3d6dfc3ddd377d76df4df50c7f8b39c74ce",
+  "serial": "uart0-dw-apb-0x04140000",
+  "serial_baud": 115200,
+  "slisp_sha256": "fe315b87a24e8b687ce8e9b626c4dd4fa20df8314c57c4b834a79ab5311eb57c",
+  "soc": "cv1800b",
+  "target_profile": "riscv64-sel4-milkv-duo",
+  "transcript_sha256": "bf33543adf7f06aa62310cbc184cec9b22eaded335ba17201c9e55aa98e05f11"
+}

@@ -57,6 +57,13 @@ pub(super) fn serve_instance_graph(
     let mut drops = 0;
     let mut reclaimed_slots = 0;
     let mut iterations = 0;
+    // Product is a resident graph, not a bounded verification workload. Its
+    // idle components poll explicit non-blocking capabilities, so ordinary
+    // healthy operation keeps producing root requests for the product's whole
+    // lifetime. Finite planes retain the request bound as a livelock watchdog.
+    let iteration_limit = (generation.boot_action
+        != boot_contracts::generation::BootAction::Product)
+        .then_some(MAX_GRAPH_ITERATIONS);
     let required = (0..generation.instance_count())
         .filter(|index| {
             generation.instance(*index).is_ok_and(|instance| {
@@ -65,7 +72,7 @@ pub(super) fn serve_instance_graph(
         })
         .count();
     let mut completed_required = [false; generation::MAX_ADMITTED_INSTANCES];
-    while iterations < MAX_GRAPH_ITERATIONS {
+    while iteration_limit.is_none_or(|limit| iterations < limit) {
         if live == 0 {
             sel4::debug_println!(
                 "SLIME_ROOT allocator quiescent live_slots={} live_objects={} live_bytes={}",
@@ -101,7 +108,12 @@ pub(super) fn serve_instance_graph(
             service_clock_source(clock_service, timer_adapter);
             continue;
         }
-        iterations += 1;
+        iterations = iterations.saturating_add(1);
+        if iteration_limit.is_none() && iterations == MAX_GRAPH_ITERATIONS {
+            sel4::debug_println!(
+                "SLIME_GRAPH resident checkpoint live={live} iterations={iterations}"
+            );
+        }
         let Some((id, arrival)) = TaskId::from_badge(badge) else {
             sel4::debug_println!("SLIME_GRAPH unbadged arrival badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
@@ -1445,6 +1457,11 @@ pub(super) fn serve_instance_graph(
                         live_required,
                         live_required,
                     );
+                    #[cfg(slime_cv1800b_duo)]
+                    sel4::debug_println!(
+                        "SLIME_ROOT READY target_profile={}",
+                        crate::TARGET_PROFILE
+                    );
                 } else if live_required == 0 {
                     // Emitted after the accounting summary below: the QEMU
                     // gates stop reading at this terminal certification.
@@ -1461,20 +1478,16 @@ pub(super) fn serve_instance_graph(
             }
         }
     }
-    // A graph whose declared success state is every required task parked
-    // forever — the full-graph boot's, by design (B55) — never reaches
-    // `live == 0`, so it runs this loop out on every boot once certified. That
-    // is the property holding, not a wedge: the wedge this bound exists to
-    // catch is a graph that exhausts every iteration *without* ever
-    // certifying, which `healthy_emitted` still distinguishes precisely.
-    if iterations == MAX_GRAPH_ITERATIONS && live != 0 {
+    // A finite plane whose declared success state is every required task
+    // parked forever never reaches `live == 0`, so it can run this loop out
+    // once certified. That is reported for the plane-specific observer to
+    // adjudicate. Product has no request limit: its authenticated action
+    // declares a resident service graph, and reaching an arbitrary request
+    // count must not stop its root dispatcher.
+    if iteration_limit == Some(iterations) && live != 0 {
         if !healthy_emitted {
             fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
         }
-        // Certified, then ran the bound out. This is not decidable here: B55's
-        // parked-forever success and a graph that stopped draining both park
-        // required tasks and complete none of them. Report it and let the
-        // observer, which knows whether the workload had finished, decide.
         sel4::debug_println!(
             "SLIME_GRAPH exhausted live={live} iterations={iterations} certified=1"
         );

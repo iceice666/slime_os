@@ -98,19 +98,22 @@ def run_qemu(
     return process.stdout
 
 
-# All seL4 plane gates must read the same pinned QEMU profile. The caller's
-# failure function retains each gate's attributable error prefix.
+# seL4 gates default to the established AArch64 reference profile. Cross-target
+# gates pass their own section explicitly; the section remains part of every
+# validation error so a missing RV64 pin cannot be misreported as an ARM one.
 QEMU_PROFILE_SECTION = "qemu_arm_virt"
 
 
 def load_qemu_profile(
-    fail: Callable[[str], NoReturn], pins_path: Path | None = None
+    fail: Callable[[str], NoReturn],
+    pins_path: Path | None = None,
+    section: str = QEMU_PROFILE_SECTION,
 ) -> dict[str, object]:
-    """The `[qemu_arm_virt]` table of `sel4/pins.toml`.
+    """Load one exact QEMU profile table from ``sel4/pins.toml``.
 
-    Refuses a missing file or a missing section rather than returning an empty
-    mapping: a gate that read no profile would boot QEMU with defaults and still
-    claim it had honoured the pins.
+    Refuses a missing file or section rather than returning an empty mapping: a
+    gate that read no profile would boot QEMU with defaults and still claim it
+    had honoured the pins.
     """
     path = pins_path or ROOT / "sel4" / "pins.toml"
     if not path.is_file():
@@ -119,24 +122,84 @@ def load_qemu_profile(
         pins = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
         fail(f"cannot parse {path.relative_to(ROOT)}: {error}")
-    profile = pins.get(QEMU_PROFILE_SECTION)
+    profile = pins.get(section)
     if not isinstance(profile, dict):
-        fail(f"{path.relative_to(ROOT)} declares no [{QEMU_PROFILE_SECTION}] profile")
+        fail(f"{path.relative_to(ROOT)} declares no [{section}] profile")
     return profile
 
 
-def profile_text(profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]) -> str:
+def profile_text(
+    profile: dict[str, object],
+    key: str,
+    fail: Callable[[str], NoReturn],
+    section: str = QEMU_PROFILE_SECTION,
+) -> str:
     value = profile.get(key)
     if not isinstance(value, str) or not value:
-        fail(f"sel4/pins.toml [{QEMU_PROFILE_SECTION}].{key} must be non-empty text")
+        fail(f"sel4/pins.toml [{section}].{key} must be non-empty text")
     return value
 
 
-def profile_integer(profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]) -> int:
+def profile_integer(
+    profile: dict[str, object],
+    key: str,
+    fail: Callable[[str], NoReturn],
+    section: str = QEMU_PROFILE_SECTION,
+) -> int:
     value = profile.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
-        fail(f"sel4/pins.toml [{QEMU_PROFILE_SECTION}].{key} must be an integer")
+        fail(f"sel4/pins.toml [{section}].{key} must be an integer")
     return value
+
+
+def qemu_kernel_arguments(
+    qemu_binary: str,
+    image_path: Path,
+    fail: Callable[[str], NoReturn],
+) -> list[str]:
+    """Return the platform-correct QEMU arguments for one packaged image.
+
+    QEMU's RISC-V ``-kernel`` path enters the ELF load base, but the rust-sel4
+    loader entry is inside that first segment. Load the image as ELF, then place
+    a two-instruction PC-relative jump at the load base so OpenSBI reaches the
+    declared entry without rewriting the packaged artifact.
+    """
+    if qemu_binary != "qemu-system-riscv64":
+        return ["-kernel", str(image_path)]
+
+    data = image_path.read_bytes()
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4:6] != b"\x02\x01":
+        fail(f"{image_path.relative_to(ROOT)} is not a little-endian ELF64 image")
+    entry = int.from_bytes(data[24:32], "little")
+    program_offset = int.from_bytes(data[32:40], "little")
+    program_size = int.from_bytes(data[54:56], "little")
+    program_count = int.from_bytes(data[56:58], "little")
+    load_base: int | None = None
+    for index in range(program_count):
+        offset = program_offset + index * program_size
+        header = data[offset : offset + program_size]
+        if len(header) != program_size:
+            fail(f"{image_path.relative_to(ROOT)} has a truncated program-header table")
+        if int.from_bytes(header[0:4], "little") == 1:
+            load_base = int.from_bytes(header[24:32], "little")
+            break
+    if load_base is None:
+        fail(f"{image_path.relative_to(ROOT)} has no loadable segment")
+    delta = entry - load_base
+    upper = (delta + 0x800) >> 12
+    lower = delta - (upper << 12)
+    if not (-(1 << 19) <= upper < (1 << 19) and -(1 << 11) <= lower < (1 << 11)):
+        fail(f"RISC-V loader entry delta {delta:#x} is outside the two-instruction shim")
+    auipc_t0 = ((upper & 0xFFFFF) << 12) | (5 << 7) | 0x17
+    jalr_zero_t0 = ((lower & 0xFFF) << 20) | (5 << 15) | 0x67
+    shim = image_path.with_name(f".{image_path.name}.entry.bin")
+    shim.write_bytes(auipc_t0.to_bytes(4, "little") + jalr_zero_t0.to_bytes(4, "little"))
+    return [
+        "-kernel",
+        str(image_path),
+        "-device",
+        f"loader,file={shim},addr={load_base:#x},force-raw=on",
+    ]
 
 
 def sha256_file(path: Path, fail: Callable[[str], NoReturn]) -> str:

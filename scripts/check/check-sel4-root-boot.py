@@ -9,19 +9,41 @@ import shutil
 import subprocess
 import sys
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import profile_text, profile_integer, sha256_file  # noqa: E402
+from harness import (
+    load_qemu_profile,
+    profile_text,
+    profile_integer,
+    qemu_kernel_arguments,
+    sha256_file,
+)  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4.elf"
-MANIFEST = ROOT / "build" / "slime-sel4.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+PLATFORMS = {
+    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
+    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
+
+TARGET_PROFILES = {
+    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
+    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
+}
+TIMER_IRQS = {"qemu-arm-virt": 30, "qemu-riscv-virt": 11}
+
+
+def artifact_paths(platform: str) -> tuple[Path, Path]:
+    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
+    return (
+        ROOT / "build" / f"slime-sel4{suffix}.elf",
+        ROOT / "build" / f"slime-sel4{suffix}.identity.json",
+    )
+
 
 # The boot is bounded: a wedged guest must fail loudly instead of hanging the
 # gate. seL4 plus the root task reaches its final marker in a few seconds.
@@ -31,7 +53,7 @@ BOOT_TIMEOUT_SECONDS = 120
 # order against the serial transcript. Together these establish the whole
 # chain: the root task admitted the generation and its authority manifest,
 # activated no legacy component image, took ownership of untyped memory,
-# acquired the real EL1 physical timer IRQ and observed one delivered and
+# acquired the platform's userspace timer IRQ and observed one delivered and
 # acknowledged interrupt with the counter advancing across the wait, staged
 # both child tasks from the native ELF fixture, activated each one, served
 # its badged request, then observed a clean exit from one and a real VM
@@ -49,7 +71,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "timer source acquired",
-        r"SLIME_TIMER acquired irq=30 freq_hz=\d+",
+        r"SLIME_TIMER acquired irq=(\d+) freq_hz=\d+",
     ),
     (
         "timer interrupt delivered",
@@ -316,7 +338,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     # Interleaved with the settle markers rather than grouped after them: each
     # task is reclaimed as it settles, and this list is order-sensitive, so
     # grouping would assert a sequence the root does not produce.
-    ("clean-exit task settled", r"SLIME_ROOT task settled task=0 role=clean-exit termination=Exit\(0\)"),
+    (
+        "clean-exit task settled",
+        r"SLIME_ROOT task settled task=0 role=clean-exit termination=Exit\(0\)",
+    ),
     (
         "the clean-exit task's arena-owned slots are accounted for",
         r"SLIME_ROOT task reclaimed task=0 source=generation slots=(\d+) arena=\d+",
@@ -399,62 +424,57 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 root boot check: {message}")
 
 
-def load_pins() -> dict[str, object]:
-    if not PINS_PATH.is_file():
-        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
+def build_image(platform: str) -> None:
+    command = [sys.executable, str(BUILD_SCRIPT), "--platform", platform]
+    print(f"[build] {' '.join(command)}", flush=True)
     try:
-        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
-    if pins.get("schema") != 1:
-        fail("unsupported sel4/pins.toml schema (expected 1)")
-    profile = pins.get("qemu_arm_virt")
-    if not isinstance(profile, dict):
-        fail("sel4/pins.toml is missing [qemu_arm_virt]")
-    return pins
-
-
-def build_image() -> None:
-    print(f"[build] {sys.executable} {BUILD_SCRIPT.relative_to(ROOT)}", flush=True)
-    try:
-        process = subprocess.run(
-            [sys.executable, str(BUILD_SCRIPT)],
-            cwd=ROOT,
-            check=False,
-        )
+        process = subprocess.run(command, cwd=ROOT, check=False)
     except OSError as error:
         fail(f"cannot run the seL4 image build: {error}")
     if process.returncode != 0:
         fail(f"seL4 image build failed with exit status {process.returncode}")
 
 
-def check_manifest() -> dict[str, object]:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_qemu_image_check`"
-        )
+def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict[str, object]:
+    if not manifest_path.is_file():
+        fail(f"missing identity manifest {manifest_path.relative_to(ROOT)}")
     try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
+        fail(f"cannot parse {manifest_path.relative_to(ROOT)}: {error}")
     if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
+        fail(f"{manifest_path.relative_to(ROOT)} is not a Slime seL4 identity manifest")
+    if manifest.get("platform") != platform:
+        fail(
+            f"{manifest_path.relative_to(ROOT)} describes {manifest.get('platform')!r}, not {platform!r}"
+        )
     image = manifest.get("image")
+    expected_profile = TARGET_PROFILES[platform]
+    if manifest.get("target_profile") != expected_profile:
+        fail(
+            f"{manifest_path.relative_to(ROOT)} describes target profile "
+            f"{manifest.get('target_profile')!r}, not {expected_profile!r}"
+        )
     if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
         fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}; run `just sel4_qemu_image_check`")
-    actual = sha256_file(IMAGE, fail)
+    if not image_path.is_file():
+        fail(f"missing packaged image {image_path.relative_to(ROOT)}")
+    actual = sha256_file(image_path, fail)
     if actual != image["sha256"]:
         fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
+            f"{image_path.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
             f"records {image['sha256']}; rebuild before booting"
         )
     return manifest
 
 
-def boot(profile: dict[str, object]) -> str:
+def boot(
+    profile: dict[str, object],
+    *,
+    section: str,
+    qemu_binary: str,
+    image_path: Path,
+) -> str:
     """Boot the image and return the serial transcript.
 
     The root task ends by suspending itself, so QEMU stays alive forever after
@@ -464,24 +484,23 @@ def boot(profile: dict[str, object]) -> str:
     deadline without the terminal marker is the failure, and the transcript
     collected so far is what gets reported.
     """
-    qemu = shutil.which("qemu-system-aarch64")
+    qemu = shutil.which(qemu_binary)
     if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
+        fail(f"{qemu_binary} is not on PATH")
     command = [
         qemu,
         "-machine",
-        profile_text(profile, "machine", fail),
+        profile_text(profile, "machine", fail, section),
         "-cpu",
-        profile_text(profile, "cpu", fail),
+        profile_text(profile, "cpu", fail, section),
         "-smp",
-        str(profile_integer(profile, "cpus", fail)),
+        str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail)}M",
+        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-kernel",
-        str(IMAGE),
+        *qemu_kernel_arguments(qemu_binary, image_path, fail),
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
     terminal = re.compile(REQUIRED_MARKERS[-1][1])
@@ -535,7 +554,7 @@ def report_transcript(transcript: str) -> None:
         sys.stdout.flush()
 
 
-def check_transcript(transcript: str) -> None:
+def check_transcript(transcript: str, platform: str) -> None:
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
         if match is not None:
@@ -550,6 +569,12 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    timer_match = re.search(r"SLIME_TIMER acquired irq=(\d+) freq_hz=\d+", transcript)
+    if timer_match is None or int(timer_match.group(1)) != TIMER_IRQS[platform]:
+        fail(
+            f"timer IRQ is {timer_match.group(1) if timer_match else 'missing'}, "
+            f"expected {TIMER_IRQS[platform]} for {platform}"
+        )
 
     clean = re.search(
         r"SLIME_ROOT task reclaimed task=0 source=generation slots=(\d+) arena=\d+",
@@ -565,7 +590,9 @@ def check_transcript(transcript: str) -> None:
         fail("task reclaim accounting disappeared after marker matching")
     total = int(clean.group(1)) + int(faulted.group(1))
     if total != int(cleanup.group(1)) or total != int(ready.group(1)):
-        fail(f"task reclaim totals disagree: tasks={total} cleanup={cleanup.group(1)} ready={ready.group(1)}")
+        fail(
+            f"task reclaim totals disagree: tasks={total} cleanup={cleanup.group(1)} ready={ready.group(1)}"
+        )
     check_private_memory_base(transcript)
 
 
@@ -591,9 +618,7 @@ def check_private_memory_base(transcript: str) -> None:
     """
     root_bases = re.findall(r"SLIME_MEM grown task=0 .*? base=(0x[0-9a-f]+)", transcript)
     child_bases = re.findall(r"SLIME_CHILD mem (?:query|grew) .*? base=(0x[0-9a-f]+)", transcript)
-    dereferenced = re.findall(
-        r"SLIME_CHILD mem (?:read|pattern) base=(0x[0-9a-f]+)", transcript
-    )
+    dereferenced = re.findall(r"SLIME_CHILD mem (?:read|pattern) base=(0x[0-9a-f]+)", transcript)
     # Four `grown` records from the phase's five operations: two size queries
     # and two growths each answer a base, while the refused one reports
     # `SLIME_MEM refused` and no base at all. Counted rather than merely
@@ -625,20 +650,34 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+        help="the pinned QEMU profile and image to build and boot",
+    )
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    pins = load_pins()
+    section, qemu_binary = PLATFORMS[arguments.platform]
+    image_path, manifest_path = artifact_paths(arguments.platform)
+    profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
-        build_image()
-    check_manifest()
-    profile = pins["qemu_arm_virt"]
-    assert isinstance(profile, dict)
-    check_transcript(boot(profile))
+        build_image(arguments.platform)
+    check_manifest(image_path, manifest_path, arguments.platform)
+    check_transcript(
+        boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image_path=image_path,
+        ),
+        arguments.platform,
+    )
     print(
         "seL4 root boot check: ordered generation, timer, task, IPC, fault, and "
-        "ready markers observed on the pinned qemu-arm-virt profile"
+        f"ready markers observed on the pinned {arguments.platform} profile"
     )
 
 

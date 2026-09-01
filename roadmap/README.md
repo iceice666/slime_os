@@ -1,12 +1,12 @@
 # Slime OS roadmap
 
-This directory is the canonical plan for Slime OS. The near-term product goal is now a concrete robotics demonstration:
+This directory is the canonical plan for Slime OS. The current physical execution goal is:
 
-> **Boot Slime OS on a Raspberry Pi 5 and run two local ROS 2 nodes that exchange bounded topic data through a minimal bounded Zenoh profile with classic CDR payloads.**
+> **Boot upstream seL4 and a verified Slime generation on the named Milk-V Duo, then replay the architecture-neutral root and component evidence through its observed hands-off deployment and serial loop.**
 
-Everything below is ordered around that acceptance test. Completed x86-64/QEMU work remains valuable regression evidence, but it is no longer the product-leading path. Framework daily-driver work, broad external ROS compatibility beyond the minimum topic path, RV64, foreign workloads, and distributed authority are deferred unless they directly de-risk the Raspberry Pi 5 ROS 2 two-node demo.
+Milk-V Duo is the current physical bring-up target because it is the only available board with an observed, repeatable USB-NCM deployment and serial evidence path. This is a narrow execution pivot, not a product-equivalence claim: the Raspberry Pi 5 ROS 2 demo and Framework daily-driver releases remain defined and deferred, and Duo evidence cannot satisfy their board-, storage-, DMA-, input-, display-, network-, suspend-, or trust-specific gates.
 
-A milestone is complete only when its exit condition is observed. Compiled code, a framebuffer demo, a passing host unit test, or an x86-only QEMU run cannot close a Raspberry Pi 5 milestone.
+A milestone is complete only when its exit condition is observed. Compiled code, a custom payload, a passing QEMU run, or evidence from a different physical target cannot close a board-specific milestone.
 
 ## Current state
 
@@ -16,28 +16,25 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
 | [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate. **C10 closed 2026-08-24** across C10.1–C10.4: one task-private 2 MiB window per child, an authenticated `private-memory-budget/v1` resource fixing every component's ceiling, a `GlobalAlloc` over that region, and adoption by `fabric-service` — the graph's own broker, in ten fixtures — which now sizes its role and frame tables from the graph a generation declares rather than from the contract's ceilings, freeing 29960 bytes of `.bss` plus `.data` per generation. A repeated spawn/exit cycle returns the frame allocator's own watermarks exactly, and a shared buffer cannot be mapped into a private window. **C9 closed 2026-08-26** across C9.1–C9.6: a root-brokered clock/timer service behind declared authority, a bounded userspace wait set that blocks once per ready set on one declared Notification and recovers every ready source from the coalesced badge word, a declared scheduling class whose band mapping is manifest data — the builder reads it once and writes the resulting priority into the `ScheduleRecord`, so a class *is* a priority rather than a second number beside one — a `lifecycle-policy/v1` transition graph, restart bound, health dependency set, and parameter authority under which a *userspace* supervisor restarts a failed component while the root charges the declared attempt and refuses everything the policy does not admit, and a generation can declare a component deterministic with the claim constrained to the authority a recorder genuinely captures. **C9.6 closed 2026-08-26**: a simulated sensor → controller → actuator graph on the `sel4-robot-runtime` plane, the controller a dual-contract-kind participant, running to completion under declared best-effort contention and surviving an injected controller restart with its fabric authority reissued, asserted by a two-boot semantic trace comparison. Both of RP5's named dependencies on this track are therefore closed. | The track is fully closed; nothing remains open. RP5's two named dependencies (C9.3, C9.4) are met, and C9.5's `recorded` source set is still clock-only — widening it is its own follow-up, not a C9 milestone.
 | [Component platform](10-component-platform.md) | **CP0–CP10 complete**, closing 2026-08-25 across CP6–CP10: `contracts/component-sdk-release/v1` describes an export, `scripts/lib/component_sdk.py` is the only thing that produces one, publication exports a detached checkout of the commit it records so a mirror commit regenerates byte-for-byte, each release ships a content-addressed seL4 prefix per target profile so an external build reads nothing under `slime_os/build/`, two real releases are classified against each other with every published matrix row backed by a build plus the boot that observed it, and a template consumer upgrades, boots, survives five injected failures, and reproduces the previous ELF and generation byte-for-byte on rollback | The track is fully closed; nothing remains open. CP7's hosted-publication clause closed 2026-08-26 with SDK 1.0.0 (`5fee7b1`) and 1.1.0 (`31742d1`) as immutable commits and signed tags on the `generated` branch |
-| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0, RP1, and RP2 complete. RP2 closed 2026-08-20 with `sel4-demo.zti`, the first generation carrying the C7 data path, the C8 route graph, and the product component graph together, plus the rollback and wrong-target arms it owed the demo; RP3–RP8 planned | RP3's Raspberry Pi 5 serial boot, deferred with P4 on a working USB-UART adapter |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5. P4's build path landed 2026-08-24: `bcm2712` is a second reproducible seL4 build platform with its own pinned artifact hashes, a forked `rust-sel4` supplying the loader platform upstream lacked, and a flat `kernel8.img` builder, all behind `just sel4_rpi5_image_check`/`just rpi5_media_check` | P4's board boot, **deferred on hardware**: artifacts and `just rpi5_boot_check` are ready and fail closed; the USB-UART adapter on hand emits nothing, and the debug UART is seL4's only console (it ships no display driver) |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | Deferred after RP0, RP1, and RP2 completed. RP2 closed 2026-08-20 with the demo-scoped AArch64 QEMU product graph; RP3–RP8 retain their original Raspberry Pi 5 acceptance conditions | Resume at RP3 when a working USB-UART evidence path is available and the physical demo is reprioritized |
+| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 complete; P2.3–P2.6 superseded by P5. The named Milk-V Duo physically boots upstream seL4 and a target-qualified generation, runs the architecture-neutral sample plane with repeatable normalized evidence, proves timer/fault behavior, recovers autonomously, and since P3.F closed 2026-09-01 serves Slisp as the resident shell over three UART0 commands through its declared `InputRead` authority | No Duo gate is open. Storage, USB, network, display, sensor, and actuator qualification on this board remain separate future scope, and P4/RP3 and Framework retain their named physical blockers: the available USB-UART adapter produces no bytes, so those boots stay unobserved |
 | [Native I/O substrate](11-io-substrate.md) | IO0–IO3 and IO5–IO7 complete; **IO4 is complete only for its exact-destination authority boundary and its network data plane is unfinished**. IO2's root cutover closed 2026-08-29, and IO5/IO6/IO7 added the track's host verification layers the same day. Five QEMU gates: `io_queue_check`, `io_driver_authority_check`, `io_block_check`, `io_link_check`, `io_network_check`, all registered in `sel4_gate_control_check`; two host model gates, `io_queue_model_check` and `io_resource_model_check`, registered in `contracts_check`; two host proof gates, `kani_io_proofs` and `kani_virtio_proofs` | IO0 fixes request/epoch/lease/queue semantics; IO1 grants bounded device/MMIO/IRQ/DMA authority with numeric reclamation on death; IO2's userspace virtio-blk is now the only product block path; IO3 proves userspace virtio-net duplex on the same substrate; IO4 enforces exact-destination networking, with IPv6/DHCP/SLAAC/listen declared and refused, but Ethernet framing, ARP, IPv4, ICMP, UDP, TCP, and exact-name DNS are unimplemented and unclaimed, so R0/RP5 cannot yet obtain a byte stream from it; IO5 quantifies IO0's lease/epoch rules and IO1's charge conservation over every interleaving rather than one schedule, with 13 must-fail mutations; IO6 proves the wire arithmetic those models disclaim — slot indexing, cursor subtraction, slice bounds — of the shipped source over every value of the declared types, with 18 must-fail mutations; IO7 closes the *device* side after B86/B87 showed it unguarded, proving used-ring index, descriptor-id, and transfer-length handling over all values with 13 harnesses and 8 must-fail mutations. All trusted-DMA on QEMU — no containment claim |
-| [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal Zenoh topic profile is first, and its bounded classic-CDR codec plus contract-derived fixtures are host-closable now against the frozen `contracts/rpi5-ros2-demo/v2` profile; its transport half waits on IO4's data plane; broader external compatibility follows after the RPi5 demo path. The transport family is generation data, so it can be replaced without a new contract format |
-| [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist |
-| [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |
-| [Authority and trust](06-authority-trust.md) | Deferred | Resume after the demo unless a demo milestone needs a specific authority primitive |
-| [Native development](08-native-development.md) | Deferred | Resume after the demo; D2/D3 may be useful later for on-device ROS node builds |
+| [ROS 2 compatibility](03-ros2-compatibility.md) | Deferred with the RPi5 demo | Resume R0/IO4 transport work when the robotics demo is reprioritized; the frozen contract and completed authority work remain valid |
+| [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist; Duo evidence is not a substitute |
+| [Foreign workloads](05-foreign-workloads.md) | Deferred | Resume only for a selected product workload that needs a Linux userspace personality |
+| [Authority and trust](06-authority-trust.md) | Deferred | Resume when a selected product or hardware release needs a specific authority primitive |
+| [Native development](08-native-development.md) | Deferred | Resume after a physical product path is stable enough to justify on-device build and live-update work |
 
-## Demo-first sequencing
+## Physical bring-up sequencing
 
-The active lane is now the [RPi5 ROS 2 demo track](09-rpi5-ros2-demo.md). Work should be selected by whether it closes one of these risks, in this order:
+The P3/P3.E [Architecture portability](07-architecture-portability.md) sequence is complete:
 
-1. **Target contract:** pin the exact Raspberry Pi 5 board/firmware/media path, ROS 2 distribution, node API subset, message type, and observed success transcript.
-2. **Target-qualified artifacts:** make the generation, release, kernel image, and component images reject wrong-architecture binaries before mapping executable bytes.
-3. **AArch64 QEMU boot:** closed. P5 established the profile on `aarch64-sel4-qemu-virt`, where seL4 owns EL1/EL0 transitions, the MMU, exceptions, timers, interrupts, and UART; RP2 closed the demo-scoped remainder on 2026-08-20 — one generation exercising the component-launch and data path together, plus rollback and wrong-target rejection on that same profile, all observed by `just sel4_demo_check`.
-4. **Raspberry Pi 5 physical boot:** build the `bcm2712` seL4 kernel/loader from the existing pins and platform config, bring up serial logging, the interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
-5. **Two-component data path on Arm:** run two isolated components — authored and built entirely outside this repository against the [Component platform track](10-component-platform.md)'s CP5 out-of-tree SDK — exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
-6. **Node and transport envelope:** consume the IO0/IO4 queue, stream/network, and exact-destination mechanisms, then provide only the allocator, startup, clock/timer, executor, and packaging surface needed by the pinned ROS 2 transport profile.
-7. **Minimal transport topic profile:** implement the fixed session, publisher/subscriber, key expression, classic CDR payload, message attachment, static declaration, and QoS subset for two nodes without introducing ambient discovery, a router, POSIX paths, or wildcard network authority.
-8. **Observed demo:** record the Raspberry Pi 5 run where one node publishes middleware-backed topic data and the other receives it, with bounded semantic/wire evidence and failure markers.
-9. **Hardening:** repeat the run, inject denial/restart/resource cases, and make the narrow RPi5 gates stable before resuming broader tracks.
+1. **RV64 reference profile:** the pinned `riscv64-sel4-qemu-virt` profile replays the architecture-neutral corpus.
+2. **Duo platform risks:** the 63.25 MiB memory fit, PLIC context, and C906 MAEE/page-table behavior are measured and explicit.
+3. **Physical seL4 and generation:** elfloader, upstream seL4, `slime-root`, and the exact `riscv64-sel4-milkv-duo` generation boot on the named board.
+4. **Component and fault evidence:** three sample-plane runs produce byte-identical normalized traces with zero framing errors; a fourth run emits the bounded early-fault diagnostic.
+5. **Recovery:** every boot autonomously cold-resets to vendor Linux.
+6. **Next decision boundary:** choose a product workload only through a new roadmap item; architecture completion does not imply ROS, storage, network, USB, display, sensor, actuator, Raspberry Pi 5, or Framework support.
 
 The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitly defer open defects before opening a new roadmap gate. A green verification suite is a precondition for milestone work, not a milestone itself.
 
@@ -72,32 +69,34 @@ flowchart TD
     CP8["CP8 platform prefix assets\ncomplete"]
     CP9["CP9 compatibility matrix\ncomplete"]
     CP10["CP10 consumer upgrade + rollback\ncomplete"]
-    R0["R0 minimal Zenoh topic profile"]
-    RP0["RP0 demo contract"]
-    RP1["RP1 target-qualified build path"]
-    RP2["RP2 AArch64 QEMU product slice"]
-    RP3["RP3 Raspberry Pi 5 serial boot"]
-    RP4["RP4 Arm component data path"]
-    RP5["RP5 node + transport envelope"]
-    RP6["RP6 minimal Zenoh nodes"]
-    RP7["RP7 observed RPi5 data demo"]
-    RP8["RP8 repeatability and fault envelope"]
-    R1["R1 broader ROS 2 topic wire profile"]
-    R2["R2 services/actions"]
+    R0["R0 minimal Zenoh topic profile\ndeferred"]
+    RP0["RP0 demo contract\ncomplete"]
+    RP1["RP1 target-qualified build path\ncomplete"]
+    RP2["RP2 AArch64 QEMU product slice\ncomplete"]
+    RP3["RP3 Raspberry Pi 5 serial boot\ndeferred"]
+    RP4["RP4 Arm component data path\ndeferred"]
+    RP5["RP5 node + transport envelope\ndeferred"]
+    RP6["RP6 minimal Zenoh nodes\ndeferred"]
+    RP7["RP7 observed RPi5 data demo\ndeferred"]
+    RP8["RP8 repeatability and fault envelope\ndeferred"]
+    R1["R1 broader ROS 2 topic wire profile\ndeferred"]
+    R2["R2 services/actions\ndeferred"]
     Framework["Framework daily-driver hardware\ndeferred"]
-    RV64["P3 RV64\ndeferred"]
+    RV64["P3 RV64 QEMU\ncomplete"]
+    Duo["P3.E seL4 on Milk-V Duo\ncomplete architecture lane"]
     X1["X1 Linux personality\noptional/deferred"]
 
     Backlog --> Foundations
     Foundations --> C7 --> C8
-    Foundations --> P0 --> P1 --> P5 --> P4
+    Foundations --> P0 --> P1 --> P5
     P1 --> P2
+    P5 --> RV64 --> Duo
     C8 --> RP0
     P0 --> RP1
     P1 --> RP1
-    RP0 --> RP1 --> RP2 --> RP3 --> RP4 --> RP5 --> RP6 --> RP7 --> RP8
+    RP0 --> RP1 --> RP2 -.->|deferred| RP3 --> RP4 --> RP5 --> RP6 --> RP7 --> RP8
     P5 --> RP2
-    P4 --> RP3
+    P4 -.->|deferred| RP3
     C7 --> RP4
     C8 --> RP4
     Backlog --> CP0
@@ -120,11 +119,10 @@ flowchart TD
     IO0 --> IO1 --> IO2 --> IO3 --> IO4
     IO4 --> RP5
     C9 -.->|clock/timer, wait sets| RP5
-    IO4 --> R0 --> RP6
+    IO4 -.->|when resumed| R0 --> RP6
     X1 -.->|only if chosen| RP6
     RP8 --> R1 --> R2
     IO4 --> R1
-    P2 -.->|later| RV64
     Foundations -.->|later| Framework
     IO2 -.->|block substrate| Framework
     IO4 -.->|network substrate| Framework
@@ -152,7 +150,7 @@ Every track preserves these rules:
 5. New IPC, I/O, ROS profile, demo trace, and persistent protocols are schema-first under `../contracts/`; generated or validated bindings cannot disagree on layout. Device-specific requests remain separate protocols and never become variants of one universal opcode.
 6. Generation, storage, protocol, queue, request epoch, lease, retry, history, payload, and demo evidence data are deterministic, versioned, bounded, integrity checked, and rejected when malformed, stale, or unsupported.
 7. Activation never overwrites the running generation in place, and a failed pending generation cannot consume the last selectable boot root. A generation in a superseded wire format counts as failed: the root refuses it (`UnsupportedVersion`, distinct from `BadMagic`) rather than migrating it, and the selector spends the pending attempt before decoding, so an undecodable candidate rolls back to known-good within its declared attempts instead of retrying forever. Format bumps are therefore *not* rollback-compatible by migration — they are rollback-*safe* by refusal, which `just sel4_boot_selection_check` observes (B64). Superseded `contracts/generation/vN` schemas are retained as format history and type-checked, never generated from.
-8. A QEMU pass cannot complete a physical Raspberry Pi 5 or Framework milestone.
+8. QEMU cannot complete a physical milestone, and evidence from Milk-V Duo, Raspberry Pi 5, or Framework cannot complete another board's target-specific gate.
 9. Every executable generation names one exact admitted target profile; the immutable disk-backed selector and root admission reject architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
 10. Architecture ports preserve the same capability, fault, wait/wake, resource-reclamation, generation, and rollback semantics. ISA-specific register frames and page tables are mechanisms, not portable contracts.
 11. ROS wire or node interoperability is not authority. Names, types, domains, graph visibility, parameters, files, devices, and network destinations grant nothing without explicit capabilities.
@@ -160,29 +158,33 @@ Every track preserves these rules:
 
 ## Release gates
 
+### RV64 Milk-V Duo architecture release
+
+Requires P3, P3.D, and P3.E. The release must boot a target-qualified verified generation through upstream seL4 on the named Duo, reach `slime-root` ready, reject incompatible artifacts before mapping executable bytes, and replay the selected architecture-neutral root/component corpus with physical serial evidence. It does not claim a product workload or qualify untested storage, USB, network, display, sensor, or actuator paths.
+
 ### RPi5 ROS 2 two-node demo release
 
-Requires RP0–RP8 and the IO slices RP5 consumes. The release must boot a target-qualified Slime OS generation from reproducible Raspberry Pi 5 media, run two local ROS 2 nodes under the selected generation-declared transport route, move bounded topic data from publisher to subscriber, emit deterministic semantic and wire evidence of the exchange, and preserve the capability/component/generation invariants above. QEMU evidence and host checks support the claim but do not replace the physical board run.
+Deferred, with RP0–RP2 retained as completed evidence. It still requires RP0–RP8 and the IO slices RP5 consumes; only a physical Raspberry Pi 5 run can satisfy its board-specific release claim. Duo or QEMU evidence cannot substitute.
 
 ### AArch64 native architecture release
 
-Requires P0, P1, and P2. It is a prerequisite for the RPi5 demo path but is not sufficient by itself: it proves `aarch64-qemu-virt`, not Raspberry Pi 5 hardware.
+Requires P0, P1, and P2. It remains valid architecture evidence for `aarch64-qemu-virt`, but is not Raspberry Pi 5 or Milk-V Duo hardware evidence.
 
 ### ROS-interoperable external wire release
 
-Requires the minimal RPi5 demo path and IO4 to be stable unless explicitly reprioritized, then R1 and R2 with their deterministic peer fixtures. R0 proves the minimum topic path; R1/R2 broaden it to external `rmw_zenoh` peers, services, and actions.
+Deferred with the robotics demo unless explicitly reprioritized. R0 proves the minimum topic path; R1/R2 broaden it to external `rmw_zenoh` peers, services, and actions.
 
 ### Framework daily-driver release
 
-Deferred. It still requires the Framework H1–H14 evidence plus the common IO slices each H milestone consumes, but it is no longer on the near-term critical path.
+Deferred. It still requires Framework H1–H14 plus the common IO slices each H milestone consumes. No Duo architecture, serial, storage, or component evidence satisfies a Framework-specific gate.
 
 ### Existing-workload release
 
-Deferred unless selected as the implementation route for RP6. If used, X1 or a target-specific alternative must be admitted for Raspberry Pi 5/AArch64, not inherited from x86-64.
+Deferred unless selected as the implementation route for a future product workload. Any backend must be admitted for that workload's exact target profile rather than inherited from x86-64 or another architecture.
 
 ## Verification policy
 
-Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. Architecture changes run the target-specific QEMU gate before any physical board claim. Raspberry Pi 5 promotion requires a recorded board run with exact image, firmware/media, generation identity, serial output, and declared device/storage authority.
+Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. Architecture changes run the target-specific QEMU gate before any physical board claim. Milk-V Duo promotion requires the P3 RV64 QEMU corpus plus a recorded Duo run with exact image, firmware, generation, memory-placement, and serial evidence. Raspberry Pi 5 and Framework promotion retain their own recorded board and device-authority requirements.
 
 Documentation-only roadmap edits do not run runtime tests; their verification is link, status, identifier, and content consistency, currently guarded by `just devlog_check` when devlog entries are added or touched.
 

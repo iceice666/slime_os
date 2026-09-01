@@ -243,10 +243,25 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
     sel4::debug_println!("SLIME_CHILD ro write probe vaddr={ro_pattern_addr:#x}");
     // SAFETY: the root maps a read-only frame covering `SHARED_RO_VADDR`. The
     // store is *expected* to fault; the root supervises that fault and advances
-    // this thread's PC past it. If the mapping were wrongly writable the store
-    // would simply succeed, which the check below detects and reports.
+    // this thread's PC past it. RV64 emits this store with compression disabled
+    // so the supervisor's four-byte advance cannot land inside a compressed
+    // instruction. If the mapping were wrongly writable the store would simply
+    // succeed, which the check below detects and reports.
+    #[cfg(target_arch = "aarch64")]
     unsafe {
         (ro_pattern_addr as *mut u64).write_volatile(SHARED_RO_INTRUSION);
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!(
+            ".option push",
+            ".option norvc",
+            "sd {value}, 0({address})",
+            ".option pop",
+            value = in(reg) SHARED_RO_INTRUSION,
+            address = in(reg) ro_pattern_addr,
+            options(nostack),
+        );
     }
     // SAFETY: as for the read in probe 1; the read-only mapping permits loads.
     let after_write = unsafe { (ro_pattern_addr as *const u64).read_volatile() };
@@ -271,9 +286,8 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
     // fault at this address or did not.
     sel4::debug_println!("SLIME_CHILD wx exec probe vaddr={SHARED_RW_VADDR:#x}");
     branch_to_data_page(SHARED_RW_VADDR);
-    // Reached either way: on an instruction abort the root resumes this thread
-    // at `x30`, which is exactly where a genuinely-executed page would also
-    // have returned. Only the root can tell the two apart.
+    // Reached either way: on an instruction fault the root resumes at the
+    // architecture's link register, exactly where a successful call returns.
     sel4::debug_println!("SLIME_CHILD wx exec probe returned vaddr={SHARED_RW_VADDR:#x}");
 
     // Hand every observation to the root in one bounded message. The root, not
@@ -457,20 +471,15 @@ fn call_grow(service: sel4::cap::Endpoint, delta: sel4::Word) -> (i64, sel4::Wor
 
 /// Branch into `addr`, a page the root mapped as non-executable data.
 ///
-/// The `blr` sets `x30` to the instruction after it, so the root can resume
-/// this thread at its link register once it has recorded the instruction abort.
-/// That recovery is bounded and lands exactly once: the branch is not retried.
+/// The indirect call writes the architecture's link register, so the root can
+/// resume this thread at the instruction after it records the execute fault.
 fn branch_to_data_page(addr: usize) {
-    // SAFETY: this block performs no memory access. `blr` writes the link
-    // register, and `clobber_abi("C")` declares every caller-saved register —
-    // including `x30` — as clobbered, so the compiler preserves anything live.
-    // The branch is expected to raise an instruction abort; the root supervises
-    // it and resumes this thread at `x30`, the instruction after the branch.
+    #[cfg(target_arch = "aarch64")]
     unsafe {
-        core::arch::asm!(
-            "blr {target}",
-            target = in(reg) addr,
-            clobber_abi("C"),
-        );
+        core::arch::asm!("blr {target}", target = in(reg) addr, clobber_abi("C"));
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!("jalr ra, 0({target})", target = in(reg) addr, clobber_abi("C"));
     }
 }
