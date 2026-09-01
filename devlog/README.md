@@ -380,3 +380,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-30 | [B91: 611 pinned slots, four reasons, and the label that was false for 185 of them](2026-08-30-b91-slot-pin-reasons/index.md) | Change | Verified | B91 |
 | 2026-08-30 | [B91 follow-ups: two proposed gates measured, refuted, and replaced by one](2026-08-30-b91-followups-audit/index.md) | Audit | Verified | B91 |
 | 2026-08-30 | [Repository hygiene ownership and contract-check consolidation](2026-08-30-repository-hygiene/index.md) | Change | Verified | none |
+| 2026-09-01 | [The SDK publish workflow trusted its operator for three separate things](2026-09-01-sdk-publication-guards/index.md) | Change | Verified | CP7, CP9 |
