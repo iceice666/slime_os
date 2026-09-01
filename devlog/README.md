@@ -394,3 +394,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-01 | [P6.A - the H1V1 handoff probe, its builder, and its gate](2026-09-01-p6a-nt98690-probe/index.md) | Change | Verified | P6.A |
 | 2026-09-02 | [P6.B - seL4 and slime-root on the H1V1](2026-09-02-p6b-sel4-nt98690-h1v1/index.md) | Change | Verified | P6.B |
 | 2026-09-02 | [P6.C - interactive Slisp over UART0 on the H1V1](2026-09-02-p6c-nt98690-slisp/index.md) | Change | Verified | P6.C |
+| 2026-09-02 | [System-image closures replace composition build variants](2026-09-02-system-image-closure-roadmap/index.md) | Decision | Proposed | CP11, CP12, CP13, CP14, CP15 |

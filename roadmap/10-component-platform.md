@@ -1,8 +1,8 @@
 # Component specification and out-of-tree development track
 
-**Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, derive generation inputs from that specification, and support components authored, built, released, and upgraded outside this repository through a reproducible SDK whose source remains owned here. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to the existing seL4 product path rather than the full platform that document describes.
+**Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, derive generation inputs from that specification, support components authored, built, released, and upgraded outside this repository through a reproducible SDK whose source remains owned here, and close the remaining host-build gap with one canonical system-image closure that deterministically produces a bootable image. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to the existing seL4 product path rather than the full platform that document describes.
 
-**Status:** CP0–CP10 complete. CP7's hosted-publication clause closed 2026-08-26: SDK 1.0.0 and 1.1.0 are immutable commits and signed tags on the canonical repository, both recording a source commit present on `origin/main`. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
+**Status:** CP0–CP10 complete. CP11–CP15 are planned; CP11 is the next open gate. CP7's hosted-publication clause closed 2026-08-26: SDK 1.0.0 and 1.1.0 are immutable commits and signed tags on the canonical repository, both recording a source commit present on `origin/main`. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -15,10 +15,13 @@
 - This track is independent of [D1–D7](08-native-development.md). D4's `ExecutableFactory`/`EXECUTABLE_ADMIT` authority is a *runtime*, in-booted-system, ephemeral admission mechanism for un-persisted dev-loop execution; CP4 is a *host-side, build-time* admission mechanism that produces an ordinary, persistent, normally signed generation. Neither depends on the other, and neither milestone should be implemented in terms of the other's mechanism.
 - CP5's "separate checkout" means a genuinely distinct git repository, not a new directory inside this repository's Cargo workspace. CP3's in-repo crate split is a necessary mechanical precondition but is explicitly not sufficient by itself to claim components can be developed "out-of-tree" — that claim is CP5's alone, mirroring how this repository already refuses to conflate QEMU evidence with physical-board evidence elsewhere in this roadmap.
 - CP5's completed exit condition covered a temporary pinned SDK bundle and the RP4 QEMU data path only. CP6–CP10 extended that evidence to a repository-owned deterministic exporter, a publication path first proven against a local clone of the canonical repository and since exercised against the hosted repository itself, downloadable per-profile platform build inputs, evidence-backed compatibility declarations, and a pinned consumer upgrade and rollback path. They did not retroactively widen CP5's claim.
-- Converting every remaining `sel4-*.zti` fixture to spec-derived form is deferred follow-on work once CP1's generator is proven on `valid.zti` and one `sel4-*.zti`; CP1's exit condition does not require converting all of them.
+- CP1 intentionally proved spec derivation on `valid.zti` and `sel4-channel.zti` without converting every remaining `sel4-*.zti` fixture. CP12 owns that complete migration. Until CP15 cuts over the final caller, the existing composition files and plane flags remain compatibility inputs rather than a second permanent convention.
 - CP6–CP10 do not move authoritative runtime, protocol, contract, target, or toolchain sources out of this repository. The SDK repository is a generated release mirror with one-way synchronization from `slime_os`; fixes land here first and are exported, never patched independently in the mirror.
 - SDK release metadata is a persisted cross-repository format and therefore remains a versioned Zutai contract under `contracts/`. The SDK adds no per-component signature, provenance trust root, or root-side admission path: ELF content hashes and the existing whole-generation release signature remain authoritative.
 - Publishing a `bcm2712-rpi5` prefix proves that an external component can be built and target-qualified against that exact platform input. It does not claim physical Raspberry Pi 5 boot support; only the existing physical-board gates can make that claim.
+- A system-image closure describes reproducible build inputs and their identities; it does not absorb the test oracle. QEMU arguments, disk/network fixtures, injected device behavior, timeouts, expected markers, and forbidden markers belong to a separate versioned test-run contract that references the image closure it exercises.
+- Scenario or fault injection that changes executable bytes is a distinct component or root implementation identity in the closure. It is never an ambient environment switch omitted from the build key. Runtime test data that does not change image bytes stays in the test-run contract.
+- CP11–CP15 are host-side build and verification work. They do not implement D1–D7's in-system compiler, executable admission, or live update path, and they do not widen any physical-board claim.
 
 ## Sequencing
 
@@ -32,6 +35,11 @@
 8. CP8 depends on CP6 and CP7 and publishes the platform-specific seL4 prefixes that an external build otherwise has to borrow from a `slime_os` checkout.
 9. CP9 depends on CP7 and CP8 and defines release versioning and the tested compatibility matrix; an untested cross-release pairing remains unsupported rather than inferred from SemVer.
 10. CP10 depends on CP9 and proves the consumer-side pin, update, generation rebuild, boot, and rollback workflow across two immutable SDK releases.
+11. CP11 depends on CP1 and CP8: the logical system model and the target-specific platform inputs already exist, so this slice defines the closure that binds them without duplicating either contract.
+12. CP12 depends on CP11 and converts every current seL4 test composition to a spec-derived closure while preserving each resolved generation byte-for-byte.
+13. CP13 depends on CP12 and replaces the builder's plane flags, variant tables, and source-owned output paths with the generic closure entry point.
+14. CP14 depends on CP13 and makes every remaining generation delta, compile-time scenario, selector role, physical instrumentation profile, and negative mutation an explicit identity-bearing closure or test-run input.
+15. CP15 depends on CP14 and cuts every QEMU checker and SDK consumer over to closure identities, deletes the legacy build surface, and proves the complete corpus reproducible from clean roots.
 
 ## CP0 — Component specification model
 
@@ -452,3 +460,163 @@ A separate consumer repository moves between two immutable SDK releases, boots t
 **Gates:** `just component_sdk_upgrade_check`, `just component_sdk_compatibility_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
 **Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+
+## CP11 — Canonical system-image and test-run closure contracts
+
+**Status:** Planned.
+
+**Depends on:** CP1, CP8.
+
+### Deliverables
+
+- define `contracts/system-image-closure/v1/schema.zt` as the canonical, bounded description of one reproducible bootable-image build, referencing rather than restating the selected `system-spec/v1`, component implementations, target profile, SDK/toolchain release, seL4 platform prefix, root/loader role, release inputs, normalized build parameters, and expected output classes;
+- define `contracts/system-test-run/v1/schema.zt` for execution-only inputs: one image-closure identity, emulator or board profile, disk/network/device fixtures, bounded fault controls, timeout, expected marker-contract identity, and forbidden outcomes;
+- add generated Python bindings and one resolver that verifies every referenced digest, target/profile pairing, implementation selection, platform asset, and build parameter before invoking Cargo, the generation builder, or the image packager;
+- provide one non-interactive host entry point accepting a resolved image closure and an output directory, with no composition name, plane flag, implicit output path, ambient component mapping, or undeclared environment override;
+- emit a versioned build-result record naming the input closure identity and the identities of the generation, root, loader, final image, and identity manifest.
+
+### Required checks
+
+- two isolated resolutions of one closure are byte-identical and reject a missing, changed, wrong-target, wrong-profile, or unrecorded input before compilation;
+- changing any executable-affecting source, toolchain, platform, parameter, external ELF, generation input, or root role changes the closure identity, while changing only a test-run marker oracle does not;
+- the resolver proves that all paths used by a build are reachable from the closure or the selected immutable release, with no fallback to the checkout's ambient `build/`, environment, current directory, or component registry;
+- representative channel, component-graph, and external-component closures reproduce their existing `generation.bin` and packaged image bytes exactly;
+- malformed and excessive closure/test-run records fail through their generated Zutai decoders and declared bounds.
+
+### Planned verification target
+
+```sh
+just system_image_closure_check
+```
+
+### Exit condition
+
+One canonical, versioned image closure resolves in two clean build roots to the same generation and bootable seL4 image, and one separate test-run record boots that image without contributing any executable build input.
+
+## CP12 — Complete spec derivation for every test composition
+
+**Status:** Planned.
+
+**Depends on:** CP11.
+
+### Deliverables
+
+- add a reviewed `system-spec/v1` source for every one of the 42 current `contracts/generation-manifest/v1/compositions/*.zti` compositions, preserving grants, placements, slot-pin reasons, notification bindings, state, budgets, fabric graphs, boot profiles, and target requirements;
+- extend `generate-generation-from-spec.py` only where an existing manifest field is genuinely not derivable from the current component/system vocabulary, adding the narrow owning contract field rather than a fixture-name branch;
+- make every composition manifest a generated output with an explicit source-closure identity and keep the current paths stable until the final cutover so existing admission and layout checks compare the same artifacts;
+- preserve the distinction between one logical system and multiple declared closures: traffic/saturation/fault and matrix/matrix-unsatisfiable may share generated source functions, but each emitted closure is complete canonical data with its own identity;
+- add a closed inventory mapping all 42 legacy composition names to their system spec, image closure, expected generation identity, and owning verification gate.
+
+### Required checks
+
+- regenerating the complete composition corpus under `--check` produces no diff, and deleting or hand-editing any generated manifest fails the gate;
+- each migrated manifest and `generation.bin` is byte-identical to its pre-migration baseline unless the milestone records and reviews an unavoidable identity change before implementation;
+- every current boot-layout fixture resolves against the spec-derived manifest with the same slots and all 611 surviving pin reasons remain builder-verified;
+- the generator has no condition keyed on a composition filename, test name, plane name, or generation number;
+- all contract, generation determinism, host admission, and representative QEMU plane gates remain green throughout the migration.
+
+### Planned verification target
+
+```sh
+just system_composition_closure_check
+```
+
+### Exit condition
+
+All 42 seL4 test compositions are generated from component/system specifications and complete image closures, with byte-identical resolved manifests and generations and no hand-authored composition remaining authoritative.
+
+## CP13 — Data-driven seL4 image builder cutover
+
+**Status:** Planned.
+
+**Depends on:** CP12.
+
+### Deliverables
+
+- make `scripts/build/build-sel4.py` accept one closure plus an explicit output directory and derive the selected generation, target directories, root inputs, loader inputs, image name, and identity path entirely from resolved closure data;
+- remove the ordinary-plane `--component-graph` and `--*-plane` argument family, `VARIANT_MANIFESTS`, `VARIANT_TARGET_DIRS`, `VARIANT_IMAGES`, and every equivalent source table that maps a scenario name to build behavior;
+- replace the JSON identity manifest's `variant` authority with the canonical closure identity, system identity, target profile, root role, and output identities while retaining compatibility fields only until their last checker migrates in CP15;
+- make prebuilt and external component inputs ordinary closure implementation records rather than separate `--prebuilt-generation`, `--component-spec-root`, or `--external-component NAME=ELF` orchestration paths;
+- keep platform configuration in the existing platform/prefix release contracts: selecting QEMU, Raspberry Pi 5, or Milk-V Duo changes closure data, not Python control-flow naming a composition.
+
+### Required checks
+
+- every ordinary plane image builds through the same command shape and no new plane requires a builder source edit;
+- selecting a closure with another target, root role, component implementation, or output directory cannot reuse a stale Cargo target, generation, root ELF, image, or identity record;
+- the generic builder reproduces every CP12 baseline and refuses output collisions between distinct closure identities;
+- an external SDK consumer builds a closure using only its immutable SDK release and verified prefix assets, with no path into this checkout's `build/` tree;
+- source checks prove the removed flags and variant mapping tables cannot return.
+
+### Planned verification target
+
+```sh
+just system_image_builder_check
+```
+
+### Exit condition
+
+One data-driven command builds every ordinary product and test image from its closure, and adding another composition requires only contract data and its behavioral checker, never a new builder flag, constant, or output-path branch.
+
+## CP14 — Explicit scenario, selector, and negative-test identities
+
+**Status:** Planned.
+
+**Depends on:** CP13.
+
+### Deliverables
+
+- replace `SLIME_GENERATION_NUMBER`, `SLIME_FABRIC_LIMIT_OVERRIDE`, and `SLIME_FABRIC_QOS_OVERRIDE` with canonical closure data for saturation, fault, and unsatisfiable-matrix generations;
+- model executable-changing component scenarios such as proxy early exit, stream early exit, generation-command cases, boot-selection failure, and recovery images as named implementation/build profiles whose normalized parameters and resulting ELF identities are part of the closure;
+- model the embedded-generation root, disk boot selector, root fixture, reclamation unwind probe, and board instrumentation as closed root roles or platform-qualified instrumentation profiles rather than variant branches;
+- represent B40 child-CSpace mutations and similar deliberately invalid builds as negative build cases referencing a valid base closure and one closed mutation, never as valid product closures;
+- move QEMU disks, device topology, corruption schedules, runtime fault controls, timeouts, and marker contracts into `system-test-run/v1` whenever they do not alter executable bytes.
+
+### Required checks
+
+- no executable or generation byte can change through an environment variable absent from the closure identity;
+- each scenario implementation builds byte-identically twice, differs from its base implementation, and is admitted only by closures that explicitly select it;
+- product closures cannot select test-only scenarios, root mutations, or board instrumentation, and wrong-platform instrumentation fails before compilation;
+- boot-selector tests prove the selector image contains no embedded generation while embedded-generation closures prove the opposite from their build-result records;
+- every negative build case fails for its declared reason and cannot emit a signed generation or a bootable image presented as valid.
+
+### Planned verification target
+
+```sh
+just system_image_scenario_check
+```
+
+### Exit condition
+
+Every remaining build-time distinction is explicit, identity-bearing closure data or a separately typed negative/test-run input; no ambient override or variant branch can silently change executable, generation, root, or image bytes.
+
+## CP15 — Whole-corpus closure cutover and legacy deletion
+
+**Status:** Planned.
+
+**Depends on:** CP14.
+
+### Deliverables
+
+- migrate every seL4 QEMU plane checker, boot-layout checker, gate-control mutation, SDK admission/upgrade check, and architecture replay to build or consume an image by closure identity and build-result record;
+- preserve each checker's behavioral ownership: marker chains, disk/network fixtures, corruption schedules, negative controls, and physical evidence rules remain in the owning checker or referenced test-run contract rather than moving into the image builder;
+- delete the legacy plane flags, variant compatibility fields, ambient generation/component mappings, duplicate output-path constants, and any composition loader that bypasses the closure resolver;
+- add one aggregate inventory gate proving every shipped/tested image is reachable from exactly one canonical closure and every closure is exercised by at least one owning build or boot gate;
+- publish the closure builder and contracts through the component SDK so an external consumer can compose target-qualified components, build a signed generation, package a bootable image, and invoke its declared QEMU test run without a `slime_os` checkout.
+
+### Required checks
+
+- the full existing seL4 gate set and `sel4_gate_control_check` pass through closure-derived images with their original behavioral assertions intact;
+- two clean complete-corpus builds produce identical closure, generation, root, loader, image, and build-result identities for every non-negative case;
+- a source guard rejects reintroduction of `--*-plane`, `VARIANT_*`, undeclared `SLIME_*` build knobs, or checker-owned hard-coded image paths that bypass build results;
+- the external SDK fixture builds and boots one complete system closure using only immutable published inputs, and rollback to the previous SDK release reproduces its previous image identity;
+- `just contracts_check`, `just generation_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`, and the complete QEMU aggregate pass after legacy deletion.
+
+### Planned verification target
+
+```sh
+just system_image_closure_aggregate_check
+```
+
+### Exit condition
+
+Every current test composition and supported product image is built, identified, and exercised through a canonical closure; the legacy variant builder surface is deleted; and a clean external consumer can turn one declared closure into the same verified bootable image without repository-private orchestration.
