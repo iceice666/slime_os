@@ -295,7 +295,7 @@ def prove_refusals(root: Path, url: str) -> None:
         + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
         + component_sdk.VENDORED
         + component_sdk.LINKER_SCRIPTS
-        + (component_sdk.TARGET_SPEC_SOURCE,)
+        + component_sdk.target_spec_source_paths()
     ):
         target = mirror / relative
         if target.exists():
@@ -641,7 +641,12 @@ def prove_deletion_is_harmless(root: Path) -> None:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="slime-component-sdk-release-") as temporary:
+    # Same teardown race the publisher guards: this tree holds the stand-in
+    # remote and every clone the arms below create, so a git child writing into
+    # `.git` during cleanup must not turn a passing gate into a failure.
+    with tempfile.TemporaryDirectory(
+        prefix="slime-component-sdk-release-", ignore_cleanup_errors=True
+    ) as temporary:
         root = Path(temporary)
         url = canonical_remote(root)
         slisp = build_product_slisp(root / "slisp.elf")

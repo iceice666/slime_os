@@ -147,7 +147,11 @@ def main() -> None:
     )
     arguments = parser.parse_args()
 
-    with tempfile.TemporaryDirectory(prefix="slime-sdk-preflight-") as temporary:
+    # This clones the hosted release, so cleanup can race a git child writing
+    # into `.git`. A teardown error must not fail a computed answer.
+    with tempfile.TemporaryDirectory(
+        prefix="slime-sdk-preflight-", ignore_cleanup_errors=True
+    ) as temporary:
         root = Path(temporary)
         previous = hosted_record(arguments.sdk_url, arguments.branch, root / "hosted")
 
