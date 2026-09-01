@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
-**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F is an open product-shell follow-up that does not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
+**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
 
 **Decision:** Milk-V Duo remains the current physical execution target because P3.D established the observed hands-off deployment loop and P3.E used it to qualify upstream seL4, `slime-root`, a target-qualified generation, repeated sample-plane semantics, timer delivery, bounded fault evidence, and autonomous recovery. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
 
