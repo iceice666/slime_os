@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
-**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, and P5 are complete. P2.3–P2.6 are superseded by P5. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
+**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F is an open product-shell follow-up that does not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
 
 **Decision:** Milk-V Duo remains the current physical execution target because P3.D established the observed hands-off deployment loop and P3.E used it to qualify upstream seL4, `slime-root`, a target-qualified generation, repeated sample-plane semantics, timer delivery, bounded fault evidence, and autonomous recovery. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
 
@@ -38,7 +38,8 @@ A profile name identifies a complete executable and platform contract, not only 
 4. P2 preserves the established AArch64 QEMU vertical slice and architecture-neutral corpus used as the first seL4 product reference.
 5. P3 establishes the RV64 QEMU reference profile before any physical Duo kernel claim.
 6. P3.D supplies the observed Duo handoff and deployment loop; P3.E closed the memory-fit, PLIC-layout, C906 memory-attribute, seL4/root, generation, component, timer, and bounded-fault gates on that exact board.
-7. P4 and RP3–RP8 retain their Raspberry Pi 5 acceptance conditions but are deferred until their physical evidence path is available and reprioritized.
+7. P3.F reuses that qualified board path and P5.2's resident product graph to add an interactive Slisp session without broadening P3.E into storage, USB, network, display, sensor, or actuator qualification.
+8. P4 and RP3–RP8 retain their Raspberry Pi 5 acceptance conditions but are deferred until their physical evidence path is available and reprioritized.
 
 ## P0: Architecture, target, and executable-artifact contracts
 
@@ -317,6 +318,35 @@ The first three gates are go/no-go evidence, not implementation completion:
 **Observed 2026-09-01:** the named Milk-V Duo booted a verified Slime generation on upstream seL4, reached `slime-root` ready, ran the architecture-neutral sample plane three times with byte-identical normalized semantic traces and zero framing errors, diagnosed the bounded early-fault control, and returned to vendor Linux after every boot without physical intervention. This closes only the declared RV64 architecture claim; storage, USB, network, display, sensor, actuator, ROS, and Framework behavior remain unclaimed.
 
 **Evidence:** [`devlog/2026-08-31-p3e-sel4-milkv-duo/`](../devlog/2026-08-31-p3e-sel4-milkv-duo/index.md)
+
+### P3.F — Interactive Slisp shell on the Milk-V Duo
+
+**Status:** Not started. This is a bounded product-shell follow-up to P3.E, not a new architecture claim or general Duo peripheral qualification.
+
+**Depends on:** P3.E for the qualified physical target and recovery loop, and P5.2 for the resident `init`/`console`/`spawn-service`/Slisp product graph.
+
+### Deliverables
+
+- build a distinct `riscv64-sel4-milkv-duo` product FIT containing the existing target-qualified resident graph and RV64 Slisp ELF; keep P3.E's sample and early-fault images unchanged as architecture regression evidence;
+- add a Duo-only UART0 receive adapter from the platform's pinned MMIO facts and feed received bytes through Slisp's existing `InputRead` capability path; Slisp must not map UART registers or gain ambient console/device authority, and QEMU's PL011 address must not leak into the physical build;
+- add `just duo_slisp_check <serial>` to digest-deploy the product FIT through P3.D's existing USB-NCM path, drive a bounded interactive session over the same serial connection, preserve the stock vendor boot path, and use an explicit test-only terminator to invoke the already-qualified cold-reset recovery after assertions;
+- keep the ordinary product shell resident when no byte is available: empty UART RX reports `WouldBlock`, and no hidden scripted input or test-only exit behavior is present in the shipped product image.
+
+### Required checks
+
+- `just slisp_core_check` and `just sel4_component_graph_check` pass before physical execution, preserving the evaluator and product-graph reference behavior;
+- the named Duo boots the product generation, reports all four required resident instances healthy, and presents exactly one `slisp>` prompt with zero serial framing errors;
+- the physical gate sends `(define answer 40)`, `(+ answer 2)`, and `sysinfo`, then observes `40`, `42`, the generation-authorized spawn request, the target-qualified `sysinfo` result, and clean child supervision without restarting the Slisp session;
+- bytes reach Slisp only through its declared input capability, output remains on its declared console endpoint, and the session stays responsive across empty FIFO intervals;
+- the gate records image, generation, component, board, firmware, and transcript identities, then cold-resets and observes vendor Linux return without physical intervention.
+
+### Planned verification target
+
+`just duo_slisp_check /dev/serial/by-id/<duo-uart>`
+
+### Exit condition
+
+On the named Milk-V Duo, a digest-verified target-qualified product image reaches the resident Slisp prompt, evaluates persistent state across multiple serial commands, launches `sysinfo` only through its declared spawn profile, and returns to vendor Linux through the bounded test terminator. The evidence must be a committed physical transcript; a QEMU prompt or P3.E's non-interactive sample-plane trace cannot close P3.F.
 
 ## P4: Raspberry Pi 5 physical architecture qualification
 
