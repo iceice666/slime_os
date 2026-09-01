@@ -16,6 +16,12 @@ component_sdk_out_of_tree_check: external_component_admission_check
 component_sdk_export_check: external_component_admission_check
     python3 scripts/check/check-component-sdk-export.py
 
+# Read-only and credential-free: it gates a publication before the release job.
+# Report the SDK version a publication from this commit must claim
+[group('component sdk')]
+component_sdk_preflight *ARGS:
+    python3 scripts/check/check-component-sdk-preflight.py {{ARGS}}
+
 [group('component sdk')]
 component_sdk_release_check: component_sdk_export_check
     python3 scripts/check/check-component-sdk-release.py
