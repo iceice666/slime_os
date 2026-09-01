@@ -306,7 +306,16 @@ def main() -> None:
     assert_commit_present(ROOT, commit)
     profiles = tuple(arguments.profile) or component_sdk.DEFAULT_PROFILES
 
-    with tempfile.TemporaryDirectory(prefix="slime-sdk-publish-") as temporary:
+    # `ignore_cleanup_errors` because the tree being removed holds live git
+    # clones. `git commit`, `git tag`, and `git push` can leave a short-lived
+    # child writing into `.git`, and a write that lands between the walk and the
+    # `rmdir` makes cleanup raise `Directory not empty` *after* publication has
+    # already succeeded and printed its result. Reporting a teardown race as a
+    # failed release is strictly worse than leaking a temporary directory: the
+    # operator retries a publication that in fact completed.
+    with tempfile.TemporaryDirectory(
+        prefix="slime-sdk-publish-", ignore_cleanup_errors=True
+    ) as temporary:
         root = Path(temporary)
         # The export always runs against a detached checkout of the recorded
         # commit, never the working tree. That is what makes the recorded commit

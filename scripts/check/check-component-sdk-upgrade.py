@@ -498,7 +498,11 @@ def prove_fault_injection(
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="slime-component-sdk-upgrade-") as temporary:
+    # Holds the stand-in remote, two SDK clones, and the consumer checkout; a
+    # git child writing into `.git` during cleanup must not fail a passing gate.
+    with tempfile.TemporaryDirectory(
+        prefix="slime-component-sdk-upgrade-", ignore_cleanup_errors=True
+    ) as temporary:
         root = Path(temporary)
         slisp = build_product_slisp(root / "slisp.elf")
         url = canonical_remote(root)

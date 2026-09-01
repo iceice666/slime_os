@@ -423,7 +423,11 @@ def prove_forged_matrix_refused(root: Path, published: dict) -> None:
 
 def main() -> None:
     product_commit = component_sdk.source_commit(ROOT)
-    with tempfile.TemporaryDirectory(prefix="slime-component-sdk-compat-") as temporary:
+    # Holds the stand-in remote and its clones; a git child writing into `.git`
+    # during cleanup must not fail a passing gate.
+    with tempfile.TemporaryDirectory(
+        prefix="slime-component-sdk-compat-", ignore_cleanup_errors=True
+    ) as temporary:
         root = Path(temporary)
         url = canonical_remote(root)
         first, second, first_commit, second_commit = prove_two_real_releases(root, url)
