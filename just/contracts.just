@@ -56,6 +56,13 @@ system_spec_check: component_spec_check
     python3 scripts/check/check-system-spec.py
     python3 scripts/generate/generate-generation-from-spec.py --check
 
+
+[group('contracts')]
+system_image_closure_check: system_spec_check
+    python3 scripts/generate/generate-system-image-closure-bindings.py --check
+    python3 scripts/generate/generate-system-test-run-bindings.py --check
+    python3 scripts/check/check-system-image-closure.py
+
 [group('contracts')]
 fabric_manifest_check: contracts_check sel4_stream_check
     python3 scripts/check/check-fabric-manifest.py

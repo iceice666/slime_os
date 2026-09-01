@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+
+"""Build one seL4 image from a canonical CP11 image closure."""
+
+from __future__ import annotations
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
+
+import argparse
+import copy
+import hashlib
+import importlib.util
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+from types import ModuleType
+
+from harness import ROOT
+from system_image_closure import make_build_result, resolve_closure
+
+
+def load_build_module(name: str, relative: str) -> ModuleType:
+    path = ROOT / "scripts" / relative
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+GENERATION_BUILDER = load_build_module("system_image_generation_builder", "build/build-generation.py")
+SEL4_BUILDER = load_build_module("system_image_sel4_builder", "build/build-sel4.py")
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"system image build: {message}")
+
+
+def write_json(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def clean_environment(*, toolchain: str, prefix: Path, target_profile: str) -> dict[str, str]:
+    denied = {
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_DIR",
+        "RUSTFLAGS",
+        "RUSTUP_TOOLCHAIN",
+        "SEL4_PREFIX",
+        "SLIME_B40_MUTATION",
+        "SLIME_COMPONENT_LINKER_DIR",
+        "SLIME_GENERATION",
+        "SLIME_SEL4_MANIFEST",
+        "SLIME_TARGET_PROFILE",
+    }
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("SLIME_") and name not in denied
+    }
+    environment["RUSTUP_TOOLCHAIN"] = toolchain
+    environment["SEL4_PREFIX"] = str(prefix)
+    environment["SLIME_TARGET_PROFILE"] = target_profile
+    return environment
+
+
+def build(closure: Path, output: Path) -> Path:
+    resolved = resolve_closure(closure)
+    value = resolved.compiled.value
+    output = output.resolve()
+    if output.exists() and any(output.iterdir()):
+        fail(f"output directory is not empty: {output}")
+    output.mkdir(parents=True, exist_ok=True)
+    prefix = resolved.artifacts["prefix"]
+    platform_name = value["target"]["platform"]
+    platform = SEL4_BUILDER.PLATFORMS.get(platform_name)
+    if platform is None:
+        fail(f"unsupported platform {platform_name!r}")
+    platform = copy.copy(platform)
+    object.__setattr__(platform, "prefix_dir", prefix)
+    object.__setattr__(platform, "build_dir", output / "sel4-build")
+
+    target_profile = GENERATION_BUILDER.resolve_target_profile(value["target"]["profile"])
+    environment = clean_environment(
+        toolchain=value["target"]["toolchain"],
+        prefix=prefix,
+        target_profile=target_profile.name,
+    )
+    component_target = output / "cargo" / "components"
+    old_target = GENERATION_BUILDER.COMPONENTS_TARGET_DIR
+    GENERATION_BUILDER.COMPONENTS_TARGET_DIR = component_target
+    old_environment = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ.update(environment)
+        os.environ["SLIME_SEL4_MANIFEST"] = resolved.compiled.identity.hex()
+        generation_dir = output / "generation"
+        generation_dir.mkdir()
+        manifest = GENERATION_BUILDER.assign_declared_slots(copy.deepcopy(resolved.manifest))
+        GENERATION_BUILDER.build_sel4_generation(
+            generation_dir,
+            manifest,
+            target_profile,
+            resolved.external_components,
+            toolchain=value["target"]["toolchain"],
+            prefix=prefix,
+            build_profile="closure",
+        )
+        generation = generation_dir / "generation.bin"
+
+        pins = {
+            "schema": 1,
+            "rust_sel4": {
+                "toolchain": value["target"]["toolchain"],
+                platform.root_target_key: str(resolved.artifacts["release:root-target"]),
+                platform.loader_target_key: "aarch64-unknown-none"
+                if platform.architecture == "aarch64"
+                else "riscv64imac-unknown-none-elf",
+            },
+            platform.pins_section: {},
+        }
+        old_cargo = SEL4_BUILDER.CARGO_BUILD
+        old_artifacts = SEL4_BUILDER.ARTIFACTS
+        SEL4_BUILDER.CARGO_BUILD = output / "cargo" / "image"
+        SEL4_BUILDER.ARTIFACTS = output / "artifacts"
+        try:
+            child_elf, root_elf, embedded = SEL4_BUILDER.build_application(
+                pins,
+                variant=SEL4_BUILDER.CHANNEL_VARIANT,
+                platform=platform,
+                resolved_generation=generation,
+                toolchain=value["target"]["toolchain"],
+                root_target=resolved.artifacts["release:root-target"],
+                child_target=resolved.artifacts["release:target-spec"],
+            )
+            if embedded != generation.resolve():
+                fail("root build did not embed the resolved generation")
+            loader, payload_tool = SEL4_BUILDER.build_loader(
+                pins,
+                platform,
+                toolchain=value["target"]["toolchain"],
+                loader_target=pins["rust_sel4"][platform.loader_target_key],
+            )
+            image = output / "image.elf"
+            SEL4_BUILDER.package_image(payload_tool, loader, root_elf, image, platform)
+            identity_manifest = output / "image.identity.json"
+            image_identity = {
+                "schema": 2,
+                "kind": "slime-system-image-identity",
+                "closureIdentity": resolved.compiled.identity.hex(),
+                "systemIdentity": resolved.system.identity.hex(),
+                "targetProfile": value["target"]["profile"],
+                "platform": value["target"]["platform"],
+                "rootRole": value["root"]["role"],
+                "loaderRole": value["loader"]["role"],
+                "generation": {
+                    "bytes": generation.stat().st_size,
+                    "sha256": hashlib.sha256(generation.read_bytes()).hexdigest(),
+                },
+                "root": {"path": "root.elf"},
+                "loader": {"path": "loader.elf"},
+                "image": {
+                    "bytes": image.stat().st_size,
+                    "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+                },
+            }
+        finally:
+            SEL4_BUILDER.CARGO_BUILD = old_cargo
+            SEL4_BUILDER.ARTIFACTS = old_artifacts
+    finally:
+        GENERATION_BUILDER.COMPONENTS_TARGET_DIR = old_target
+        os.environ.clear()
+        os.environ.update(old_environment)
+
+    root_output = output / "root.elf"
+    loader_output = output / "loader.elf"
+    shutil.copyfile(root_elf, root_output)
+    shutil.copyfile(loader, loader_output)
+    image_identity["root"].update(
+        bytes=root_output.stat().st_size,
+        sha256=hashlib.sha256(root_output.read_bytes()).hexdigest(),
+    )
+    image_identity["loader"].update(
+        bytes=loader_output.stat().st_size,
+        sha256=hashlib.sha256(loader_output.read_bytes()).hexdigest(),
+    )
+    write_json(identity_manifest, image_identity)
+    result, normalized, identity = make_build_result(
+        resolved,
+        output_root=output,
+        generation=generation,
+        root=root_output,
+        loader=loader_output,
+        image=image,
+        identity_manifest=identity_manifest,
+    )
+    write_json(output / "build-result.json", result)
+    (output / "build-result.normalized.json").write_bytes(normalized)
+    (output / "build-result.identity").write_text(identity + "\n", encoding="utf-8")
+    print(f"system image build: wrote closure {resolved.compiled.identity.hex()} to {output}")
+    return output
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("closure", type=Path)
+    parser.add_argument("output_dir", type=Path)
+    arguments = parser.parse_args()
+    if arguments.closure.suffix != ".zti":
+        fail("closure must be a .zti record")
+    build(arguments.closure, arguments.output_dir)
+
+
+if __name__ == "__main__":
+    main()

@@ -617,8 +617,12 @@ def sha256_file(path: Path) -> str:
 
 def file_record(path: Path) -> dict[str, object]:
     require_file(path, "build artifact")
+    try:
+        recorded = path.relative_to(ROOT)
+    except ValueError:
+        recorded = Path(path.name)
     return {
-        "path": str(path.relative_to(ROOT)),
+        "path": str(recorded),
         "bytes": path.stat().st_size,
         "sha256": sha256_file(path),
     }
@@ -1074,24 +1078,33 @@ def build_application(
     component_spec_root: Path | None = None,
     external_components: list[str] | None = None,
     prebuilt_generation: Path | None = None,
+    resolved_generation: Path | None = None,
     duo_early_fault: bool = False,
     test_terminator: bool = False,
+    toolchain: str | None = None,
+    root_target: Path | None = None,
+    child_target: Path | None = None,
 ) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
-    toolchain = text(rust_sel4, "toolchain", "rust_sel4")
+    toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
     environment = cargo_environment(toolchain, platform)
-    root_target = ROOT / text(rust_sel4, platform.root_target_key, "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+    root_target = root_target or ROOT / text(
+        rust_sel4, platform.root_target_key, "rust_sel4"
+    )
+    child_target = child_target or RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
 
     child_target_dir = CARGO_BUILD / platform.name / "child"
+    child_environment = environment.copy()
+    child_remap = f"--remap-path-prefix={child_target_dir}=./target/sel4/{platform.name}/child"
+    child_environment["RUSTFLAGS"] = f"{child_environment.get('RUSTFLAGS', '')} {child_remap}".strip()
     cargo_build(
         manifest=CHILD_MANIFEST,
         package="slime-root-child",
         target=child_target,
         target_dir=child_target_dir,
-        environment=environment,
+        environment=child_environment,
         description="build root child",
         features=child_features(),
     )
@@ -1101,12 +1114,12 @@ def build_application(
     root_environment = environment.copy()
     root_environment["SLIME_TARGET_PROFILE"] = platform.target_profile
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
-    if platform is CV1800B_DUO:
+    if platform.name == CV1800B_DUO.name:
         frequency = table(pins, platform.pins_section).get("timer_frequency_hz")
         if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
             fail(f"sel4/pins.toml [{platform.pins_section}].timer_frequency_hz must be positive")
         root_environment["SLIME_DUO_TIMEBASE_HZ"] = str(frequency)
-    if platform is QEMU_ARM_VIRT and variant == GRAPH_VARIANT:
+    if platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011
         # RX FIFO and feeds those bytes through the existing input capability.
         # Plane images keep deterministic scripts, and physical targets do not
@@ -1130,6 +1143,10 @@ def build_application(
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
         root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = bundle_identity
+        generation = None
+    elif resolved_generation is not None:
+        generation = resolved_generation.resolve()
+        root_environment["SLIME_GENERATION"] = str(generation)
     else:
         manifest = VARIANT_MANIFESTS.get(variant, "sel4")
         generation_environment = None
@@ -1142,37 +1159,14 @@ def build_application(
             generation_environment = dict(os.environ)
             generation_environment["SLIME_PRODUCT_SLISP_SHA256"] = slisp_digest
             external_components = [f"slisp-external={slisp_elf}"]
-        # B62: `traffic`, `fault`, and `saturation` share one manifest. They were
-        # three 1882-line fixtures differing in exactly two fields, and a full
-        # copy per variant is how a fixture goes stale against a rule it restates
-        # (B55). `.zti` is immediate mode by design and cannot compose, so the
-        # delta is declared here. Each variant still gets its own generation
-        # number, which is what keeps their identities — and therefore their
-        # images — distinct.
         variant_delta = VARIANT_GENERATION_DELTAS.get(variant)
         if variant_delta:
             generation_environment = generation_environment or dict(os.environ)
             generation_environment.update(variant_delta)
         if variant == FAULT_VARIANT:
-            # C8.14: the one fault this plane must *inject* rather than script.
-            # Every other degradation path -- rejection, malformed reply,
-            # timeout, cancellation, retry exhaustion, duplicate, stale,
-            # expiry, and the call and operation peer deaths -- is already
-            # driven by the traffic action's own participants. A declared
-            # interposition hop dying is the one condition no participant can
-            # ask for, because a proxy that relays correctly cannot also be
-            # absent.
             generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
         if variant in STREAM_DEATH_VARIANTS:
-            # C8.5/C8.14: the stream family's own peer death, scripted for the
-            # same reason the interposition hop's is. A publisher cannot both
-            # end its route with `FLAG_LAST` and be observed dying mid-stream,
-            # so a plane that asserts peer death is a distinct structured event
-            # has to script one. Left to a race between the peer's exit and the
-            # broker's drain -- which is what these three planes relied on --
-            # the marker appeared or did not depending on which side won, and
-            # made the fault plane's stream record differ between two boots.
             generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
         generation = build_sel4_generation(
@@ -1184,7 +1178,7 @@ def build_application(
             prebuilt_generation=prebuilt_generation,
         ).resolve()
         root_environment["SLIME_GENERATION"] = str(generation)
-        if variant == FIXTURE_VARIANT and platform is not CV1800B_DUO:
+        if variant == FIXTURE_VARIANT and platform.name != CV1800B_DUO.name:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
     if variant == RECLAMATION_VARIANT:
         rustflags = root_environment.get("RUSTFLAGS", "")
@@ -1205,6 +1199,9 @@ def build_application(
     # `SEL4_PREFIX`, so a QEMU and a board build of the same variant are
     # different binaries.
     root_target_dir = CARGO_BUILD / platform.name / VARIANT_TARGET_DIRS[variant]
+    rustflags = root_environment.get("RUSTFLAGS", "")
+    remap = f"--remap-path-prefix={root_target_dir}=./target/sel4/{platform.name}/{variant}"
+    root_environment["RUSTFLAGS"] = f"{rustflags} {remap}".strip()
     cargo_build(
         manifest=ROOT / "Cargo.toml",
         package="slime-root",
@@ -1218,23 +1215,25 @@ def build_application(
     return child_elf, root_elf, None if variant == BOOT_SELECTION_VARIANT else generation
 
 
-def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Path]:
+def build_loader(
+    pins: dict[str, object],
+    platform: Platform,
+    *,
+    toolchain: str | None = None,
+    loader_target: str | None = None,
+) -> tuple[Path, Path]:
     """Build the kernel loader and its host packaging tool.
 
     Both run with `deps/rust-sel4` as the working directory: that workspace's
     `.cargo/config.toml` supplies the `rust-lld` linker selection and the
-    `RUST_TARGET_PATH` its crates expect, and cargo discovers configuration
-    from the working directory rather than from `--manifest-path`.
-
-    The loader is platform-specific even though its target triple is not: it
-    compiles one `plat` module for the console it prints on and links at an
-    address derived from that platform's `kernel.elf`. It therefore builds into
-    a per-platform target directory, so a board image can never be packaged
-    with a loader left behind by a QEMU build.
+    `RUST_TARGET_PATH` its crates expect. Closure callers pass the toolchain and
+    loader target explicitly; legacy callers retain the pinned manifest route.
     """
     rust_sel4 = table(pins, "rust_sel4")
-    toolchain = text(rust_sel4, "toolchain", "rust_sel4")
-    loader_target = text(rust_sel4, platform.loader_target_key, "rust_sel4")
+    toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
+    loader_target = loader_target or text(
+        rust_sel4, platform.loader_target_key, "rust_sel4"
+    )
     environment = cargo_environment(toolchain, platform)
 
     loader_target_dir = CARGO_BUILD / platform.name / "loader"
@@ -1322,7 +1321,9 @@ def write_manifest(
     generation: Path | None = None,
     duo_early_fault: bool = False,
     test_terminator: bool = False,
+    source_platform: Platform | None = None,
 ) -> None:
+    source_platform = source_platform or platform
     prefix = platform.prefix_dir
     kernel = require_file(prefix / "bin" / "kernel.elf", "installed seL4 kernel")
     kernel_config = require_file(
@@ -1337,19 +1338,19 @@ def write_manifest(
     platform_info = require_file(
         prefix / "support" / "platform_gen.yaml", "installed platform metadata"
     )
-    root_target = ROOT / text(table(pins, "rust_sel4"), platform.root_target_key, "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+    root_target = ROOT / text(table(pins, "rust_sel4"), source_platform.root_target_key, "rust_sel4")
+    child_target = RUST_SEL4_SOURCE / "support" / "targets" / source_platform.child_target_name
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
     if duo_early_fault:
         suffix += "-early-fault"
     if test_terminator:
         suffix += "-test-terminator"
-    stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
-    stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
-    stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
-    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", platform)
+    stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", source_platform)
+    stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", source_platform)
+    stable_loader = copy_artifact(loader, "sel4-kernel-loader", source_platform)
+    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", source_platform)
 
-    manifest_platform = table(pins, platform.pins_section)
+    manifest_platform = table(pins, source_platform.pins_section)
     manifest = {
         "schema": 1,
         "kind": "slime-sel4-image-identity",
@@ -1369,7 +1370,7 @@ def write_manifest(
         },
         "config": {
             "pins": file_record(PINS_PATH),
-            "cmake": file_record(platform.config),
+            "cmake": file_record(source_platform.config),
             "root_target": file_record(root_target),
             "child_target": file_record(child_target),
             "kernel_config": file_record(kernel_config),
@@ -1385,39 +1386,28 @@ def write_manifest(
             "payload_tool": file_record(stable_payload_tool),
         },
         "image": file_record(image),
-        # Which startup path this image takes, so a gate cannot boot a different
-        # one and assert against markers it will never emit.
-        #
-        # `component_graph` is retained beside `variant` rather than replaced by
-        # it: P5.1's and P5.2's gates assert on that field, and a third image is
-        # no reason to edit verification code those slices' evidence rests on. A
-        # bool cannot name three images, so `variant` is what a new gate reads.
         "component_graph": variant == GRAPH_VARIANT,
         "variant": variant,
-        # Which board or machine this image is built for. Every field above is
-        # a function of it, so a gate can refuse an image built for the other
-        # platform rather than discovering it from a silent boot failure.
-        "platform": platform.name,
-        "target_profile": platform.target_profile,
+        "platform": source_platform.name,
+        "target_profile": source_platform.target_profile,
     }
     if duo_early_fault:
         manifest["duo_early_fault"] = True
     if test_terminator:
         manifest["test_terminator"] = True
-    if platform.qemu_dtb:
-        # Emulator launch facts, which gates read to build their QEMU command.
+    if source_platform.qemu_dtb:
         manifest["qemu"] = {
-            "machine": text(manifest_platform, "machine", platform.pins_section),
-            "cpu": text(manifest_platform, "cpu", platform.pins_section),
+            "machine": text(manifest_platform, "machine", source_platform.pins_section),
+            "cpu": text(manifest_platform, "cpu", source_platform.pins_section),
             "cpus": manifest_platform["cpus"],
             "memory_mib": manifest_platform["memory_mib"],
-            "version": text(manifest_platform, "qemu_version", platform.pins_section),
+            "version": text(manifest_platform, "qemu_version", source_platform.pins_section),
         }
     else:
         manifest["board"] = {
-            "platform": text(manifest_platform, "platform", platform.pins_section),
-            "soc": text(manifest_platform, "soc", platform.pins_section),
-            "serial": text(manifest_platform, "serial", platform.pins_section),
+            "platform": text(manifest_platform, "platform", source_platform.pins_section),
+            "soc": text(manifest_platform, "soc", source_platform.pins_section),
+            "serial": text(manifest_platform, "serial", source_platform.pins_section),
             "serial_baud": manifest_platform["serial_baud"],
             "boot_files": manifest_platform["boot_files"],
         }

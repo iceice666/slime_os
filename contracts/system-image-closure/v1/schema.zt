@@ -1,0 +1,164 @@
+-- Slime OS canonical system-image closure contract, version 1 (CP11).
+--
+-- A closure names every identity-bearing input to one bootable image build. It
+-- references the logical system and immutable build inputs instead of copying
+-- their records. Paths are normalized, closure-relative locators; their bytes
+-- are never trusted without the recorded identity.
+ArtifactReference :: type {
+  path : Text;
+  kind : Text;
+  identity : Text;
+};
+
+ImplementationSelection :: type {
+  component : Text;
+  provider : Text;
+  artifact : ArtifactReference;
+  identity : Text;
+  buildProfile : Text;
+};
+
+TargetSelection :: type {
+  profile : Text;
+  platform : Text;
+  sdkRelease : ArtifactReference;
+  prefix : ArtifactReference;
+  toolchain : Text;
+  rustSel4Commit : Text;
+};
+
+BuildRole :: type {
+  role : Text;
+  implementation : ArtifactReference;
+  parameters : List Text;
+};
+
+NamedInput :: type {
+  name : Text;
+  artifact : ArtifactReference;
+};
+
+BuildParameter :: type {
+  name : Text;
+  value : Text;
+};
+
+SystemImageClosure :: type {
+  formatVersion : Int;
+  name : Text;
+  systemSpec : ArtifactReference;
+  systemIdentity : Text;
+  implementations : List ImplementationSelection;
+  target : TargetSelection;
+  root : BuildRole;
+  loader : BuildRole;
+  releaseInputs : List NamedInput;
+  buildParameters : List BuildParameter;
+  expectedOutputs : List Text;
+};
+
+ResultArtifact :: type {
+  path : Text;
+  bytes : Int;
+  sha256 : Text;
+};
+
+SystemImageBuildResult :: type {
+  formatVersion : Int;
+  closureIdentity : Text;
+  systemIdentity : Text;
+  targetProfile : Text;
+  platform : Text;
+  rootRole : Text;
+  loaderRole : Text;
+  generation : ResultArtifact;
+  root : ResultArtifact;
+  loader : ResultArtifact;
+  image : ResultArtifact;
+  identityManifest : ResultArtifact;
+};
+
+FromData @ArtifactReference :: derive
+FromData @ImplementationSelection :: derive
+FromData @TargetSelection :: derive
+FromData @BuildRole :: derive
+FromData @NamedInput :: derive
+FromData @BuildParameter :: derive
+FromData @SystemImageClosure :: derive
+FromData @ResultArtifact :: derive
+FromData @SystemImageBuildResult :: derive
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-system-image-closure-v1:";
+buildResultIdentityDomain :: Text = "slime-system-image-build-result-v1:";
+
+artifactKindFile :: Text = "file";
+artifactKindTree :: Text = "tree";
+providerWorkspace :: Text = "workspace";
+providerExternal :: Text = "external";
+rootRoleEmbeddedGeneration :: Text = "embedded-generation";
+rootRoleBootSelector :: Text = "boot-selector";
+loaderRoleKernelLoader :: Text = "kernel-loader";
+
+outputGeneration :: Text = "generation";
+outputRoot :: Text = "root";
+outputLoader :: Text = "loader";
+outputImage :: Text = "image";
+outputIdentityManifest :: Text = "identity-manifest";
+
+maxSourceBytes :: Int = 262144;
+maxNormalizedBytes :: Int = 262144;
+maxNameBytes :: Int = 96;
+maxPathBytes :: Int = 256;
+maxTextBytes :: Int = 256;
+maxDigestBytes :: Int = 64;
+maxImplementations :: Int = 64;
+maxReleaseInputs :: Int = 32;
+maxBuildParameters :: Int = 32;
+maxRoleParameters :: Int = 16;
+maxOutputs :: Int = 8;
+
+decodeSystemImageClosure :: Data -> Validation DecodeIssue SystemImageClosure
+  = data => decode data;
+
+decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildResult
+  = data => decode data;
+{
+  ArtifactReference =;
+  ImplementationSelection =;
+  TargetSelection =;
+  BuildRole =;
+  NamedInput =;
+  BuildParameter =;
+  SystemImageClosure =;
+  ResultArtifact =;
+  SystemImageBuildResult =;
+  decodeSystemImageClosure =;
+  decodeSystemImageBuildResult =;
+  formatVersion =;
+  identityDomain =;
+  buildResultIdentityDomain =;
+  artifactKindFile =;
+  artifactKindTree =;
+  providerWorkspace =;
+  providerExternal =;
+  rootRoleEmbeddedGeneration =;
+  rootRoleBootSelector =;
+  loaderRoleKernelLoader =;
+  outputGeneration =;
+  outputRoot =;
+  outputLoader =;
+  outputImage =;
+  outputIdentityManifest =;
+  maxSourceBytes =;
+  maxNormalizedBytes =;
+  maxNameBytes =;
+  maxPathBytes =;
+  maxTextBytes =;
+  maxDigestBytes =;
+  maxImplementations =;
+  maxReleaseInputs =;
+  maxBuildParameters =;
+  maxRoleParameters =;
+  maxOutputs =;
+}

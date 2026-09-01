@@ -463,7 +463,7 @@ A separate consumer repository moves between two immutable SDK releases, boots t
 
 ## CP11 — Canonical system-image and test-run closure contracts
 
-**Status:** Planned.
+**Status:** Complete.
 
 **Depends on:** CP1, CP8.
 
@@ -492,6 +492,14 @@ just system_image_closure_check
 ### Exit condition
 
 One canonical, versioned image closure resolves in two clean build roots to the same generation and bootable seL4 image, and one separate test-run record boots that image without contributing any executable build input.
+
+**Delivered:** `system-image-closure/v1` now binds the selected system spec, component implementations, SDK/toolchain, target-qualified seL4 prefix, root and loader roles, release inputs, build parameters, and output classes into one normalized identity. `system-test-run/v1` keeps emulator/board fixtures, runtime faults, timeout, marker oracle, and forbidden outcomes outside executable identity. The generic `build-system-image.py CLOSURE OUTPUT_DIR` resolver verifies every declared path and digest before compilation, uses isolated Cargo/generation/image roots, rejects ambient `SLIME_*` build controls, and emits versioned image and build-result identity records.
+
+**Exit condition (observed):** `just system_image_closure_check` resolved the canonical channel closure, refused missing, changed, wrong-target, wrong-profile, unrecorded, malformed, and excessive inputs, built it in two isolated roots plus an adversarial-environment root, and observed byte-identical generation, root, loader, image, image identity, normalized build result, and build-result identity. `just sel4_fault_check` and `just sel4_boot_selection_check` separately confirmed the legacy scenario and selector paths still compile their declared controls after closure builds received a distinct hermetic build profile.
+
+**Gates:** `just system_image_closure_check`, `just sel4_fault_check`, `just sel4_boot_selection_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
+
+**Evidence:** [`devlog/2026-09-02-cp11-system-image-closure/`](../devlog/2026-09-02-cp11-system-image-closure/index.md)
 
 ## CP12 — Complete spec derivation for every test composition
 

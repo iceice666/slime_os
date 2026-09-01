@@ -1081,34 +1081,39 @@ def cargo_target_directory_name(target_profile: TargetProfile) -> str:
 
 
 def sel4_component_environment(
-    environment: dict[str, str], target_profile: TargetProfile
+    environment: dict[str, str],
+    target_profile: TargetProfile,
+    *,
+    toolchain: str | None = None,
+    prefix: Path | None = None,
 ) -> dict[str, str]:
-    """Add what a `slime-components` build for one seL4 profile needs.
+    """Add the explicit seL4 component toolchain and prefix inputs.
 
-    The generated bindings select their syscall ABI from the installed libsel4
-    configuration, so the prefix must match the target profile. Reusing the
-    AArch64 prefix for an RV64 JSON target compiles AArch64 syscall helpers as
-    RISC-V inline assembly and fails only after Cargo has built most crates.
+    Legacy callers may omit them and retain the repository pin routes. Closure
+    builds pass both values, so their executable inputs cannot fall back to the
+    checkout's ambient `sel4/pins.toml` or `build/` tree.
     """
-    pins_path = ROOT / "sel4" / "pins.toml"
-    if not pins_path.is_file():
-        fail(f"missing pin manifest: {pins_path.relative_to(ROOT)}")
-    import tomllib
+    if toolchain is None or prefix is None:
+        pins_path = ROOT / "sel4" / "pins.toml"
+        if not pins_path.is_file():
+            fail(f"missing pin manifest: {pins_path.relative_to(ROOT)}")
+        import tomllib
 
-    pins = tomllib.loads(pins_path.read_text(encoding="utf-8"))
-    environment["RUSTUP_TOOLCHAIN"] = pins["rust_sel4"]["toolchain"]
-    prefix_by_profile = {
-        SEL4_TARGET_PROFILE: ROOT / "build" / "sel4-prefix",
-        SEL4_BOARD_TARGET_PROFILE: ROOT / "build" / "sel4-rpi5-prefix",
-        SEL4_RISCV64_TARGET_PROFILE: ROOT / "build" / "sel4-riscv64-prefix",
-        SEL4_RISCV64_DUO_TARGET_PROFILE: ROOT / "build" / "sel4-cv1800b-duo-prefix",
-        SEL4_NT98690_TARGET_PROFILE: ROOT / "build" / "sel4-ns02201-h1v1-prefix",
-    }
-    prefix = prefix_by_profile.get(target_profile.name)
-    if prefix is None:
-        fail(f"no seL4 prefix route for target {target_profile.name!r}")
+        pins = tomllib.loads(pins_path.read_text(encoding="utf-8"))
+        toolchain = pins["rust_sel4"]["toolchain"]
+        prefix_by_profile = {
+            SEL4_TARGET_PROFILE: ROOT / "build" / "sel4-prefix",
+            SEL4_BOARD_TARGET_PROFILE: ROOT / "build" / "sel4-rpi5-prefix",
+            SEL4_RISCV64_TARGET_PROFILE: ROOT / "build" / "sel4-riscv64-prefix",
+            SEL4_RISCV64_DUO_TARGET_PROFILE: ROOT / "build" / "sel4-cv1800b-duo-prefix",
+            SEL4_NT98690_TARGET_PROFILE: ROOT / "build" / "sel4-ns02201-h1v1-prefix",
+        }
+        prefix = prefix_by_profile.get(target_profile.name)
+        if prefix is None:
+            fail(f"no seL4 prefix route for target {target_profile.name!r}")
     if not (prefix / "libsel4" / "include" / "kernel" / "gen_config.json").is_file():
-        fail(f"no installed seL4 prefix at {prefix.relative_to(ROOT)} for {target_profile.name}")
+        fail(f"no installed seL4 prefix at {prefix} for {target_profile.name}")
+    environment["RUSTUP_TOOLCHAIN"] = toolchain
     environment["SEL4_PREFIX"] = str(prefix)
     if not environment.get("LIBCLANG_PATH"):
         fail(
@@ -1124,6 +1129,10 @@ def build_rust_components(
     recovery: bool = False,
     candidate_identity: bytes | None = None,
     components: set[str] | None = None,
+    *,
+    toolchain: str | None = None,
+    prefix: Path | None = None,
+    build_profile: str = "default",
 ) -> Path:
     environment = {
         key: value
@@ -1138,6 +1147,18 @@ def build_rust_components(
         environment["SLIME_BOOT_SELECTION_FAIL"] = "1"
     else:
         environment.pop("SLIME_BOOT_SELECTION_FAIL", None)
+    if build_profile == "closure":
+        for knob in (
+            "SLIME_FABRIC_PROXY_EARLY_EXIT",
+            "SLIME_FABRIC_STREAM_EARLY_EXIT",
+            "SLIME_GENERATION_CANDIDATE",
+            "SLIME_GENERATION_CMD_SCENARIO",
+            "SLIME_BOOT_SELECTION_FAIL",
+            "SLIME_RECOVERY_IMAGE",
+        ):
+            environment.pop(knob, None)
+    elif build_profile != "default":
+        fail(f"unsupported component build profile {build_profile!r}")
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
     # Product graph selectors are deliberately absent: generated manifest data
     # selects component behavior. Validation-only injection controls remain.
@@ -1155,7 +1176,7 @@ def build_rust_components(
         environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
     # Keep separate target directories for distinct manifests because their
     # generated layout and profile inputs intentionally produce distinct images.
-    sel4_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
+    sel4_manifest = None if build_profile == "closure" else os.environ.get("SLIME_SEL4_MANIFEST")
     if recovery:
         target_name = "recovery"
     elif sel4_manifest is not None and sel4_manifest != "sel4":
@@ -1241,7 +1262,9 @@ def build_rust_components(
                 f"--remap-path-prefix={ROOT}=.",
             ]
         )
-        environment = sel4_component_environment(environment, target_profile)
+        environment = sel4_component_environment(
+            environment, target_profile, toolchain=toolchain, prefix=prefix
+        )
     else:
         # B12: `components/.cargo/config.toml` carried a hardcoded
         # `--remap-path-prefix` naming one developer's checkout. Any other
@@ -2872,6 +2895,10 @@ def build_sel4_generation(
     target_profile: TargetProfile,
     external_components: dict[str, Path] | None = None,
     component_spec_root: Path | None = None,
+    *,
+    toolchain: str | None = None,
+    prefix: Path | None = None,
+    build_profile: str = "default",
 ) -> None:
     """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
 
@@ -2910,6 +2937,9 @@ def build_sel4_generation(
             target_profile,
             candidate_identity=None,
             components=workspace_binaries,
+            toolchain=toolchain,
+            prefix=prefix,
+            build_profile=build_profile,
         )
         if workspace_binaries
         else None
