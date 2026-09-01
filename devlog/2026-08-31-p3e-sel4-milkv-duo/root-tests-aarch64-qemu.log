@@ -1,0 +1,23 @@
+Command:
+SEL4_PREFIX=$PWD/build/sel4-prefix \
+RUSTUP_TOOLCHAIN=nightly-2026-04-04 \
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-gcc \
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64 \
+cargo test -p slime-root --target aarch64-unknown-linux-gnu --lib -- --format=terse
+
+Observed:
+   Compiling slime-root v0.1.0
+    Finished `test` profile [unoptimized + debuginfo]
+     Running unittests src/lib.rs
+
+running 214 tests
+....................................................................................... 87/214
+....................................................................................... 174/214
+........................................
+test result: ok. 214 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+Context:
+The repository's `just test_sel4_root` pairs the host Rust target with the installed AArch64 seL4 prefix and therefore cannot compile on this x86_64 workstation: rust-sel4 bindgen selects its Clang target from CARGO_CFG_TARGET_ARCH, while the prefix supplies AArch64 syscall register constraints. This architecture-matched invocation keeps the pinned AArch64 prefix, cross-compiles the host-testable library to AArch64 Linux with the pinned Rust toolchain, and executes the resulting libtest binary through qemu-aarch64.
+
+Fault found before the passing run:
+The first architecture-matched run executed all 214 tests and failed only `object_allocator::tests::sparse_device_preflight_models_the_live_anchor_without_mutating_slots`: the fixture attempted `slots.release(106)` after allocating only slots 100..105. The fixture was corrected to retain occupied slot 106; the full rerun above passed.

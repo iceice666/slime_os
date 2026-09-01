@@ -70,8 +70,10 @@ BOOT_TIMEOUT_SECONDS = 150
 #
 # `satp=0x0000000000000000` is load-bearing rather than incidental: it is the
 # evidence that the payload received control with translation off, which is the
-# state an seL4 elfloader requires. A nonzero satp would mean something had
-# already installed a page table and this is not a clean firmware handoff.
+# state an seL4 elfloader requires. `sxstatus` is the T-Head S-mode extension
+# mirror; its bit 21 is MAEE, which changes Sv39 PTE bits 60--63. Both the full
+# register and the decoded bit are required so the platform port can select its
+# page-table encoding from observed firmware state rather than a board guess.
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "U-Boot selected our FIT configuration",
@@ -104,6 +106,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the payload entered with translation disabled",
         r"SLIME_DUO satp      = 0x0{16}",
+    ),
+    (
+        "the T-Head extension state is readable in S-mode",
+        r"SLIME_DUO sxstatus  = 0x[0-9a-f]{16}",
+    ),
+    (
+        "the C906 MAEE state is enabled for the seL4 page-table encoding",
+        r"SLIME_DUO maee      = 0x0{15}1",
     ),
     (
         "the SBI timebase counter is readable and nonzero",
@@ -242,7 +252,7 @@ def ssh_base(key: Path) -> list[str]:
     ]
 
 
-def deploy(profile: dict[str, object], key: Path, digest: str) -> None:
+def deploy(profile: dict[str, object], key: Path, digest: str, fit: Path = FIT) -> None:
     """Write the FIT into the board's FAT boot partition and verify it landed.
 
     The digest is read back from the target rather than trusted from the copy,
@@ -264,11 +274,11 @@ def deploy(profile: dict[str, object], key: Path, digest: str) -> None:
             "Linux with the USB-NCM gadget up for the deploy phase. If a previous "
             "run left it at the U-Boot prompt, let autoboot run and retry."
         )
-    name = FIT.name
+    name = fit.name
     # `-O` selects the legacy SCP protocol: the board's dropbear ships no
     # sftp-server, so a modern sftp-backed scp fails outright.
     copy = subprocess.run(
-        ["scp", "-O", *ssh_base(key), str(FIT), f"root@{host}:/boot/{name}"],
+        ["scp", "-O", *ssh_base(key), str(fit), f"root@{host}:/boot/{name}"],
         capture_output=True,
         text=True,
     )
@@ -434,18 +444,24 @@ def reach_uboot(console: Console, prompt: str, window: float) -> None:
     fail(f"the U-Boot prompt {prompt!r} appeared but does not answer commands")
 
 
-def load_and_start(console: Console, profile: dict[str, object]) -> str:
+def load_and_start(
+    console: Console,
+    profile: dict[str, object],
+    fit: Path = FIT,
+    config: str = "config-duo",
+    read_seconds: float = 10.0,
+) -> str:
     """`fatload` the FIT and `bootm` it, returning the payload's transcript."""
     staging = str(profile["fit_staging_address"])
     partition = str(profile["boot_partition"])
-    console.write(f"fatload {partition} {staging} {FIT.name}\r".encode())
+    console.write(f"fatload {partition} {staging} {fit.name}\r".encode())
     loaded = console.read_for(4.0)
     # This U-Boot prints "<N> bytes read in <T> ms"; accept the older
     # "Bytes transferred = <N>" wording too, and require a nonzero count.
     match = re.search(r"(\d+)\s+bytes read|Bytes transferred\s*=\s*(\d+)", loaded)
     if match is None:
         fail(
-            f"`fatload {partition} {staging} {FIT.name}` reported no transfer; "
+            f"`fatload {partition} {staging} {fit.name}` reported no transfer; "
             "the payload is not on the board's boot partition"
         )
     count = int(next(group for group in match.groups() if group))
@@ -453,11 +469,9 @@ def load_and_start(console: Console, profile: dict[str, object]) -> str:
         fail("fatload reported a zero-byte transfer")
     print(f"[serial] fatload staged {count} bytes at {staging}")
 
-    launch = str(profile["uboot_launch"]).format(
-        staging=staging, config="config-duo"
-    )
+    launch = str(profile["uboot_launch"]).format(staging=staging, config=config)
     console.write(launch.encode() + b"\r")
-    return console.read_for(10.0)
+    return console.read_for(read_seconds)
 
 
 def report_transcript(transcript: str) -> None:

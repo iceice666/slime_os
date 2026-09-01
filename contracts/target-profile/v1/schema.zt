@@ -214,6 +214,25 @@ profiles :: List Profile = {
     cargoTarget = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
     qemuBinary = "qemu-system-riscv64";
   };
+  {
+    constName = "RISCV64_SEL4_MILKV_DUO";
+    name = "riscv64-sel4-milkv-duo";
+    id = 7;
+    architecture = 3;
+    abi = 5;
+    pageProfile = 3;
+    -- Same userspace ABI as the RV64 seL4 reference, but a distinct exact
+    -- platform identity. The board's C906, firmware handoff, PLIC, timer, and
+    -- 63.25 MiB memory window are not interchangeable with QEMU `virt`.
+    requiredFeatures = 144;
+    elfMachine = 243;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
+    qemuBinary = "";
+  };
 };
 
 format ::= {

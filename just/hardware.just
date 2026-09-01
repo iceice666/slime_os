@@ -16,6 +16,10 @@ rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check r
 sel4_rpi5_image_check: sel4_pin_check
     python3 scripts/build/build-sel4.py --platform bcm2712-rpi5 --skip-pin-check
 
+[group('hardware')]
+sel4_duo_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform cv1800b-duo --skip-pin-check
+
 # Flatten via the media builder: objcopy drops the sectionless loader payload.
 # This recipe writes no block device.
 [group('hardware')]
@@ -62,6 +66,14 @@ duo_payload_check:
 [group('hardware')]
 duo_boot_check serial="": duo_payload_check
     python3 scripts/check/check-duo-boot.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
+# P3.E: build and digest-deploy the Duo sample-plane and bounded early-fault
+# FITs, drive four autonomous physical boots, and require identical normalized
+# semantics across three successful runs. Each image cold-resets through the
+# observed RTC block and the gate waits for vendor Linux before continuing.
+[group('hardware')]
+duo_sel4_check serial="": riscv64_qemu_check
+    python3 scripts/check/check-duo-sel4.py {{ if serial == "" { "" } else { "--serial " + serial } }}
 
 # Bring-up aid, not a gate: print whatever the Duo's UART0 emits and assert
 # nothing. Builds no artifacts and qualifies no board, so it answers the one

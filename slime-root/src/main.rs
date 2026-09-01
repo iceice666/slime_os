@@ -226,6 +226,124 @@ const TIMER_PROOF_DEADLINE_DIVISOR: u64 = 100;
 /// of burning the full boot-check timeout.
 const TIMER_PROOF_BOUND_SECONDS: u64 = 3;
 
+/// Run one IRQ-backed deadline and name the phase in every marker.
+fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
+    let mut timer_scheduler = TimerScheduler::<1>::new();
+    const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
+    let timer_start = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => fatal!("timer clock unreadable during {phase}: {error:?}"),
+    };
+    let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
+    let (_, scheduled) =
+        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
+            Ok(scheduled) => scheduled,
+            Err(error) => fatal!("timer proof deadline rejected during {phase}: {error:?}"),
+        };
+    if let Err(error) = apply_deadline_programming(timer_adapter, scheduled.programming) {
+        fatal!("timer deadline could not be programmed during {phase}: {error:?}")
+    }
+
+    let bound_ticks = timer_adapter
+        .frequency_hz()
+        .saturating_mul(TIMER_PROOF_BOUND_SECONDS);
+    let mut polls: u64 = 0;
+    loop {
+        if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
+            break;
+        }
+        let elapsed = match timer_adapter.monotonic_now() {
+            Ok(now) => now.0.wrapping_sub(timer_start.0),
+            Err(error) => fatal!("timer clock unreadable while waiting during {phase}: {error:?}"),
+        };
+        if elapsed > bound_ticks {
+            fatal!(
+                "SLIME_TIMER FAIL phase={phase} timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
+            )
+        }
+        polls += 1;
+    }
+    if phase == "startup" {
+        sel4::debug_println!(
+            "SLIME_TIMER delivered badge={:#x} polls={polls}",
+            timer_adapter.signal_badge(),
+        );
+    } else {
+        sel4::debug_println!(
+            "SLIME_TIMER phase={phase} delivered badge={:#x} polls={polls}",
+            timer_adapter.signal_badge(),
+        );
+    }
+
+    let drained = match timer_scheduler.service_timer_source(timer_adapter, |_| true) {
+        Ok(transition) => transition,
+        Err(ServiceTimerError::Program { error, transition }) => fatal!(
+            "timer deadline reprogramming failed during {phase}: {error:?} wakes={}",
+            transition.events.len()
+        ),
+        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
+            "timer acknowledgement failed during {phase}: {error:?} wakes={}",
+            transition.events.len()
+        ),
+        Err(error) => fatal!("timer service rejected the observed {phase} expiry: {error:?}"),
+    };
+    let timer_end = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => fatal!("timer clock unreadable after {phase} service: {error:?}"),
+    };
+    if phase == "startup" {
+        sel4::debug_println!(
+            "SLIME_TIMER serviced events={} programming={:?}",
+            drained.events.len(),
+            drained.programming,
+        );
+        sel4::debug_println!(
+            "SLIME_TIMER advanced start={} end={} delta={}",
+            timer_start.0,
+            timer_end.0,
+            timer_end.0.wrapping_sub(timer_start.0),
+        );
+        sel4::debug_println!("SLIME_TIMER OK");
+    } else {
+        sel4::debug_println!(
+            "SLIME_TIMER phase={phase} serviced events={} programming={:?}",
+            drained.events.len(),
+            drained.programming,
+        );
+        sel4::debug_println!(
+            "SLIME_TIMER phase={phase} advanced start={} end={} delta={}",
+            timer_start.0,
+            timer_end.0,
+            timer_end.0.wrapping_sub(timer_start.0),
+        );
+        sel4::debug_println!("SLIME_TIMER phase={phase} OK");
+    }
+}
+
+#[cfg(slime_duo_early_fault)]
+fn run_duo_early_fault_control(
+    timer_adapter: &mut PhysicalTimerAdapter,
+    reset_registers: device::MappedGranule,
+) {
+    let refused = timer_adapter.program_deadline(event::MonotonicInstant(u64::MAX));
+    if !matches!(
+        refused,
+        Err(platform_timer::PlatformTimerAckError::RegisterAccess)
+    ) {
+        fatal!("Duo early-fault control did not refuse an out-of-range RTC deadline")
+    }
+    sel4::debug_println!(
+        "SLIME_DUO EARLY_FAULT phase=post-timer cause=timer-range-refused bounded=1"
+    );
+    sel4::debug_println!("SLIME_DUO reset request kind=cold");
+    if !timer_adapter.request_cold_reset(reset_registers) {
+        fatal!("CV1800B cold-reset register access failed after early fault")
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 #[repr(C, align(4096))]
 struct FreePage([u8; GRANULE_SIZE]);
 
@@ -262,9 +380,15 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for QEMU RV64's Goldfish RTC register page.
+/// Standing window for the selected RV64 platform's userspace timer registers.
 #[cfg(target_arch = "riscv64")]
-static mut RTC_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing window for the CV1800B RTC control granule used to reset the board
+/// after an autonomous physical proof completes. It must be mapped before the
+/// timer granule: both come from one device untyped and retype is monotonic.
+#[cfg(slime_cv1800b_duo)]
+static mut RESET_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing MMIO windows for the userspace-authority inventory, one per
 /// granule in QEMU's virtio-mmio transport range.
@@ -285,8 +409,12 @@ static mut BOOT_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
 static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
     [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
 
-#[cfg(target_arch = "riscv64")]
-const RTC_PADDR: usize = 0x0010_1000;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const TIMER_PADDR: usize = 0x0010_1000;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const TIMER_PADDR: usize = 0x0502_6000;
+#[cfg(slime_cv1800b_duo)]
+const RESET_PADDR: usize = 0x0502_5000;
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
@@ -548,20 +676,36 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(adapter) => adapter,
         Err(error) => fatal!("timer source unavailable: {error:?}"),
     };
+    #[cfg(slime_cv1800b_duo)]
+    let reset_registers = {
+        let reset_addr = ptr::addr_of!(RESET_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, reset_addr) {
+            fatal!("reset page unavailable: {error:?}")
+        }
+        match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            reset_addr,
+            RESET_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("reset registers unavailable: {error:?}"),
+        }
+    };
     #[cfg(target_arch = "riscv64")]
     {
-        let rtc_addr = ptr::addr_of!(RTC_PAGE) as usize;
-        if let Err(error) = ScratchPage::claim(bootinfo, rtc_addr) {
-            fatal!("RTC page unavailable: {error:?}")
+        let timer_addr = ptr::addr_of!(TIMER_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, timer_addr) {
+            fatal!("timer page unavailable: {error:?}")
         }
         let registers = match device::DeviceRegion::map(
             allocator,
             sel4::init_thread::slot::VSPACE.cap(),
-            rtc_addr,
-            RTC_PADDR,
+            timer_addr,
+            TIMER_PADDR,
         ) {
             Ok(region) => region.granule(),
-            Err(error) => fatal!("RTC registers unavailable: {error:?}"),
+            Err(error) => fatal!("timer registers unavailable: {error:?}"),
         };
         timer_adapter.attach_registers(registers);
     }
@@ -570,77 +714,9 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         timer_adapter.frequency_hz(),
     );
 
-    let mut timer_scheduler = TimerScheduler::<1>::new();
-    const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
-    let timer_start = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable: {error:?}"),
-    };
-    let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
-    let (_, scheduled) =
-        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
-            Ok(scheduled) => scheduled,
-            Err(error) => fatal!("timer proof deadline rejected: {error:?}"),
-        };
-    if let Err(error) = apply_deadline_programming(&mut timer_adapter, scheduled.programming) {
-        fatal!("timer deadline could not be programmed: {error:?}")
-    }
-
-    let bound_ticks = timer_adapter
-        .frequency_hz()
-        .saturating_mul(TIMER_PROOF_BOUND_SECONDS);
-    let mut polls: u64 = 0;
-    loop {
-        if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
-            break;
-        }
-        let elapsed = match timer_adapter.monotonic_now() {
-            Ok(now) => now.0.wrapping_sub(timer_start.0),
-            Err(error) => fatal!("timer clock unreadable while waiting: {error:?}"),
-        };
-        if elapsed > bound_ticks {
-            fatal!(
-                "SLIME_TIMER FAIL timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
-            )
-        }
-        polls += 1;
-    }
-    sel4::debug_println!(
-        "SLIME_TIMER delivered badge={:#x} polls={polls}",
-        timer_adapter.signal_badge(),
-    );
-
-    // The two post-mutation variants carry the transition the expiry already
-    // computed (see `timer.rs`), so even a failing platform step reports how
-    // many wakes were decided instead of dropping them silently.
-    let drained = match timer_scheduler.service_timer_source(&mut timer_adapter, |_| true) {
-        Ok(transition) => transition,
-        Err(ServiceTimerError::Program { error, transition }) => fatal!(
-            "timer deadline reprogramming failed after delivery: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
-            "timer acknowledgement failed after delivery: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(error) => fatal!("timer service rejected the observed expiry: {error:?}"),
-    };
-    let timer_end = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable after service: {error:?}"),
-    };
-    sel4::debug_println!(
-        "SLIME_TIMER serviced events={} programming={:?}",
-        drained.events.len(),
-        drained.programming,
-    );
-    sel4::debug_println!(
-        "SLIME_TIMER advanced start={} end={} delta={}",
-        timer_start.0,
-        timer_end.0,
-        timer_end.0.wrapping_sub(timer_start.0),
-    );
-    sel4::debug_println!("SLIME_TIMER OK");
+    prove_timer(&mut timer_adapter, "startup");
+    #[cfg(slime_duo_early_fault)]
+    run_duo_early_fault_control(&mut timer_adapter, reset_registers);
     if let Err(error) = timer_adapter.bind_to(sel4::init_thread::slot::TCB.cap()) {
         fatal!("timer notification could not bind to root: {error:?}")
     }
@@ -881,6 +957,15 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );
+        #[cfg(slime_cv1800b_duo)]
+        sel4::debug_println!("SLIME_ROOT READY target_profile={TARGET_PROFILE}");
+        #[cfg(slime_cv1800b_duo)]
+        {
+            sel4::debug_println!("SLIME_DUO reset request kind=cold");
+            if !timer_adapter.request_cold_reset(reset_registers) {
+                fatal!("CV1800B cold-reset register access failed")
+            }
+        }
         loop {
             core::hint::spin_loop();
         }

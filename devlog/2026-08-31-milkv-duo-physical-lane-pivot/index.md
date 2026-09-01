@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-08-31 |
 | Kind | Decision |
-| Status | Proposed |
+| Status | Verified |
 | Scope | `roadmap/{README,01-foundations,04-platform-hardware,07-architecture-portability,09-rpi5-ros2-demo}.md`, `devlog/README.md` |
 | Roadmap | P3, P3.D, P3.E, P4, RP3, M5.7, H1 |
 | Gates | `just devlog_check` |
@@ -69,11 +69,11 @@ conditions and are deferred rather than erased.
 
 ## Open risks and follow-ups
 
-- [ ] P3 must establish the pinned `riscv64-sel4-qemu-virt` reference profile and replay the selected architecture-neutral corpus before P3.E claims physical equivalence.
-- [ ] Measure elfloader, kernel, root, generation, and initial-object placement against the observed 63.25 MiB Duo DRAM window.
-- [ ] Confirm the CV1800B PLIC S-mode context layout from authoritative SoC documentation before selecting or changing a driver layout.
-- [ ] Observe the C906 `mxstatus`/`sxstatus` MAEE state before trusting standard Sv39 page tables.
-- [ ] Reconsider a Duo product workload only after a verified generation and two-component vertical slice produce repeatable physical evidence.
+- [x] P3 established the pinned `riscv64-sel4-qemu-virt` reference profile and replayed the selected architecture-neutral corpus before P3.E's physical claim.
+- [x] P3.E measured the complete minimum image and initial-object placement inside the observed 63.25 MiB Duo DRAM window.
+- [x] P3.E selected the CV1800B PLIC S-mode context from the SoC layout and observed IRQ delivery before and after graph activation.
+- [x] The physical probe observed `sxstatus.MAEE=1`, and the loader/kernel apply the required C906 page-table encoding.
+- [x] A verified generation and architecture-neutral component vertical slice produced repeatable physical evidence; selecting a Duo product workload remains a separate roadmap decision.
 - [ ] Resume RP3 only with a working Raspberry Pi 5 serial evidence path and an explicit product reprioritization; resume M5.7/H1 only with their named Framework prerequisites.
 
 ## Artifacts and provenance

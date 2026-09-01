@@ -115,7 +115,28 @@ QEMU_RISCV_VIRT = Platform(
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
 )
 
-PLATFORMS = {platform.name: platform for platform in (QEMU_ARM_VIRT, BCM2712_RPI5, QEMU_RISCV_VIRT)}
+CV1800B_DUO = Platform(
+    name="cv1800b-duo",
+    config=ROOT / "sel4" / "config" / "cv1800b-duo.cmake",
+    build_dir=BUILD_ROOT / "sel4-cv1800b-duo",
+    prefix_dir=BUILD_ROOT / "sel4-cv1800b-duo-prefix",
+    target_profile="riscv64-sel4-milkv-duo",
+    pins_section="cv1800b_duo",
+    observed_prefix_section="observed_prefix_cv1800b_duo",
+    random_seed="slime-sel4-cv1800b-duo",
+    qemu_dtb=False,
+    architecture="riscv64",
+    root_target_key="riscv64_root_target",
+    child_target_name="riscv64imac-sel4-minimal.json",
+    loader_target_key="riscv64_loader_target",
+    cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+)
+
+PLATFORMS = {
+    platform.name: platform
+    for platform in (QEMU_ARM_VIRT, BCM2712_RPI5, QEMU_RISCV_VIRT, CV1800B_DUO)
+}
+
 IMAGE = BUILD_ROOT / "slime-sel4.elf"
 MANIFEST = BUILD_ROOT / "slime-sel4.identity.json"
 # P5.2's component-graph image is written beside the P5.1 one rather than
@@ -1023,7 +1044,8 @@ def build_application(
     component_spec_root: Path | None = None,
     external_components: list[str] | None = None,
     prebuilt_generation: Path | None = None,
-) -> tuple[Path, Path]:
+    duo_early_fault: bool = False,
+) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
     environment = cargo_environment(toolchain, platform)
@@ -1048,12 +1070,19 @@ def build_application(
     root_environment = environment.copy()
     root_environment["SLIME_TARGET_PROFILE"] = platform.target_profile
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
+    if platform is CV1800B_DUO:
+        frequency = table(pins, platform.pins_section).get("timer_frequency_hz")
+        if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
+            fail(f"sel4/pins.toml [{platform.pins_section}].timer_frequency_hz must be positive")
+        root_environment["SLIME_DUO_TIMEBASE_HZ"] = str(frequency)
     if platform is QEMU_ARM_VIRT and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011
         # RX FIFO and feeds those bytes through the existing input capability.
         # Plane images keep deterministic scripts, and physical targets do not
         # compile a QEMU address into their root task.
         root_environment["SLIME_QEMU_KEYBOARD"] = "1"
+    if duo_early_fault:
+        root_environment["SLIME_DUO_EARLY_FAULT"] = "1"
     if variant == BOOT_SELECTION_VARIANT:
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
@@ -1103,17 +1132,16 @@ def build_application(
             # made the fault plane's stream record differ between two boots.
             generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
-        root_environment["SLIME_GENERATION"] = str(
-            build_sel4_generation(
-                manifest,
-                platform=platform,
-                environment=generation_environment,
-                component_spec_root=component_spec_root,
-                external_components=external_components,
-                prebuilt_generation=prebuilt_generation,
-            ).resolve()
-        )
-        if variant == FIXTURE_VARIANT:
+        generation = build_sel4_generation(
+            manifest,
+            platform=platform,
+            environment=generation_environment,
+            component_spec_root=component_spec_root,
+            external_components=external_components,
+            prebuilt_generation=prebuilt_generation,
+        ).resolve()
+        root_environment["SLIME_GENERATION"] = str(generation)
+        if variant == FIXTURE_VARIANT and platform is not CV1800B_DUO:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
     if variant == RECLAMATION_VARIANT:
         rustflags = root_environment.get("RUSTFLAGS", "")
@@ -1144,7 +1172,7 @@ def build_application(
     )
     root_elf = root_target_dir / root_target.stem / "release" / "slime-root.elf"
     require_file(root_elf, "root task ELF")
-    return child_elf, root_elf
+    return child_elf, root_elf, None if variant == BOOT_SELECTION_VARIANT else generation
 
 
 def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Path]:
@@ -1249,6 +1277,7 @@ def write_manifest(
     variant: str = FIXTURE_VARIANT,
     platform: Platform = QEMU_ARM_VIRT,
     generation: Path | None = None,
+    duo_early_fault: bool = False,
 ) -> None:
     prefix = platform.prefix_dir
     kernel = require_file(prefix / "bin" / "kernel.elf", "installed seL4 kernel")
@@ -1266,8 +1295,9 @@ def write_manifest(
     )
     root_target = ROOT / text(table(pins, "rust_sel4"), platform.root_target_key, "rust_sel4")
     child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
-
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
+    if duo_early_fault:
+        suffix += "-early-fault"
     stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
     stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
     stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
@@ -1324,6 +1354,8 @@ def write_manifest(
         "platform": platform.name,
         "target_profile": platform.target_profile,
     }
+    if duo_early_fault:
+        manifest["duo_early_fault"] = True
     if platform.qemu_dtb:
         # Emulator launch facts, which gates read to build their QEMU command.
         manifest["qemu"] = {
@@ -1418,6 +1450,11 @@ def main() -> None:
         "--sample-plane",
         action="store_true",
         help="embed the sample-plane generation (P5.3.4), writing a separate image",
+    )
+    parser.add_argument(
+        "--duo-early-fault",
+        action="store_true",
+        help="build a Duo-only bounded post-timer fault diagnostic image",
     )
     parser.add_argument(
         "--stream-plane",
@@ -1754,6 +1791,10 @@ def main() -> None:
     if len(selected) > 1:
         fail("each --*-plane flag selects a different generation; pass one")
     variant = selected[0] if selected else FIXTURE_VARIANT
+    if arguments.duo_early_fault and arguments.platform != CV1800B_DUO.name:
+        fail("--duo-early-fault requires --platform cv1800b-duo")
+    if arguments.duo_early_fault and variant != SAMPLE_VARIANT:
+        fail("--duo-early-fault requires --sample-plane")
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
@@ -1785,13 +1826,14 @@ def main() -> None:
         ],
         description="verify installed seL4 prefix",
     )
-    child_elf, root_elf = build_application(
+    child_elf, root_elf, generation = build_application(
         pins,
         variant=variant,
         platform=platform,
         component_spec_root=arguments.component_spec_root,
         external_components=arguments.external_component,
         prebuilt_generation=arguments.prebuilt_generation,
+        duo_early_fault=arguments.duo_early_fault,
     )
     loader, payload_tool = build_loader(pins, platform)
     image, manifest_path = VARIANT_IMAGES[variant]
@@ -1802,6 +1844,11 @@ def main() -> None:
         image = image.with_name(f"{image.stem}-{platform.name}{image.suffix}")
         manifest_path = manifest_path.with_name(
             manifest_path.name.replace(".identity.json", f"-{platform.name}.identity.json")
+        )
+    if arguments.duo_early_fault:
+        image = image.with_name(image.name.replace(".elf", "-early-fault.elf"))
+        manifest_path = manifest_path.with_name(
+            manifest_path.name.replace(".identity.json", "-early-fault.identity.json")
         )
     package_image(payload_tool, loader, root_elf, image, platform)
     write_manifest(
@@ -1814,7 +1861,8 @@ def main() -> None:
         manifest_path=manifest_path,
         variant=variant,
         platform=platform,
-        generation=arguments.prebuilt_generation,
+        generation=generation,
+        duo_early_fault=arguments.duo_early_fault,
     )
     print(
         f"seL4 image build: wrote {image.relative_to(ROOT)} and {manifest_path.relative_to(ROOT)}"

@@ -9,6 +9,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_BUNDLE_IDENTITY");
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
     println!("cargo:rerun-if-env-changed=SLIME_QEMU_KEYBOARD");
+    println!("cargo:rerun-if-env-changed=SLIME_DUO_EARLY_FAULT");
+    println!("cargo:rerun-if-env-changed=SLIME_DUO_TIMEBASE_HZ");
     println!("cargo::rustc-check-cfg=cfg(slime_boot_selector)");
     println!("cargo::rustc-check-cfg=cfg(slime_b38_force_unwind)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_missing)");
@@ -19,9 +21,27 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_rights)");
     println!("cargo::rustc-check-cfg=cfg(slime_root_fixture)");
     println!("cargo::rustc-check-cfg=cfg(slime_qemu_keyboard)");
+    println!("cargo::rustc-check-cfg=cfg(slime_cv1800b_duo)");
+    println!("cargo::rustc-check-cfg=cfg(slime_duo_early_fault)");
     let target_profile = std::env::var("SLIME_TARGET_PROFILE")
         .unwrap_or_else(|_| "aarch64-sel4-qemu-virt".to_owned());
     println!("cargo:rustc-env=SLIME_TARGET_PROFILE={target_profile}");
+    if target_profile == "riscv64-sel4-milkv-duo" {
+        println!("cargo::rustc-cfg=slime_cv1800b_duo");
+        let timebase = std::env::var("SLIME_DUO_TIMEBASE_HZ")
+            .expect("Milk-V Duo build requires SLIME_DUO_TIMEBASE_HZ");
+        let frequency: u64 = timebase
+            .parse()
+            .expect("SLIME_DUO_TIMEBASE_HZ must be a positive integer");
+        assert!(frequency > 0, "SLIME_DUO_TIMEBASE_HZ must be positive");
+        println!("cargo:rustc-env=SLIME_DUO_TIMEBASE_HZ={frequency}");
+    }
+    if std::env::var("SLIME_DUO_EARLY_FAULT").as_deref() == Ok("1") {
+        if target_profile != "riscv64-sel4-milkv-duo" {
+            panic!("SLIME_DUO_EARLY_FAULT is valid only for the Milk-V Duo profile");
+        }
+        println!("cargo::rustc-cfg=slime_duo_early_fault");
+    }
     if std::env::var("SLIME_BOOT_SELECTOR").as_deref() == Ok("1") {
         let identity = std::env::var("SLIME_BOOT_BUNDLE_IDENTITY")
             .expect("selector build requires SLIME_BOOT_BUNDLE_IDENTITY");

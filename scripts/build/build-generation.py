@@ -298,10 +298,15 @@ SEL4_BOARD_TARGET_PROFILE = "aarch64-rpi5"
 # P3's RV64 reference uses the same generated graph and native seL4 transport,
 # but every executable is rebuilt and qualified for a distinct ABI/profile.
 SEL4_RISCV64_TARGET_PROFILE = "riscv64-sel4-qemu-virt"
+# P3.E's physical RV64 target shares the seL4 userspace ABI, not its platform
+# identity. Rewriting the manifest target forces every embedded executable to be
+# rebuilt and admitted for the named Duo profile.
+SEL4_RISCV64_DUO_TARGET_PROFILE = "riscv64-sel4-milkv-duo"
 SEL4_TARGET_PROFILES = (
     SEL4_TARGET_PROFILE,
     SEL4_BOARD_TARGET_PROFILE,
     SEL4_RISCV64_TARGET_PROFILE,
+    SEL4_RISCV64_DUO_TARGET_PROFILE,
 )
 # Additional seL4 manifests carry distinct authenticated boot actions and
 # generation-derived component tables while sharing the same target profile.
@@ -1092,6 +1097,7 @@ def sel4_component_environment(
         SEL4_TARGET_PROFILE: ROOT / "build" / "sel4-prefix",
         SEL4_BOARD_TARGET_PROFILE: ROOT / "build" / "sel4-rpi5-prefix",
         SEL4_RISCV64_TARGET_PROFILE: ROOT / "build" / "sel4-riscv64-prefix",
+        SEL4_RISCV64_DUO_TARGET_PROFILE: ROOT / "build" / "sel4-cv1800b-duo-prefix",
     }
     prefix = prefix_by_profile.get(target_profile.name)
     if prefix is None:

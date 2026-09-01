@@ -381,5 +381,8 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-30 | [B91 follow-ups: two proposed gates measured, refuted, and replaced by one](2026-08-30-b91-followups-audit/index.md) | Audit | Verified | B91 |
 | 2026-08-30 | [Repository hygiene ownership and contract-check consolidation](2026-08-30-repository-hygiene/index.md) | Change | Verified | none |
 | 2026-08-29 | [P3.D: a Milk-V Duo boots a Slime-built S-mode payload, hands-off](2026-08-29-p3d-milkv-duo-bringup/index.md) | Change | Verified | P3.D, P3.E |
-| 2026-08-31 | [Milk-V Duo becomes the current physical bring-up lane](2026-08-31-milkv-duo-physical-lane-pivot/index.md) | Decision | Proposed | P3, P3.D, P3.E, P4, RP3, M5.7, H1 |
+| 2026-08-31 | [Milk-V Duo becomes the current physical bring-up lane](2026-08-31-milkv-duo-physical-lane-pivot/index.md) | Decision | Verified | P3, P3.D, P3.E, P4, RP3, M5.7, H1 |
 | 2026-08-31 | [P3: RV64 QEMU reaches architecture-neutral seL4 parity](2026-08-31-p3-rv64-qemu-vertical-slice/index.md) | Change | Verified | P3 |
+| 2026-08-31 | [P3.E — seL4 on the Milk-V Duo](2026-08-31-p3e-sel4-milkv-duo/index.md) | Change | Verified | P3.E |
+| 2026-08-31 | [P3.E loader leaves omitted RISC-V accessed and dirty bits](2026-08-31-p3e-loader-ad-bits/index.md) | Defect | Verified | P3.E |
+| 2026-09-01 | [P3.E left the CV1800B RTC seconds counter stopped](2026-09-01-p3e-rtc-counter-start/index.md) | Defect | Verified | P3.E |

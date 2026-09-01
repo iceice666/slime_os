@@ -71,6 +71,26 @@ _start:
     csrr    a0, satp
     call    put_hex
     call    put_nl
+    /*
+     * T-Head C906 MAEE changes the meaning of Sv39 PTE bits 60--63. The
+     * S-mode read-only `sxstatus` mirror is the only state this payload can
+     * observe directly; bit 21 is MAEE. A seL4 port must branch on this
+     * measured state rather than assuming standard PTE encodings.
+     */
+    la      a0, msg_sxstatus
+    call    puts
+    csrr    a0, 0x5c0             /* T-Head sxstatus */
+    mv      s4, a0
+    call    put_hex
+    call    put_nl
+
+    la      a0, msg_maee
+    call    puts
+    srli    a0, s4, 21
+    andi    a0, a0, 1
+    call    put_hex
+    call    put_nl
+
 
     /* read the S-mode timer via rdtime: this is the path seL4 uses for
      * timestamps, so a sane changing value matters. */
@@ -190,6 +210,10 @@ msg_dtb:
     .asciz "SLIME_DUO dtb       = "
 msg_satp:
     .asciz "SLIME_DUO satp      = "
+msg_sxstatus:
+    .asciz "SLIME_DUO sxstatus  = "
+msg_maee:
+    .asciz "SLIME_DUO maee      = "
 msg_time:
     .asciz "SLIME_DUO rdtime    = "
 msg_marker:

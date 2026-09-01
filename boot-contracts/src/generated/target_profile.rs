@@ -3,7 +3,7 @@
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MAX_NAME_BYTES: usize = 32;
-pub const PROFILE_COUNT: usize = 6;
+pub const PROFILE_COUNT: usize = 7;
 
 pub const ARCH_X86_64: u32 = 1;
 pub const ARCH_AARCH64: u32 = 2;
@@ -34,6 +34,7 @@ pub const PROFILE_AARCH64_RPI5: u32 = 3;
 pub const PROFILE_AARCH64_SEL4_QEMU_VIRT: u32 = 5;
 pub const PROFILE_RISCV64_QEMU_VIRT: u32 = 4;
 pub const PROFILE_RISCV64_SEL4_QEMU_VIRT: u32 = 6;
+pub const PROFILE_RISCV64_SEL4_MILKV_DUO: u32 = 7;
 
 pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
     TargetProfile {
@@ -104,6 +105,19 @@ pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
     TargetProfile {
         id: 6,
         name: "riscv64-sel4-qemu-virt",
+        architecture: 3,
+        abi: 5,
+        page_profile: 3,
+        required_features: 144,
+        elf_machine: 243,
+        page_bytes: 4096,
+        kernel_preferred_base: 0xFFFF_FFFF_8000_0000,
+        kernel_load_base: 0xFFFF_FFFF_9000_0000,
+        component_base: 0x0040_0000,
+    },
+    TargetProfile {
+        id: 7,
+        name: "riscv64-sel4-milkv-duo",
         architecture: 3,
         abi: 5,
         page_profile: 3,

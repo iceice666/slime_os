@@ -815,6 +815,12 @@ pub(super) fn launch_instance_graph(
         }
     }
     sel4::debug_println!("SLIME_GRAPH activated instances={activated}");
+    // No component request has been received yet: activation can queue a
+    // synchronous IPC call, but only the service loop below can mutate the
+    // ClockService scheduler or program its hardware deadline. This second
+    // proof therefore establishes post-activation IRQ liveness before timer
+    // ownership passes to the service loop.
+    prove_timer(timer, "post-graph-start");
 
     let mut buffers = SharedBufferTable::new(GenerationEpoch(generation.number));
     let budget = shared_buffer_budget(generation);

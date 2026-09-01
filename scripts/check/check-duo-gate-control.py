@@ -30,8 +30,8 @@ GATE = ROOT / "scripts" / "check" / "check-duo-boot.py"
 TRANSCRIPT = (
     ROOT
     / "devlog"
-    / "2026-08-29-p3d-milkv-duo-bringup"
-    / "duo-boot-serial.log"
+    / "2026-08-31-p3e-sel4-milkv-duo"
+    / "maee-smoke.log"
 )
 
 
@@ -68,7 +68,7 @@ def main() -> None:
     if not TRANSCRIPT.is_file():
         fail(
             f"{TRANSCRIPT.relative_to(ROOT)} is missing; this control needs the "
-            "observed board transcript P3.D recorded"
+            "observed board transcript that established the MAEE markers"
         )
     observed = TRANSCRIPT.read_text()
 

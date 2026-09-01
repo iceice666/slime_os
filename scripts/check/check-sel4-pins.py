@@ -18,9 +18,10 @@ from harness import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-QEMU_CONFIG_PATHS = {
+CONFIG_PATHS = {
     "qemu-arm-virt": ROOT / "sel4" / "config" / "qemu-arm-virt.cmake",
     "qemu-riscv-virt": ROOT / "sel4" / "config" / "qemu-riscv-virt.cmake",
+    "cv1800b-duo": ROOT / "sel4" / "config" / "cv1800b-duo.cmake",
 }
 RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
@@ -36,6 +37,10 @@ PREFIX_PATHS = {
     "bcm2712-rpi5": (
         ROOT / "build" / "sel4-rpi5-prefix",
         "observed_prefix_bcm2712_rpi5",
+    ),
+    "cv1800b-duo": (
+        ROOT / "build" / "sel4-cv1800b-duo-prefix",
+        "observed_prefix_cv1800b_duo",
     ),
 }
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -227,6 +232,10 @@ def expected_cmake_values(profile: dict[str, object], section: str) -> dict[str,
                 else "OFF",
             }
         )
+    if section == "cv1800b_duo":
+        values["KernelRiscvExportTimeUser"] = (
+            "ON" if boolean(profile, "export_time_user", section) else "OFF"
+        )
     return values
 
 
@@ -351,7 +360,7 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
 def check_profile(pins: dict[str, object]) -> None:
     arm = table(pins, "qemu_arm_virt")
     arm_expected = expected_cmake_values(arm, "qemu_arm_virt")
-    arm_actual = parse_cmake_cache(QEMU_CONFIG_PATHS["qemu-arm-virt"])
+    arm_actual = parse_cmake_cache(CONFIG_PATHS["qemu-arm-virt"])
     if arm_actual != arm_expected:
         details = [
             f"{key}: expected {arm_expected.get(key)!r}, got {arm_actual.get(key)!r}"
@@ -375,7 +384,7 @@ def check_profile(pins: dict[str, object]) -> None:
 
     riscv = table(pins, "qemu_riscv_virt")
     riscv_expected = expected_cmake_values(riscv, "qemu_riscv_virt")
-    riscv_actual = parse_cmake_cache(QEMU_CONFIG_PATHS["qemu-riscv-virt"])
+    riscv_actual = parse_cmake_cache(CONFIG_PATHS["qemu-riscv-virt"])
     if riscv_actual != riscv_expected:
         details = [
             f"{key}: expected {riscv_expected.get(key)!r}, got {riscv_actual.get(key)!r}"
@@ -395,6 +404,39 @@ def check_profile(pins: dict[str, object]) -> None:
         or integer(riscv, "memory_mib", "qemu_riscv_virt") != 3072
     ):
         fail("qemu-riscv-virt QEMU shape must be one CPU and 3072 MiB")
+
+    duo = table(pins, "cv1800b_duo")
+    duo_expected = expected_cmake_values(duo, "cv1800b_duo")
+    duo_actual = parse_cmake_cache(CONFIG_PATHS["cv1800b-duo"])
+    if duo_actual != duo_expected:
+        details = [
+            f"{key}: expected {duo_expected.get(key)!r}, got {duo_actual.get(key)!r}"
+            for key in sorted(set(duo_expected) | set(duo_actual))
+            if duo_expected.get(key) != duo_actual.get(key)
+        ]
+        fail("cv1800b-duo CMake config disagrees with pins.toml:\n" + "\n".join(details))
+    if duo_expected["KernelIsMCS"] != "OFF" or duo_expected["KernelMaxNumNodes"] != "1":
+        fail("cv1800b-duo product profile must be non-MCS and single-node")
+    if text(duo, "cpu", "cv1800b_duo") != "thead-c906":
+        fail("cv1800b-duo CPU pin must name the T-Head C906")
+    if text(duo, "mmu", "cv1800b_duo") != "sv39":
+        fail("cv1800b-duo MMU pin must be Sv39")
+    if integer(duo, "timer_frequency_hz", "cv1800b_duo") != 25_000_000:
+        fail("cv1800b-duo timer frequency must match the observed DT")
+    if integer(duo, "timer_irq", "cv1800b_duo") != 17:
+        fail("cv1800b-duo timer IRQ must match the observed RTC alarm source")
+    if integer(duo, "max_irq", "cv1800b_duo") != 101:
+        fail("cv1800b-duo PLIC source count must match riscv,ndev")
+    if integer(duo, "usable_memory_bytes", "cv1800b_duo") != 0x03F00000:
+        fail("cv1800b-duo usable memory must exclude the OpenSBI reservation")
+    expected_duo_boot_files = [
+        "slime-sel4-cv1800b-duo.itb",
+        "slime-sel4-sample-cv1800b-duo.itb",
+        "slime-sel4-sample-cv1800b-duo-early-fault.itb",
+    ]
+    if duo.get("boot_files") != expected_duo_boot_files:
+        fail("cv1800b-duo boot files must pin the product, sample, and fault FITs")
+
     rpi5 = parse_cmake_cache(RPI5_CONFIG_PATH)
     include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/AARCH64_bcm2712_verified.cmake"
     # The inherited verified profile supplies platform/architecture, turns
@@ -485,6 +527,7 @@ def check_prefix(pins: dict[str, object], platform: str) -> None:
         "qemu-arm-virt": "just sel4_qemu_image_check",
         "qemu-riscv-virt": "just riscv64_qemu_image_check",
         "bcm2712-rpi5": "just sel4_rpi5_image_check",
+        "cv1800b-duo": "just sel4_duo_image_check",
     }[platform]
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")

@@ -52,11 +52,13 @@ use crate::event::MonotonicInstant;
 use crate::object_allocator::{AllocError, ObjectAllocator};
 use crate::timer::PlatformTimer;
 
-/// Userspace timer interrupt for the selected QEMU `virt` platform.
+/// Userspace timer interrupt for the selected product platform.
 #[cfg(target_arch = "aarch64")]
 pub const TIMER_IRQ: sel4::Word = 30;
-#[cfg(target_arch = "riscv64")]
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
 pub const TIMER_IRQ: sel4::Word = 11;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+pub const TIMER_IRQ: sel4::Word = 17;
 
 /// Badge minted onto the notification copy bound to the IRQ handler. The
 /// notification object's own (unbadged, full-rights) capability is used to
@@ -90,9 +92,9 @@ pub enum PlatformTimerSetupError {
 /// Failure while operating the platform timer after acquisition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlatformTimerAckError {
-    /// The RV64 adapter was used before its RTC register page was attached.
+    /// The RV64 adapter was used before its timer register page was attached.
     RegistersUnavailable,
-    /// A device-register offset was outside the mapped granule.
+    /// A timer register offset was outside the mapped granule.
     RegisterAccess,
     /// seL4 refused the IRQ acknowledgement.
     Acknowledge(sel4::Error),
@@ -163,7 +165,7 @@ impl PhysicalTimerAdapter {
         })
     }
 
-    /// Attach the mapped Goldfish RTC register page used by RV64 QEMU.
+    /// Attach the mapped register page for the selected RV64 timer device.
     #[cfg(target_arch = "riscv64")]
     pub fn attach_registers(&mut self, registers: MappedGranule) {
         self.registers = Some(registers);
@@ -198,10 +200,36 @@ impl PhysicalTimerAdapter {
         {
             read_cntfrq()
         }
-        #[cfg(target_arch = "riscv64")]
+        #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         {
             1_000_000_000
         }
+        #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+        {
+            1
+        }
+    }
+
+    /// Trigger the CV1800B RTC block's cold power-cycle request.
+    ///
+    /// `control` maps `0x0502_5000`; this adapter already owns the adjacent
+    /// `0x0502_6000` timer granule. The sequence is the SoC restart handler's:
+    /// enable power cycling, unlock `CTRL0`, then request the cycle. Success
+    /// means every bounded register write was issued; working hardware resets
+    /// before the caller can continue.
+    #[cfg(slime_cv1800b_duo)]
+    pub fn request_cold_reset(&self, control: MappedGranule) -> bool {
+        const CTRL_UNLOCK_KEY: usize = 0x004;
+        const CTRL0: usize = 0x008;
+        const ENABLE_POWER_CYCLE: usize = 0x0c8;
+        const UNLOCK_KEY: u32 = 0xab18;
+        const POWER_CYCLE_REQUEST: u32 = 0xffff_0808;
+
+        self.registers.is_some_and(|timer| {
+            timer.write32(ENABLE_POWER_CYCLE, 1)
+                && control.write32(CTRL_UNLOCK_KEY, UNLOCK_KEY)
+                && control.write32(CTRL0, POWER_CYCLE_REQUEST)
+        })
     }
 }
 
@@ -213,13 +241,22 @@ impl PlatformTimer for PhysicalTimerAdapter {
         {
             Ok(MonotonicInstant(read_cntpct()))
         }
-        #[cfg(target_arch = "riscv64")]
+        #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         {
             let registers = self
                 .registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
             Ok(MonotonicInstant(
-                read_rtc(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
+                read_goldfish_rtc(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
+            ))
+        }
+        #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+        {
+            let registers = self
+                .registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
+            Ok(MonotonicInstant(
+                read_cv1800b_rtc(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
             ))
         }
     }
@@ -230,8 +267,16 @@ impl PlatformTimer for PhysicalTimerAdapter {
             write_cntp_cval(deadline.0);
             write_cntp_ctl(CNTP_CTL_ENABLE);
         }
-        #[cfg(target_arch = "riscv64")]
-        program_rtc(
+        #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+        program_goldfish_rtc(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+            deadline.0,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+        program_cv1800b_rtc(
             self.registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
             deadline.0,
@@ -244,8 +289,15 @@ impl PlatformTimer for PhysicalTimerAdapter {
     fn disarm_timer(&mut self) -> Result<(), Self::Error> {
         #[cfg(target_arch = "aarch64")]
         write_cntp_ctl(0);
-        #[cfg(target_arch = "riscv64")]
-        disarm_rtc(
+        #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+        disarm_goldfish_rtc(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+        disarm_cv1800b_rtc(
             self.registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
         )
@@ -255,68 +307,191 @@ impl PlatformTimer for PhysicalTimerAdapter {
     }
 
     fn acknowledge_timer_irq(&mut self) -> Result<(), Self::Error> {
-        // `service_timer_source` calls this only after the next deadline
-        // state (`program_deadline` or `disarm_timer`, both above) has
-        // already been installed, so the device-level condition that raised
-        // the interrupt is already cleared or superseded. The barrier below
-        // makes that register write's effect on the timer hardware
-        // observable before the interrupt controller is told the line is
-        // clear; acknowledging first could let the kernel unmask a line the
-        // device had not actually deasserted yet, which — being
-        // level-triggered — would refire it immediately.
+        // `service_timer_source` installs the next deadline before this call.
+        // A platform acknowledgement must therefore clear only the expired
+        // condition and must not invalidate the newly installed deadline.
         #[cfg(target_arch = "aarch64")]
         isb();
-        #[cfg(target_arch = "riscv64")]
-        clear_rtc_interrupt(
+        #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+        clear_goldfish_rtc_interrupt(
             self.registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
         )
         .then_some(())
         .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        // CV1800B has no independent alarm-pending clear. Both programming
+        // paths write ALARM_ENABLE=0 before either leaving the timer disabled
+        // or installing the next alarm, so another write here would cancel
+        // that freshly installed deadline. The common IRQ-handler ack below
+        // is the only remaining acknowledgement on this platform.
         self.irq_handler
             .irq_handler_ack()
             .map_err(PlatformTimerAckError::Acknowledge)
     }
 }
-#[cfg(target_arch = "riscv64")]
-const RTC_TIME_LOW: usize = 0x00;
-#[cfg(target_arch = "riscv64")]
-const RTC_TIME_HIGH: usize = 0x04;
-#[cfg(target_arch = "riscv64")]
-const RTC_ALARM_LOW: usize = 0x08;
-#[cfg(target_arch = "riscv64")]
-const RTC_ALARM_HIGH: usize = 0x0c;
-#[cfg(target_arch = "riscv64")]
-const RTC_IRQ_ENABLED: usize = 0x10;
-#[cfg(target_arch = "riscv64")]
-const RTC_CLEAR_ALARM: usize = 0x14;
-#[cfg(target_arch = "riscv64")]
-const RTC_CLEAR_INTERRUPT: usize = 0x1c;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_TIME_LOW: usize = 0x00;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_TIME_HIGH: usize = 0x04;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_ALARM_LOW: usize = 0x08;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_ALARM_HIGH: usize = 0x0c;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_IRQ_ENABLED: usize = 0x10;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_CLEAR_ALARM: usize = 0x14;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+const GOLDFISH_RTC_CLEAR_INTERRUPT: usize = 0x1c;
 
-#[cfg(target_arch = "riscv64")]
-fn read_rtc(registers: MappedGranule) -> Option<u64> {
-    let low = registers.read32(RTC_TIME_LOW)? as u64;
-    let high = registers.read32(RTC_TIME_HIGH)? as u64;
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+fn read_goldfish_rtc(registers: MappedGranule) -> Option<u64> {
+    let low = registers.read32(GOLDFISH_RTC_TIME_LOW)? as u64;
+    let high = registers.read32(GOLDFISH_RTC_TIME_HIGH)? as u64;
     Some(low | (high << 32))
 }
 
-#[cfg(target_arch = "riscv64")]
-fn program_rtc(registers: MappedGranule, deadline: u64) -> bool {
-    registers.write32(RTC_ALARM_HIGH, (deadline >> 32) as u32)
-        && registers.write32(RTC_ALARM_LOW, deadline as u32)
-        && registers.write32(RTC_IRQ_ENABLED, 1)
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+fn program_goldfish_rtc(registers: MappedGranule, deadline: u64) -> bool {
+    registers.write32(GOLDFISH_RTC_ALARM_HIGH, (deadline >> 32) as u32)
+        && registers.write32(GOLDFISH_RTC_ALARM_LOW, deadline as u32)
+        && registers.write32(GOLDFISH_RTC_IRQ_ENABLED, 1)
 }
 
-#[cfg(target_arch = "riscv64")]
-fn disarm_rtc(registers: MappedGranule) -> bool {
-    registers.write32(RTC_IRQ_ENABLED, 0)
-        && registers.write32(RTC_CLEAR_ALARM, 1)
-        && registers.write32(RTC_CLEAR_INTERRUPT, 1)
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+fn disarm_goldfish_rtc(registers: MappedGranule) -> bool {
+    registers.write32(GOLDFISH_RTC_IRQ_ENABLED, 0)
+        && registers.write32(GOLDFISH_RTC_CLEAR_ALARM, 1)
+        && registers.write32(GOLDFISH_RTC_CLEAR_INTERRUPT, 1)
 }
 
-#[cfg(target_arch = "riscv64")]
-fn clear_rtc_interrupt(registers: MappedGranule) -> bool {
-    registers.write32(RTC_CLEAR_INTERRUPT, 1)
+#[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
+fn clear_goldfish_rtc_interrupt(registers: MappedGranule) -> bool {
+    registers.write32(GOLDFISH_RTC_CLEAR_INTERRUPT, 1)
+}
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_ALARM_TIME: usize = 0x08;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_ALARM_ENABLE: usize = 0x0c;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_ANA_CALIB: usize = 0x00;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_SEC_PULSE_GEN: usize = 0x04;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_SECONDS: usize = 0x18;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_APB_RDATA_SEL: usize = 0x3c;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_ENABLE_POWER_WAKEUP: usize = 0xbc;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_EXTERNAL_PULSE_SELECT: u32 = 1 << 31;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_APB_READ_SECONDS: u32 = 1;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_ALARM_ENABLED: u32 = 1;
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const CV1800B_RTC_ALARM_WAKEUP_SOURCES: u32 = 0x30;
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+fn read_cv1800b_rtc(registers: MappedGranule) -> Option<u64> {
+    Some(registers.read32(CV1800B_RTC_SECONDS)? as u64)
+}
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+fn program_cv1800b_rtc(registers: MappedGranule, deadline: u64) -> bool {
+    u32::try_from(deadline).is_ok_and(|deadline| {
+        let Some(pulse_generator) = registers.read32(CV1800B_RTC_SEC_PULSE_GEN) else {
+            return false;
+        };
+        let Some(analog_calibration) = registers.read32(CV1800B_RTC_ANA_CALIB) else {
+            return false;
+        };
+        let Some(wakeup_sources) = registers.read32(CV1800B_RTC_ENABLE_POWER_WAKEUP) else {
+            return false;
+        };
+        // Bit 31 selects an external seconds pulse. Firmware does not leave
+        // that source running across the FIT handoff, so the vendor driver
+        // clears it in both control registers before reading or arming the RTC.
+        // Preserve the calibrated low bits: only the source selector belongs
+        // to this transition.
+        registers.write32(
+            CV1800B_RTC_SEC_PULSE_GEN,
+            pulse_generator & !CV1800B_RTC_EXTERNAL_PULSE_SELECT,
+        ) && registers.write32(
+            CV1800B_RTC_ANA_CALIB,
+            analog_calibration & !CV1800B_RTC_EXTERNAL_PULSE_SELECT,
+        ) && registers.write32(CV1800B_RTC_ALARM_ENABLE, 0)
+            && wait_cv1800b_rtc_settle()
+            && registers.write32(CV1800B_RTC_ALARM_TIME, deadline)
+            && registers.write32(CV1800B_RTC_APB_RDATA_SEL, CV1800B_RTC_APB_READ_SECONDS)
+            && registers.write32(CV1800B_RTC_ALARM_ENABLE, CV1800B_RTC_ALARM_ENABLED)
+            && registers.write32(
+                CV1800B_RTC_ENABLE_POWER_WAKEUP,
+                wakeup_sources | CV1800B_RTC_ALARM_WAKEUP_SOURCES,
+            )
+            && registers.read32(CV1800B_RTC_SECONDS).is_some()
+    })
+}
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+fn wait_cv1800b_rtc_settle() -> bool {
+    // The vendor driver waits 200 us after disabling the alarm. The kernel
+    // sets `scounteren.TM` for this platform before entering userspace, and
+    // the root build receives the timebase from the pinned board profile.
+    // Bound both time and iterations so a stopped or non-advancing counter
+    // becomes `RegisterAccess` instead of wedging startup.
+    const TIMEBASE_HZ: u64 = const_parse_u64(env!("SLIME_DUO_TIMEBASE_HZ"));
+    const SETTLE_MICROSECONDS: u64 = 200;
+    const SETTLE_TICKS: u64 = (TIMEBASE_HZ * SETTLE_MICROSECONDS).div_ceil(1_000_000);
+    const MAX_POLLS: usize = 1_000_000;
+
+    let start = read_riscv_time();
+    (0..MAX_POLLS).any(|_| {
+        if read_riscv_time().wrapping_sub(start) >= SETTLE_TICKS {
+            true
+        } else {
+            core::hint::spin_loop();
+            false
+        }
+    })
+}
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+const fn const_parse_u64(value: &str) -> u64 {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    let mut parsed = 0u64;
+    while index < bytes.len() {
+        let digit = bytes[index];
+        assert!(digit.is_ascii_digit(), "invalid decimal integer");
+        parsed = parsed * 10 + (digit - b'0') as u64;
+        index += 1;
+    }
+    assert!(parsed > 0, "integer must be positive");
+    parsed
+}
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+#[inline]
+fn read_riscv_time() -> u64 {
+    let value: u64;
+    // SAFETY: `rdtime` is a pure counter read. The selected kernel sets only
+    // `scounteren.TM` before entering userspace, granting this instruction
+    // without exposing the cycle or instret counters.
+    unsafe {
+        core::arch::asm!(
+            "rdtime {value}",
+            value = out(reg) value,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    value
+}
+
+#[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
+fn disarm_cv1800b_rtc(registers: MappedGranule) -> bool {
+    registers.write32(CV1800B_RTC_ALARM_ENABLE, 0)
 }
 
 /// Reads the EL1 physical counter (`CNTPCT_EL0`), the free-running clock the

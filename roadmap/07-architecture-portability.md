@@ -2,9 +2,9 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
-**Status:** In progress — P0, P1, P2.1, P2.2, P3.D, and P5 are complete. P2.3–P2.6 are superseded by P5. P3 RV64 QEMU and P3.E seL4-on-Duo are current. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
+**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, and P5 are complete. P2.3–P2.6 are superseded by P5. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
 
-**Decision:** Milk-V Duo is the current physical execution target because P3.D established the only observed, repeatable, hands-off deployment and serial evidence loop available to the project. P3 first establishes the RV64 QEMU reference corpus; P3.E then uses that corpus and the observed board loop to qualify upstream seL4, `slime-root`, and a verified generation on the Duo. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
+**Decision:** Milk-V Duo remains the current physical execution target because P3.D established the observed hands-off deployment loop and P3.E used it to qualify upstream seL4, `slime-root`, a target-qualified generation, repeated sample-plane semantics, timer delivery, bounded fault evidence, and autonomous recovery. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
 
 Slime targets 64-bit little-endian systems with an MMU and user/supervisor isolation. MCU-class targets without that isolation boundary are external bounded companions, not reduced-security ports of this kernel.
 
@@ -36,8 +36,8 @@ A profile name identifies a complete executable and platform contract, not only 
 2. P0 fixes target and executable-artifact contracts before another architecture emits executable generations.
 3. P1 extracts and verifies the existing x86-64 implementation without changing observable behavior; this prevents x86 trap, APIC, CR3, GDT/IDT, PCI, and firmware assumptions from becoming universal contracts.
 4. P2 preserves the established AArch64 QEMU vertical slice and architecture-neutral corpus used as the first seL4 product reference.
-5. P3 now establishes the RV64 QEMU reference profile before any physical Duo kernel claim.
-6. P3.D supplies the observed Duo handoff and deployment loop; P3.E must kill the memory-fit, PLIC-layout, and C906 memory-attribute risks before completing the platform port.
+5. P3 establishes the RV64 QEMU reference profile before any physical Duo kernel claim.
+6. P3.D supplies the observed Duo handoff and deployment loop; P3.E closed the memory-fit, PLIC-layout, C906 memory-attribute, seL4/root, generation, component, timer, and bounded-fault gates on that exact board.
 7. P4 and RP3–RP8 retain their Raspberry Pi 5 acceptance conditions but are deferred until their physical evidence path is available and reprioritized.
 
 ## P0: Architecture, target, and executable-artifact contracts
@@ -288,7 +288,7 @@ loop ran three times consecutively hands-off.
 
 ### P3.E — seL4 on the Milk-V Duo
 
-**Status:** Current, with fail-fast risk qualification before platform implementation. P3.D established the handoff and loop; this slice owns the seL4 platform port and the first verified Slime generation on the board.
+**Status:** Complete and physically verified 2026-09-01. The named Milk-V Duo boots upstream seL4 and `slime-root`, admits only the `riscv64-sel4-milkv-duo` generation, delivers RTC/PLIC timer interrupts before and after graph activation, runs the architecture-neutral sample plane three times with byte-identical normalized traces and zero framing errors, emits a bounded early-fault diagnostic, and autonomously cold-resets to vendor Linux after every boot.
 
 **Depends on:** P3 (the RV64 QEMU profile must pass its corpus first), and P3.D for the board's pinned facts and deployment loop.
 
@@ -312,9 +312,11 @@ The first three gates are go/no-go evidence, not implementation completion:
 - wrong-target artifacts, unsupported ISA extensions, page modes, firmware handoffs, and interrupt profiles fail explicitly rather than being guessed from the running machine;
 - the physical gate records image, generation, board, firmware, memory-placement, and serial identities, and repeated runs produce the same normalized semantic evidence.
 
-### Exit condition
+### Exit condition (observed)
 
-The named Milk-V Duo boots a verified Slime generation on upstream seL4, reaches `slime-root`'s ready state, and runs the selected architecture-neutral component vertical slice with repeatable physical serial evidence. This closes an RV64 architecture claim only; no untested storage, USB, network, display, sensor, actuator, ROS, or Framework behavior is promoted.
+**Observed 2026-09-01:** the named Milk-V Duo booted a verified Slime generation on upstream seL4, reached `slime-root` ready, ran the architecture-neutral sample plane three times with byte-identical normalized semantic traces and zero framing errors, diagnosed the bounded early-fault control, and returned to vendor Linux after every boot without physical intervention. This closes only the declared RV64 architecture claim; storage, USB, network, display, sensor, actuator, ROS, and Framework behavior remain unclaimed.
+
+**Evidence:** [`devlog/2026-08-31-p3e-sel4-milkv-duo/`](../devlog/2026-08-31-p3e-sel4-milkv-duo/index.md)
 
 ## P4: Raspberry Pi 5 physical architecture qualification
 

@@ -1,0 +1,9 @@
+Artifact: build/slime-sel4-sample-cv1800b-duo.elf
+Root page table: 0x800b8000
+Non-branch leaf descriptors: 1533
+Branch descriptors: 2
+First rebuilt leaf descriptor: 0x7000001fe00000cf
+Required low bits: 0xcf = V|R|W|X|A|D
+All 1533 non-branch leaves carry A|D: true
+
+Method: decoded the 0x3000-byte page-table LOAD segment at virtual address 0x800b6000 as 64-bit little-endian Sv39 descriptors after rebuilding from rust-sel4 commit 070c6a384a01ce0f6c60e081fddc8c40fb2a6132. Branch entries were identified by V=1 and R|W|X=0; all other valid entries were counted as eager leaves.

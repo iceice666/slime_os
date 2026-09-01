@@ -1,0 +1,147 @@
+SLIME_DUO loader page tables active
+SLIME_ROOT allocator slots=3068 untypeds=23 bytes=61791040
+SLIME_TIMER acquired irq=17 freq_hz=1
+SLIME_TIMER delivered badge=0x1 polls=<n>
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=<n> end=<n> delta=<n>
+SLIME_TIMER OK
+SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta=8192 caps_deleted=2
+SLIME_ROOT plan slots required=414 available=3061
+SLIME_ROOT generation admitted number=<n> executables=4 instances=4 grants=6 health=4 bootstrap=1
+SLIME_ROOT fabric graph=absent schemas=0 routes=0 participants=0 interpositions=0
+SLIME_ROOT authority manifest=<identity>
+SLIME_ROOT graph admitted executables=4 instances=4 slimecm=0 elf=4 unrecognized=0
+SLIME_MEM budget holders=0 declared=0
+SLIME_CLOCK authority holders=0 timer_quota=0
+SLIME_WAIT sources declared=0 resource=0
+SLIME_GRAPH schedule instance=init priority=254 default=254
+SLIME_GRAPH threads instance=init count=1
+SLIME_GRAPH factory placed task=<n> component=init slot=<n> kind=shared-buffer-factory
+SLIME_GRAPH staged task=<n> instance=init executable=init grants=3 bindings=3 window=0x2e000 frames=31 tables=3 entry=0x141da
+SLIME_GRAPH schedule instance=sample-worker priority=254 default=254
+SLIME_GRAPH threads instance=sample-worker count=2
+SLIME_GRAPH schedule instance=sample-worker thread=1 priority=100
+SLIME_GRAPH staged task=<n> instance=sample-worker executable=sample-worker grants=1 bindings=1 window=0x37000 frames=42 tables=3 entry=0x11e32
+SLIME_GRAPH staged instances=2 root_autostart=2 loadable_executables=4 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH endpoint grant=sample-plane-channel producer_instance=2 consumer_instance=1
+SLIME_GRAPH endpoint grant=sample-worker-loopback producer_instance=3 consumer_instance=3
+SLIME_GRAPH native endpoint task=<n> slot=<n> side=both
+SLIME_GRAPH peer endpoints created=2 grants=2 installed=1
+SLIME_GRAPH notifications created=0 bindings=0
+SLIME_CLOCK authority task=<n> instance=init flags=0x0 timers=0 badge=0x0
+SLIME_CLOCK authority task=<n> instance=sample-worker flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH activated instances=2
+SLIME_TIMER phase=post-graph-start delivered badge=0x1 polls=<n>
+SLIME_TIMER phase=post-graph-start serviced events=1 programming=Disarm
+SLIME_TIMER phase=post-graph-start advanced start=<n> end=<n> delta=<n>
+SLIME_TIMER phase=post-graph-start OK
+SLIME_GRAPH quota task=<n> instance=init executable=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_MEM quota task=<n> instance=init declared=0 installed=0 base=0x0
+SLIME_GRAPH quota task=<n> instance=sample-worker executable=sample-worker pages=0 buffers=0 mappings=0 loans=0
+SLIME_MEM quota task=<n> instance=sample-worker declared=0 installed=0 base=0x0
+SLIME_GRAPH quotas declared=2 budgeted=0 holders=2
+SLIME_ROOT console dispatcher started
+SLIME_ROOT allocator baseline live_slots=104 live_objects=98 live_bytes=888928
+[sample-worker] main thread running
+SLIME_GRAPH healthy generation=<n> instances=<identity> required=2 live=2 idle=2 failed=0
+SLIME_GRAPH spawn preflight executable-ok task-instance=0 slot=<n> executable=2 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=0 child=<n> name=sample-receiver
+SLIME_GRAPH spawn authorized task=<n> slot=<n> component=sample-receiver grants=0
+SLIME_GRAPH schedule instance=sample-receiver priority=254 default=254
+SLIME_GRAPH quota task=<n> instance=sample-receiver executable=sample-receiver pages=2 buffers=1 mappings=2 loans=1
+SLIME_MEM quota task=<n> instance=sample-receiver declared=0 installed=0 base=0x0
+SLIME_GRAPH native endpoint task=<n> slot=<n> side=both
+SLIME_CLOCK authority task=<n> instance=sample-receiver flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH spawned task=<n> child=<n> component=sample-receiver grants=0 endpoints=1 notifications=0 handle=3 supervision_grants=0 buffer_factory_grants=0
+SLIME_GRAPH spawn preflight executable-ok task-instance=0 slot=<n> executable=1 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=0 child=<n> name=sample-lender
+SLIME_GRAPH spawn authorized task=<n> slot=<n> component=sample-lender grants=2
+SLIME_GRAPH schedule instance=sample-lender priority=254 default=254
+SLIME_GRAPH quota task=<n> instance=sample-lender executable=sample-lender pages=4 buffers=1 mappings=2 loans=1
+SLIME_MEM quota task=<n> instance=sample-lender declared=0 installed=0 base=0x0
+SLIME_GRAPH native endpoint task=<n> slot=<n> side=both
+SLIME_CLOCK authority task=<n> instance=sample-lender flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH spawned task=<n> child=<n> component=sample-lender grants=2 endpoints=1 notifications=0 handle=5 supervision_grants=1 buffer_factory_grants=1
+SLIME_GRAPH spawn preflight executable-ok task-instance=0 slot=<n> executable=2 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=0 child=<n> name=sample-receiver
+SLIME_GRAPH spawn refused task=<n> child=sample-receiver class=instance-live
+[init] spawn budget refused
+[sample-lender] factory is not a buffer
+SLIME_GRAPH buffer created task=<n> slot=<n> id=<n> pages=2 writable=1
+[sample-lender] buffer created
+[sample-lender] payload written
+SLIME_GRAPH loan refused task=<n> slot=<n> class=unsealed
+[sample-lender] unsealed loan denied
+SLIME_GRAPH buffer map refused task=<n> slot=<n> class=write
+[sample-lender] seal is irreversible
+SLIME_GRAPH loan created task=<n> slot=<n> id=<n> to=2 offset=0 length=8192
+[sample-lender] loan created
+SLIME_GRAPH capability exported task=<n> id=<n> kind=loan rights=0x200 retain=0
+SLIME_GRAPH capability imported task=<n> id=<n> kind=loan rights=0x200 retain=0
+[sample-receiver] descriptor received
+SLIME_GRAPH loan mapped refused task=<n> slot=<n> class=range
+[sample-receiver] malformed descriptor mapped nothing
+SLIME_GRAPH frame aliased frame=1200 vaddr=0xa00000000 live=1
+SLIME_GRAPH frame aliased frame=1201 vaddr=0xa00001000 live=2
+SLIME_GRAPH loan mapped task=<n> slot=<n> id=<n>
+[sample-receiver] loaned bytes mapped
+[sample-receiver] loan stays read-only
+[sample-receiver] payload verified
+SLIME_GRAPH loan returned task=<n> slot=<n> id=<n>
+[sample-receiver] loan returned once
+[sample-lender] descriptor sent
+[sample-lender] receiver settled
+[sample-lender] released
+[sample-lender] done
+SLIME_GRAPH component exit task=<n> status=0
+SLIME_CLOCK teardown task=<n> before=0 live=0
+SLIME_LIFECYCLE terminated task=<n> instance=1 cause=exit
+SLIME_GRAPH quota released task=<n> live=3
+SLIME_ROOT reclaim census task=<n> slots=2919 bytes=60947264 live_objects=141 arena_reuses=0
+[sample-receiver] done
+SLIME_GRAPH component exit task=<n> status=0
+SLIME_CLOCK teardown task=<n> before=0 live=0
+SLIME_LIFECYCLE terminated task=<n> instance=2 cause=exit
+SLIME_GRAPH quota released task=<n> live=2
+SLIME_ROOT reclaim census task=<n> slots=2952 bytes=60947264 live_objects=110 arena_reuses=0
+SLIME_GRAPH supervision collected task=<n> child=<n> kind=0
+SLIME_GRAPH supervision collected task=<n> child=<n> kind=0
+SLIME_GRAPH spawn preflight executable-ok task-instance=0 slot=<n> executable=2 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=0 child=<n> name=sample-receiver
+SLIME_GRAPH spawn authorized task=<n> slot=<n> component=sample-receiver grants=0
+SLIME_GRAPH schedule instance=sample-receiver priority=254 default=254
+SLIME_GRAPH quota task=<n> instance=sample-receiver executable=sample-receiver pages=2 buffers=1 mappings=2 loans=1
+SLIME_MEM quota task=<n> instance=sample-receiver declared=0 installed=0 base=0x0
+SLIME_GRAPH native endpoint task=<n> slot=<n> side=both
+SLIME_CLOCK authority task=<n> instance=sample-receiver flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH spawned task=<n> child=<n> component=sample-receiver grants=0 endpoints=1 notifications=0 handle=3 supervision_grants=0 buffer_factory_grants=0
+[init] spawn budget recovered
+[init] sample plane complete
+SLIME_GRAPH component exit task=<n> status=0
+SLIME_CLOCK teardown task=<n> before=0 live=0
+SLIME_LIFECYCLE terminated task=<n> instance=0 cause=exit
+SLIME_GRAPH quota released task=<n> live=2
+SLIME_ROOT reclaim census task=<n> slots=2957 bytes=60947264 live_objects=104 arena_reuses=1
+[sample-receiver] no peer granted
+SLIME_GRAPH component exit task=<n> status=0
+SLIME_CLOCK teardown task=<n> before=0 live=0
+SLIME_LIFECYCLE terminated task=<n> instance=2 cause=exit
+SLIME_GRAPH quota released task=<n> live=1
+SLIME_ROOT reclaim census task=<n> slots=2990 bytes=60947264 live_objects=73 arena_reuses=1
+[sample-worker] worker thread running
+[sample-worker] native endpoint carried a message
+[sample-worker] main thread done
+SLIME_GRAPH component exit task=<n> status=0
+SLIME_CLOCK teardown task=<n> before=0 live=0
+SLIME_LIFECYCLE terminated task=<n> instance=3 cause=exit
+SLIME_GRAPH quota released task=<n> live=0
+SLIME_ROOT reclaim census task=<n> slots=3042 bytes=60947264 live_objects=24 arena_reuses=1
+SLIME_ROOT allocator quiescent live_slots=26 live_objects=24 live_bytes=845920
+SLIME_GRAPH served live=0 unsupported=0 buffers=5 windows=0 tasks=0
+SLIME_GRAPH tasks reclaimed live=0 slots=189
+SLIME_GRAPH native task_caps=0 exports=0 tickets=0
+SLIME_GRAPH capabilities exports=1 imports=1 cancels=0 finalized=1 outstanding=0 tickets=0
+SLIME_GRAPH loans served=3 loans=0 mappings=0 regions=0 orphans=0 quota=0
+SLIME_GRAPH spawns served=3 drops=1 terminated=5
+SLIME_ROOT allocator live_slots=26 live_objects=24 live_bytes=845920 slot_reuses=20219 arena_reuses=1
+SLIME_ROOT READY target_profile=riscv64-sel4-milkv-duo
