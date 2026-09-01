@@ -1445,6 +1445,11 @@ pub(super) fn serve_instance_graph(
                         live_required,
                         live_required,
                     );
+                    #[cfg(slime_cv1800b_duo)]
+                    sel4::debug_println!(
+                        "SLIME_ROOT READY target_profile={}",
+                        crate::TARGET_PROFILE
+                    );
                 } else if live_required == 0 {
                     // Emitted after the accounting summary below: the QEMU
                     // gates stop reading at this terminal certification.

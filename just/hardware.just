@@ -75,6 +75,13 @@ duo_boot_check serial="": duo_payload_check
 duo_sel4_check serial="": riscv64_qemu_check
     python3 scripts/check/check-duo-sel4.py {{ if serial == "" { "" } else { "--serial " + serial } }}
 
+# P3.F: build the target-qualified resident graph with Duo UART0 input, deploy
+# its distinct product FIT, drive one bounded Slisp session, and cold-reset only
+# through the gate-only terminator after every assertion has passed.
+[group('hardware')]
+duo_slisp_check serial="": slisp_core_check sel4_component_graph_check
+    python3 scripts/check/check-duo-slisp.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
 # Bring-up aid, not a gate: print whatever the Duo's UART0 emits and assert
 # nothing. Builds no artifacts and qualifies no board, so it answers the one
 # question `duo_boot_check` cannot when the wire is silent — whether any byte

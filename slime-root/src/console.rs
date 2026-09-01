@@ -103,13 +103,13 @@ pub struct ConsoleContext {
 /// console component run and both read input. One cursor would let the
 /// root-launched copy drain the script before the spawned one asked.
 ///
-/// An empty byte slice ordinarily reports `WouldBlock`. The QEMU product build
-/// may additionally attach its polling PL011 receive path; deterministic plane
+/// An empty byte slice ordinarily reports `WouldBlock`. Product builds may
+/// additionally attach one platform polling receiver; deterministic plane
 /// scripts remain per-task and take precedence over that live source.
 pub struct ScriptedInput {
     bytes: &'static [u8],
     cursors: [usize; MAX_TASKS],
-    uart: Option<crate::device::Pl011Input>,
+    terminal: Option<crate::device::TerminalInput>,
 }
 
 impl ScriptedInput {
@@ -117,12 +117,12 @@ impl ScriptedInput {
         Self {
             bytes,
             cursors: [0; MAX_TASKS],
-            uart: None,
+            terminal: None,
         }
     }
 
-    pub fn with_pl011(mut self, uart: crate::device::Pl011Input) -> Self {
-        self.uart = Some(uart);
+    pub fn with_terminal(mut self, terminal: crate::device::TerminalInput) -> Self {
+        self.terminal = Some(terminal);
         self
     }
 
@@ -140,7 +140,7 @@ impl ScriptedInput {
                 None => Some(encode_key(0x1b)),
             };
         }
-        self.uart
+        self.terminal
             .as_ref()?
             .poll_byte()
             .map(normalize_terminal_byte)

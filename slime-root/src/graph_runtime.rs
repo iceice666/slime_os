@@ -26,7 +26,7 @@ pub(super) struct RuntimeDevices<'a> {
     pub(super) timer: &'a mut PhysicalTimerAdapter,
     #[cfg(slime_boot_selector)]
     pub(super) boot_blocks: &'a mut device::BlockDevices,
-    pub(super) input: Option<device::Pl011Input>,
+    pub(super) input: Option<device::TerminalInput>,
     pub(super) io_authority: &'a mut platform::AuthorityInventory,
 }
 

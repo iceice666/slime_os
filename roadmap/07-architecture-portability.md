@@ -321,32 +321,15 @@ The first three gates are go/no-go evidence, not implementation completion:
 
 ### P3.F — Interactive Slisp shell on the Milk-V Duo
 
-**Status:** Not started. This is a bounded product-shell follow-up to P3.E, not a new architecture claim or general Duo peripheral qualification.
+**Status:** Complete and physically verified 2026-09-01. The named Milk-V Duo booted the digest-verified resident-product FIT, accepted three UART0 commands through Slisp's declared `InputRead` authority, retained state, launched `sysinfo` through its declared spawn profile, and returned to vendor Linux through the bounded test terminator.
 
 **Depends on:** P3.E for the qualified physical target and recovery loop, and P5.2 for the resident `init`/`console`/`spawn-service`/Slisp product graph.
 
-### Deliverables
+### Exit condition (observed)
 
-- build a distinct `riscv64-sel4-milkv-duo` product FIT containing the existing target-qualified resident graph and RV64 Slisp ELF; keep P3.E's sample and early-fault images unchanged as architecture regression evidence;
-- add a Duo-only UART0 receive adapter from the platform's pinned MMIO facts and feed received bytes through Slisp's existing `InputRead` capability path; Slisp must not map UART registers or gain ambient console/device authority, and QEMU's PL011 address must not leak into the physical build;
-- add `just duo_slisp_check <serial>` to digest-deploy the product FIT through P3.D's existing USB-NCM path, drive a bounded interactive session over the same serial connection, preserve the stock vendor boot path, and use an explicit test-only terminator to invoke the already-qualified cold-reset recovery after assertions;
-- keep the ordinary product shell resident when no byte is available: empty UART RX reports `WouldBlock`, and no hidden scripted input or test-only exit behavior is present in the shipped product image.
+On the named Milk-V Duo, the digest-verified target-qualified product image reached the resident Slisp prompt, evaluated persistent state across three serial commands, launched `sysinfo` only through its declared spawn profile, and returned to vendor Linux through the bounded test terminator. The committed physical transcript recorded zero framing errors and the image, generation, component, board, firmware, and transcript identities.
 
-### Required checks
-
-- `just slisp_core_check` and `just sel4_component_graph_check` pass before physical execution, preserving the evaluator and product-graph reference behavior;
-- the named Duo boots the product generation, reports all four required resident instances healthy, and presents exactly one `slisp>` prompt with zero serial framing errors;
-- the physical gate sends `(define answer 40)`, `(+ answer 2)`, and `sysinfo`, then observes `40`, `42`, the generation-authorized spawn request, the target-qualified `sysinfo` result, and clean child supervision without restarting the Slisp session;
-- bytes reach Slisp only through its declared input capability, output remains on its declared console endpoint, and the session stays responsive across empty FIFO intervals;
-- the gate records image, generation, component, board, firmware, and transcript identities, then cold-resets and observes vendor Linux return without physical intervention.
-
-### Planned verification target
-
-`just duo_slisp_check /dev/serial/by-id/<duo-uart>`
-
-### Exit condition
-
-On the named Milk-V Duo, a digest-verified target-qualified product image reaches the resident Slisp prompt, evaluates persistent state across multiple serial commands, launches `sysinfo` only through its declared spawn profile, and returns to vendor Linux through the bounded test terminator. The evidence must be a committed physical transcript; a QEMU prompt or P3.E's non-interactive sample-plane trace cannot close P3.F.
+**Evidence:** [`devlog/2026-09-01-p3f-duo-slisp/`](../devlog/2026-09-01-p3f-duo-slisp/index.md)
 
 ## P4: Raspberry Pi 5 physical architecture qualification
 

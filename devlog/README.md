@@ -386,3 +386,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-31 | [P3.E — seL4 on the Milk-V Duo](2026-08-31-p3e-sel4-milkv-duo/index.md) | Change | Verified | P3.E |
 | 2026-08-31 | [P3.E loader leaves omitted RISC-V accessed and dirty bits](2026-08-31-p3e-loader-ad-bits/index.md) | Defect | Verified | P3.E |
 | 2026-09-01 | [P3.E left the CV1800B RTC seconds counter stopped](2026-09-01-p3e-rtc-counter-start/index.md) | Defect | Verified | P3.E |
+| 2026-09-01 | [P3.F - Duo Slisp product shell](2026-09-01-p3f-duo-slisp/index.md) | Change | Verified | P3.F |

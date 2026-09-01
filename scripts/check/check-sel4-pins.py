@@ -423,6 +423,27 @@ def check_profile(pins: dict[str, object]) -> None:
         fail("cv1800b-duo MMU pin must be Sv39")
     if integer(duo, "timer_frequency_hz", "cv1800b_duo") != 25_000_000:
         fail("cv1800b-duo timer frequency must match the observed DT")
+    if text(duo, "serial", "cv1800b_duo") != "uart0-dw-apb-0x04140000":
+        fail("cv1800b-duo UART0 must match the observed DW APB MMIO identity")
+    duo_dts = (ROOT / "deps" / "sel4" / "tools" / "dts" / "cv1800b-duo.dts").read_text(
+        encoding="utf-8"
+    )
+    uart_node = re.search(
+        r"serial@04140000\s*\{(?P<body>.*?)\n\s*\};",
+        duo_dts,
+        flags=re.DOTALL,
+    )
+    if uart_node is None:
+        fail("cv1800b-duo DT is missing UART0 at 0x04140000")
+    uart_body = uart_node.group("body")
+    for fact in (
+        'compatible = "snps,dw-apb-uart";',
+        "reg = <0x00 0x4140000 0x00 0x1000>;",
+        "reg-shift = <0x02>;",
+        "reg-io-width = <0x04>;",
+    ):
+        if fact not in uart_body:
+            fail(f"cv1800b-duo UART0 DT fact missing: {fact}")
     if integer(duo, "timer_irq", "cv1800b_duo") != 17:
         fail("cv1800b-duo timer IRQ must match the observed RTC alarm source")
     if integer(duo, "max_irq", "cv1800b_duo") != 101:

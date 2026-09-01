@@ -433,6 +433,7 @@ def build_sel4(
         "target_profile": image_identity["target_profile"],
         "variant": image_identity.get("variant"),
         "duo_early_fault": image_identity.get("duo_early_fault", False),
+        "duo_test_terminator": image_identity.get("duo_test_terminator", False),
         "fit_config": config,
         "load_address": f"{load:#x}",
         "entry_address": f"{entry:#x}",

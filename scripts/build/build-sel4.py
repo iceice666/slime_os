@@ -1045,6 +1045,7 @@ def build_application(
     external_components: list[str] | None = None,
     prebuilt_generation: Path | None = None,
     duo_early_fault: bool = False,
+    duo_test_terminator: bool = False,
 ) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
@@ -1081,6 +1082,17 @@ def build_application(
         # Plane images keep deterministic scripts, and physical targets do not
         # compile a QEMU address into their root task.
         root_environment["SLIME_QEMU_KEYBOARD"] = "1"
+    if platform is CV1800B_DUO and variant == GRAPH_VARIANT:
+        serial = text(table(pins, platform.pins_section), "serial", platform.pins_section)
+        match = re.fullmatch(r"uart0-dw-apb-(0x[0-9a-fA-F]+)", serial)
+        if match is None:
+            fail(
+                f"sel4/pins.toml [{platform.pins_section}].serial must name "
+                "uart0-dw-apb-<hex-address>"
+            )
+        root_environment["SLIME_DUO_UART_PADDR"] = match.group(1)
+        if duo_test_terminator:
+            root_environment["SLIME_DUO_TEST_TERMINATOR"] = "1"
     if duo_early_fault:
         root_environment["SLIME_DUO_EARLY_FAULT"] = "1"
     if variant == BOOT_SELECTION_VARIANT:
@@ -1278,6 +1290,7 @@ def write_manifest(
     platform: Platform = QEMU_ARM_VIRT,
     generation: Path | None = None,
     duo_early_fault: bool = False,
+    duo_test_terminator: bool = False,
 ) -> None:
     prefix = platform.prefix_dir
     kernel = require_file(prefix / "bin" / "kernel.elf", "installed seL4 kernel")
@@ -1298,6 +1311,8 @@ def write_manifest(
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
     if duo_early_fault:
         suffix += "-early-fault"
+    if duo_test_terminator:
+        suffix += "-test-terminator"
     stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
     stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
     stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
@@ -1356,6 +1371,8 @@ def write_manifest(
     }
     if duo_early_fault:
         manifest["duo_early_fault"] = True
+    if duo_test_terminator:
+        manifest["duo_test_terminator"] = True
     if platform.qemu_dtb:
         # Emulator launch facts, which gates read to build their QEMU command.
         manifest["qemu"] = {
@@ -1455,6 +1472,11 @@ def main() -> None:
         "--duo-early-fault",
         action="store_true",
         help="build a Duo-only bounded post-timer fault diagnostic image",
+    )
+    parser.add_argument(
+        "--duo-test-terminator",
+        action="store_true",
+        help="build a distinct Duo resident-product image with the gate-only reset trigger",
     )
     parser.add_argument(
         "--stream-plane",
@@ -1795,6 +1817,12 @@ def main() -> None:
         fail("--duo-early-fault requires --platform cv1800b-duo")
     if arguments.duo_early_fault and variant != SAMPLE_VARIANT:
         fail("--duo-early-fault requires --sample-plane")
+    if arguments.duo_test_terminator and arguments.platform != CV1800B_DUO.name:
+        fail("--duo-test-terminator requires --platform cv1800b-duo")
+    if arguments.duo_test_terminator and variant != GRAPH_VARIANT:
+        fail("--duo-test-terminator requires --component-graph")
+    if arguments.duo_test_terminator and arguments.duo_early_fault:
+        fail("--duo-test-terminator cannot be combined with --duo-early-fault")
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
@@ -1834,6 +1862,7 @@ def main() -> None:
         external_components=arguments.external_component,
         prebuilt_generation=arguments.prebuilt_generation,
         duo_early_fault=arguments.duo_early_fault,
+        duo_test_terminator=arguments.duo_test_terminator,
     )
     loader, payload_tool = build_loader(pins, platform)
     image, manifest_path = VARIANT_IMAGES[variant]
@@ -1850,6 +1879,13 @@ def main() -> None:
         manifest_path = manifest_path.with_name(
             manifest_path.name.replace(".identity.json", "-early-fault.identity.json")
         )
+    if arguments.duo_test_terminator:
+        image = image.with_name(image.name.replace(".elf", "-test-terminator.elf"))
+        manifest_path = manifest_path.with_name(
+            manifest_path.name.replace(
+                ".identity.json", "-test-terminator.identity.json"
+            )
+        )
     package_image(payload_tool, loader, root_elf, image, platform)
     write_manifest(
         pins,
@@ -1863,6 +1899,7 @@ def main() -> None:
         platform=platform,
         generation=generation,
         duo_early_fault=arguments.duo_early_fault,
+        duo_test_terminator=arguments.duo_test_terminator,
     )
     print(
         f"seL4 image build: wrote {image.relative_to(ROOT)} and {manifest_path.relative_to(ROOT)}"

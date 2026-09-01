@@ -344,6 +344,56 @@ fn run_duo_early_fault_control(
     }
 }
 
+#[cfg(slime_cv1800b_duo)]
+fn request_duo_cold_reset(
+    timer_registers: device::MappedGranule,
+    reset_registers: device::MappedGranule,
+) -> ! {
+    sel4::debug_println!("SLIME_DUO reset request kind=cold");
+    if !platform_timer::request_cv1800b_cold_reset(timer_registers, reset_registers) {
+        fatal!("CV1800B cold-reset register access failed")
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[cfg(slime_duo_test_terminator)]
+fn request_duo_test_reset() -> ! {
+    sel4::debug_println!("SLIME_DUO test terminator accepted");
+    // SAFETY: root startup writes both `Some` values before the console thread
+    // starts; the two MMIO mappings remain live for the root's lifetime.
+    let timer = unsafe { ptr::addr_of!(DUO_TIMER_REGISTERS).read() };
+    let reset = unsafe { ptr::addr_of!(DUO_RESET_REGISTERS).read() };
+    match (timer, reset) {
+        (Some(timer), Some(reset)) => request_duo_cold_reset(timer, reset),
+        _ => fatal!("Duo test reset registers unavailable"),
+    }
+}
+
+#[cfg(slime_duo_uart)]
+const fn const_parse_hex_usize(value: &str) -> usize {
+    let bytes = value.as_bytes();
+    assert!(
+        bytes.len() > 2 && bytes[0] == b'0' && bytes[1] == b'x',
+        "hex prefix required"
+    );
+    let mut index = 2;
+    let mut parsed = 0usize;
+    while index < bytes.len() {
+        let digit = match bytes[index] {
+            b'0'..=b'9' => bytes[index] - b'0',
+            b'a'..=b'f' => bytes[index] - b'a' + 10,
+            b'A'..=b'F' => bytes[index] - b'A' + 10,
+            _ => panic!("invalid hexadecimal integer"),
+        };
+        parsed = parsed * 16 + digit as usize;
+        index += 1;
+    }
+    assert!(parsed != 0, "integer must be nonzero");
+    parsed
+}
+
 #[repr(C, align(4096))]
 struct FreePage([u8; GRANULE_SIZE]);
 
@@ -358,12 +408,12 @@ static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// [`FREE_PAGE`], and one shared virtual address cannot hold both.
 static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for QEMU `virt`'s temporary PL011 input driver.
+/// Standing window for the selected product terminal receiver.
 ///
-/// Claimed before the virtio scan: device-untyped retype is monotonic within a
-/// region, and PL011 (`0x0900_0000`) precedes virtio (`0x0a00_0000`).
-#[cfg(slime_qemu_keyboard)]
-static mut QEMU_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+/// QEMU maps PL011 at `0x0900_0000`; the Duo product maps UART0 at the physical
+/// address supplied from the pinned board profile. Plane images map neither.
+#[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
+static mut PRODUCT_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
 /// non-alias probe. Separate from the loader scratch page: the proof needs both
@@ -389,6 +439,10 @@ static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// timer granule: both come from one device untyped and retype is monotonic.
 #[cfg(slime_cv1800b_duo)]
 static mut RESET_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+#[cfg(slime_duo_test_terminator)]
+static mut DUO_RESET_REGISTERS: Option<device::MappedGranule> = None;
+#[cfg(slime_duo_test_terminator)]
+static mut DUO_TIMER_REGISTERS: Option<device::MappedGranule> = None;
 
 /// Standing MMIO windows for the userspace-authority inventory, one per
 /// granule in QEMU's virtio-mmio transport range.
@@ -415,6 +469,8 @@ const TIMER_PADDR: usize = 0x0010_1000;
 const TIMER_PADDR: usize = 0x0502_6000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
+#[cfg(slime_duo_uart)]
+const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR"));
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
@@ -664,6 +720,52 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
+    #[cfg(all(any(slime_qemu_keyboard, slime_duo_uart), not(slime_root_fixture)))]
+    let product_input = {
+        let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
+            fatal!("product input page unavailable: {error:?}")
+        }
+        #[cfg(slime_qemu_keyboard)]
+        let (paddr, receiver) = {
+            let registers = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                uart_addr,
+                device::QEMU_PL011_PADDR,
+            ) {
+                Ok(registers) => registers,
+                Err(error) => fatal!("QEMU keyboard UART unavailable: {error:?}"),
+            };
+            (
+                device::QEMU_PL011_PADDR,
+                device::TerminalReceiver::Pl011(device::Pl011Input::new(registers)),
+            )
+        };
+        #[cfg(slime_duo_uart)]
+        let (paddr, receiver) = {
+            let registers = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                uart_addr,
+                DUO_UART_PADDR,
+            ) {
+                Ok(registers) => registers,
+                Err(error) => fatal!("Duo product UART unavailable: {error:?}"),
+            };
+            (
+                DUO_UART_PADDR,
+                device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
+            )
+        };
+        sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
+        let input = device::TerminalInput::new(receiver);
+        #[cfg(slime_duo_test_terminator)]
+        let input = input.with_test_terminator(0x1d, request_duo_test_reset);
+        Some(input)
+    };
+    #[cfg(all(not(any(slime_qemu_keyboard, slime_duo_uart)), not(slime_root_fixture)))]
+    let product_input: Option<device::TerminalInput> = None;
     // ---- timer phase ----
     // Proves `TimerScheduler` (see `timer.rs`) is driven by a real seL4 IRQ
     // before any fixture task exists: acquire the one architected-timer PPI
@@ -692,6 +794,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Err(error) => fatal!("reset registers unavailable: {error:?}"),
         }
     };
+    #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+    let timer_registers;
     #[cfg(target_arch = "riscv64")]
     {
         let timer_addr = ptr::addr_of!(TIMER_PAGE) as usize;
@@ -707,6 +811,15 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Ok(region) => region.granule(),
             Err(error) => fatal!("timer registers unavailable: {error:?}"),
         };
+        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        {
+            timer_registers = registers;
+        }
+        #[cfg(slime_duo_test_terminator)]
+        unsafe {
+            ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(registers));
+            ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
+        }
         timer_adapter.attach_registers(registers);
     }
     sel4::debug_println!(
@@ -764,30 +877,6 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta={} caps_deleted=2",
         2 * GRANULE_SIZE,
     );
-
-    #[cfg(all(slime_qemu_keyboard, not(slime_root_fixture)))]
-    let qemu_input = {
-        let uart_addr = ptr::addr_of!(QEMU_UART_PAGE) as usize;
-        if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
-            fatal!("QEMU keyboard page unavailable: {error:?}")
-        }
-        let registers = match device::DeviceRegion::map(
-            allocator,
-            sel4::init_thread::slot::VSPACE.cap(),
-            uart_addr,
-            device::QEMU_PL011_PADDR,
-        ) {
-            Ok(registers) => registers,
-            Err(error) => fatal!("QEMU keyboard UART unavailable: {error:?}"),
-        };
-        sel4::debug_println!(
-            "SLIME_ROOT QEMU keyboard ready uart={:#x}",
-            device::QEMU_PL011_PADDR,
-        );
-        Some(device::Pl011Input::new(registers))
-    };
-    #[cfg(all(not(slime_qemu_keyboard), not(slime_root_fixture)))]
-    let qemu_input: Option<device::Pl011Input> = None;
 
     // ---- device phase ----
     //
@@ -951,21 +1040,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 timer: &mut timer_adapter,
                 #[cfg(slime_boot_selector)]
                 boot_blocks: &mut block_devices,
-                input: qemu_input,
+                input: product_input,
                 io_authority: &mut io_authority,
             },
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );
-        #[cfg(slime_cv1800b_duo)]
-        sel4::debug_println!("SLIME_ROOT READY target_profile={TARGET_PROFILE}");
-        #[cfg(slime_cv1800b_duo)]
-        {
-            sel4::debug_println!("SLIME_DUO reset request kind=cold");
-            if !timer_adapter.request_cold_reset(reset_registers) {
-                fatal!("CV1800B cold-reset register access failed")
-            }
-        }
+        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        request_duo_cold_reset(timer_registers, reset_registers);
         loop {
             core::hint::spin_loop();
         }

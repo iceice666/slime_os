@@ -92,7 +92,7 @@ pub(super) struct ConsoleTables<'a> {
     pub(super) windows: &'a WindowTable<MAX_WINDOW_ENTRIES>,
     pub(super) tasks: &'a TaskTable<MAX_TASKS>,
     pub(super) script: &'static [u8],
-    pub(super) input: Option<device::Pl011Input>,
+    pub(super) input: Option<device::TerminalInput>,
     pub(super) namespaces: &'a mut directory::Namespaces,
     pub(super) scopes: &'a directory::ScopeTable,
 }
@@ -117,7 +117,7 @@ pub(super) fn start_console_dispatcher(
         Err(error) => fatal!("console scratch unavailable: {error:?}"),
     };
     let input_source = match input {
-        Some(uart) => console::ScriptedInput::new(script).with_pl011(uart),
+        Some(terminal) => console::ScriptedInput::new(script).with_terminal(terminal),
         None => console::ScriptedInput::new(script),
     };
 

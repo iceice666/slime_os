@@ -219,18 +219,24 @@ impl PhysicalTimerAdapter {
     /// before the caller can continue.
     #[cfg(slime_cv1800b_duo)]
     pub fn request_cold_reset(&self, control: MappedGranule) -> bool {
-        const CTRL_UNLOCK_KEY: usize = 0x004;
-        const CTRL0: usize = 0x008;
-        const ENABLE_POWER_CYCLE: usize = 0x0c8;
-        const UNLOCK_KEY: u32 = 0xab18;
-        const POWER_CYCLE_REQUEST: u32 = 0xffff_0808;
-
-        self.registers.is_some_and(|timer| {
-            timer.write32(ENABLE_POWER_CYCLE, 1)
-                && control.write32(CTRL_UNLOCK_KEY, UNLOCK_KEY)
-                && control.write32(CTRL0, POWER_CYCLE_REQUEST)
-        })
+        self.registers
+            .is_some_and(|timer| request_cv1800b_cold_reset(timer, control))
     }
+}
+
+/// Trigger the CV1800B RTC block's cold power-cycle request from already-mapped
+/// timer and control granules.
+#[cfg(slime_cv1800b_duo)]
+pub fn request_cv1800b_cold_reset(timer: MappedGranule, control: MappedGranule) -> bool {
+    const CTRL_UNLOCK_KEY: usize = 0x004;
+    const CTRL0: usize = 0x008;
+    const ENABLE_POWER_CYCLE: usize = 0x0c8;
+    const UNLOCK_KEY: u32 = 0xab18;
+    const POWER_CYCLE_REQUEST: u32 = 0xffff_0808;
+
+    timer.write32(ENABLE_POWER_CYCLE, 1)
+        && control.write32(CTRL_UNLOCK_KEY, UNLOCK_KEY)
+        && control.write32(CTRL0, POWER_CYCLE_REQUEST)
 }
 
 impl PlatformTimer for PhysicalTimerAdapter {
