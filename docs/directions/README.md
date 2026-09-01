@@ -69,6 +69,7 @@ Promoted entries collapse to a pointer row in the index below; the canonical
 | 31 | [Linux/container compatibility route](31-compat-personality.md) | promoted → [Foreign X1](../../roadmap/05-foreign-workloads.md) (design retained) | compat |
 | 32 | [Scheduling class and QoS authority](32-scheduling-authority.md) | promoted → [Core C9](../../roadmap/02-core-runtime.md) (design retained) | lifecycle |
 | 33 | [Secrets as capabilities](33-secrets-as-capabilities.md) | promoted → [Authority A2](../../roadmap/06-authority-trust.md) (design retained) | authority |
+| 34 | [Root capacity ceilings: memory, threads, and cores](34-capacity-ceilings.md) | parked | capacity |
 
 ## Routes
 
@@ -112,6 +113,13 @@ route when they span clusters.
   half) [Foreign X2](../../roadmap/05-foreign-workloads.md), and it is the primary
   consumer of entries 18 (network), 32 (scheduling), and 33 (secrets) for
   confining foreign code.
+- **capacity** (34): what the root can hold at once — private and shared
+  memory ceilings, threads per component, and cores. Not an authority
+  question: every ceiling is already declared, bounded, and reclaimed, and
+  entry 34 changes only how large the bound may be. It is listed separately
+  because it gates the *sizing* of several other routes rather than their
+  semantics — 28's inference component, 31's guest, and any multi-queue
+  driver are unsizable while a task's working set is capped at 2 MiB.
 
 ## What is unblocked now
 
@@ -134,6 +142,7 @@ without waiting for any milestone:
 | 31 | syscall-to-capability mapping table for a minimal workload (paper) | M6 prerequisites are complete; Foreign X1 implementation remains future; guest-VM half needs [Foreign X2](../../roadmap/05-foreign-workloads.md) |
 | 32 | scheduling-class schema and authority-vs-policy design note (paper) | M6 prerequisites are complete; Core C9.3 owns the class half, and entry 25's conserved CPU account is blocked on the MCS assurance decision rather than on C9 |
 | 33 | Secret matrix amendment + recorder/revocation interaction (paper) | M6 prerequisites are complete; at-rest sealing interim vs Authority A4 TPM binding remains open |
+| 34 | large-page allocation in `slime-root` (implementation) | both architectures already expose 2 MiB/1 GiB frame objects; the private window is already span-aligned; changes no contract, so ceiling raises and the SMP question stay separate decisions |
 
 ## Sequencing
 
@@ -142,7 +151,7 @@ without waiting for any milestone:
 | 0 — before M5.6 implementation (done) | 6 (M5.6a), 4 (M5.6b) | Both promoted checked contracts landed; transition and state/GC semantics froze before implementation. |
 | 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13, 24 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. Entry 24 is dependency-free contracts work in the M5.6a methodology and is the current probe. |
 | 2 — late M5 through M6 (foundation complete) | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay), 25, 26, 27, 29, 30 | Release trust, recovery, spawn, supervision, accounting, powerbox, and minimal transfer foundations have landed. The listed directions retain only their broader generalization work: provenance, replay, restart policy, sync transport, migration, conserved accounts, and merge/build semantics. |
-| 3 — independent future tracks | 17, 18, 19; 2 (A1), 32 (C9), 33 (A2), 31 (X1), 28 (A3), 5 (A4), 10 (A5) | Daily-driver hardware quality (energy 17, network 18, MPK 19) lands in the Hardware H track. The promoted work proceeds on independent tracks: Authority A1 adds revocation, Core C9 adds scheduling authority, and Authority A2 adds secrets; Foreign X1 supplies the compatibility personality; Authority A3 adds accelerator authority on Hardware H4 IOMMU containment; Authority A4 binds boot state to the TPM; Authority A5 extends capabilities across machines on sync plus A1 revocation. |
+| 3 — independent future tracks | 17, 18, 19, 34; 2 (A1), 32 (C9), 33 (A2), 31 (X1), 28 (A3), 5 (A4), 10 (A5) | Daily-driver hardware quality (energy 17, network 18, MPK 19) lands in the Hardware H track. The promoted work proceeds on independent tracks: Authority A1 adds revocation, Core C9 adds scheduling authority, and Authority A2 adds secrets; Foreign X1 supplies the compatibility personality; Authority A3 adds accelerator authority on Hardware H4 IOMMU containment; Authority A4 binds boot state to the TPM; Authority A5 extends capabilities across machines on sync plus A1 revocation. Entry 34's large-page half is unblocked now and sits here only because its ceiling and SMP halves wait on a workload that needs them. |
 
 ## Research references
 

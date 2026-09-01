@@ -390,3 +390,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-01 | [The SDK publish workflow trusted its operator for three separate things](2026-09-01-sdk-publication-guards/index.md) | Change | Verified | CP7, CP9 |
 | 2026-09-01 | [B92: resident product graph lifetime](2026-09-01-b92-resident-graph-lifetime/index.md) | Defect | Verified | B92, P3.F |
 | 2026-09-01 | [The SDK could not build a component for the board P3.F had just qualified](2026-09-01-sdk-riscv-profiles/index.md) | Change | Verified | CP8, P3.E, P3.F |
+| 2026-09-02 | [Capacity ceilings: what a raise actually costs, and why single-core is now written down](2026-09-02-capacity-ceilings-register/index.md) | Decision | Proposed | none |

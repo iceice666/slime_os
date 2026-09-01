@@ -36,6 +36,37 @@ set(KernelArmHypervisorSupport ON CACHE BOOL "")
 # proofs extend to MCS on this platform, or the project accepts an unverified
 # kernel for a stated reason.
 set(KernelIsMCS OFF CACHE BOOL "")
+# Single core, with the same deferral discipline as MCS above: the reason is
+# recorded rather than left blank, because raising this is the second-largest
+# assurance decision in this file.
+#
+# `deps/sel4/CAVEATS.md` states the terms. Plain SMP is not formally verified;
+# SMP with hypervisor extensions -- which this file enables -- is supported
+# and "generally stable" but likewise unverified; SMP with MCS and hypervisor
+# extensions exists on AArch64 only, with `gcc` only, on `odroidc4`/`tx1`/`tx2`,
+# and is described as less tested with lower code coverage. As with MCS, this
+# build is already outside the verified set (`KernelVerificationBuild OFF`
+# plus printing, and `qemu-arm-virt` on no verified-platform list), so the cost
+# lands on `sel4/config/bcm2712-rpi5.cmake`, which includes upstream's own
+# `AARCH64_bcm2712_verified.cmake`. The decision is per-target and flipping it
+# here alone would not be the same decision.
+#
+# Two couplings a future change must carry, not discover:
+#
+#   * Thread placement moves with MCS. `rust-sel4` gates `tcb_set_affinity` on
+#     `all(not(KERNEL_MCS), not(MAX_NUM_NODES = "1"))`
+#     (`deps/rust-sel4/crates/sel4/src/invocations.rs:285`), so taking SMP and
+#     MCS together changes *which* API places a thread. They are not
+#     independent options.
+#   * `slime-root`'s bounded tables are mutated by a single-threaded root, and
+#     several of its invariants hold today because only one child runs at a
+#     time. SMP does not make the root multi-threaded, but it does make
+#     children concurrent, so every such invariant needs re-reading before the
+#     first multi-core boot. That audit is the cost, not this line.
+#
+# Registered as `docs/directions/34-capacity-ceilings.md`, which also carries
+# the private-memory and per-component thread ceilings this bound interacts
+# with.
 set(KernelMaxNumNodes 1 CACHE STRING "")
 set(KernelVerificationBuild OFF CACHE BOOL "")
 set(KernelDebugBuild ON CACHE BOOL "")
