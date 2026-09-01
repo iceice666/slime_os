@@ -295,7 +295,7 @@ def prove_refusals(root: Path, url: str) -> None:
         + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
         + component_sdk.VENDORED
         + component_sdk.LINKER_SCRIPTS
-        + (component_sdk.TARGET_SPEC_SOURCE,)
+        + component_sdk.target_spec_source_paths()
     ):
         target = mirror / relative
         if target.exists():

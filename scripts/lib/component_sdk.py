@@ -75,10 +75,33 @@ EXPORT_CRATES: tuple[tuple[str, str], ...] = (
 # and its provenance is recorded through the `[rust_sel4]` pin.
 VENDORED = ("deps/rust-sel4",)
 
-# The target specification a component builds against, copied out of the
-# vendored source into a stable SDK location so a consumer names one path.
-TARGET_SPEC_SOURCE = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json"
-TARGET_SPEC_SDK = "targets/aarch64-sel4-minimal.json"
+# The target specifications a component builds against, copied out of the
+# vendored source into stable SDK locations so a consumer names one path per
+# profile. Keyed by file stem because that is what Cargo calls a JSON target and
+# what `slime-build-support` matches on.
+#
+# Per-profile rather than one constant: the RV64 profiles build against
+# `riscv64imac-sel4-minimal.json`, so a single exported specification would
+# either omit them or bind every profile's `targetSpecHash` to one unrelated
+# file. `aarch64-rpi5` needs none of these -- it is a bare triple.
+TARGET_SPEC_SOURCE_DIR = "deps/rust-sel4/support/targets"
+TARGET_SPEC_SDK_DIR = "targets"
+TARGET_SPECS = ("aarch64-sel4-minimal", "riscv64imac-sel4-minimal")
+
+
+def target_spec_sdk_path(stem: str) -> str:
+    return f"{TARGET_SPEC_SDK_DIR}/{stem}.json"
+
+
+def target_spec_source_paths() -> tuple[str, ...]:
+    """Every target specification the export reads, as source-relative paths.
+
+    Exists so a gate mirroring the export's inputs derives them from here
+    instead of restating one path. That restatement is exactly how the linker
+    scripts once became an export input a hand-written list did not know about.
+    """
+    return tuple(f"{TARGET_SPEC_SOURCE_DIR}/{stem}.json" for stem in TARGET_SPECS)
+
 
 # The component linker scripts. Repository-level build inputs rather than crate
 # sources: an `aarch64-unknown-none` component links at the fixed component base
@@ -134,7 +157,7 @@ PROFILE_PLATFORMS: dict[str, dict[str, object]] = {
         "platform": "qemu-arm-virt",
         "prefix": "build/sel4-prefix",
         "pins": "observed_prefix",
-        "cargo_target": TARGET_SPEC_SDK,
+        "cargo_target": target_spec_sdk_path("aarch64-sel4-minimal"),
         "cargo_target_is_spec": True,
         "rust_flags": ("-C", "link-arg=--build-id=none"),
         "cargo_flags": (
@@ -165,6 +188,50 @@ PROFILE_PLATFORMS: dict[str, dict[str, object]] = {
             "link-arg=max-page-size=4096",
         ),
         "cargo_flags": (),
+    },
+    # Both RV64 profiles build against one specification and differ in platform
+    # identity, prefix, and pins -- exactly the distinction CP8 records for
+    # AArch64: `qemu-riscv-virt` is a QEMU reference and `cv1800b-duo` is a named
+    # board whose C906, firmware handoff, PLIC, timer, and 63.25 MiB window are
+    # not interchangeable with it. A component qualified for one is refused by
+    # the other.
+    #
+    # Flags mirror the AArch64 seL4 profile because both are JSON targets, and
+    # `scripts/build/build-generation.py` builds every JSON target with the same
+    # `-Z` set and the same single determinism-relevant link argument. No linker
+    # script: `slime-build-support` returns `None` for the seL4 targets, so a
+    # component there links at its own addresses as an ordinary seL4 task.
+    "riscv64-sel4-qemu-virt": {
+        "platform": "qemu-riscv-virt",
+        "prefix": "build/sel4-riscv64-prefix",
+        "pins": "observed_prefix_qemu_riscv_virt",
+        "cargo_target": target_spec_sdk_path("riscv64imac-sel4-minimal"),
+        "cargo_target_is_spec": True,
+        "rust_flags": ("-C", "link-arg=--build-id=none"),
+        "cargo_flags": (
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ),
+    },
+    "riscv64-sel4-milkv-duo": {
+        "platform": "cv1800b-duo",
+        "prefix": "build/sel4-cv1800b-duo-prefix",
+        "pins": "observed_prefix_cv1800b_duo",
+        "cargo_target": target_spec_sdk_path("riscv64imac-sel4-minimal"),
+        "cargo_target_is_spec": True,
+        "rust_flags": ("-C", "link-arg=--build-id=none"),
+        "cargo_flags": (
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ),
     },
 }
 DEFAULT_PROFILES = ("aarch64-sel4-qemu-virt", "aarch64-rpi5")
@@ -1349,9 +1416,13 @@ def export(
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source / relative, target, ignore=COPY_IGNORE)
-    target_spec = destination / TARGET_SPEC_SDK
-    target_spec.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source / TARGET_SPEC_SOURCE, target_spec)
+    specs = destination / TARGET_SPEC_SDK_DIR
+    specs.mkdir(parents=True, exist_ok=True)
+    for stem in TARGET_SPECS:
+        shutil.copyfile(
+            source / TARGET_SPEC_SOURCE_DIR / f"{stem}.json",
+            destination / target_spec_sdk_path(stem),
+        )
     linker = destination / LINKER_SCRIPT_SDK
     linker.mkdir()
     for relative in LINKER_SCRIPTS:
@@ -1368,7 +1439,6 @@ def export(
         entry.write_text(body, encoding="utf-8")
         entry.chmod(0o755)
 
-    target_spec_hash = hashlib.sha256(target_spec.read_bytes()).hexdigest()
     profile_records = []
     for profile in profiles:
         binding = PROFILE_PLATFORMS[profile]
@@ -1379,9 +1449,19 @@ def export(
                 "platform": binding["platform"],
                 "cargoTarget": binding["cargo_target"],
                 "cargoTargetIsSpec": is_spec,
+                # Digest the specification this profile actually names, not a
+                # single exported file: two architectures ship two
+                # specifications, and binding both to one hash would let a
+                # changed RV64 target leave every recorded digest untouched.
                 # A triple has no specification bytes to bind, so the field is
                 # empty rather than carrying a digest of an unrelated file.
-                "targetSpecHash": target_spec_hash if is_spec else "",
+                "targetSpecHash": (
+                    hashlib.sha256(
+                        (destination / str(binding["cargo_target"])).read_bytes()
+                    ).hexdigest()
+                    if is_spec
+                    else ""
+                ),
                 "rustFlags": list(binding["rust_flags"]),
                 "cargoFlags": list(binding["cargo_flags"]),
                 "prefix": export_prefix_asset(
@@ -1411,7 +1491,8 @@ def export(
     files = sorted(
         [relative for relative, _ in EXPORT_CRATES]
         + list(VENDORED)
-        + [TARGET_SPEC_SDK, LINKER_SCRIPT_SDK, *GENERATED_FILES]
+        + [target_spec_sdk_path(stem) for stem in TARGET_SPECS]
+        + [LINKER_SCRIPT_SDK, *GENERATED_FILES]
         + [profile["prefix"]["archive"] for profile in profile_records]
         + list(contract.RECORD_FILE_NAMES)
     )
