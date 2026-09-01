@@ -1,0 +1,65 @@
+# QEMU virt self-test of tools/nt98690/payload/probe.S
+#
+# Not board evidence. This is the same instruction stream the H1V1 payload
+# is built from, retargeted at QEMU virt via -DSLIME_PROBE_QEMU_VIRT and run
+# to prove the code executes at all before it is carried to hardware.
+#
+# Command:
+#   qemu-system-aarch64 -machine virt,virtualization=on,gic-version=2 \
+#     -cpu cortex-a72 -smp 1 -m 1G -nographic -no-reboot \
+#     -kernel build/nt98690-payload/probe-qemu.bin
+#
+# Expected differences from a board run, both by construction:
+#   check placement = FAIL   QEMU loads at its own RAM base + text_offset
+#                            (0x40000000 + 0x10000000), not the link address.
+#   cnt_hz_est               QEMU does not throttle its console to the line
+#                            rate the estimate assumes, so the value is a
+#                            fraction of the true 62.5 MHz CNTFRQ_EL0 above.
+#
+# The core is a Cortex-A72 here because QEMU has no Cortex-A73 model; the
+# H1V1 reports midr_part 0xd09 where this reports 0xd08. That the decode is
+# right is the claim, not the value.
+#
+# Recorded 2026-09-01T14:33:34Z on Linux 7.0.0-30-generic
+# qemu: QEMU emulator version 11.0.1
+# probe-qemu.bin sha256: b432c3d56006de8bc568136d085dca957273052728eefafbc6250b47d0b22d00
+# board payload sha256:  1046ed432ceea7fda174a0db8086b7df1853edd89344e865c4b3ed0555c86d8e  (same source, board addresses)
+
+=== SLIME_NT98690 probe: entry reached ===
+SLIME_NT98690 el         = 0x0000000000000002
+SLIME_NT98690 base       = 0x0000000050000000
+SLIME_NT98690 pc         = 0x00000000500000c0
+SLIME_NT98690 x0         = 0x0000000050200000
+SLIME_NT98690 x1         = 0x0000000000000000
+SLIME_NT98690 x2         = 0x0000000000000000
+SLIME_NT98690 x3         = 0x0000000000000000
+SLIME_NT98690 fdt_magic  = 0x00000000d00dfeed
+SLIME_NT98690 fdt_size   = 0x0000000000100000
+SLIME_NT98690 midr       = 0x00000000410fd083
+SLIME_NT98690 midr_part  = 0x0000000000000d08
+SLIME_NT98690 mpidr      = 0x0000000080000000
+SLIME_NT98690 mmfr0      = 0x0000000000001124
+SLIME_NT98690 parange    = 0x0000000000000004
+SLIME_NT98690 pfr0       = 0x0000000000000222
+SLIME_NT98690 cntfrq     = 0x0000000003b9aca0
+SLIME_NT98690 cntpct0    = 0x0000000000030edf
+SLIME_NT98690 calib      = ......................................................................................................................................................................................................................................
+SLIME_NT98690 cntpct1    = 0x000000000003fdfe
+SLIME_NT98690 cnt_delta  = 0x000000000000b53d
+SLIME_NT98690 cnt_hz_est = 0x00000000002365ea
+SLIME_NT98690 sctlr      = 0x0000000000000000
+SLIME_NT98690 hcr_el2    = 0x0000000000000000
+SLIME_NT98690 cnthctl    = 0x0000000000000003
+SLIME_NT98690 cntvoff    = 0x0000000000000000
+SLIME_NT98690 gicd_ctlr  = 0x0000000000000000
+SLIME_NT98690 gicd_typer = 0x0000000000000008
+SLIME_NT98690 gicd_iidr  = 0x000000000000043b
+SLIME_NT98690 gic_irqs   = 0x0000000000000120
+SLIME_NT98690 check placement   = FAIL
+SLIME_NT98690 check el2         = ok
+SLIME_NT98690 check fdt_magic   = ok
+SLIME_NT98690 check mmu_off     = ok
+SLIME_NT98690 check cnt_advance = ok
+SLIME_NT98690 check gicd        = ok
+SLIME_NT98690 PAYLOAD_FAIL
+SLIME_NT98690 reset request kind=psci

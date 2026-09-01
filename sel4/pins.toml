@@ -186,6 +186,75 @@ timer_irq = 17
 max_irq = 101
 usable_memory_bytes = 66060288
 fit_config = "config-duo-sel4"
+
+# P6.A: the Novatek NT98690 (NS02201) H1V1, a physical AArch64 bring-up target.
+#
+# Board facts only. This table carries no seL4 product keys -- no `platform`,
+# `sel4_arch`, or printing options -- because P6.A builds no kernel: it
+# qualifies the firmware handoff and measures what the board actually reports.
+# P6.B adds the product half beside these, along with its own
+# `[observed_prefix_ns02201_h1v1]`.
+#
+# Sources, since none of this may be asserted by Slime:
+#   vendor device tree  /srv/novatek/sdk/worktrees/h1v1-dev/configs/Linux/
+#                       cfg_690_IPC_EMMC_RAMDISK_CM2504/nvt-{basic,peri,mem-tbl}.dtsi
+#   TF-A                BSP/trusted-firmware-a/plat/novatek/nvt_ns02201/
+#   U-Boot              BSP/u-boot/configs/nvt-ns02201_a64_pci_emmc_defconfig
+#   board switches      ~/nt98690-ubuntu/project_env.sh
+# Keys marked "observed" are filled from a recorded serial transcript, not from
+# any of the above; until P6.A runs they are absent rather than guessed.
+[ns02201_h1v1]
+soc = "ns02201"
+board = "novatek-h1v1"
+cpu = "cortex-a73"
+cpus = 4
+# 16550-compatible, and the same port BL31 and U-Boot print through -- so the
+# console is continuous from firmware into anything Slime loads. `reg-shift`
+# and `reg-io-width` are why the holding and line-status registers sit at byte
+# offsets 0x00 and 0x14 with 32-bit accesses.
+serial = "uart0-ns16550a-0x2f0130000"
+serial_reg_shift = 2
+serial_reg_io_width = 4
+serial_clock_hz = 48000000
+serial_baud = 115200
+# Two GiB is populated, but the vendor `/memory` node declares one, which is
+# what U-Boot's `gd->ram_size` reports and therefore all any loader may assume.
+dram_base = "0x0"
+dram_size = "0x80000000"
+firmware_memory_size = "0x40000000"
+# BL31 lives here and the device tree marks it `no-map`. TF-A's TZASC
+# programming protects it from DMA masters only, so nothing stops a CPU write:
+# it is reserved by agreement, and every payload address is chosen around it.
+atf_base = "0x01f00000"
+atf_size = "0x00100000"
+# GICv2, with every bank above 4 GiB like the rest of this SoC's MMIO.
+interrupt_controller = "arm-gicv2-0x2fff01000"
+gicd_base = "0x2fff01000"
+gicc_base = "0x2fff02000"
+gich_base = "0x2fff04000"
+gicv_base = "0x2fff06000"
+# What the device tree claims. TF-A writes `CNTFRQ_EL0` on secondary cores
+# only, so the primary's value is a separate, observed key below.
+dts_timer_frequency_hz = 12000000
+psci = "0.2-smc"
+uboot_version = "2021.10-novatek-ns02201"
+uboot_prompt = "nvt: "
+uboot_select_device = "mmc dev 0"
+# `booti` is the only entry command this U-Boot has: `go`, `bootelf`, and
+# `bootm` are all compiled out. The device-tree argument is not optional --
+# omitting it panics U-Boot -- and `${fdtcontroladdr}` is the tree the vendor
+# loader passed in, which U-Boot relocates and hands to us in x0.
+uboot_launch = "booti {load} - ${fdtcontroladdr}"
+# Where the payload is linked, where it is loaded, and what its Image header
+# declares as `text_offset`; this U-Boot relocates to `text_offset` regardless
+# of the header's placement flag, so all three must be this value.
+payload_load_address = "0x10000000"
+boot_partition = "mmc 0:1"
+# eMMC 8-bit with an SD card inserted. `0x0001` is the loader's SD rescue mode,
+# which reflashes firmware, and is never the position for booting a payload.
+sw18_boot_position = "0x1001"
+boot_files = ["slime-nt98690-probe.bin"]
+
 [observed_prefix_cv1800b_duo]
 # Recorded from the exact fork commits, toolchain, and CV1800B config above.
 kernel_sha256 = "bf743ec2f8f51bd260d9c3b700ddc01b199039e5af2075de9501967c65c2e4f2"

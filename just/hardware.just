@@ -100,3 +100,43 @@ duo_serial_monitor serial timeout="120":
 [group('hardware')]
 duo_gate_control_check:
     python3 scripts/check/check-duo-gate-control.py
+
+# P6.A: deterministic and hermetic — it needs no board, and it writes no block
+# device: staging the card is an operator step, because copying onto removable
+# media is the one action that can destroy an unrelated disk. Add
+# `--qemu-variant` to also build the QEMU `virt` retarget of the same source,
+# which is how the instruction stream is executed before it reaches hardware.
+#
+# Build the H1V1 probe into the flat arm64 `Image` its vendor U-Boot can start.
+[group('hardware')]
+nt98690_payload_check:
+    python3 scripts/build/build-nt98690-payload.py
+
+# P6.A: boot the pinned probe on the named H1V1 and require ordered evidence on
+# UART0 at the baud `sel4/pins.toml [ns02201_h1v1]` pins.
+#
+# Physical: it proves the artifact is this build's, drives the unmodified vendor
+# U-Boot over serial, checks the card's bytes against the built image before
+# spending a boot, launches with `booti`, and reads the probe's measured facts
+# and verdicts. Nothing writes eMMC; the probe returns the board to its vendor
+# firmware through PSCI, so a run needs no physical intervention.
+#
+# The board may be on another machine: `serial` takes a tty path or a
+# `tcp:HOST:PORT` bridge. Omitting it runs and fails, never skips.
+#
+#   just nt98690_boot_check /dev/ttyUSB0
+#   just nt98690_boot_check tcp:127.0.0.1:5000
+[group('hardware')]
+nt98690_boot_check serial="": nt98690_payload_check
+    python3 scripts/check/check-nt98690-boot.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
+# Bring-up aid, not a gate: print whatever the H1V1's UART0 emits and assert
+# nothing. It answers the one question `nt98690_boot_check` cannot when the wire
+# is silent — whether any byte reaches this host — and it is how the vendor
+# banner wording is observed before the gate's markers are frozen against it.
+# Exits on its own after 10s of quiet or the timeout.
+#
+# just nt98690_serial_monitor /dev/ttyUSB0
+[group('hardware')]
+nt98690_serial_monitor serial timeout="180":
+    python3 scripts/check/check-nt98690-boot.py --monitor --serial {{ serial }} --timeout {{ timeout }}
