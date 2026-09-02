@@ -222,6 +222,25 @@ FAILURE_MARKERS: tuple[str, ...] = (
 )
 
 
+#: The watchdog sequence TF-A's `nova_system_reset` performs on this SoC
+#: (`plat/novatek/nvt_ns02201/pm.c`; `RTC_PWBC_RESET 0` selects this branch),
+#: with offsets and bits from its `novatek_def.h`: release the watchdog's clock
+#: reset, enable its clock, unlock it, fire a manual reset. `--reset-probe`
+#: issues the same five writes from the non-secure world, which is the one
+#: question P6.B's root-driven reset depends on and BL31 cannot answer for it.
+#: Nothing here touches eMMC or firmware: BL31 does exactly this on every PSCI
+#: SYSTEM_RESET, and the P6.A probe's reset already went through it.
+RESET_CG_BASE = 0x2_F002_0000
+RESET_CG_CLOCK_RESET = 0x9C  # ATF_CG_RESET_OFS; bit ATF_WDT_RST
+RESET_CG_CLOCK_RESET_BIT = 4
+RESET_CG_CLOCK_ENABLE = 0x400  # ATF_CG_ENABLE_OFS; bit ATF_WDT_POS
+RESET_CG_CLOCK_ENABLE_BIT = 24
+RESET_WDT_BASE = 0x2_F006_0000
+RESET_WDT_MANUAL = 0x0C  # MAN_RST_OFS
+RESET_WDT_UNLOCK = (0x5A96_0112, 0x5A96_0113)
+RESET_PROBE_SECONDS = 30.0
+
+
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"nt98690 boot check: {message}")
 
@@ -396,6 +415,88 @@ def survey(console: Console, prompt: str, timeout: float) -> str:
     return collected
 
 
+def wait_for_banner(console: Console, seconds: float) -> str:
+    """Read silently until the vendor U-Boot banner, and keep only its line.
+
+    Say nothing: the board is resetting into its own firmware, and a keystroke
+    would interrupt the autoboot this step exists to observe -- leaving the
+    board at a prompt and the recovery unproven. What follows the banner is the
+    vendor's own next boot, which reaches its kernel handoff about 700
+    characters later and prints `Moving Image from` -- a failure marker about
+    where *this* gate's payload was placed, not the vendor's. Retained, a
+    correct autonomous recovery would reject the run it proves.
+    """
+    recovery = ""
+    remaining = seconds
+    while remaining > 0:
+        recovery += console.read_for(1.0)
+        remaining -= 1.0
+        if re.search(BANNER_PATTERN, recovery):
+            recovery += console.read_for(1.0)
+            end = re.search(BANNER_PATTERN, recovery).end()
+            line_end = recovery.find("\n", end)
+            return recovery[: line_end if line_end != -1 else len(recovery)]
+    return recovery
+
+
+def read_register(output: str, address: int) -> int | None:
+    """The value `md` printed for `address`, at either access width."""
+    match = re.search(rf"(?m)^0*{address:x}:\s+([0-9a-f]{{8,16}})\b", output)
+    return None if match is None else int(match.group(1), 16)
+
+
+def reset_probe(console: Console, prompt: str, timeout: float) -> tuple[str, int | None]:
+    """Perform TF-A's watchdog reset from U-Boot and report which width worked.
+
+    32-bit writes first, since the registers are 32 bits wide and that is what
+    the root's MMIO helper does; 64-bit second, because TF-A itself uses
+    `mmio_write_64` and a block that only latches the wider access is
+    possible. Returns the transcript and the width that reset the board, or
+    `None` when neither did -- which is the finding that sends P6.B down its
+    manual-power-cycle path instead.
+    """
+    reach_uboot(console, prompt, min(timeout, PROMPT_WINDOW_SECONDS), fail)
+    transcript = ""
+    for width in (32, 64):
+        suffix = "l" if width == 32 else "q"
+        print(f"[reset]  watchdog sequence with {width}-bit writes")
+        for offset, bit in (
+            (RESET_CG_CLOCK_RESET, RESET_CG_CLOCK_RESET_BIT),
+            (RESET_CG_CLOCK_ENABLE, RESET_CG_CLOCK_ENABLE_BIT),
+        ):
+            address = RESET_CG_BASE + offset
+            output = send_command(console, f"md.{suffix} {address:#x} 1", prompt, 10.0, fail)
+            transcript += output
+            value = read_register(output, address)
+            if value is None:
+                fail(f"could not read the clock-gate register at {address:#x}:\n{output[-300:]}")
+            print(f"[reset]    {address:#x} = {value:#x} -> set bit {bit}")
+            transcript += send_command(
+                console, f"mw.{suffix} {address:#x} {value | (1 << bit):#x}", prompt, 10.0, fail
+            )
+        for key in RESET_WDT_UNLOCK:
+            transcript += send_command(
+                console, f"mw.{suffix} {RESET_WDT_BASE:#x} {key:#x}", prompt, 10.0, fail
+            )
+        # The manual-reset write does not return a prompt if it works.
+        console.flush_input()
+        console.write(f"mw.{suffix} {RESET_WDT_BASE + RESET_WDT_MANUAL:#x} 1\r".encode())
+        print(f"[reset]    fired; waiting up to {RESET_PROBE_SECONDS:.0f}s for the firmware banner")
+        recovery = wait_for_banner(console, RESET_PROBE_SECONDS)
+        transcript += recovery
+        if re.search(BANNER_PATTERN, recovery):
+            print(f"[reset]  the board reset and its firmware returned: {width}-bit writes work")
+            return transcript, width
+        print(f"[reset]  no banner in {RESET_PROBE_SECONDS:.0f}s: the board did not reset")
+        console.write(b"\r")
+        if prompt not in console.read_for(1.5):
+            fail(
+                "the board neither reset nor answers the prompt after the watchdog "
+                "writes; power-cycle it. Nothing on eMMC was touched"
+            )
+    return transcript, None
+
+
 def monitor(console: Console, timeout: float) -> None:
     """Print whatever the board says, asserting nothing.
 
@@ -438,6 +539,14 @@ def main() -> None:
         action="store_true",
         help="ask the board the read-only questions a scored run depends on",
     )
+    parser.add_argument(
+        "--reset-probe",
+        action="store_true",
+        help=(
+            "perform TF-A's watchdog reset sequence from the U-Boot prompt and "
+            "report whether the non-secure world may reset this board"
+        ),
+    )
     parser.add_argument("--transcript", type=Path, help="write the captured transcript here")
     parser.add_argument("--no-build", action="store_true")
     arguments = parser.parse_args()
@@ -464,6 +573,18 @@ def main() -> None:
 
         if arguments.survey:
             transcript += survey(console, str(profile["uboot_prompt"]), arguments.timeout)
+            return
+
+        if arguments.reset_probe:
+            probed, width = reset_probe(console, str(profile["uboot_prompt"]), arguments.timeout)
+            transcript += probed
+            if width is None:
+                fail(
+                    "neither 32- nor 64-bit watchdog writes reset the board from the "
+                    "non-secure world; P6.B's root cannot reset it and must use the "
+                    "manual power-cycle path"
+                )
+            print(f"nt98690 reset probe: PASS, {width}-bit writes reset the named {profile['board']}")
             return
 
         if not arguments.no_build:
@@ -535,29 +656,8 @@ def main() -> None:
                 break
         transcript += payload
 
-        # Say nothing from here on. The board is resetting into its own
-        # firmware, and a keystroke would interrupt the autoboot this step
-        # exists to observe -- leaving the board at a prompt and the recovery
-        # unproven.
         print(f"[gate]   waiting up to {RECOVERY_SECONDS:.0f}s for the vendor firmware to return")
-        recovery = ""
-        remaining = RECOVERY_SECONDS
-        while remaining > 0:
-            recovery += console.read_for(1.0)
-            remaining -= 1.0
-            if re.search(BANNER_PATTERN, recovery):
-                # Let the banner line arrive whole, then keep only up to its
-                # end. What follows is the vendor's own next boot, which reaches
-                # its kernel handoff about 700 characters later and prints
-                # `Moving Image from` -- a failure marker about where *this*
-                # gate's payload was placed, not the vendor's. Retained, a
-                # correct autonomous recovery would reject the run it proves.
-                recovery += console.read_for(1.0)
-                end = re.search(BANNER_PATTERN, recovery).end()
-                line_end = recovery.find("\n", end)
-                recovery = recovery[: line_end if line_end != -1 else len(recovery)]
-                break
-        transcript += recovery
+        transcript += wait_for_banner(console, RECOVERY_SECONDS)
     finally:
         console.close()
         if arguments.transcript and transcript:
