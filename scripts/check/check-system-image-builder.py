@@ -223,7 +223,15 @@ def check_resolution(
 
 
 def check_no_plane_flags() -> None:
-    """The builder takes a closure and an output directory, and nothing else."""
+    """The builder's argument surface names records, never build behavior.
+
+    Two positionals and one flag. `--negative` is admitted because it selects
+    which *record type* the positional is — a `NegativeBuildCase` rather than a
+    `SystemImageClosure` — and not what the build does: the mutation, the root
+    role, the profiles, and the parameters all still come from the record. A
+    plane flag is the opposite, naming behavior the caller chose, and the
+    patterns below keep that class out.
+    """
     source = BUILDER.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(BUILDER))
     added = [
@@ -237,10 +245,11 @@ def check_no_plane_flags() -> None:
     for node in added:
         if node.args and isinstance(node.args[0], ast.Constant):
             declared.append(node.args[0].value)
-    if sorted(declared) != ["closure", "output_dir"]:
+    admitted = ["--negative", "closure", "output_dir"]
+    if sorted(declared) != admitted:
         fail(
             "the closure builder declares arguments "
-            f"{sorted(declared)}; expected exactly ['closure', 'output_dir']"
+            f"{sorted(declared)}; expected exactly {admitted}"
         )
     for pattern, label in (
         (r"--[a-z0-9-]+-plane", "a plane flag"),
