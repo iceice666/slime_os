@@ -80,7 +80,7 @@ vendor firmware's banner every time.
 ## Open risks and follow-ups
 
 - [x] **The board booted seL4 three times**; the transcripts are committed here.
-- [x] The watchdog reset from the non-secure world works with 32-bit writes from EL0 through seL4: every run's reset request was followed by the firmware banner. A transcript cannot show whether an operator also cycled power between runs; the operator's account is recorded under Corrections once given. The separate `--reset-probe` was not needed and remains available as a bench tool.
+- [x] The watchdog reset from the non-secure world works with 32-bit writes from EL0 through seL4: every run's reset request was followed by the firmware banner, and the operator applied power exactly once, when the gate asked (see Corrections). The separate `--reset-probe` was not needed and remains available as a bench tool.
 - [x] `check-sel4-sample-plane.py::check_transcript` accepted the board's own transcripts, on the board's own architecture.
 - [ ] The fork branches are local until pushed; the pins name commits `1b93edf5…` and `20905bef…`.
 - [ ] The root's virtio scan at `0x0a00_0000` maps a RAM page as device memory on this board and reports `devices=0`; harmless and stable, left as is.
@@ -92,3 +92,12 @@ vendor firmware's banner every time.
 - Board evidence, received from the operator by wormhole and re-verified here: [`sample-run-1.log`](sample-run-1.log) / [`sample-run-1.normalized.log`](sample-run-1.normalized.log), [`sample-run-2.log`](sample-run-2.log) / [`sample-run-2.normalized.log`](sample-run-2.normalized.log), [`sample-run-3.log`](sample-run-3.log) / [`sample-run-3.normalized.log`](sample-run-3.normalized.log).
 - Plan of record: [`../2026-09-01-p6-nt98690-h1v1-lane/plan.md`](../2026-09-01-p6-nt98690-h1v1-lane/plan.md), Part C.
 - Related roadmap item: [P6.B](../../roadmap/07-architecture-portability.md#p6b--sel4-and-slime-root-on-the-h1v1).
+
+## Corrections
+
+1. Appended 2026-09-02, after the run. A transcript cannot show whether power
+   was cycled between runs, so the autonomy claim rested on the operator's
+   account: power was applied once, when the gate printed its power-cycle
+   instruction at the start, and not again. Runs two and three therefore began
+   from the root's own watchdog reset, which is what the roadmap's "resets
+   itself" and "without an operator" mean here.
