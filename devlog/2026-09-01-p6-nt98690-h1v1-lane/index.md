@@ -204,3 +204,9 @@ corrections themselves.
 5. **Fork pushes are not this host's to make.** Its GitHub identity has no push
    access to `iceice666/{seL4,rust-sel4}`; fork commits are local on
    `slime-ns02201-h1v1` branches and pinned by hash until the operator pushes.
+6. **Session 3 was planned on 2026-09-02 against the landed P6.B tree.**
+   `plan.md`'s Part D supersedes Part A's `## A8` outline: the board-neutral
+   rename is wider than `build.rs` (the builder's Duo-only serial parse and the
+   H1V1's unguarded post-graph reset are the real blockers), fork-push risk 9
+   closed the good way (forks at `CG-AA`, pushed and pinned), and the P6.C gate
+   is written to enter the shared tamper control the Duo's slisp gate never had.

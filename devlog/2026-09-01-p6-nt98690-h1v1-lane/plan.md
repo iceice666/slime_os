@@ -391,3 +391,78 @@ from` (base drift — the identity's `load_address` vs the fatload address); `SL
 (PPI 30 assumption: confirm hyp in `gen_config.json` and `CNTHCTL_EL2`); reset marker printed
 but no banner (C1 fallback); normalized traces differ (inspect the diff before touching
 `DYNAMIC_FIELDS`); `sample.check_transcript` rejects a board transcript (A7.11).
+
+---
+
+# Part D — Session 3 plan (P6.C: interactive Slisp over UART0), appended 2026-09-02
+
+Part A's `## A8. Session 3 outline` is superseded by this part. Corrections to Part A made
+by Session 3's exploration:
+
+1. **The generalisation A8 named is wider than `build.rs`.** The real blocker is
+   `scripts/build/build-sel4.py`'s product-UART env branch, which gates on
+   `platform is CV1800B_DUO` *and* parses `serial` with `uart0-dw-apb-(0x…)` — a regex the
+   H1V1's `uart0-ns16550a-0x2f0130000` does not match. And the H1V1's post-graph
+   `request_ns02201_reset()` in `slime-root/src/main.rs` is unconditional, missing the Duo's
+   `not(<uart cfg>)` guard that lets a product graph stay resident.
+2. **A7 risk 9 (fork push rights) is closed the good way.** The forks live at
+   `github.com/CG-AA/{seL4,rust-sel4}` with `slime-ns02201-h1v1` pushed at the pinned
+   hashes, and Slime `main` is pushed to `CG-AA/slime_os`. P6.C needs no fork changes.
+3. The Duo's slisp gate (`check-duo-slisp.py`) is **not** in the shared tamper control's
+   `GATES` — it exposes no `REQUIRED_MARKERS`. P6.C's gate is written to be eligible, which
+   constrains its marker grammar to `literal_for`'s vocabulary (newlines spelled `\n`,
+   matched against a CR-stripped view of the transcript).
+
+## D1. Board-neutral product-UART build inputs (one commit, Duo behavior unchanged)
+
+Rename the inputs the roadmap calls board-named: env `SLIME_DUO_UART_PADDR` →
+`SLIME_PRODUCT_UART_PADDR` (cfg `slime_duo_uart` → `slime_product_uart`), env
+`SLIME_DUO_TEST_TERMINATOR` → `SLIME_PRODUCT_TEST_TERMINATOR` (cfg likewise),
+`build-sel4.py` flag `--duo-test-terminator` → `--test-terminator`, identity key
+`duo_test_terminator` → `test_terminator`. Genuinely Duo-specific things keep Duo names
+(`SLIME_DUO_TIMEBASE_HZ`, `SLIME_DUO_EARLY_FAULT`, `request_duo_test_reset`, the RTC cold
+reset and its `kind=cold` markers). `build.rs`'s guard becomes "physical board profiles
+only"; `build-sel4.py`'s env branch covers both boards with a per-platform serial kind
+(`dw-apb` / `ns16550a`); `main.rs` gains `request_ns02201_test_reset() -> !` (prints
+`SLIME_NT98690 test terminator accepted`, calls `request_ns02201_reset()`), installs it
+under `all(slime_product_test_terminator, slime_ns02201_h1v1)`, and guards both post-graph
+resets with `not(slime_product_uart)`. `DwApbInput` keeps its name; its doc comment goes
+board-neutral (both boards pin reg-shift 2 / io-width 4). Rename-neutrality is checked by
+sha256 comparison of the two Duo graph images before and after.
+
+## D2. H1V1 product image and payload
+
+`build-sel4.py --component-graph --platform ns02201-h1v1 --test-terminator` over the
+existing `sel4.zti` product composition (6 executables / 6 instances / 11 grants,
+`bootAction = "product"` ⇒ resident dispatcher); the aarch64 product Slisp builds against
+`build/sel4-prefix` exactly as the QEMU-arm product does. `[ns02201_h1v1].boot_files` gains
+`slime-sel4-ns02201-h1v1-test-terminator.bin`; `build-nt98690-payload.py` propagates
+`variant` and `test_terminator` into the payload identity.
+
+## D3. The gate — `scripts/check/check-nt98690-slisp.py`
+
+Own checker; borrows `uboot_console`, the P6.A staging helpers, and `sel4_gate_markers`.
+Single ordered `REQUIRED_MARKERS` chain (~30, frozen against a fresh QEMU product-graph
+transcript and a stand-in rehearsal), P6.B's failure set plus the resident-graph failures
+(`SLIME_GRAPH exhausted`, the Slisp exit line, `[slisp] repl done`, `! input`). One scored
+boot, one operator power-cycle: P6.A staging → boot markers through
+`[slisp] resident input wait` → type `(define answer 40)`, `(+ answer 2)`, `sysinfo` →
+resident checkpoint at 32768 iterations → `(+ answer 3)` → framing check → terminator
+`0x1d` → `SLIME_NT98690 test terminator accepted` → `reset request kind=wdt` → banner.
+Duo-parity assertions: exactly one resident-wait line, exactly one healthy line,
+`framing_errors == 0` before the terminator. Evidence `slisp-session.log` +
+`slisp-identities.json`. Registered in `check-sel4-gate-controls.py::GATES`.
+
+## D4–D7. Recipe, records, verification, stop conditions
+
+`just nt98690_slisp_check serial="": slisp_core_check sel4_component_graph_check`; the
+S1/S2-shaped operator bundle, proven standalone before wormholing. Roadmap 07 gains P6.C's
+`#### Verification target` and `#### Exit condition` up front and the observed exit after
+the run; the stale header and P6-umbrella status lines are corrected. A new devlog entry
+carries the session evidence; the memory file's stale push-state lines are fixed. Host
+verification: reference gates, rename-neutrality hashes, `duo_gate_control_check`, the
+contract/generation/pin/image/payload chain, `sel4_gate_control_check` with the new gate,
+ruff/typos/fmt/lint/devlog. Stop conditions are Defect entries: RX without echo, repeated
+or missing resident-wait, a slow resident checkpoint, a swallowed terminator,
+`SLIME_NT98690 reset failed`, a marker `literal_for` cannot instantiate, or any QEMU
+reference shift under the rename.

@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
-**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence. P6 opens a second physical AArch64 lane on the Novatek NT98690 H1V1, whose vendor firmware keeps a serial console the Raspberry Pi 5 lane lacks; P6.A is in progress and nothing about that board is claimed until a transcript is recorded.
+**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence. P6 opens a second physical AArch64 lane on the Novatek NT98690 H1V1, whose vendor firmware keeps a serial console the Raspberry Pi 5 lane lacks; P6.A and P6.B are complete with observed board transcripts, and P6.C (the interactive shell) is in progress.
 
 **Decision:** Milk-V Duo remains the current physical execution target because P3.D established the observed hands-off deployment loop and P3.E used it to qualify upstream seL4, `slime-root`, a target-qualified generation, repeated sample-plane semantics, timer delivery, bounded fault evidence, and autonomous recovery. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
 
@@ -898,7 +898,7 @@ interruption at each append/commit boundary.
 
 ## P6: Novatek NT98690 (NS02201) H1V1 physical lane
 
-**Status:** P6.A in progress; P6.B and P6.C planned. This lane claims nothing about the board until an observed serial transcript says otherwise.
+**Status:** P6.A and P6.B complete, observed on the named board on 2026-09-02; P6.C in progress. This lane claims nothing about the board until an observed serial transcript says otherwise.
 
 **Decision:** The H1V1 is opened as a second physical AArch64 lane because its evidence path already exists and P4's does not. The vendor firmware keeps a 16550 UART0 console alive from BL31 through U-Boot, and the board's own vendor tooling drives that console programmatically, so the ordered-marker evidence P4 is blocked on is available here today. The lane deliberately reuses the vendor loader, TF-A, and U-Boot unmodified and boots from removable media only: no image in this lane writes the board's eMMC, and the stock firmware remains the recovery path. Duo and Raspberry Pi 5 evidence cannot complete an H1V1 gate, and H1V1 evidence completes neither of theirs.
 
@@ -968,7 +968,7 @@ A named Novatek NT98690 H1V1 loads the pinned sample-plane seL4 image from remov
 
 ### P6.C — Interactive Slisp over UART0 on the H1V1
 
-**Status:** Planned. Depends on P6.B.
+**Status:** In progress. Depends on P6.B.
 
 #### Deliverables
 
@@ -980,7 +980,16 @@ A named Novatek NT98690 H1V1 loads the pinned sample-plane seL4 image from remov
 
 - the shell remains resident across its input waits and never exits;
 - an empty receive FIFO reports `WouldBlock` rather than blocking the root's console dispatcher;
-- deterministic plane images keep their scripted input source and compile no board address.
+- deterministic plane images keep their scripted input source and compile no board address;
+- the `aarch64-sel4-qemu-virt` product graph and the Slisp core vectors pass first, and the gate's marker contract is covered by the shared tamper control.
+
+#### Verification target
+
+`just nt98690_slisp_check <serial>` — build the resident product-graph image with the gate-only terminator, wrap it in the qualified `Image` header, stage it over P6.A's handoff, and drive one bounded interactive session on the named board; `just sel4_gate_control_check` proves the marker chain fails on tampered evidence.
+
+#### Exit condition
+
+A named Novatek NT98690 H1V1 loads the pinned resident product-graph seL4 image from removable media through its unmodified vendor U-Boot, reaches the resident `slisp> ` prompt over the declared `InputRead` path with the root reporting its product input ready at the pinned UART address, answers typed commands — a definition, an arithmetic use of it, and a `sysinfo` spawn through spawn-service — stays resident past the 32768-iteration checkpoint and answers again, and returns to its vendor firmware only through the gate-only `0x1d` terminator routed into P6.B's watchdog reset; the session transcript is committed as evidence with zero framing errors.
 
 ## MCU and embedded-companion boundary
 
