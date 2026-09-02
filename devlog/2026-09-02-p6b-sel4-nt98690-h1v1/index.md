@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-02 |
 | Kind | Change |
-| Status | Proposed |
+| Status | Verified |
 | Scope | `deps/sel4` (`src/plat/ns02201/`, `tools/dts/ns02201-h1v1.dts`, the Cortex-A73 option), `deps/rust-sel4` (`crates/sel4-kernel-loader/src/plat/ns02201/`), `sel4/pins.toml`, `sel4/config/ns02201-h1v1.cmake`, `contracts/target-profile/v1/`, `scripts/build/{build-sel4,build-nt98690-payload,build-generation,build-rpi5-media}.py`, `scripts/lib/{arm64_image,uboot_console,component_sdk}.py`, `scripts/check/{check-nt98690-sel4,check-nt98690-boot,check-sel4-pins,check-sel4-gate-controls,check-architecture-contract}.py`, `slime-root`, `just/{hardware,quality}.just` |
 | Roadmap | P6.B |
 | Gates | `just sel4_nt98690_image_check`, `just nt98690_sel4_check`, `just sel4_gate_control_check`, `just sel4_pin_check` |
@@ -20,8 +20,9 @@ qualified, a root task that resets the board through the SoC watchdog when the
 sample plane completes, and a gate that boots the sample-plane image three
 times over the same `booti` handoff and requires byte-identical normalized
 traces. Every value in the kernel configuration was measured by P6.A rather
-than assumed. The host side is complete and verified; the board session is
-what closes the milestone.
+than assumed. The board session closed the milestone on 2026-09-02: three boots, three
+identical normalized traces, and the root's watchdog reset followed by the
+vendor firmware's banner every time.
 
 ## Changes
 
@@ -62,8 +63,9 @@ what closes the milestone.
 | Rehearsal of `check-nt98690-sel4.py` against a stand-in board replaying the QEMU sample-plane transcript with per-run jitter | Three runs: contract, sample-plane assertions, and wire clean; normalized traces identical; each run's recovery evidence is exactly the firmware banner line; no `Moving Image` in any transcript. Not board evidence: a rehearsal of the loop | Direct, synthetic |
 | `just sel4_root_boot_check`, `just sel4_sample_check`, `just generation_check` over the re-pinned tree | Passed: the QEMU reference kernel is byte-identical, only its config JSON gained the two keys, and every reference plane still boots | Direct |
 | `just contracts_check`, `just ruff`, `just typos`, `just fmt_check_all`, `just lint_all`, `just devlog_check` | Passed on the committed tree | Direct |
-| `--reset-probe` on the named board | Pending the operator | — |
-| `just nt98690_sel4_check <serial>` on the named board | Pending the operator | — |
+| `--reset-probe` on the named board | Not run as a separate step: the operator went straight to the gate, whose three runs each end with the root's `reset request kind=wdt` followed by the firmware banner -- the reset from the non-secure world, observed three times from EL0 through seL4 rather than once from U-Boot | Direct; the three transcripts |
+| `just nt98690_sel4_check /dev/ttyUSB0` on the named board, 2026-09-02 | **Passed.** Each run: `fatload` read 1,285,200 bytes in 66 ms; the loader saw memory `0x10000000..0x40000000` and copied the kernel to `0x10000000`; `Booting all finished, dropped to user space`; `SLIME_ROOT allocator slots=3047 untypeds=26 bytes=798838800`; `SLIME_TIMER acquired irq=30 freq_hz=12000000`, delivered and serviced before and after graph activation; the generation admitted with `executables=4 instances=4 grants=6`; `SLIME_ROOT READY target_profile=aarch64-sel4-nt98690-h1v1`; `SLIME_NT98690 reset request kind=wdt`; `U-Boot 2021.10`. Raw transcripts 120,204 bytes each, normalized traces 9,448 bytes each and byte-identical; the operator's normalized files equal this host's re-normalization of the raw logs; 0 framing errors on a local tty; no `Moving Image` in any run | Direct; [`sample-run-1.log`](sample-run-1.log), [`sample-run-2.log`](sample-run-2.log), [`sample-run-3.log`](sample-run-3.log), and their `.normalized.log` siblings |
+| Re-verification of the operator's evidence on this host | The gate's own contract, the sample plane's `check_transcript`, and `normalize` re-run over the three raw logs: all pass, and reproduce the operator's normalized files exactly | Direct |
 
 ## Decisions
 
@@ -77,9 +79,9 @@ what closes the milestone.
 
 ## Open risks and follow-ups
 
-- [ ] **The board has not booted seL4.** P6.B stays in progress until `just nt98690_sel4_check <serial>` passes on the named H1V1 and its three transcripts are committed here.
-- [ ] The watchdog reset from the non-secure world is unobserved until `--reset-probe` runs. If neither write width resets the board, the gate still passes with the operator power-cycling at each prompt, and P6.B's roadmap wording changes from "autonomously" to "with a power cycle between boots".
-- [ ] `check-sel4-sample-plane.py::check_transcript` accepted the stand-in's board-shaped transcript, retiring the S1 plan's risk on paper; the board's own transcript settles it.
+- [x] **The board booted seL4 three times**; the transcripts are committed here.
+- [x] The watchdog reset from the non-secure world works with 32-bit writes from EL0 through seL4: every run's reset request was followed by the firmware banner. A transcript cannot show whether an operator also cycled power between runs; the operator's account is recorded under Corrections once given. The separate `--reset-probe` was not needed and remains available as a bench tool.
+- [x] `check-sel4-sample-plane.py::check_transcript` accepted the board's own transcripts, on the board's own architecture.
 - [ ] The fork branches are local until pushed; the pins name commits `1b93edf5…` and `20905bef…`.
 - [ ] The root's virtio scan at `0x0a00_0000` maps a RAM page as device memory on this board and reports `devices=0`; harmless and stable, left as is.
 
@@ -87,6 +89,6 @@ what closes the milestone.
 
 - Fork commits: seL4 `1b93edf532c5b53e607b4f4f9fa226f78a63ec13`, rust-sel4 `20905bef6b93b7d863ac6dc5d7053f96aa09765a`, both on `slime-ns02201-h1v1`.
 - Prefix hashes: `sel4/pins.toml [observed_prefix_ns02201_h1v1]`.
-- Board evidence, once observed: `reset-probe.log`, `sample-run-{1,2,3}.log`, `sample-run-{1,2,3}.normalized.log`.
+- Board evidence, received from the operator by wormhole and re-verified here: [`sample-run-1.log`](sample-run-1.log) / [`sample-run-1.normalized.log`](sample-run-1.normalized.log), [`sample-run-2.log`](sample-run-2.log) / [`sample-run-2.normalized.log`](sample-run-2.normalized.log), [`sample-run-3.log`](sample-run-3.log) / [`sample-run-3.normalized.log`](sample-run-3.normalized.log).
 - Plan of record: [`../2026-09-01-p6-nt98690-h1v1-lane/plan.md`](../2026-09-01-p6-nt98690-h1v1-lane/plan.md), Part C.
 - Related roadmap item: [P6.B](../../roadmap/07-architecture-portability.md#p6b--sel4-and-slime-root-on-the-h1v1).
