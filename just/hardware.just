@@ -140,3 +140,26 @@ nt98690_boot_check serial="": nt98690_payload_check
 [group('hardware')]
 nt98690_serial_monitor serial timeout="180":
     python3 scripts/check/check-nt98690-boot.py --monitor --serial {{ serial }} --timeout {{ timeout }}
+
+# P6.B: build the H1V1's seL4 kernel, loader, root task, and generation for
+# the `aarch64-sel4-nt98690-h1v1` profile into their own prefix and
+# directories, and pin the kernel artifacts' hashes. Hermetic; it needs no
+# board and writes no block device.
+[group('hardware')]
+sel4_nt98690_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform ns02201-h1v1 --skip-pin-check
+
+# P6.B: boot the sample-plane image on the named H1V1 three times over the
+# same `booti` handoff P6.A qualified, and require the same ordered root
+# evidence the reference planes require, byte-identical normalized traces
+# across the three runs, and the board's own return to its firmware after
+# each. The AArch64 reference profile passes first, as the roadmap requires.
+#
+# The root resets the board through the SoC watchdog after every run, so the
+# operator power-cycles once, at the start. `serial` takes a tty path or a
+# `tcp:HOST:PORT` bridge; omitting it runs and fails, never skips.
+#
+#   just nt98690_sel4_check /dev/ttyUSB0
+[group('hardware')]
+nt98690_sel4_check serial="": sel4_root_boot_check sel4_sample_check
+    python3 scripts/check/check-nt98690-sel4.py {{ if serial == "" { "" } else { "--serial " + serial } }}

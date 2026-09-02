@@ -203,8 +203,13 @@ def reach_uboot(
     *,
     key: bytes = b"\r",
     interval: float = 0.05,
-) -> None:
+) -> str:
     """Leave the board sitting at its U-Boot prompt, or fail saying why not.
+
+    Returns everything the board printed on the way there. For a board that
+    reset itself, that text is the recovery evidence -- its firmware banner --
+    and a gate that boots repeatedly reads it there rather than spending a
+    silent window it would have to interrupt anyway to stage the next boot.
 
     The interrupt key is sent repeatedly from before the board is powered,
     because a U-Boot built with `bootdelay=0` evaluates `tstc()` exactly once:
@@ -265,8 +270,9 @@ def reach_uboot(
         console.write(b"\r")
         if pattern.search(console.read_for(1.0)):
             print(f"[console] at the {prompt!r} prompt")
-            return
+            return collected
     fail(f"the {prompt!r} prompt appeared but does not answer a carriage return")
+    raise AssertionError("unreachable")
 
 
 def send_command(
