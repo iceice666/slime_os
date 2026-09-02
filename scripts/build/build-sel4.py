@@ -132,6 +132,27 @@ CV1800B_DUO = Platform(
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
 )
 
+# P6's physical target: the Novatek NT98690 (NS02201) H1V1. Its kernel is a
+# different build again -- Cortex-A73, 40-bit physical addresses, a GIC-400
+# above 4 GiB -- installed into its own prefix with its own pinned hashes. The
+# device tree is in-tree in the fork, so there is no QEMU to dump one from.
+NS02201_H1V1 = Platform(
+    name="ns02201-h1v1",
+    config=ROOT / "sel4" / "config" / "ns02201-h1v1.cmake",
+    build_dir=BUILD_ROOT / "sel4-ns02201-h1v1",
+    prefix_dir=BUILD_ROOT / "sel4-ns02201-h1v1-prefix",
+    target_profile="aarch64-sel4-nt98690-h1v1",
+    pins_section="ns02201_h1v1",
+    observed_prefix_section="observed_prefix_ns02201_h1v1",
+    random_seed="slime-sel4-ns02201-h1v1",
+    qemu_dtb=False,
+    architecture="aarch64",
+    root_target_key="root_target",
+    child_target_name="aarch64-sel4-minimal.json",
+    loader_target_key="loader_target",
+    cross_compiler_environment="CROSS_COMPILER_PREFIX",
+)
+
 # The physical boards whose product image polls a real UART, and the serial
 # kind their pinned `serial` string must name. Every entry pins `reg-shift 2`
 # / `reg-io-width 4`, so the root's one 16550 adapter serves each; the kind in
@@ -142,7 +163,7 @@ PRODUCT_UART_KINDS: "dict[Platform, str]" = {
 
 PLATFORMS = {
     platform.name: platform
-    for platform in (QEMU_ARM_VIRT, BCM2712_RPI5, QEMU_RISCV_VIRT, CV1800B_DUO)
+    for platform in (QEMU_ARM_VIRT, BCM2712_RPI5, QEMU_RISCV_VIRT, CV1800B_DUO, NS02201_H1V1)
 }
 
 IMAGE = BUILD_ROOT / "slime-sel4.elf"

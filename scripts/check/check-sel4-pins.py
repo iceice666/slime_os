@@ -22,6 +22,7 @@ CONFIG_PATHS = {
     "qemu-arm-virt": ROOT / "sel4" / "config" / "qemu-arm-virt.cmake",
     "qemu-riscv-virt": ROOT / "sel4" / "config" / "qemu-riscv-virt.cmake",
     "cv1800b-duo": ROOT / "sel4" / "config" / "cv1800b-duo.cmake",
+    "ns02201-h1v1": ROOT / "sel4" / "config" / "ns02201-h1v1.cmake",
 }
 RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
@@ -41,6 +42,10 @@ PREFIX_PATHS = {
     "cv1800b-duo": (
         ROOT / "build" / "sel4-cv1800b-duo-prefix",
         "observed_prefix_cv1800b_duo",
+    ),
+    "ns02201-h1v1": (
+        ROOT / "build" / "sel4-ns02201-h1v1-prefix",
+        "observed_prefix_ns02201_h1v1",
     ),
 }
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -218,7 +223,7 @@ def expected_cmake_values(profile: dict[str, object], section: str) -> dict[str,
         "KernelDebugBuild": "ON" if boolean(profile, "debug_build", section) else "OFF",
         "KernelPrinting": "ON" if boolean(profile, "printing", section) else "OFF",
     }
-    if section == "qemu_arm_virt":
+    if section in ("qemu_arm_virt", "ns02201_h1v1"):
         values.update(
             {
                 "KernelArmHypervisorSupport": "ON"
@@ -458,6 +463,81 @@ def check_profile(pins: dict[str, object]) -> None:
     if duo.get("boot_files") != expected_duo_boot_files:
         fail("cv1800b-duo boot files must pin the product, sample, and fault FITs")
 
+    # P6.B: the H1V1's product half must agree with its CMake config, with the
+    # facts the P6.A probe measured on the board, and with the seL4 fork's own
+    # device tree for the platform -- three sources that can drift apart
+    # independently, none of which is allowed to be a Slime-side assertion.
+    h1v1 = table(pins, "ns02201_h1v1")
+    h1v1_expected = expected_cmake_values(h1v1, "ns02201_h1v1")
+    h1v1_actual = parse_cmake_cache(CONFIG_PATHS["ns02201-h1v1"])
+    if h1v1_actual != h1v1_expected:
+        details = [
+            f"{key}: expected {h1v1_expected.get(key)!r}, got {h1v1_actual.get(key)!r}"
+            for key in sorted(set(h1v1_expected) | set(h1v1_actual))
+            if h1v1_expected.get(key) != h1v1_actual.get(key)
+        ]
+        fail("ns02201-h1v1 CMake config disagrees with pins.toml:\n" + "\n".join(details))
+    if h1v1_expected["KernelIsMCS"] != "OFF" or h1v1_expected["KernelMaxNumNodes"] != "1":
+        fail("ns02201-h1v1 product profile must be non-MCS and single-node")
+    if h1v1_expected["KernelArmHypervisorSupport"] != "ON":
+        fail("ns02201-h1v1 must be a hypervisor build: firmware enters at EL2 and the loader asserts it")
+    if text(h1v1, "cpu", "ns02201_h1v1") != "cortex-a73":
+        fail("ns02201-h1v1 CPU pin must name the Cortex-A73 the board reported")
+    if integer(h1v1, "entry_el_observed", "ns02201_h1v1") != 2:
+        fail("ns02201-h1v1 observed entry EL must be 2, the level the hypervisor build assumes")
+    if integer(h1v1, "physical_address_bits", "ns02201_h1v1") != 40:
+        fail("ns02201-h1v1 physical address width must be the 40 bits PARange 2 encodes")
+    frequency = integer(h1v1, "timer_frequency_hz", "ns02201_h1v1")
+    if frequency != integer(h1v1, "cntfrq_el0_primary_hz", "ns02201_h1v1"):
+        fail("ns02201-h1v1 timer frequency must be the CNTFRQ_EL0 the board reported")
+    if frequency != 12_000_000:
+        fail("ns02201-h1v1 timer frequency must be 12 MHz")
+    if integer(h1v1, "timer_irq", "ns02201_h1v1") != 30:
+        fail("ns02201-h1v1 timer IRQ must be CNTP's PPI 30, the line a hypervisor seL4 leaves to userspace")
+    if integer(h1v1, "max_irq", "ns02201_h1v1") != integer(h1v1, "gic_irqs", "ns02201_h1v1"):
+        fail("ns02201-h1v1 max_irq must be the line count GICD_TYPER reported")
+    if text(h1v1, "serial", "ns02201_h1v1") != "uart0-ns16550a-0x2f0130000":
+        fail("ns02201-h1v1 UART0 must match the observed 16550 MMIO identity")
+    h1v1_dts = (ROOT / "deps" / "sel4" / "tools" / "dts" / "ns02201-h1v1.dts").read_text(
+        encoding="utf-8"
+    )
+    uart_node = re.search(
+        r"uart@2f0130000\s*\{(?P<body>.*?)\n\s*\};",
+        h1v1_dts,
+        flags=re.DOTALL,
+    )
+    if uart_node is None:
+        fail("ns02201-h1v1 DT is missing UART0 at 0x2f0130000")
+    uart_body = uart_node.group("body")
+    for fact in (
+        'compatible = "ns16550a";',
+        "reg = <0x02 0xf0130000 0x00 0x1000>;",
+        "reg-shift = <0x02>;",
+        "reg-io-width = <0x04>;",
+    ):
+        if fact not in uart_body:
+            fail(f"ns02201-h1v1 UART0 DT fact missing: {fact}")
+    memory_base = int(text(h1v1, "sel4_memory_base", "ns02201_h1v1"), 16)
+    memory_size = int(text(h1v1, "sel4_memory_size", "ns02201_h1v1"), 16)
+    overlay = (
+        ROOT / "deps" / "sel4" / "src" / "plat" / "ns02201" / "overlay-ns02201-h1v1.dts"
+    ).read_text(encoding="utf-8")
+    memory_node = re.search(
+        rf"memory@{memory_base:x}\s*\{{(?P<body>.*?)\n\s*\}};", overlay, flags=re.DOTALL
+    )
+    if memory_node is None or (
+        f"reg = <0x0 {memory_base:#x} 0x0 {memory_size:#x}>;" not in memory_node.group("body")
+    ):
+        fail(
+            "ns02201-h1v1 overlay memory node must declare the pinned window "
+            f"{memory_base:#x}+{memory_size:#x}; it is what places the kernel"
+        )
+    if memory_base % 0x20_0000 != 0:
+        fail("ns02201-h1v1 memory base must be 2 MiB-aligned")
+    expected_h1v1_boot_files = ["slime-nt98690-probe.bin", "slime-sel4-sample-ns02201-h1v1.bin"]
+    if h1v1.get("boot_files") != expected_h1v1_boot_files:
+        fail("ns02201-h1v1 boot files must pin the P6.A probe and the P6.B sample image")
+
     rpi5 = parse_cmake_cache(RPI5_CONFIG_PATH)
     include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/AARCH64_bcm2712_verified.cmake"
     # The inherited verified profile supplies platform/architecture, turns
@@ -549,6 +629,7 @@ def check_prefix(pins: dict[str, object], platform: str) -> None:
         "qemu-riscv-virt": "just riscv64_qemu_image_check",
         "bcm2712-rpi5": "just sel4_rpi5_image_check",
         "cv1800b-duo": "just sel4_duo_image_check",
+        "ns02201-h1v1": "just sel4_nt98690_image_check",
     }[platform]
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")
