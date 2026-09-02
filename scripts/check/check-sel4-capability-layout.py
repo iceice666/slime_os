@@ -26,8 +26,8 @@ defect should read as a layout defect rather than as a component failing.
 
 from __future__ import annotations
 
-import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -35,11 +35,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import load_script  # noqa: E402
 
 boot_plane = load_script("boot_plane", "check/check-sel4-boot-plane.py")
 
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
+NEGATIVE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "negative"
+CLOSURE = "sel4-boot"
+
+def negative_cases() -> dict[str, Path]:
+    """Each B40 mutation and the negative build case declaring it.
+
+    Read from the records rather than restated here: the mutation vocabulary is
+    the contract's, and a second copy of it in this file would be one more
+    place to disagree with the records the build actually resolves.
+    """
+    found: dict[str, Path] = {}
+    for path in sorted(NEGATIVE_ROOT.glob("*.zti")):
+        match = re.search(r'mutation = "([a-z_]+)";', path.read_text(encoding="utf-8"))
+        if match is None:
+            fail(f"{path.name} declares no mutation")
+        found[match.group(1)] = path
+    return found
 
 # The supervisor's terminal, and the refusal the audit prints. Both are reused
 # from the boot-plane gate so the two cannot drift apart.
@@ -60,23 +78,53 @@ def fail(message: str) -> None:
     raise SystemExit(f"capability layout check: {message}")
 
 
-def build(mutation: str | None) -> None:
-    environment = dict(os.environ)
-    environment.pop("SLIME_B40_MUTATION", None)
-    if mutation is not None:
-        environment["SLIME_B40_MUTATION"] = mutation
-    command = [sys.executable, str(BUILD_SCRIPT), "--boot-plane"]
+def build(mutation: str | None) -> Path:
+    """Build the boot plane, or one of its negative cases, and return the image.
+
+    CP14 typed the six B40 perturbations as `NegativeBuildCase` records rather
+    than an ambient `SLIME_B40_MUTATION`: each names its base closure by
+    identity, one closed mutation, and the refusal this audit must observe. So
+    a mutated root is reachable only through the record that declares it, and a
+    negative build deliberately produces no image-identity or build-result
+    record — it cannot be mistaken for a product image.
+
+    This also removes the shared-image hazard the ambient knob created. Each
+    build lands in its own directory, so a mutated root can no longer be left
+    in the path every other seL4 gate boots.
+    """
+    if mutation is None:
+        try:
+            return build_closure_image(CLOSURE).image
+        except ClosureImageError as error:
+            fail(str(error))
+    cases = negative_cases()
+    if mutation not in cases:
+        fail(f"no negative build case declares mutation {mutation!r}")
+    case = cases[mutation]
+    output = ROOT / "build" / "closure" / f"negative-{mutation}"
+    # The builder refuses a non-empty output directory, which is what keeps a
+    # stale artifact from being reported as this build's. Clearing it here is
+    # the honest way to satisfy that: a rebuilt mutation must not inherit
+    # anything from its predecessor.
+    if output.exists():
+        shutil.rmtree(output)
+    command = [
+        sys.executable,
+        str(BUILDER_SCRIPT),
+        "--negative",
+        str(case),
+        str(output),
+    ]
     process = subprocess.run(
-        command,
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
+        command, cwd=ROOT, check=False, capture_output=True, text=True
     )
     if process.returncode != 0:
         tail = (process.stdout + process.stderr)[-2000:]
         fail(f"build failed for mutation {mutation!r}\n{tail}")
+    image = output / "negative-image.elf"
+    if not image.is_file():
+        fail(f"the negative build for {mutation!r} produced no image at {image}")
+    return image
 
 
 def main() -> int:
@@ -85,34 +133,31 @@ def main() -> int:
     pins = boot_plane.load_pins()
     profile = pins["qemu_arm_virt"]
 
-    build(None)
-    transcript = boot_plane.boot(profile)
+    image = build(None)
+    transcript = boot_plane.boot(profile, image=image)
     if not TERMINAL.search(transcript):
         fail("the unmutated graph never reached the supervisor terminal")
     if REFUSAL.search(transcript):
         fail("the unmutated graph was refused by its own CSpace audit")
     print("capability layout check: every child CSpace matches the admitted plan")
 
-    # Whatever happens below, the last build must be unmutated: every other
-    # seL4 gate boots `build/slime-sel4-boot.elf`, and leaving a mutated image
-    # there would fail them for a reason that has nothing to do with them.
-    try:
-        check_mutations(profile)
-    finally:
-        build(None)
+    # No rebuild-to-clean afterwards: each negative build writes its own
+    # directory and never the path another gate boots, so a mutated root
+    # cannot leak into an unrelated gate.
+    check_mutations(profile)
     print(f"capability layout check: all {len(MUTATIONS)} negative mutations refused")
     return 0
 
 
 def check_mutations(profile: dict[str, object]) -> None:
     for mutation, description in MUTATIONS:
-        build(mutation)
+        mutated = build(mutation)
         # A refused CSpace is a root fatal, and the boot-plane helper turns a
         # failure marker into SystemExit. Here that outcome is the expected
         # one, so the transcript is recovered from the exception rather than
         # letting it end the gate.
         try:
-            transcript = boot_plane.boot(profile)
+            transcript = boot_plane.boot(profile, image=mutated)
         except SystemExit:
             # `boot` clears LAST_TRANSCRIPT on entry, so an empty one means it
             # failed before the guest produced anything — a missing QEMU or a

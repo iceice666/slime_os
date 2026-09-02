@@ -303,7 +303,14 @@ def build_image() -> None:
 LAST_TRANSCRIPT = ""
 
 
-def boot(profile: dict[str, object]) -> str:
+def boot(profile: dict[str, object], *, image: Path | None = None) -> str:
+    """Boot the plane image and return the transcript.
+
+    `image` lets a gate that audits this plane's root — the capability-layout
+    audit — boot a specific build, including a negative build case's
+    deliberately mutated root, without that image ever occupying the path this
+    gate's own build produces.
+    """
     """Boot until the graph settles, or a failure appears.
 
     The healthy record is necessary evidence but not a stopping point: it
@@ -343,7 +350,7 @@ def boot(profile: dict[str, object]) -> str:
         "-serial",
         "mon:stdio",
         "-kernel",
-        str(IMAGE),
+        str(image if image is not None else IMAGE),
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
     failures = re.compile("|".join(FAILURE_MARKERS))
