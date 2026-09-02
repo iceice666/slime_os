@@ -33,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 import re
 import shutil
 import subprocess
@@ -49,8 +50,14 @@ from arm64_image import (  # noqa: E402
     HEADER_BYTES,
     MAGIC,
     Arm64ImageError,
+    check_branch_lands_on_start,
     decode_branch,
+    elf_entry,
+    encode_branch,
+    flatten,
+    pack_header,
     parse_header,
+    read_load_segments,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,6 +69,13 @@ PROBE_LINKER_SCRIPT = SOURCE_DIR / "probe.ld"
 OUT_DIR = ROOT / "build" / "nt98690-payload"
 
 TARGET_PROFILE = "aarch64-nt98690-bringup"
+PROBE_BOOT_FILE = "slime-nt98690-probe.bin"
+
+#: P6.B: the seL4 image the board boots, and the identity it must carry.
+SEL4_TARGET_PROFILE = "aarch64-sel4-nt98690-h1v1"
+SEL4_PLATFORM = "ns02201-h1v1"
+SEL4_DEFAULT_STEM = "slime-sel4-sample-ns02201-h1v1"
+SEL4_DEFAULT_IMAGE = ROOT / "build" / f"{SEL4_DEFAULT_STEM}.elf"
 
 #: The probe keeps its whole state in registers and a 4 KiB stack, so its
 #: memory footprint is its file plus that stack plus alignment. A declared
@@ -118,11 +132,18 @@ def hex_pin(profile: dict[str, object], key: str) -> int:
         fail(f"sel4/pins.toml [{PINS_SECTION}].{key} is not a hexadecimal integer")
 
 
-def boot_file(profile: dict[str, object]) -> str:
+def boot_file(profile: dict[str, object], name: str) -> str:
+    """`name`, once the pins say the card is expected to carry it.
+
+    The gate stages whatever this builder names, so a file the pins do not
+    list would be a boot the board's profile never declared.
+    """
     files = profile["boot_files"]
-    if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], str):
-        fail(f"sel4/pins.toml [{PINS_SECTION}].boot_files must name exactly one file")
-    return files[0]
+    if not isinstance(files, list) or not all(isinstance(entry, str) for entry in files):
+        fail(f"sel4/pins.toml [{PINS_SECTION}].boot_files must be a list of file names")
+    if name not in files:
+        fail(f"sel4/pins.toml [{PINS_SECTION}].boot_files does not list {name}")
+    return name
 
 
 def check_link_address(profile: dict[str, object]) -> int:
@@ -232,7 +253,14 @@ def build_binary(prefix: str, *, output_name: str, qemu_variant: bool) -> tuple[
     return binary, elf, entry, toolchain
 
 
-def check_image_header(image: bytes, *, load: int, entry: int) -> None:
+def check_image_header(
+    image: bytes,
+    *,
+    load: int,
+    entry: int,
+    entry_at_load: bool = True,
+    reserve_slack: int = MAX_RESERVED_BEYOND_FILE,
+) -> None:
     """Assert the header the assembler emitted is the one firmware needs.
 
     Every field here is one firmware acts on, and the checks are ordered by how
@@ -255,7 +283,7 @@ def check_image_header(image: bytes, *, load: int, entry: int) -> None:
             f"linked and loaded at {load:#x}; this board relocates to "
             "text_offset, so it would run code from the wrong address"
         )
-    if entry != load:
+    if entry_at_load and entry != load:
         fail(f"ELF entry {entry:#x} is not the link address {load:#x}")
 
     try:
@@ -282,11 +310,10 @@ def check_image_header(image: bytes, *, load: int, entry: int) -> None:
             f"header image_size {header.image_size:#x} is smaller than the "
             f"{len(image):#x}-byte image, so firmware would not reserve all of it"
         )
-    if header.image_size > len(image) + MAX_RESERVED_BEYOND_FILE:
+    if header.image_size > len(image) + reserve_slack:
         fail(
             f"header image_size {header.image_size:#x} reserves more than "
-            f"{MAX_RESERVED_BEYOND_FILE:#x} bytes beyond the {len(image):#x}-byte "
-            "image; the probe's only uninitialised memory is its stack"
+            f"{reserve_slack:#x} bytes beyond the {len(image):#x}-byte image"
         )
 
 
@@ -321,6 +348,120 @@ def write_identity(
     return path
 
 
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_sel4(
+    profile: dict[str, object], *, image: Path, image_identity_path: Path, output_stem: str
+) -> None:
+    """Wrap a packaged seL4 loader ELF in the arm64 `Image` the board's `booti` starts.
+
+    The loader links itself at a fixed physical address derived from the
+    installed kernel, with its ELF header in the lowest PT_LOAD. That header is
+    dead once the image is loaded -- nothing at runtime reads it -- and it is
+    exactly the sixty-four bytes an arm64 `Image` header occupies, so the one
+    overwrites the other: `text_offset` is the link base, `code0` branches to
+    the loader's entry, and `image_size` is the flattened span, uninitialised
+    memory included. `booti` then places the image where it was linked, the
+    same arithmetic P6.A proved with the probe.
+    """
+    if not image.is_file() or not image_identity_path.is_file():
+        fail(
+            f"the seL4 image {image.relative_to(ROOT)} or its identity is missing; run "
+            "`python3 scripts/build/build-sel4.py --platform ns02201-h1v1 --sample-plane` first"
+        )
+    try:
+        image_identity = json.loads(image_identity_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"cannot parse {image_identity_path.relative_to(ROOT)}: {error}")
+    if image_identity.get("target_profile") != SEL4_TARGET_PROFILE:
+        fail("the packaged seL4 image identity names the wrong target profile")
+    if image_identity.get("platform") != SEL4_PLATFORM:
+        fail("the packaged seL4 image identity names the wrong platform")
+    image_record = image_identity.get("image")
+    if not isinstance(image_record, dict) or image_record.get("sha256") != sha256_file(image):
+        fail("the seL4 ELF does not match its image identity manifest")
+    generation = image_identity.get("generation")
+    if not isinstance(generation, dict) or not isinstance(generation.get("identity"), str):
+        fail("the seL4 image identity does not record its embedded generation")
+
+    name = boot_file(profile, f"{output_stem}.bin")
+    try:
+        segments = read_load_segments(image)
+        entry = elf_entry(image)
+        flat, base = flatten(image, segments)
+    except Arm64ImageError as error:
+        fail(str(error))
+    if segments[0].offset != 0 or segments[0].file_size < HEADER_BYTES:
+        fail(
+            "the lowest seL4 PT_LOAD does not begin with the ELF header, so there "
+            "are no dead bytes at the base for the arm64 Image header to replace"
+        )
+    end = base + len(flat)
+    if not base <= entry < end:
+        fail(f"entry {entry:#x} lies outside the loaded span {base:#x}..{end:#x}")
+
+    memory_base = hex_pin(profile, "sel4_memory_base")
+    memory_end = memory_base + hex_pin(profile, "sel4_memory_size")
+    if base < memory_base or end > memory_end:
+        fail(
+            f"seL4 image span {base:#x}..{end:#x} leaves the kernel's memory window "
+            f"{memory_base:#x}..{memory_end:#x}"
+        )
+    for start, stop, what in RESERVED_REGIONS:
+        if base < stop and end > start:
+            fail(f"seL4 image span {base:#x}..{end:#x} overlaps the {what} ({start:#x}..{stop:#x})")
+
+    try:
+        code0 = struct.unpack("<I", encode_branch(base, entry))[0]
+    except Arm64ImageError as error:
+        fail(str(error))
+    flat[:HEADER_BYTES] = pack_header(code0=code0, text_offset=base, image_size=len(flat))
+    payload = bytes(flat)
+    check_image_header(payload, load=base, entry=entry, entry_at_load=False, reserve_slack=0)
+    try:
+        check_branch_lands_on_start(payload, base, entry)
+    except Arm64ImageError as error:
+        fail(str(error))
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    binary = OUT_DIR / name
+    binary.write_bytes(payload)
+    identity = {
+        "schema": 1,
+        "kind": "slime-nt98690-sel4-payload-identity",
+        "board": profile["board"],
+        "soc": profile["soc"],
+        "platform": SEL4_PLATFORM,
+        "target_profile": SEL4_TARGET_PROFILE,
+        "variant": image_identity.get("variant"),
+        "boot_file": name,
+        "load_address": f"{base:#x}",
+        "entry_address": f"{entry:#x}",
+        "image_end": f"{end:#x}",
+        "text_offset": f"{base:#x}",
+        "image_size": f"{len(payload):#x}",
+        "payload_bytes": len(payload),
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        "elf_path": str(image.relative_to(ROOT)),
+        "elf_sha256": image_record["sha256"],
+        "generation_identity": generation["identity"],
+        "generation_sha256": generation.get("sha256"),
+        "memory_window": [f"{memory_base:#x}", f"{memory_end:#x}"],
+    }
+    identity_path = OUT_DIR / f"{output_stem}.identity.json"
+    identity_path.write_text(json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    print(f"sel4:     {binary.relative_to(ROOT)} ({len(payload)} bytes)")
+    print(f"from:     {image.relative_to(ROOT)} (variant {image_identity.get('variant')})")
+    print(f"identity: {identity_path.relative_to(ROOT)}")
+    print(f"load:     {base:#x} (link base, header text_offset, and fatload address); entry {entry:#x}")
+    print()
+    print("This wrote no block device. To stage the image for a board run:")
+    print(f"  cp {binary.relative_to(ROOT)} <mounted FAT32 partition>/")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -331,14 +472,30 @@ def main() -> None:
             "instruction stream can be executed before it reaches a board"
         ),
     )
+    parser.add_argument(
+        "--sel4",
+        action="store_true",
+        help="wrap a packaged seL4 loader ELF in the arm64 Image header instead of the probe",
+    )
+    parser.add_argument("--image", type=Path, default=SEL4_DEFAULT_IMAGE)
+    parser.add_argument("--identity", type=Path, help="the image's identity manifest")
+    parser.add_argument("--output-stem", default=SEL4_DEFAULT_STEM)
     arguments = parser.parse_args()
 
     profile = load_profile()
+    if arguments.sel4:
+        image = arguments.image.resolve()
+        identity = arguments.identity or image.with_suffix(".identity.json")
+        build_sel4(
+            profile, image=image, image_identity_path=identity, output_stem=arguments.output_stem
+        )
+        return
+
     load = check_link_address(profile)
     prefix = cross_prefix()
 
     binary, elf, entry, toolchain = build_binary(
-        prefix, output_name=boot_file(profile), qemu_variant=False
+        prefix, output_name=boot_file(profile, PROBE_BOOT_FILE), qemu_variant=False
     )
     image = binary.read_bytes()
     check_image_header(image, load=load, entry=entry)
