@@ -906,7 +906,7 @@ interruption at each append/commit boundary.
 
 ### P6.A — H1V1 environment bootstrap and firmware handoff evidence
 
-**Status:** In progress. It claims a firmware handoff and a set of measured board facts, not seL4, `slime-root`, or any Slime generation on this board; those are P6.B.
+**Status:** Complete, observed on the named board on 2026-09-02. It claims a firmware handoff and a set of measured board facts, not seL4, `slime-root`, or any Slime generation on this board; those are P6.B. Evidence: [the P6.A devlog entry](../devlog/2026-09-01-p6a-nt98690-probe/index.md) and its `probe-boot.log`.
 
 **Why the probe comes before the port:** every value the seL4 platform port needs — the exception level the payload is entered at, the physical address `booti` places it at, the primary core's `CNTFRQ_EL0`, the implemented physical-address range, and the GIC's line count — is a property of this board's firmware rather than of its documentation. The vendor device tree states a timer frequency, but TF-A programs `CNTFRQ_EL0` only on secondary cores, so the primary's value is unknown until read. Pinning those numbers from documents and discovering later that the board disagrees is the failure mode this milestone exists to prevent.
 
@@ -938,11 +938,13 @@ just sel4_gate_control_check
 
 #### Exit condition
 
-A named Novatek NT98690 H1V1 loads a pinned Slime-built payload from removable media through its unmodified vendor U-Boot, runs it at the pinned physical address, prints every ordered marker including its measured exception level, counter, and interrupt-controller facts, and returns to the vendor firmware without physical intervention; the measured values are then pinned as the board's profile. Unobserved until a transcript is recorded.
+A named Novatek NT98690 H1V1 loads a pinned Slime-built payload from removable media through its unmodified vendor U-Boot, runs it at the pinned physical address, prints every ordered marker including its measured exception level, counter, and interrupt-controller facts, and returns to the vendor firmware without physical intervention; the measured values are then pinned as the board's profile.
+
+**Exit condition (observed):** on 2026-09-02 a named Novatek NT98690 H1V1 loaded the pinned payload from SD through its unmodified vendor U-Boot, ran it at `0x10000000` with no `Moving Image` relocation, and reported EL2, a device-tree pointer at `0x3ffc3000` carrying `d00dfeed`, Cortex-A73 (`midr` `0x411fd090`), 40-bit physical addresses, `CNTFRQ_EL0` of 12 MHz corroborated to 0.33% by a line-rate estimate, and a live GIC-400 with 352 lines; all 25 markers matched in order with 0 framing errors, and PSCI `SYSTEM_RESET` returned the board to its vendor firmware unattended.
 
 ### P6.B — seL4 and `slime-root` on the H1V1
 
-**Status:** Planned. Blocked on P6.A's observed facts, which select this milestone's kernel configuration rather than being chosen ahead of it.
+**Status:** Planned, and unblocked: P6.A's observed facts now select this milestone's kernel configuration. `KernelArmCortexA73` takes 40-bit physical addresses, `MAX_IRQ` is 352 over GICv2 with no system register interface, `TIMER_FREQUENCY` is 12000000 read from `CNTFRQ_EL0` rather than pinned, and the loader is entered at EL2.
 
 #### Deliverables
 

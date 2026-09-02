@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-01 |
 | Kind | Change |
-| Status | Proposed |
+| Status | Verified |
 | Scope | `tools/nt98690/payload/{probe.S,probe.ld}`, `scripts/build/build-nt98690-payload.py`, `scripts/lib/{arm64_image,uboot_console}.py`, `scripts/check/check-nt98690-boot.py`, `scripts/check/check-sel4-gate-controls.py`, `sel4/pins.toml`, `just/hardware.just` |
 | Roadmap | P6.A |
 | Gates | `just nt98690_payload_check`, `just nt98690_boot_check`, `just sel4_gate_control_check` |
@@ -133,9 +133,9 @@ throttle its console to the line rate the estimate assumes.
 
 ## Open risks and follow-ups
 
-- [ ] **The board has not been booted.** P6.A stays in progress until
-      `just nt98690_boot_check <serial>` runs against the named H1V1 and its
-      transcript is committed here as `probe-boot.log`.
+- [x] **The board has been booted.** `nt98690_boot_check --serial /dev/ttyUSB0`
+      passed on the named H1V1 on 2026-09-02: all 25 markers in order, no failure
+      marker, 0 framing errors on a local tty. Transcript: `probe-boot.log`.
 - [x] Before that first scored run, capture `just nt98690_serial_monitor` across a
       power cycle and confirm the U-Boot banner, the `mmc` device line, and the
       device-tree line against the real wording. **Done 2026-09-02**, on the board:
@@ -148,9 +148,9 @@ throttle its console to the line rate the estimate assumes.
       `lmb_dump_all` reserves `0x1f00000-0x1ffffff`, `0x4800000-0xabfffff`, and
       `0x7f9c4a40-0x7fffffff`, all three inside the builder's `RESERVED_REGIONS`,
       and none of them contains the pinned load address `0x10000000`.
-- [ ] `parange`, `cntfrq`, and `gicd_typer` match any 16-digit value today. Tighten
-      them to the observed values once there are some; until then they assert shape,
-      not fact.
+- [x] `parange`, `cntfrq`, `gicd_typer`, and `gic_irqs` are tightened to the values
+      the board reported, so the gate now asserts this board rather than a shape. A
+      different H1V1 revision would fail it, which is the intent.
 - [ ] `md.l` head-and-tail comparison samples the loaded image rather than digesting
       it, because this U-Boot has no `crc32`. If the survey shows `crc32` after all,
       P6.B should use it; if `ping` works, `tftpboot` would remove the card swap
@@ -200,3 +200,16 @@ observations, not scored runs; P6.A remains in progress.
    it to `0x0`, which is `ALIGN(ram_base, 2 MiB) + text_offset`. The probe pins
    `text_offset` to its load address, so the same arithmetic is a no-op and
    `Moving Image from` should not appear.
+
+5. **The run passed.** `probe-boot.log` records the whole of it. `check placement`,
+   `check el2`, `check fdt_magic`, `check mmu_off`, `check cnt_advance`, and
+   `check gicd` all returned `ok`; `PAYLOAD_OK`; PSCI `SYSTEM_RESET` returned the
+   board to its loader, TF-A, and U-Boot with no operator action. The transcript
+   ends at the banner, which is correction 1 working on hardware: the vendor's
+   next kernel handoff, and its `Moving Image from`, are outside the evidence.
+
+6. **The timer risk closed the other way.** This entry's rationale, and the P6.B
+   plan, assumed `CNTFRQ_EL0` might read zero on the primary core because TF-A's
+   `plat_helpers.S` programs it on secondaries. It reads 12 MHz, and the probe's
+   independent estimate against the 115200 line rate agreed to 0.33%. P6.B takes
+   the timer frequency from the register and needs no pinned override.
