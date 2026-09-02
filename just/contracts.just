@@ -66,6 +66,17 @@ system_image_builder_check: system_composition_closure_check
     python3 scripts/generate/generate-system-image-closures.py --check
     python3 scripts/check/check-system-image-builder.py
 
+# Execution-only inputs — disks, devices, injected faults, timeouts, marker
+# contracts — are declared per plane and frozen, so a timeout or a disk cannot
+# change without a reviewed record change. Bless with `just system_test_run_bless`.
+[group('contracts')]
+system_test_run_check:
+    python3 scripts/check/check-system-test-run.py
+
+[group('contracts')]
+system_test_run_bless:
+    python3 scripts/generate/generate-system-test-runs.py --bless
+
 # Every shipped or tested image traces to exactly one closure, and every
 # closure is exercised by an owning gate. Cheap by design: a mapping only
 # checked before a release is a mapping that drifts between releases.

@@ -1,0 +1,16 @@
+{
+  formatVersion = 1;
+  name = "sel4-boot";
+  imageClosureIdentity = "eef2be9688d7d3100f5e4ebe006debb0ad2755797dd824d4adcb41ea6f71ddd3";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 300;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

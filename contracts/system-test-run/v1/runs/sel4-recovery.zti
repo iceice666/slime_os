@@ -1,0 +1,43 @@
+{
+  formatVersion = 1;
+  name = "sel4-recovery";
+  imageClosureIdentity = "baf995c147660f259130154b3721b2141f23236081b9b2d511ffa0ffdbe09c2f";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [
+    {
+      name = "disk-0";
+      path = "";
+      identity = "";
+      writable = true;
+    };
+    {
+      name = "disk-1";
+      path = "";
+      identity = "";
+      writable = true;
+    };
+  ];
+  networks = [];
+  devices = [
+    {
+      name = "virtio-blk-device";
+      path = "";
+      identity = "";
+      writable = false;
+    };
+  ];
+  faultControls = [
+    {
+      kind = "corruption";
+      target = "";
+      value = "";
+    };
+  ];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

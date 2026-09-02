@@ -1,17 +1,17 @@
 {
   formatVersion = 1;
   name = "sel4-channel";
-  imageClosureIdentity = "d69b5607518956053d9f16c9b35ea03922e9126add3057b5ca1420005b381ff6";
+  imageClosureIdentity = "d0e68701ce36189d7d4438ee69958256e8cbf30c80fe6b991436b1daaed50b0a";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
   networks = [];
   devices = [];
   faultControls = [];
-  timeoutSeconds = 30;
+  timeoutSeconds = 120;
   markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
   forbiddenOutcomes = [
-    "SLIME_ROOT FATAL";
     "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
   ];
 }

@@ -1,0 +1,14 @@
+{
+  formatVersion = 1;
+  name = "sel4-reclamation";
+  imageClosureIdentity = "613707327ecd21ebc3a448a1009ed16d05dbf49d0650158995d1f4da3318a8f2";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 180;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [];
+}

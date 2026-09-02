@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-network";
+  imageClosureIdentity = "0490475a52544f4e0f757bd8536881b4c3dd7616e8fc2ec64a2bbc6596e2e8cc";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

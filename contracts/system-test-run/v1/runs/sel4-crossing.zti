@@ -1,0 +1,23 @@
+{
+  formatVersion = 1;
+  name = "sel4-crossing";
+  imageClosureIdentity = "769dfb05367f7d103a491dd228d7fcf74224d1d9f6690545724c1e31b1a3a168";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [
+    {
+      kind = "device";
+      target = "";
+      value = "";
+    };
+  ];
+  timeoutSeconds = 180;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}
