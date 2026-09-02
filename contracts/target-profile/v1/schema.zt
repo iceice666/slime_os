@@ -233,6 +233,26 @@ profiles :: List Profile = {
     cargoTarget = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
     qemuBinary = "";
   };
+  {
+    constName = "AARCH64_SEL4_NT98690_H1V1";
+    name = "aarch64-sel4-nt98690-h1v1";
+    id = 8;
+    architecture = 2;
+    abi = 4;
+    pageProfile = 2;
+    -- Same userspace ABI as the AArch64 seL4 reference, but a distinct exact
+    -- platform identity: the Novatek NT98690 H1V1's Cortex-A73, GIC-400 above
+    -- 4 GiB, 12 MHz generic timer, and 768 MiB window at 0x10000000 are not
+    -- interchangeable with QEMU `virt`, and admission is equality.
+    requiredFeatures = 66;
+    elfMachine = 183;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json";
+    qemuBinary = "";
+  };
 };
 
 format ::= {
