@@ -1,4 +1,4 @@
-# CP12 — composition derivation for 40 of the 42 seL4 planes
+# CP12/CP13 — composition derivation and the data-driven closure builder
 
 | Field | Value |
 |---|---|
@@ -6,8 +6,8 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/system-spec/v1`, `contracts/composition-inventory/v1`, `contracts/component-spec/v1/components/`, `scripts/lib/system_spec.py`, `scripts/check/check-system-spec.py`, `scripts/check/check-composition-inventory.py`, `scripts/generate/generate-composition-inventory-bindings.py`, 21 `contracts/generation-manifest/v1/compositions/*.zti`, `just/contracts.just` |
-| Roadmap | CP12 |
-| Gates | `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check` |
+| Roadmap | CP12, CP13 |
+| Gates | `just system_image_builder_check`, `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check` |
 | Trigger | CP11's closure contract landed, so the composition corpus became the remaining hand-authored input |
 | Baseline | CP1 derived `valid.zti` and `sel4-channel.zti` from system specs; the other 40 compositions were hand-authored |
 
@@ -43,6 +43,8 @@ composition and with a closed reason, in a new
 | `scripts/lib/system_spec.py` | `derive_bindings` widened with declared pins and extras; notification validation now admits several signallers with one waiter, matching `build-generation.py`'s own rule | The derivation reproduces the corpus's real binding and notification topology instead of the two fixtures' subset |
 | `scripts/check/check-system-spec.py` | Normalizes binding order, minted-binding order, and absent-vs-empty optional sections; the post-baseline private-memory assertion is now placement-aware | The comparison stays an equality test over what the builder actually reads, with each normalization justified against the builder line that makes the two forms one build |
 | `contracts/component-spec/v1/components/` | 25 new specs (11 for the one-to-one planes, 14 for the multi-instance planes: `clock-authority-probe`, `wait-set-probe`, `scheduling-class-probe`, `lifecycle-restart-probe`, the private-memory probes, and the storage/generation probes); `maxSpecs` 64 → 96 | Every executable the converted compositions declare has a reviewed component record |
+| `scripts/generate/generate-system-image-closures.py` | New: emits one closure per derived composition (38) from repository state, with `--check` refusing drift | CP11's contract is exercised by the corpus rather than by one hand-authored record, while resolution stays an independent authority that re-reads every digest |
+| `scripts/check/check-system-image-builder.py` | New CP13 gate: closure coverage, distinct identities, spec-matching manifests, twice-byte-identical builds, output-collision refusal, and an AST assertion that the builder declares no plane flag or variant table | Adding a composition needs contract data and a behavioral checker, never a builder flag or output-path branch |
 | `contracts/composition-inventory/v1` | New contract, record, generated bindings, and gate | "Which compositions are migrated" is one closed record instead of a Python table, a directory listing, and a roadmap paragraph |
 | `scripts/check/check-sel4-io-link-plane.py` | Fixture-text assertion whitespace-normalized | The plane asserts the declaration, not the spacing a hand-authored fixture happened to use |
 
@@ -72,6 +74,8 @@ composition and with a closed reason, in a new
 | `sel4_directory_check`, `sel4_input_check`, `sel4_filesystem_check`, `sel4_storage_check`, `sel4_store_check`, `sel4_transfer_check` | Pass | Direct |
 | `sel4_generation_check`, `sel4_recovery_plane_check`, `sel4_rollback_check`, `replay_check`, `io_block_check`, `io_driver_authority_check` | Pass | Direct |
 | `just sel4_gate_control_check` | Pass — 45 gates reject 1748 mutated transcripts and layouts | Direct |
+| `just system_image_builder_check` | Pass — 38 closures resolve with distinct identities and spec-matching manifests, 3 compositions declared closure-exempt, `sel4-channel` built twice byte-identically, a non-empty output directory refused | Direct |
+| `just system_image_closure_check` | Pass against the generated `sel4-channel` closure | Direct |
 | `just test_host`, `just ruff` | Pass | Direct |
 | `just typos` | Fails on `contracts/system-image-closure/v1/inputs/sel4-prefix/libsel4/include/interfaces/sel4_client.h` ("pre-empted"), a vendored seL4 header committed by CP11 and untouched here; `typos` over every path this change touches is clean | Direct, pre-existing failure |
 
@@ -120,6 +124,13 @@ to say about this change; `git status` shows zero `.rs` files modified.
 - [ ] `sel4-c-runtime` remains `unpinnedExternalImplementation`: its C
       implementation is built by a helper script at gate time with no committed
       content identity to pin.
+- [ ] CP13's legacy surface — `build-sel4.py`'s `--*-plane` family, `VARIANT_*`
+      tables, and the identity manifest's `variant` authority — is retained
+      because the 36 QEMU plane checkers still call it. CP15 owns migrating
+      those checkers and deleting the flags.
+- [ ] `sel4`, `sel4-slisp`, and `reference` have no closure: the first two admit
+      an external product Slisp ELF with no committed artifact, and the third
+      targets a platform with no seL4 asset.
 - [ ] `just typos` fails on a CP11-vendored seL4 header; unrelated to this change
       and not fixed here.
 
@@ -128,4 +139,5 @@ to say about this change; `git status` shows zero `.rs` files modified.
 - Closed inventory: `contracts/composition-inventory/v1/inventory.zti`
 - Frozen pre-migration baselines: `contracts/system-spec/v1/baselines/*.zti` (41 files)
 - Derived sources: `contracts/system-spec/v1/systems/*.zti` (41 files)
-- Related roadmap item: [CP12](../../roadmap/10-component-platform.md)
+- Generated closures: `contracts/system-image-closure/v1/closures/*.zti` (38 files)
+- Related roadmap items: [CP12, CP13](../../roadmap/10-component-platform.md)

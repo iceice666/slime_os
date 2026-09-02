@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-reclamation";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-reclamation.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "50dea6c229f3aadf93b499116b8a348a08202e7851de09b8458292decb1e4f7f";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "9a3f828e408d5c7111a8d4e9c6304cf9664e208996738d6b3bfd61da4b946b4a";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,28 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "reclamation-fault";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/reclamation-fault";
+        kind = "tree";
+        identity = "6c0dc841ebbd3c578d5431ac953370b961b023dbe3c97ea0ca602b8021171502";
+      };
+      identity = "1705cbd4a33511238a5bc4aa3fc6ded7c56f284d0b21baa2b4381f913e4d71c2";
+      buildProfile = "default";
+    };
+    {
+      component = "supervision-child";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/supervision-child";
+        kind = "tree";
+        identity = "e932e4188967d12d88d752983710633e9e182cc8a5aa376e6c88828936c4e0c8";
+      };
+      identity = "213c7dd13deb5cf65430dfed4aa36ff9856f9211b76a7d1fdaa0f02ff74abf7c";
       buildProfile = "default";
     };
   ];

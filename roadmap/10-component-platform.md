@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, derive generation inputs from that specification, support components authored, built, released, and upgraded outside this repository through a reproducible SDK whose source remains owned here, and close the remaining host-build gap with one canonical system-image closure that deterministically produces a bootable image. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to the existing seL4 product path rather than the full platform that document describes.
 
-**Status:** CP0–CP11 complete. CP12 is substantially delivered — 40 of the 42 seL4 compositions are derived from system specs and the remaining 2 are recorded with closed reasons by `contracts/composition-inventory/v1` — and is the next open gate; CP13–CP15 are planned. CP7's hosted-publication clause closed 2026-08-26: SDK 1.0.0 and 1.1.0 are immutable commits and signed tags on the canonical repository, both recording a source commit present on `origin/main`. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
+**Status:** CP0–CP11 complete. CP12 is substantially delivered — 40 of the 42 seL4 compositions are derived from system specs and the remaining 2 are recorded with closed reasons by `contracts/composition-inventory/v1` — and is the next open gate. CP13 is partially delivered: one generic command builds any of 38 generated closures, with the legacy flag family retained until CP15 migrates its last checker. CP14–CP15 are planned. CP7's hosted-publication clause closed 2026-08-26: SDK 1.0.0 and 1.1.0 are immutable commits and signed tags on the canonical repository, both recording a source commit present on `origin/main`. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -545,7 +545,7 @@ All 42 seL4 test compositions are generated from component/system specifications
 
 ## CP13 — Data-driven seL4 image builder cutover
 
-**Status:** Planned.
+**Status:** Partially delivered. One generic command builds any of 38 generated closures with no plane flag, variant table, or composition named in builder source, and `just system_image_builder_check` gates that. The legacy `build-sel4.py` flag family is not yet deleted, because CP15 owns migrating its last checker.
 
 **Depends on:** CP12.
 
@@ -574,6 +574,16 @@ just system_image_builder_check
 ### Exit condition
 
 One data-driven command builds every ordinary product and test image from its closure, and adding another composition requires only contract data and its behavioral checker, never a new builder flag, constant, or output-path branch.
+
+**Delivered:** `scripts/generate/generate-system-image-closures.py` emits one closure per derived composition — 38 of them — from repository state, and the CP11 resolver independently re-reads every path and refuses any digest that disagrees, so generation and resolution stay separate authorities rather than one circular claim. Each closure names its system spec's identity, every component spec's identity, every implementation crate tree, the SDK release, the target-qualified prefix, the root and loader roles, and the fifteen shared workspace build inputs. `scripts/check/check-system-image-builder.py` proves the corpus property CP11 could only prove for one record: every derived composition has a closure or a declared reason, no closure is orphaned, all 38 resolve, no two share an identity, and each resolved closure's manifest is exactly the one its system spec derives — so a closure cannot become a second authority on what a plane admits. The builder's own argument surface is asserted from its AST: exactly `closure` and `output_dir`, with no `--*-plane` option, no `VARIANT_*` table, and no composition name anywhere in its source.
+
+**Exit condition (observed, partial):** `just system_image_builder_check` resolved all 38 closures with distinct identities and spec-matching manifests, built `sel4-channel` twice into separate output directories with byte-identical generation, root, loader, image, identity-manifest, and build-result identities, and observed the builder refuse a non-empty output directory — the collision guard that keeps two closure identities from sharing one tree. `--exhaustive` builds every closure the same way. `just system_image_closure_check` still passes against the generated `sel4-channel` closure.
+
+**Not delivered:** `scripts/build/build-sel4.py`'s `--*-plane` family, `VARIANT_*` tables, and the identity manifest's `variant` authority are still in place. They are what the 36 existing QEMU plane checkers call, and CP15 owns migrating those checkers; deleting the flags before their last caller moves would break every plane gate. The new builder path is additive and independently gated until then.
+
+**Gates:** `just system_image_builder_check`, `just system_image_closure_check`, `just system_composition_closure_check`, `just ruff`.
+
+**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md)
 
 ## CP14 — Explicit scenario, selector, and negative-test identities
 

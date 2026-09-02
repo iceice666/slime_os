@@ -1,12 +1,12 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-demo";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-demo.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "f01f015b290b4a9a541090b9057ec81d37312376f90047f2821812c30c300a9a";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "a82b70bee722343da4a890a30378d9a9c09ce70ffd46b478ebfce97b08f515d7";
   implementations = [
     {
       component = "console";
@@ -20,6 +20,83 @@
       buildProfile = "default";
     };
     {
+      component = "echo-agent";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/echo-agent";
+        kind = "tree";
+        identity = "dcc5d6f0ee098ab18b8a273abb8e2cf1dc2fd22e1cfb0710b00ed5ce469acfb1";
+      };
+      identity = "9dd589b3b6cb995c9aabdc9206a40d6e0f22d5f19ec1258090d3edf38ee7ab4f";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-intruder";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-intruder";
+        kind = "tree";
+        identity = "e94d474ba7b97829cd308a264c17cebf2a3350759b0f7e18ba8d9e130327cf24";
+      };
+      identity = "050f2a1e977f0455d62839385159484e1e6792f00acbccd54aa898a101900c5b";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-publisher";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-publisher";
+        kind = "tree";
+        identity = "4c7dfd82add7aa67859db4f8c0f235d672926f9df67305ab0209e667d6d48fb6";
+      };
+      identity = "1d9c92fe0221afb391cedc825557bf8b6681004f650359c3ad13cbdd1d8acf37";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-publisher-b";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-publisher-b";
+        kind = "tree";
+        identity = "90589dadf1c31e9e97bdc44757c8f31aa6fc1a85ed9bdfd395f333b29216ddfa";
+      };
+      identity = "f54fd407bd85207bda8be378992f3c80e9deb70fdb823da414cd87556e96c829";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-service";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/fabric-service";
+        kind = "tree";
+        identity = "8a0ccfdd939bee0edbcaed163373255b3825bd899f455fa9eb673f8fb1455ac8";
+      };
+      identity = "c825f80940562ad7f0231f9f0db5855b7b006b48d2bf1edb1a2fe179c4d42732";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-subscriber";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-subscriber";
+        kind = "tree";
+        identity = "46ab5dfcaf2ed8de6bbf935d09e9f97bc93b6e97f20967c50b5cda82e03a651a";
+      };
+      identity = "dcf6f8e85f20c16320edffbe4b34b9df9f938cabfe9fd2e0c721381920a409bf";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-subscriber-b";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-subscriber-b";
+        kind = "tree";
+        identity = "394269082d6e1d76dd8fd8ffe203ae303bd3084210a993a44148d39b37aaaf35";
+      };
+      identity = "db90343030973d65e2df2736db97adcff7c103cecf3a1a4b79fb57751e8b8164";
+      buildProfile = "default";
+    };
+    {
       component = "init";
       provider = "workspace";
       artifact = {
@@ -28,6 +105,50 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "sample-lender";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/sample-lender";
+        kind = "tree";
+        identity = "628f616f4409424e879f8bf46239cc3a1c7bca1961745a0132d650ddec714100";
+      };
+      identity = "365b086d0dc96333f4e46668a288d881bfa5721137847595eecc6b7a58cd912c";
+      buildProfile = "default";
+    };
+    {
+      component = "sample-receiver";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/sample-receiver";
+        kind = "tree";
+        identity = "c717acd35f4dcac6b068016c2a93f76e9c1d79723e27afaa3889ebce514dc750";
+      };
+      identity = "c1a288e796c53d404996354b807f8103332f2cdb9d8e55f2cb59d533ebace40a";
+      buildProfile = "default";
+    };
+    {
+      component = "spawn-service";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/spawn-service";
+        kind = "tree";
+        identity = "b125e025d6bd12d32f0ca33b460b9681e46c87352658d292514beb135564a14f";
+      };
+      identity = "fe3c4c014d15d585582384f186e11f9396001f0c2bd97f9793612ff4ae9a5513";
+      buildProfile = "default";
+    };
+    {
+      component = "sysinfo";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/sysinfo";
+        kind = "tree";
+        identity = "dbc05730c12bc11ec2aab8eb22e95efa37645a2ad21fa884eb24cd61051a8c3f";
+      };
+      identity = "3e003d274ba105610d887b52ba85f8fcdd10197447ef8766a4b9c3bd03f4ff61";
       buildProfile = "default";
     };
   ];

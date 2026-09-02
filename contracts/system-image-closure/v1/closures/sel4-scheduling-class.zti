@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-scheduling-class";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-scheduling-class.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "6af4327c57e25a9f7d601570e55dcfbf1563842c89d01677f5ffcd9bc9bb17f1";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "476203cf3dfed14e07822b51ae9e66b0977ba09344cf75b6e5bb83a3b9762c9b";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,28 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "scheduling-class-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/scheduling-class-probe";
+        kind = "tree";
+        identity = "107ff69a64d1f2316323e04a3b199acbc9bc6bbdefae08a72b0d6516d2153260";
+      };
+      identity = "8ca47532ca2b69506b9155f3b0ef9ef5182c408a372bc41f087a2b08f2d2a807";
+      buildProfile = "default";
+    };
+    {
+      component = "supervision-child";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/supervision-child";
+        kind = "tree";
+        identity = "e932e4188967d12d88d752983710633e9e182cc8a5aa376e6c88828936c4e0c8";
+      };
+      identity = "213c7dd13deb5cf65430dfed4aa36ff9856f9211b76a7d1fdaa0f02ff74abf7c";
       buildProfile = "default";
     };
   ];

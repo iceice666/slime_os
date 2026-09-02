@@ -1,12 +1,12 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-loan";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-loan.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "0265df66a1dba8f11e149b422203b60d5acee2742baa20588de3361118979dc0";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "8d853a81f431618b70f96c160c960cd9e50a68ca4d4c224d193a4e1b5e9bd5f3";
   implementations = [
     {
       component = "console";
@@ -28,6 +28,17 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "sample-receiver";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/sample-receiver";
+        kind = "tree";
+        identity = "c717acd35f4dcac6b068016c2a93f76e9c1d79723e27afaa3889ebce514dc750";
+      };
+      identity = "c1a288e796c53d404996354b807f8103332f2cdb9d8e55f2cb59d533ebace40a";
       buildProfile = "default";
     };
   ];

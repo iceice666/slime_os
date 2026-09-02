@@ -1,22 +1,33 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-robot-runtime";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-robot-runtime.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "dbd50785f836bef9da51669b37d1b49593f979bd4aa4667777e4efcc96b794bf";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "8c47ee844c1875af7b20a1c8c0f6019f4843ddf3f6c32d37a2df1d05adecb146";
   implementations = [
     {
-      component = "console";
+      component = "fabric-call-worker";
       provider = "workspace";
       artifact = {
-        path = "components/system/console";
+        path = "components/testkit/fabric-call-worker";
         kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
+        identity = "aacdb18c7a219ae5e3cdbb966687b0e5c31962e3c218acef96a2fd43d26d5fe3";
       };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
+      identity = "6db506528b40834f2bf101f77fdf1c8bb0d3a97c2b77e85817e3a374f3450deb";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-service";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/fabric-service";
+        kind = "tree";
+        identity = "8a0ccfdd939bee0edbcaed163373255b3825bd899f455fa9eb673f8fb1455ac8";
+      };
+      identity = "c825f80940562ad7f0231f9f0db5855b7b006b48d2bf1edb1a2fe179c4d42732";
       buildProfile = "default";
     };
     {
@@ -28,6 +39,72 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-actuator";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-actuator";
+        kind = "tree";
+        identity = "8bfb1beb1af1a17e9e17b6e4011efe92dc0ff2473e13cae3277f2fbbd034b629";
+      };
+      identity = "fd3997c7d8657ba9a018bfb928fbf2a9c62a84955a6c74db8e18a2427f5267c7";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-burner";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-burner";
+        kind = "tree";
+        identity = "d8ce8e44c98beb4a2d6cd57138f65d7e9edb188e1c8ab8f1cce79e56ddf98b91";
+      };
+      identity = "a61c274b10108cc888fbcadb33f428f05c74eef8d622ce0e74e5b4afb065d52f";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-clock";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-clock";
+        kind = "tree";
+        identity = "82bd3006cd45fe9ed219cb84f34b6a036a781f8c5c7d84e122afe3807f8c005c";
+      };
+      identity = "abe211395dc0c4f6044039d99d84d3e5ee071bcc17bc5fb7a786e77d6b77867b";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-controller";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-controller";
+        kind = "tree";
+        identity = "1e943c54afe6248e02d09c4f6e289679d4a644768b0363096b8a09f4cc0b759d";
+      };
+      identity = "0e956f228e05b2f5bc41c8c1f127fffea539c8ecc8e433d6e314fdaeb680db8a";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-sensor";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-sensor";
+        kind = "tree";
+        identity = "abd4998f49e9de406a5d06e7c5397351f598aecc5029d28c82f64f989092aea5";
+      };
+      identity = "85c567acad1dad058e7013b0d7e112461986b9e7f858d6a7ea7785bbd63615a7";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-supervisor";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-supervisor";
+        kind = "tree";
+        identity = "f1a222ac3cde5ba0e56fbfbec2f23fc3f7afe3a832c3a7c7070fbd8d27d6e2db";
+      };
+      identity = "c0402b9deaeb053186bf2f8f71a9e4f7f43c684974e1f5b20f3a80a02518d0f4";
       buildProfile = "default";
     };
   ];

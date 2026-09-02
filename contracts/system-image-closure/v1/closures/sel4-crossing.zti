@@ -1,22 +1,22 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-crossing";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-crossing.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "69675fc88ec53ca1bb9d889e4b7191cdbe4e29bde6c219d338162e55ab9ceabc";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "fb466681444b364f1bc1f259171ab0f965a0c0587b6f19abdfb07c9089c00bac";
   implementations = [
     {
-      component = "console";
+      component = "crossing-peer";
       provider = "workspace";
       artifact = {
-        path = "components/system/console";
+        path = "components/testkit/crossing-peer";
         kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
+        identity = "33f9f234b4f74aee41143b32d9d520ffe0db39a23b5537c6cfb09740d31f157d";
       };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
+      identity = "5af319fa5ab75bf3c6a137ae4c3c5923858c4a8ea5a171255077f081445eac05";
       buildProfile = "default";
     };
     {

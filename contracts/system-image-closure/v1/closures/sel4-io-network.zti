@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-io-network";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-io-network.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "73ff8d787878dee741e35fe669061d39c405d81ed9a1e92aa22e3fbf8985abc8";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "a73738c46f48aacd156d90d0667f36026bafa4f0e1e750fcb001c53aa23b1464";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,50 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "io-link-loopback";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/io-link-loopback";
+        kind = "tree";
+        identity = "5ced7616755026ceb2d3e0a3a7d9d82faaef0cc91dcc7d19bc351908821150fe";
+      };
+      identity = "b4e7cfccafc79545e45b0831dc5c0c9acad4483f13be1d9f74dbe82a3e54a4ea";
+      buildProfile = "default";
+    };
+    {
+      component = "io-network-intruder";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/io-network-intruder";
+        kind = "tree";
+        identity = "362ed6b05be27927e181ee8be90442df8548adc9f394414ce90e6c39d55b7727";
+      };
+      identity = "f911e1e360014140f97d495ae53b1d0a6bb17fd6e0ca4ad10b3e8e18b8f2a2aa";
+      buildProfile = "default";
+    };
+    {
+      component = "io-network-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/io-network-probe";
+        kind = "tree";
+        identity = "1dbb28b6ad23a6f9fae8a61951e5d9ba8a0429b72c2b2eb7cd3859fe966b8b95";
+      };
+      identity = "0ced140489165ea8ba31283c72f093e3a46975d5cf45f815d5031bf2f9029743";
+      buildProfile = "default";
+    };
+    {
+      component = "network-service";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/network-service";
+        kind = "tree";
+        identity = "30be1220b409819318d213b6eef1fb22968a6a10b48f7c5e88b4236c56bbc670";
+      };
+      identity = "9cc4517dba9671d3ce7f221d597af279934399cf4086ae8f96c1bb15fbc91610";
       buildProfile = "default";
     };
   ];

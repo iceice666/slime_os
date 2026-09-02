@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-replay";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-replay.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "e55c2077bf74dbcbd180cb755c9d83d3268da76e48f37228efaef677a5a456d4";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "951b640e6151df74b914673f4b6d54c952b90a1c17b8291f138146801a26c656";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,28 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "replay-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/replay-probe";
+        kind = "tree";
+        identity = "589a519c40cd15913640a691b4454bf71a543f4662e12c52259ce10b3556b983";
+      };
+      identity = "6825fb033de98ccd49d110b0ec407d0182b07623b04cac8d3a034c227f39d5a6";
+      buildProfile = "default";
+    };
+    {
+      component = "virtio-blk-driver";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/virtio-blk-driver";
+        kind = "tree";
+        identity = "e3fc05ef80b332802471d9e286e5427f59755f0eed82f7387df9d462f0b08ede";
+      };
+      identity = "0d22d3966ba1c64332c10c9dd8d39b4e08945c8aad1b85f473b771ff0886a7e8";
       buildProfile = "default";
     };
   ];

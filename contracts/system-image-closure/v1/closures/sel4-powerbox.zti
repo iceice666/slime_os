@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-powerbox";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-powerbox.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "b3a9069ab7733a8c619ca1f2e7f169a91a96318df6ab0c34ec66ac34d1cb418f";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "7a0ea4c196acdf25fd2768e63de5cc75dff260f0c5628d87a96eb50e1bb905de";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,28 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "powerbox-chooser";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/powerbox-chooser";
+        kind = "tree";
+        identity = "f8c76c60d2ea857816e326c2d3be13f23687a590c4cab2c085d3fd0c50e5502e";
+      };
+      identity = "4697dda17e8ac15ed189838bbb70902d89e6c2426e782f52dd89d0a478df23f8";
+      buildProfile = "default";
+    };
+    {
+      component = "powerbox-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/powerbox-probe";
+        kind = "tree";
+        identity = "4b80de28a8d804b18dc98702bdebc66e095331f7cab6fd21bb6dd2639eea0593";
+      };
+      identity = "1ccfcbbe5b87c5f62f00232e6a019225fd8614a4b0489a057a3146b62122208c";
       buildProfile = "default";
     };
   ];

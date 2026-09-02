@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-io-link";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-io-link.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "d4ed99fd5725e3ad131a05e879019cb16c2bdfecec66b6832854c11b2e0e7d02";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "50308eda0e49b030d9151f17069e65ba4bf74d57fc53ae12b556f1907d12803b";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,39 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "io-link-intruder";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/io-link-intruder";
+        kind = "tree";
+        identity = "1901d06f87e89b35472e4fb1f6862b0c8f8ec0b029d4acb5c92a05238ce6b66b";
+      };
+      identity = "423fcb490870ce59048ab2bd58677ec17d2f01394f03ec4fafce63441a0923ab";
+      buildProfile = "default";
+    };
+    {
+      component = "io-link-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/io-link-probe";
+        kind = "tree";
+        identity = "4c67661b3823cf5a7b0021b37077cd44555b86d3d0c40344fb149d5c83b05582";
+      };
+      identity = "c440b2e7bacfba785c26bae7f83473948398380a22bf8688f465438ea56c97d4";
+      buildProfile = "default";
+    };
+    {
+      component = "virtio-net-driver";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/virtio-net-driver";
+        kind = "tree";
+        identity = "61bb6b3d43110476e9fc90cd88590f19242f98810117c26250d1abf4c53911b9";
+      };
+      identity = "06086530990f12d52119842a6cf9fa915fded772aab934042e6812af36548e96";
       buildProfile = "default";
     };
   ];

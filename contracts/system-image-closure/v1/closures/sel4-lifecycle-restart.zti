@@ -1,24 +1,13 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-lifecycle-restart";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-lifecycle-restart.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "712f40c2e39ebe69a4103d733fe13606685c90cdd19b2247f7e41bd8bfeafbb7";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "840f7cf0e6366f404471a2418e27f1a555be6f4562302c8b36c25914d53bccf4";
   implementations = [
-    {
-      component = "console";
-      provider = "workspace";
-      artifact = {
-        path = "components/system/console";
-        kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
-      };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
-      buildProfile = "default";
-    };
     {
       component = "init";
       provider = "workspace";
@@ -28,6 +17,17 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "lifecycle-restart-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/lifecycle-restart-probe";
+        kind = "tree";
+        identity = "f920f6d5299e1e7fc4f78d7fa1f0b01095ddb58a0df39cba34b2801e622aeff1";
+      };
+      identity = "65638f82a8102bf746f39513bb8bbd089cde941da9ef08b8c43f4ccac8cdcf28";
       buildProfile = "default";
     };
   ];

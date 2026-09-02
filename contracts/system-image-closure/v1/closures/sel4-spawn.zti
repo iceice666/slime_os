@@ -1,12 +1,12 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-spawn";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-spawn.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "828607f42dac17b03e2e331e812a422b082069362deae4eb4b6aa9256fa51d39";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "bcb11013c407d64d0fed693d46cea1cf94aa97ec9d1e2df389258b19cdfaecf8";
   implementations = [
     {
       component = "console";
@@ -28,6 +28,17 @@
         identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "sysinfo";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/sysinfo";
+        kind = "tree";
+        identity = "dbc05730c12bc11ec2aab8eb22e95efa37645a2ad21fa884eb24cd61051a8c3f";
+      };
+      identity = "3e003d274ba105610d887b52ba85f8fcdd10197447ef8766a4b9c3bd03f4ff61";
       buildProfile = "default";
     };
   ];
