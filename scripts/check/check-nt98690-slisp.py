@@ -303,15 +303,27 @@ def stage_and_launch(
 
 
 def read_until(console: Console, transcript: str, pattern: str, seconds: float, what: str) -> str:
-    """Append serial output until `pattern` or a failure marker appears."""
-    stop = re.compile("|".join((pattern, *FAILURE_MARKERS)))
+    """Append serial output until `pattern` appears; a failure marker fails now.
+
+    Failing here, naming the marker, is what turns a root FATAL into a
+    diagnosis instead of whichever later assertion happens to trip first --
+    the board session that found the reset-granule carve-order defect was
+    initially reported as a miscounted input wait.
+    """
+    target = re.compile(pattern)
+    failures = re.compile("|".join(FAILURE_MARKERS))
     remaining = seconds
     while remaining > 0:
         chunk = console.read_for(0.5)
         remaining -= 0.5
         transcript += chunk
-        if stop.search(contract_view(transcript)):
+        view = contract_view(transcript)
+        if target.search(view):
             return transcript
+        found = failures.search(view)
+        if found is not None:
+            report_transcript(transcript)
+            fail(f"failure marker while waiting for {what}: {found.group(0)!r}")
     report_transcript(transcript)
     fail(f"no {what} within {seconds:.0f}s")
 

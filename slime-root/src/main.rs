@@ -781,6 +781,46 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
+    // The clock-gate (0x2_f002_0000) and watchdog (0x2_f006_0000) granules
+    // sit below UART0 (0x2_f013_0000) in the same device untyped, and device
+    // untypeds retype monotonically upward -- so these two must be carved
+    // before the product input maps the UART, or a product image loses its
+    // reset path (observed on the board as Allocate(DeviceFramePassed)).
+    #[cfg(slime_ns02201_h1v1)]
+    {
+        let mut granules = [None; 2];
+        for (slot, (page, paddr)) in [
+            (
+                ptr::addr_of!(NS02201_CLOCK_GATE_PAGE) as usize,
+                NS02201_CLOCK_GATE_PADDR,
+            ),
+            (
+                ptr::addr_of!(NS02201_WATCHDOG_PAGE) as usize,
+                NS02201_WATCHDOG_PADDR,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Err(error) = ScratchPage::claim(bootinfo, page) {
+                fatal!("NT98690 reset page unavailable: {error:?}")
+            }
+            granules[slot] = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                page,
+                paddr,
+            ) {
+                Ok(region) => Some(region.granule()),
+                Err(error) => fatal!("NT98690 reset registers unavailable: {error:?}"),
+            };
+        }
+        let registers = (granules[0].unwrap(), granules[1].unwrap());
+        // SAFETY: written once here, before any other thread exists.
+        unsafe {
+            ptr::addr_of_mut!(NS02201_RESET_REGISTERS).write(Some(registers));
+        }
+    }
     #[cfg(all(any(slime_qemu_keyboard, slime_product_uart), not(slime_root_fixture)))]
     let product_input = {
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
@@ -844,41 +884,6 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(adapter) => adapter,
         Err(error) => fatal!("timer source unavailable: {error:?}"),
     };
-    #[cfg(slime_ns02201_h1v1)]
-    {
-        let mut granules = [None; 2];
-        for (slot, (page, paddr)) in [
-            (
-                ptr::addr_of!(NS02201_CLOCK_GATE_PAGE) as usize,
-                NS02201_CLOCK_GATE_PADDR,
-            ),
-            (
-                ptr::addr_of!(NS02201_WATCHDOG_PAGE) as usize,
-                NS02201_WATCHDOG_PADDR,
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if let Err(error) = ScratchPage::claim(bootinfo, page) {
-                fatal!("NT98690 reset page unavailable: {error:?}")
-            }
-            granules[slot] = match device::DeviceRegion::map(
-                allocator,
-                sel4::init_thread::slot::VSPACE.cap(),
-                page,
-                paddr,
-            ) {
-                Ok(region) => Some(region.granule()),
-                Err(error) => fatal!("NT98690 reset registers unavailable: {error:?}"),
-            };
-        }
-        let registers = (granules[0].unwrap(), granules[1].unwrap());
-        // SAFETY: written once here, before any other thread exists.
-        unsafe {
-            ptr::addr_of_mut!(NS02201_RESET_REGISTERS).write(Some(registers));
-        }
-    }
     #[cfg(slime_cv1800b_duo)]
     let reset_registers = {
         let reset_addr = ptr::addr_of!(RESET_PAGE) as usize;
