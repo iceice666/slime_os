@@ -1508,26 +1508,6 @@ def main() -> None:
         help="embed the loan-plane generation (P5.3.2), writing a separate image",
     )
     parser.add_argument(
-        "--io-queue-plane",
-        action="store_true",
-        help="embed the shared I/O queue proof generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--io-block-plane",
-        action="store_true",
-        help="embed the userspace virtio-blk parity and fault proof generation",
-    )
-    parser.add_argument(
-        "--io-network-plane",
-        action="store_true",
-        help="embed the bounded network-service proof generation",
-    )
-    parser.add_argument(
-        "--io-link-plane",
-        action="store_true",
-        help="embed the supervised userspace virtio-net LinkDevice proof generation",
-    )
-    parser.add_argument(
         "--spawn-plane",
         action="store_true",
         help="embed the spawn-plane generation (P5.3.3), writing a separate image",
@@ -1568,16 +1548,6 @@ def main() -> None:
         "--supervision-plane",
         action="store_true",
         help=("embed the supervision-plane generation (B16), writing a separate image"),
-    )
-    parser.add_argument(
-        "--reclamation-plane",
-        action="store_true",
-        help="embed the B38 task-reclamation generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--private-memory-plane",
-        action="store_true",
-        help=("embed the C10.2 private-memory-budget generation, writing a separate image"),
     )
     parser.add_argument(
         "--clock-authority-plane",
@@ -1682,16 +1652,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--saturation-plane",
-        action="store_true",
-        help=(
-            "embed the adversarial saturation generation (C8.13): the "
-            "identical traffic-action scenario against declared ceilings "
-            "tightened to the traffic plane's own observed peaks, writing a "
-            "separate image"
-        ),
-    )
-    parser.add_argument(
         "--fault-plane",
         action="store_true",
         help=(
@@ -1780,11 +1740,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--io-driver-authority-plane",
-        action="store_true",
-        help="embed the IO1 userspace hardware-authority proof generation",
-    )
-    parser.add_argument(
         "--store-plane",
         action="store_true",
         help=(
@@ -1837,17 +1792,10 @@ def main() -> None:
             (DEMO_VARIANT, arguments.demo_plane),
             (CHANNEL_VARIANT, arguments.channel_plane),
             (LOAN_VARIANT, arguments.loan_plane),
-            (IO_QUEUE_VARIANT, arguments.io_queue_plane),
-            (IO_DRIVER_AUTHORITY_VARIANT, arguments.io_driver_authority_plane),
-            (IO_NETWORK_VARIANT, arguments.io_network_plane),
-            (IO_BLOCK_VARIANT, arguments.io_block_plane),
-            (IO_LINK_VARIANT, arguments.io_link_plane),
             (SPAWN_VARIANT, arguments.spawn_plane),
             (SAMPLE_VARIANT, arguments.sample_plane),
             (STREAM_VARIANT, arguments.stream_plane),
             (SUPERVISION_VARIANT, arguments.supervision_plane),
-            (RECLAMATION_VARIANT, arguments.reclamation_plane),
-            (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
             (CLOCK_AUTHORITY_VARIANT, arguments.clock_authority_plane),
             (WAIT_SET_VARIANT, arguments.wait_set_plane),
             (SCHEDULING_CLASS_VARIANT, arguments.scheduling_class_plane),
@@ -1864,7 +1812,6 @@ def main() -> None:
             (MATRIX_UNSATISFIABLE_VARIANT, arguments.matrix_unsatisfiable_plane),
             (BOOT_VARIANT, arguments.boot_plane),
             (TRAFFIC_VARIANT, arguments.traffic_plane),
-            (SATURATION_VARIANT, arguments.saturation_plane),
             (FAULT_VARIANT, arguments.fault_plane),
             (STORAGE_VARIANT, arguments.storage_plane),
             (STORE_VARIANT, arguments.store_plane),
