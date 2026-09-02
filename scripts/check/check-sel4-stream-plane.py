@@ -74,7 +74,13 @@ PINS_PATH = ROOT / "sel4" / "pins.toml"
 # repository state before the build, so a stale input is refused rather than
 # silently producing a different image.
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-stream.zti"
-CLOSURE = "sel4-stream"
+# The stream plane asserts peer death as a distinct structured event, which
+# requires the publisher compiled to exit early. That is a build profile, and
+# CP14 made it closure data: `sel4-stream-death` is `sel4-stream` plus the
+# `streamEarlyExit` profile on exactly the one implementation whose ELF
+# changes. Using the base closure builds a publisher that never dies, so the
+# peer-death marker never appears.
+CLOSURE = "sel4-stream-death"
 IMAGE: Path | None = None
 
 BOOT_TIMEOUT_SECONDS = 180

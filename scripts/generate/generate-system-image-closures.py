@@ -119,6 +119,17 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
         {},
         {"fabric-publisher": "streamEarlyExit"},
     ),
+    # C8.5's QoS plane retires a departed publisher through the peer-dead path,
+    # so it needs the same mid-stream publisher death the stream plane does.
+    # `build-sel4.py` gave it that by listing the qos variant in
+    # `STREAM_DEATH_VARIANTS`; as closure data it is a scenario over its own
+    # composition rather than a property of the base graph, because the base
+    # `sel4-qos` closure must stay the plane without a dying publisher.
+    "sel4-qos-death": (
+        "sel4-qos",
+        {},
+        {"fabric-publisher": "streamEarlyExit"},
+    ),
 }
 
 # CP14 root roles. A root role is a distinct root *build* over the same

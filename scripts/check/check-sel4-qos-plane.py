@@ -42,7 +42,12 @@ PINS_PATH = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-qos.zti"
 # The closure identity names the build's inputs and is re-resolved from repository
 # state before the build, so stale input is refused instead of silently changing the image.
-CLOSURE = "sel4-qos"
+# C8.5 asserts a departed publisher is retired through the peer-dead path, so
+# this plane needs the publisher compiled to exit mid-stream. That is a build
+# profile, and CP14 made it closure data: `sel4-qos-death` is `sel4-qos` plus
+# `streamEarlyExit` on the one implementation whose ELF changes. The base
+# closure builds a publisher that never departs, so the marker never appears.
+CLOSURE = "sel4-qos-death"
 IMAGE: Path | None = None
 SPAWN_PATTERN = re.compile(
     r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "
