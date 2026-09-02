@@ -60,6 +60,9 @@ BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
 # comparison rather than a sampled one.
 BYTE_ARM = "sel4-stream-death"
 
+# The root-role closure whose bytes the expensive arm proves.
+ROOT_ROLE_ARM = "sel4-channel-fixture"
+
 EXPECTED_PARAMETERS = ("generationNumber", "fabricLimitOverride", "fabricQosOverride")
 
 
@@ -191,6 +194,109 @@ def check_unknown_profile_refused() -> None:
                 fail(f"wrong refusal for an unadmitted profile: {error}")
             return
     fail("a closure naming an unadmitted build profile was accepted")
+
+
+def check_root_roles() -> int:
+    """Root roles are closed, platform-qualified, and change the root ELF.
+
+    A root role is a distinct root *build* over the same composition: the
+    selector carries no embedded generation, the fixture root reports its
+    capability layout, the unwind root forces B38's construction unwind. Each
+    was a `build-sel4.py` variant branch, so each could change root bytes with
+    nothing in any build key to say which. This asserts the vocabulary is
+    closed, an unadmitted role or parameter is refused, a parameter on the
+    wrong platform is refused before Cargo runs, and — the arm that matters —
+    a role-only closure builds a different, reproducible root while leaving the
+    generation alone.
+    """
+    expected = ("embedded-generation", "boot-selector", "root-fixture", "reclamation-unwind")
+    if tuple(CONTRACT.ROOT_ROLES) != expected:
+        fail(f"the contract admits root roles {tuple(CONTRACT.ROOT_ROLES)}; expected {expected}")
+    if tuple(CONTRACT.ROOT_PARAMETERS) != ("qemuKeyboard", "duoTestTerminator"):
+        fail(f"unexpected root parameters {tuple(CONTRACT.ROOT_PARAMETERS)}")
+
+    base = compile_closure(CLOSURE_ROOT / "sel4-channel.zti")
+    for mutate, needle in (
+        (lambda v: v["root"].__setitem__("role", "ambientRole"), "unknown role"),
+        (lambda v: v["root"].__setitem__("parameters", ["ambientKnob"]), "does not admit"),
+        # Platform qualification: the Duo terminator on a QEMU target compiles
+        # an address the platform does not have, so it is refused up front.
+        (
+            lambda v: v["root"].__setitem__("parameters", ["duoTestTerminator"]),
+            "requires platform",
+        ),
+    ):
+        value = copy.deepcopy(base.value)
+        mutate(value)
+        with tempfile.TemporaryDirectory(prefix="slime-root-role-") as scope:
+            path = Path(scope) / "sel4-channel.zti"
+            path.write_text(GENERATOR_MODULE.render(value) + "\n", encoding="utf-8")
+            try:
+                resolve_closure(path)
+            except SystemImageClosureError as error:
+                if needle not in str(error):
+                    fail(f"wrong refusal for a root-role mutation: {error}; wanted {needle!r}")
+            else:
+                fail(f"a closure with an invalid root role/parameter was accepted ({needle})")
+
+    roles = GENERATOR_MODULE.ROOT_ROLE_CLOSURES
+    if not roles:
+        fail("no root-role closure is declared, so this arm asserts nothing")
+    for name, (base_name, role, parameters) in sorted(roles.items()):
+        path = CLOSURE_ROOT / f"{name}.zti"
+        if not path.is_file():
+            fail(f"{name}: declared a root-role closure but has none")
+        resolved = resolve_closure(path)
+        if resolved.root_role != role:
+            fail(f"{name}: resolved root role {resolved.root_role!r} differs from {role!r}")
+        if resolved.root_parameters != tuple(sorted(parameters)):
+            fail(f"{name}: resolved root parameters differ from the declared")
+        if resolved.compiled.identity == compile_closure(
+            CLOSURE_ROOT / f"{base_name}.zti"
+        ).identity:
+            fail(f"{name}: root-role closure and its base share an identity")
+    return len(roles)
+
+
+def check_root_role_bytes(name: str) -> tuple[str, str]:
+    """A role-only closure builds a different root, reproducibly, same generation."""
+    base_name, _role, _parameters = GENERATOR_MODULE.ROOT_ROLE_CLOSURES[name]
+
+    def build(closure_name: str, output: Path) -> dict:
+        process = subprocess.run(
+            [
+                sys.executable,
+                str(BUILDER_SCRIPT),
+                str(CLOSURE_ROOT / f"{closure_name}.zti"),
+                str(output),
+            ],
+            cwd=ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if process.returncode != 0:
+            tail = "\n".join(process.stdout.strip().splitlines()[-12:])
+            fail(f"{closure_name}: build failed:\n{tail}")
+        return json.loads((output / "build-result.json").read_text(encoding="utf-8"))
+
+    with tempfile.TemporaryDirectory(prefix=f"slime-root-bytes-{name}-") as scope:
+        root = Path(scope)
+        left = build(base_name, root / "base")
+        right = build(name, root / "role")
+        again = build(name, root / "again")
+        if left["root"]["sha256"] == right["root"]["sha256"]:
+            fail(f"{name}: the root role changed no root byte")
+        if right["root"]["sha256"] != again["root"]["sha256"]:
+            fail(f"{name}: the role's root ELF is not reproducible")
+        # A root role changes the root, never the generation: the graph it
+        # admits is its base's.
+        if left["generation"]["sha256"] != right["generation"]["sha256"]:
+            fail(f"{name}: a root role changed the generation, which it must not")
+        if left["closureIdentity"] == right["closureIdentity"]:
+            fail(f"{name}: base and role closure share a closure identity")
+        return left["root"]["sha256"], right["root"]["sha256"]
 
 
 def check_scenarios() -> int:
@@ -395,6 +501,8 @@ scenario_count = check_scenarios()
 check_malformed_refused()
 closure_count = check_every_closure_applies()
 base_elf, scenario_elf = check_profile_bytes(BYTE_ARM)
+role_count = check_root_roles()
+base_root, role_root = check_root_role_bytes(ROOT_ROLE_ARM)
 
 print(
     f"system image scenario check: the closure contract admits exactly "
@@ -406,5 +514,9 @@ print(
     f"all {closure_count} closures' parameters apply to their own manifests; and "
     f"{BYTE_ARM}'s profile moved its component ELF from {base_elf[:12]} to "
     f"{scenario_elf[:12]} reproducibly, leaving unnamed components and the base image "
-    "byte-identical"
+    "byte-identical; the 4-name root-role vocabulary is closed with an unadmitted role, "
+    f"an unadmitted parameter, and a wrong-platform parameter all refused, {role_count} "
+    f"root-role closure(s) resolving distinctly from their bases, and {ROOT_ROLE_ARM} moving "
+    f"root.elf from {base_root[:12]} to {role_root[:12]} reproducibly with its generation "
+    "unchanged"
 )

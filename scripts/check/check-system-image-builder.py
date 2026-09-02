@@ -96,14 +96,20 @@ def load_generator():
     return module
 
 
-GENERATOR_SCENARIOS = load_generator().SCENARIOS
+_GENERATOR = load_generator()
+GENERATOR_SCENARIOS = _GENERATOR.SCENARIOS
+# Root-role closures: same composition, different root build. Not scenarios —
+# they carry no build parameter and no component profile — so they are their
+# own admitted closure class, and `check-system-image-scenario.py` owns
+# asserting each changes the root and not the generation.
+GENERATOR_ROOT_ROLES = _GENERATOR.ROOT_ROLE_CLOSURES
 
 
 def closure_paths() -> dict[str, Path]:
     return {path.stem: path for path in sorted(CLOSURE_ROOT.glob("*.zti"))}
 
 
-def check_coverage(closures: dict[str, Path]) -> set[str]:
+def check_coverage(closures: dict[str, Path]) -> tuple[set[str], set[str]]:
     """Every derived composition has a closure or a declared reason, and no orphan.
 
     A scenario closure is not a composition — it is a base composition plus
@@ -112,12 +118,13 @@ def check_coverage(closures: dict[str, Path]) -> set[str]:
     asserting each one is a real scenario over a real base.
     """
     scenarios = set(GENERATOR_SCENARIOS)
+    root_roles = set(GENERATOR_ROOT_ROLES)
 
     derived = set(DERIVED_GENERATION_FIXTURES)
     missing = sorted(derived - set(closures) - set(WITHOUT_CLOSURE))
     if missing:
         fail(f"derived composition(s) with no closure and no declared reason: {missing}")
-    orphaned = sorted(set(closures) - derived - scenarios)
+    orphaned = sorted(set(closures) - derived - scenarios - root_roles)
     if orphaned:
         fail(f"closure(s) naming no derived composition or declared scenario: {orphaned}")
     stale_reasons = sorted(set(WITHOUT_CLOSURE) & set(closures))
@@ -129,10 +136,12 @@ def check_coverage(closures: dict[str, Path]) -> set[str]:
     unknown_reasons = sorted(set(WITHOUT_CLOSURE) - derived)
     if unknown_reasons:
         fail(f"exemption(s) naming no derived composition: {unknown_reasons}")
-    return scenarios
+    return scenarios, root_roles
 
 
-def check_resolution(closures: dict[str, Path], scenarios: set[str]) -> dict[str, str]:
+def check_resolution(
+    closures: dict[str, Path], scenarios: set[str], root_roles: set[str]
+) -> dict[str, str]:
     """Every closure resolves, names a distinct identity, and agrees with its spec."""
     catalogue = interface_catalogue()
     components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
@@ -165,6 +174,24 @@ def check_resolution(closures: dict[str, Path], scenarios: set[str]) -> dict[str
             for profile in resolved.build_profiles.values()
             if profile != "default"
         }
+        if name in root_roles:
+            # A root role changes the root build, never the graph, so the
+            # manifest comparison below still applies — against its base.
+            if resolved.root_role == "embedded-generation":
+                fail(f"{name}: declared a root-role closure but carries the ordinary role")
+            expected = derive_manifest(
+                compile_system(
+                    SYSTEM_ROOT / f"{GENERATOR_ROOT_ROLES[name][0]}.zti", components=components
+                )
+            )
+            if resolved.manifest != expected:
+                fail(f"{name}: root-role closure's manifest differs from its base's")
+            continue
+        if resolved.root_role != "embedded-generation":
+            fail(
+                f"{name}: carries root role {resolved.root_role!r} but is not a declared "
+                "root-role closure"
+            )
         if name in scenarios:
             if not resolved.build_parameters and not scenario_profiles:
                 fail(
@@ -314,8 +341,8 @@ def main() -> None:
     closures = closure_paths()
     if not closures:
         fail("no closure exists")
-    scenarios = check_coverage(closures)
-    identities = check_resolution(closures, scenarios)
+    scenarios, root_roles = check_coverage(closures)
+    identities = check_resolution(closures, scenarios, root_roles)
     check_no_plane_flags()
 
     selected = sorted(closures) if arguments.exhaustive else [SELECTED]
@@ -328,7 +355,7 @@ def main() -> None:
         f"system image builder check: {len(closures)} closures resolve with distinct "
         f"identities and manifests matching their system specs; "
         f"{len(WITHOUT_CLOSURE)} derived compositions declared closure-exempt, "
-        f"{len(scenarios)} scenario closure(s); "
+        f"{len(scenarios)} scenario and {len(root_roles)} root-role closure(s); "
         f"{len(selected)} closure(s) built twice byte-identically through one command "
         "shape with no plane flag, variant table, or composition named in builder source"
     )

@@ -103,6 +103,11 @@ class ResolvedClosure:
     # ordinary implementation; a scenario profile changes that component's ELF
     # bytes, so it belongs to the identity that selected it.
     build_profiles: dict[str, str]
+    # What the root task is built to be, and the closed platform-qualified
+    # parameters that vary it. `embedded-generation` with no parameters is the
+    # ordinary case; the rest were `build-sel4.py` variant branches.
+    root_role: str
+    root_parameters: tuple[str, ...]
 
 
 def _fail(message: str) -> None:
@@ -445,12 +450,35 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
             f"missing={sorted(required_release_inputs - set(release_names))} "
             f"extra={sorted(set(release_names) - required_release_inputs)}"
         )
-    if value["root"]["role"] != image_contract.ROOT_ROLE_EMBEDDED_GENERATION:
-        _fail("this closure requires the embedded-generation root role")
-    if value["root"]["parameters"]:
-        _fail("embedded-generation root accepts no role parameters in closure version 1")
+    root_role = value["root"]["role"]
+    if root_role not in image_contract.ROOT_ROLES:
+        _fail(f"unknown root role {root_role!r}")
+    root_parameters = value["root"]["parameters"]
+    unknown_root = sorted(set(root_parameters) - set(image_contract.ROOT_PARAMETERS))
+    if unknown_root:
+        _fail(
+            f"root.parameters names {unknown_root}, which this closure version does not "
+            f"admit; expected a subset of {sorted(image_contract.ROOT_PARAMETERS)}"
+        )
+    if len(set(root_parameters)) != len(root_parameters):
+        _fail("root.parameters must be unique")
+    if root_parameters != sorted(root_parameters):
+        _fail("root.parameters must be sorted")
+    # Both parameters compile a platform-specific address or marker into the
+    # root task, so the wrong platform is refused before Cargo runs rather than
+    # producing a root that reads a device it does not have.
+    platform_name = value["target"]["platform"]
+    for parameter, required_platform in (
+        (image_contract.ROOT_PARAMETER_QEMU_KEYBOARD, "qemu-arm-virt"),
+        (image_contract.ROOT_PARAMETER_DUO_TEST_TERMINATOR, "cv1800b-duo"),
+    ):
+        if parameter in root_parameters and platform_name != required_platform:
+            _fail(
+                f"root.parameters: {parameter!r} requires platform {required_platform!r}, "
+                f"not {platform_name!r}"
+            )
     if artifacts["root"] != (base / "slime-root").resolve():
-        _fail("embedded-generation root implementation must be the declared slime-root tree")
+        _fail("every root role's implementation must be the declared slime-root tree")
     if value["loader"]["role"] != image_contract.LOADER_ROLE_KERNEL_LOADER:
         _fail("this closure requires the kernel-loader role")
     if value["loader"]["parameters"]:
@@ -472,7 +500,15 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
     profiles = {entry["component"]: entry["buildProfile"] for entry in value["implementations"]}
     manifest = derive_manifest(system)
     return ResolvedClosure(
-        compiled, system, manifest, artifacts, external, parameters, profiles
+        compiled,
+        system,
+        manifest,
+        artifacts,
+        external,
+        parameters,
+        profiles,
+        root_role,
+        tuple(root_parameters),
     )
 
 

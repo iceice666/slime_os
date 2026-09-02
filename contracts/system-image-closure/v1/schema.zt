@@ -174,9 +174,38 @@ artifactKindFile :: Text = "file";
 artifactKindTree :: Text = "tree";
 providerWorkspace :: Text = "workspace";
 providerExternal :: Text = "external";
+-- What the root task is built to be.
+--
+-- `embedded-generation` is the ordinary product and plane root: it carries the
+-- signed generation this closure resolved. `boot-selector` carries none and
+-- reads its generation from disk at boot, which is why the two cannot share an
+-- identity — a selector image that embedded a generation would be the thing
+-- its own gate exists to disprove.
+--
+-- `root-fixture` and `reclamation-unwind` are the two remaining root builds
+-- that were `build-sel4.py` variant branches. Each embeds a generation like
+-- `embedded-generation` and differs in exactly one compile-time property: the
+-- fixture root reports its capability layout for the byte-frozen boot-layout
+-- fixtures, and the unwind root is compiled to force B38's supervised
+-- construction unwind. Both are test-only.
 rootRoleEmbeddedGeneration :: Text = "embedded-generation";
 rootRoleBootSelector :: Text = "boot-selector";
+rootRoleFixture :: Text = "root-fixture";
+rootRoleReclamationUnwind :: Text = "reclamation-unwind";
 loaderRoleKernelLoader :: Text = "kernel-loader";
+
+-- One closed root-role parameter. `BuildRole.parameters` was declared by CP11
+-- and admitted only the empty list; these are the two properties a root build
+-- genuinely varies by beyond its role, and both are platform-qualified.
+--
+--   `qemuKeyboard`      -- the root reads the emulated console's RX FIFO and
+--                          feeds those bytes through the declared input
+--                          capability. QEMU only: a physical target compiles no
+--                          QEMU address into its root task.
+--   `duoTestTerminator` -- the root prints the terminal marker its gate reads.
+--                          `cv1800b-duo` only.
+rootParameterQemuKeyboard :: Text = "qemuKeyboard";
+rootParameterDuoTestTerminator :: Text = "duoTestTerminator";
 
 outputGeneration :: Text = "generation";
 outputRoot :: Text = "root";
@@ -229,7 +258,11 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   buildProfileRecoveryImage =;
   rootRoleEmbeddedGeneration =;
   rootRoleBootSelector =;
+  rootRoleFixture =;
+  rootRoleReclamationUnwind =;
   loaderRoleKernelLoader =;
+  rootParameterQemuKeyboard =;
+  rootParameterDuoTestTerminator =;
   parameterGenerationNumber =;
   parameterFabricLimitOverride =;
   parameterFabricQosOverride =;

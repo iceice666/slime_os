@@ -121,6 +121,19 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
     ),
 }
 
+# CP14 root roles. A root role is a distinct root *build* over the same
+# composition: the selector carries no embedded generation and reads one from
+# disk, the fixture root reports its capability layout, the unwind root forces
+# B38's construction unwind. Each was a `build-sel4.py` variant branch; each is
+# now its own closure with its own identity.
+#
+# `(base composition, root role, root parameters)`. The base is the graph the
+# role's own gate boots, and the role changes only the root.
+ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
+    "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
+}
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"system image closure generation: {message}")
@@ -195,6 +208,8 @@ def closure_for(
     base: str | None = None,
     parameters: dict[str, str] | None = None,
     profiles: dict[str, str] | None = None,
+    root_role: str | None = None,
+    root_parameters: tuple[str, ...] = (),
 ) -> dict | None:
     """One closure, or `None` when the composition cannot have a reproducible one.
 
@@ -254,9 +269,9 @@ def closure_for(
             "rustSel4Commit": record["rustSel4"]["commit"],
         },
         "root": {
-            "role": CONTRACT.ROOT_ROLE_EMBEDDED_GENERATION,
+            "role": root_role or CONTRACT.ROOT_ROLE_EMBEDDED_GENERATION,
             "implementation": artifact(*ROOT_IMPLEMENTATION),
-            "parameters": [],
+            "parameters": sorted(root_parameters),
         },
         "loader": {
             "role": CONTRACT.LOADER_ROLE_KERNEL_LOADER,
@@ -297,6 +312,17 @@ def outputs() -> dict[Path, str]:
         )
         if closure is None:
             fail(f"scenario {name} produced no closure, but its base composition has one")
+        emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
+    for name, (base, role, parameters) in sorted(ROOT_ROLE_CLOSURES.items()):
+        if base not in DERIVED_GENERATION_FIXTURES:
+            fail(f"root-role closure {name} names composition {base!r}, which is not derived")
+        if role == CONTRACT.ROOT_ROLE_EMBEDDED_GENERATION:
+            fail(f"root-role closure {name} declares the ordinary role, so it is its base")
+        closure = closure_for(
+            name, specs, components, base=base, root_role=role, root_parameters=parameters
+        )
+        if closure is None:
+            fail(f"root-role closure {name} produced none, but its base composition has one")
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
     if not emitted:
         fail("no composition produced a closure")

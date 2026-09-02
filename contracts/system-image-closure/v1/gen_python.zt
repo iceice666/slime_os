@@ -41,9 +41,22 @@ render :: Text = t.join "" {
   text "BUILD_PROFILE_GENERATION_CMD_BAD_RELEASE" schema.buildProfileGenerationCmdBadRelease;
   text "BUILD_PROFILE_BOOT_SELECTION_FAIL" schema.buildProfileBootSelectionFail;
   text "BUILD_PROFILE_RECOVERY_IMAGE" schema.buildProfileRecoveryImage;
-  tuple "ROOT_ROLES" { schema.rootRoleEmbeddedGeneration; schema.rootRoleBootSelector; };
+  tuple "ROOT_ROLES" {
+    schema.rootRoleEmbeddedGeneration;
+    schema.rootRoleBootSelector;
+    schema.rootRoleFixture;
+    schema.rootRoleReclamationUnwind;
+  };
   text "ROOT_ROLE_EMBEDDED_GENERATION" schema.rootRoleEmbeddedGeneration;
   text "ROOT_ROLE_BOOT_SELECTOR" schema.rootRoleBootSelector;
+  text "ROOT_ROLE_FIXTURE" schema.rootRoleFixture;
+  text "ROOT_ROLE_RECLAMATION_UNWIND" schema.rootRoleReclamationUnwind;
+  tuple "ROOT_PARAMETERS" {
+    schema.rootParameterQemuKeyboard;
+    schema.rootParameterDuoTestTerminator;
+  };
+  text "ROOT_PARAMETER_QEMU_KEYBOARD" schema.rootParameterQemuKeyboard;
+  text "ROOT_PARAMETER_DUO_TEST_TERMINATOR" schema.rootParameterDuoTestTerminator;
   tuple "LOADER_ROLES" { schema.loaderRoleKernelLoader; };
   text "LOADER_ROLE_KERNEL_LOADER" schema.loaderRoleKernelLoader;
   tuple "BUILD_PARAMETERS" {

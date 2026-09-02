@@ -1084,6 +1084,13 @@ def build_application(
     toolchain: str | None = None,
     root_target: Path | None = None,
     child_target: Path | None = None,
+    # CP14: when a closure drives the build, the root's role and its declared
+    # parameters come from closure data rather than from `variant`. `None`
+    # keeps the legacy variant-derived behavior every existing caller relies
+    # on, so the two paths coexist until CP15 migrates the last checker.
+    closure_root_role: str | None = None,
+    closure_root_parameters: tuple[str, ...] = (),
+    closure_target_name: str | None = None,
 ) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
@@ -1119,13 +1126,36 @@ def build_application(
         if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
             fail(f"sel4/pins.toml [{platform.pins_section}].timer_frequency_hz must be positive")
         root_environment["SLIME_DUO_TIMEBASE_HZ"] = str(frequency)
-    if platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
+    if closure_root_role is not None:
+        # Closure-driven: the role and its parameters are the whole selection,
+        # and the resolver has already refused a wrong-platform parameter.
+        if "qemuKeyboard" in closure_root_parameters:
+            root_environment["SLIME_QEMU_KEYBOARD"] = "1"
+        if "duoTestTerminator" in closure_root_parameters:
+            root_environment["SLIME_DUO_TEST_TERMINATOR"] = "1"
+        if closure_root_role == "boot-selector":
+            root_environment["SLIME_BOOT_SELECTOR"] = "1"
+            root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = boot_bundle_identity(platform)
+            generation = None
+        else:
+            if resolved_generation is None:
+                fail(f"root role {closure_root_role!r} requires a resolved generation")
+            generation = resolved_generation.resolve()
+            root_environment["SLIME_GENERATION"] = str(generation)
+            if closure_root_role == "root-fixture":
+                root_environment["SLIME_ROOT_FIXTURE"] = "1"
+        if closure_root_role == "reclamation-unwind":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_b38_force_unwind".strip()
+            )
+    elif platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011
         # RX FIFO and feeds those bytes through the existing input capability.
         # Plane images keep deterministic scripts, and physical targets do not
         # compile a QEMU address into their root task.
         root_environment["SLIME_QEMU_KEYBOARD"] = "1"
-    if platform in PRODUCT_UART_KINDS and variant == GRAPH_VARIANT:
+    if closure_root_role is None and platform in PRODUCT_UART_KINDS and variant == GRAPH_VARIANT:
         serial = text(table(pins, platform.pins_section), "serial", platform.pins_section)
         kind = PRODUCT_UART_KINDS[platform]
         match = re.fullmatch(rf"uart0-{kind}-(0x[0-9a-fA-F]+)", serial)
@@ -1139,7 +1169,9 @@ def build_application(
             root_environment["SLIME_PRODUCT_TEST_TERMINATOR"] = "1"
     if duo_early_fault:
         root_environment["SLIME_DUO_EARLY_FAULT"] = "1"
-    if variant == BOOT_SELECTION_VARIANT:
+    if closure_root_role is not None:
+        pass
+    elif variant == BOOT_SELECTION_VARIANT:
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
         root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = bundle_identity
@@ -1180,7 +1212,7 @@ def build_application(
         root_environment["SLIME_GENERATION"] = str(generation)
         if variant == FIXTURE_VARIANT and platform.name != CV1800B_DUO.name:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
-    if variant == RECLAMATION_VARIANT:
+    if closure_root_role is None and variant == RECLAMATION_VARIANT:
         rustflags = root_environment.get("RUSTFLAGS", "")
         root_environment["RUSTFLAGS"] = f"{rustflags} --cfg slime_b38_force_unwind".strip()
     # B40 negative mutations: perturb one child CSpace in exactly one way so
@@ -1198,9 +1230,10 @@ def build_application(
     # the same reason one level up — the root task compiles against a specific
     # `SEL4_PREFIX`, so a QEMU and a board build of the same variant are
     # different binaries.
-    root_target_dir = CARGO_BUILD / platform.name / VARIANT_TARGET_DIRS[variant]
+    target_name = closure_target_name or VARIANT_TARGET_DIRS[variant]
+    root_target_dir = CARGO_BUILD / platform.name / target_name
     rustflags = root_environment.get("RUSTFLAGS", "")
-    remap = f"--remap-path-prefix={root_target_dir}=./target/sel4/{platform.name}/{variant}"
+    remap = f"--remap-path-prefix={root_target_dir}=./target/sel4/{platform.name}/{target_name}"
     root_environment["RUSTFLAGS"] = f"{rustflags} {remap}".strip()
     cargo_build(
         manifest=ROOT / "Cargo.toml",
@@ -1212,6 +1245,8 @@ def build_application(
     )
     root_elf = root_target_dir / root_target.stem / "release" / "slime-root.elf"
     require_file(root_elf, "root task ELF")
+    if closure_root_role is not None:
+        return child_elf, root_elf, generation
     return child_elf, root_elf, None if variant == BOOT_SELECTION_VARIANT else generation
 
 

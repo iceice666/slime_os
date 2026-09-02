@@ -46,6 +46,7 @@ composition and with a closed reason, in a new
 | `scripts/generate/generate-system-image-closures.py` | New: emits one closure per derived composition (38) from repository state, with `--check` refusing drift | CP11's contract is exercised by the corpus rather than by one hand-authored record, while resolution stays an independent authority that re-reads every digest |
 | `contracts/system-image-closure/v1/schema.zt` | Added a closed three-name `BuildParameter` vocabulary and taught the resolver to refuse any other; `build-system-image.py` applies the parameters from the resolved closure | The three deltas that changed generation bytes through ambient `SLIME_*` variables are in the build key, so two scenarios over one composition are two identities rather than one identity an environment disambiguated |
 | `contracts/system-image-closure/v1/schema.zt` | Made `ImplementationSelection.buildProfile` a closed seven-name vocabulary mapping each executable-changing scenario to one `option_env!` knob; `build-system-image.py` translates resolved profiles into those knobs and refuses two profiles setting one knob to different values | A scenario ELF is reachable only through the identity that declares it, and the knob selection is in the build key rather than the caller's environment |
+| `contracts/system-image-closure/v1/schema.zt` | Made `BuildRole.role` a closed four-name vocabulary and `BuildRole.parameters` the two platform-qualified instrumentation knobs; `build_application` takes them from closure data with no `variant` on that path | The boot selector, fixture root, and unwind root stop being variant branches that could change root bytes with nothing in a build key to say which |
 | `scripts/check/check-system-image-scenario.py` | New CP14 gate: parameter and profile vocabulary closure, unadmitted-name refusals, scenario identity distinctness, field-by-field proof that a parameter changes only what it names, eight malformed-parameter refusals, and a build arm proving a profile moves the named component's ELF reproducibly while leaving unnamed components byte-identical | A scenario cannot silently change bytes outside what it declares, and a profile recorded in the identity but changing no bytes would fail |
 | `scripts/check/check-system-image-builder.py` | New CP13 gate: closure coverage, distinct identities, spec-matching manifests, twice-byte-identical builds, output-collision refusal, and an AST assertion that the builder declares no plane flag or variant table | Adding a composition needs contract data and a behavioral checker, never a builder flag or output-path branch |
 | `contracts/composition-inventory/v1` | New contract, record, generated bindings, and gate | "Which compositions are migrated" is one closed record instead of a Python table, a directory listing, and a roadmap paragraph |
@@ -79,7 +80,7 @@ composition and with a closed reason, in a new
 | `just sel4_gate_control_check` | Pass — 45 gates reject 1748 mutated transcripts and layouts | Direct |
 | `just system_image_builder_check` | Pass — 38 closures resolve with distinct identities and spec-matching manifests, 3 compositions declared closure-exempt, `sel4-channel` built twice byte-identically, a non-empty output directory refused | Direct |
 | `just system_image_closure_check` | Pass against the generated `sel4-channel` closure | Direct |
-| `just system_image_scenario_check` | Pass — 3 admitted parameters and a fourth refused; 3 scenario closures with identities distinct from their base and each other, each changing exactly the fields it names; 8 malformed parameters refused; the 7-name profile vocabulary closed with an unadmitted profile and a same-knob conflict both refused; `sel4-stream-death`'s profile moved `fabric-publisher.elf` `cd5cedc17aea` → `7c3f028a5226` reproducibly with `init.elf` unchanged and the two images differing | Direct |
+| `just system_image_scenario_check` | Pass — 3 admitted parameters and a fourth refused; 3 scenario closures with identities distinct from their base and each other, each changing exactly the fields it names; 8 malformed parameters refused; the 7-name profile vocabulary closed with an unadmitted profile and a same-knob conflict both refused; `sel4-stream-death`'s profile moved `fabric-publisher.elf` `cd5cedc17aea` → `7c3f028a5226` reproducibly with `init.elf` unchanged and the two images differing; the 4-name root-role vocabulary closed with an unadmitted role, unadmitted parameter, and wrong-platform parameter refused, and `sel4-channel-fixture` moving `root.elf` `96322f2a8025` → `edf09fe2ba56` reproducibly with its generation unchanged | Direct |
 | `just test_host`, `just ruff` | Pass | Direct |
 | `just typos` | Fails on `contracts/system-image-closure/v1/inputs/sel4-prefix/libsel4/include/interfaces/sel4_client.h` ("pre-empted"), a vendored seL4 header committed by CP11 and untouched here; `typos` over every path this change touches is clean | Direct, pre-existing failure |
 
@@ -132,14 +133,14 @@ to say about this change; `git status` shows zero `.rs` files modified.
       tables, and the identity manifest's `variant` authority — is retained
       because the 36 QEMU plane checkers still call it. CP15 owns migrating
       those checkers and deleting the flags.
-- [ ] CP14's remaining three deliverables: the boot selector, root fixture,
-      reclamation unwind probe, and board instrumentation are still root variants
-      rather than closed root roles; B40 mutations are still an ambient
-      `SLIME_B40_MUTATION`; and QEMU disks, device topology, and corruption
-      schedules have not moved into `system-test-run/v1`.
-- [ ] The `generationCmd*`, `bootSelectionFail`, and `recoveryImage` profiles are
-      declared and gated but not yet carried by a closure: their host
-      compositions build through the legacy path CP15 migrates.
+- [ ] CP14's remaining two deliverables: B40 mutations are still an ambient
+      `SLIME_B40_MUTATION` rather than negative build cases over a valid base
+      closure; and QEMU disks, device topology, corruption schedules, and
+      runtime fault controls have not moved into `system-test-run/v1`.
+- [ ] The `generationCmd*`, `bootSelectionFail`, and `recoveryImage` profiles and
+      the `boot-selector` root role are declared, resolvable, and gated but not
+      yet carried by a closure: their host compositions build through the legacy
+      path CP15 migrates.
 - [ ] `sel4`, `sel4-slisp`, and `reference` have no closure: the first two admit
       an external product Slisp ELF with no committed artifact, and the third
       targets a platform with no seL4 asset.

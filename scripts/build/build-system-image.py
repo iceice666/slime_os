@@ -262,14 +262,31 @@ def build(closure: Path, output: Path) -> Path:
         try:
             child_elf, root_elf, embedded = SEL4_BUILDER.build_application(
                 pins,
-                variant=SEL4_BUILDER.CHANNEL_VARIANT,
                 platform=platform,
-                resolved_generation=generation,
+                resolved_generation=(
+                    None
+                    if resolved.root_role == CLOSURE_CONTRACT.ROOT_ROLE_BOOT_SELECTOR
+                    else generation
+                ),
                 toolchain=value["target"]["toolchain"],
                 root_target=resolved.artifacts["release:root-target"],
                 child_target=resolved.artifacts["release:target-spec"],
+                # CP14: the root's role and its declared parameters, from
+                # closure data. No `variant` is passed, so the builder's
+                # variant table cannot select anything here.
+                closure_root_role=resolved.root_role,
+                closure_root_parameters=resolved.root_parameters,
+                closure_target_name=f"closure-{resolved.compiled.identity.hex()[:16]}",
             )
-            if embedded != generation.resolve():
+            # A boot-selector root carries no embedded generation, and an
+            # embedded-generation root carries exactly the one this closure
+            # resolved. The two claims are opposite and both are checked, which
+            # is what keeps a selector image from silently shipping a
+            # generation.
+            if resolved.root_role == CLOSURE_CONTRACT.ROOT_ROLE_BOOT_SELECTOR:
+                if embedded is not None:
+                    fail("boot-selector root embedded a generation")
+            elif embedded != generation.resolve():
                 fail("root build did not embed the resolved generation")
             loader, payload_tool = SEL4_BUILDER.build_loader(
                 pins,
@@ -287,7 +304,8 @@ def build(closure: Path, output: Path) -> Path:
                 "systemIdentity": resolved.system.identity.hex(),
                 "targetProfile": value["target"]["profile"],
                 "platform": value["target"]["platform"],
-                "rootRole": value["root"]["role"],
+                "rootRole": resolved.root_role,
+                "rootParameters": list(resolved.root_parameters),
                 "loaderRole": value["loader"]["role"],
                 "generation": {
                     "bytes": generation.stat().st_size,
