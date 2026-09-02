@@ -258,10 +258,29 @@ test_sel4_root:
     host="$(rustc -vV | sed -n 's/^host: //p')"
     mkdir -p build
     capture="build/slime-root-host-tests.txt"
+    # The installed prefix is AArch64 and libsel4's syscall headers carry
+    # AArch64 inline assembly, so the tests must be compiled *for* AArch64. On
+    # an AArch64 host that is the host target; on any other host they are
+    # cross-compiled against the flake's cross toolchain and run under
+    # qemu-aarch64 with that toolchain's glibc as the sysroot -- the same
+    # binaries, the same count, on the same architecture the root ships on.
+    case "$host" in
+        aarch64-*) target="$host" ;;
+        *)
+            target="aarch64-unknown-linux-gnu"
+            libc="$("${CROSS_COMPILER_PREFIX}gcc" -print-file-name=libc.so)"
+            sysroot="$(dirname "$(dirname "$libc")")"
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${CROSS_COMPILER_PREFIX}gcc"
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -L $sysroot"
+            export CC_aarch64_unknown_linux_gnu="${CROSS_COMPILER_PREFIX}gcc"
+            rustup +"$toolchain" target list --installed | grep -qx "$target" \
+                || rustup +"$toolchain" target add "$target"
+            ;;
+    esac
     # Do not use command substitution: `set -e` must preserve build failures,
     # and the per-checkout capture under `build/` avoids concurrent-run clashes.
     SEL4_PREFIX="$prefix" RUSTUP_TOOLCHAIN="$toolchain" \
-        cargo test -p slime-root --target "$host" --lib -- --format=terse \
+        cargo test -p slime-root --target "$target" --lib -- --format=terse \
         | tee "$capture"
     output="$(cat "$capture")"
     actual="$(printf '%s\n' "$output" | sed -n 's/^running \([0-9]*\) test.*/\1/p' | head -1)"
