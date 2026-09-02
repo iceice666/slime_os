@@ -1,18 +1,18 @@
 # Platform hardware
 
-**Purpose:** Preserve the deferred x86-64 Framework daily-driver qualification plan: bind the common [Native I/O substrate](11-io-substrate.md) to the target's firmware and buses, implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
+**Purpose:** Qualify the named x86-64 Framework after the architecture track has established its upstream-seL4 CPU/product boot: inventory the real firmware and buses, bind the common [Native I/O substrate](11-io-substrate.md), implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
 
-**Status:** Deferred while Milk-V Duo is the current physical architecture bring-up lane. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard. No Duo result changes this status.
+**Status:** Planned behind [P6.6's Framework removable-media CPU boot](07-architecture-portability.md#p66--framework-removable-media-cpu-boot). P6 is now the active architecture lane; H1 remains blocked until that exact QEMU-proven image boots on the target. The previous custom-kernel Framework evidence remains historical, and no Milk-V Duo result changes this status.
 
-**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 shared buffers and C9 scheduling/restart authority; the architecture-neutral [Native I/O substrate](11-io-substrate.md); and [Architecture portability](07-architecture-portability.md), especially P1's x86/platform source boundary. The common I/O track owns queue/epoch/lease semantics, hardware-resource capability classes, userspace virtio reference drivers, `LinkDevice`, and exact-destination network services. H owns only the Framework bindings, drivers, containment, promotion policy, and physical evidence.
+**Dependencies:** [P6](07-architecture-portability.md#p6-x86-64-sel4-qemu-and-framework-cpu-boot), especially P6.6; [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 shared buffers and C9 scheduling/restart authority; and the architecture-neutral [Native I/O substrate](11-io-substrate.md). P6 owns target admission, Multiboot/UEFI media, the root/component path, and the first no-write CPU boot. H owns hardware inventory, Framework bindings, drivers, containment, promotion policy, and physical device evidence.
 
 The Hardware track promotes each Framework path in two distinct steps: deterministic device/service logic under host or QEMU checks, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs AMD-IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
 
-This track qualifies one named x86-64 Framework platform. It does not own the portable I/O ABI, Raspberry Pi 5, generic Arm, or RISC-V support. ACPI, PCI BDF/BAR, APIC routes, AMD-IOMMU aliases, xHCI/NVMe identities, firmware methods, and physical observations remain Framework profile data and must not become universal Slime contracts. Milk-V Duo is only the current physical architecture bring-up target: its serial, storage, component, or device evidence cannot satisfy H1–H14 or M5.7. Raspberry Pi 5 remains admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
+This track qualifies one named x86-64 Framework platform after P6 establishes its CPU/product boot. It does not own the portable I/O ABI, Raspberry Pi 5, generic Arm, or RISC-V support. ACPI, PCI BDF/BAR, APIC routes, AMD-IOMMU aliases, xHCI/NVMe identities, firmware methods, and physical observations remain Framework profile data and must not become universal Slime contracts. Milk-V Duo is retained target-specific evidence only: its serial, storage, component, or device results cannot satisfy P6, H1–H14, or M5.7. Raspberry Pi 5 remains admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
 
 Sequencing:
 
-- H1 inventories the actual Framework firmware and device topology; later drivers consume that evidence rather than guessed BDFs, interrupt routes, or protocols.
+- P6.6 first boots the resident product graph without probing or qualifying devices. H1 then inventories the actual Framework firmware and device topology; later drivers consume that evidence rather than guessed BDFs, interrupt routes, or protocols.
 - IO0–IO2 establish the common queue/lease/resource ABI and userspace virtio-blk proof. H2 then binds IO1 to the Framework PCI/ACPI/APIC profile and gates every Framework userspace hardware driver. H3 implements xHCI, USB, and HID over the common substrate under deterministic checks; H4 adds AMD-IOMMU containment and promotes USB HID on the Framework.
 - H5 and H6 consume H4 and the common block/network services and may proceed in parallel. H7 consumes H4, IO2, and H5's disposable external-media path.
 - H8 may proceed after IO0/IO1 and H2 because it uses the boot GOP framebuffer; H9 consumes the H1 ACPI inventory. H10 consumes every device service that must quiesce and resume.
@@ -20,11 +20,11 @@ Sequencing:
 
 ### H1: Framework evidence harness and hardware inventory
 
-**Status:** Blocked pending a seL4 Framework image and physical verification. `just framework_inventory_check` now fails closed because the retired custom-kernel inventory path has no product replacement; the exit condition remains open until `evidence/framework-inventory.jsonl` records the target Framework topology, localized keyboard failure, and byte-identical internal-NVMe comparison region.
+**Status:** Blocked on P6.6 and then physical inventory verification. `just framework_inventory_check` remains unavailable until the exact P6.5 image has completed `just framework_cpu_boot_check`; H1 closes only when `evidence/framework-inventory.jsonl` records the target topology, localized keyboard failure, and byte-identical internal-NVMe comparison region.
 
 Deliverables:
 
-- emit one bounded, versioned hardware report over both framebuffer and serial without requiring keyboard input: ACPI table identities and checksums, MCFG functions, validated BARs, interrupt routes, framebuffer geometry, IOMMU-table presence, NVMe identity, and every input-controller initialization stage;
+- extend the P6.6 identity/readiness output into one bounded, versioned hardware report over GOP and every actually available debug channel, without requiring keyboard input: ACPI table identities and checksums, MCFG functions, validated BARs, interrupt routes, framebuffer geometry, IOMMU-table presence, NVMe identity, and every input-controller initialization stage; do not assume a Framework COM1 exists because QEMU used one;
 - add an append-only host-side evidence record containing image identity, machine identity, firmware version, report output, and pre/post hashes for every storage device whose immutability is being asserted;
 - keep the report free of raw memory, firmware secrets, storage payloads, and unbounded descriptor dumps;
 - preserve the removable-image no-internal-write rule and provide a non-interactive timeout or shutdown path so a failed input driver cannot strand the test.
@@ -36,15 +36,15 @@ Required checks:
 - the Framework report identifies whether the keyboard path is i8042, USB HID, or another firmware-described controller and records the exact initialization failure;
 - the internal NVMe comparison region remains byte-identical across the inventory boot.
 
-Planned verification target: `just framework_inventory_check`. The target is intentionally unavailable and exits non-zero until a seL4 Framework image and evidence collector exist.
+Planned verification target: `just framework_inventory_check`. It depends on `just framework_cpu_boot_check` and fails closed until the seL4 Framework evidence collector and physical record exist.
 
-Exit condition: the repository contains reproducible evidence for the target Framework's actual controller topology and the current keyboard failure is localized to a named initialization stage.
+Exit condition: starting from the exact P6.5 removable image already proven to boot the product graph, the repository contains reproducible evidence for the target Framework's actual controller topology and localizes the current keyboard path to a named initialization stage while preserving the no-internal-write boundary.
 
 ### H2: Framework PCI binding for userspace drivers
 
 **Status:** Not started.
 
-H2 consumes [IO1's hardware resource authority](11-io-substrate.md#io1--hardware-resource-authority-and-dma-accounts), [H1's observed inventory](#h1-framework-evidence-harness-and-hardware-inventory), and [P1's x86-64 architecture/platform boundary](07-architecture-portability.md#p1-x86-64-architecture-boundary-extraction). IO1 owns the portable device/MMIO/interrupt/DMA capability classes, quotas, restart/reclamation rules, and separation between shared buffers and DMA mappings. H2 owns their concrete Framework PCI/ACPI/APIC binding and the target-qualified failure/rollback behavior every later Framework driver consumes.
+H2 consumes [IO1's hardware resource authority](11-io-substrate.md#io1--hardware-resource-authority-and-dma-accounts), [H1's observed inventory](#h1-framework-evidence-harness-and-hardware-inventory), and [P6's x86-64 seL4 target boundary](07-architecture-portability.md#p6-x86-64-sel4-qemu-and-framework-cpu-boot). IO1 owns the portable device/MMIO/interrupt/DMA capability classes, quotas, restart/reclamation rules, and separation between shared buffers and DMA mappings. H2 owns their concrete Framework PCI/ACPI/APIC binding and the target-qualified failure/rollback behavior every later Framework driver consumes.
 
 Deliverables:
 
@@ -61,7 +61,7 @@ Required checks:
 - malformed or conflicting MCFG/ACPI/PCI/BAR/interrupt profile data fails before any mapping, interrupt binding, or bus mastering;
 - exact BAR offsets, mapping lengths, access modes, interrupt acknowledgements, and DMA/account bounds are validated by IO1 and cannot be widened by Framework profile data;
 - restart, rollback, and wrong-profile admission revoke the old bindings, return every charge, create a fresh epoch, and leave hardware authority unavailable when the retained generation lacks the new resource classes;
-- the P1 source-boundary guard rejects new x86 privileged mechanisms outside admitted architecture/platform files, while H2 tests may exercise the Framework PCI profile explicitly;
+- the P1/P6 source-boundary guard rejects new x86 privileged mechanisms outside admitted architecture/platform files, while H2 tests may exercise the Framework PCI profile explicitly;
 - ordinary service clients see only typed semantic capabilities and never PCI identities, MMIO mappings, APIC vectors, DMA addresses, or global device enumeration.
 
 Planned verification target:
