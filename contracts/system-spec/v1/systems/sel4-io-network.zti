@@ -31,6 +31,7 @@
       dependencies = [];
     };
   ];
+  instances = [];
   grants = [
     {
       name = "network-probe-service";
@@ -92,6 +93,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

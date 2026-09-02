@@ -1,0 +1,213 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-driver-authority";
+  generation = 50;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "io-driver-intruder";
+    "io-driver-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "io-driver-probe";
+      spawnBudget = 2;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "io-driver-intruder";
+      executable = "io-driver-intruder";
+    };
+    {
+      name = "io-driver-supervisor";
+      executable = "io-driver-probe";
+    };
+    {
+      name = "io-driver-worker";
+      executable = "io-driver-probe";
+      owner = "io-driver-supervisor";
+      autostart = false;
+      health = "optional";
+      dependencies = [
+        "io-driver-supervisor";
+      ];
+    };
+  ];
+  grants = [
+    {
+      name = "io-driver-worker-executable";
+      capabilityKind = "executable";
+      source = "io-driver-supervisor";
+      target = "io-driver-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "probe-device";
+      capabilityKind = "device";
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "probe-mmio";
+      capabilityKind = "mmioRegion";
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "probe-irq";
+      capabilityKind = "interruptSource";
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "probe-dma";
+      capabilityKind = "dmaAccount";
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "io-driver-supervisor";
+      grant = "probe-irq";
+      slot = 3;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "io-driver-supervisor";
+      grant = "probe-dma";
+      slot = 4;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "io-driver-worker";
+      grant = "probe-device";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-driver-worker";
+      grant = "probe-mmio";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-driver-worker";
+      grant = "probe-irq";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-driver-worker";
+      grant = "probe-dma";
+      slot = 3;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [
+    {
+      holder = "io-driver-supervisor";
+      grant = "probe-device";
+    };
+    {
+      holder = "io-driver-supervisor";
+      grant = "probe-mmio";
+    };
+  ];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      bufferLoans = 0;
+      dmaMappings = 1;
+      dmaPages = 2;
+      holder = "io-driver-worker";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 0;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [];
+    restarts = [
+      {
+        attempts = 1;
+        backoffFactor = 256;
+        backoffNs = 0;
+        causes = [
+          "fault";
+        ];
+        instance = "io-driver-worker";
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+    ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

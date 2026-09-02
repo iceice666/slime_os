@@ -51,6 +51,7 @@
       autostart = false;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-fabric-call-worker";
@@ -390,6 +391,7 @@
     };
   ];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/parameter-call.zti";
     "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";

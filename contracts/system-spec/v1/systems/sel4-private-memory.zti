@@ -1,0 +1,98 @@
+{
+  formatVersion = 1;
+  name = "sel4-private-memory";
+  generation = 40;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "private-memory";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "private-heap-probe";
+    "private-memory-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "private-heap-both";
+      executable = "private-heap-probe";
+      bufferBytePages = 1;
+      bufferCount = 1;
+      mappingCount = 1;
+      privatePageQuota = 24;
+    };
+    {
+      name = "private-heap-denied";
+      executable = "private-heap-probe";
+    };
+    {
+      name = "private-heap-granted";
+      executable = "private-heap-probe";
+      privatePageQuota = 24;
+    };
+    {
+      name = "private-memory-denied";
+      executable = "private-memory-probe";
+    };
+    {
+      name = "private-memory-granted";
+      executable = "private-memory-probe";
+      privatePageQuota = 3;
+    };
+  ];
+  grants = [
+    {
+      name = "both-planes-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "private-heap-both";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "private-heap-both";
+      grant = "both-planes-shared-buffer-factory";
+      slot = 1;
+      reason = "encodedLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

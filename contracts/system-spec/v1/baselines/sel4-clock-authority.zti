@@ -1,0 +1,192 @@
+{
+  bootAction = "clock-authority";
+  bootstrapInstance = "init";
+  clockAuthority = [
+    {
+      holder = "clock-monotonic";
+      monotonicRead = true;
+      timerUse = false;
+      simulatedRead = false;
+      simulatedAdvance = false;
+      timerQuota = 0;
+    };
+    {
+      holder = "clock-timer";
+      monotonicRead = false;
+      timerUse = true;
+      simulatedRead = false;
+      simulatedAdvance = false;
+      timerQuota = 2;
+      timerNotification = "clock-timer-expiry";
+      timerBadgeBit = 9;
+    };
+    {
+      holder = "clock-simulated-reader";
+      monotonicRead = false;
+      timerUse = false;
+      simulatedRead = true;
+      simulatedAdvance = false;
+      timerQuota = 0;
+    };
+    {
+      holder = "clock-simulated-advancer";
+      monotonicRead = false;
+      timerUse = false;
+      simulatedRead = false;
+      simulatedAdvance = true;
+      timerQuota = 0;
+    };
+  ];
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "clock-authority-probe";
+      object = "sha256:clock-authority-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 41;
+  grants = [];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "clock-monotonic";
+      "clock-timer";
+      "clock-simulated-reader";
+      "clock-simulated-advancer";
+      "clock-denied";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-monotonic";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-timer";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-simulated-reader";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-simulated-advancer";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-denied";
+      owner = "root";
+    };
+  ];
+  interfaceSchemas = [];
+  mintedBindings = [];
+  notificationBindings = [
+    {
+      grant = "clock-timer-expiry";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "clock-simulated-reader-ready";
+      holder = "clock-simulated-reader";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "clock-simulated-reader-ready";
+      holder = "clock-simulated-advancer";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "clock-timer-expiry";
+      holder = "clock-timer";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  notificationGrants = [
+    {
+      name = "clock-simulated-reader-ready";
+      source = "clock-simulated-reader";
+      target = "clock-simulated-advancer";
+    };
+    {
+      name = "clock-timer-expiry";
+      source = "init";
+      target = "clock-timer";
+    };
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:clock-authority-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "clock-authority";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

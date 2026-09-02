@@ -37,6 +37,7 @@
       workerPriority = 100;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-sample-lender";
@@ -165,6 +166,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

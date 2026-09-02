@@ -389,8 +389,20 @@ SystemRecordingEntry :: type {
 -- generation's, and a system that composes the component differently declares
 -- its own. Absent means the component spec's value, so a plane that changes
 -- nothing declares nothing.
+-- `executableName` renames the emitted executable when a composition's own
+-- executable identity differs from the component spec that describes it. The
+-- corpus's convention is that a `sel4-`-prefixed binary implements the
+-- unprefixed spec identity — `generation-manager` names
+-- `sel4-generation-manager`, `filesystem-service` names
+-- `sel4-filesystem-service` — and two compositions name the *binary* rather
+-- than the spec in their `Executable.name` and `Instance.executable` fields.
+-- Only one spec may claim one implementation binary, so a second spec under
+-- the binary's own name is not available; the composition states the emitted
+-- name instead. Absent means the component's own name, which every other
+-- composition uses.
 Placement :: type {
   component : Text;
+  executableName? : Text;
   owner? : Text;
   autostart? : Bool;
   health? : Text;
@@ -398,6 +410,51 @@ Placement :: type {
   dependencies? : List Text;
   spawnBudget? : Int;
   stackBytes? : Int;
+  bufferBytePages? : Int;
+  bufferCount? : Int;
+  mappingCount? : Int;
+  loanCount? : Int;
+  privatePageQuota? : Int;
+  priority? : Int;
+  extraThreads? : Int;
+  workerPriority? : Int;
+};
+
+-- One concrete instance, when a composition needs to say more than "one
+-- instance per admitted component, named for it".
+--
+-- That default is what CP1 assumed and what 22 compositions satisfy, but it is
+-- not general: `contracts/generation-manifest/v1`'s `Instance.executable` has
+-- always been a separate field from `Instance.name`, and the corpus uses it.
+-- `clock-authority-probe` runs as five instances — `clock-monotonic`,
+-- `clock-timer`, `clock-simulated-reader`, `clock-simulated-advancer`,
+-- `clock-denied` — each granted different clock authority, and
+-- `supervision-child` runs as 26. One executable, many instances, and the
+-- authority tables key on the *instance*, so the instance is the thing a
+-- composition must be able to name.
+--
+-- `executable` names an admitted component; several instances may share one.
+-- The override fields are the instance-level half of `Placement`: `owner`,
+-- `autostart`, `health`, `dependencies`, the thread/priority fields, and the
+-- five quotas are per instance, while `role`, `spawnBudget`, and `stackBytes`
+-- stay on `Placement` because the manifest carries them on `Executable`, which
+-- is one record per distinct binary however many instances run it.
+--
+-- `dependencies` matters most here: it names concrete instances in this graph,
+-- and a multi-instance composition routinely has one instance depend on
+-- another running the same executable (`lifecycle-worker` on
+-- `lifecycle-supervisor`). No component spec can state that.
+--
+-- An empty `instances` list means the default: one instance per admitted
+-- component, named for it, taking its `Placement`. A composition that declares
+-- instances declares all of them.
+SystemInstance :: type {
+  name : Text;
+  executable : Text;
+  owner? : Text;
+  autostart? : Bool;
+  health? : Text;
+  dependencies? : List Text;
   bufferBytePages? : Int;
   bufferCount? : Int;
   mappingCount? : Int;
@@ -467,6 +524,7 @@ SystemSpec :: type {
   bootAttempts : Int;
   components : List Text;
   placements : List Placement;
+  instances : List SystemInstance;
   grants : List SystemGrant;
   slotPins : List SlotPin;
   extraBindings : List ExtraBinding;
@@ -487,6 +545,14 @@ SystemSpec :: type {
   -- refuses a graph without the object and an object without the graph, so its
   -- presence *is* derived.
   sharedBufferBudgetObject : Bool;
+  -- Whether the generation carries a `boot-layout` resource object.
+  --
+  -- Every composition but one does, and that one is why this is declared:
+  -- `sel4-stress.zti` carries no boot layout at all. Its graph is `init` plus
+  -- 22 instances of one child spawned by name, so nothing reads a layout row,
+  -- and asserting the object universally would add a payload that generation
+  -- has never encoded.
+  bootLayoutObject : Bool;
   interfaceSchemas : List Text;
   state : List SystemState;
   notifications : List SystemNotification;
@@ -555,6 +621,7 @@ FromData @SystemFabricProfile :: derive
 FromData @SystemFabricGraph :: derive
 FromData @SystemBootProfile :: derive
 FromData @Placement :: derive
+FromData @SystemInstance :: derive
 FromData @ExtraBinding :: derive
 FromData @SystemMintedBinding :: derive
 FromData @SystemSpec :: derive
@@ -566,6 +633,7 @@ identityDomain :: Text = "slime-system-spec-v1:";
 -- ceiling; the rest mirror the manifest limits the builder already enforces, so
 -- a system spec cannot describe a generation the builder would refuse.
 maxComponents :: Int = 48;
+maxInstances :: Int = 64;
 maxSourceBytes :: Int = 262144;
 maxNameBytes :: Int = 64;
 maxTextBytes :: Int = 256;
@@ -616,6 +684,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   SystemFabricGraph =;
   SystemBootProfile =;
   Placement =;
+  SystemInstance =;
   ExtraBinding =;
   SystemMintedBinding =;
   SystemClockAuthority =;
@@ -638,6 +707,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   formatVersion =;
   identityDomain =;
   maxComponents =;
+  maxInstances =;
   maxSourceBytes =;
   maxNameBytes =;
   maxTextBytes =;

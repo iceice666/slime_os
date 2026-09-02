@@ -28,6 +28,7 @@
       ];
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-powerbox-chooser";
@@ -128,6 +129,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

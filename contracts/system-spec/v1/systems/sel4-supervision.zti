@@ -25,6 +25,7 @@
       ];
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-supervision-child";
@@ -69,6 +70,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

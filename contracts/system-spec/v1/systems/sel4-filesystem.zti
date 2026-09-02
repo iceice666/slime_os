@@ -1,0 +1,403 @@
+{
+  formatVersion = 1;
+  name = "sel4-filesystem";
+  generation = 29;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "filesystem";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "directory-probe";
+    "filesystem-service";
+    "init";
+    "virtio-blk-driver";
+  ];
+  placements = [
+    {
+      component = "filesystem-service";
+      executableName = "sel4-filesystem-service";
+    };
+    {
+      component = "init";
+      spawnBudget = 2;
+    };
+  ];
+  instances = [
+    {
+      name = "directory-probe";
+      executable = "directory-probe";
+      owner = "init";
+      autostart = false;
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sel4-filesystem-service";
+      executable = "sel4-filesystem-service";
+      owner = "init";
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+    };
+    {
+      name = "virtio-blk-driver";
+      executable = "virtio-blk-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+  ];
+  grants = [
+    {
+      name = "init-sel4-filesystem-service";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-filesystem-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-directory-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "directory-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "filesystem-init-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "filesystem-service-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "sel4-filesystem-service";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = true;
+    };
+    {
+      name = "filesystem-block-peer";
+      capabilityKind = "endpoint";
+      source = "sel4-filesystem-service";
+      target = "virtio-blk-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "filesystem-block-device";
+      capabilityKind = "device";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "filesystem-block-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "filesystem-block-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "filesystem-block-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+    {
+      name = "filesystem-service-a-namespace";
+      capabilityKind = "directory";
+      source = "sel4-filesystem-service";
+      target = "sel4-filesystem-service";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      transferable = false;
+    };
+    {
+      name = "directory-probe-namespace";
+      capabilityKind = "directory";
+      source = "directory-probe";
+      target = "directory-probe";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      transferable = true;
+    };
+    {
+      name = "filesystem-rpc";
+      capabilityKind = "endpoint";
+      source = "directory-probe";
+      target = "sel4-filesystem-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "filesystem-service-ready";
+      capabilityKind = "endpoint";
+      source = "sel4-filesystem-service";
+      target = "init";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-directory-probe";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sel4-filesystem-service";
+      slot = 2;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "filesystem-service-ready";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "filesystem-init-buffer-factory";
+      slot = 4;
+      reason = "bootLayout";
+    };
+    {
+      holder = "sel4-filesystem-service";
+      grant = "filesystem-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-filesystem-service";
+      grant = "filesystem-service-a-namespace";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-filesystem-service";
+      grant = "filesystem-service-ready";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-filesystem-service";
+      grant = "filesystem-service-buffer-factory";
+      slot = 4;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-filesystem-service";
+      grant = "filesystem-block-peer";
+      slot = 8;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "directory-probe";
+      grant = "filesystem-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "directory-probe";
+      grant = "directory-probe-namespace";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "filesystem-block-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "filesystem-block-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "filesystem-block-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "filesystem-block-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "filesystem-block-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [
+    {
+      component = "filesystem-service";
+      bytes = 131072;
+    };
+  ];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "filesystem-block-request-ready";
+      source = "sel4-filesystem-service";
+      target = "virtio-blk-driver";
+    };
+    {
+      name = "filesystem-block-completion-ready";
+      source = "virtio-blk-driver";
+      target = "sel4-filesystem-service";
+    };
+    {
+      name = "filesystem-block-state-changed";
+      source = "virtio-blk-driver";
+      target = "sel4-filesystem-service";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "filesystem-block-request-ready";
+      holder = "sel4-filesystem-service";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "filesystem-block-request-ready";
+      holder = "virtio-blk-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "filesystem-block-completion-ready";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "filesystem-block-completion-ready";
+      holder = "sel4-filesystem-service";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "filesystem-block-state-changed";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "filesystem-block-state-changed";
+      holder = "sel4-filesystem-service";
+      role = "wait";
+      slot = 2;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      bufferLoans = 4;
+      dmaMappings = 3;
+      dmaPages = 12;
+      holder = "virtio-blk-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 8;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [
+    {
+      device = 0;
+      holder = "sel4-filesystem-service";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      ring = 0;
+      sectorLimit = 2048;
+    };
+  ];
+  blockRingAuthorityObject = true;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

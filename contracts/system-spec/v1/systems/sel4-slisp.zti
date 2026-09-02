@@ -17,6 +17,7 @@
       stackBytes = 16384;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "slisp-input";
@@ -43,6 +44,7 @@
   defaultImageBytes = 131072;
   imageSizes = [];
   sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

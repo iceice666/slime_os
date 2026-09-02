@@ -70,28 +70,46 @@ INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interf
 # from here.
 DERIVED_GENERATION_FIXTURES = {
     "reference": "valid.zti",
-    "sel4-channel": "sel4-channel.zti",
     "sel4": "sel4.zti",
     "sel4-boot": "sel4-boot.zti",
     "sel4-call": "sel4-call.zti",
+    "sel4-channel": "sel4-channel.zti",
+    "sel4-clock-authority": "sel4-clock-authority.zti",
     "sel4-crossing": "sel4-crossing.zti",
     "sel4-demo": "sel4-demo.zti",
+    "sel4-directory": "sel4-directory.zti",
+    "sel4-filesystem": "sel4-filesystem.zti",
+    "sel4-generation": "sel4-generation.zti",
+    "sel4-input": "sel4-input.zti",
+    "sel4-io-block": "sel4-io-block.zti",
+    "sel4-io-driver-authority": "sel4-io-driver-authority.zti",
     "sel4-io-link": "sel4-io-link.zti",
     "sel4-io-network": "sel4-io-network.zti",
     "sel4-io-queue": "sel4-io-queue.zti",
+    "sel4-lifecycle-restart": "sel4-lifecycle-restart.zti",
     "sel4-loan": "sel4-loan.zti",
     "sel4-operation": "sel4-operation.zti",
     "sel4-powerbox": "sel4-powerbox.zti",
+    "sel4-private-memory": "sel4-private-memory.zti",
     "sel4-qos": "sel4-qos.zti",
     "sel4-reclamation": "sel4-reclamation.zti",
+    "sel4-recovery": "sel4-recovery.zti",
+    "sel4-replay": "sel4-replay.zti",
     "sel4-robot-runtime": "sel4-robot-runtime.zti",
+    "sel4-rollback": "sel4-rollback.zti",
     "sel4-sample": "sel4-sample.zti",
+    "sel4-scheduling-class": "sel4-scheduling-class.zti",
     "sel4-slisp": "sel4-slisp.zti",
     "sel4-spawn": "sel4-spawn.zti",
+    "sel4-storage": "sel4-storage.zti",
+    "sel4-store": "sel4-store.zti",
     "sel4-stream": "sel4-stream.zti",
+    "sel4-stress": "sel4-stress.zti",
     "sel4-supervision": "sel4-supervision.zti",
     "sel4-traffic": "sel4-traffic.zti",
+    "sel4-transfer": "sel4-transfer.zti",
     "sel4-visibility": "sel4-visibility.zti",
+    "sel4-wait-set": "sel4-wait-set.zti",
 }
 
 def derived_manifest_path(fixture: str) -> Path:
@@ -134,6 +152,8 @@ _SPEC_FIELDS = {
     "defaultImageBytes",
     "imageSizes",
     "sharedBufferBudgetObject",
+    "bootLayoutObject",
+    "instances",
     "interfaceSchemas",
     "state",
     "notifications",
@@ -265,24 +285,70 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     # weaker version here would be a second authority on it, and a wrong one.
 
     placements_by_component = {entry["component"]: entry for entry in spec["placements"]}
-    if spec["bootstrapInstance"] not in admitted:
-        _fail(f"bootstrapInstance: {spec['bootstrapInstance']!r} is not an admitted component")
-    bootstrap_role = placements_by_component.get(spec["bootstrapInstance"], {}).get(
-        "role", components[spec["bootstrapInstance"]]["componentType"]
+    # The emitted executable identity per component: its own name unless this
+    # composition renames it, which two compositions do because their
+    # executable is named for the implementation binary rather than the spec.
+    emitted = {
+        name: placements_by_component.get(name, {}).get("executableName", name)
+        for name in declared
+    }
+    if len(set(emitted.values())) != len(emitted):
+        _fail("placements: two components emit the same executable name")
+    emitted_names = set(emitted.values())
+    # `admitted` is the component (executable) set; `live` is the instance set
+    # grants, notifications, slot pins, and every policy table name. They are
+    # equal only when a composition declares no explicit instances.
+    declared_instances = spec["instances"]
+    if len(declared_instances) > contract.MAX_INSTANCES:
+        _fail("instances: exceeds bound")
+    instance_owners: dict[str, str] = {}
+    for entry in declared_instances:
+        if entry["name"] in instance_owners:
+            _fail(f"instances: duplicate instance {entry['name']!r}")
+        if entry["executable"] not in emitted_names:
+            _fail(
+                f"instances: {entry['name']}: executable {entry['executable']!r} is not an "
+                "admitted component"
+            )
+        if "health" in entry and entry["health"] not in ("required", "optional"):
+            _fail(f"instances: {entry['name']}: unknown health {entry['health']!r}")
+        instance_owners[entry["name"]] = entry["executable"]
+    if declared_instances:
+        uncovered = sorted(emitted_names - set(instance_owners.values()))
+        if uncovered:
+            _fail(
+                f"instances: executables {uncovered} are admitted but no instance runs them; "
+                "an explicit instance list declares every instance"
+            )
+    live = instance_names(spec)
+    component_of = {value: key for key, value in emitted.items()}
+
+    if spec["bootstrapInstance"] not in live:
+        _fail(f"bootstrapInstance: {spec['bootstrapInstance']!r} is not a declared instance")
+    bootstrap_executable = instance_owners.get(
+        spec["bootstrapInstance"], spec["bootstrapInstance"]
+    )
+    bootstrap_component = component_of.get(bootstrap_executable, bootstrap_executable)
+    bootstrap_role = placements_by_component.get(bootstrap_component, {}).get(
+        "role", components[bootstrap_component]["componentType"]
     )
     if bootstrap_role != "init":
         _fail(f"bootstrapInstance: {spec['bootstrapInstance']!r} is not an init component")
 
-    # A dependency must be admitted too, or the derived instance graph names an
-    # instance the generation does not contain. A placement may override the
-    # component spec's own list, which is the reference generation's answer:
-    # `slisp` depends on `console` where both are composed and on nothing in
-    # the composition that admits only `slisp`.
-    for name in declared:
-        placement = placements_by_component.get(name, {})
-        for dependency in placement.get("dependencies", components[name]["dependencies"]):
-            if dependency not in admitted:
-                _fail(f"{name}: depends on {dependency!r}, which this system does not admit")
+    # A dependency must be a live instance, or the derived graph names an
+    # instance the generation does not contain. An instance record or a
+    # placement may override the component spec's own list, which is the
+    # reference generation's answer: `slisp` depends on `console` where both are
+    # composed and on nothing in the composition that admits only `slisp`, and
+    # `lifecycle-worker` depends on `lifecycle-supervisor`, another instance of
+    # its own executable.
+    for entry in resolved_instances(spec):
+        component_name = component_of.get(entry["executable"], entry["executable"])
+        for dependency in entry.get("dependencies", components[component_name]["dependencies"]):
+            if dependency not in live:
+                _fail(
+                    f"{entry['name']}: depends on {dependency!r}, which this system does not admit"
+                )
 
     placements = spec["placements"]
     seen_placements = [entry["component"] for entry in placements]
@@ -305,9 +371,9 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
         grant_names.add(grant["name"])
         if grant["capabilityKind"] not in _builder.CAPABILITY_KIND:
             _fail(f"grants: {grant['name']}: unknown capability kind {grant['capabilityKind']!r}")
-        if grant["source"] not in admitted:
+        if grant["source"] not in live:
             _fail(f"grants: {grant['name']}: source {grant['source']!r} is not admitted")
-        if grant["target"] not in admitted:
+        if grant["target"] not in live and grant["target"] not in admitted:
             _fail(f"grants: {grant['name']}: target {grant['target']!r} is not admitted")
         # The rights vocabulary and the per-kind mask are the builder's, checked
         # here so a malformed grant is refused before a manifest exists rather
@@ -370,7 +436,7 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
         # be real; which instances legitimately hold which grants beyond that
         # is exactly the declared fact a slot pin (and, for the ordinary case,
         # `derive_bindings`) exists to state.
-        if grant is None or pin["holder"] not in admitted:
+        if grant is None or pin["holder"] not in live:
             _fail(
                 f"slotPins: {pin['holder']}/{pin['grant']} pins a slot for a binding the "
                 "grant table does not produce"
@@ -401,9 +467,9 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     extra_keys = [(entry["holder"], entry["grant"]) for entry in spec["extraBindings"]]
     if len(set(extra_keys)) != len(extra_keys):
         _fail("extraBindings: duplicate (holder, grant)")
-    structural = derive_bindings(spec["grants"], admitted)
+    structural = derive_bindings(spec["grants"], live)
     for entry in spec["extraBindings"]:
-        if entry["grant"] not in grants_by_name or entry["holder"] not in admitted:
+        if entry["grant"] not in grants_by_name or entry["holder"] not in live:
             _fail(
                 f"extraBindings: {entry['holder']}/{entry['grant']} names no grant this "
                 "system declares for an admitted instance"
@@ -424,7 +490,7 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
         _fail("mintedBindings: duplicate name")
     for entry in spec["mintedBindings"]:
         for role in ("owner", "holder"):
-            if entry[role] not in admitted:
+            if entry[role] not in live:
                 _fail(f"mintedBindings: {entry['name']}: {role} is not admitted")
         if entry["capabilityKind"] not in _builder.CAPABILITY_KIND:
             _fail(
@@ -503,10 +569,11 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
         _fail("imageSizes: duplicate component")
 
     _validate_bounds(spec, contract)
-    _validate_notifications(spec, admitted)
-    _validate_interfaces(spec, components, admitted, contract)
-    _validate_boot_profiles(spec, admitted)
-    _validate_authority_sections(spec, admitted)
+    # These four name instances, not components.
+    _validate_notifications(spec, live)
+    _validate_interfaces(spec, components, admitted, live, contract)
+    _validate_boot_profiles(spec, live)
+    _validate_authority_sections(spec, live)
 
 
 def _validate_bounds(spec: dict, contract: ModuleType) -> None:
@@ -651,7 +718,11 @@ def _validate_notifications(spec: dict, admitted: set[str]) -> None:
 
 
 def _validate_interfaces(
-    spec: dict, components: dict[str, dict], admitted: set[str], contract: ModuleType
+    spec: dict,
+    components: dict[str, dict],
+    admitted: set[str],
+    live: set[str],
+    contract: ModuleType,
 ) -> None:
     if len(spec["interfaceSchemas"]) > contract.MAX_INTERFACE_SCHEMAS:
         _fail("interfaceSchemas: exceeds bound")
@@ -661,6 +732,18 @@ def _validate_interfaces(
         if not path.is_relative_to(INTERFACE_SCHEMA_ROOT) or not path.is_file():
             _fail(f"interfaceSchemas: {entry!r} is no declared interface schema")
         catalogue[path.stem] = entry
+
+    # A fabric participant is an instance; the component spec whose declared
+    # interfaces its role is checked against is the executable that instance
+    # runs.
+    component_by_executable = {
+        entry.get("executableName", entry["component"]): entry["component"]
+        for entry in spec["placements"]
+    }
+    executable_of = {
+        entry["name"]: component_by_executable.get(entry["executable"], entry["executable"])
+        for entry in resolved_instances(spec)
+    }
 
     graph = spec.get("fabricGraph")
     if graph is None:
@@ -673,7 +756,7 @@ def _validate_interfaces(
                 )
         return
 
-    if graph["fabricComponent"] not in admitted:
+    if graph["fabricComponent"] not in live:
         _fail("fabricGraph: fabricComponent is not admitted")
     names = [route["name"] for route in graph["routes"]]
     if len(set(names)) != len(names):
@@ -688,17 +771,18 @@ def _validate_interfaces(
                 "which this system does not admit"
             )
         for participant in route["participants"]:
-            if participant["component"] not in admitted:
+            if participant["component"] not in live:
                 _fail(f"fabricGraph: {route['name']}: participant is not admitted")
             for hop in participant["interposition"]:
-                if hop not in admitted:
+                if hop not in live:
                     _fail(f"fabricGraph: {route['name']}: interposition hop {hop!r} is not admitted")
             # The route role a system gives a component and the role its own
             # spec declares are the same fact; CP0's gate checks it against
             # `valid.zti`, and this checks it against the system that produces a
             # manifest at all.
             tag = _DIRECTION_TAGS[participant["direction"]]
-            entries = components[participant["component"]]["interfaces"]
+            owner = executable_of[participant["component"]]
+            entries = components[owner]["interfaces"]
             if not any(
                 item["name"] == route["name"]
                 and item["tag"] == tag
@@ -716,7 +800,7 @@ def _validate_interfaces(
             if not interposition["chain"]:
                 _fail(f"fabricGraph: profile {profile['name']} declares an empty chain")
             for hop in interposition["chain"]:
-                if hop not in admitted:
+                if hop not in live:
                     _fail(f"fabricGraph: profile {profile['name']}: hop {hop!r} is not admitted")
         for control in profile["streamControls"]:
             if control not in {grant["name"] for grant in spec["grants"]}:
@@ -876,15 +960,44 @@ def derive_bindings(
     return bindings
 
 
+def resolved_instances(spec: dict) -> list[dict]:
+    """Every concrete instance this system declares, in canonical order.
+
+    A composition that declares no `instances` gets the default: one instance
+    per admitted component, named for it, carrying that component's
+    `Placement`. That is what 22 of the corpus's compositions mean and what CP1
+    assumed universally. A composition that declares instances declares all of
+    them, and may run one executable under several names.
+    """
+    declared = spec["instances"]
+    if declared:
+        return sorted(declared, key=lambda entry: entry["name"])
+    placements = {entry["component"]: entry for entry in spec["placements"]}
+    return [
+        dict(
+            placements.get(name, {}),
+            name=placements.get(name, {}).get("executableName", name),
+            executable=placements.get(name, {}).get("executableName", name),
+        )
+        for name in spec["components"]
+    ]
+
+
+def instance_names(spec: dict) -> set[str]:
+    """The instance identities grants, notifications, and policy tables name."""
+    return {entry["name"] for entry in resolved_instances(spec)}
+
+
 def derive_manifest(system: CompiledSystem) -> dict:
     """The `contracts/generation-manifest/v1` manifest this system spec describes."""
     spec, components = system.spec, system.components
-    admitted = set(spec["components"])
     placements = {entry["component"]: entry for entry in spec["placements"]}
     commands = {entry["component"]: entry["commands"] for entry in spec["commandBindings"]}
     sizes = {entry["component"]: entry["bytes"] for entry in spec["imageSizes"]}
+    # Grants, pins, and extra bindings all name *instances*, which is not the
+    # component set once one executable runs under several names.
     bindings = derive_bindings(
-        spec["grants"], admitted, spec["slotPins"], spec["extraBindings"]
+        spec["grants"], instance_names(spec), spec["slotPins"], spec["extraBindings"]
     )
     pins = {(pin["holder"], pin["grant"]): pin for pin in spec["slotPins"]}
 
@@ -893,15 +1006,27 @@ def derive_manifest(system: CompiledSystem) -> dict:
     instances = []
     budget = []
     private_budget = []
+    # `Executable` and `Object` are one record per distinct binary, however many
+    # instances run it, so they are derived from `components` while the
+    # instances below are derived from `resolved_instances`.
+    # The emitted executable identity, which is the component's own name unless
+    # this composition renames it. Instances reference the emitted name, so the
+    # map is built before either loop.
+    emitted = {
+        name: placements.get(name, {}).get("executableName", name)
+        for name in spec["components"]
+    }
+    component_of = {value: key for key, value in emitted.items()}
     for name in spec["components"]:
         component = components[name]
         resource = component["runtime"]["resource"]
         placement = placements.get(name, {})
         role = placement.get("role", component["componentType"])
+        emitted_name = emitted[name]
         executable = {
             "commandProfile": commands.get(name, []),
-            "name": name,
-            "object": f"sha256:{name}",
+            "name": emitted_name,
+            "object": f"sha256:{emitted_name}",
             "role": role,
             # How many children this composition launches, which varies by
             # system: `init` is 1 under the channel plane and 18 under the
@@ -919,13 +1044,19 @@ def derive_manifest(system: CompiledSystem) -> dict:
         executables.append(executable)
         objects.append(
             {
-                "id": f"sha256:{name}",
+                "id": f"sha256:{emitted_name}",
                 "kind": "bootstrap" if role == "init" else "component",
                 "size": sizes.get(name, spec["defaultImageBytes"]),
             }
         )
+
+    for declared in resolved_instances(spec):
+        name = declared["name"]
+        executable_name = declared["executable"]
+        component = components[component_of.get(executable_name, executable_name)]
+        resource = component["runtime"]["resource"]
         instance = {
-            "autostart": placement.get("autostart", True),
+            "autostart": declared.get("autostart", True),
             "bindings": [
                 {
                     "grant": grant,
@@ -936,21 +1067,22 @@ def derive_manifest(system: CompiledSystem) -> dict:
                 else {"grant": grant}
                 for grant in sorted(bindings[name])
             ],
-            "dependencies": placement.get("dependencies", component["dependencies"]),
-            "executable": name,
-            "health": placement.get("health", component["health"]),
+            "dependencies": declared.get("dependencies", component["dependencies"]),
+            "executable": executable_name,
+            "health": declared.get("health", component["health"]),
             "name": name,
-            "owner": placement.get("owner", component["owner"]),
+            "owner": declared.get("owner", component["owner"]),
         }
         for field in ("priority", "extraThreads", "workerPriority"):
-            if field in placement:
-                instance[field] = placement[field]
+            if field in declared:
+                instance[field] = declared[field]
         instances.append(instance)
         # Each ceiling is the component spec's unless this composition declares
         # its own: a quota is how much of *this* generation's budget the
-        # instance may hold, and the corpus disagrees per plane.
+        # instance may hold, and the corpus disagrees per plane. Keyed by
+        # instance, because that is what the authenticated budget authenticates.
         quota = {
-            field: placement.get(field, resource[field])
+            field: declared.get(field, resource[field])
             for field in (
                 "bufferBytePages",
                 "bufferCount",
@@ -1000,7 +1132,8 @@ def derive_manifest(system: CompiledSystem) -> dict:
         objects.append({"id": "shared-buffer-budget", "kind": "resource", "size": 4096})
     if spec.get("fabricGraph") is not None:
         objects.append({"id": "fabric-graph", "kind": "resource", "size": 4096})
-    objects.append({"id": "boot-layout", "kind": "resource", "size": 4096})
+    if spec["bootLayoutObject"]:
+        objects.append({"id": "boot-layout", "kind": "resource", "size": 4096})
     # C10.4: strictly derived, unlike `shared-buffer-budget` above. The builder
     # refuses a `privateMemoryBudget` without this object and encodes nothing
     # from an object with no holders, so there is nothing for a spec to choose:
@@ -1063,10 +1196,10 @@ def derive_manifest(system: CompiledSystem) -> dict:
         ],
         "health": {
             "bootAttempts": spec["bootAttempts"],
+            # Instance identities, not component names: the health policy names
+            # the instances that must be live.
             "requiredInstances": sorted(
-                name
-                for name in spec["components"]
-                if placements.get(name, {}).get("health", components[name]["health"]) == "required"
+                entry["name"] for entry in instances if entry["health"] == "required"
             ),
         },
         "instances": instances,

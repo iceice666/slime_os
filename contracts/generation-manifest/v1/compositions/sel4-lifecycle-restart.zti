@@ -1,18 +1,6 @@
 {
   bootAction = "lifecycle-restart";
   bootstrapInstance = "init";
-  clockAuthority = [
-    {
-      holder = "lifecycle-supervisor";
-      monotonicRead = true;
-      timerUse = true;
-      simulatedRead = false;
-      simulatedAdvance = false;
-      timerQuota = 2;
-      timerNotification = "lifecycle-supervisor-tick";
-      timerBadgeBit = 9;
-    };
-  ];
   executables = [
     {
       commandProfile = [];
@@ -48,9 +36,9 @@
     bootAttempts = 3;
     requiredInstances = [
       "init";
-      "lifecycle-supervisor";
-      "lifecycle-graph";
       "lifecycle-denied";
+      "lifecycle-graph";
+      "lifecycle-supervisor";
     ];
   };
   instances = [
@@ -61,6 +49,24 @@
       executable = "init";
       health = "required";
       name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "lifecycle-restart-probe";
+      health = "required";
+      name = "lifecycle-denied";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "lifecycle-restart-probe";
+      health = "required";
+      name = "lifecycle-graph";
       owner = "root";
     };
     {
@@ -79,24 +85,6 @@
       owner = "root";
     };
     {
-      autostart = true;
-      bindings = [];
-      dependencies = [];
-      executable = "lifecycle-restart-probe";
-      health = "required";
-      name = "lifecycle-graph";
-      owner = "root";
-    };
-    {
-      autostart = true;
-      bindings = [];
-      dependencies = [];
-      executable = "lifecycle-restart-probe";
-      health = "required";
-      name = "lifecycle-denied";
-      owner = "root";
-    };
-    {
       autostart = false;
       bindings = [];
       dependencies = [
@@ -108,112 +96,9 @@
       owner = "lifecycle-supervisor";
     };
   ];
-  interfaceSchemas = [];
-  lifecyclePolicy = {
-    initialState = "Initialize";
-    terminalState = "Error";
-    transitions = [
-      {
-        from = "Initialize";
-        to = "Running";
-      };
-      {
-        from = "Running";
-        to = "Ready";
-      };
-      {
-        from = "Running";
-        to = "Stop";
-      };
-      {
-        from = "Running";
-        to = "Error";
-      };
-      {
-        from = "Ready";
-        to = "Stop";
-      };
-    ];
-    restarts = [
-      {
-        instance = "lifecycle-worker";
-        attempts = 3;
-        causes = [
-          "exit";
-          "fault";
-          "unhealthy";
-        ];
-        backoffNs = 200000;
-        backoffFactor = 512;
-      };
-    ];
-    dependencies = [
-      {
-        instance = "lifecycle-worker";
-        dependency = "lifecycle-supervisor";
-        requiredState = "Running";
-      };
-    ];
-    parameters = [
-      {
-        holder = "lifecycle-supervisor";
-        subject = "lifecycle-supervisor";
-        read = true;
-        write = true;
-      };
-      {
-        holder = "lifecycle-supervisor";
-        subject = "lifecycle-worker";
-        read = true;
-        write = true;
-      };
-      {
-        holder = "lifecycle-worker";
-        subject = "lifecycle-worker";
-        read = true;
-        write = false;
-      };
-      {
-        holder = "lifecycle-graph";
-        subject = "lifecycle-graph";
-        read = false;
-        write = true;
-      };
-    ];
-  };
   mintedBindings = [];
-  notificationBindings = [
-    {
-      grant = "lifecycle-supervisor-tick";
-      holder = "init";
-      role = "signal";
-      slot = 0;
-    };
-    {
-      grant = "lifecycle-supervisor-tick";
-      holder = "lifecycle-supervisor";
-      role = "wait";
-      slot = 0;
-    };
-  ];
-  notificationGrants = [
-    {
-      name = "lifecycle-supervisor-tick";
-      source = "init";
-      target = "lifecycle-supervisor";
-    };
-  ];
+  interfaceSchemas = [];
   objects = [
-    {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
-    };
-    {
-      id = "sha256:lifecycle-restart-probe";
-      kind = "component";
-      size = 65536;
-    };
     {
       id = "boot-layout";
       kind = "resource";
@@ -239,11 +124,57 @@
       kind = "resource";
       size = 4096;
     };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:lifecycle-restart-probe";
+      kind = "component";
+      size = 65536;
+    };
   ];
   privateMemoryBudget = [
     {
       holder = "lifecycle-worker";
       pageQuota = 4;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  notificationGrants = [
+    {
+      name = "lifecycle-supervisor-tick";
+      source = "init";
+      target = "lifecycle-supervisor";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "lifecycle-supervisor-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "lifecycle-supervisor-tick";
+      holder = "lifecycle-supervisor";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  clockAuthority = [
+    {
+      holder = "lifecycle-supervisor";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "lifecycle-supervisor-tick";
+      timerQuota = 2;
+      timerUse = true;
     };
   ];
   schedulingClass = {
@@ -255,13 +186,82 @@
     ];
     instances = [
       {
-        instance = "lifecycle-worker";
         class = "normal";
+        instance = "lifecycle-worker";
       };
     ];
     promotions = [];
   };
-  sharedBufferBudget = [];
-  state = [];
-  target = "aarch64-sel4-qemu-virt";
+  lifecyclePolicy = {
+    dependencies = [
+      {
+        dependency = "lifecycle-supervisor";
+        instance = "lifecycle-worker";
+        requiredState = "Running";
+      };
+    ];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "lifecycle-supervisor";
+        read = true;
+        subject = "lifecycle-supervisor";
+        write = true;
+      };
+      {
+        holder = "lifecycle-supervisor";
+        read = true;
+        subject = "lifecycle-worker";
+        write = true;
+      };
+      {
+        holder = "lifecycle-worker";
+        read = true;
+        subject = "lifecycle-worker";
+        write = false;
+      };
+      {
+        holder = "lifecycle-graph";
+        read = false;
+        subject = "lifecycle-graph";
+        write = true;
+      };
+    ];
+    restarts = [
+      {
+        attempts = 3;
+        backoffFactor = 512;
+        backoffNs = 200000;
+        causes = [
+          "exit";
+          "fault";
+          "unhealthy";
+        ];
+        instance = "lifecycle-worker";
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Ready";
+      };
+      {
+        from = "Running";
+        to = "Stop";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+      {
+        from = "Ready";
+        to = "Stop";
+      };
+    ];
+  };
 }

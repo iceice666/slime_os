@@ -17,6 +17,7 @@ render :: Text = t.join "" {
   line "FORMAT_VERSION" schema.formatVersion;
   "IDENTITY_DOMAIN = "; t.show schema.identityDomain; ".encode(\"utf-8\")\n";
   line "MAX_COMPONENTS" schema.maxComponents;
+  line "MAX_INSTANCES" schema.maxInstances;
   line "MAX_SOURCE_BYTES" schema.maxSourceBytes;
   line "MAX_NAME_BYTES" schema.maxNameBytes;
   line "MAX_TEXT_BYTES" schema.maxTextBytes;

@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "private-heap-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Holds a C10.4 private heap alongside a shared-buffer grant to prove the two memory planes are accounted separately, including a holder granted neither.";
+  implementation = {
+    provider = "workspace";
+    binary = "private-heap-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the private_memory_check gate boots a generation declaring private-heap-probe";
+    expectedResult = "the private region grows only to its declared quota and the shared-buffer ceiling is unaffected";
+    passFailCriteria = "[init] private memory plane complete";
+    requiredTestEnvironment = "private_memory_check";
+  };
+}

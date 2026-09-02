@@ -26,6 +26,7 @@
       bufferCount = 0;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "io-queue-peer";
@@ -75,6 +76,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [

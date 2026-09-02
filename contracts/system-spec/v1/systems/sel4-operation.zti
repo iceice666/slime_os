@@ -52,6 +52,7 @@
       spawnBudget = 6;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-fabric-service";
@@ -475,6 +476,7 @@
     };
   ];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/navigation-operation.zti";
   ];

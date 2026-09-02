@@ -36,6 +36,7 @@
       mappingCount = 1;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-sample-receiver";
@@ -138,6 +139,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

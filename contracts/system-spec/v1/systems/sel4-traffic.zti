@@ -197,6 +197,7 @@
       spawnBudget = 19;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-fabric-service";
@@ -1332,6 +1333,7 @@
     };
   ];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
     "contracts/interface-schema/v1/interfaces/diagnostics-stream.zti";

@@ -1,0 +1,166 @@
+{
+  formatVersion = 1;
+  name = "sel4-directory";
+  generation = 28;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "directory";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "sel4-directory-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sel4-directory-probe";
+      executable = "sel4-directory-probe";
+      autostart = false;
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "sel4-directory-probe-idle";
+      executable = "sel4-directory-probe";
+      owner = "root";
+      dependencies = [
+        "init";
+      ];
+    };
+  ];
+  grants = [
+    {
+      name = "init-sel4-directory-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-directory-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "directory-probe-root";
+      capabilityKind = "directory";
+      source = "sel4-directory-probe";
+      target = "sel4-directory-probe";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      transferable = false;
+    };
+    {
+      name = "directory-probe-root-idle";
+      capabilityKind = "directory";
+      source = "sel4-directory-probe-idle";
+      target = "sel4-directory-probe-idle";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-directory-probe-run-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sel4-directory-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-directory-probe-idle-token";
+      capabilityKind = "endpoint";
+      source = "sel4-directory-probe-idle";
+      target = "sel4-directory-probe-idle";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sel4-directory-probe";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sel4-directory-probe-run-token";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-directory-probe";
+      grant = "directory-probe-root";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-directory-probe";
+      grant = "sel4-directory-probe-run-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-directory-probe-idle";
+      grant = "directory-probe-root-idle";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-directory-probe-idle";
+      grant = "sel4-directory-probe-idle-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

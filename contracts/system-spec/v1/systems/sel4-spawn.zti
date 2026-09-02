@@ -31,6 +31,7 @@
       ];
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-console";
@@ -275,6 +276,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

@@ -30,6 +30,7 @@
       loanCount = 10;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "io-link-peer";
@@ -144,6 +145,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [

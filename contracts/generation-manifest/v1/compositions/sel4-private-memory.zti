@@ -11,15 +11,15 @@
     };
     {
       commandProfile = [];
-      name = "private-memory-probe";
-      object = "sha256:private-memory-probe";
+      name = "private-heap-probe";
+      object = "sha256:private-heap-probe";
       role = "application";
       spawnBudget = 0;
     };
     {
       commandProfile = [];
-      name = "private-heap-probe";
-      object = "sha256:private-heap-probe";
+      name = "private-memory-probe";
+      object = "sha256:private-memory-probe";
       role = "application";
       spawnBudget = 0;
     };
@@ -56,20 +56,26 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "both-planes-shared-buffer-factory";
+          slot = 1;
+          slotReason = "encodedLayout";
+        };
+      ];
       dependencies = [];
-      executable = "private-memory-probe";
+      executable = "private-heap-probe";
       health = "optional";
-      name = "private-memory-granted";
+      name = "private-heap-both";
       owner = "root";
     };
     {
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "private-memory-probe";
+      executable = "private-heap-probe";
       health = "optional";
-      name = "private-memory-denied";
+      name = "private-heap-denied";
       owner = "root";
     };
     {
@@ -85,45 +91,24 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "private-heap-probe";
+      executable = "private-memory-probe";
       health = "optional";
-      name = "private-heap-denied";
+      name = "private-memory-denied";
       owner = "root";
     };
     {
       autostart = true;
-      bindings = [
-        {
-          grant = "both-planes-shared-buffer-factory";
-          slot = 1;
-          slotReason = "encodedLayout";
-        };
-      ];
+      bindings = [];
       dependencies = [];
-      executable = "private-heap-probe";
+      executable = "private-memory-probe";
       health = "optional";
-      name = "private-heap-both";
+      name = "private-memory-granted";
       owner = "root";
     };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
   objects = [
-    {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
-    };
-    {
-      id = "sha256:private-memory-probe";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "sha256:private-heap-probe";
-      kind = "component";
-      size = 65536;
-    };
     {
       id = "boot-layout";
       kind = "resource";
@@ -135,6 +120,21 @@
       size = 4096;
     };
     {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-heap-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
       id = "shared-buffer-budget";
       kind = "resource";
       size = 4096;
@@ -142,16 +142,16 @@
   ];
   privateMemoryBudget = [
     {
-      holder = "private-memory-granted";
-      pageQuota = 3;
+      holder = "private-heap-both";
+      pageQuota = 24;
     };
     {
       holder = "private-heap-granted";
       pageQuota = 24;
     };
     {
-      holder = "private-heap-both";
-      pageQuota = 24;
+      holder = "private-memory-granted";
+      pageQuota = 3;
     };
   ];
   sharedBufferBudget = [

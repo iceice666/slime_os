@@ -16,6 +16,7 @@
       spawnBudget = 2;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-crossing-peer";
@@ -89,6 +90,7 @@
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];

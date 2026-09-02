@@ -50,6 +50,7 @@
       ];
     };
   ];
+  instances = [];
   grants = [
     {
       name = "init-console";
@@ -287,6 +288,7 @@
     };
   ];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [
     {

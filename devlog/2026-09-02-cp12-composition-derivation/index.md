@@ -1,4 +1,4 @@
-# CP12 — composition derivation for the one-to-one seL4 planes
+# CP12 — composition derivation for 40 of the 42 seL4 planes
 
 | Field | Value |
 |---|---|
@@ -17,15 +17,19 @@ CP1 proved generation derivation on two compositions and assumed one component
 spec maps to one instance. Extending that to the corpus disproved the
 assumption for 17 of the remaining 40 compositions and surfaced eight
 generation-manifest sections the system-spec contract could not express at all.
-This entry converts every composition that genuinely fits the one-to-one model —
-22 of 42, up from 2 — after extending `contracts/system-spec/v1` with those
-eight sections, five declared-binding/minted-binding facts, and nine per-instance
-placement overrides. Each converted composition's `generation.bin` was rebuilt
-from its frozen pre-migration text and from its derived text under one toolchain
-and compared: 21 of 22 are byte-identical, and the 22nd (`sel4-channel`) is a
-file this change does not touch. The remaining 20 compositions are recorded, per
-composition and with a closed reason, in a new `contracts/composition-inventory/v1`
-record that `just system_composition_closure_check` refuses to let drift.
+This entry converts 40 of the 42 compositions, up from 2. It extends
+`contracts/system-spec/v1` with those eight sections, the declared binding and
+minted-binding facts the grant table cannot imply, per-instance placement
+overrides, and — the change that unblocked the other 18 — a `SystemInstance`
+record that separates a concrete instance from the executable it runs, so
+`clock-authority-probe` can be five instances and `supervision-child` 26, each
+with its own authority, quotas, and dependencies on other instances of its own
+executable. Every converted composition's `generation.bin` was rebuilt from its
+frozen pre-migration text and from its derived text under one toolchain and
+compared: all 40 are byte-identical. The remaining 2 are recorded, per
+composition and with a closed reason, in a new
+`contracts/composition-inventory/v1` record that
+`just system_composition_closure_check` refuses to let drift.
 
 ## Changes
 
@@ -33,10 +37,12 @@ record that `just system_composition_closure_check` refuses to let drift.
 |---|---|---|
 | `contracts/system-spec/v1/schema.zt` | Added `clockAuthority`, `ioResourceBudget`, `networkDestinations`, `blockRingAuthority`, `waitSet`, `schedulingClass`, `lifecyclePolicy`, `recording` and their `*Object` presence booleans | A composition's declared authority is expressible in its own source rather than only in the manifest it should be generated from |
 | `contracts/system-spec/v1/schema.zt` | Added `ExtraBinding` and `SystemMintedBinding` | A spawn broker's third-party binding and a runtime-minted capability are declared where they are decided, not implied by a grant table that cannot imply them |
+| `contracts/system-spec/v1/schema.zt` | Added `SystemInstance`: a concrete instance distinct from its executable, with per-instance owner, autostart, health, dependencies, quotas, and thread/priority fields; an empty list keeps the one-instance-per-component default | One executable can run under many instance names, which is what `Instance.executable` has always allowed and what 18 compositions use |
+| `contracts/system-spec/v1/schema.zt` | Added `Placement.executableName` and a declared `bootLayoutObject` | A composition whose executable is named for its implementation binary (`sel4-generation-manager`, `sel4-filesystem-service`) can emit that name without a second spec claiming the same binary; `sel4-stress` carries no boot layout at all, so its presence is declared rather than assumed |
 | `contracts/system-spec/v1/schema.zt` | Added nine `Placement` overrides: `health`, `role`, `dependencies`, `stackBytes`, the four shared-buffer ceilings, and `privatePageQuota` | Facts that vary per composition (`supervision-child` is `required` under one plane and `optional` under another; `slisp` is an application in the reference generation and its own bootstrap in `sel4-slisp`) stop being forced into one component-wide answer |
 | `scripts/lib/system_spec.py` | `derive_bindings` widened with declared pins and extras; notification validation now admits several signallers with one waiter, matching `build-generation.py`'s own rule | The derivation reproduces the corpus's real binding and notification topology instead of the two fixtures' subset |
 | `scripts/check/check-system-spec.py` | Normalizes binding order, minted-binding order, and absent-vs-empty optional sections; the post-baseline private-memory assertion is now placement-aware | The comparison stays an equality test over what the builder actually reads, with each normalization justified against the builder line that makes the two forms one build |
-| `contracts/component-spec/v1/components/` | 11 new specs (`crossing-peer`, `reclamation-fault`, `sample-worker`, `supervision-child`, `c-runtime-probe`, six `robot-*`); `maxSpecs` 64 → 96 | Every executable the converted compositions declare has a reviewed component record |
+| `contracts/component-spec/v1/components/` | 25 new specs (11 for the one-to-one planes, 14 for the multi-instance planes: `clock-authority-probe`, `wait-set-probe`, `scheduling-class-probe`, `lifecycle-restart-probe`, the private-memory probes, and the storage/generation probes); `maxSpecs` 64 → 96 | Every executable the converted compositions declare has a reviewed component record |
 | `contracts/composition-inventory/v1` | New contract, record, generated bindings, and gate | "Which compositions are migrated" is one closed record instead of a Python table, a directory listing, and a roadmap paragraph |
 | `scripts/check/check-sel4-io-link-plane.py` | Fixture-text assertion whitespace-normalized | The plane asserts the declaration, not the spacing a hand-authored fixture happened to use |
 
@@ -54,14 +60,17 @@ record that `just system_composition_closure_check` refuses to let drift.
 
 | Command/scenario | Result | Evidence class |
 |---|---|---|
-| `just system_composition_closure_check` | Pass — 23 systems compiled, 23 manifests derived semantically identical to their committed fixtures, 21 named mutations refused; 42 compositions inventoried (22 derived, 20 hand-authored), 7 inventory mutations refused | Direct |
-| Baseline-vs-derived `generation.bin`, one toolchain, 22 compositions | 21 byte-identical; `sel4-channel` is unchanged by this commit and its pre-B91 baseline predates `slotReason`, so only the derived side builds | Direct |
+| `just system_composition_closure_check` | Pass — 41 systems compiled, 41 manifests derived semantically identical to their committed fixtures, 21 named mutations refused; 42 compositions inventoried (40 derived, 2 hand-authored), 7 inventory mutations refused | Direct |
+| Baseline-vs-derived `generation.bin`, one toolchain, 40 compositions | All 40 byte-identical (39 measured directly; `sel4-channel` is unchanged by this commit and its pre-B91 baseline predates `slotReason`, so only the derived side builds) | Direct |
 | `just generation_check` | Pass — two isolated builds byte-identical, admission passed, 4 mutations refused | Direct |
 | `just contracts_check` | Pass | Direct |
 | `just sel4_boot_layout_check` | Pass — 31 plane layouts match their fixtures | Direct |
 | `sel4_channel_check`, `sel4_crossing_check`, `sel4_supervision_check`, `sel4_reclamation_check`, `sel4_sample_check`, `sel4_powerbox_check`, `slisp_core_check` | Pass | Direct |
 | `sel4_boot_check`, `sel4_stream_check`, `sel4_call_check`, `sel4_operation_check`, `sel4_visibility_check`, `sel4_qos_check`, `robot_runtime_check` | Pass | Direct |
 | `sel4_demo_check`, `sel4_loan_check`, `sel4_spawn_check`, `sel4_traffic_check`, `io_queue_check`, `io_link_check`, `io_network_check` | Pass | Direct |
+| `clock_authority_check`, `wait_set_check`, `scheduling_class_check`, `private_memory_check`, `lifecycle_restart_check`, `sel4_stress_check` | Pass — the multi-instance planes, including the 23-instance stress graph | Direct |
+| `sel4_directory_check`, `sel4_input_check`, `sel4_filesystem_check`, `sel4_storage_check`, `sel4_store_check`, `sel4_transfer_check` | Pass | Direct |
+| `sel4_generation_check`, `sel4_recovery_plane_check`, `sel4_rollback_check`, `replay_check`, `io_block_check`, `io_driver_authority_check` | Pass | Direct |
 | `just sel4_gate_control_check` | Pass — 45 gates reject 1748 mutated transcripts and layouts | Direct |
 | `just test_host`, `just ruff` | Pass | Direct |
 | `just typos` | Fails on `contracts/system-image-closure/v1/inputs/sel4-prefix/libsel4/include/interfaces/sel4_client.h` ("pre-empted"), a vendored seL4 header committed by CP11 and untouched here; `typos` over every path this change touches is clean | Direct, pre-existing failure |
@@ -71,16 +80,16 @@ to say about this change; `git status` shows zero `.rs` files modified.
 
 ## Decisions
 
-- **Decision:** Convert only the compositions whose instances map one-to-one onto
-  a component spec, and record the rest in a closed contract with a per-composition
-  reason.
-  **Rationale:** The 17 multi-instance compositions need a system-spec *instance*
-  record distinct from the executable it runs, carrying its own dependencies.
-  That is a model change large enough to make the byte-identity claim for the 22
-  that do fit unverifiable if bundled with it.
-  **Rejected alternative:** Converting all 42 by special-casing the multi-instance
-  planes in the generator — which CP12's own deliverable forbids ("adding the
-  narrow owning contract field rather than a fixture-name branch").
+- **Decision:** Separate a concrete instance from the executable it runs, with an
+  empty `instances` list preserving the one-instance-per-component default.
+  **Rationale:** CP1's one-to-one assumption is not general and never was:
+  `Instance.executable` has always been a distinct manifest field, and 18
+  compositions use it. Landing the conversion in two steps — the one-to-one
+  planes first, then the instance model — kept each byte-identity claim
+  independently verifiable.
+  **Rejected alternative:** Special-casing the multi-instance planes in the
+  generator, which CP12's own deliverable forbids ("adding the narrow owning
+  contract field rather than a fixture-name branch").
 
 - **Decision:** Every new authority section carries a companion `*Object` boolean
   rather than deriving resource-object presence from list non-emptiness.
@@ -103,22 +112,20 @@ to say about this change; `git status` shows zero `.rs` files modified.
 
 ## Open risks and follow-ups
 
-- [ ] 17 compositions remain `multiInstanceExecutable`; they need a system-spec
-      instance record distinct from its executable, with per-instance
-      dependencies. Tracked in `roadmap/00-backlog.md`; CP15's whole-corpus
-      cutover depends on it.
-- [ ] `sel4-filesystem` needs the `sel4-filesystem-service` / `filesystem-service`
-      naming collision resolved before it can derive.
-- [ ] `sel4-matrix` needs per-composition fabric route naming (or multi-route
-      component interface entries) before it can derive.
-- [ ] `sel4-c-runtime` needs a committed content identity for its C implementation
-      before it can be pinned as an external implementation.
+- [ ] `sel4-matrix` remains `routeNameVariance`: three fabric components hold
+      route roles their specs do not declare, and `just component_spec_check`
+      requires a spec's interface list to match `valid.zti`'s graph exactly, so
+      one spec cannot describe two compositions' route sets. Needs
+      per-composition interface entries or a system-level route-role override.
+- [ ] `sel4-c-runtime` remains `unpinnedExternalImplementation`: its C
+      implementation is built by a helper script at gate time with no committed
+      content identity to pin.
 - [ ] `just typos` fails on a CP11-vendored seL4 header; unrelated to this change
       and not fixed here.
 
 ## Artifacts and provenance
 
 - Closed inventory: `contracts/composition-inventory/v1/inventory.zti`
-- Frozen pre-migration baselines: `contracts/system-spec/v1/baselines/*.zti` (23 files)
-- Derived sources: `contracts/system-spec/v1/systems/*.zti` (23 files)
+- Frozen pre-migration baselines: `contracts/system-spec/v1/baselines/*.zti` (41 files)
+- Derived sources: `contracts/system-spec/v1/systems/*.zti` (41 files)
 - Related roadmap item: [CP12](../../roadmap/10-component-platform.md)

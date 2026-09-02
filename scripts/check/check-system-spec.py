@@ -38,6 +38,7 @@ from system_spec import (
     compile_system,
     derive_manifest,
     derived_manifest_path,
+    resolved_instances,
     system_paths,
 )
 from zutai_cli import STDLIB, binary
@@ -229,6 +230,9 @@ def normalized(manifest: dict) -> dict:
         "notificationGrants",
         "notificationBindings",
         "mintedBindings",
+        "interfaceSchemas",
+        "sharedBufferBudget",
+        "state",
     ):
         resolved.setdefault(field, [])
     return resolved
@@ -328,18 +332,26 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
     nothing behind it would let a wrong budget through under a name the
     comparison skips. This is the replacement assertion, and it is stricter than
     the baseline's would have been: it compares the derived budget against the
-    quota each instance is composed with, which is the component spec's value
-    unless this system's placement declares its own.
+    quota each *instance* is composed with, which is the component spec's value
+    unless the instance record or the component's placement declares its own.
+    An authenticated budget is keyed by instance, so this is too.
     """
     placements = {entry["component"]: entry for entry in system.spec["placements"]}
+    component_by_executable = {
+        entry.get("executableName", entry["component"]): entry["component"]
+        for entry in system.spec["placements"]
+    }
     expected = {}
-    for component in system.spec["components"]:
-        quota = placements.get(component, {}).get(
-            "privatePageQuota",
-            COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"],
+    for instance in resolved_instances(system.spec):
+        component = component_by_executable.get(
+            instance["executable"], instance["executable"]
+        )
+        default = COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
+        quota = instance.get(
+            "privatePageQuota", placements.get(component, {}).get("privatePageQuota", default)
         )
         if quota:
-            expected[component] = quota
+            expected[instance["name"]] = quota
     budget = {entry["holder"]: entry["pageQuota"] for entry in derived.get("privateMemoryBudget", [])}
     if budget != expected:
         fail(
