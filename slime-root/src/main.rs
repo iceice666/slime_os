@@ -34,7 +34,7 @@ use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
     platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
-    transfer_window, wait_set,
+    transfer_window, vm_attributes, wait_set,
 };
 
 use core::ptr;
@@ -430,8 +430,10 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for the selected RV64 platform's userspace timer registers.
-#[cfg(target_arch = "riscv64")]
+/// Standing window for the platform's memory-mapped timer registers, on the
+/// profiles whose monotonic source is a device rather than an architected
+/// register the kernel grants userspace access to.
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the CV1800B RTC control granule used to reset the board
@@ -467,6 +469,14 @@ static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
 const TIMER_PADDR: usize = 0x0010_1000;
 #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
 const TIMER_PADDR: usize = 0x0502_6000;
+/// The IA-PC HPET's architectural base address on QEMU q35.
+///
+/// A pinned machine fact, not discovery: firmware reports it in the ACPI HPET
+/// table, and P6 reads no ACPI (H1 owns the real inventory). This is the
+/// address that machine's HPET is fixed at, and a machine whose firmware
+/// relocates it is a different platform profile.
+#[cfg(target_arch = "x86_64")]
+const TIMER_PADDR: usize = 0xfed0_0000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
 #[cfg(slime_duo_uart)]
@@ -476,14 +486,23 @@ const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR")
 /// These are pinned machine facts, not discovery. The generation's userspace
 /// driver owns device semantics; root uses the constants only for the bounded
 /// bootstrap inventory and IRQ-capability handoff.
+///
+/// QEMU q35 has no virtio-mmio window at all: virtio devices there are PCI
+/// functions behind an ACPI-described host bridge. P6 explicitly does not
+/// enumerate PCI or enable bus mastering — that is H2's — so this profile
+/// declares an empty transport range and its bootstrap inventory finds no
+/// devices. The range is stated as zero granules rather than omitted so the
+/// scan is a real bounded loop over nothing instead of a separate code path.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_BASE: usize = 0;
 /// Bytes between consecutive transports.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 const VIRTIO_MMIO_STRIDE: usize = 0x1000;
 const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
 /// Number of transport granules to scan.
@@ -491,11 +510,16 @@ const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
 const VIRTIO_MMIO_GRANULES: usize = 4;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_GRANULES: usize = 8;
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_GRANULES: usize = 0;
 /// Interrupt number of the first transport in seL4's IRQ namespace.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
+/// Unreachable on this profile: no transport exists to derive an IRQ for.
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 0;
 /// Badge the device notification carries, distinct from the timer's.
 const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
 
@@ -660,7 +684,14 @@ static mut OBJECT_ALLOCATOR: core::mem::MaybeUninit<ObjectAllocator> =
 /// a read-only mapping, one branch into an execute-never page. A third fault
 /// from the clean-exit fixture is not part of the contract and is treated as a
 /// real failure.
+///
+/// x86-64 expects only the first: seL4 exposes no execute-never frame
+/// attribute there, so a data page is executable and the branch probe cannot
+/// fault. See `slime_root::vm_attributes`.
+#[cfg(not(target_arch = "x86_64"))]
 const SHARED_EXPECTED_PROBES: usize = 2;
+#[cfg(target_arch = "x86_64")]
+const SHARED_EXPECTED_PROBES: usize = 1;
 
 /// What the root observed while supervising the clean-exit fixture's
 /// shared-buffer phase.
@@ -820,6 +851,23 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(registers));
             ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
         }
+        timer_adapter.attach_registers(registers);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let timer_addr = ptr::addr_of!(TIMER_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, timer_addr) {
+            fatal!("timer page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            timer_addr,
+            TIMER_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("timer registers unavailable: {error:?}"),
+        };
         timer_adapter.attach_registers(registers);
     }
     sel4::debug_println!(

@@ -24,6 +24,10 @@ CONFIG_PATHS = {
     "cv1800b-duo": ROOT / "sel4" / "config" / "cv1800b-duo.cmake",
 }
 RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
+# P6.1's pc99 profile, like the Pi's, derives from an upstream canned config
+# rather than restating one, so it is validated by its own block below rather
+# than by comparing a standalone table.
+PC99_CONFIG_PATH = ROOT / "sel4" / "config" / "qemu-pc99.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
 RUST_SEL4_PATH = ROOT / "deps" / "rust-sel4"
 # Each platform installs its own prefix and pins its own artifact hashes: the
@@ -42,6 +46,17 @@ PREFIX_PATHS = {
         ROOT / "build" / "sel4-cv1800b-duo-prefix",
         "observed_prefix_cv1800b_duo",
     ),
+    "qemu-pc99": (ROOT / "build" / "sel4-pc99-prefix", "observed_prefix_qemu_pc99"),
+}
+# An x86 machine describes itself through ACPI at run time, so seL4 pc99
+# compiles no device tree and generates no `platform_gen.yaml`: its install has
+# no `support/` directory. Naming the platforms whose prefix carries those two
+# artifacts keeps the hash contract explicit instead of fabricating files.
+PREFIX_HAS_PLATFORM_DESCRIPTION = {
+    "qemu-arm-virt",
+    "qemu-riscv-virt",
+    "bcm2712-rpi5",
+    "cv1800b-duo",
 }
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DATED_NIGHTLY = re.compile(r"nightly-\d{4}-\d{2}-\d{2}")
@@ -113,12 +128,13 @@ def boolean(entry: dict[str, object], key: str, section: str) -> bool:
     return value
 
 
-def run_output(command: list[str], *, cwd: Path = ROOT) -> str:
+def run_output(command: list[str], *, cwd: Path = ROOT, stdin: str | None = None) -> str:
     try:
         process = subprocess.run(
             command,
             cwd=cwd,
             check=False,
+            input=stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -322,10 +338,16 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
         not in flake
     ):
         fail("flake.nix must export an absolute RISCV64_CROSS_COMPILER_PREFIX")
+    if 'X86_64_COMPILER_PREFIX = "${x86CC}/bin/${x86CC.targetPrefix}"' not in flake:
+        fail("flake.nix must export an absolute X86_64_COMPILER_PREFIX")
 
     target_specs = (
         ("root_target", "root_target_sha256", "aarch64-unknown-none"),
+        ("child_target", "child_target_sha256", "aarch64-unknown-none"),
         ("riscv64_root_target", "riscv64_root_target_sha256", "riscv64"),
+        ("riscv64_child_target", "riscv64_child_target_sha256", "riscv64"),
+        ("x86_64_root_target", "x86_64_root_target_sha256", "x86_64-unknown-none-elf"),
+        ("x86_64_child_target", "x86_64_child_target_sha256", "x86_64-unknown-none-elf"),
     )
     for target_key, hash_key, llvm_target in target_specs:
         target_text = text(rust_sel4, target_key, "rust_sel4")
@@ -334,7 +356,7 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
             target_path.relative_to(ROOT)
         except ValueError:
             fail(f"[rust_sel4].{target_key} escapes the repository root")
-        require_file(target_path, "root-task target specification")
+        require_file(target_path, "target specification")
         expected_hash = require_sha256(text(rust_sel4, hash_key, "rust_sel4"), target_key)
         actual_hash = sha256_file(target_path, fail)
         if actual_hash != expected_hash:
@@ -351,10 +373,80 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
         if target.get("panic-strategy") != "abort" or target.get("exe-suffix") != ".elf":
             fail(f"{target_key} must use panic=abort and the .elf executable suffix")
 
+    check_x86_64_target_derivation(rust_sel4)
+
     if text(rust_sel4, "loader_target", "rust_sel4") != "aarch64-unknown-none":
         fail("unsupported AArch64 loader target pin")
     if text(rust_sel4, "riscv64_loader_target", "rust_sel4") != "riscv64imac-unknown-none-elf":
         fail("unsupported RISC-V loader target pin")
+
+
+def check_x86_64_target_derivation(rust_sel4: dict[str, object]) -> None:
+    """Hold the repo-owned x86-64 specifications to their upstream derivation.
+
+    P6.1 copies rust-sel4's two x86-64 specifications and rewrites exactly one
+    field each, because upstream's `-sse,-sse2` plus `rustc-abi = "softfloat"`
+    has no LLVM lowering for the 128-bit integer arithmetic `slime-root`'s
+    release-signature verification performs (`sel4/targets/README.md`).
+
+    Both halves are pinned: the upstream hash catches a specification that
+    moved underneath the copy, and this comparison catches a copy that drifted
+    further than the one documented delta.
+    """
+    expected_features = "-mmx,-avx,-avx2,+sse,+sse2"
+    for local_key, upstream_key, upstream_hash_key in (
+        (
+            "x86_64_root_target",
+            "x86_64_root_target_upstream",
+            "x86_64_root_target_upstream_sha256",
+        ),
+        (
+            "x86_64_child_target",
+            "x86_64_child_target_upstream",
+            "x86_64_child_target_upstream_sha256",
+        ),
+    ):
+        local_path = ROOT / text(rust_sel4, local_key, "rust_sel4")
+        upstream_path = ROOT / text(rust_sel4, upstream_key, "rust_sel4")
+        require_file(upstream_path, "upstream x86-64 target specification")
+        expected_hash = require_sha256(
+            text(rust_sel4, upstream_hash_key, "rust_sel4"), upstream_hash_key
+        )
+        actual_hash = sha256_file(upstream_path, fail)
+        if actual_hash != expected_hash:
+            fail(
+                f"{upstream_path.relative_to(ROOT)} SHA-256 is {actual_hash}, expected "
+                f"{expected_hash}; rust-sel4 changed the specification "
+                f"{local_path.relative_to(ROOT)} was derived from"
+            )
+        try:
+            local = json.loads(local_path.read_text(encoding="utf-8"))
+            upstream = json.loads(upstream_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            fail(f"cannot parse an x86-64 target specification: {error}")
+        if local.get("features") != expected_features:
+            fail(
+                f"{local_path.relative_to(ROOT)} features must be "
+                f"{expected_features!r}, not {local.get('features')!r}"
+            )
+        if "rustc-abi" in local:
+            fail(
+                f"{local_path.relative_to(ROOT)} must not declare rustc-abi; the "
+                "softfloat ABI is what breaks 128-bit integer lowering"
+            )
+        upstream_rest = {k: v for k, v in upstream.items() if k not in ("features", "rustc-abi")}
+        local_rest = {k: v for k, v in local.items() if k != "features"}
+        if local_rest != upstream_rest:
+            differing = sorted(
+                key
+                for key in set(local_rest) | set(upstream_rest)
+                if local_rest.get(key) != upstream_rest.get(key)
+            )
+            fail(
+                f"{local_path.relative_to(ROOT)} differs from "
+                f"{upstream_path.relative_to(ROOT)} in {differing}; only `features` "
+                "and the absence of `rustc-abi` are the admitted delta"
+            )
 
 
 def check_profile(pins: dict[str, object]) -> None:
@@ -489,6 +581,77 @@ def check_profile(pins: dict[str, object]) -> None:
         ]
         fail("bcm2712-rpi5 CMake config is incomplete:\n" + "\n".join(details))
 
+    pc99 = parse_cmake_cache(PC99_CONFIG_PATH)
+    pc99_include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/X64_verified.cmake"
+    # Same shape as the Pi's overlay: the inherited profile is a proof
+    # configuration, so this one restores the debug build and printing every
+    # marker gate depends on. Two entries are load-bearing beyond that:
+    #
+    #  * `KernelFSGSBase "inst"` is kept from upstream, because it is what makes
+    #    the kernel set `CR4.FSGSBASE` and permits the userspace `rdfsbase` the
+    #    component runtime reads its thread index with.
+    #  * `KernelVTX OFF` keeps VT-x objects out of a graph no generation grants.
+    required_pc99 = {
+        "KernelPlatform": "pc99",
+        "KernelSel4Arch": "x86_64",
+        "KernelIsMCS": "OFF",
+        "KernelMaxNumNodes": "1",
+        "KernelVerificationBuild": "OFF",
+        "KernelDebugBuild": "ON",
+        "KernelPrinting": "ON",
+        "KernelFSGSBase": "inst",
+        "KernelVTX": "OFF",
+        "KernelPC99TSCFrequency": "0",
+    }
+    pc99_source = PC99_CONFIG_PATH.read_text(encoding="utf-8").splitlines()
+    if f"include({pc99_include})" not in [line.strip() for line in pc99_source]:
+        fail("qemu-pc99 CMake config does not inherit the pinned X64 profile")
+    if pc99 != required_pc99:
+        details = [
+            f"{key}: expected {required_pc99.get(key)!r}, got {pc99.get(key)!r}"
+            for key in sorted(set(required_pc99) | set(pc99))
+            if required_pc99.get(key) != pc99.get(key)
+        ]
+        fail("qemu-pc99 CMake config is incomplete:\n" + "\n".join(details))
+
+    pc99_pins = table(pins, "qemu_pc99")
+    if text(pc99_pins, "platform", "qemu_pc99") != "pc99":
+        fail("qemu_pc99 platform pin must name pc99")
+    if text(pc99_pins, "sel4_arch", "qemu_pc99") != "x86_64":
+        fail("qemu_pc99 sel4_arch pin must name x86_64")
+    # The versioned machine model, not the `q35` alias, which follows whatever
+    # the installed QEMU's newest revision happens to be.
+    if text(pc99_pins, "machine", "qemu_pc99") != "pc-q35-11.0":
+        fail("qemu_pc99 must pin the exact versioned q35 machine model")
+    # `KernelFSGSBase "inst"` halts at boot on a CPU that does not report
+    # FSGSBASE in `CPUID.07h:EBX[0]`. `Nehalem` and earlier QEMU models do not.
+    if text(pc99_pins, "cpu", "qemu_pc99") != "Haswell":
+        fail(
+            "qemu_pc99 must pin a CPU model implementing FSGSBASE; the kernel's "
+            "KernelFSGSBase \"inst\" boot path halts without it"
+        )
+    if text(pc99_pins, "fsgs_base", "qemu_pc99") != required_pc99["KernelFSGSBase"]:
+        fail("qemu_pc99 fsgs_base pin disagrees with the CMake profile")
+    if pc99_pins.get("vtx") is not False:
+        fail("qemu_pc99 vtx pin disagrees with the CMake profile")
+    if text(pc99_pins, "interrupt_controller", "qemu_pc99") != "ioapic":
+        fail("qemu_pc99 must pin the IOAPIC interrupt controller")
+    if pc99_pins.get("irq_pic") is not False:
+        fail("qemu_pc99 must pin the legacy PIC off")
+    if integer(pc99_pins, "max_num_ioapic", "qemu_pc99") != 1:
+        fail(
+            "qemu_pc99 must pin exactly one IOAPIC; slime-root's IRQ acquisition "
+            "addresses IOAPIC 0 and H1 owns discovering a real topology"
+        )
+    # The HPET main-counter rate `slime-root` drives, not the local APIC timer,
+    # which seL4 claims for its own tick at kernel boot.
+    if integer(pc99_pins, "timer_frequency_hz", "qemu_pc99") != 10_000_000:
+        fail("qemu_pc99 must pin the q35 HPET's 10 MHz main-counter rate")
+    # Records that this machine's virtio devices are PCI functions. P6 does not
+    # enumerate PCI, so the root's bootstrap inventory finds nothing here.
+    if integer(pc99_pins, "virtio_mmio_count", "qemu_pc99") != 0:
+        fail("qemu_pc99 exposes no virtio-mmio window; its count must be zero")
+
 
 def check_rustup_policy(pins: dict[str, object]) -> None:
     """The pinned toolchain must already be installed, with `rust-src`.
@@ -521,6 +684,7 @@ def check_qemu_version(pins: dict[str, object]) -> None:
     for section, executable in (
         ("qemu_arm_virt", "qemu-system-aarch64"),
         ("qemu_riscv_virt", "qemu-system-riscv64"),
+        ("qemu_pc99", "qemu-system-x86_64"),
     ):
         expected = text(table(pins, section), "qemu_version", section)
         qemu = shutil.which(executable)
@@ -532,6 +696,40 @@ def check_qemu_version(pins: dict[str, object]) -> None:
             fail(f"cannot parse QEMU version from: {output!r}")
         if match.group(1) != expected:
             fail(f"{executable} version is {match.group(1)}, expected {expected}")
+    # The pc99 kernel's `KernelFSGSBase "inst"` boot path halts on a CPU that
+    # does not report FSGSBASE, and `-cpu help` does not list per-model
+    # features. Ask the installed QEMU to expand the pinned model instead, so a
+    # future model losing the feature fails here rather than at boot.
+    pc99 = table(pins, "qemu_pc99")
+    model = text(pc99, "cpu", "qemu_pc99")
+    qemu = shutil.which("qemu-system-x86_64")
+    if qemu is None:
+        fail("qemu-system-x86_64 is not on PATH")
+    expansion = run_output(
+        [
+            qemu,
+            "-machine",
+            text(pc99, "machine", "qemu_pc99"),
+            "-cpu",
+            model,
+            "-display",
+            "none",
+            "-S",
+            "-qmp",
+            "stdio",
+        ],
+        stdin=(
+            '{"execute":"qmp_capabilities"}\n'
+            '{"execute":"query-cpu-model-expansion","arguments":'
+            f'{{"type":"full","model":{{"name":"{model}"}}}}}}\n'
+            '{"execute":"quit"}\n'
+        ),
+    )
+    if '"fsgsbase": true' not in expansion:
+        fail(
+            f"QEMU CPU model {model} does not report fsgsbase; the pinned kernel's "
+            'KernelFSGSBase "inst" boot path would halt'
+        )
 
 
 def check_prefix(pins: dict[str, object], platform: str) -> None:
@@ -541,14 +739,32 @@ def check_prefix(pins: dict[str, object], platform: str) -> None:
         "kernel_sha256": prefix / "bin" / "kernel.elf",
         "kernel_config_sha256": prefix / "libsel4" / "include" / "kernel" / "gen_config.json",
         "libsel4_config_sha256": prefix / "libsel4" / "include" / "sel4" / "gen_config.json",
-        "dtb_sha256": prefix / "support" / "kernel.dtb",
-        "platform_info_sha256": prefix / "support" / "platform_gen.yaml",
     }
+    if platform in PREFIX_HAS_PLATFORM_DESCRIPTION:
+        files["dtb_sha256"] = prefix / "support" / "kernel.dtb"
+        files["platform_info_sha256"] = prefix / "support" / "platform_gen.yaml"
+    else:
+        # Assert the absence rather than skipping it. If a future kernel bump
+        # started installing a `support/` directory for this platform, the hash
+        # set would silently stop covering two real build inputs.
+        for absent in ("kernel.dtb", "platform_gen.yaml"):
+            if (prefix / "support" / absent).exists():
+                fail(
+                    f"{platform} installed a support/{absent} this pin set does not "
+                    "cover; add its hash to PREFIX_HAS_PLATFORM_DESCRIPTION"
+                )
+        for unexpected in ("dtb_sha256", "platform_info_sha256"):
+            if unexpected in observed:
+                fail(
+                    f"[{section}].{unexpected} names an artifact {platform} does not "
+                    "install; remove it"
+                )
     rebuild = {
         "qemu-arm-virt": "just sel4_qemu_image_check",
         "qemu-riscv-virt": "just riscv64_qemu_image_check",
         "bcm2712-rpi5": "just sel4_rpi5_image_check",
         "cv1800b-duo": "just sel4_duo_image_check",
+        "qemu-pc99": "just x86_64_sel4_image_check",
     }[platform]
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")

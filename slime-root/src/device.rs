@@ -92,6 +92,14 @@ fn uncached_attributes() -> sel4::VmAttributes {
     {
         sel4::VmAttributes::NONE
     }
+    // seL4's x86 attribute word is a cache-policy selector rather than a
+    // permission mask: `seL4_X86_Default_VMAttributes` is zero and each policy
+    // is a distinct value, so uncached MMIO is `CACHE_DISABLED` outright and
+    // not the default with a bit cleared.
+    #[cfg(target_arch = "x86_64")]
+    {
+        sel4::VmAttributes::CACHE_DISABLED
+    }
 }
 
 impl DeviceRegion {
@@ -456,14 +464,12 @@ impl DeviceIrq {
                 badge,
             )
             .map_err(DeviceError::Irq)?;
-        sel4::init_thread::slot::IRQ_CONTROL
-            .cap()
-            .irq_control_get_trigger(
-                irq,
-                !level_triggered,
-                &root_cnode.absolute_cptr(irq_handler_slot.cptr()),
-            )
-            .map_err(DeviceError::Irq)?;
+        crate::irq_control::acquire_handler(
+            irq,
+            level_triggered,
+            &root_cnode.absolute_cptr(irq_handler_slot.cptr()),
+        )
+        .map_err(DeviceError::Irq)?;
         irq_handler_slot
             .cap()
             .irq_handler_set_notification(signal_slot.cap())

@@ -64,6 +64,14 @@
           # RISC-V toolchain, pinned by an absolute wrapper path for the same
           # reproducibility reason as AArch64.
           riscvCrossCC = pkgs.pkgsCross.riscv64.stdenv.cc;
+          # P6.1's pc99 kernel. `pkgsCross.gnu64` is the x86-64 GNU/Linux
+          # toolchain: on `x86_64-linux` it resolves to the native wrapper and
+          # on the AArch64 hosts to a cross wrapper, which is the same shape
+          # difference `crossCC` documents above and is equally harmless
+          # because both inject the same flags. It is named here so
+          # `X86_64_COMPILER_PREFIX` is one exact store path rather than
+          # whatever `gcc` the shell's `PATH` happens to resolve.
+          x86CC = pkgs.pkgsCross.gnu64.stdenv.cc;
           # The seL4 build drives host Python generators (bitfield, invocation,
           # hardware/DTS) through a bare `python3`.
           sel4Python = pkgs.python3.withPackages (ps: [
@@ -103,6 +111,7 @@
                 libxml2.bin
                 crossCC
                 riscvCrossCC
+                x86CC
                 sel4Python
               ];
 
@@ -124,6 +133,13 @@
             # compiler driver and the same assembler (B21).
             CROSS_COMPILER_PREFIX = "${crossCC}/bin/${crossCC.targetPrefix}";
             RISCV64_CROSS_COMPILER_PREFIX = "${riscvCrossCC}/bin/${riscvCrossCC.targetPrefix}";
+            # P6.1's pc99 kernel. Unlike AArch64 and RISC-V this is not a cross
+            # toolchain — an x86-64 seL4 kernel is built by an ordinary
+            # ELF-targeting x86-64 GCC — but it is exported by absolute store
+            # path for exactly the same reason: `[observed_prefix_qemu_pc99]`
+            # must bind one compiler and assembler rather than whichever `gcc`
+            # the ambient `PATH` resolves first.
+            X86_64_COMPILER_PREFIX = "${x86CC}/bin/${x86CC.targetPrefix}";
 
             # Freestanding C components use Clang's target driver and LLD.
             # Do not inherit mkShell's ambient CC: on Linux it is GCC, which

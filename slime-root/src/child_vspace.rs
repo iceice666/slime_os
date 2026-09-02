@@ -108,11 +108,12 @@ impl<'a> ChildImage<'a> {
     /// Parse and validate a payload against this root task's compiled ISA.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, ImageError> {
         let file = ElfFile64::<Endianness>::parse(bytes).map_err(|_| ImageError::NotElf)?;
-        let expected = if cfg!(target_arch = "riscv64") {
-            Architecture::Riscv64
-        } else {
-            Architecture::Aarch64
-        };
+        #[cfg(target_arch = "aarch64")]
+        let expected = Architecture::Aarch64;
+        #[cfg(target_arch = "riscv64")]
+        let expected = Architecture::Riscv64;
+        #[cfg(target_arch = "x86_64")]
+        let expected = Architecture::X86_64;
         if file.architecture() != expected || !file.is_little_endian() {
             return Err(ImageError::WrongTarget);
         }
@@ -472,7 +473,7 @@ fn map_thread_pages(
             vspace,
             ipc_buffer_addr,
             sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+            crate::vm_attributes::data(),
         )
         .map_err(|error| VSpaceError::FrameMap {
             vaddr: ipc_buffer_addr,
@@ -495,7 +496,7 @@ fn map_thread_pages(
             vspace,
             transfer_window_addr,
             sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+            crate::vm_attributes::data(),
         )
         .map_err(|error| VSpaceError::FrameMap {
             vaddr: transfer_window_addr,
@@ -677,6 +678,16 @@ fn unify_instruction_cache(pages: &[PageEntry], page_count: usize) -> Result<(),
             core::arch::asm!("fence.i", options(nostack));
         }
     }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let _ = (pages, page_count);
+        // x86-64 keeps its instruction cache coherent with stores in hardware
+        // and seL4 exposes no page-cache maintenance invocation here, so the
+        // writes this root already performed are visible to the child's first
+        // fetch. The child has not run yet and its TCB is configured after
+        // this point, so no speculative fetch of the old contents can be
+        // outstanding either.
+    }
     Ok(())
 }
 
@@ -822,14 +833,14 @@ fn page_rights(flags: u8) -> sel4::CapRights {
         .build()
 }
 
-/// Executability is the architecture's `EXECUTE_NEVER` VM attribute, while
-/// `VmAttributes::DEFAULT` permits execution. Data and stack pages therefore
-/// set it explicitly; only a `PF_X` segment stays executable.
+/// Executability follows the segment's `PF_X` flag. Whether a non-executable
+/// mapping is enforced by the page tables is architecture-dependent; see
+/// `crate::vm_attributes`.
 fn page_attributes(flags: u8) -> sel4::VmAttributes {
     if flags & FLAG_EXEC != 0 {
-        sel4::VmAttributes::DEFAULT
+        crate::vm_attributes::executable()
     } else {
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER
+        crate::vm_attributes::data()
     }
 }
 

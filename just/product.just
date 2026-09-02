@@ -19,6 +19,15 @@ sel4_root_boot_check: sel4_pin_check
 riscv64_qemu_image_check: sel4_pin_check
     python3 scripts/build/build-sel4.py --platform qemu-riscv-virt --skip-pin-check
 
+# P6.1 builds the admitted x86-64 seL4 kernel, root task, child fixture, and
+# generation for the pinned QEMU pc99 profile. Deliberately no boot claim: this
+# platform is on the native Multiboot2 route, so no packaged image exists until
+# P6.2 builds the GRUB file tree that supplies the two ELFs as modules.
+[group('product')]
+x86_64_sel4_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform qemu-pc99 --skip-pin-check
+    python3 scripts/check/check-sel4-x86-64-image.py
+
 [group('product')]
 riscv64_qemu_check: sel4_pin_check
     python3 scripts/check/check-sel4-root-boot.py --platform qemu-riscv-virt

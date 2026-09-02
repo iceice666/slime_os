@@ -16,8 +16,27 @@ commit = "070c6a384a01ce0f6c60e081fddc8c40fb2a6132"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
+child_target = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json"
+child_target_sha256 = "0762fbeca23afb9f148f622f3f40f3a01b093630b905cab760592141f72d7015"
 riscv64_root_target = "deps/rust-sel4/support/targets/riscv64imac-sel4-roottask-minimal.json"
 riscv64_root_target_sha256 = "1ba7236f7df19f49777dc2f3bc189ea06ce30d7af1e3746c0183fe94467f64c9"
+riscv64_child_target = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json"
+riscv64_child_target_sha256 = "85e4e62fcc84c35895e43b31fcbd1ba07eecb9f139b5d8bf5198fa439ef7e791"
+# P6.1's x86-64 specifications are repo-owned rather than rust-sel4's, because
+# the upstream pair disables SSE and forces a softfloat ABI, which has no LLVM
+# lowering for the 128-bit integer arithmetic `slime-root`'s release-signature
+# verification performs. `sel4/targets/README.md` records the exact failure and
+# why hardware float is the correct configuration for a kernel that saves
+# x87/SSE state per thread. Both `upstream_*` hashes pin what these copies were
+# derived from, so an upstream change cannot leave them silently stale.
+x86_64_root_target = "sel4/targets/x86_64-sel4-roottask-minimal.json"
+x86_64_root_target_sha256 = "34ec23870dbdb344757cd1b3304c6b0ad0133dc17ca2f174f7c3eff90e8f254e"
+x86_64_root_target_upstream = "deps/rust-sel4/support/targets/x86_64-sel4-roottask-minimal.json"
+x86_64_root_target_upstream_sha256 = "13575da7c4495e985d21a848c15fae67d953306b1ff5d038935db7f1428b74c3"
+x86_64_child_target = "sel4/targets/x86_64-sel4-minimal.json"
+x86_64_child_target_sha256 = "e04fa8c9eb3e6f8f894e9bace309c9b3c4f5610bbddc359f64a101c05fe10115"
+x86_64_child_target_upstream = "deps/rust-sel4/support/targets/x86_64-sel4-minimal.json"
+x86_64_child_target_upstream_sha256 = "a4056f0b61caaf8101ae15036184a67e3bad43978e8e6f914ef0b5bf3b6e7586"
 loader_target = "aarch64-unknown-none"
 riscv64_loader_target = "riscv64imac-unknown-none-elf"
 
@@ -65,6 +84,54 @@ timer_frequency_hz = 10000000
 uart = "ns16550a-0x10000000"
 virtio_mmio_base = "0x10001000"
 virtio_mmio_count = 8
+
+# P6's x86-64 architecture reference. These are QEMU's explicit q35 machine
+# facts and this repository's pc99 kernel profile, pinned so the port never
+# inherits a newer emulator's chipset, CPU feature set, interrupt routing, or
+# firmware silently.
+#
+#  * `machine` names the versioned q35 model rather than the `q35` alias, which
+#    follows whatever the installed QEMU's newest revision happens to be.
+#  * `cpu` is the oldest model this profile can use: the pc99 kernel profile
+#    keeps `KernelFSGSBase "inst"`, whose boot path requires the CPU to report
+#    `FSGSBASE` in `CPUID.07h:EBX[0]` and halts with a diagnostic if it does
+#    not. `Nehalem` and earlier models do not implement it; `Haswell` is the
+#    first QEMU model that does, and the Framework's Ryzen AI 300 does too.
+#  * `interrupt_controller` and `lapic_mode` are what the installed kernel
+#    configuration reports (`KERNEL_IRQ_CONTROLLER`, `KERNEL_LAPIC_MODE`),
+#    not a Slime choice. `IRQ_PIC` is off, so the legacy 8259 pins are
+#    reserved rather than available.
+#  * `timer_frequency_hz` is the IA-PC HPET's fixed 10 MHz main-counter rate on
+#    this machine, which is the monotonic source `slime-root` drives; the local
+#    APIC timer belongs to seL4's own scheduling tick and is claimed at kernel
+#    boot (`setIRQState(IRQTimer, irq_timer)`).
+#  * `virtio` records that this machine exposes no virtio-mmio window at all.
+#    Its virtio devices are PCI functions, and P6 does not enumerate PCI, so
+#    the root's bootstrap inventory finds nothing here by construction.
+[qemu_pc99]
+platform = "pc99"
+sel4_arch = "x86_64"
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+machine = "pc-q35-11.0"
+cpu = "Haswell"
+cpus = 1
+memory_mib = 2048
+qemu_version = "11.0.1"
+fsgs_base = "inst"
+fpu = "XSAVE"
+vtx = false
+interrupt_controller = "ioapic"
+lapic_mode = "XAPIC"
+irq_pic = false
+max_num_ioapic = 1
+timer_frequency_hz = 10000000
+serial = "com1-16550a-0x3f8"
+serial_baud = 115200
+virtio_mmio_count = 0
 
 # P4's physical target. Every value here is read from seL4's own platform
 # description or the board's firmware device tree, never asserted by Slime:
@@ -260,3 +327,13 @@ kernel_config_sha256 = "cd840a2d821a9c6aa57fbb095c3c2522d49b6341747e4605cea1014b
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "5e38d5dad9b4e1b3e600330acb7750599c0a0d146c5c790ff8175b9d24e9db1b"
 platform_info_sha256 = "1e386f61b9578985a7cdfff93e647cbfab0468ff88fbf339ff715619d7ce138a"
+
+# P6.1's x86-64 seL4 reference prefix. There is no `dtb_sha256` or
+# `platform_info_sha256` here: an x86 machine describes itself through ACPI at
+# run time, so seL4 pc99 compiles no device tree and generates no
+# `platform_gen.yaml`, and the install has no `support/` directory at all.
+# `check-sel4-pins.py` asserts that absence rather than skipping it.
+[observed_prefix_qemu_pc99]
+kernel_sha256 = "18e676b802e5edac2a969fa350754e9e7c26ede859beca73e876ecabb8a53a33"
+kernel_config_sha256 = "d18f277ed2b9ad9f9d4e1f4903dfac0197597c2068d5f2dfc558e89d7517be18"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"

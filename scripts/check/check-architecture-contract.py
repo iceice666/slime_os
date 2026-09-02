@@ -54,6 +54,8 @@ EXPECTED_PROFILES = {
     "aarch64-sel4-qemu-virt",
     "riscv64-sel4-qemu-virt",
     "riscv64-sel4-milkv-duo",
+    "x86_64-sel4-qemu-pc99",
+    "x86_64-sel4-framework13-ai300",
 }
 UNKNOWN_TARGET = "unknown-architecture-profile"
 NEUTRAL_RESOURCE = b"architecture-neutral-resource-v1"

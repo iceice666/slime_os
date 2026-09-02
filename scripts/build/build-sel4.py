@@ -30,17 +30,32 @@ class Platform:
 
     Everything here is what makes two platforms differ. The rest of this
     script — variants, generations, the loader, packaging — is shared, because
-    which board an image runs on is orthogonal to which generation it embeds.
+    which board an image embeds is orthogonal to which generation it embeds.
 
     `qemu_dtb` distinguishes the two device-tree routes. `qemu-arm-virt` has no
     device tree until QEMU is asked to dump one, so the build extracts it
     deterministically and passes it in. `bcm2712` ships its description in
     tree (`tools/dts/rpi5b.dts` plus overlays), so passing a DTB would override
-    the board's own facts with an emulator's.
+    the board's own facts with an emulator's. `pc99` has no device tree at
+    all — an x86 machine describes itself through ACPI — so it neither dumps
+    one nor ships one, and its installed prefix carries no `support/` artifacts
+    for a checker to hash.
+
+    `emulated` says whether this platform is a QEMU machine, and is therefore
+    what selects the emulator-launch half of the identity manifest. It is
+    separate from `qemu_dtb` because pc99 is both: an emulated machine with no
+    device tree.
+
+    `boot_route` names how the kernel and root task are packaged into a
+    bootable image. `kernel-loader` is the rust-sel4 loader, which implements
+    Arm and RISC-V only. `multiboot2` is seL4 pc99's own native contract, where
+    the kernel and root task stay separate Multiboot modules a bootloader
+    supplies; P6.2 builds that file tree, so a `multiboot2` platform produces
+    admitted artifacts and an identity manifest without a packaged image.
 
     `pins_section` names this platform's `sel4/pins.toml` table, and
-    `observed_prefix_section` its pinned artifact hashes: the two platforms
-    build different kernels, so one set of hashes cannot describe both.
+    `observed_prefix_section` its pinned artifact hashes: the platforms build
+    different kernels, so one set of hashes cannot describe several.
     """
 
     name: str
@@ -52,10 +67,12 @@ class Platform:
     observed_prefix_section: str
     random_seed: str
     qemu_dtb: bool
+    emulated: bool
+    boot_route: str
     architecture: str
     root_target_key: str
-    child_target_name: str
-    loader_target_key: str
+    child_target_key: str
+    loader_target_key: str | None
     cross_compiler_environment: str
 
 
@@ -72,9 +89,11 @@ QEMU_ARM_VIRT = Platform(
     # changing it would move `kernel.elf` and report as toolchain drift.
     random_seed="slime-sel4-qemu-arm-virt",
     qemu_dtb=True,
+    emulated=True,
+    boot_route="kernel-loader",
     architecture="aarch64",
     root_target_key="root_target",
-    child_target_name="aarch64-sel4-minimal.json",
+    child_target_key="child_target",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
 )
@@ -91,9 +110,11 @@ BCM2712_RPI5 = Platform(
     observed_prefix_section="observed_prefix_bcm2712_rpi5",
     random_seed="slime-sel4-bcm2712-rpi5",
     qemu_dtb=False,
+    emulated=False,
+    boot_route="kernel-loader",
     architecture="aarch64",
     root_target_key="root_target",
-    child_target_name="aarch64-sel4-minimal.json",
+    child_target_key="child_target",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
 )
@@ -108,9 +129,11 @@ QEMU_RISCV_VIRT = Platform(
     observed_prefix_section="observed_prefix_qemu_riscv_virt",
     random_seed="slime-sel4-qemu-riscv-virt",
     qemu_dtb=True,
+    emulated=True,
+    boot_route="kernel-loader",
     architecture="riscv64",
     root_target_key="riscv64_root_target",
-    child_target_name="riscv64imac-sel4-minimal.json",
+    child_target_key="riscv64_child_target",
     loader_target_key="riscv64_loader_target",
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
 )
@@ -125,16 +148,49 @@ CV1800B_DUO = Platform(
     observed_prefix_section="observed_prefix_cv1800b_duo",
     random_seed="slime-sel4-cv1800b-duo",
     qemu_dtb=False,
+    emulated=False,
+    boot_route="kernel-loader",
     architecture="riscv64",
     root_target_key="riscv64_root_target",
-    child_target_name="riscv64imac-sel4-minimal.json",
+    child_target_key="riscv64_child_target",
     loader_target_key="riscv64_loader_target",
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
 )
 
+# P6.1's x86-64 seL4 reference. An emulated machine with no device tree, and
+# the only platform on the native Multiboot2 boot route: the pinned rust-sel4
+# loader implements Arm and RISC-V assembly only, and seL4 pc99 already
+# consumes Multiboot modules, so P6.2 packages the kernel and root task into a
+# GRUB file tree rather than a loader-wrapped ELF. `loader_target_key` is
+# therefore `None`, and this platform produces no packaged image.
+QEMU_PC99 = Platform(
+    name="qemu-pc99",
+    config=ROOT / "sel4" / "config" / "qemu-pc99.cmake",
+    build_dir=BUILD_ROOT / "sel4-pc99",
+    prefix_dir=BUILD_ROOT / "sel4-pc99-prefix",
+    target_profile="x86_64-sel4-qemu-pc99",
+    pins_section="qemu_pc99",
+    observed_prefix_section="observed_prefix_qemu_pc99",
+    random_seed="slime-sel4-qemu-pc99",
+    qemu_dtb=False,
+    emulated=True,
+    boot_route="multiboot2",
+    architecture="x86_64",
+    root_target_key="x86_64_root_target",
+    child_target_key="x86_64_child_target",
+    loader_target_key=None,
+    cross_compiler_environment="X86_64_COMPILER_PREFIX",
+)
+
 PLATFORMS = {
     platform.name: platform
-    for platform in (QEMU_ARM_VIRT, BCM2712_RPI5, QEMU_RISCV_VIRT, CV1800B_DUO)
+    for platform in (
+        QEMU_ARM_VIRT,
+        BCM2712_RPI5,
+        QEMU_RISCV_VIRT,
+        CV1800B_DUO,
+        QEMU_PC99,
+    )
 }
 
 IMAGE = BUILD_ROOT / "slime-sel4.elf"
@@ -635,8 +691,16 @@ def cross_compiler_prefix(platform: Platform) -> str:
     defaults = {
         "aarch64": "aarch64-unknown-linux-gnu-",
         "riscv64": "riscv64-unknown-linux-gnu-",
+        # Empty, not a triple prefix: an x86-64 kernel is built by the same
+        # ELF-targeting compiler as the host, so `flake.nix` pins one absolute
+        # `X86_64_COMPILER_PREFIX` rather than a cross wrapper. Falling back to
+        # a bare `gcc` keeps the build usable outside the pinned shell while
+        # `check-sel4-pins.py` still requires the absolute export.
+        "x86_64": "",
     }
-    prefix = os.environ.get(platform.cross_compiler_environment) or defaults[platform.architecture]
+    prefix = os.environ.get(platform.cross_compiler_environment)
+    if prefix is None:
+        prefix = defaults[platform.architecture]
     require_tool(f"{prefix}gcc")
     return prefix
 
@@ -1051,7 +1115,7 @@ def build_application(
     toolchain = text(rust_sel4, "toolchain", "rust_sel4")
     environment = cargo_environment(toolchain, platform)
     root_target = ROOT / text(rust_sel4, platform.root_target_key, "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+    child_target = ROOT / text(rust_sel4, platform.child_target_key, "rust_sel4")
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
 
@@ -1282,9 +1346,9 @@ def write_manifest(
     *,
     child_elf: Path,
     root_elf: Path,
-    loader: Path,
-    payload_tool: Path,
-    image: Path = IMAGE,
+    loader: Path | None,
+    payload_tool: Path | None,
+    image: Path | None = IMAGE,
     manifest_path: Path = MANIFEST,
     variant: str = FIXTURE_VARIANT,
     platform: Platform = QEMU_ARM_VIRT,
@@ -1302,12 +1366,19 @@ def write_manifest(
         prefix / "libsel4" / "include" / "sel4" / "gen_config.json",
         "installed libsel4 config",
     )
-    dtb = require_file(prefix / "support" / "kernel.dtb", "installed seL4 DTB")
-    platform_info = require_file(
-        prefix / "support" / "platform_gen.yaml", "installed platform metadata"
-    )
+    # An x86 machine describes itself through ACPI at run time, so seL4 pc99
+    # compiles no device tree and generates no `platform_gen.yaml`; its install
+    # has no `support/` directory at all. Recording absent files as present
+    # would make the identity claim something the prefix does not contain.
+    dtb = None
+    platform_info = None
+    if platform.architecture != "x86_64":
+        dtb = require_file(prefix / "support" / "kernel.dtb", "installed seL4 DTB")
+        platform_info = require_file(
+            prefix / "support" / "platform_gen.yaml", "installed platform metadata"
+        )
     root_target = ROOT / text(table(pins, "rust_sel4"), platform.root_target_key, "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+    child_target = ROOT / text(table(pins, "rust_sel4"), platform.child_target_key, "rust_sel4")
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
     if duo_early_fault:
         suffix += "-early-fault"
@@ -1315,8 +1386,12 @@ def write_manifest(
         suffix += "-test-terminator"
     stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
     stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
-    stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
-    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", platform)
+    stable_loader = None if loader is None else copy_artifact(loader, "sel4-kernel-loader", platform)
+    stable_payload_tool = (
+        None
+        if payload_tool is None
+        else copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", platform)
+    )
 
     manifest_platform = table(pins, platform.pins_section)
     manifest = {
@@ -1343,17 +1418,25 @@ def write_manifest(
             "child_target": file_record(child_target),
             "kernel_config": file_record(kernel_config),
             "libsel4_config": file_record(libsel4_config),
-            "dtb": file_record(dtb),
-            "platform_info": file_record(platform_info),
+            **({} if dtb is None else {"dtb": file_record(dtb)}),
+            **({} if platform_info is None else {"platform_info": file_record(platform_info)}),
         },
         "elf": {
             "kernel": file_record(kernel),
             "child": file_record(stable_child),
             "root": file_record(stable_root),
-            "loader": file_record(stable_loader),
-            "payload_tool": file_record(stable_payload_tool),
+            **({} if stable_loader is None else {"loader": file_record(stable_loader)}),
+            **(
+                {}
+                if stable_payload_tool is None
+                else {"payload_tool": file_record(stable_payload_tool)}
+            ),
         },
-        "image": file_record(image),
+        # How the kernel and root task reach execution. `multiboot2` records
+        # that no single packaged image exists: a bootloader supplies the two
+        # ELFs as separate modules, and P6.2 owns building that file tree.
+        "boot_route": platform.boot_route,
+        **({} if image is None else {"image": file_record(image)}),
         # Which startup path this image takes, so a gate cannot boot a different
         # one and assert against markers it will never emit.
         #
@@ -1373,7 +1456,7 @@ def write_manifest(
         manifest["duo_early_fault"] = True
     if duo_test_terminator:
         manifest["duo_test_terminator"] = True
-    if platform.qemu_dtb:
+    if platform.emulated:
         # Emulator launch facts, which gates read to build their QEMU command.
         manifest["qemu"] = {
             "machine": text(manifest_platform, "machine", platform.pins_section),
@@ -1864,7 +1947,15 @@ def main() -> None:
         duo_early_fault=arguments.duo_early_fault,
         duo_test_terminator=arguments.duo_test_terminator,
     )
-    loader, payload_tool = build_loader(pins, platform)
+    # The rust-sel4 loader implements Arm and RISC-V only, and seL4 pc99 needs
+    # no wrapper: a Multiboot2 bootloader supplies `kernel.elf` and the root
+    # task as separate modules. Building the loader for this platform would
+    # fail on missing architecture assembly rather than produce a usable
+    # artifact.
+    loader: Path | None = None
+    payload_tool: Path | None = None
+    if platform.boot_route == "kernel-loader":
+        loader, payload_tool = build_loader(pins, platform)
     image, manifest_path = VARIANT_IMAGES[variant]
     if platform is not QEMU_ARM_VIRT:
         # A board image is a different artifact from the QEMU image of the same
@@ -1886,7 +1977,10 @@ def main() -> None:
                 ".identity.json", "-test-terminator.identity.json"
             )
         )
-    package_image(payload_tool, loader, root_elf, image, platform)
+    if platform.boot_route == "kernel-loader":
+        package_image(payload_tool, loader, root_elf, image, platform)
+    else:
+        image = None
     write_manifest(
         pins,
         child_elf=child_elf,
@@ -1901,9 +1995,18 @@ def main() -> None:
         duo_early_fault=arguments.duo_early_fault,
         duo_test_terminator=arguments.duo_test_terminator,
     )
-    print(
-        f"seL4 image build: wrote {image.relative_to(ROOT)} and {manifest_path.relative_to(ROOT)}"
-    )
+    if image is None:
+        print(
+            "seL4 image build: wrote "
+            f"{root_elf.relative_to(ROOT)}, {child_elf.relative_to(ROOT)}, and "
+            f"{manifest_path.relative_to(ROOT)} "
+            f"({platform.boot_route}: no packaged image; the bootloader supplies the modules)"
+        )
+    else:
+        print(
+            f"seL4 image build: wrote {image.relative_to(ROOT)} "
+            f"and {manifest_path.relative_to(ROOT)}"
+        )
 
 
 if __name__ == "__main__":

@@ -490,7 +490,7 @@ fn back_page(
         // not set it, so omitting it would map the whole private region
         // executable.
         sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        crate::vm_attributes::data(),
     ) {
         // Nothing to unmap: the mapping is what failed. Delete the capability
         // so the slot is empty, then give the slot back — in that order, on the
