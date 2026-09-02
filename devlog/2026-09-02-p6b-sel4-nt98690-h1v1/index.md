@@ -60,7 +60,8 @@ what closes the milestone.
 | `just test_sel4_root` (amended recipe, `qemu-aarch64`) | 214 passed, 0 failed | Direct |
 | `just sel4_gate_control_check` | 47 gates reject 1822 mutated transcripts; every marker of the new gate instantiates | Direct |
 | Rehearsal of `check-nt98690-sel4.py` against a stand-in board replaying the QEMU sample-plane transcript with per-run jitter | Three runs: contract, sample-plane assertions, and wire clean; normalized traces identical; each run's recovery evidence is exactly the firmware banner line; no `Moving Image` in any transcript. Not board evidence: a rehearsal of the loop | Direct, synthetic |
-| `just contracts_check`, `just generation_check`, `just ruff`, `just typos`, `just fmt_check_all`, `just lint_all`, `just devlog_check` | See the closing row once the board session lands | Direct |
+| `just sel4_root_boot_check`, `just sel4_sample_check`, `just generation_check` over the re-pinned tree | Passed: the QEMU reference kernel is byte-identical, only its config JSON gained the two keys, and every reference plane still boots | Direct |
+| `just contracts_check`, `just ruff`, `just typos`, `just fmt_check_all`, `just lint_all`, `just devlog_check` | Passed on the committed tree | Direct |
 | `--reset-probe` on the named board | Pending the operator | — |
 | `just nt98690_sel4_check <serial>` on the named board | Pending the operator | — |
 
