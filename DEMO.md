@@ -73,10 +73,25 @@ of the session, backspace works, and a typo answers with `! parse` or
 ## Leave
 
 Press **Ctrl-]**. This image is the gate artifact, so the byte `0x1d` is
-intercepted by the root and routed into the SoC watchdog: the board resets
-and comes back up in its vendor firmware, then vendor Linux, untouched.
+intercepted by the root and routed into the SoC watchdog: you get
+`SLIME_NT98690 test terminator accepted`, the board resets, and it comes back
+up in its vendor firmware, then vendor Linux, untouched. Boot the image again
+with the same three commands from `nvt: ` whenever you want it back; the card
+keeps the image until you overwrite it.
 
-Avoid plain Escape — it asks the shell's REPL to exit for good, and the
-prompt will not return until you boot the image again. Same commands from
-`nvt: ` whenever you want it back; the card keeps the image until you
-overwrite it.
+## One sharp edge: Escape reboots the board
+
+Slisp is one of the four *required* residents, so init fails closed the moment
+it exits — and the shell exits on an **Escape** byte (`0x1b`), printing
+`[slisp] repl done`. Losing a required resident is a FATAL, and the root
+resets the board through the watchdog on the `cause=fatal` path. So an Escape
+does not just drop the prompt; it reboots the board back to vendor firmware.
+
+The trap: **arrow keys, Home/End, Page-Up/Down, and function keys all send a
+sequence that begins with `0x1b`**, so any of them will trip this. Edit a line
+with backspace or by retyping, not with the arrow keys, and use Ctrl-] rather
+than Escape to leave. A reboot here is harmless — nothing is written — but it
+costs you the session.
+
+The `<<seL4(CPU 0) … CNode … Source slot invalid or empty>>` lines you may see
+during a `sysinfo` spawn are benign kernel debug output, not errors.
