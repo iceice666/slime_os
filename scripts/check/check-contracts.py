@@ -348,6 +348,10 @@ for contract, generator in (
     run("check", str(contract / "check.zt"))
     run("check", str(contract / "gen_python.zt"))
     subprocess.run([sys.executable, str(generator), "--check"], cwd=ROOT, check=True)
+# The negative-build-case module lives beside the closure contract it perturbs
+# and shares its bindings, so it is type-checked here rather than getting its
+# own generator entry.
+run("check", str(SYSTEM_IMAGE_CLOSURE_CONTRACT / "check-negative.zt"))
 # CP9's published matrix is a committed repository artifact, so it is checked
 # unconditionally: there is no state in which it is legitimately absent, and a
 # conditional check would let deleting it pass silently.

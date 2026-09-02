@@ -22,6 +22,8 @@ from zutai_cli import STDLIB, binary
 IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1"
 TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v1"
 IMAGE_CHECKER = IMAGE_CONTRACT_ROOT / "check.zt"
+NEGATIVE_CHECKER = IMAGE_CONTRACT_ROOT / "check-negative.zt"
+NEGATIVE_ROOT = IMAGE_CONTRACT_ROOT / "negative"
 TEST_CHECKER = TEST_CONTRACT_ROOT / "check.zt"
 SYSTEM_ROOT = ROOT / "contracts" / "system-spec" / "v1" / "systems"
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -53,6 +55,13 @@ _TARGET_FIELDS = {
 _ROLE_FIELDS = {"role", "implementation", "parameters"}
 _NAMED_INPUT_FIELDS = {"name", "artifact"}
 _PARAMETER_FIELDS = {"name", "value"}
+_NEGATIVE_FIELDS = {
+    "formatVersion",
+    "name",
+    "baseClosureIdentity",
+    "mutation",
+    "expectedRefusal",
+}
 _TEST_FIELDS = {
     "formatVersion",
     "name",
@@ -85,6 +94,14 @@ class CompiledClosure:
 
 @dataclass(frozen=True)
 class CompiledTestRun:
+    path: Path
+    value: dict
+    normalized: bytes
+    identity: bytes
+
+
+@dataclass(frozen=True)
+class CompiledNegativeCase:
     path: Path
     value: dict
     normalized: bytes
@@ -546,3 +563,51 @@ def make_build_result(
     }
     normalized = normalize(value)
     return value, normalized, hashlib.sha256(image_contract.BUILD_RESULT_IDENTITY_DOMAIN + normalized).hexdigest()
+
+
+def compile_negative_case(path: Path, contract: ModuleType = image_contract) -> CompiledNegativeCase:
+    """One negative build case: a valid base closure plus one closed mutation.
+
+    Compiled rather than resolved, and the distinction is the point: a negative
+    case names no artifacts of its own, so there is nothing to re-read and
+    verify. What is checked is that it is well-formed, that its mutation is one
+    the contract admits, and that the base closure it perturbs exists and
+    resolves — because a mutation against a base nobody can build is evidence
+    of nothing.
+    """
+    value = _exact(
+        _run_zutai(
+            path.resolve(),
+            NEGATIVE_CHECKER,
+            "SLIME_NEGATIVE_BUILD_CASE_PATH",
+            contract.MAX_SOURCE_BYTES,
+        ),
+        _NEGATIVE_FIELDS,
+        str(path),
+    )
+    if value["formatVersion"] != contract.FORMAT_VERSION:
+        _fail(f"unsupported negative build case version {value['formatVersion']}")
+    name = _bounded_text(value["name"], contract.MAX_NAME_BYTES, "name")
+    if _NAME.fullmatch(name) is None or name != path.stem:
+        _fail("negative case name must match its file name and use canonical spelling")
+    _digest(value["baseClosureIdentity"], "baseClosureIdentity", contract)
+    mutation = _bounded_text(value["mutation"], contract.MAX_NAME_BYTES, "mutation")
+    if mutation not in contract.MUTATIONS:
+        _fail(
+            f"mutation: {mutation!r} is not one this contract admits; expected one of "
+            f"{sorted(contract.MUTATIONS)}"
+        )
+    _bounded_text(value["expectedRefusal"], contract.MAX_TEXT_BYTES, "expectedRefusal")
+    normalized = normalize(value)
+    if len(normalized) > contract.MAX_NORMALIZED_BYTES:
+        _fail("normalized negative case exceeds bound")
+    return CompiledNegativeCase(
+        path.resolve(),
+        value,
+        normalized,
+        hashlib.sha256(contract.NEGATIVE_IDENTITY_DOMAIN + normalized).digest(),
+    )
+
+
+def negative_case_paths(root: Path = NEGATIVE_ROOT) -> list[Path]:
+    return sorted(root.glob("*.zti"))

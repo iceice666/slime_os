@@ -25,6 +25,15 @@ render :: Text = t.join "" {
   tuple "PROVIDERS" { schema.providerWorkspace; schema.providerExternal; };
   text "PROVIDER_WORKSPACE" schema.providerWorkspace;
   text "PROVIDER_EXTERNAL" schema.providerExternal;
+  "NEGATIVE_IDENTITY_DOMAIN = "; t.show schema.negativeIdentityDomain; ".encode(\"utf-8\")\n";
+  tuple "MUTATIONS" {
+    schema.mutationMissing;
+    schema.mutationExtra;
+    schema.mutationAliased;
+    schema.mutationWrongSlot;
+    schema.mutationWrongType;
+    schema.mutationWrongRights;
+  };
   tuple "BUILD_PROFILES" {
     schema.buildProfileDefault;
     schema.buildProfileProxyEarlyExit;

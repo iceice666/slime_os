@@ -166,6 +166,53 @@ FromData @SystemImageClosure :: derive
 FromData @ResultArtifact :: derive
 FromData @SystemImageBuildResult :: derive
 
+-- One deliberately invalid build: a valid base closure plus exactly one closed
+-- root mutation, expected to be refused.
+--
+-- B40's six child-CSpace perturbations are the case. Each compiles the root
+-- with one capability wrong — a declared capability deleted, an undeclared one
+-- installed, a badge aliased, a slot or type or rights substituted — so the
+-- capability-layout audit's refusal is *observed* rather than assumed. Before
+-- CP14 the selection was an ambient `SLIME_B40_MUTATION`, which meant an
+-- invalid root was reachable from any build command and nothing distinguished
+-- it from a valid one in any identity.
+--
+-- A negative case is deliberately *not* a `SystemImageClosure`. A closure is a
+-- key for a build whose output is meant to boot; these are builds whose output
+-- must be refused, and giving them the same type would let one be presented as
+-- a valid product image. `baseClosureIdentity` names the closure they perturb,
+-- so the mutation is one delta against a reviewed valid build rather than a
+-- second graph nobody compares.
+--
+-- `expectedRefusal` is the marker the audit must emit. A case that failed for
+-- some *other* reason — a build error, a different refusal — is not evidence
+-- that the mutation was caught, so the expected reason is declared and checked
+-- rather than "it failed, good".
+NegativeBuildCase :: type {
+  formatVersion : Int;
+  name : Text;
+  baseClosureIdentity : Text;
+  mutation : Text;
+  expectedRefusal : Text;
+};
+
+FromData @NegativeBuildCase :: derive
+
+decodeNegativeBuildCase :: Data -> Validation DecodeIssue NegativeBuildCase
+  = data => decode data;
+
+negativeIdentityDomain :: Text = "slime-negative-build-case-v1:";
+
+-- The six B40 child-CSpace mutations, closed. Each maps to exactly one
+-- `--cfg slime_b40_mutate_*` the root's own `build.rs` declares, so a seventh
+-- cannot appear here without the root admitting it too.
+mutationMissing :: Text = "missing";
+mutationExtra :: Text = "extra";
+mutationAliased :: Text = "aliased";
+mutationWrongSlot :: Text = "wrong_slot";
+mutationWrongType :: Text = "wrong_type";
+mutationWrongRights :: Text = "wrong_rights";
+
 formatVersion :: Int = 1;
 identityDomain :: Text = "slime-system-image-closure-v1:";
 buildResultIdentityDomain :: Text = "slime-system-image-build-result-v1:";
@@ -240,6 +287,15 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   SystemImageClosure =;
   ResultArtifact =;
   SystemImageBuildResult =;
+  NegativeBuildCase =;
+  decodeNegativeBuildCase =;
+  negativeIdentityDomain =;
+  mutationMissing =;
+  mutationExtra =;
+  mutationAliased =;
+  mutationWrongSlot =;
+  mutationWrongType =;
+  mutationWrongRights =;
   decodeSystemImageClosure =;
   decodeSystemImageBuildResult =;
   formatVersion =;

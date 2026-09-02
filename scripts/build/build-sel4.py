@@ -1091,6 +1091,10 @@ def build_application(
     closure_root_role: str | None = None,
     closure_root_parameters: tuple[str, ...] = (),
     closure_target_name: str | None = None,
+    # CP14: one closed B40 child-CSpace mutation, from a negative build case.
+    # Only the closure path accepts it, so an ambient environment variable can
+    # no longer make any build produce a deliberately invalid root.
+    closure_root_mutation: str | None = None,
 ) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
@@ -1212,13 +1216,22 @@ def build_application(
         root_environment["SLIME_GENERATION"] = str(generation)
         if variant == FIXTURE_VARIANT and platform.name != CV1800B_DUO.name:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
+    if closure_root_mutation is not None:
+        if closure_root_role is None:
+            fail("a root mutation is only selectable through a closure")
+        if closure_root_mutation not in B40_MUTATIONS:
+            fail(f"unknown B40 mutation {closure_root_mutation!r}")
+        rustflags = root_environment.get("RUSTFLAGS", "")
+        root_environment["RUSTFLAGS"] = (
+            f"{rustflags} --cfg slime_b40_mutate_{closure_root_mutation}".strip()
+        )
     if closure_root_role is None and variant == RECLAMATION_VARIANT:
         rustflags = root_environment.get("RUSTFLAGS", "")
         root_environment["RUSTFLAGS"] = f"{rustflags} --cfg slime_b38_force_unwind".strip()
     # B40 negative mutations: perturb one child CSpace in exactly one way so
     # the capability-layout audit's refusal is observed rather than assumed.
     # Never set for a product variant.
-    mutation = os.environ.get("SLIME_B40_MUTATION")
+    mutation = None if closure_root_role is not None else os.environ.get("SLIME_B40_MUTATION")
     if mutation:
         if mutation not in B40_MUTATIONS:
             fail(f"unknown B40 mutation {mutation!r}")

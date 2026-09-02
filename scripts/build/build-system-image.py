@@ -21,7 +21,12 @@ from types import ModuleType
 
 import system_image_closure_contract as CLOSURE_CONTRACT
 from harness import ROOT
-from system_image_closure import make_build_result, resolve_closure
+from system_image_closure import (
+    compile_closure,
+    compile_negative_case,
+    make_build_result,
+    resolve_closure,
+)
 
 
 def load_build_module(name: str, relative: str) -> ModuleType:
@@ -188,7 +193,14 @@ def profile_environment(profiles: dict[str, str]) -> dict[str, str]:
     return environment
 
 
-def build(closure: Path, output: Path) -> Path:
+def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
+    """Build one closure into `output`.
+
+    `mutation` builds a *negative* case: the same closure with one child-CSpace
+    perturbation compiled into the root. The output is not a product image and
+    is never presented as one — `build_negative` below is the only caller, and
+    it writes no image-identity record.
+    """
     resolved = resolve_closure(closure)
     value = resolved.compiled.value
     output = output.resolve()
@@ -276,14 +288,24 @@ def build(closure: Path, output: Path) -> Path:
                 # variant table cannot select anything here.
                 closure_root_role=resolved.root_role,
                 closure_root_parameters=resolved.root_parameters,
-                closure_target_name=f"closure-{resolved.compiled.identity.hex()[:16]}",
+                closure_target_name=(
+                    f"closure-{resolved.compiled.identity.hex()[:16]}"
+                    if mutation is None
+                    else f"negative-{mutation}-{resolved.compiled.identity.hex()[:12]}"
+                ),
+                closure_root_mutation=mutation,
             )
             # A boot-selector root carries no embedded generation, and an
             # embedded-generation root carries exactly the one this closure
             # resolved. The two claims are opposite and both are checked, which
             # is what keeps a selector image from silently shipping a
             # generation.
-            if resolved.root_role == CLOSURE_CONTRACT.ROOT_ROLE_BOOT_SELECTOR:
+            if mutation is not None:
+                # A mutated root still embeds its generation; what the case
+                # asserts is that the audit refuses the CSpace at boot. So
+                # nothing about the embedding is claimed here.
+                pass
+            elif resolved.root_role == CLOSURE_CONTRACT.ROOT_ROLE_BOOT_SELECTOR:
                 if embedded is not None:
                     fail("boot-selector root embedded a generation")
             elif embedded != generation.resolve():
@@ -338,6 +360,20 @@ def build(closure: Path, output: Path) -> Path:
         bytes=loader_output.stat().st_size,
         sha256=hashlib.sha256(loader_output.read_bytes()).hexdigest(),
     )
+    if mutation is not None:
+        # A negative build is not a product image, so it gets no image-identity
+        # record and no build result. Those two artifacts are what every
+        # downstream consumer reads as "this is a verified image"; writing them
+        # for a deliberately invalid root is exactly the confusion the negative
+        # case type exists to prevent. The image itself stays, because its
+        # owning gate boots it to observe the refusal.
+        for stray in (identity_manifest, image, root_output, loader_output):
+            if stray is identity_manifest and stray.exists():
+                stray.unlink()
+        (output / "negative-image.elf").write_bytes(image.read_bytes())
+        image.unlink()
+        print(f"system image build: wrote negative image to {output / 'negative-image.elf'}")
+        return output
     write_json(identity_manifest, image_identity)
     result, normalized, identity = make_build_result(
         resolved,
@@ -355,14 +391,52 @@ def build(closure: Path, output: Path) -> Path:
     return output
 
 
+def build_negative(case: Path, output: Path) -> Path:
+    """Build one negative case: a valid base closure plus one closed mutation.
+
+    The base is found by identity rather than by path, so a case cannot name a
+    closure that does not exist and cannot drift onto a different one silently.
+    The result is a deliberately invalid image whose refusal its owning gate
+    observes at boot; no image-identity record is written, so nothing here can
+    be mistaken for a product image.
+    """
+    compiled = compile_negative_case(case)
+    wanted = compiled.value["baseClosureIdentity"]
+    for candidate in sorted(
+        (ROOT / "contracts" / "system-image-closure" / "v1" / "closures").glob("*.zti")
+    ):
+        if compile_closure(candidate).identity.hex() == wanted:
+            base = candidate
+            break
+    else:
+        fail(f"{case.stem}: no closure has identity {wanted}")
+    result = build(base, output, mutation=compiled.value["mutation"])
+    (output / "negative-case.identity").write_text(
+        compiled.identity.hex() + "\n", encoding="utf-8"
+    )
+    print(
+        f"system image build: wrote negative case {compiled.identity.hex()} "
+        f"({compiled.value['mutation']}) over closure {wanted} to {output}"
+    )
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("closure", type=Path)
     parser.add_argument("output_dir", type=Path)
+    parser.add_argument(
+        "--negative",
+        action="store_true",
+        help="treat the record as a negative build case rather than a closure",
+    )
     arguments = parser.parse_args()
     if arguments.closure.suffix != ".zti":
         fail("closure must be a .zti record")
-    build(arguments.closure, arguments.output_dir)
+    if arguments.negative:
+        build_negative(arguments.closure, arguments.output_dir)
+    else:
+        build(arguments.closure, arguments.output_dir)
 
 
 if __name__ == "__main__":

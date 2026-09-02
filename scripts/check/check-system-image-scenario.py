@@ -48,6 +48,8 @@ from harness import ROOT
 from system_image_closure import (
     SystemImageClosureError,
     compile_closure,
+    compile_negative_case,
+    negative_case_paths,
     resolve_closure,
 )
 
@@ -62,6 +64,9 @@ BYTE_ARM = "sel4-stream-death"
 
 # The root-role closure whose bytes the expensive arm proves.
 ROOT_ROLE_ARM = "sel4-channel-fixture"
+
+# The negative case whose build the expensive arm proves.
+NEGATIVE_ARM = "sel4-b40-missing"
 
 EXPECTED_PARAMETERS = ("generationNumber", "fabricLimitOverride", "fabricQosOverride")
 
@@ -299,6 +304,118 @@ def check_root_role_bytes(name: str) -> tuple[str, str]:
         return left["root"]["sha256"], right["root"]["sha256"]
 
 
+def check_negative_cases() -> int:
+    """Negative build cases are typed, closed, based on a real closure, and refused-shaped.
+
+    A negative case is a valid base closure plus one child-CSpace mutation,
+    expected to be refused. It is deliberately *not* a `SystemImageClosure`:
+    a closure keys a build meant to boot, and giving these the same type would
+    let a deliberately invalid root be presented as a product image. This
+    asserts they compile, name distinct identities, cover the closed mutation
+    set exactly once each, and reference a base closure that really exists.
+    """
+    paths = negative_case_paths()
+    if not paths:
+        fail("no negative build case is declared, so this arm asserts nothing")
+    closure_identities = {
+        compile_closure(path).identity.hex(): path.stem
+        for path in sorted(CLOSURE_ROOT.glob("*.zti"))
+    }
+    seen_mutations: dict[str, str] = {}
+    identities: dict[str, str] = {}
+    for path in paths:
+        case = compile_negative_case(path)
+        mutation = case.value["mutation"]
+        if mutation in seen_mutations:
+            fail(
+                f"{path.stem} and {seen_mutations[mutation]} both declare mutation "
+                f"{mutation!r}"
+            )
+        seen_mutations[mutation] = path.stem
+        identity = case.identity.hex()
+        if identity in identities:
+            fail(f"{path.stem} and {identities[identity]} compute the same case identity")
+        identities[identity] = path.stem
+        base = case.value["baseClosureIdentity"]
+        if base not in closure_identities:
+            fail(f"{path.stem}: base closure identity {base} names no closure")
+        if not case.value["expectedRefusal"]:
+            fail(f"{path.stem}: declares no expected refusal, so failing proves nothing")
+    missing = sorted(set(CONTRACT.MUTATIONS) - set(seen_mutations))
+    if missing:
+        fail(f"mutation(s) {missing} have no negative build case")
+    # A case naming a mutation the contract does not admit, or a base closure
+    # nobody has, is refused rather than silently skipped.
+    template = compile_negative_case(paths[0]).value
+    for mutate, needle in (
+        (lambda v: v.__setitem__("mutation", "ambientMutation"), "not one this contract admits"),
+        (lambda v: v.__setitem__("expectedRefusal", ""), "expected text"),
+    ):
+        value = copy.deepcopy(template)
+        mutate(value)
+        with tempfile.TemporaryDirectory(prefix="slime-negative-") as scope:
+            bad = Path(scope) / f"{value['name']}.zti"
+            bad.write_text(GENERATOR_MODULE.render(value) + "\n", encoding="utf-8")
+            try:
+                compile_negative_case(bad)
+            except SystemImageClosureError as error:
+                if needle not in str(error):
+                    fail(f"wrong refusal for a malformed negative case: {error}")
+            else:
+                fail(f"a malformed negative case was accepted ({needle})")
+    return len(paths)
+
+
+def check_negative_build(name: str) -> str:
+    """A negative build produces a distinct root and no product identity record.
+
+    The arm that makes the type real: the mutation must change the root, and
+    the build must refuse to emit the two artifacts every consumer reads as
+    "this is a verified image" — `image.identity.json` and `build-result.json`.
+    """
+    case_path = ROOT / "contracts" / "system-image-closure" / "v1" / "negative" / f"{name}.zti"
+    case = compile_negative_case(case_path)
+    base_name = next(
+        path.stem
+        for path in sorted(CLOSURE_ROOT.glob("*.zti"))
+        if compile_closure(path).identity.hex() == case.value["baseClosureIdentity"]
+    )
+
+    def run(args: list[str], output: Path) -> None:
+        process = subprocess.run(
+            [sys.executable, str(BUILDER_SCRIPT), *args, str(output)],
+            cwd=ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if process.returncode != 0:
+            tail = "\n".join(process.stdout.strip().splitlines()[-12:])
+            fail(f"{name}: build failed:\n{tail}")
+
+    with tempfile.TemporaryDirectory(prefix=f"slime-negative-build-{name}-") as scope:
+        root = Path(scope)
+        run([str(CLOSURE_ROOT / f"{base_name}.zti")], root / "base")
+        run(["--negative", str(case_path)], root / "negative")
+
+        base_root = hashlib.sha256((root / "base" / "root.elf").read_bytes()).hexdigest()
+        negative_root = hashlib.sha256((root / "negative" / "root.elf").read_bytes()).hexdigest()
+        if base_root == negative_root:
+            fail(f"{name}: the mutation changed no root byte")
+        # No product identity, no build result, and the image is named for what
+        # it is.
+        for forbidden in ("image.identity.json", "build-result.json", "image.elf"):
+            if (root / "negative" / forbidden).exists():
+                fail(f"{name}: a negative build wrote {forbidden}, which claims a valid image")
+        if not (root / "negative" / "negative-image.elf").is_file():
+            fail(f"{name}: a negative build wrote no negative-image.elf for its gate to boot")
+        recorded = (root / "negative" / "negative-case.identity").read_text(encoding="utf-8")
+        if recorded.strip() != case.identity.hex():
+            fail(f"{name}: the build recorded a different negative-case identity")
+        return negative_root
+
+
 def check_scenarios() -> int:
     """Every scenario resolves, differs from its base, and changes only what it names."""
     scenarios = GENERATOR_MODULE.SCENARIOS
@@ -503,6 +620,8 @@ closure_count = check_every_closure_applies()
 base_elf, scenario_elf = check_profile_bytes(BYTE_ARM)
 role_count = check_root_roles()
 base_root, role_root = check_root_role_bytes(ROOT_ROLE_ARM)
+negative_count = check_negative_cases()
+negative_root = check_negative_build(NEGATIVE_ARM)
 
 print(
     f"system image scenario check: the closure contract admits exactly "
@@ -518,5 +637,8 @@ print(
     f"an unadmitted parameter, and a wrong-platform parameter all refused, {role_count} "
     f"root-role closure(s) resolving distinctly from their bases, and {ROOT_ROLE_ARM} moving "
     f"root.elf from {base_root[:12]} to {role_root[:12]} reproducibly with its generation "
-    "unchanged"
+    "unchanged; and "
+    f"{negative_count} negative build case(s) cover the closed mutation set over real base "
+    f"closures with malformed cases refused, {NEGATIVE_ARM} producing a distinct root "
+    f"{negative_root[:12]} and no image-identity or build-result record"
 )
