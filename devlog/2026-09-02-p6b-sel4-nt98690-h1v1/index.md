@@ -84,7 +84,7 @@ vendor firmware's banner every time.
 - [x] **The board booted seL4 three times**; the transcripts are committed here.
 - [x] The watchdog reset from the non-secure world works with 32-bit writes from EL0 through seL4: every run's reset request was followed by the firmware banner, and the operator applied power exactly once, when the gate asked (see Corrections). The separate `--reset-probe` was not needed and remains available as a bench tool.
 - [x] `check-sel4-sample-plane.py::check_transcript` accepted the board's own transcripts, on the board's own architecture.
-- [ ] The fork branches are local until pushed; the pins name commits `1b93edf5…` and `20905bef…`.
+- [x] The fork branches are pushed to `CG-AA/{seL4,rust-sel4}` at the pinned `1b93edf5…` and `20905bef…` (see Corrections). `.gitmodules` and `sel4/pins.toml` keep naming the `iceice666` forks, which must carry those two commits before this tree builds from them.
 - [ ] The root's virtio scan at `0x0a00_0000` maps a RAM page as device memory on this board and reports `devices=0`; harmless and stable, left as is.
 
 ## Artifacts and provenance
@@ -103,3 +103,11 @@ vendor firmware's banner every time.
    instruction at the start, and not again. Runs two and three therefore began
    from the root's own watchdog reset, which is what the roadmap's "resets
    itself" and "without an operator" mean here.
+2. Appended 2026-09-02, after the push. The forks could not be pushed from this
+   host because its GitHub identity had no write access to `iceice666/*`. The
+   `slime-ns02201-h1v1` branches were pushed to `CG-AA/seL4` and
+   `CG-AA/rust-sel4`, forks of the iceice666 repositories with every branch
+   and commit intact, at exactly the pinned hashes. This tree keeps naming the
+   iceice666 forks; landing the one platform commit in each of them is the
+   prerequisite for building this change from upstream. The Decisions bullet
+   "Fork pushes are the operator's" describes the situation before this.
