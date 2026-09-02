@@ -130,7 +130,7 @@ def build_artifacts() -> None:
             "--component-graph",
             "--platform",
             PLATFORM,
-            "--duo-test-terminator",
+            "--test-terminator",
         ]
     )
     run(
@@ -164,7 +164,7 @@ def check_identity() -> tuple[str, dict[str, object]]:
         fail("the product image identity is not the resident graph")
     if image_identity.get("duo_early_fault", False):
         fail("the product image unexpectedly enables the P3.E early-fault control")
-    if not image_identity.get("duo_test_terminator", False):
+    if not image_identity.get("test_terminator", False):
         fail("the physical gate image lacks its explicit test-only terminator")
     image_record = image_identity.get("image")
     if not isinstance(image_record, dict) or image_record.get("sha256") != sha256_file(IMAGE, fail):
@@ -174,7 +174,7 @@ def check_identity() -> tuple[str, dict[str, object]]:
         or fit_identity.get("target_profile") != TARGET_PROFILE
     ):
         fail("the FIT identity is not the Duo resident product")
-    if not fit_identity.get("duo_test_terminator", False):
+    if not fit_identity.get("test_terminator", False):
         fail("the physical gate FIT lacks its explicit test-only terminator")
     if fit_identity.get("elf_sha256") != sha256_file(IMAGE, fail):
         fail("the FIT identity does not bind the product ELF")

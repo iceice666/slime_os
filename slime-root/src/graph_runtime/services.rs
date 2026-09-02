@@ -1457,7 +1457,7 @@ pub(super) fn serve_instance_graph(
                         live_required,
                         live_required,
                     );
-                    #[cfg(slime_cv1800b_duo)]
+                    #[cfg(slime_physical_target)]
                     sel4::debug_println!(
                         "SLIME_ROOT READY target_profile={}",
                         crate::TARGET_PROFILE

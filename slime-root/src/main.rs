@@ -358,7 +358,7 @@ fn request_duo_cold_reset(
     }
 }
 
-#[cfg(slime_duo_test_terminator)]
+#[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 fn request_duo_test_reset() -> ! {
     sel4::debug_println!("SLIME_DUO test terminator accepted");
     // SAFETY: root startup writes both `Some` values before the console thread
@@ -371,7 +371,7 @@ fn request_duo_test_reset() -> ! {
     }
 }
 
-#[cfg(slime_duo_uart)]
+#[cfg(slime_product_uart)]
 const fn const_parse_hex_usize(value: &str) -> usize {
     let bytes = value.as_bytes();
     assert!(
@@ -410,9 +410,9 @@ static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the selected product terminal receiver.
 ///
-/// QEMU maps PL011 at `0x0900_0000`; the Duo product maps UART0 at the physical
-/// address supplied from the pinned board profile. Plane images map neither.
-#[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
+/// QEMU maps PL011 at `0x0900_0000`; a physical board's product maps UART0 at
+/// the address supplied from its pinned board profile. Plane images map neither.
+#[cfg(any(slime_qemu_keyboard, slime_product_uart))]
 static mut PRODUCT_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
@@ -439,9 +439,9 @@ static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// timer granule: both come from one device untyped and retype is monotonic.
 #[cfg(slime_cv1800b_duo)]
 static mut RESET_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
-#[cfg(slime_duo_test_terminator)]
+#[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 static mut DUO_RESET_REGISTERS: Option<device::MappedGranule> = None;
-#[cfg(slime_duo_test_terminator)]
+#[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 static mut DUO_TIMER_REGISTERS: Option<device::MappedGranule> = None;
 
 /// Standing MMIO windows for the userspace-authority inventory, one per
@@ -469,8 +469,8 @@ const TIMER_PADDR: usize = 0x0010_1000;
 const TIMER_PADDR: usize = 0x0502_6000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
-#[cfg(slime_duo_uart)]
-const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR"));
+#[cfg(slime_product_uart)]
+const PRODUCT_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_PRODUCT_UART_PADDR"));
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
@@ -720,7 +720,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
-    #[cfg(all(any(slime_qemu_keyboard, slime_duo_uart), not(slime_root_fixture)))]
+    #[cfg(all(any(slime_qemu_keyboard, slime_product_uart), not(slime_root_fixture)))]
     let product_input = {
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
@@ -742,29 +742,32 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 device::TerminalReceiver::Pl011(device::Pl011Input::new(registers)),
             )
         };
-        #[cfg(slime_duo_uart)]
+        #[cfg(slime_product_uart)]
         let (paddr, receiver) = {
             let registers = match device::DeviceRegion::map(
                 allocator,
                 sel4::init_thread::slot::VSPACE.cap(),
                 uart_addr,
-                DUO_UART_PADDR,
+                PRODUCT_UART_PADDR,
             ) {
                 Ok(registers) => registers,
-                Err(error) => fatal!("Duo product UART unavailable: {error:?}"),
+                Err(error) => fatal!("product UART unavailable: {error:?}"),
             };
             (
-                DUO_UART_PADDR,
+                PRODUCT_UART_PADDR,
                 device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
             )
         };
         sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
         let input = device::TerminalInput::new(receiver);
-        #[cfg(slime_duo_test_terminator)]
+        #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
         let input = input.with_test_terminator(0x1d, request_duo_test_reset);
         Some(input)
     };
-    #[cfg(all(not(any(slime_qemu_keyboard, slime_duo_uart)), not(slime_root_fixture)))]
+    #[cfg(all(
+        not(any(slime_qemu_keyboard, slime_product_uart)),
+        not(slime_root_fixture)
+    ))]
     let product_input: Option<device::TerminalInput> = None;
     // ---- timer phase ----
     // Proves `TimerScheduler` (see `timer.rs`) is driven by a real seL4 IRQ
@@ -794,7 +797,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Err(error) => fatal!("reset registers unavailable: {error:?}"),
         }
     };
-    #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+    #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
     let timer_registers;
     #[cfg(target_arch = "riscv64")]
     {
@@ -811,11 +814,11 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Ok(region) => region.granule(),
             Err(error) => fatal!("timer registers unavailable: {error:?}"),
         };
-        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         {
             timer_registers = registers;
         }
-        #[cfg(slime_duo_test_terminator)]
+        #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
         unsafe {
             ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(registers));
             ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
@@ -1046,7 +1049,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );
-        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         request_duo_cold_reset(timer_registers, reset_registers);
         loop {
             core::hint::spin_loop();
