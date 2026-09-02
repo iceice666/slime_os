@@ -394,6 +394,15 @@ fn request_duo_cold_reset(
     }
 }
 
+/// The gate-only terminator byte routes into the same watchdog reset an
+/// autonomous proof uses, so a scored session ends by returning the board to
+/// its vendor firmware without an operator.
+#[cfg(all(slime_product_test_terminator, slime_ns02201_h1v1))]
+fn request_ns02201_test_reset() -> ! {
+    sel4::debug_println!("SLIME_NT98690 test terminator accepted");
+    request_ns02201_reset()
+}
+
 #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 fn request_duo_test_reset() -> ! {
     sel4::debug_println!("SLIME_DUO test terminator accepted");
@@ -814,6 +823,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         let input = device::TerminalInput::new(receiver);
         #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
         let input = input.with_test_terminator(0x1d, request_duo_test_reset);
+        #[cfg(all(slime_product_test_terminator, slime_ns02201_h1v1))]
+        let input = input.with_test_terminator(0x1d, request_ns02201_test_reset);
         Some(input)
     };
     #[cfg(all(
@@ -1138,7 +1149,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         );
         #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         request_duo_cold_reset(timer_registers, reset_registers);
-        #[cfg(slime_ns02201_h1v1)]
+        #[cfg(all(slime_ns02201_h1v1, not(slime_product_uart)))]
         request_ns02201_reset();
         loop {
             core::hint::spin_loop();

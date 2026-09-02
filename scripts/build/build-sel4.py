@@ -159,6 +159,7 @@ NS02201_H1V1 = Platform(
 # the pin string is asserted so a swapped board profile fails loudly.
 PRODUCT_UART_KINDS: "dict[Platform, str]" = {
     CV1800B_DUO: "dw-apb",
+    NS02201_H1V1: "ns16550a",
 }
 
 PLATFORMS = {
