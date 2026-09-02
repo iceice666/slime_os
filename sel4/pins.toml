@@ -237,6 +237,11 @@ gicv_base = "0x2fff06000"
 # only, so the primary's value is a separate, observed key below.
 dts_timer_frequency_hz = 12000000
 psci = "0.2-smc"
+# The U-Boot facts below were read off the board on 2026-09-02 and are no
+# longer inferred from vendor source; the transcript is
+# devlog/2026-09-01-p6a-nt98690-probe/uboot-survey.log. `mmc list` reports
+# MMC0 as the SD slot and MMC2 as the eMMC, so device 0 is the removable card
+# and no gate command addresses the eMMC.
 uboot_version = "2021.10-novatek-ns02201"
 uboot_prompt = "nvt: "
 uboot_select_device = "mmc dev 0"

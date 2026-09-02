@@ -136,10 +136,18 @@ throttle its console to the line rate the estimate assumes.
 - [ ] **The board has not been booted.** P6.A stays in progress until
       `just nt98690_boot_check <serial>` runs against the named H1V1 and its
       transcript is committed here as `probe-boot.log`.
-- [ ] Before that first scored run, capture `just nt98690_serial_monitor` across a
+- [x] Before that first scored run, capture `just nt98690_serial_monitor` across a
       power cycle and confirm the U-Boot banner, the `mmc` device line, and the
-      device-tree line against the real wording. They are currently derived from the
-      vendor U-Boot source, which is strong but is not a transcript.
+      device-tree line against the real wording. **Done 2026-09-02**, on the board:
+      `vendor-boot.log` (autoboot, 0 framing errors at 115200) and
+      `uboot-survey.log` (the prompt). Every marker matched, and the run found two
+      gate defects recorded under Corrections. The pinned prompt `nvt: `,
+      `mmc dev 0`, and `mmc 0:1` are confirmed: `mmc list` reports MMC0 as the SD
+      slot and MMC2 as the eMMC, so no gate command addresses the eMMC.
+      `${fdtcontroladdr}` is `0x7f9c5ea0` and holds `d00dfeed`. U-Boot's own
+      `lmb_dump_all` reserves `0x1f00000-0x1ffffff`, `0x4800000-0xabfffff`, and
+      `0x7f9c4a40-0x7fffffff`, all three inside the builder's `RESERVED_REGIONS`,
+      and none of them contains the pinned load address `0x10000000`.
 - [ ] `parange`, `cntfrq`, and `gicd_typer` match any 16-digit value today. Tighten
       them to the observed values once there are some; until then they assert shape,
       not fact.
@@ -159,3 +167,36 @@ throttle its console to the line rate the estimate assumes.
 - Lane decision, board facts, and the P6.B/P6.C outlines: [`devlog/2026-09-01-p6-nt98690-h1v1-lane/`](../2026-09-01-p6-nt98690-h1v1-lane/index.md)
 - Vendor U-Boot consulted for every expected console string: `/srv/novatek/sdk/worktrees/h1v1-dev/BSP/u-boot` (`cmd/mmc.c`, `cmd/booti.c`, `arch/arm/lib/{image,bootm}.c`, `common/image-fdt.c`, `fs/fs.c`)
 - Related roadmap item: [P6.A](../../roadmap/07-architecture-portability.md#p6a--h1v1-environment-bootstrap-and-firmware-handoff-evidence)
+
+## Corrections
+
+Appended 2026-09-02, after the first board session. The survey runs below were
+observations, not scored runs; P6.A remains in progress.
+
+1. **The recovery step would have failed a correct run.** This board's firmware
+   reaches its kernel handoff about 700 characters after the U-Boot banner and
+   prints `Moving Image from 0x7c700040 to 0x0`. The gate read three further
+   seconds past the banner — roughly 34 kB at 115200 — so that line entered the
+   transcript, where `Moving Image from` is a failure marker asserting where
+   *this gate's* payload was placed. A board recovering exactly as this
+   milestone requires would have rejected the run at its final step, with every
+   earlier check passed. The recovery capture now keeps the banner line and
+   nothing after it (`1427254`).
+
+2. **The device-tree pre-flight asserted nothing.** `md.l ${fdtcontroladdr} 1`
+   was issued and its output appended to the transcript without being examined,
+   so a bad address was caught only at the end by the ordered marker contract —
+   after `booti` had run and this U-Boot had panicked on the missing tree,
+   contradicting the step's own stated purpose. It now fails where it reads
+   (`b1e7e64`).
+
+3. **`--survey` added** (`d5c5910`). The vendor autoboot transcript cannot supply
+   the slot number, `${fdtcontroladdr}`, or the prompt string, because it never
+   stops at the prompt; on a board with no scriptable reboot each wrong guess
+   costs a power cycle. All its commands are read-only.
+
+4. The vendor kernel's own relocation confirms the placement model the payload's
+   header depends on: loaded at `0x7c700040` with `text_offset` 0, U-Boot moved
+   it to `0x0`, which is `ALIGN(ram_base, 2 MiB) + text_offset`. The probe pins
+   `text_offset` to its load address, so the same arithmetic is a no-op and
+   `Moving Image from` should not appear.
