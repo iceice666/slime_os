@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-01 |
 | Kind | Decision |
-| Status | Proposed |
+| Status | Verified |
 | Scope | `roadmap/07-architecture-portability.md`, `roadmap/README.md`, `sel4/pins.toml`, `tools/nt98690/`, `scripts/build/build-nt98690-payload.py`, `scripts/check/check-nt98690-boot.py`, `scripts/lib/{arm64_image,uboot_console}.py`, `just/hardware.just` |
 | Roadmap | P6, P6.A, P6.B, P6.C |
 | Gates | `just nt98690_payload_check`, `just nt98690_boot_check`, `just sel4_gate_control_check` |
@@ -210,3 +210,11 @@ corrections themselves.
    H1V1's unguarded post-graph reset are the real blockers), fork-push risk 9
    closed the good way (forks at `CG-AA`, pushed and pinned), and the P6.C gate
    is written to enter the shared tamper control the Duo's slisp gate never had.
+7. **The lane closed on 2026-09-02.** All three sessions ran on the named
+   board within two days: P6.A (25 markers), P6.B (three byte-identical seL4
+   boots with autonomous watchdog recovery), and P6.C (one resident Slisp
+   session over the declared `InputRead` path, ended by the gate-only
+   terminator). The decision's exit conditions were observed as proposed; the
+   one structural deviation from this entry's plan — the reset moving from
+   Session 3 into Session 2 — is correction 3, and Session 3's remaining
+   deviations are correction 6. Evidence lives with the three Change entries.

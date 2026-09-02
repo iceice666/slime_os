@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-02 |
 | Kind | Change |
-| Status | Proposed |
+| Status | Verified |
 | Scope | `slime-root` (`build.rs`, `src/main.rs`, `src/device.rs`), `scripts/build/{build-sel4,build-nt98690-payload,build-duo-payload}.py`, `scripts/check/{check-nt98690-slisp,check-duo-slisp,check-sel4-pins,check-sel4-gate-controls}.py`, `sel4/pins.toml`, `just/hardware.just`, `roadmap/07-architecture-portability.md` |
 | Roadmap | P6.C |
 | Gates | `just nt98690_slisp_check`, `just sel4_gate_control_check`, `just sel4_component_graph_check`, `just slisp_core_check` |
@@ -65,6 +65,7 @@ the shared tamper control, which the Duo's own slisp gate never entered.
 | `check-nt98690-slisp.py --serial tcp:…` against a board-shaped stand-in (staging dialogue answering `md.l` from the real payload bytes, echoed session, terminator/reset/banner) — from the repository and again standalone from the operator bundle with system Python | PASS | Host rehearsal |
 | Post-rename host suite: `just ruff`, `typos`, `fmt_check_all` (after one rustfmt wrap of a lengthened cfg), `lint_all`, `test_sel4_root`, `contracts_check`, `generation_check`, `sel4_pin_check`, `sel4_nt98690_image_check`, `riscv64_qemu_check`, `slisp_core_check`, `devlog_check` | PASS | Host/QEMU |
 | First board campaign (2026-09-02): `SLIME_ROOT FATAL NT98690 reset registers unavailable: Allocate(DeviceFramePassed { paddr: 0x2f0060000 })` immediately after `product input ready uart=0x2f0130000` — the product image carved the UART0 granule before the reset granules that sit below it in the same device untyped, and device untypeds retype monotonically upward; only a product image orders them this way, so P6.B's sample runs could not have caught it. The gate misreported the FATAL as a miscounted input wait. Both fixed below | FAILED, root-caused | Direct physical |
+| Second board campaign (2026-09-02): `just`-shaped bundle run of `check-nt98690-slisp.py --no-build --serial /dev/ttyUSB0` on the named H1V1, one power-on — PASS: all 34 markers in order, `(define answer 40)`/`(+ answer 2)`/`sysinfo` answered at the resident prompt, `resident checkpoint live=4 iterations=32768` crossed, `(+ answer 3)` answered after it, terminator accepted, `reset request kind=wdt`, vendor banner returned, 0 framing errors. Transcript re-verified on the host against the full contract; the identities bind this build's payload, ELF, and generation | PASS | Direct physical |
 
 ## Decisions
 
@@ -94,10 +95,18 @@ the shared tamper control, which the Duo's own slisp gate never entered.
 
 ## Open risks and follow-ups
 
-- The board session has not yet run; the roadmap keeps `In progress` until the
-  observed exit condition is recorded here.
+- None open. The board session ran on 2026-09-02 and the observed exit
+  condition is recorded in the roadmap; the failed first campaign's root cause
+  and both fixes are recorded above.
 
 ## Artifacts and provenance
 
+- [`slisp-session.log`](slisp-session.log) — the scored session's raw serial
+  transcript (117,637 bytes, sha256 `672996dc…`), written by the gate on the
+  board host and returned by wormhole; re-verified here against the full
+  marker contract before committing.
+- [`slisp-identities.json`](slisp-identities.json) — the gate's identity
+  record binding the transcript to this build's payload, ELF, and generation,
+  with `framing_errors: 0` on `uart0-ns16550a-0x2f0130000`.
 - Roadmap: [P6.C](../../roadmap/07-architecture-portability.md#p6c--interactive-slisp-over-uart0-on-the-h1v1)
 - Plan of record: [Part D](../2026-09-01-p6-nt98690-h1v1-lane/plan.md)
