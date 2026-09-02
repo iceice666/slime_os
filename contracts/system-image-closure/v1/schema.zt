@@ -38,10 +38,43 @@ NamedInput :: type {
   artifact : ArtifactReference;
 };
 
+-- One normalized build parameter: a value that changes generation or
+-- executable bytes and is therefore part of the closure identity.
+--
+-- CP14's reason for existing. Three deltas used to reach the generation
+-- builder as ambient environment variables — `SLIME_GENERATION_NUMBER`,
+-- `SLIME_FABRIC_LIMIT_OVERRIDE`, `SLIME_FABRIC_QOS_OVERRIDE` — set from a
+-- per-variant table in `build-sel4.py`. Each changes what the generation
+-- encodes, so a build key that omitted them described a different build than
+-- the one that ran, and two closures differing only in a saturation ceiling
+-- computed one identity.
+--
+-- `name` is closed to the three below, so a fourth ambient knob cannot appear
+-- here without a contract change, and the resolver refuses any name outside
+-- the set:
+--
+--   `generationNumber`   -- the generation number the manifest is built with,
+--                           overriding what the system spec declares. A
+--                           positive decimal integer.
+--   `fabricLimitOverride`-- one declared `fabricGraph.limits` ceiling,
+--                           narrowed for this build. `<limit>=<value>`, and
+--                           the limit must already exist in the graph.
+--   `fabricQosOverride`  -- one declared participant QoS field, changed for
+--                           this build. `<route>:<component>:<field>:<value>`,
+--                           and every part must resolve against the declared
+--                           graph.
+--
+-- The value stays `Text` rather than a union because each parameter's own
+-- grammar differs and the generation builder is the authority that parses it;
+-- what this contract owns is that the value is *in the identity*.
 BuildParameter :: type {
   name : Text;
   value : Text;
 };
+
+parameterGenerationNumber :: Text = "generationNumber";
+parameterFabricLimitOverride :: Text = "fabricLimitOverride";
+parameterFabricQosOverride :: Text = "fabricQosOverride";
 
 SystemImageClosure :: type {
   formatVersion : Int;
@@ -145,6 +178,9 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   rootRoleEmbeddedGeneration =;
   rootRoleBootSelector =;
   loaderRoleKernelLoader =;
+  parameterGenerationNumber =;
+  parameterFabricLimitOverride =;
+  parameterFabricQosOverride =;
   outputGeneration =;
   outputRoot =;
   outputLoader =;

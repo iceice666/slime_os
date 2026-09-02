@@ -82,7 +82,7 @@ def check_refusals(temporary: Path) -> None:
         ("wrong-profile", lambda value: value["target"].update(platform="milkv-duo"), "profile and platform"),
         ("unrecorded-component", lambda value: value["implementations"].pop(), "exactly cover"),
         ("missing-release", lambda value: value["releaseInputs"].pop(), "exactly cover"),
-        ("ambient-parameter", lambda value: value["buildParameters"].append({"name": "ambient", "value": "1"}), "no admitted parameter"),
+        ("ambient-parameter", lambda value: value["buildParameters"].append({"name": "ambient", "value": "1"}), "does not admit"),
     )
     for name, mutate, refusal in cases:
         value = copy.deepcopy(compiled.value)

@@ -176,7 +176,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "65ccd3093cb5308669e26ca7d19f752808649816e456857a190bc7d71f9890ee";
+        identity = "bc44390d50c303f32c8bccda2cf7551ef4290f3060f796161b970c5cc918a0ee";
       };
     };
     {

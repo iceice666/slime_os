@@ -91,15 +91,28 @@ def closure_paths() -> dict[str, Path]:
     return {path.stem: path for path in sorted(CLOSURE_ROOT.glob("*.zti"))}
 
 
-def check_coverage(closures: dict[str, Path]) -> None:
-    """Every derived composition has a closure or a declared reason, and no orphan."""
+def check_coverage(closures: dict[str, Path]) -> set[str]:
+    """Every derived composition has a closure or a declared reason, and no orphan.
+
+    A scenario closure is not a composition — it is a base composition plus
+    declared build parameters — so the orphan check admits the scenario names
+    the closure generator declares, and `check-system-image-scenario.py` owns
+    asserting each one is a real scenario over a real base.
+    """
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    spec = spec_from_file_location("builder_closure_generator", GENERATOR)
+    generator = module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    scenarios = set(generator.SCENARIOS)
+
     derived = set(DERIVED_GENERATION_FIXTURES)
     missing = sorted(derived - set(closures) - set(WITHOUT_CLOSURE))
     if missing:
         fail(f"derived composition(s) with no closure and no declared reason: {missing}")
-    orphaned = sorted(set(closures) - derived)
+    orphaned = sorted(set(closures) - derived - scenarios)
     if orphaned:
-        fail(f"closure(s) naming no derived composition: {orphaned}")
+        fail(f"closure(s) naming no derived composition or declared scenario: {orphaned}")
     stale_reasons = sorted(set(WITHOUT_CLOSURE) & set(closures))
     if stale_reasons:
         fail(
@@ -109,9 +122,10 @@ def check_coverage(closures: dict[str, Path]) -> None:
     unknown_reasons = sorted(set(WITHOUT_CLOSURE) - derived)
     if unknown_reasons:
         fail(f"exemption(s) naming no derived composition: {unknown_reasons}")
+    return scenarios
 
 
-def check_resolution(closures: dict[str, Path]) -> dict[str, str]:
+def check_resolution(closures: dict[str, Path], scenarios: set[str]) -> dict[str, str]:
     """Every closure resolves, names a distinct identity, and agrees with its spec."""
     catalogue = interface_catalogue()
     components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
@@ -129,6 +143,17 @@ def check_resolution(closures: dict[str, Path]) -> dict[str, str]:
         # The closure's own manifest and the composition corpus's must be the
         # same object: a closure that resolved a different graph than the plane
         # gates boot would be a second authority on what the plane admits.
+        #
+        # A scenario closure is excluded, and only because its whole purpose is
+        # to differ: its declared build parameters change the manifest, and
+        # `check-system-image-scenario.py` asserts they change exactly the
+        # fields they name and nothing else.
+        if name in scenarios:
+            if not resolved.build_parameters:
+                fail(f"{name}: declared a scenario but carries no build parameters")
+            continue
+        if resolved.build_parameters:
+            fail(f"{name}: carries build parameters but is not a declared scenario")
         expected = derive_manifest(
             compile_system(SYSTEM_ROOT / f"{name}.zti", components=components)
         )
@@ -256,8 +281,8 @@ def main() -> None:
     closures = closure_paths()
     if not closures:
         fail("no closure exists")
-    check_coverage(closures)
-    identities = check_resolution(closures)
+    scenarios = check_coverage(closures)
+    identities = check_resolution(closures, scenarios)
     check_no_plane_flags()
 
     selected = sorted(closures) if arguments.exhaustive else [SELECTED]
@@ -269,7 +294,8 @@ def main() -> None:
     print(
         f"system image builder check: {len(closures)} closures resolve with distinct "
         f"identities and manifests matching their system specs; "
-        f"{len(WITHOUT_CLOSURE)} derived compositions declared closure-exempt; "
+        f"{len(WITHOUT_CLOSURE)} derived compositions declared closure-exempt, "
+        f"{len(scenarios)} scenario closure(s); "
         f"{len(selected)} closure(s) built twice byte-identically through one command "
         "shape with no plane flag, variant table, or composition named in builder source"
     )

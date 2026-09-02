@@ -1,4 +1,4 @@
-# CP12/CP13 — composition derivation and the data-driven closure builder
+# CP12/CP13/CP14 — composition derivation, the closure builder, and scenario identities
 
 | Field | Value |
 |---|---|
@@ -6,8 +6,8 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/system-spec/v1`, `contracts/composition-inventory/v1`, `contracts/component-spec/v1/components/`, `scripts/lib/system_spec.py`, `scripts/check/check-system-spec.py`, `scripts/check/check-composition-inventory.py`, `scripts/generate/generate-composition-inventory-bindings.py`, 21 `contracts/generation-manifest/v1/compositions/*.zti`, `just/contracts.just` |
-| Roadmap | CP12, CP13 |
-| Gates | `just system_image_builder_check`, `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check` |
+| Roadmap | CP12, CP13, CP14 |
+| Gates | `just system_image_scenario_check`, `just system_image_builder_check`, `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check` |
 | Trigger | CP11's closure contract landed, so the composition corpus became the remaining hand-authored input |
 | Baseline | CP1 derived `valid.zti` and `sel4-channel.zti` from system specs; the other 40 compositions were hand-authored |
 
@@ -44,6 +44,8 @@ composition and with a closed reason, in a new
 | `scripts/check/check-system-spec.py` | Normalizes binding order, minted-binding order, and absent-vs-empty optional sections; the post-baseline private-memory assertion is now placement-aware | The comparison stays an equality test over what the builder actually reads, with each normalization justified against the builder line that makes the two forms one build |
 | `contracts/component-spec/v1/components/` | 25 new specs (11 for the one-to-one planes, 14 for the multi-instance planes: `clock-authority-probe`, `wait-set-probe`, `scheduling-class-probe`, `lifecycle-restart-probe`, the private-memory probes, and the storage/generation probes); `maxSpecs` 64 → 96 | Every executable the converted compositions declare has a reviewed component record |
 | `scripts/generate/generate-system-image-closures.py` | New: emits one closure per derived composition (38) from repository state, with `--check` refusing drift | CP11's contract is exercised by the corpus rather than by one hand-authored record, while resolution stays an independent authority that re-reads every digest |
+| `contracts/system-image-closure/v1/schema.zt` | Added a closed three-name `BuildParameter` vocabulary and taught the resolver to refuse any other; `build-system-image.py` applies the parameters from the resolved closure | The three deltas that changed generation bytes through ambient `SLIME_*` variables are in the build key, so two scenarios over one composition are two identities rather than one identity an environment disambiguated |
+| `scripts/check/check-system-image-scenario.py` | New CP14 gate: vocabulary closure, unadmitted-parameter refusal, scenario identity distinctness, field-by-field proof that a parameter changes only what it names, and eight malformed-parameter refusals | A scenario cannot silently change bytes outside what it declares |
 | `scripts/check/check-system-image-builder.py` | New CP13 gate: closure coverage, distinct identities, spec-matching manifests, twice-byte-identical builds, output-collision refusal, and an AST assertion that the builder declares no plane flag or variant table | Adding a composition needs contract data and a behavioral checker, never a builder flag or output-path branch |
 | `contracts/composition-inventory/v1` | New contract, record, generated bindings, and gate | "Which compositions are migrated" is one closed record instead of a Python table, a directory listing, and a roadmap paragraph |
 | `scripts/check/check-sel4-io-link-plane.py` | Fixture-text assertion whitespace-normalized | The plane asserts the declaration, not the spacing a hand-authored fixture happened to use |
@@ -76,6 +78,7 @@ composition and with a closed reason, in a new
 | `just sel4_gate_control_check` | Pass — 45 gates reject 1748 mutated transcripts and layouts | Direct |
 | `just system_image_builder_check` | Pass — 38 closures resolve with distinct identities and spec-matching manifests, 3 compositions declared closure-exempt, `sel4-channel` built twice byte-identically, a non-empty output directory refused | Direct |
 | `just system_image_closure_check` | Pass against the generated `sel4-channel` closure | Direct |
+| `just system_image_scenario_check` | Pass — 3 admitted parameters and a fourth refused, 2 scenario closures with identities distinct from their base and each other, each changing exactly the fields it names, 8 malformed parameters refused, all 40 closures' parameters applying to their own manifests | Direct |
 | `just test_host`, `just ruff` | Pass | Direct |
 | `just typos` | Fails on `contracts/system-image-closure/v1/inputs/sel4-prefix/libsel4/include/interfaces/sel4_client.h` ("pre-empted"), a vendored seL4 header committed by CP11 and untouched here; `typos` over every path this change touches is clean | Direct, pre-existing failure |
 
@@ -128,6 +131,13 @@ to say about this change; `git status` shows zero `.rs` files modified.
       tables, and the identity manifest's `variant` authority — is retained
       because the 36 QEMU plane checkers still call it. CP15 owns migrating
       those checkers and deleting the flags.
+- [ ] CP14's remaining four deliverables: executable-changing component scenarios
+      (proxy/stream early exit, generation-command cases, boot-selection failure,
+      recovery images) are still `SLIME_*` flags; the boot selector, root fixture,
+      reclamation unwind probe, and board instrumentation are still root variants;
+      B40 mutations are still an ambient `SLIME_B40_MUTATION`; and QEMU disks,
+      device topology, and corruption schedules have not moved into
+      `system-test-run/v1`.
 - [ ] `sel4`, `sel4-slisp`, and `reference` have no closure: the first two admit
       an external product Slisp ELF with no committed artifact, and the third
       targets a platform with no seL4 asset.

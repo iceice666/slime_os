@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import system_image_closure_contract as CLOSURE_CONTRACT
 from harness import ROOT
 from system_image_closure import make_build_result, resolve_closure
 
@@ -44,6 +45,61 @@ def fail(message: str) -> None:
 
 def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def apply_parameters(manifest: dict, parameters: dict[str, str]) -> dict:
+    """Apply the closure's declared build parameters to the derived manifest.
+
+    These are the three deltas CP14 moved out of the environment. Each is
+    validated against what the manifest already declares rather than trusted:
+    a parameter naming an undeclared limit, route, participant, or field is a
+    refusal, not a silently created graph field. The grammars are the ones
+    `build-generation.py` parsed when these arrived as `SLIME_*` variables, so
+    a closure and a legacy build express the same delta the same way.
+    """
+    for name, value in sorted(parameters.items()):
+        if name == CLOSURE_CONTRACT.PARAMETER_GENERATION_NUMBER:
+            if not value.isdigit() or int(value) <= 0:
+                fail(f"{name}: must be a positive integer, not {value!r}")
+            manifest["generation"] = int(value)
+        elif name == CLOSURE_CONTRACT.PARAMETER_FABRIC_LIMIT_OVERRIDE:
+            limit, separator, raw = value.partition("=")
+            if not separator or not limit:
+                fail(f"{name}: must be <limit>=<value>, not {value!r}")
+            limits = manifest.get("fabricGraph", {}).get("limits")
+            if not isinstance(limits, dict) or limit not in limits:
+                fail(f"{name}: names undeclared limit {limit!r}")
+            if not raw.isdigit() or int(raw) <= 0:
+                fail(f"{name}: value must be a positive integer, not {raw!r}")
+            limits[limit] = int(raw)
+        elif name == CLOSURE_CONTRACT.PARAMETER_FABRIC_QOS_OVERRIDE:
+            parts = value.split(":")
+            if len(parts) != 4 or not all(parts):
+                fail(f"{name}: must be <route>:<component>:<field>:<value>, not {value!r}")
+            route_name, component, field, setting = parts
+            routes = [
+                route
+                for route in manifest.get("fabricGraph", {}).get("routes", [])
+                if route.get("name") == route_name
+            ]
+            if len(routes) != 1:
+                fail(f"{name}: names undeclared route {route_name!r}")
+            members = [
+                member
+                for member in routes[0]["participants"]
+                if member.get("component") == component
+            ]
+            if len(members) != 1:
+                fail(
+                    f"{name}: names {component!r}, which is not a unique participant "
+                    f"of {route_name!r}"
+                )
+            if field not in members[0]:
+                fail(f"{name}: names undeclared field {field!r}")
+            members[0][field] = setting
+        else:
+            fail(f"{name}: not an admitted build parameter")
+    return manifest
 
 
 def clean_environment(*, toolchain: str, prefix: Path, target_profile: str) -> dict[str, str]:
@@ -102,7 +158,13 @@ def build(closure: Path, output: Path) -> Path:
         os.environ["SLIME_SEL4_MANIFEST"] = resolved.compiled.identity.hex()
         generation_dir = output / "generation"
         generation_dir.mkdir()
-        manifest = GENERATION_BUILDER.assign_declared_slots(copy.deepcopy(resolved.manifest))
+        # CP14: the three deltas that used to arrive as ambient environment
+        # variables are applied here, from the resolved closure, so the bytes
+        # they change are keyed by the identity that selected them. Applied
+        # before slot assignment because a narrowed fabric limit can change
+        # what the graph declares.
+        manifest = apply_parameters(copy.deepcopy(resolved.manifest), resolved.build_parameters)
+        manifest = GENERATION_BUILDER.assign_declared_slots(manifest)
         GENERATION_BUILDER.build_sel4_generation(
             generation_dir,
             manifest,

@@ -278,7 +278,12 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
     if parameter_names != sorted(parameter_names) or len(set(parameter_names)) != len(parameter_names):
         _fail("buildParameters must be uniquely keyed and sorted by name")
     if parameter_names:
-        _fail("buildParameters contains no admitted parameter for this closure version")
+        unknown = sorted(set(parameter_names) - set(contract.BUILD_PARAMETERS))
+        if unknown:
+            _fail(
+                f"buildParameters names {unknown}, which this closure version does not admit; "
+                f"expected a subset of {sorted(contract.BUILD_PARAMETERS)}"
+            )
     outputs = _list(value["expectedOutputs"], contract.MAX_OUTPUTS, "expectedOutputs")
     if outputs != list(contract.OUTPUT_CLASSES):
         _fail("expectedOutputs must name the complete canonical output set in contract order")

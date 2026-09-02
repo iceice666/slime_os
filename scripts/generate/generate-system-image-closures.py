@@ -82,6 +82,26 @@ LOADER_IMPLEMENTATION = ("deps/rust-sel4", "tree")
 EXCLUDED = {"reference"}
 
 
+
+# CP14: scenario closures. A scenario is one base composition plus declared
+# build parameters that change generation bytes — the three deltas that used to
+# reach the generation builder as ambient `SLIME_*` variables set from
+# `build-sel4.py`'s `VARIANT_GENERATION_DELTAS`. Each becomes its own closure
+# with its own identity, so "the saturation image" is a build key rather than
+# an environment an operator remembered to set.
+#
+# The numbers are the ones that table declares, so each scenario's generation
+# identity is unchanged by becoming closure data. `matrix-unsatisfiable` has no
+# entry because its base composition (`sel4-matrix`) is not derived yet.
+SCENARIOS: dict[str, tuple[str, dict[str, str]]] = {
+    "sel4-saturation": (
+        "sel4-traffic",
+        {"generationNumber": "39", "fabricLimitOverride": "inFlightOperations=2"},
+    ),
+    "sel4-fault": ("sel4-traffic", {"generationNumber": "40"}),
+}
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"system image closure generation: {message}")
 
@@ -147,9 +167,23 @@ def sdk_profile(profile_name: str) -> dict:
     return {"record": record, "profile": matches[0]}
 
 
-def closure_for(name: str, specs: dict, components: dict) -> dict | None:
-    """One closure, or `None` when the composition cannot have a reproducible one."""
-    system = compile_system(SYSTEM_ROOT / f"{name}.zti", components=components)
+def closure_for(
+    name: str,
+    specs: dict,
+    components: dict,
+    *,
+    base: str | None = None,
+    parameters: dict[str, str] | None = None,
+) -> dict | None:
+    """One closure, or `None` when the composition cannot have a reproducible one.
+
+    `base` and `parameters` build a *scenario* closure: the same composition
+    with declared build parameters that change generation bytes. The closure's
+    own `name` is the scenario's, so two scenarios over one composition are two
+    build keys rather than one identity an environment variable disambiguated.
+    """
+    source = base or name
+    system = compile_system(SYSTEM_ROOT / f"{source}.zti", components=components)
     profile_name = system.spec["targetRequirement"]
     if not profile_name.startswith("aarch64-sel4"):
         return None
@@ -186,7 +220,7 @@ def closure_for(name: str, specs: dict, components: dict) -> dict | None:
         "formatVersion": CONTRACT.FORMAT_VERSION,
         "name": name,
         "systemSpec": artifact(
-            str((SYSTEM_ROOT / f"{name}.zti").relative_to(ROOT)), "file"
+            str((SYSTEM_ROOT / f"{source}.zti").relative_to(ROOT)), "file"
         ),
         "systemIdentity": system.identity.hex(),
         "implementations": implementations,
@@ -212,7 +246,9 @@ def closure_for(name: str, specs: dict, components: dict) -> dict | None:
             {"name": input_name, "artifact": artifact(relative, kind)}
             for input_name, relative, kind in RELEASE_INPUTS
         ],
-        "buildParameters": [],
+        "buildParameters": [
+            {"name": key, "value": parameters[key]} for key in sorted(parameters or {})
+        ],
         "expectedOutputs": list(CONTRACT.OUTPUT_CLASSES),
     }
 
@@ -229,6 +265,13 @@ def outputs() -> dict[Path, str]:
         closure = closure_for(name, specs, components)
         if closure is None:
             continue
+        emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
+    for name, (base, parameters) in sorted(SCENARIOS.items()):
+        if base not in DERIVED_GENERATION_FIXTURES:
+            fail(f"scenario {name} names composition {base!r}, which is not derived")
+        closure = closure_for(name, specs, components, base=base, parameters=parameters)
+        if closure is None:
+            fail(f"scenario {name} produced no closure, but its base composition has one")
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
     if not emitted:
         fail("no composition produced a closure")

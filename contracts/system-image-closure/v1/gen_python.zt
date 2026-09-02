@@ -30,6 +30,14 @@ render :: Text = t.join "" {
   text "ROOT_ROLE_BOOT_SELECTOR" schema.rootRoleBootSelector;
   tuple "LOADER_ROLES" { schema.loaderRoleKernelLoader; };
   text "LOADER_ROLE_KERNEL_LOADER" schema.loaderRoleKernelLoader;
+  tuple "BUILD_PARAMETERS" {
+    schema.parameterGenerationNumber;
+    schema.parameterFabricLimitOverride;
+    schema.parameterFabricQosOverride;
+  };
+  text "PARAMETER_GENERATION_NUMBER" schema.parameterGenerationNumber;
+  text "PARAMETER_FABRIC_LIMIT_OVERRIDE" schema.parameterFabricLimitOverride;
+  text "PARAMETER_FABRIC_QOS_OVERRIDE" schema.parameterFabricQosOverride;
   tuple "OUTPUT_CLASSES" {
     schema.outputGeneration;
     schema.outputRoot;
