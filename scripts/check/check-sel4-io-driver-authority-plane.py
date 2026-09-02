@@ -15,17 +15,19 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
-from harness import GENERATION_COMPOSITIONS  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
-from sel4_plane import run_plane, verify_image_identity  # noqa: E402
+from sel4_plane import run_plane  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-io-driver-authority.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-io-driver-authority.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before building, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-io-driver-authority"
+IMAGE: Path | None = None
 GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-io-driver-authority.zti"
 AUTOMATIC_BINDING_SLOTS = {
@@ -33,7 +35,6 @@ AUTOMATIC_BINDING_SLOTS = {
     "probe-device": 1,
     "probe-mmio": 2,
 }
-IMAGE_VARIANT = "io-driver-authority"
 TIMEOUT = 240
 
 # Concurrent components have independent chains. Ordering is asserted only where
@@ -158,13 +159,15 @@ def check_automatic_binding_slots() -> None:
 
 
 def build_image() -> None:
-    process = subprocess.run(
-        [sys.executable, str(BUILD_SCRIPT), "--io-driver-authority-plane"],
-        cwd=ROOT,
-        check=False,
-    )
-    if process.returncode != 0:
-        fail(f"image build failed with exit status {process.returncode}")
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
 
 
 def check_fixture() -> None:
@@ -194,12 +197,6 @@ def main() -> None:
     check_automatic_binding_slots()
     if not arguments.no_build:
         build_image()
-    verify_image_identity(
-        image=IMAGE,
-        manifest=MANIFEST,
-        variant=IMAGE_VARIANT,
-        fail=fail,
-    )
     terminal = re.compile(CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
     transcript = run_plane(
         image=IMAGE,

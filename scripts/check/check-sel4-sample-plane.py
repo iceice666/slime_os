@@ -19,7 +19,6 @@ claimed by this product gate.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -31,6 +30,7 @@ from typing import NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from component_paths import source_path  # noqa: E402
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import (
     GENERATION_COMPOSITIONS,
     load_qemu_profile,
@@ -42,26 +42,17 @@ from harness import (
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-sample.zti"
-IMAGE_VARIANT = "sample"
+# CP15: the closure identity names the build's inputs and is re-resolved from
+# repository state before the build, so a stale input is refused rather than
+# silently producing a different image.
+CLOSURE = "sel4-sample"
+IMAGE: Path | None = None
 PLATFORMS = {
     "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
     "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
 }
 
-TARGET_PROFILES = {
-    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
-    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
-}
-
-
-def artifact_paths(platform: str) -> tuple[Path, Path]:
-    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
-    return (
-        ROOT / "build" / f"slime-sel4-sample{suffix}.elf",
-        ROOT / "build" / f"slime-sel4-sample{suffix}.identity.json",
-    )
 
 
 BOOT_TIMEOUT_SECONDS = 180
@@ -364,54 +355,18 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 sample plane check: {message}")
 
 
-def build_image(platform: str) -> None:
-    command = [
-        sys.executable,
-        str(BUILD_SCRIPT),
-        "--sample-plane",
-        "--platform",
-        platform,
-    ]
-    print(f"[build] {' '.join(command)}", flush=True)
+def build_image() -> None:
+    global IMAGE
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
-
-
-def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> None:
-    if not manifest_path.is_file():
-        fail(f"missing identity manifest {manifest_path.relative_to(ROOT)}")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {manifest_path.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{manifest_path.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    if manifest.get("variant") != IMAGE_VARIANT:
-        fail(f"{manifest_path.relative_to(ROOT)} records variant {manifest.get('variant')!r}")
-    if manifest.get("platform") != platform:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
         fail(
-            f"{manifest_path.relative_to(ROOT)} describes {manifest.get('platform')!r}, not {platform!r}"
-        )
-    expected_profile = TARGET_PROFILES[platform]
-    if manifest.get("target_profile") != expected_profile:
-        fail(
-            f"{manifest_path.relative_to(ROOT)} describes target profile "
-            f"{manifest.get('target_profile')!r}, not {expected_profile!r}"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not image_path.is_file():
-        fail(f"missing packaged image {image_path.relative_to(ROOT)}")
-    actual = sha256_file(image_path, fail)
-    if actual != image["sha256"]:
-        fail(
-            f"{image_path.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
         )
 
 
@@ -654,11 +609,11 @@ def main() -> None:
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     section, qemu_binary = PLATFORMS[arguments.platform]
-    image_path, manifest_path = artifact_paths(arguments.platform)
+    image_path = IMAGE
     profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
-        build_image(arguments.platform)
-    check_manifest(image_path, manifest_path, arguments.platform)
+        build_image()
+        image_path = IMAGE
     check_transcript(
         boot(
             profile,

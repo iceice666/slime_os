@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from fabric_trace_contract import FABRIC_TRACE_RECORD_LEN  # noqa: E402
 from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
@@ -22,12 +23,13 @@ from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = ROOT / "build" / "slime-sel4-replay.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-replay.identity.json"
-BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
+# CP15: the closure identity names the build's inputs and is re-resolved from
+# repository state before the build, so a stale input is refused rather than
+# silently producing a different image.
+CLOSURE = "sel4-replay"
+IMAGE: Path | None = None
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-replay.zti"
-IMAGE_VARIANT = "replay"
 GENERATION = 45
 TIMEOUT = 300
 DISK_BYTES = 1 << 20
@@ -141,23 +143,18 @@ def fail(message: str) -> NoReturn:
 
 
 def build_image() -> None:
-    process = subprocess.run(
-        [sys.executable, str(BUILD), "--replay-plane"],
-        cwd=ROOT,
-        check=False,
-    )
-    if process.returncode != 0 or not IMAGE.is_file():
-        fail("image build failed")
-    if not MANIFEST.is_file():
-        fail("identity manifest missing")
-    identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    if identity.get("target_profile") != "aarch64-sel4-qemu-virt":
-        fail(f"wrong target profile {identity.get('target_profile')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
 
 
 def boot(profile: dict[str, object], disk: Path) -> str:

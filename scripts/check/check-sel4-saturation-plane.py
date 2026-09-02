@@ -51,7 +51,6 @@ section for why each remains open.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -62,9 +61,10 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from fabric_graph_limits import declared_limits  # noqa: E402
-from harness import GENERATION_COMPOSITIONS, load_script, profile_integer, profile_text, sha256_file  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_integer, profile_text, sha256_file  # noqa: E402
 from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_BUFFERS,
     FABRIC_TRACE_RESOURCE_CALLS,
@@ -79,28 +79,28 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_RETAINED,
     FABRIC_TRACE_RESOURCE_RETRIES,
 )
+from system_image_closure import compile_closure  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-saturation.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-saturation.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-traffic.zti"
-IMAGE_VARIANT = "saturation"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before the build, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-saturation"
+IMAGE: Path | None = None
 BOOT_TIMEOUT_SECONDS = 240
 
-# B62: the ceilings this variant narrows, read from the build's own declaration
-# rather than restated here. `build-sel4.py` supplies them to the generation
-# builder as `SLIME_FABRIC_LIMIT_OVERRIDE`, so the number the image was built
-# with and the number this gate asserts against cannot drift — which is the
-# property the deleted `sel4-saturation.zti` provided by being a whole second
-# copy of the traffic fixture.
+# B62: read the ceilings from the closure that names the build inputs, so the
+# number the image was built with and the number this gate asserts against cannot drift.
 def _variant_limit_overrides() -> dict[str, int]:
-    builder = load_script("saturation_sel4_build", "build/build-sel4.py")
-    declared = builder.VARIANT_GENERATION_DELTAS.get(IMAGE_VARIANT, {})
-    spec = declared.get("SLIME_FABRIC_LIMIT_OVERRIDE")
+    closure = ROOT / "contracts" / "system-image-closure" / "v1" / "closures" / f"{CLOSURE}.zti"
+    parameters = {
+        entry["name"]: entry["value"]
+        for entry in compile_closure(closure).value["buildParameters"]
+    }
+    spec = parameters.get("fabricLimitOverride")
     if not spec:
-        fail(f"the {IMAGE_VARIANT} variant declares no fabric-limit override")
+        fail(f"the {CLOSURE} closure declares no fabric-limit override")
     name, _, raw = spec.partition("=")
     if not name or not raw.isdigit():
         fail(f"malformed fabric-limit override {spec!r}")
@@ -311,45 +311,20 @@ def load_pins() -> dict[str, object]:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--saturation-plane"]
-    print(f"[build] {' '.join(command)}", flush=True)
+    global IMAGE
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
-
-
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_saturation_check`"
-        )
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    if manifest.get("variant") != IMAGE_VARIANT:
-        fail(
-            f"{MANIFEST.relative_to(ROOT)} records variant "
-            f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
-            "rebuild with `--saturation-plane`"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
     actual = sha256_file(IMAGE, fail)
-    if actual != image["sha256"]:
+    if actual != built.digest():
         fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
         )
+
+
 
 
 def boot(profile: dict[str, object]) -> str:
@@ -799,7 +774,6 @@ def main() -> None:
     pins = load_pins()
     if not arguments.no_build:
         build_image()
-    check_manifest()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
     check_transcript(boot(profile))

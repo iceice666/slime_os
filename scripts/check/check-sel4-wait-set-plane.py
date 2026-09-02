@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from harness import (
     GENERATION_COMPOSITIONS,
@@ -28,28 +29,18 @@ from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-wait-set.zti"
-IMAGE_VARIANT = "wait-set"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before the build, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-wait-set"
+IMAGE: Path | None = None
 PLATFORMS = {
     "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
-    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
-}
-
-TARGET_PROFILES = {
-    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
-    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
 }
 TIMEOUT = 240
 
 
-def artifact_paths(platform: str) -> tuple[Path, Path]:
-    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
-    return (
-        ROOT / "build" / f"slime-sel4-wait-set{suffix}.elf",
-        ROOT / "build" / f"slime-sel4-wait-set{suffix}.identity.json",
-    )
 
 
 # The three declared sources, by the badge bit each names and the kind it is
@@ -135,36 +126,19 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 wait-set plane check: {message}")
 
 
-def build_image(platform: str, image_path: Path, manifest_path: Path) -> None:
-    process = subprocess.run(
-        [
-            sys.executable,
-            str(BUILD),
-            "--wait-set-plane",
-            "--platform",
-            platform,
-        ],
-        cwd=ROOT,
-        check=False,
-    )
-    if process.returncode != 0 or not image_path.is_file():
-        fail("image build failed")
-    if not manifest_path.is_file():
-        fail("identity manifest missing")
-    identity = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    if identity.get("platform") != platform:
-        fail(f"identity platform is {identity.get('platform')!r}, not {platform!r}")
-    expected_profile = TARGET_PROFILES[platform]
-    if identity.get("target_profile") != expected_profile:
+def build_image() -> None:
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
         fail(
-            f"identity target profile is {identity.get('target_profile')!r}, "
-            f"not {expected_profile!r}"
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
         )
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(image_path, fail):
-        fail("packaged image digest does not match identity manifest")
 
 
 def boot(
@@ -382,8 +356,9 @@ def main() -> None:
     arguments = parser.parse_args()
     check_fixture_shape()
     section, qemu_binary = PLATFORMS[arguments.platform]
-    image_path, manifest_path = artifact_paths(arguments.platform)
-    build_image(arguments.platform, image_path, manifest_path)
+    build_image()
+    assert IMAGE is not None
+    image_path = IMAGE
     profile = load_qemu_profile(fail, PINS, section)
     transcript = boot(
         profile,

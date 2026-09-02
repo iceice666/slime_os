@@ -20,7 +20,6 @@ ordered because each is one causal sequence.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -31,6 +30,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 
@@ -39,11 +39,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-qos.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-qos.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-qos.zti"
-IMAGE_VARIANT = "qos"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before the build, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-qos"
+IMAGE: Path | None = None
 SPAWN_PATTERN = re.compile(
     r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "
     r"grants=(\d+) endpoints=(\d+) notifications=(\d+) handle=(\d+)"
@@ -172,49 +172,20 @@ def load_pins() -> dict[str, object]:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--qos-plane"]
-    print(f"[build] {' '.join(command)}", flush=True)
+    global IMAGE
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
-
-
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_qos_check`"
-        )
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    # The seven images are built from the same sources and differ only in which
-    # generation the root task embeds, so booting the wrong one would fail on
-    # markers rather than on identity. Checking the variant reports the actual
-    # cause instead.
-    if manifest.get("variant") != IMAGE_VARIANT:
-        fail(
-            f"{MANIFEST.relative_to(ROOT)} records variant "
-            f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
-            "rebuild with `--qos-plane`"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
     actual = sha256_file(IMAGE, fail)
-    if actual != image["sha256"]:
+    if actual != built.digest():
         fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
         )
+
+
 
 
 def boot(profile: dict[str, object]) -> str:
@@ -372,7 +343,6 @@ def main() -> None:
     pins = load_pins()
     if not arguments.no_build:
         build_image()
-    check_manifest()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
     check_transcript(boot(profile))

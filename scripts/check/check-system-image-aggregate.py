@@ -421,6 +421,38 @@ def check_no_undeclared_build_knobs(extra_source: str | None = None) -> tuple[in
     )
 
 
+def check_migration_is_monotone() -> tuple[int, int]:
+    """Migrated checkers do not regress, and unmigrated ones are named.
+
+    CP15 moves each plane gate from a `--<name>-plane` flag to a closure
+    identity. Mid-migration both shapes exist, so the useful invariant is not
+    "no checker uses a flag" — that is false until the last one moves — but
+    that a checker which has moved cannot move back, and that the remaining set
+    is enumerated rather than open.
+
+    A checker that builds through `closure_image` must not also invoke
+    `build-sel4.py`: holding both is how a gate silently keeps booting the
+    legacy artifact while appearing migrated.
+    """
+    migrated, legacy = [], []
+    for path in sorted(CHECK_ROOT.glob("check-sel4-*.py")):
+        text = path.read_text(encoding="utf-8")
+        uses_closure = "closure_image" in text
+        uses_flag = bool(re.search(r'"--[a-z0-9-]+-plane"', text)) or "build-sel4.py" in text
+        if uses_closure and uses_flag:
+            fail(
+                f"{path.name}: builds through closure_image *and* invokes the legacy builder; "
+                "a half-migrated gate can boot the legacy artifact while appearing migrated"
+            )
+        if uses_closure:
+            migrated.append(path.name)
+        elif uses_flag:
+            legacy.append(path.name)
+    if not migrated:
+        fail("no plane gate builds by closure identity, so CP15 has not started")
+    return len(migrated), len(legacy)
+
+
 def check_gate_controls(images: dict[str, set[str]]) -> int:
     """This gate refuses each drift it claims to catch.
 
@@ -514,6 +546,7 @@ flag_count = check_plane_flags_are_owned()
 check_record_kinds_are_disjoint()
 negative_count = check_negative_cases_have_no_image()
 closure_knobs, non_keying_knobs, legacy_knobs = check_no_undeclared_build_knobs()
+migrated_gates, legacy_gates = check_migration_is_monotone()
 control_count = check_gate_controls(images)
 
 print(
@@ -525,5 +558,7 @@ print(
     f"SLIME_* build knobs classified {closure_knobs} closure-declared / {non_keying_knobs} "
     f"non-keying / {legacy_knobs} legacy pending CP15 deletion, with none unclassified, none "
     f"misfiled, and every closure-declared knob reachable from the closure builder; "
+    f"{migrated_gates} plane gate(s) build by closure identity with {legacy_gates} still on the "
+    f"legacy flag and none holding both; "
     f"and {control_count} named drift control(s) refused"
 )

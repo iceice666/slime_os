@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """B38 gate: exceed old task CSlot/untyped lifetime watermarks with bounded live use."""
 from __future__ import annotations
-import json
 import re
 import shutil
 import subprocess
@@ -12,13 +11,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+
 from component_paths import source_path  # noqa: E402
 from harness import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = ROOT / "build" / "slime-sel4-reclamation.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-reclamation.identity.json"
-BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
+# CP15: the closure identity names the build's inputs and is re-resolved from
+# repository state before the build, so stale input is refused rather than
+# silently producing a different image. This checker exercises the forced
+# construction-unwind arm carried by the reclamation-unwind root role.
+CLOSURE = "sel4-reclamation-unwind"
+IMAGE: Path | None = None
 PINS = ROOT / "sel4" / "pins.toml"
 INIT = source_path("init")
 TIMEOUT = 180
@@ -27,6 +31,20 @@ TIMEOUT = 180
 def fail(message: str) -> None:
     raise SystemExit(f"seL4 reclamation plane check: {message}")
 
+
+def build_image() -> None:
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
 
 def boot(profile: dict[str, object]) -> str:
     qemu = shutil.which("qemu-system-aarch64")
@@ -67,17 +85,7 @@ def main() -> None:
     match = re.search(r"const RECLAMATION_LOOP_CHILDREN: u32 = (\d+);", source)
     if match is None or int(match.group(1)) <= 64:
         fail("lifetime loop does not exceed the old monotonic ceiling")
-    build = subprocess.run([sys.executable, str(BUILD), "--reclamation-plane"], cwd=ROOT)
-    if build.returncode != 0 or not IMAGE.is_file():
-        fail("image build failed")
-    if not MANIFEST.is_file():
-        fail("identity manifest missing")
-    identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    if identity.get("variant") != "reclamation":
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
+    build_image()
     pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
     profile = pins.get("qemu_arm_virt")
     if not isinstance(profile, dict):

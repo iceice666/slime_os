@@ -5,23 +5,24 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+from harness import sha256_file  # noqa: E402
 
 from sel4_gate_markers import match_marker_contract  # noqa: E402
-from sel4_plane import run_plane, verify_image_identity  # noqa: E402
+from sel4_plane import run_plane  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-io-queue.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-io-queue.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before building, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-io-queue"
+IMAGE: Path | None = None
 FIXTURE = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions" / "sel4-io-queue.zti"
-IMAGE_VARIANT = "io-queue"
 TIMEOUT = 240
 
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -83,13 +84,15 @@ def fail(message: str) -> NoReturn:
 
 
 def build_image() -> None:
-    process = subprocess.run(
-        [sys.executable, str(BUILD_SCRIPT), "--io-queue-plane"],
-        cwd=ROOT,
-        check=False,
-    )
-    if process.returncode != 0:
-        fail(f"image build failed with exit status {process.returncode}")
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
 
 
 def check_transcript(transcript: str) -> None:
@@ -119,12 +122,6 @@ def main() -> None:
     check_fixture()
     if not arguments.no_build:
         build_image()
-    verify_image_identity(
-        image=IMAGE,
-        manifest=MANIFEST,
-        variant=IMAGE_VARIANT,
-        fail=fail,
-    )
     terminal = re.compile(CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
     transcript = run_plane(
         image=IMAGE,

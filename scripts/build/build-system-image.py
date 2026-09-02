@@ -222,7 +222,16 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
         prefix=prefix,
         target_profile=target_profile.name,
     )
-    component_target = output / "cargo" / "components"
+    # Components build into the repository's canonical component target
+    # directory, not under `output`. Cargo records the target directory in
+    # panic-location strings, and `--remap-path-prefix` normalizes only the
+    # canonical one; building under a caller-chosen `output` put that path in
+    # the shipped ELF and made the same closure produce different bytes for
+    # different output directories. The image, root, loader, and generation
+    # still land in `output` — only this intermediate is shared, and it is
+    # keyed by composition and generation number so two closures cannot
+    # collide in it.
+    component_target = GENERATION_BUILDER.COMPONENTS_TARGET_DIR
     old_target = GENERATION_BUILDER.COMPONENTS_TARGET_DIR
     GENERATION_BUILDER.COMPONENTS_TARGET_DIR = component_target
     old_environment = os.environ.copy()
@@ -253,6 +262,13 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
             toolchain=value["target"]["toolchain"],
             prefix=prefix,
             build_profile="closure",
+            # The composition this closure resolves, not the closure identity:
+            # CP3 established that the Cargo target directory name reaches the
+            # shipped ELF's symbols, so keying it by identity would move every
+            # component's bytes whenever any closure input changed. Passing the
+            # composition name makes a closure build byte-identical to the
+            # legacy build of the same composition.
+            closure_target_name=resolved.system.name,
         )
         generation = generation_dir / "generation.bin"
 

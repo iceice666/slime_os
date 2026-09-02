@@ -1133,6 +1133,7 @@ def build_rust_components(
     toolchain: str | None = None,
     prefix: Path | None = None,
     build_profile: str = "default",
+    closure_target_name: str | None = None,
 ) -> Path:
     environment = {
         key: value
@@ -1175,7 +1176,17 @@ def build_rust_components(
         environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
     # Keep separate target directories for distinct manifests because their
     # generated layout and profile inputs intentionally produce distinct images.
-    sel4_manifest = None if build_profile == "closure" else os.environ.get("SLIME_SEL4_MANIFEST")
+    #
+    # A closure build passes its manifest identity in `SLIME_SEL4_MANIFEST`
+    # rather than a composition name, and that hex identity must not become the
+    # target directory: CP3 established that the Cargo target directory name
+    # reaches the shipped ELF's symbol names, so keying it by identity would
+    # make every component's bytes change whenever any closure input moved.
+    # `closure_target_name` supplies the composition-derived name the legacy
+    # path would have used, so both paths build byte-identical components.
+    sel4_manifest = closure_target_name if build_profile == "closure" else os.environ.get(
+        "SLIME_SEL4_MANIFEST"
+    )
     if recovery:
         target_name = "recovery"
     elif sel4_manifest is not None and sel4_manifest != "sel4":
@@ -1254,6 +1265,16 @@ def build_rust_components(
         # explicitly keeps the link reproducible instead of silently dropping
         # them. `-T` and the load base are deliberately absent: a component here
         # is an ordinary seL4 ELF task at its own link addresses.
+        # `--remap-path-prefix` for the target directory is what keeps a
+        # panic location out of the shipped bytes. `target_dir` is remapped to
+        # a logical name derived from the profile and manifest, and `ROOT` to
+        # `.`, so two checkouts produce identical ELFs.
+        #
+        # The `target_dir` rule is listed first so it wins for a path that is
+        # both under `ROOT` and inside the target directory: `ROOT` -> `.`
+        # would otherwise rewrite the leading portion and leave the caller's
+        # output directory in `core::panic::Location` strings, making one
+        # closure produce different bytes per output directory.
         environment["RUSTFLAGS"] = " ".join(
             [
                 "-C link-arg=--build-id=none",
@@ -2898,6 +2919,7 @@ def build_sel4_generation(
     toolchain: str | None = None,
     prefix: Path | None = None,
     build_profile: str = "default",
+    closure_target_name: str | None = None,
 ) -> None:
     """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
 
@@ -2939,6 +2961,7 @@ def build_sel4_generation(
             toolchain=toolchain,
             prefix=prefix,
             build_profile=build_profile,
+            closure_target_name=closure_target_name,
         )
         if workspace_binaries
         else None

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import socket
@@ -14,17 +13,18 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from harness import load_qemu_profile, profile_integer, profile_text, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-io-link.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-io-link.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before building, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-io-link"
+IMAGE: Path | None = None
 FIXTURE = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions" / "sel4-io-link.zti"
-IMAGE_VARIANT = "io-link"
 TIMEOUT = 20
 
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -116,25 +116,17 @@ def fail(message: str) -> NoReturn:
 
 
 def build_image() -> None:
-    process = subprocess.run(
-        [sys.executable, str(BUILD_SCRIPT), "--io-link-plane"], cwd=ROOT, check=False
-    )
-    if process.returncode != 0:
-        fail(f"image build failed with exit status {process.returncode}")
-
-
-def check_manifest() -> None:
-    if not IMAGE.is_file() or not MANIFEST.is_file():
-        fail("image or identity manifest missing")
+    global IMAGE
     try:
-        identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse identity manifest: {error}")
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
+
+
 
 
 def reserve_udp_port() -> tuple[socket.socket, int]:
@@ -249,7 +241,6 @@ def main() -> None:
     check_fixture()
     if not arguments.no_build:
         build_image()
-    check_manifest()
     transcript = boot(load_qemu_profile(fail, PINS))
     check_transcript(transcript)
     print("seL4 I/O link plane check: duplex readiness, replenishment, reset, restart, and authority proved")

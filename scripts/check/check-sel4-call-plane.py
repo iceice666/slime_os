@@ -12,7 +12,6 @@ prove the authority landed in the intended receiver without widening.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -24,15 +23,19 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+
 from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-call.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-call.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+# CP15: this plane builds by closure identity rather than by a plane flag. The
+# identity names the build's inputs and is re-resolved from repository state
+# before the build, so a stale input is refused rather than silently producing
+# a different image.
+CLOSURE = "sel4-call"
+IMAGE: Path | None = None
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-call.zti"
-IMAGE_VARIANT = "call"
 BOOT_TIMEOUT_SECONDS = 240
 
 # Participants run concurrently, so only causal order within each chain is part
@@ -231,44 +234,17 @@ def load_pins() -> dict[str, object]:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--call-plane"]
-    print(f"[build] {' '.join(command)}", flush=True)
+    global IMAGE
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
-
-
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_call_check`"
-        )
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    if manifest.get("variant") != IMAGE_VARIANT:
-        fail(
-            f"{MANIFEST.relative_to(ROOT)} records variant "
-            f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
-            "rebuild with `--call-plane`"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
     actual = sha256_file(IMAGE, fail)
-    if actual != image["sha256"]:
+    if actual != built.digest():
         fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
         )
 
 
@@ -436,7 +412,6 @@ def main() -> None:
     pins = load_pins()
     if not arguments.no_build:
         build_image()
-    check_manifest()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
     check_transcript(boot(profile))

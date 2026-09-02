@@ -43,13 +43,17 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer  # noqa: E402
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE_SCRIPT = ROOT / "scripts" / "build" / "build-store-fixture.py"
-IMAGE = ROOT / "build" / "slime-sel4-transfer.elf"
+# CP15: the closure identity names the build's inputs and is re-resolved from
+# repository state before the build, so a stale input is refused rather than
+# silently producing a different image.
+CLOSURE = "sel4-transfer"
+IMAGE: Path | None = None
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-transfer.zti"
 BOOT_TIMEOUT_SECONDS = 240
 
@@ -164,14 +168,18 @@ def load_pins() -> dict[str, object]:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--transfer-plane"]
-    print(f"[build] {' '.join(command)}", flush=True)
+    global IMAGE
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
 
 
 def build_fixture(disk: Path, variant: str) -> None:
@@ -398,8 +406,6 @@ def main() -> None:
     pins = load_pins()
     if not arguments.no_build:
         build_image()
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
 
