@@ -433,7 +433,17 @@ def main() -> None:
         # Confirm the device tree exists before spending a boot on it. This
         # U-Boot panics rather than warns when `booti` is given no tree, and
         # `${fdtcontroladdr}` is supplied by the vendor loader rather than by us.
-        transcript += send_command(console, "md.l ${fdtcontroladdr} 1", prompt, 10.0, fail)
+        tree = send_command(console, "md.l ${fdtcontroladdr} 1", prompt, 10.0, fail)
+        transcript += tree
+        # The word is the FDT's big-endian d00dfeed magic read back as a
+        # little-endian long, so this is the tree's own header and not an
+        # address that merely reads.
+        if "edfe0dd0" not in tree:
+            fail(
+                "${fdtcontroladdr} does not point at a device tree — `md.l` read "
+                f"no d00dfeed magic there. `booti` panics rather than warns on a "
+                f"missing tree, so this run stops before spending a boot on it:\n{tree[-400:]}"
+            )
 
         partition = str(profile["boot_partition"])
         loaded = send_command(
