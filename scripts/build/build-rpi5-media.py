@@ -27,11 +27,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import struct
 import sys
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+import arm64_image  # noqa: E402
+from arm64_image import ELF_MAGIC, Arm64ImageError, Segment, elf_entry  # noqa: E402,F401
 from typing import NoReturn
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,112 +43,35 @@ IMAGE = ROOT / "build" / "slime-sel4-bcm2712-rpi5.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-bcm2712-rpi5.identity.json"
 MEDIA = ROOT / "build" / "rpi5-media"
 
-PT_LOAD = 1
-ELF_MAGIC = b"\x7fELF"
-# `mrs x0, mpidr_el1`, the first instruction of `_start` in
-# `deps/rust-sel4/crates/sel4-kernel-loader/asm/aarch64/head.S`.
-MRS_MPIDR_EL1 = 0xD53800A0
-
-
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"rpi5 media build: {message}")
 
 
-@dataclass(frozen=True)
-class Segment:
-    offset: int
-    paddr: int
-    file_size: int
-    mem_size: int
-
-
-def read_load_segments(path: Path) -> list[Segment]:
-    """Every PT_LOAD segment of a little-endian AArch64 ELF64, by physical address."""
-    data = path.read_bytes()
-    if data[:4] != ELF_MAGIC:
-        fail(f"{path.relative_to(ROOT)} is not an ELF file")
-    if data[4] != 2 or data[5] != 1:
-        fail(f"{path.relative_to(ROOT)} is not a little-endian 64-bit ELF")
-    e_machine = struct.unpack_from("<H", data, 18)[0]
-    if e_machine != 183:  # EM_AARCH64
-        fail(f"{path.relative_to(ROOT)} is not an AArch64 ELF (e_machine={e_machine})")
-    e_phoff, = struct.unpack_from("<Q", data, 32)
-    e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
-    segments = []
-    for index in range(e_phnum):
-        base = e_phoff + index * e_phentsize
-        p_type, = struct.unpack_from("<I", data, base)
-        if p_type != PT_LOAD:
-            continue
-        p_offset, _p_vaddr, p_paddr, p_filesz, p_memsz = struct.unpack_from(
-            "<QQQQQ", data, base + 8
-        )
-        segments.append(Segment(p_offset, p_paddr, p_filesz, p_memsz))
-    if not segments:
-        fail(f"{path.relative_to(ROOT)} declares no PT_LOAD segment")
-    return sorted(segments, key=lambda segment: segment.paddr)
-
-
 def flatten(path: Path, segments: list[Segment], entry: int) -> tuple[bytes, int]:
-    """One contiguous image, and the physical address it must be loaded at.
+    """One contiguous image whose first word branches to the entry point.
 
-    Gaps between segments are zero-filled, which is what a raw image means: the
-    firmware copies these bytes to `kernel_address` and jumps to the *first
-    byte*, so anything the loader expects to be zero must actually be zero here
-    rather than left to whatever the previous boot stage wrote.
-
-    Two facts make this more than a concatenation, and getting either wrong
-    yields an image that loads and then does nothing observable:
-
-      * The firmware branches to the start of what it loaded, but the ELF's
-        entry point is 0x4838 into the lowest segment — `.rodata` precedes
-        `.text` in the loader's layout. The first instruction executed would
-        therefore not be `_start`.
-      * The lowest segment begins at file offset 0, so it *contains the 64-byte
-        ELF header*. Copying it verbatim put `7f454c46` — `ELF` — at the address
-        the firmware branches to, and the CPU executed the header as AArch64.
-        That is precisely a board that boots and prints nothing.
-
-    Both are fixed by keeping every segment at its true physical address —
-    contents are position-dependent, so they cannot be slid — and overwriting
-    the ELF header's own bytes with one `b` to the entry point. The header is
-    dead weight at run time, occupies the image's first 64 bytes, and sits at a
-    page-aligned address, so the branch costs nothing and keeps
-    `kernel_address` page-aligned. Trimming the image to `entry` instead would
-    have worked too, but would have handed the firmware an address aligned only
-    to 4 bytes.
+    The BCM2712 firmware copies the file to `kernel_address` and jumps to its
+    *first byte*, and the ELF's entry is not its first byte: `.rodata` precedes
+    `.text`, and the lowest segment begins with the ELF header. The shared
+    flattener supplies the zero-filled span; the branch installed here is what
+    makes its first word executable, and `check_entry_is_code` proves it.
     """
-    data = path.read_bytes()
-    base = segments[0].paddr
-    end = max(segment.paddr + segment.mem_size for segment in segments)
+    try:
+        image, base = arm64_image.flatten(path, segments)
+    except Arm64ImageError as error:
+        fail(str(error))
+    end = base + len(image)
     if not base <= entry < end:
         fail(f"entry {entry:#x} falls outside the loaded span")
-    if base % 4096 != 0:
-        fail(f"lowest segment address {base:#x} is not page-aligned")
-    image = bytearray(end - base)
-    for segment in segments:
-        start = segment.paddr - base
-        image[start : start + segment.file_size] = data[
-            segment.offset : segment.offset + segment.file_size
-        ]
     image[:4] = encode_branch(base, entry)
     return bytes(image), base
 
 
 def encode_branch(source: int, target: int) -> bytes:
-    """An AArch64 unconditional `b` from `source` to `target`.
-
-    `b` is `0b000101` followed by a signed 26-bit immediate counting
-    instructions, so it reaches +/-128 MiB — far more than the 0x4838 needed
-    here, but the range is checked rather than assumed.
-    """
-    delta = target - source
-    if delta % 4 != 0:
-        fail(f"branch target {target:#x} is not instruction-aligned")
-    imm26 = delta // 4
-    if not -(1 << 25) <= imm26 < (1 << 25):
-        fail(f"branch from {source:#x} to {target:#x} is out of range for `b`")
-    return struct.pack("<I", (0b000101 << 26) | (imm26 & ((1 << 26) - 1)))
+    try:
+        return arm64_image.encode_branch(source, target)
+    except Arm64ImageError as error:
+        fail(str(error))
 
 
 def check_entry_is_code(image: bytes, base: int, entry: int) -> None:
@@ -176,20 +102,17 @@ def check_entry_is_code(image: bytes, base: int, entry: int) -> None:
             f"the flattened image starts with {image[:4].hex()}, not the "
             f"expected branch {expected.hex()} to the entry point"
         )
-    landing = entry - base
-    if landing + 4 > len(image):
-        fail("the branch target lies outside the flattened image")
-    first = struct.unpack_from("<I", image, landing)[0]
-    if first != MRS_MPIDR_EL1:
-        fail(
-            f"the branch lands on {first:#010x}, not the loader's "
-            f"`mrs x0, mpidr_el1` ({MRS_MPIDR_EL1:#010x}); the entry point is "
-            "not _start"
-        )
+    try:
+        arm64_image.check_branch_lands_on_start(image, base, entry)
+    except Arm64ImageError as error:
+        fail(str(error))
 
 
-def elf_entry(path: Path) -> int:
-    return struct.unpack_from("<Q", path.read_bytes(), 24)[0]
+def read_load_segments(path: Path) -> list[Segment]:
+    try:
+        return arm64_image.read_load_segments(path)
+    except Arm64ImageError as error:
+        fail(str(error))
 
 
 def render_config(load_addr: int, pins: dict[str, object]) -> str:
