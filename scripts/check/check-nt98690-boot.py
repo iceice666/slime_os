@@ -490,7 +490,16 @@ def main() -> None:
             recovery += console.read_for(1.0)
             remaining -= 1.0
             if re.search(BANNER_PATTERN, recovery):
-                recovery += console.read_for(3.0)
+                # Let the banner line arrive whole, then keep only up to its
+                # end. What follows is the vendor's own next boot, which reaches
+                # its kernel handoff about 700 characters later and prints
+                # `Moving Image from` -- a failure marker about where *this*
+                # gate's payload was placed, not the vendor's. Retained, a
+                # correct autonomous recovery would reject the run it proves.
+                recovery += console.read_for(1.0)
+                end = re.search(BANNER_PATTERN, recovery).end()
+                line_end = recovery.find("\n", end)
+                recovery = recovery[: line_end if line_end != -1 else len(recovery)]
                 break
         transcript += recovery
     finally:
