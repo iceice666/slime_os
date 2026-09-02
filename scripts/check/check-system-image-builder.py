@@ -87,6 +87,18 @@ def fail(message: str) -> None:
     raise SystemExit(f"system image builder check: {message}")
 
 
+def load_generator():
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    spec = spec_from_file_location("builder_closure_generator", GENERATOR)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GENERATOR_SCENARIOS = load_generator().SCENARIOS
+
+
 def closure_paths() -> dict[str, Path]:
     return {path.stem: path for path in sorted(CLOSURE_ROOT.glob("*.zti"))}
 
@@ -99,12 +111,7 @@ def check_coverage(closures: dict[str, Path]) -> set[str]:
     the closure generator declares, and `check-system-image-scenario.py` owns
     asserting each one is a real scenario over a real base.
     """
-    from importlib.util import module_from_spec, spec_from_file_location
-
-    spec = spec_from_file_location("builder_closure_generator", GENERATOR)
-    generator = module_from_spec(spec)
-    spec.loader.exec_module(generator)
-    scenarios = set(generator.SCENARIOS)
+    scenarios = set(GENERATOR_SCENARIOS)
 
     derived = set(DERIVED_GENERATION_FIXTURES)
     missing = sorted(derived - set(closures) - set(WITHOUT_CLOSURE))
@@ -144,16 +151,42 @@ def check_resolution(closures: dict[str, Path], scenarios: set[str]) -> dict[str
         # same object: a closure that resolved a different graph than the plane
         # gates boot would be a second authority on what the plane admits.
         #
-        # A scenario closure is excluded, and only because its whole purpose is
-        # to differ: its declared build parameters change the manifest, and
-        # `check-system-image-scenario.py` asserts they change exactly the
-        # fields they name and nothing else.
+        # A scenario closure is excluded from the manifest comparison, and only
+        # because differing is its purpose: declared build parameters change
+        # the manifest, and `check-system-image-scenario.py` asserts they
+        # change exactly the fields they name and nothing else.
+        #
+        # A scenario need not carry parameters at all — a build profile changes
+        # component ELF bytes while leaving the manifest alone, which is the
+        # `sel4-stream-death` case — so what is required is that it differ from
+        # its base in *some* declared way.
+        scenario_profiles = {
+            profile
+            for profile in resolved.build_profiles.values()
+            if profile != "default"
+        }
         if name in scenarios:
+            if not resolved.build_parameters and not scenario_profiles:
+                fail(
+                    f"{name}: declared a scenario but carries neither a build parameter "
+                    "nor a build profile, so it is its base composition"
+                )
             if not resolved.build_parameters:
-                fail(f"{name}: declared a scenario but carries no build parameters")
+                # Profile-only: the manifest is still exactly its base's, so
+                # the comparison below applies and is worth keeping.
+                expected = derive_manifest(
+                    compile_system(
+                        SYSTEM_ROOT / f"{GENERATOR_SCENARIOS[name][0]}.zti", components=components
+                    )
+                )
+                if resolved.manifest != expected:
+                    fail(f"{name}: profile-only scenario's manifest differs from its base's")
             continue
-        if resolved.build_parameters:
-            fail(f"{name}: carries build parameters but is not a declared scenario")
+        if resolved.build_parameters or scenario_profiles:
+            fail(
+                f"{name}: carries build parameters or a non-default build profile but is "
+                "not a declared scenario"
+            )
         expected = derive_manifest(
             compile_system(SYSTEM_ROOT / f"{name}.zti", components=components)
         )

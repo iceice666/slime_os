@@ -93,12 +93,32 @@ EXCLUDED = {"reference"}
 # The numbers are the ones that table declares, so each scenario's generation
 # identity is unchanged by becoming closure data. `matrix-unsatisfiable` has no
 # entry because its base composition (`sel4-matrix`) is not derived yet.
-SCENARIOS: dict[str, tuple[str, dict[str, str]]] = {
+# Each entry is `(base composition, build parameters, {component: profile})`.
+# The profiles are the executable-changing scenarios: `build-sel4.py` set the
+# same knobs per variant from `FAULT_VARIANT`/`STREAM_DEATH_VARIANTS`, so the
+# ELF bytes are unchanged by the selection becoming closure data.
+SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
     "sel4-saturation": (
         "sel4-traffic",
         {"generationNumber": "39", "fabricLimitOverride": "inFlightOperations=2"},
+        {},
     ),
-    "sel4-fault": ("sel4-traffic", {"generationNumber": "40"}),
+    # C8.14's degradation envelope: the interposition hop dies mid-route *and*
+    # a publisher ends its stream early, which is why one closure carries two
+    # distinct scenario profiles.
+    "sel4-fault": (
+        "sel4-traffic",
+        {"generationNumber": "40"},
+        {"fabric-proxy": "proxyEarlyExit", "fabric-publisher": "streamEarlyExit"},
+    ),
+    # C8.4's mid-stream publisher death, without the fault plane's proxy death:
+    # the two must stay distinguishable, which they cannot be if one image
+    # carries both.
+    "sel4-stream-death": (
+        "sel4-stream",
+        {},
+        {"fabric-publisher": "streamEarlyExit"},
+    ),
 }
 
 
@@ -174,6 +194,7 @@ def closure_for(
     *,
     base: str | None = None,
     parameters: dict[str, str] | None = None,
+    profiles: dict[str, str] | None = None,
 ) -> dict | None:
     """One closure, or `None` when the composition cannot have a reproducible one.
 
@@ -209,7 +230,7 @@ def closure_for(
                 "provider": spec.spec["implementation"]["provider"],
                 "artifact": artifact(relative, kind),
                 "identity": spec.identity.hex(),
-                "buildProfile": "default",
+                "buildProfile": (profiles or {}).get(component, "default"),
             }
         )
     implementations.sort(key=lambda entry: entry["component"])
@@ -266,10 +287,14 @@ def outputs() -> dict[Path, str]:
         if closure is None:
             continue
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
-    for name, (base, parameters) in sorted(SCENARIOS.items()):
+    for name, (base, parameters, profiles) in sorted(SCENARIOS.items()):
         if base not in DERIVED_GENERATION_FIXTURES:
             fail(f"scenario {name} names composition {base!r}, which is not derived")
-        closure = closure_for(name, specs, components, base=base, parameters=parameters)
+        if not parameters and not profiles:
+            fail(f"scenario {name} declares no parameters and no profiles, so it is its base")
+        closure = closure_for(
+            name, specs, components, base=base, parameters=parameters, profiles=profiles
+        )
         if closure is None:
             fail(f"scenario {name} produced no closure, but its base composition has one")
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"

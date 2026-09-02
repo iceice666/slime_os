@@ -99,6 +99,10 @@ class ResolvedClosure:
     artifacts: dict[str, Path]
     external_components: dict[str, Path]
     build_parameters: dict[str, str]
+    # Per-component build profile, keyed by component. `default` for every
+    # ordinary implementation; a scenario profile changes that component's ELF
+    # bytes, so it belongs to the identity that selected it.
+    build_profiles: dict[str, str]
 
 
 def _fail(message: str) -> None:
@@ -241,7 +245,14 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
             _fail(f"implementations[{index}].provider: unknown provider {provider!r}")
         _artifact(entry["artifact"], f"implementations[{index}].artifact")
         _digest(entry["identity"], f"implementations[{index}].identity")
-        _bounded_text(entry["buildProfile"], contract.MAX_NAME_BYTES, "buildProfile", empty=True)
+        profile = _bounded_text(
+            entry["buildProfile"], contract.MAX_NAME_BYTES, "buildProfile", empty=True
+        )
+        if profile not in contract.BUILD_PROFILES:
+            _fail(
+                f"implementations[{index}].buildProfile: unknown profile {profile!r}; "
+                f"expected one of {sorted(contract.BUILD_PROFILES)}"
+            )
     if component_names != sorted(component_names) or len(set(component_names)) != len(component_names):
         _fail("implementations must be uniquely keyed and sorted by component")
     target = _exact(value["target"], _TARGET_FIELDS, "target")
@@ -458,8 +469,11 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
     if artifacts["release:root-target"].name != expected_root_target:
         _fail("root target specification does not match the selected target profile")
     parameters = {entry["name"]: entry["value"] for entry in value["buildParameters"]}
+    profiles = {entry["component"]: entry["buildProfile"] for entry in value["implementations"]}
     manifest = derive_manifest(system)
-    return ResolvedClosure(compiled, system, manifest, artifacts, external, parameters)
+    return ResolvedClosure(
+        compiled, system, manifest, artifacts, external, parameters, profiles
+    )
 
 
 def make_build_result(

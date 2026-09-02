@@ -126,6 +126,68 @@ def clean_environment(*, toolchain: str, prefix: Path, target_profile: str) -> d
     return environment
 
 
+# Which compile-time knob each scenario build profile sets. The knobs are the
+# `option_env!` names the components already read, so a closure-built scenario
+# ELF and a legacy one are the same bytes; what changes is that the selection
+# is now in the build key rather than in the caller's environment.
+PROFILE_KNOBS: dict[str, tuple[str, str]] = {
+    CLOSURE_CONTRACT.BUILD_PROFILE_PROXY_EARLY_EXIT: (
+        "SLIME_FABRIC_PROXY_EARLY_EXIT",
+        "1",
+    ),
+    CLOSURE_CONTRACT.BUILD_PROFILE_STREAM_EARLY_EXIT: (
+        "SLIME_FABRIC_STREAM_EARLY_EXIT",
+        "1",
+    ),
+    CLOSURE_CONTRACT.BUILD_PROFILE_GENERATION_CMD_BAD_CLOSURE: (
+        "SLIME_GENERATION_CMD_SCENARIO",
+        "bad-closure",
+    ),
+    CLOSURE_CONTRACT.BUILD_PROFILE_GENERATION_CMD_BAD_RELEASE: (
+        "SLIME_GENERATION_CMD_SCENARIO",
+        "bad-release",
+    ),
+    CLOSURE_CONTRACT.BUILD_PROFILE_BOOT_SELECTION_FAIL: (
+        "SLIME_BOOT_SELECTION_FAIL",
+        "1",
+    ),
+    CLOSURE_CONTRACT.BUILD_PROFILE_RECOVERY_IMAGE: ("SLIME_RECOVERY_IMAGE", "1"),
+}
+
+
+def profile_environment(profiles: dict[str, str]) -> dict[str, str]:
+    """The compile-time knobs the closure's declared build profiles select.
+
+    A knob is a Cargo-visible `option_env!`, so it applies to every component
+    in the invocation rather than to one package. Several *distinct* knobs
+    coexist — `sel4-fault` needs both the proxy and the stream death, which is
+    why this returns a map rather than one selection — but two profiles that
+    set the *same* knob to different values cannot both be honoured, so that is
+    refused rather than silently resolved. A closure identity must be a claim
+    about the bytes the build produced.
+    """
+    selected = sorted(
+        {
+            profile
+            for profile in profiles.values()
+            if profile != CLOSURE_CONTRACT.BUILD_PROFILE_DEFAULT
+        }
+    )
+    environment: dict[str, str] = {}
+    origin: dict[str, str] = {}
+    for profile in selected:
+        knob, value = PROFILE_KNOBS[profile]
+        if knob in environment and environment[knob] != value:
+            fail(
+                f"build profiles {origin[knob]!r} and {profile!r} both set {knob} to "
+                f"different values ({environment[knob]!r}, {value!r}); a compile-time knob "
+                "has one value per build"
+            )
+        environment[knob] = value
+        origin[knob] = profile
+    return environment
+
+
 def build(closure: Path, output: Path) -> Path:
     resolved = resolve_closure(closure)
     value = resolved.compiled.value
@@ -156,6 +218,12 @@ def build(closure: Path, output: Path) -> Path:
         os.environ.clear()
         os.environ.update(environment)
         os.environ["SLIME_SEL4_MANIFEST"] = resolved.compiled.identity.hex()
+        # CP14: the scenario knobs the closure's build profiles select. Set
+        # from resolved closure data rather than inherited, so a scenario ELF
+        # is reachable only through the identity that declares it — and the
+        # generation builder's `closure` profile strips any it did not get
+        # from here.
+        os.environ.update(profile_environment(resolved.build_profiles))
         generation_dir = output / "generation"
         generation_dir.mkdir()
         # CP14: the three deltas that used to arrive as ambient environment

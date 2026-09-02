@@ -1148,15 +1148,14 @@ def build_rust_components(
     else:
         environment.pop("SLIME_BOOT_SELECTION_FAIL", None)
     if build_profile == "closure":
-        for knob in (
-            "SLIME_FABRIC_PROXY_EARLY_EXIT",
-            "SLIME_FABRIC_STREAM_EARLY_EXIT",
-            "SLIME_GENERATION_CANDIDATE",
-            "SLIME_GENERATION_CMD_SCENARIO",
-            "SLIME_BOOT_SELECTION_FAIL",
-            "SLIME_RECOVERY_IMAGE",
-        ):
-            environment.pop(knob, None)
+        # A closure build inherits no scenario knob from its caller's
+        # environment: `build-system-image.py` clears every `SLIME_*` before
+        # setting exactly the ones its resolved closure's build profiles
+        # select (CP14). So the knobs present here arrived from closure data,
+        # and stripping them would discard the very selection the closure
+        # identity is a claim about. `SLIME_GENERATION_CANDIDATE` is not a
+        # closure profile and is still removed.
+        environment.pop("SLIME_GENERATION_CANDIDATE", None)
     elif build_profile != "default":
         fail(f"unsupported component build profile {build_profile!r}")
     environment["SLIME_TARGET_PROFILE"] = target_profile.name

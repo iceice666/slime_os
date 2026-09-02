@@ -35,7 +35,11 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import copy
+import hashlib
 import importlib.util
+import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -49,6 +53,12 @@ from system_image_closure import (
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
+BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
+
+# The scenario whose bytes the expensive arm proves. `sel4-stream-death` is the
+# smallest closure carrying a build profile, so the arm is a real end-to-end
+# comparison rather than a sampled one.
+BYTE_ARM = "sel4-stream-death"
 
 EXPECTED_PARAMETERS = ("generationNumber", "fabricLimitOverride", "fabricQosOverride")
 
@@ -122,13 +132,74 @@ def check_unknown_parameter_refused() -> None:
     fail("a closure naming an unadmitted build parameter was accepted")
 
 
+def check_profile_vocabulary() -> None:
+    """The profile vocabulary is closed, and a same-knob conflict is refused."""
+    expected = (
+        "default",
+        "proxyEarlyExit",
+        "streamEarlyExit",
+        "generationCmdBadClosure",
+        "generationCmdBadRelease",
+        "bootSelectionFail",
+        "recoveryImage",
+    )
+    if tuple(CONTRACT.BUILD_PROFILES) != expected:
+        fail(
+            f"the closure contract admits build profiles {tuple(CONTRACT.BUILD_PROFILES)}; "
+            f"expected {expected}"
+        )
+    # Every non-default profile maps to a knob the builder knows.
+    unmapped = sorted(
+        profile
+        for profile in CONTRACT.BUILD_PROFILES
+        if profile != CONTRACT.BUILD_PROFILE_DEFAULT and profile not in BUILDER.PROFILE_KNOBS
+    )
+    if unmapped:
+        fail(f"build profile(s) {unmapped} map to no compile-time knob")
+    # Distinct knobs coexist; the same knob at two values is refused.
+    both = BUILDER.profile_environment(
+        {"a": CONTRACT.BUILD_PROFILE_PROXY_EARLY_EXIT, "b": CONTRACT.BUILD_PROFILE_STREAM_EARLY_EXIT}
+    )
+    if len(both) != 2:
+        fail(f"two distinct scenario knobs did not coexist: {both}")
+    try:
+        BUILDER.profile_environment(
+            {
+                "a": CONTRACT.BUILD_PROFILE_GENERATION_CMD_BAD_CLOSURE,
+                "b": CONTRACT.BUILD_PROFILE_GENERATION_CMD_BAD_RELEASE,
+            }
+        )
+    except SystemExit as error:
+        if "one value per build" not in str(error):
+            fail(f"wrong refusal for a same-knob profile conflict: {error}")
+    else:
+        fail("two profiles setting one knob to different values were accepted")
+
+
+def check_unknown_profile_refused() -> None:
+    """A closure naming a profile outside the admitted set is refused."""
+    base = compile_closure(CLOSURE_ROOT / "sel4-traffic.zti")
+    value = copy.deepcopy(base.value)
+    value["implementations"][0]["buildProfile"] = "ambientScenario"
+    with tempfile.TemporaryDirectory(prefix="slime-profile-") as scope:
+        path = Path(scope) / "sel4-traffic.zti"
+        path.write_text(GENERATOR_MODULE.render(value) + "\n", encoding="utf-8")
+        try:
+            compile_closure(path)
+        except SystemImageClosureError as error:
+            if "unknown profile" not in str(error):
+                fail(f"wrong refusal for an unadmitted profile: {error}")
+            return
+    fail("a closure naming an unadmitted build profile was accepted")
+
+
 def check_scenarios() -> int:
     """Every scenario resolves, differs from its base, and changes only what it names."""
     scenarios = GENERATOR_MODULE.SCENARIOS
     if not scenarios:
         fail("no scenario is declared, so this gate asserts nothing")
     identities: dict[str, str] = {}
-    for name, (base_name, parameters) in sorted(scenarios.items()):
+    for name, (base_name, parameters, profiles) in sorted(scenarios.items()):
         scenario_path = CLOSURE_ROOT / f"{name}.zti"
         base_path = CLOSURE_ROOT / f"{base_name}.zti"
         if not scenario_path.is_file():
@@ -142,8 +213,30 @@ def check_scenarios() -> int:
                 f"{name}: resolved parameters {scenario.build_parameters} differ from the "
                 f"declared {parameters}"
             )
-        if not parameters:
-            fail(f"{name}: a scenario with no parameters is its base composition")
+        # The resolved build profiles are the declared ones, and every other
+        # component stays `default`: a scenario names the components whose
+        # bytes change, so a profile leaking onto an unnamed component would
+        # make the closure identity a claim about the wrong ELFs.
+        resolved_profiles = {
+            component: profile
+            for component, profile in scenario.build_profiles.items()
+            if profile != CONTRACT.BUILD_PROFILE_DEFAULT
+        }
+        if resolved_profiles != profiles:
+            fail(
+                f"{name}: resolved build profiles {resolved_profiles} differ from the "
+                f"declared {profiles}"
+            )
+        for component in sorted(profiles):
+            if component not in base.build_profiles:
+                fail(f"{name}: profile names {component!r}, which its base does not admit")
+            if base.build_profiles[component] != CONTRACT.BUILD_PROFILE_DEFAULT:
+                fail(f"{name}: base composition already carries a profile for {component!r}")
+        # Two profiles setting one knob to different values cannot both be
+        # honoured, so the builder refuses that rather than resolving it.
+        BUILDER.profile_environment(scenario.build_profiles)
+        if not parameters and not profiles:
+            fail(f"{name}: a scenario with no parameters and no profiles is its base")
         scenario_identity = scenario.compiled.identity.hex()
         if scenario_identity == base.compiled.identity.hex():
             fail(f"{name}: scenario and base compute the same closure identity")
@@ -223,17 +316,95 @@ def check_every_closure_applies() -> int:
     return count
 
 
+def check_profile_bytes(name: str) -> tuple[str, str]:
+    """A scenario profile changes the ELF it names, reproducibly, and nothing else.
+
+    The expensive arm, and the one that makes the rest more than bookkeeping:
+    a profile that were merely recorded in the identity while changing no bytes
+    would satisfy every assertion above. This builds the base and the scenario
+    and compares the actual component ELFs.
+    """
+    base_name, _parameters, profiles = GENERATOR_MODULE.SCENARIOS[name]
+    if not profiles:
+        fail(f"{name}: selected for the byte arm but declares no build profile")
+    component = sorted(profiles)[0]
+
+    def build(closure_name: str, output: Path) -> Path:
+        process = subprocess.run(
+            [sys.executable, str(BUILDER_SCRIPT), str(CLOSURE_ROOT / f"{closure_name}.zti"), str(output)],
+            cwd=ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if process.returncode != 0:
+            tail = "\n".join(process.stdout.strip().splitlines()[-12:])
+            fail(f"{closure_name}: build failed:\n{tail}")
+        return output
+
+    def elf(output: Path, executable: str) -> str:
+        hits = sorted(output.glob(f"cargo/components/**/release/{executable}.elf"))
+        if not hits:
+            fail(f"{output}: built no {executable}.elf")
+        return hashlib.sha256(hits[0].read_bytes()).hexdigest()
+
+    with tempfile.TemporaryDirectory(prefix=f"slime-profile-bytes-{name}-") as scope:
+        root = Path(scope)
+        base = build(base_name, root / "base")
+        scenario = build(name, root / "scenario")
+        again = build(name, root / "again")
+
+        base_elf, scenario_elf, again_elf = (
+            elf(base, component),
+            elf(scenario, component),
+            elf(again, component),
+        )
+        if base_elf == scenario_elf:
+            fail(f"{name}: the {component} profile changed no ELF byte")
+        if scenario_elf != again_elf:
+            fail(f"{name}: the scenario {component} ELF is not reproducible")
+
+        # A component the profile does not name is byte-identical, so the knob
+        # did not leak across the graph.
+        untouched = sorted(
+            entry
+            for entry, profile in resolve_closure(
+                CLOSURE_ROOT / f"{name}.zti"
+            ).build_profiles.items()
+            if profile == CONTRACT.BUILD_PROFILE_DEFAULT
+        )
+        for entry in untouched[:3]:
+            if elf(base, entry) != elf(scenario, entry):
+                fail(f"{name}: {entry} changed although no profile names it")
+
+        left = json.loads((base / "build-result.json").read_text(encoding="utf-8"))
+        right = json.loads((scenario / "build-result.json").read_text(encoding="utf-8"))
+        if left["image"]["sha256"] == right["image"]["sha256"]:
+            fail(f"{name}: base and scenario produced the same image")
+        if left["closureIdentity"] == right["closureIdentity"]:
+            fail(f"{name}: base and scenario share a closure identity")
+        return base_elf, scenario_elf
+
+
 check_vocabulary()
+check_profile_vocabulary()
 check_unknown_parameter_refused()
+check_unknown_profile_refused()
 scenario_count = check_scenarios()
 check_malformed_refused()
 closure_count = check_every_closure_applies()
+base_elf, scenario_elf = check_profile_bytes(BYTE_ARM)
 
 print(
     f"system image scenario check: the closure contract admits exactly "
     f"{len(EXPECTED_PARAMETERS)} build parameters and refuses any other; "
     f"{scenario_count} scenario closure(s) resolve with identities distinct from their base "
     f"and from each other, changing exactly the manifest fields they name; "
-    f"8 malformed parameters refused; all {closure_count} closures' parameters apply to "
-    "their own manifests"
+    f"8 malformed parameters refused; the {len(CONTRACT.BUILD_PROFILES)}-name build-profile "
+    "vocabulary is closed with a same-knob conflict and an unadmitted profile both refused; "
+    f"all {closure_count} closures' parameters apply to their own manifests; and "
+    f"{BYTE_ARM}'s profile moved its component ELF from {base_elf[:12]} to "
+    f"{scenario_elf[:12]} reproducibly, leaving unnamed components and the base image "
+    "byte-identical"
 )

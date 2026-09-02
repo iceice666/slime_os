@@ -25,6 +25,22 @@ render :: Text = t.join "" {
   tuple "PROVIDERS" { schema.providerWorkspace; schema.providerExternal; };
   text "PROVIDER_WORKSPACE" schema.providerWorkspace;
   text "PROVIDER_EXTERNAL" schema.providerExternal;
+  tuple "BUILD_PROFILES" {
+    schema.buildProfileDefault;
+    schema.buildProfileProxyEarlyExit;
+    schema.buildProfileStreamEarlyExit;
+    schema.buildProfileGenerationCmdBadClosure;
+    schema.buildProfileGenerationCmdBadRelease;
+    schema.buildProfileBootSelectionFail;
+    schema.buildProfileRecoveryImage;
+  };
+  text "BUILD_PROFILE_DEFAULT" schema.buildProfileDefault;
+  text "BUILD_PROFILE_PROXY_EARLY_EXIT" schema.buildProfileProxyEarlyExit;
+  text "BUILD_PROFILE_STREAM_EARLY_EXIT" schema.buildProfileStreamEarlyExit;
+  text "BUILD_PROFILE_GENERATION_CMD_BAD_CLOSURE" schema.buildProfileGenerationCmdBadClosure;
+  text "BUILD_PROFILE_GENERATION_CMD_BAD_RELEASE" schema.buildProfileGenerationCmdBadRelease;
+  text "BUILD_PROFILE_BOOT_SELECTION_FAIL" schema.buildProfileBootSelectionFail;
+  text "BUILD_PROFILE_RECOVERY_IMAGE" schema.buildProfileRecoveryImage;
   tuple "ROOT_ROLES" { schema.rootRoleEmbeddedGeneration; schema.rootRoleBootSelector; };
   text "ROOT_ROLE_EMBEDDED_GENERATION" schema.rootRoleEmbeddedGeneration;
   text "ROOT_ROLE_BOOT_SELECTOR" schema.rootRoleBootSelector;

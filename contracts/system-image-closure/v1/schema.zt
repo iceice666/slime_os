@@ -10,6 +10,43 @@ ArtifactReference :: type {
   identity : Text;
 };
 
+-- Which implementation a composition selects for one component, and under
+-- which build profile.
+--
+-- `buildProfile` is the executable-changing scenario selector. Several planes
+-- need one component compiled to behave differently — a proxy that dies
+-- mid-route, a publisher that ends its stream early, a staging client that
+-- expects a specific refusal — and each is a `option_env!` knob the component
+-- reads at compile time, so it changes that component's ELF bytes. Before
+-- CP14 the knobs arrived as ambient `SLIME_*` variables set per variant by
+-- `build-sel4.py`, which meant the ELF a closure named and the ELF a build
+-- produced could differ with nothing in the identity to say so.
+--
+-- Closed to the profiles below. `default` is the ordinary build every product
+-- closure uses; the rest are test-only and each maps to exactly one knob that
+-- exactly one set of components reads:
+--
+--   `proxyEarlyExit`         -- `SLIME_FABRIC_PROXY_EARLY_EXIT`: the route
+--                               interposition hop dies mid-route, so the graph
+--                               must degrade rather than tolerate a task it
+--                               stopped tracking.
+--   `streamEarlyExit`        -- `SLIME_FABRIC_STREAM_EARLY_EXIT`: a publisher
+--                               dies mid-stream, which must stay distinct from
+--                               an orderly `FLAG_LAST` end.
+--   `generationCmdBadClosure`-- `SLIME_GENERATION_CMD_SCENARIO=bad-closure`:
+--                               the staging client expects the object-closure
+--                               refusal rather than success.
+--   `generationCmdBadRelease`-- `SLIME_GENERATION_CMD_SCENARIO=bad-release`:
+--                               the same client expects the release-signature
+--                               refusal.
+--   `bootSelectionFail`      -- `SLIME_BOOT_SELECTION_FAIL`: init reports
+--                               unhealthy so the selector must roll back.
+--   `recoveryImage`          -- `SLIME_RECOVERY_IMAGE`: the recovery build of
+--                               the graph.
+--
+-- A profile is per implementation rather than per closure because exactly one
+-- component's bytes change: naming it on the closure would make every other
+-- component's ELF look scenario-dependent when it is not.
 ImplementationSelection :: type {
   component : Text;
   provider : Text;
@@ -17,6 +54,14 @@ ImplementationSelection :: type {
   identity : Text;
   buildProfile : Text;
 };
+
+buildProfileDefault :: Text = "default";
+buildProfileProxyEarlyExit :: Text = "proxyEarlyExit";
+buildProfileStreamEarlyExit :: Text = "streamEarlyExit";
+buildProfileGenerationCmdBadClosure :: Text = "generationCmdBadClosure";
+buildProfileGenerationCmdBadRelease :: Text = "generationCmdBadRelease";
+buildProfileBootSelectionFail :: Text = "bootSelectionFail";
+buildProfileRecoveryImage :: Text = "recoveryImage";
 
 TargetSelection :: type {
   profile : Text;
@@ -175,6 +220,13 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   artifactKindTree =;
   providerWorkspace =;
   providerExternal =;
+  buildProfileDefault =;
+  buildProfileProxyEarlyExit =;
+  buildProfileStreamEarlyExit =;
+  buildProfileGenerationCmdBadClosure =;
+  buildProfileGenerationCmdBadRelease =;
+  buildProfileBootSelectionFail =;
+  buildProfileRecoveryImage =;
   rootRoleEmbeddedGeneration =;
   rootRoleBootSelector =;
   loaderRoleKernelLoader =;
