@@ -76,6 +76,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("rpi5_boot", "check/check-rpi5-boot.py", 11),
     ("nt98690_boot", "check/check-nt98690-boot.py", 25),
     ("nt98690_sel4", "check/check-nt98690-sel4.py", 19),
+    ("nt98690_slisp", "check/check-nt98690-slisp.py", 34),
 )
 
 

@@ -163,3 +163,19 @@ sel4_nt98690_image_check: sel4_pin_check
 [group('hardware')]
 nt98690_sel4_check serial="": sel4_root_boot_check sel4_sample_check
     python3 scripts/check/check-nt98690-sel4.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
+# P6.C: build the target-qualified resident product graph with H1V1 UART0
+# input and the gate-only terminator, wrap it in the qualified arm64 `Image`
+# header, and drive one bounded Slisp session on the named board: staged over
+# P6.A's handoff, typed commands answered at the resident prompt, residency
+# proven past the former iteration ceiling, and the board returned to its
+# vendor firmware only through the terminator's watchdog reset. The QEMU
+# product graph and the Slisp core vectors pass first, as the roadmap
+# requires. Staging the card is the operator's step; nothing here writes a
+# block device. `serial` takes a tty path or a `tcp:HOST:PORT` bridge;
+# omitting it runs and fails, never skips.
+#
+#   just nt98690_slisp_check /dev/ttyUSB0
+[group('hardware')]
+nt98690_slisp_check serial="": slisp_core_check sel4_component_graph_check
+    python3 scripts/check/check-nt98690-slisp.py {{ if serial == "" { "" } else { "--serial " + serial } }}
