@@ -109,6 +109,8 @@ enum LoanLifecycleRequest {
 macro_rules! fatal {
     ($($arg:tt)*) => {{
         sel4::debug_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
+        #[cfg(slime_ns02201_h1v1)]
+        crate::request_ns02201_reset_after_fatal();
         sel4::init_thread::suspend_self()
     }};
 }
@@ -344,6 +346,40 @@ fn run_duo_early_fault_control(
     }
 }
 
+/// Reset the NT98690 through its watchdog once an autonomous physical proof
+/// completes, so the next scored boot needs no operator.
+#[cfg(slime_ns02201_h1v1)]
+fn request_ns02201_reset() -> ! {
+    sel4::debug_println!("SLIME_NT98690 reset request kind=wdt");
+    // SAFETY: root startup wrote the value before any other thread existed;
+    // both MMIO mappings remain live for the root's lifetime.
+    let registers = unsafe { ptr::addr_of!(NS02201_RESET_REGISTERS).read() };
+    let issued = registers.is_some_and(|(clock_gate, watchdog)| {
+        platform_timer::request_ns02201_watchdog_reset(clock_gate, watchdog)
+    });
+    if !issued {
+        sel4::debug_println!("SLIME_NT98690 reset failed");
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// The H1V1's vendor Linux offers no console to reboot from, so a root parked
+/// on a fatal condition costs the bench a manual power cycle. Once the reset
+/// granules are mapped, a fatal resets the board instead; before that, there
+/// is nothing to do but park, exactly as on every other platform.
+#[cfg(slime_ns02201_h1v1)]
+fn request_ns02201_reset_after_fatal() {
+    // SAFETY: root startup writes the value once, before any thread but the
+    // root runs; both MMIO mappings remain live for the root's lifetime.
+    let registers = unsafe { ptr::addr_of!(NS02201_RESET_REGISTERS).read() };
+    if let Some((clock_gate, watchdog)) = registers {
+        sel4::debug_println!("SLIME_NT98690 reset request kind=wdt cause=fatal");
+        let _ = platform_timer::request_ns02201_watchdog_reset(clock_gate, watchdog);
+    }
+}
+
 #[cfg(slime_cv1800b_duo)]
 fn request_duo_cold_reset(
     timer_registers: device::MappedGranule,
@@ -469,6 +505,22 @@ const TIMER_PADDR: usize = 0x0010_1000;
 const TIMER_PADDR: usize = 0x0502_6000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
+
+/// Standing windows for the NT98690's clock-gate and watchdog granules, the
+/// two pages TF-A's own system reset programs. Mapped at startup so both an
+/// autonomous proof's completion and a fatal condition can reset the board.
+#[cfg(slime_ns02201_h1v1)]
+static mut NS02201_CLOCK_GATE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+#[cfg(slime_ns02201_h1v1)]
+static mut NS02201_WATCHDOG_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+#[cfg(slime_ns02201_h1v1)]
+static mut NS02201_RESET_REGISTERS: Option<(device::MappedGranule, device::MappedGranule)> = None;
+/// `CG_BASE` and `WDT_BASE` from TF-A's `nvt_ns02201/include/novatek_def.h`;
+/// the vendor tree lists them as `cg@2,f0020000` and `wdt@2,f0060000`.
+#[cfg(slime_ns02201_h1v1)]
+const NS02201_CLOCK_GATE_PADDR: usize = 0x2_f002_0000;
+#[cfg(slime_ns02201_h1v1)]
+const NS02201_WATCHDOG_PADDR: usize = 0x2_f006_0000;
 #[cfg(slime_product_uart)]
 const PRODUCT_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_PRODUCT_UART_PADDR"));
 /// QEMU virt's architecture-specific virtio-mmio transport window.
@@ -781,6 +833,41 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(adapter) => adapter,
         Err(error) => fatal!("timer source unavailable: {error:?}"),
     };
+    #[cfg(slime_ns02201_h1v1)]
+    {
+        let mut granules = [None; 2];
+        for (slot, (page, paddr)) in [
+            (
+                ptr::addr_of!(NS02201_CLOCK_GATE_PAGE) as usize,
+                NS02201_CLOCK_GATE_PADDR,
+            ),
+            (
+                ptr::addr_of!(NS02201_WATCHDOG_PAGE) as usize,
+                NS02201_WATCHDOG_PADDR,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Err(error) = ScratchPage::claim(bootinfo, page) {
+                fatal!("NT98690 reset page unavailable: {error:?}")
+            }
+            granules[slot] = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                page,
+                paddr,
+            ) {
+                Ok(region) => Some(region.granule()),
+                Err(error) => fatal!("NT98690 reset registers unavailable: {error:?}"),
+            };
+        }
+        let registers = (granules[0].unwrap(), granules[1].unwrap());
+        // SAFETY: written once here, before any other thread exists.
+        unsafe {
+            ptr::addr_of_mut!(NS02201_RESET_REGISTERS).write(Some(registers));
+        }
+    }
     #[cfg(slime_cv1800b_duo)]
     let reset_registers = {
         let reset_addr = ptr::addr_of!(RESET_PAGE) as usize;
@@ -1051,6 +1138,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         );
         #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         request_duo_cold_reset(timer_registers, reset_registers);
+        #[cfg(slime_ns02201_h1v1)]
+        request_ns02201_reset();
         loop {
             core::hint::spin_loop();
         }

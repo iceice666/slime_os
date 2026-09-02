@@ -27,6 +27,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_product_test_terminator)");
     println!("cargo::rustc-check-cfg=cfg(slime_cv1800b_duo)");
     println!("cargo::rustc-check-cfg=cfg(slime_duo_early_fault)");
+    println!("cargo::rustc-check-cfg=cfg(slime_ns02201_h1v1)");
     println!("cargo::rustc-check-cfg=cfg(slime_physical_target)");
     let target_profile = std::env::var("SLIME_TARGET_PROFILE")
         .unwrap_or_else(|_| "aarch64-sel4-qemu-virt".to_owned());
@@ -34,9 +35,15 @@ fn main() {
     // A named physical board, as opposed to a QEMU machine: the root announces
     // its target profile at READY and resets the board through its own
     // registers after an autonomous proof, neither of which a QEMU gate wants.
-    let physical_target = matches!(target_profile.as_str(), "riscv64-sel4-milkv-duo");
+    let physical_target = matches!(
+        target_profile.as_str(),
+        "riscv64-sel4-milkv-duo" | "aarch64-sel4-nt98690-h1v1"
+    );
     if physical_target {
         println!("cargo::rustc-cfg=slime_physical_target");
+    }
+    if target_profile == "aarch64-sel4-nt98690-h1v1" {
+        println!("cargo::rustc-cfg=slime_ns02201_h1v1");
     }
     if target_profile == "riscv64-sel4-milkv-duo" {
         println!("cargo::rustc-cfg=slime_cv1800b_duo");
