@@ -1,0 +1,740 @@
+{
+  bootAction = "stream";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 6;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-service";
+      object = "sha256:fabric-service";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-publisher";
+      object = "sha256:fabric-publisher";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-publisher-b";
+      object = "sha256:fabric-publisher-b";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-subscriber";
+      object = "sha256:fabric-subscriber";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-subscriber-b";
+      object = "sha256:fabric-subscriber-b";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-intruder";
+      object = "sha256:fabric-intruder";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  fabricGraph = {
+    fabricComponent = "fabric-service";
+    limits = {
+      bufferPages = 28;
+      buffers = 14;
+      capabilitySlots = 32;
+      clients = 5;
+      eventDepth = 2;
+      historyDepth = 8;
+      inFlightCalls = 0;
+      inFlightOperations = 0;
+      ingressSources = 9;
+      loans = 14;
+      mappings = 14;
+      publishers = 3;
+      queueDepth = 8;
+      retainedSamples = 2;
+      retries = 0;
+      routes = 2;
+      sampleBytes = 8192;
+      servers = 0;
+      subscribers = 4;
+    };
+    profiles = [
+      {
+        interpositions = [];
+        name = "sel4";
+      };
+    ];
+    routes = [
+      {
+        interface = "TelemetryStream";
+        name = "telemetry";
+        participants = [
+          {
+            component = "fabric-publisher";
+            deadlineNs = 0;
+            direction = "publish";
+            durability = "retained";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 300;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 2;
+            visibility = "graph";
+          };
+          {
+            component = "fabric-subscriber";
+            deadlineNs = 0;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 8;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 0;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+          {
+            component = "fabric-publisher-b";
+            deadlineNs = 100;
+            direction = "publish";
+            durability = "retained";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 200;
+            lifespanNs = 300;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 2;
+            visibility = "graph";
+          };
+          {
+            component = "fabric-subscriber-b";
+            deadlineNs = 0;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 0;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+        ];
+      };
+      {
+        interface = "DiagnosticsStream";
+        name = "diagnostics";
+        participants = [
+          {
+            component = "fabric-publisher-b";
+            deadlineNs = 100;
+            direction = "publish";
+            durability = "volatile";
+            historyDepth = 2;
+            interposition = [];
+            leaseNs = 200;
+            lifespanNs = 0;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+          {
+            component = "fabric-subscriber-b";
+            deadlineNs = 100;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 2;
+            interposition = [];
+            leaseNs = 200;
+            lifespanNs = 0;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+        ];
+      };
+    ];
+    traceDepth = 16;
+    traceOverflow = "saturate";
+  };
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-fabric-service";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "init-fabric-publisher";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-publisher";
+      transferable = false;
+    };
+    {
+      name = "init-fabric-publisher-b";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-publisher-b";
+      transferable = false;
+    };
+    {
+      name = "init-fabric-subscriber";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-subscriber";
+      transferable = false;
+    };
+    {
+      name = "init-fabric-subscriber-b";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-subscriber-b";
+      transferable = false;
+    };
+    {
+      name = "init-fabric-intruder";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-intruder";
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "init";
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-publisher";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-subscriber";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-intruder-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-intruder";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+      transferable = true;
+    };
+    {
+      name = "fabric-subscriber-b-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-subscriber-b";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-probe";
+      capabilityKind = "endpoint";
+      rights = [
+        "recv";
+      ];
+      source = "fabric-publisher";
+      target = "fabric-service";
+      transferable = true;
+    };
+    {
+      name = "fabric-subscriber-probe";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+      ];
+      source = "fabric-subscriber";
+      target = "fabric-service";
+      transferable = true;
+    };
+    {
+      name = "fabric-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "fabric-service";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "fabric-service";
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-fabric-intruder";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-fabric-publisher";
+          slot = 2;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-fabric-publisher-b";
+          slot = 3;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-fabric-service";
+          slot = 4;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-fabric-subscriber";
+          slot = 5;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-fabric-subscriber-b";
+          slot = 6;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-shared-buffer-factory";
+          slot = 8;
+          slotReason = "bootLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-intruder-control";
+          slot = 4;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-publisher-b-control";
+          slot = 5;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-publisher-control";
+          slot = 2;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-service-shared-buffer-factory";
+          slot = 1;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-subscriber-b-control";
+          slot = 6;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-subscriber-control";
+          slot = 3;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-publisher-probe";
+          slot = 11;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "fabric-subscriber-probe";
+          slot = 12;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-service";
+      health = "required";
+      name = "fabric-service";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-publisher-control";
+        };
+        {
+          grant = "fabric-publisher-probe";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-publisher";
+      health = "optional";
+      name = "fabric-publisher";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-publisher-b-control";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-publisher-b";
+      health = "optional";
+      name = "fabric-publisher-b";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-subscriber-control";
+        };
+        {
+          grant = "fabric-subscriber-probe";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-subscriber";
+      health = "optional";
+      name = "fabric-subscriber";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-subscriber-b-control";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-subscriber-b";
+      health = "optional";
+      name = "fabric-subscriber-b";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-intruder-control";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-intruder";
+      health = "optional";
+      name = "fabric-intruder";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [
+    {
+      name = "fabric-publisher-b-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      owner = "init";
+      holder = "fabric-publisher-b";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 9;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 7;
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-b-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 10;
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 8;
+      transferable = false;
+    };
+  ];
+  notificationGrants = [
+    { name = "fabric-publisher-telemetry-ready"; source = "fabric-publisher"; target = "fabric-service"; };
+    { name = "fabric-publisher-telemetry-credit"; source = "fabric-service"; target = "fabric-publisher"; };
+    { name = "fabric-subscriber-telemetry-ready"; source = "fabric-service"; target = "fabric-subscriber"; };
+    { name = "fabric-subscriber-telemetry-credit"; source = "fabric-subscriber"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-telemetry-ready"; source = "fabric-publisher-b"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-telemetry-credit"; source = "fabric-service"; target = "fabric-publisher-b"; };
+    { name = "fabric-subscriber-b-telemetry-ready"; source = "fabric-service"; target = "fabric-subscriber-b"; };
+    { name = "fabric-subscriber-b-telemetry-credit"; source = "fabric-subscriber-b"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-diagnostics-ready"; source = "fabric-publisher-b"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-diagnostics-credit"; source = "fabric-service"; target = "fabric-publisher-b"; };
+    { name = "fabric-subscriber-b-diagnostics-ready"; source = "fabric-service"; target = "fabric-subscriber-b"; };
+    { name = "fabric-subscriber-b-diagnostics-credit"; source = "fabric-subscriber-b"; target = "fabric-service"; };
+  ];
+  notificationBindings = [
+    { grant = "fabric-publisher-telemetry-ready"; holder = "fabric-publisher"; slot = 0; role = "signal"; };
+    { grant = "fabric-publisher-telemetry-ready"; holder = "fabric-service"; slot = 0; role = "wait"; };
+    { grant = "fabric-publisher-telemetry-credit"; holder = "fabric-service"; slot = 1; role = "signal"; };
+    { grant = "fabric-publisher-telemetry-credit"; holder = "fabric-publisher"; slot = 1; role = "wait"; };
+    { grant = "fabric-subscriber-telemetry-ready"; holder = "fabric-service"; slot = 2; role = "signal"; };
+    { grant = "fabric-subscriber-telemetry-ready"; holder = "fabric-subscriber"; slot = 0; role = "wait"; };
+    { grant = "fabric-subscriber-telemetry-credit"; holder = "fabric-subscriber"; slot = 1; role = "signal"; };
+    { grant = "fabric-subscriber-telemetry-credit"; holder = "fabric-service"; slot = 3; role = "wait"; };
+    { grant = "fabric-publisher-b-telemetry-ready"; holder = "fabric-publisher-b"; slot = 0; role = "signal"; };
+    { grant = "fabric-publisher-b-telemetry-ready"; holder = "fabric-service"; slot = 4; role = "wait"; };
+    { grant = "fabric-publisher-b-telemetry-credit"; holder = "fabric-service"; slot = 5; role = "signal"; };
+    { grant = "fabric-publisher-b-telemetry-credit"; holder = "fabric-publisher-b"; slot = 1; role = "wait"; };
+    { grant = "fabric-subscriber-b-telemetry-ready"; holder = "fabric-service"; slot = 6; role = "signal"; };
+    { grant = "fabric-subscriber-b-telemetry-ready"; holder = "fabric-subscriber-b"; slot = 0; role = "wait"; };
+    { grant = "fabric-subscriber-b-telemetry-credit"; holder = "fabric-subscriber-b"; slot = 1; role = "signal"; };
+    { grant = "fabric-subscriber-b-telemetry-credit"; holder = "fabric-service"; slot = 7; role = "wait"; };
+    { grant = "fabric-publisher-b-diagnostics-ready"; holder = "fabric-publisher-b"; slot = 2; role = "signal"; };
+    { grant = "fabric-publisher-b-diagnostics-ready"; holder = "fabric-service"; slot = 8; role = "wait"; };
+    { grant = "fabric-publisher-b-diagnostics-credit"; holder = "fabric-service"; slot = 9; role = "signal"; };
+    { grant = "fabric-publisher-b-diagnostics-credit"; holder = "fabric-publisher-b"; slot = 3; role = "wait"; };
+    { grant = "fabric-subscriber-b-diagnostics-ready"; holder = "fabric-service"; slot = 10; role = "signal"; };
+    { grant = "fabric-subscriber-b-diagnostics-ready"; holder = "fabric-subscriber-b"; slot = 2; role = "wait"; };
+    { grant = "fabric-subscriber-b-diagnostics-credit"; holder = "fabric-subscriber-b"; slot = 3; role = "signal"; };
+    { grant = "fabric-subscriber-b-diagnostics-credit"; holder = "fabric-service"; slot = 11; role = "wait"; };
+  ];
+  interfaceSchemas = [
+    "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
+    "contracts/interface-schema/v1/interfaces/diagnostics-stream.zti";
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-service";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:fabric-publisher";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-publisher-b";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-subscriber";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-subscriber-b";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-intruder";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "fabric-graph";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "private-memory-budget";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [
+    {
+      holder = "fabric-service";
+      pageQuota = 16;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 14;
+      bytePages = 28;
+      holder = "fabric-service";
+      loanCount = 14;
+      mappingCount = 14;
+    };
+    {
+      bufferCount = 0;
+      bytePages = 4;
+      holder = "fabric-publisher";
+      loanCount = 0;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 1;
+      bytePages = 8;
+      holder = "fabric-publisher-b";
+      loanCount = 1;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 0;
+      bytePages = 4;
+      holder = "fabric-subscriber";
+      loanCount = 0;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 0;
+      bytePages = 4;
+      holder = "fabric-subscriber-b";
+      loanCount = 0;
+      mappingCount = 4;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

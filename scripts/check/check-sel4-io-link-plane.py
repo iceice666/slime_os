@@ -223,16 +223,20 @@ def check_transcript(transcript: str) -> None:
 
 
 def check_fixture() -> None:
-    text = FIXTURE.read_text(encoding="utf-8")
+    # Whitespace-normalized before matching: the composition is CP12 generator
+    # output rather than hand-authored text, so `name = "x";` and `name="x";`
+    # are the same declaration and only the latter's spacing was an artifact of
+    # how the fixture happened to be typed.
+    text = " ".join(FIXTURE.read_text(encoding="utf-8").split())
     for declaration in (
         "generation = 52;",
         'name = "virtio-net-driver";',
         'name = "io-link-probe";',
         'name = "io-link-intruder";',
-        'name="io-link-tx-request-ready";',
-        'name="io-link-rx-request-ready";',
+        'name = "io-link-tx-request-ready";',
+        'name = "io-link-rx-request-ready";',
     ):
-        if declaration not in text:
+        if " ".join(declaration.split()) not in text:
             fail(f"fixture is missing {declaration!r}")
 
 

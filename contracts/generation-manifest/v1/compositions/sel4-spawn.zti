@@ -4,17 +4,17 @@
   executables = [
     {
       commandProfile = [];
-      name = "init";
-      object = "sha256:init";
-      role = "init";
-      spawnBudget = 4;
-    };
-    {
-      commandProfile = [];
       name = "console";
       object = "sha256:console";
       role = "service";
       spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 4;
     };
     {
       commandProfile = [];
@@ -27,6 +27,27 @@
   formatVersion = 1;
   generation = 1;
   grants = [
+    {
+      name = "console-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "console-view";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "console";
+      transferable = true;
+    };
     {
       name = "init-console";
       capabilityKind = "executable";
@@ -50,17 +71,6 @@
       transferable = false;
     };
     {
-      name = "console-control";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "init";
-      target = "console";
-      transferable = false;
-    };
-    {
       name = "sysinfo-context";
       capabilityKind = "endpoint";
       rights = [
@@ -70,16 +80,6 @@
       source = "init";
       target = "sysinfo";
       transferable = false;
-    };
-    {
-      name = "console-view";
-      capabilityKind = "directory";
-      rights = [
-        "directoryRead";
-      ];
-      source = "init";
-      target = "console";
-      transferable = true;
     };
     {
       name = "sysinfo-view-1";
@@ -152,8 +152,40 @@
   };
   instances = [
     {
+      autostart = false;
+      bindings = [
+        {
+          grant = "console-control";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "console-view";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "init";
+    };
+    {
       autostart = true;
       bindings = [
+        {
+          grant = "console-control";
+          slot = 3;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "console-view";
+          slot = 5;
+          slotReason = "bootLayout";
+        };
         {
           grant = "init-console";
           slot = 1;
@@ -165,19 +197,9 @@
           slotReason = "bootLayout";
         };
         {
-          grant = "console-control";
-          slot = 3;
-          slotReason = "encodedLayout";
-        };
-        {
           grant = "sysinfo-context";
           slot = 4;
           slotReason = "encodedLayout";
-        };
-        {
-          grant = "console-view";
-          slot = 5;
-          slotReason = "bootLayout";
         };
         {
           grant = "sysinfo-view-1";
@@ -215,28 +237,6 @@
       health = "required";
       name = "init";
       owner = "root";
-    };
-    {
-      autostart = false;
-      bindings = [
-        {
-          grant = "console-control";
-          slot = 0;
-          slotReason = "componentAbi";
-        };
-        {
-          grant = "console-view";
-          slot = 1;
-          slotReason = "componentAbi";
-        };
-      ];
-      dependencies = [
-        "init";
-      ];
-      executable = "console";
-      health = "required";
-      name = "console";
-      owner = "init";
     };
     {
       autostart = false;
@@ -290,13 +290,18 @@
   interfaceSchemas = [];
   objects = [
     {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
     };
     {
       id = "sha256:console";
       kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
       size = 65536;
     };
     {
@@ -309,12 +314,8 @@
       kind = "resource";
       size = 4096;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

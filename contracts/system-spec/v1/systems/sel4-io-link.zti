@@ -1,0 +1,279 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-link";
+  generation = 52;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "io-link-intruder";
+    "io-link-probe";
+    "virtio-net-driver";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "io-link-probe";
+      bufferBytePages = 10;
+      bufferCount = 10;
+      mappingCount = 10;
+      loanCount = 10;
+    };
+    {
+      component = "virtio-net-driver";
+      mappingCount = 10;
+      loanCount = 10;
+    };
+  ];
+  grants = [
+    {
+      name = "io-link-peer";
+      capabilityKind = "endpoint";
+      source = "io-link-probe";
+      target = "virtio-net-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "io-link-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "io-link-probe";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-net-device";
+      capabilityKind = "device";
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-net-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-net-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-net-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "io-link-probe";
+      grant = "io-link-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-link-probe";
+      grant = "io-link-buffer-factory";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-net-driver";
+      grant = "io-link-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-net-driver";
+      grant = "virtio-net-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-net-driver";
+      grant = "virtio-net-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-net-driver";
+      grant = "virtio-net-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-net-driver";
+      grant = "virtio-net-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "io-link-tx-request-ready";
+      source = "io-link-probe";
+      target = "virtio-net-driver";
+    };
+    {
+      name = "io-link-rx-request-ready";
+      source = "io-link-probe";
+      target = "virtio-net-driver";
+    };
+    {
+      name = "io-link-tx-completion-ready";
+      source = "virtio-net-driver";
+      target = "io-link-probe";
+    };
+    {
+      name = "io-link-rx-completion-ready";
+      source = "virtio-net-driver";
+      target = "io-link-probe";
+    };
+    {
+      name = "io-link-state-changed";
+      source = "virtio-net-driver";
+      target = "io-link-probe";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "io-link-tx-request-ready";
+      holder = "io-link-probe";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "io-link-tx-request-ready";
+      holder = "virtio-net-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-link-rx-request-ready";
+      holder = "io-link-probe";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "io-link-rx-request-ready";
+      holder = "virtio-net-driver";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "io-link-tx-completion-ready";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "io-link-tx-completion-ready";
+      holder = "io-link-probe";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "io-link-rx-completion-ready";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "io-link-rx-completion-ready";
+      holder = "io-link-probe";
+      role = "wait";
+      slot = 3;
+    };
+    {
+      grant = "io-link-state-changed";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 4;
+    };
+    {
+      grant = "io-link-state-changed";
+      holder = "io-link-probe";
+      role = "wait";
+      slot = 4;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      bufferLoans = 16;
+      dmaMappings = 18;
+      dmaPages = 20;
+      holder = "virtio-net-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 16;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [
+    {
+      badgeBit = 2;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "io-link-tx-completion-ready";
+      waiter = "io-link-probe";
+    };
+    {
+      badgeBit = 3;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "io-link-rx-completion-ready";
+      waiter = "io-link-probe";
+    };
+  ];
+  waitSetObject = true;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -1,0 +1,821 @@
+{
+  formatVersion = 1;
+  name = "sel4-robot-runtime";
+  generation = 46;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "robot-runtime";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "fabric-call-worker";
+    "fabric-service";
+    "init";
+    "robot-actuator";
+    "robot-burner";
+    "robot-clock";
+    "robot-controller";
+    "robot-sensor";
+    "robot-supervisor";
+  ];
+  placements = [
+    {
+      component = "fabric-call-worker";
+      owner = "init";
+      health = "required";
+      dependencies = [];
+      stackBytes = 16384;
+      bufferBytePages = 8;
+      bufferCount = 4;
+      loanCount = 4;
+      privatePageQuota = 8;
+    };
+    {
+      component = "fabric-service";
+      owner = "init";
+      health = "required";
+      dependencies = [];
+      spawnBudget = 0;
+      stackBytes = 16384;
+      bufferBytePages = 24;
+      bufferCount = 12;
+      mappingCount = 12;
+      loanCount = 12;
+      privatePageQuota = 8;
+    };
+    {
+      component = "init";
+      spawnBudget = 5;
+    };
+    {
+      component = "robot-controller";
+      autostart = false;
+    };
+  ];
+  grants = [
+    {
+      name = "init-fabric-call-worker";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-call-worker";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-service";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-robot-actuator";
+      capabilityKind = "executable";
+      source = "init";
+      target = "robot-actuator";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-robot-clock";
+      capabilityKind = "executable";
+      source = "init";
+      target = "robot-clock";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-robot-sensor";
+      capabilityKind = "executable";
+      source = "init";
+      target = "robot-sensor";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-actuator-control";
+      capabilityKind = "endpoint";
+      source = "robot-actuator";
+      target = "fabric-call-worker";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "robot-clock-control";
+      capabilityKind = "endpoint";
+      source = "robot-clock";
+      target = "fabric-call-worker";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-controller-call-control";
+      capabilityKind = "endpoint";
+      source = "robot-controller";
+      target = "fabric-call-worker";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "robot-controller-clock-phase";
+      capabilityKind = "endpoint";
+      source = "robot-controller";
+      target = "robot-clock";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-controller-control";
+      capabilityKind = "endpoint";
+      source = "robot-controller";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "robot-controller-executable";
+      capabilityKind = "executable";
+      source = "robot-supervisor";
+      target = "robot-controller";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-sensor-control";
+      capabilityKind = "endpoint";
+      source = "robot-sensor";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-fabric-service";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-call-worker";
+      slot = 2;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-robot-sensor";
+      slot = 3;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-robot-actuator";
+      slot = 4;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-robot-clock";
+      slot = 5;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-shared-buffer-factory";
+      slot = 7;
+      reason = "bootLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "robot-sensor-control";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "robot-controller-control";
+      slot = 30;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-call-worker";
+      grant = "robot-controller-call-control";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-call-worker";
+      grant = "robot-actuator-control";
+      slot = 4;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-call-worker";
+      grant = "robot-clock-control";
+      slot = 5;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "robot-sensor";
+      grant = "robot-sensor-control";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "robot-actuator";
+      grant = "robot-actuator-control";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "robot-clock";
+      grant = "robot-clock-control";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "robot-clock";
+      grant = "robot-controller-clock-phase";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "robot-supervisor";
+      grant = "robot-controller-executable";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "robot-controller";
+      grant = "robot-controller-control";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "robot-controller";
+      grant = "robot-controller-call-control";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "robot-controller";
+      grant = "robot-controller-clock-phase";
+      slot = 5;
+      reason = "encodedLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [
+    {
+      name = "fabric-call-worker-shared-buffer-factory";
+      owner = "init";
+      holder = "fabric-call-worker";
+      capabilityKind = "sharedBufferFactory";
+      slot = 1;
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-service-shared-buffer-factory";
+      owner = "init";
+      holder = "fabric-service";
+      capabilityKind = "sharedBufferFactory";
+      slot = 1;
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-actuator-supervision";
+      owner = "init";
+      holder = "fabric-call-worker";
+      capabilityKind = "supervision";
+      slot = 8;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-clock-supervision";
+      owner = "init";
+      holder = "fabric-call-worker";
+      capabilityKind = "supervision";
+      slot = 9;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "robot-sensor-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      capabilityKind = "supervision";
+      slot = 9;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+  ];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [
+    {
+      component = "fabric-service";
+      bytes = 131072;
+    };
+    {
+      component = "fabric-call-worker";
+      bytes = 131072;
+    };
+    {
+      component = "robot-burner";
+      bytes = 32768;
+    };
+    {
+      component = "robot-clock";
+      bytes = 32768;
+    };
+  ];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [
+    "contracts/interface-schema/v1/interfaces/parameter-call.zti";
+    "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
+  ];
+  state = [];
+  notifications = [
+    {
+      name = "fabric-call-worker-parameters-ready";
+      source = "robot-controller";
+      target = "fabric-call-worker";
+    };
+    {
+      name = "robot-controller-telemetry-credit";
+      source = "robot-controller";
+      target = "fabric-service";
+    };
+    {
+      name = "robot-controller-telemetry-ready";
+      source = "fabric-service";
+      target = "robot-controller";
+    };
+    {
+      name = "robot-sensor-telemetry-credit";
+      source = "fabric-service";
+      target = "robot-sensor";
+    };
+    {
+      name = "robot-sensor-telemetry-ready";
+      source = "robot-sensor";
+      target = "fabric-service";
+    };
+    {
+      name = "robot-sensor-tick";
+      source = "init";
+      target = "robot-sensor";
+    };
+    {
+      name = "robot-supervisor-tick";
+      source = "init";
+      target = "robot-supervisor";
+    };
+    {
+      name = "robot-controller-retired";
+      source = "robot-supervisor";
+      target = "fabric-call-worker";
+    };
+    {
+      name = "robot-actuator-timeout-observed";
+      source = "robot-controller";
+      target = "robot-actuator";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "robot-sensor-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "robot-sensor-tick";
+      holder = "robot-sensor";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "robot-supervisor-tick";
+      holder = "init";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "robot-supervisor-tick";
+      holder = "robot-supervisor";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "robot-sensor-telemetry-ready";
+      holder = "robot-sensor";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "robot-sensor-telemetry-ready";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "robot-sensor-telemetry-credit";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "robot-sensor-telemetry-credit";
+      holder = "robot-sensor";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "robot-controller-telemetry-ready";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "robot-controller-telemetry-ready";
+      holder = "robot-controller";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "robot-controller-telemetry-credit";
+      holder = "robot-controller";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "robot-controller-telemetry-credit";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 4;
+    };
+    {
+      grant = "fabric-call-worker-parameters-ready";
+      holder = "robot-controller";
+      role = "signal";
+      slot = 4;
+    };
+    {
+      grant = "fabric-call-worker-parameters-ready";
+      holder = "robot-supervisor";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "fabric-call-worker-parameters-ready";
+      holder = "robot-actuator";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "fabric-call-worker-parameters-ready";
+      holder = "robot-clock";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "fabric-call-worker-parameters-ready";
+      holder = "fabric-call-worker";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "robot-controller-retired";
+      holder = "robot-supervisor";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "robot-controller-retired";
+      holder = "fabric-call-worker";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "robot-actuator-timeout-observed";
+      holder = "robot-controller";
+      role = "signal";
+      slot = 5;
+    };
+    {
+      grant = "robot-actuator-timeout-observed";
+      holder = "robot-actuator";
+      role = "wait";
+      slot = 2;
+    };
+  ];
+  bootProfiles = [];
+  fabricGraph = {
+    fabricComponent = "fabric-service";
+    limits = {
+      bufferPages = 24;
+      buffers = 12;
+      capabilitySlots = 40;
+      clients = 2;
+      eventDepth = 2;
+      historyDepth = 4;
+      inFlightCalls = 4;
+      inFlightOperations = 0;
+      ingressSources = 6;
+      loans = 12;
+      mappings = 12;
+      publishers = 1;
+      queueDepth = 8;
+      retainedSamples = 2;
+      retries = 2;
+      routes = 2;
+      sampleBytes = 8192;
+      servers = 1;
+      subscribers = 1;
+    };
+    profiles = [
+      {
+        interpositions = [];
+        name = "sel4";
+        streamControls = [];
+      };
+    ];
+    routes = [
+      {
+        interface = "TelemetryStream";
+        name = "telemetry";
+        participants = [
+          {
+            component = "robot-sensor";
+            deadlineNs = 0;
+            direction = "publish";
+            durability = "retained";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 0;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 2;
+            visibility = "graph";
+          };
+          {
+            component = "robot-controller";
+            deadlineNs = 0;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 0;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+        ];
+      };
+      {
+        interface = "ParameterCall";
+        name = "parameters";
+        participants = [
+          {
+            component = "robot-controller";
+            deadlineNs = 1000000;
+            direction = "client";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 2000000;
+            liveliness = "automatic";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+          {
+            component = "robot-actuator";
+            deadlineNs = 1000000;
+            direction = "server";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 5000000;
+            lifespanNs = 2000000;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+        ];
+      };
+    ];
+    traceDepth = 64;
+    traceOverflow = "saturate";
+  };
+  clockAuthority = [
+    {
+      holder = "robot-sensor";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "robot-sensor-tick";
+      timerQuota = 2;
+      timerUse = true;
+    };
+    {
+      holder = "robot-supervisor";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "robot-supervisor-tick";
+      timerQuota = 2;
+      timerUse = true;
+    };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  schedulingClass = {
+    bands = [
+      {
+        class = "foreground";
+        priority = 200;
+      };
+      {
+        class = "normal";
+        priority = 150;
+      };
+      {
+        class = "bestEffort";
+        priority = 100;
+      };
+    ];
+    instances = [
+      {
+        class = "normal";
+        instance = "fabric-call-worker";
+      };
+      {
+        class = "normal";
+        instance = "fabric-service";
+      };
+      {
+        class = "normal";
+        instance = "robot-actuator";
+      };
+      {
+        class = "bestEffort";
+        instance = "robot-burner";
+      };
+      {
+        class = "normal";
+        instance = "robot-clock";
+      };
+      {
+        class = "normal";
+        instance = "robot-controller";
+      };
+      {
+        class = "foreground";
+        instance = "robot-sensor";
+      };
+      {
+        class = "normal";
+        instance = "robot-supervisor";
+      };
+    ];
+    promotions = [];
+  };
+  lifecyclePolicy = {
+    dependencies = [
+      {
+        dependency = "robot-supervisor";
+        instance = "robot-controller";
+        requiredState = "Running";
+      };
+    ];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "robot-supervisor";
+        read = true;
+        subject = "robot-controller";
+        write = true;
+      };
+      {
+        holder = "robot-controller";
+        read = true;
+        subject = "robot-controller";
+        write = false;
+      };
+    ];
+    restarts = [
+      {
+        attempts = 2;
+        backoffFactor = 256;
+        backoffNs = 200000;
+        causes = [
+          "fault";
+        ];
+        instance = "robot-controller";
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Ready";
+      };
+      {
+        from = "Running";
+        to = "Stop";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+      {
+        from = "Ready";
+        to = "Stop";
+      };
+    ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

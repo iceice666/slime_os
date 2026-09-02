@@ -57,17 +57,6 @@
       transferable = false;
     };
     {
-      name = "sample-worker-loopback";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "sample-worker";
-      target = "sample-worker";
-      transferable = false;
-    };
-    {
       name = "init-shared-buffer-factory";
       capabilityKind = "sharedBufferFactory";
       rights = [
@@ -75,6 +64,16 @@
       ];
       source = "init";
       target = "init";
+      transferable = false;
+    };
+    {
+      name = "sample-lender-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "sample-lender";
       transferable = false;
     };
     {
@@ -89,13 +88,14 @@
       transferable = true;
     };
     {
-      name = "sample-lender-shared-buffer-factory";
-      capabilityKind = "sharedBufferFactory";
+      name = "sample-worker-loopback";
+      capabilityKind = "endpoint";
       rights = [
-        "bufferCreate";
+        "send";
+        "recv";
       ];
-      source = "init";
-      target = "sample-lender";
+      source = "sample-worker";
+      target = "sample-worker";
       transferable = false;
     };
   ];
@@ -184,19 +184,19 @@
       ];
       dependencies = [];
       executable = "sample-worker";
-      extraThreads = 1;
       health = "required";
       name = "sample-worker";
       owner = "root";
+      extraThreads = 1;
       workerPriority = 100;
     };
   ];
   mintedBindings = [
     {
-      name = "sample-receiver-supervision";
       capabilityKind = "supervision";
-      owner = "init";
       holder = "sample-lender";
+      name = "sample-receiver-supervision";
+      owner = "init";
       rights = [
         "supervise";
       ];
@@ -206,6 +206,11 @@
   ];
   interfaceSchemas = [];
   objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
     {
       id = "sha256:init";
       kind = "bootstrap";
@@ -231,12 +236,8 @@
       kind = "resource";
       size = 4096;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [
     {
       bufferCount = 1;

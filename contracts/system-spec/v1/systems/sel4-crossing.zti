@@ -1,0 +1,111 @@
+{
+  formatVersion = 1;
+  name = "sel4-crossing";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "crossing";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "crossing-peer";
+    "init";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 2;
+    };
+  ];
+  grants = [
+    {
+      name = "init-crossing-peer";
+      capabilityKind = "executable";
+      source = "init";
+      target = "crossing-peer";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "crossing-carrier";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "crossing-peer";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "crossing-gate";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "crossing-peer";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-crossing-peer";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "crossing-carrier";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "crossing-gate";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "crossing-peer";
+      grant = "crossing-carrier";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "crossing-peer";
+      grant = "crossing-gate";
+      slot = 1;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

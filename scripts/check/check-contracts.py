@@ -71,6 +71,10 @@ SYSTEM_SPEC_CONTRACT = ROOT / "contracts" / "system-spec" / "v1"
 SYSTEM_SPEC_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-system-spec-bindings.py"
 )
+COMPOSITION_INVENTORY_CONTRACT = ROOT / "contracts" / "composition-inventory" / "v1"
+COMPOSITION_INVENTORY_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-composition-inventory-bindings.py"
+)
 COMPONENT_SDK_RELEASE_CONTRACT = ROOT / "contracts" / "component-sdk-release" / "v1"
 COMPONENT_SDK_RELEASE_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-component-sdk-release-bindings.py"
@@ -316,6 +320,14 @@ run("check", str(SYSTEM_SPEC_CONTRACT / "check.zt"))
 run("check", str(SYSTEM_SPEC_CONTRACT / "gen_python.zt"))
 subprocess.run(
     [sys.executable, str(SYSTEM_SPEC_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+run("check", str(COMPOSITION_INVENTORY_CONTRACT / "schema.zt"))
+run("check", str(COMPOSITION_INVENTORY_CONTRACT / "check.zt"))
+run("check", str(COMPOSITION_INVENTORY_CONTRACT / "gen_python.zt"))
+subprocess.run(
+    [sys.executable, str(COMPOSITION_INVENTORY_BINDING_GENERATOR), "--check"],
     cwd=ROOT,
     check=True,
 )

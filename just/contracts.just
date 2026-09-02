@@ -56,6 +56,11 @@ system_spec_check: component_spec_check
     python3 scripts/check/check-system-spec.py
     python3 scripts/generate/generate-generation-from-spec.py --check
 
+[group('contracts')]
+system_composition_closure_check: system_spec_check
+    python3 scripts/generate/generate-composition-inventory-bindings.py --check
+    python3 scripts/check/check-composition-inventory.py
+
 
 [group('contracts')]
 system_image_closure_check: system_spec_check

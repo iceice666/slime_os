@@ -775,6 +775,8 @@
       slot = 4;
     };
   ];
+  extraBindings = [];
+  mintedBindings = [];
   commandBindings = [
     {
       commands = [
@@ -1497,6 +1499,18 @@
     traceDepth = 16;
     traceOverflow = "saturate";
   };
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
   deploymentConstraint = "x86_64 QEMU with a virtio block device and a serial console.";
   acceptanceCriteria = "just contracts_check and just generation_check admit this generation.";
 }

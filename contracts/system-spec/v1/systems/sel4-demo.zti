@@ -1,0 +1,1081 @@
+{
+  formatVersion = 1;
+  name = "sel4-demo";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "demo";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "console";
+    "echo-agent";
+    "fabric-intruder";
+    "fabric-publisher";
+    "fabric-publisher-b";
+    "fabric-service";
+    "fabric-subscriber";
+    "fabric-subscriber-b";
+    "init";
+    "sample-lender";
+    "sample-receiver";
+    "spawn-service";
+    "sysinfo";
+  ];
+  placements = [
+    {
+      component = "console";
+      owner = "init";
+    };
+    {
+      component = "echo-agent";
+      owner = "spawn-service";
+      autostart = false;
+      dependencies = [
+        "spawn-service";
+      ];
+    };
+    {
+      component = "fabric-intruder";
+      owner = "init";
+      role = "service";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      component = "fabric-publisher";
+      owner = "init";
+      role = "service";
+      dependencies = [
+        "init";
+      ];
+      bufferBytePages = 4;
+      mappingCount = 4;
+    };
+    {
+      component = "fabric-publisher-b";
+      owner = "init";
+      role = "service";
+      dependencies = [
+        "init";
+      ];
+      bufferBytePages = 8;
+      mappingCount = 4;
+    };
+    {
+      component = "fabric-service";
+      owner = "init";
+      health = "required";
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+    {
+      component = "fabric-subscriber";
+      owner = "init";
+      role = "service";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      component = "fabric-subscriber-b";
+      owner = "init";
+      role = "service";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      component = "sample-lender";
+      owner = "init";
+      autostart = false;
+      role = "service";
+    };
+    {
+      component = "sample-receiver";
+      owner = "init";
+      autostart = false;
+      role = "service";
+    };
+    {
+      component = "spawn-service";
+      owner = "init";
+      health = "required";
+    };
+    {
+      component = "sysinfo";
+      owner = "spawn-service";
+      autostart = false;
+      dependencies = [
+        "spawn-service";
+      ];
+    };
+  ];
+  grants = [
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      source = "init";
+      target = "console";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-spawn-service";
+      capabilityKind = "executable";
+      source = "init";
+      target = "spawn-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "console-output";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "console";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "spawn-service-rpc";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "spawn-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "spawn-service-sysinfo";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo";
+      capabilityKind = "executable";
+      source = "init";
+      target = "echo-agent";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
+      source = "spawn-service";
+      target = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
+      source = "spawn-service";
+      target = "echo-agent";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "spawn-service";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-sample-lender";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sample-lender";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-sample-receiver";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sample-receiver";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sample-lender-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "sample-lender";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "demo-sample-channel";
+      capabilityKind = "endpoint";
+      source = "sample-lender";
+      target = "sample-receiver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "init-fabric-service";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-publisher";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-publisher";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-publisher-b";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-publisher-b";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-subscriber";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-subscriber";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-subscriber-b";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-subscriber-b";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-intruder";
+      capabilityKind = "executable";
+      source = "init";
+      target = "fabric-intruder";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-control";
+      capabilityKind = "endpoint";
+      source = "fabric-publisher";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-control";
+      capabilityKind = "endpoint";
+      source = "fabric-subscriber";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-intruder-control";
+      capabilityKind = "endpoint";
+      source = "fabric-intruder";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-control";
+      capabilityKind = "endpoint";
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "fabric-subscriber-b-control";
+      capabilityKind = "endpoint";
+      source = "fabric-subscriber-b";
+      target = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-probe";
+      capabilityKind = "endpoint";
+      source = "fabric-publisher";
+      target = "fabric-service";
+      rights = [
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "fabric-subscriber-probe";
+      capabilityKind = "endpoint";
+      source = "fabric-subscriber";
+      target = "fabric-service";
+      rights = [
+        "send";
+      ];
+      transferable = true;
+    };
+    {
+      name = "fabric-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "fabric-service";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-console";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "console-output";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-spawn-service";
+      slot = 5;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-sysinfo";
+      slot = 6;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-echo";
+      slot = 7;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-rpc";
+      slot = 13;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-shared-buffer-factory";
+      slot = 8;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sample-lender";
+      slot = 14;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sample-receiver";
+      slot = 15;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-shared-buffer-factory";
+      slot = 16;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-service";
+      slot = 17;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-publisher";
+      slot = 18;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-publisher-b";
+      slot = 19;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-subscriber";
+      slot = 20;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-subscriber-b";
+      slot = 21;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-fabric-intruder";
+      slot = 22;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "fabric-service-shared-buffer-factory";
+      slot = 23;
+      reason = "bootLayout";
+    };
+    {
+      holder = "console";
+      grant = "console-output";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-echo";
+      slot = 2;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-shared-buffer-factory";
+      slot = 4;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-echo-context";
+      slot = 5;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "sysinfo";
+      grant = "spawn-service-sysinfo-context";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "echo-agent";
+      grant = "spawn-service-echo-context";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-lender";
+      grant = "sample-lender-shared-buffer-factory";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-lender";
+      grant = "demo-sample-channel";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-receiver";
+      grant = "demo-sample-channel";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-intruder-control";
+      slot = 4;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-publisher-b-control";
+      slot = 5;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-publisher-control";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-service-shared-buffer-factory";
+      slot = 1;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-subscriber-b-control";
+      slot = 6;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-subscriber-control";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-publisher-probe";
+      slot = 11;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "fabric-service";
+      grant = "fabric-subscriber-probe";
+      slot = 12;
+      reason = "encodedLayout";
+    };
+  ];
+  extraBindings = [
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-sysinfo";
+    };
+  ];
+  mintedBindings = [
+    {
+      name = "fabric-publisher-b-shared-buffer-factory";
+      owner = "init";
+      holder = "fabric-publisher-b";
+      capabilityKind = "sharedBufferFactory";
+      slot = 1;
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      capabilityKind = "supervision";
+      slot = 9;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      capabilityKind = "supervision";
+      slot = 7;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      capabilityKind = "supervision";
+      slot = 10;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      capabilityKind = "supervision";
+      slot = 8;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sample-receiver-supervision";
+      owner = "init";
+      holder = "sample-lender";
+      capabilityKind = "supervision";
+      slot = 2;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+  ];
+  commandBindings = [
+    {
+      component = "spawn-service";
+      commands = [
+        "echo";
+        "sysinfo";
+      ];
+    };
+  ];
+  defaultImageBytes = 65536;
+  imageSizes = [
+    {
+      component = "fabric-service";
+      bytes = 131072;
+    };
+  ];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [
+    "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
+    "contracts/interface-schema/v1/interfaces/diagnostics-stream.zti";
+  ];
+  state = [
+    {
+      name = "echo-agent-session";
+      owner = "echo-agent";
+      policy = "ephemeral";
+      schemaVersion = 1;
+    };
+  ];
+  notifications = [
+    {
+      name = "fabric-publisher-telemetry-ready";
+      source = "fabric-publisher";
+      target = "fabric-service";
+    };
+    {
+      name = "fabric-publisher-telemetry-credit";
+      source = "fabric-service";
+      target = "fabric-publisher";
+    };
+    {
+      name = "fabric-subscriber-telemetry-ready";
+      source = "fabric-service";
+      target = "fabric-subscriber";
+    };
+    {
+      name = "fabric-subscriber-telemetry-credit";
+      source = "fabric-subscriber";
+      target = "fabric-service";
+    };
+    {
+      name = "fabric-publisher-b-telemetry-ready";
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+    };
+    {
+      name = "fabric-publisher-b-telemetry-credit";
+      source = "fabric-service";
+      target = "fabric-publisher-b";
+    };
+    {
+      name = "fabric-subscriber-b-telemetry-ready";
+      source = "fabric-service";
+      target = "fabric-subscriber-b";
+    };
+    {
+      name = "fabric-subscriber-b-telemetry-credit";
+      source = "fabric-subscriber-b";
+      target = "fabric-service";
+    };
+    {
+      name = "fabric-publisher-b-diagnostics-ready";
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+    };
+    {
+      name = "fabric-publisher-b-diagnostics-credit";
+      source = "fabric-service";
+      target = "fabric-publisher-b";
+    };
+    {
+      name = "fabric-subscriber-b-diagnostics-ready";
+      source = "fabric-service";
+      target = "fabric-subscriber-b";
+    };
+    {
+      name = "fabric-subscriber-b-diagnostics-credit";
+      source = "fabric-subscriber-b";
+      target = "fabric-service";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "fabric-publisher-telemetry-ready";
+      holder = "fabric-publisher";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "fabric-publisher-telemetry-ready";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "fabric-publisher-telemetry-credit";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "fabric-publisher-telemetry-credit";
+      holder = "fabric-publisher";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "fabric-subscriber-telemetry-ready";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "fabric-subscriber-telemetry-ready";
+      holder = "fabric-subscriber";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "fabric-subscriber-telemetry-credit";
+      holder = "fabric-subscriber";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "fabric-subscriber-telemetry-credit";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 3;
+    };
+    {
+      grant = "fabric-publisher-b-telemetry-ready";
+      holder = "fabric-publisher-b";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "fabric-publisher-b-telemetry-ready";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 4;
+    };
+    {
+      grant = "fabric-publisher-b-telemetry-credit";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 5;
+    };
+    {
+      grant = "fabric-publisher-b-telemetry-credit";
+      holder = "fabric-publisher-b";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "fabric-subscriber-b-telemetry-ready";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 6;
+    };
+    {
+      grant = "fabric-subscriber-b-telemetry-ready";
+      holder = "fabric-subscriber-b";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "fabric-subscriber-b-telemetry-credit";
+      holder = "fabric-subscriber-b";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "fabric-subscriber-b-telemetry-credit";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 7;
+    };
+    {
+      grant = "fabric-publisher-b-diagnostics-ready";
+      holder = "fabric-publisher-b";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "fabric-publisher-b-diagnostics-ready";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 8;
+    };
+    {
+      grant = "fabric-publisher-b-diagnostics-credit";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 9;
+    };
+    {
+      grant = "fabric-publisher-b-diagnostics-credit";
+      holder = "fabric-publisher-b";
+      role = "wait";
+      slot = 3;
+    };
+    {
+      grant = "fabric-subscriber-b-diagnostics-ready";
+      holder = "fabric-service";
+      role = "signal";
+      slot = 10;
+    };
+    {
+      grant = "fabric-subscriber-b-diagnostics-ready";
+      holder = "fabric-subscriber-b";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "fabric-subscriber-b-diagnostics-credit";
+      holder = "fabric-subscriber-b";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "fabric-subscriber-b-diagnostics-credit";
+      holder = "fabric-service";
+      role = "wait";
+      slot = 11;
+    };
+  ];
+  bootProfiles = [];
+  fabricGraph = {
+    fabricComponent = "fabric-service";
+    limits = {
+      bufferPages = 28;
+      buffers = 14;
+      capabilitySlots = 32;
+      clients = 5;
+      eventDepth = 2;
+      historyDepth = 8;
+      inFlightCalls = 0;
+      inFlightOperations = 0;
+      ingressSources = 9;
+      loans = 14;
+      mappings = 14;
+      publishers = 3;
+      queueDepth = 8;
+      retainedSamples = 2;
+      retries = 0;
+      routes = 2;
+      sampleBytes = 8192;
+      servers = 0;
+      subscribers = 4;
+    };
+    profiles = [
+      {
+        interpositions = [];
+        name = "sel4";
+        streamControls = [];
+      };
+    ];
+    routes = [
+      {
+        interface = "TelemetryStream";
+        name = "telemetry";
+        participants = [
+          {
+            component = "fabric-publisher";
+            deadlineNs = 0;
+            direction = "publish";
+            durability = "retained";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 300;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 2;
+            visibility = "graph";
+          };
+          {
+            component = "fabric-subscriber";
+            deadlineNs = 0;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 8;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 0;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+          {
+            component = "fabric-publisher-b";
+            deadlineNs = 100;
+            direction = "publish";
+            durability = "retained";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 200;
+            lifespanNs = 300;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 2;
+            visibility = "graph";
+          };
+          {
+            component = "fabric-subscriber-b";
+            deadlineNs = 0;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 0;
+            liveliness = "automatic";
+            reliability = "bestEffort";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+        ];
+      };
+      {
+        interface = "DiagnosticsStream";
+        name = "diagnostics";
+        participants = [
+          {
+            component = "fabric-publisher-b";
+            deadlineNs = 100;
+            direction = "publish";
+            durability = "volatile";
+            historyDepth = 2;
+            interposition = [];
+            leaseNs = 200;
+            lifespanNs = 0;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+          {
+            component = "fabric-subscriber-b";
+            deadlineNs = 100;
+            direction = "subscribe";
+            durability = "volatile";
+            historyDepth = 2;
+            interposition = [];
+            leaseNs = 200;
+            lifespanNs = 0;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "graph";
+          };
+        ];
+      };
+    ];
+    traceDepth = 16;
+    traceOverflow = "saturate";
+  };
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

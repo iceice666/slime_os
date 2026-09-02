@@ -67,6 +67,7 @@ SORTED_SECTIONS = {
     "grants": lambda entry: (entry["name"], entry["source"], entry["target"]),
     "sharedBufferBudget": lambda entry: entry["holder"],
     "privateMemoryBudget": lambda entry: entry["holder"],
+    "mintedBindings": lambda entry: entry["name"],
 }
 
 # Sections the frozen baseline predates.
@@ -186,7 +187,51 @@ def normalized(manifest: dict) -> dict:
         value["health"] = dict(
             value["health"], requiredInstances=sorted(value["health"]["requiredInstances"])
         )
-    return BUILDER.assign_declared_slots(value)
+    # One instance's binding list is order-independent to the builder, so it is
+    # normalized on the same terms as the sections above rather than compared
+    # in the order a fixture was typed in. `assign_declared_slots` reserves
+    # explicit slots first and then takes omitted ones in grant-name order;
+    # `build_sel4_plan` emits capability records by grant index and looks each
+    # holder's binding up by name; `declared_services` accumulates a set. No
+    # encoded byte is a function of the position of a binding within its list,
+    # and `just generation_check` compares the built bytes.
+    resolved = BUILDER.assign_declared_slots(value)
+    for instance in resolved.get("instances", []):
+        instance["bindings"] = sorted(
+            instance.get("bindings", []), key=lambda entry: entry["grant"]
+        )
+    # An absent `streamControls` and an empty one are the same build:
+    # `generation_fabric.py`'s `declared_stream_controls or
+    # FABRIC_STREAM_CONTROL_GRANTS` falls back to the single-broker default for
+    # both. The derivation emits the field the contract declares, so the
+    # baseline's omission is normalized rather than treated as a divergence.
+    graph = resolved.get("fabricGraph")
+    if graph is not None:
+        for profile in graph.get("profiles", []):
+            profile.setdefault("streamControls", [])
+    # `bootProfiles` is likewise absent in some baselines and an empty list in
+    # others; `resolve_boot_profile` falls back to `health.requiredInstances`
+    # for both, so the two are one build and the derivation emits the field the
+    # manifest contract declares. The optional authority/policy tables below
+    # read the same way: `build-generation.py` reaches each through
+    # `manifest.get(field) or []`, so absence and emptiness are one deny-by-
+    # default answer. `sel4-io-network` is the case that requires it — it
+    # carries a `wait-set` resource object with no declared source at all.
+    resolved.setdefault("bootProfiles", [])
+    for field in (
+        "clockAuthority",
+        "ioResourceBudget",
+        "networkDestinations",
+        "blockRingAuthority",
+        "waitSet",
+        "recording",
+        "privateMemoryBudget",
+        "notificationGrants",
+        "notificationBindings",
+        "mintedBindings",
+    ):
+        resolved.setdefault(field, [])
+    return resolved
 
 
 def strip_dead_bindings(manifest: dict) -> dict:
@@ -277,19 +322,24 @@ def split_post_baseline(manifest: dict) -> tuple[dict, dict]:
 
 
 def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
-    """The post-baseline sections say exactly what the component specs declare.
+    """The post-baseline sections say exactly what the system declares.
 
     The baseline predates these, so it cannot check them — and an excusal with
     nothing behind it would let a wrong budget through under a name the
     comparison skips. This is the replacement assertion, and it is stricter than
     the baseline's would have been: it compares the derived budget against the
-    specs the system composes rather than against a frozen copy of one answer.
+    quota each instance is composed with, which is the component spec's value
+    unless this system's placement declares its own.
     """
-    expected = {
-        component: COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
-        for component in system.spec["components"]
-        if COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
-    }
+    placements = {entry["component"]: entry for entry in system.spec["placements"]}
+    expected = {}
+    for component in system.spec["components"]:
+        quota = placements.get(component, {}).get(
+            "privatePageQuota",
+            COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"],
+        )
+        if quota:
+            expected[component] = quota
     budget = {entry["holder"]: entry["pageQuota"] for entry in derived.get("privateMemoryBudget", [])}
     if budget != expected:
         fail(

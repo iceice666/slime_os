@@ -1,0 +1,65 @@
+{
+  formatVersion = 1;
+  name = "sel4-slisp";
+  generation = 43;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "slisp";
+  bootstrapInstance = "slisp";
+  bootAttempts = 3;
+  components = [
+    "slisp";
+  ];
+  placements = [
+    {
+      component = "slisp";
+      role = "init";
+      dependencies = [];
+      stackBytes = 16384;
+    };
+  ];
+  grants = [
+    {
+      name = "slisp-input";
+      capabilityKind = "input";
+      source = "slisp";
+      target = "slisp";
+      rights = [
+        "inputRead";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "slisp";
+      grant = "slisp-input";
+      slot = 1;
+      reason = "encodedLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 131072;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

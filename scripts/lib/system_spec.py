@@ -52,14 +52,46 @@ INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interf
 
 # Which committed `contracts/generation-manifest/v1` fixture each system spec derives.
 #
-# CP1 converts the reference manifest and the smallest seL4 manifest; converting
-# the remaining `sel4-*.zti` fixtures is deferred follow-on work. An explicit
-# table rather than a glob, so "which fixtures are generated" is a stated fact
-# and a system spec that derives nothing is a gate failure rather than a silent
-# no-op. Both the gate and the generator read it from here.
+# CP1 converted the reference manifest and the smallest seL4 manifest. CP12
+# converts every composition whose instances map one-to-one onto a component
+# spec name — no shared executable spawned under more than one instance name,
+# and no per-instance dependency naming another instance of the same
+# executable. The 17 remaining compositions need that generalization (a
+# concrete instance distinct from the component/executable it runs, with
+# composition-declared per-instance dependencies) before they can convert; see
+# `roadmap/00-backlog.md`. `sel4-c-runtime` and `sel4-filesystem` fit the
+# one-to-one shape but are deferred too: the former's implementation is a
+# freestanding C source with no stable committed content identity, and the
+# latter's executable name (`sel4-filesystem-service`) collides with the
+# unrelated pre-existing `filesystem-service` component spec's implementation
+# binary. An explicit table rather than a glob, so "which fixtures are
+# generated" is a stated fact and a system spec that derives nothing is a gate
+# failure rather than a silent no-op. Both the gate and the generator read it
+# from here.
 DERIVED_GENERATION_FIXTURES = {
     "reference": "valid.zti",
     "sel4-channel": "sel4-channel.zti",
+    "sel4": "sel4.zti",
+    "sel4-boot": "sel4-boot.zti",
+    "sel4-call": "sel4-call.zti",
+    "sel4-crossing": "sel4-crossing.zti",
+    "sel4-demo": "sel4-demo.zti",
+    "sel4-io-link": "sel4-io-link.zti",
+    "sel4-io-network": "sel4-io-network.zti",
+    "sel4-io-queue": "sel4-io-queue.zti",
+    "sel4-loan": "sel4-loan.zti",
+    "sel4-operation": "sel4-operation.zti",
+    "sel4-powerbox": "sel4-powerbox.zti",
+    "sel4-qos": "sel4-qos.zti",
+    "sel4-reclamation": "sel4-reclamation.zti",
+    "sel4-robot-runtime": "sel4-robot-runtime.zti",
+    "sel4-sample": "sel4-sample.zti",
+    "sel4-slisp": "sel4-slisp.zti",
+    "sel4-spawn": "sel4-spawn.zti",
+    "sel4-stream": "sel4-stream.zti",
+    "sel4-supervision": "sel4-supervision.zti",
+    "sel4-traffic": "sel4-traffic.zti",
+    "sel4-visibility": "sel4-visibility.zti",
 }
 
 def derived_manifest_path(fixture: str) -> Path:
@@ -76,7 +108,6 @@ def derived_manifest_path(fixture: str) -> Path:
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 
 _builder = load_script("system_spec_generation_builder", "build/build-generation.py")
-# The target-profile table and the source `formatVersion` both reach us through
 # the builder, which already imports the generated `target_profile` bindings and
 # is the module that refuses an unknown target or an unsupported source format.
 _TARGET_PROFILES = _builder.TARGET_PROFILES_BY_NAME
@@ -97,6 +128,8 @@ _SPEC_FIELDS = {
     "placements",
     "grants",
     "slotPins",
+    "extraBindings",
+    "mintedBindings",
     "commandBindings",
     "defaultImageBytes",
     "imageSizes",
@@ -107,6 +140,20 @@ _SPEC_FIELDS = {
     "notificationBindings",
     "bootProfiles",
     "fabricGraph",
+    "clockAuthority",
+    "clockAuthorityObject",
+    "ioResourceBudget",
+    "ioResourceBudgetObject",
+    "networkDestinations",
+    "networkDestinationsObject",
+    "blockRingAuthority",
+    "blockRingAuthorityObject",
+    "waitSet",
+    "waitSetObject",
+    "schedulingClass",
+    "lifecyclePolicy",
+    "recording",
+    "recordingObject",
     "deploymentConstraint",
     "acceptanceCriteria",
 }
@@ -162,9 +209,11 @@ def _load(path: Path, contract: ModuleType) -> dict:
         _fail(f"{path}: invalid Zutai JSON projection: {error}")
     if not isinstance(value, dict):
         _fail(f"{path}: expected a record")
-    # `fabricGraph` is optional, so its absence is a legitimate shape.
+    # `fabricGraph`, `schedulingClass`, and `lifecyclePolicy` are optional
+    # records; their absence is a legitimate shape.
+    _OPTIONAL_FIELDS = {"fabricGraph", "schedulingClass", "lifecyclePolicy"}
     unexpected = set(value) - _SPEC_FIELDS
-    missing = _SPEC_FIELDS - set(value) - {"fabricGraph"}
+    missing = _SPEC_FIELDS - set(value) - _OPTIONAL_FIELDS
     if unexpected or missing:
         _fail(f"{path}: unexpected {sorted(unexpected)}, missing {sorted(missing)}")
     return value
@@ -215,15 +264,23 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     # compares them by equality before mapping executable bytes. Restating a
     # weaker version here would be a second authority on it, and a wrong one.
 
+    placements_by_component = {entry["component"]: entry for entry in spec["placements"]}
     if spec["bootstrapInstance"] not in admitted:
         _fail(f"bootstrapInstance: {spec['bootstrapInstance']!r} is not an admitted component")
-    if components[spec["bootstrapInstance"]]["componentType"] != "init":
+    bootstrap_role = placements_by_component.get(spec["bootstrapInstance"], {}).get(
+        "role", components[spec["bootstrapInstance"]]["componentType"]
+    )
+    if bootstrap_role != "init":
         _fail(f"bootstrapInstance: {spec['bootstrapInstance']!r} is not an init component")
 
     # A dependency must be admitted too, or the derived instance graph names an
-    # instance the generation does not contain.
+    # instance the generation does not contain. A placement may override the
+    # component spec's own list, which is the reference generation's answer:
+    # `slisp` depends on `console` where both are composed and on nothing in
+    # the composition that admits only `slisp`.
     for name in declared:
-        for dependency in components[name]["dependencies"]:
+        placement = placements_by_component.get(name, {})
+        for dependency in placement.get("dependencies", components[name]["dependencies"]):
             if dependency not in admitted:
                 _fail(f"{name}: depends on {dependency!r}, which this system does not admit")
 
@@ -234,6 +291,12 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     for entry in placements:
         if entry["component"] not in admitted:
             _fail(f"placements: {entry['component']!r} is not an admitted component")
+        if "health" in entry and entry["health"] not in ("required", "optional"):
+            _fail(f"placements: {entry['component']}: unknown health {entry['health']!r}")
+        if "role" in entry and entry["role"] not in ("init", "service", "application"):
+            _fail(f"placements: {entry['component']}: unknown role {entry['role']!r}")
+        if "stackBytes" in entry and not 0 < entry["stackBytes"] <= _builder.COMPONENT_MAX_STACK_BYTES:
+            _fail(f"placements: {entry['component']}: stackBytes outside the declared bound")
 
     grant_names: set[str] = set()
     for grant in spec["grants"]:
@@ -296,9 +359,18 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     # against them — needs the corpus to describe components rather than one
     # generation's use of them, which is CP3/CP5 work.
 
-    bindings = derive_bindings(spec["grants"], admitted)
+    grants_by_name = {grant["name"]: grant for grant in spec["grants"]}
     for pin in spec["slotPins"]:
-        if pin["grant"] not in bindings.get(pin["holder"], set()):
+        grant = grants_by_name.get(pin["grant"])
+        # A binding is not restricted to a grant's own source/target: a spawn
+        # broker such as `spawn-service` can hold a third-party binding on an
+        # `executable` grant it neither issued nor received, delegated spawn
+        # authority the command-dispatch table (`commandBindings`) routes
+        # through it. `pin["holder"]` need only be admitted and the grant must
+        # be real; which instances legitimately hold which grants beyond that
+        # is exactly the declared fact a slot pin (and, for the ordinary case,
+        # `derive_bindings`) exists to state.
+        if grant is None or pin["holder"] not in admitted:
             _fail(
                 f"slotPins: {pin['holder']}/{pin['grant']} pins a slot for a binding the "
                 "grant table does not produce"
@@ -320,6 +392,58 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
         slots = [pin["slot"] for pin in pins]
         if len(set(slots)) != len(slots):
             _fail(f"slotPins: {holder} pins one slot twice")
+
+    # An extra binding is the unpinned half of the same declared fact a slot
+    # pin carries: a holder the grant table's structural rule does not reach.
+    # Both are refused when the grant is unreal or the holder unadmitted, and a
+    # holder the structural rule already reaches needs no entry here — that
+    # would be a second way to say one thing.
+    extra_keys = [(entry["holder"], entry["grant"]) for entry in spec["extraBindings"]]
+    if len(set(extra_keys)) != len(extra_keys):
+        _fail("extraBindings: duplicate (holder, grant)")
+    structural = derive_bindings(spec["grants"], admitted)
+    for entry in spec["extraBindings"]:
+        if entry["grant"] not in grants_by_name or entry["holder"] not in admitted:
+            _fail(
+                f"extraBindings: {entry['holder']}/{entry['grant']} names no grant this "
+                "system declares for an admitted instance"
+            )
+        if entry["grant"] in structural.get(entry["holder"], set()):
+            _fail(
+                f"extraBindings: {entry['holder']}/{entry['grant']} is already produced by "
+                "the grant table, so declaring it adds nothing"
+            )
+    if set(extra_keys) & set(pin_keys):
+        _fail("extraBindings: a slot-pinned binding is already declared by its pin")
+
+    # Minted bindings name no grant, so the grant table cannot validate them:
+    # what is checkable is that the owner and holder are admitted, the kind and
+    # rights are the builder's own vocabulary, and no two entries share a name.
+    minted_names = [entry["name"] for entry in spec["mintedBindings"]]
+    if len(set(minted_names)) != len(minted_names):
+        _fail("mintedBindings: duplicate name")
+    for entry in spec["mintedBindings"]:
+        for role in ("owner", "holder"):
+            if entry[role] not in admitted:
+                _fail(f"mintedBindings: {entry['name']}: {role} is not admitted")
+        if entry["capabilityKind"] not in _builder.CAPABILITY_KIND:
+            _fail(
+                f"mintedBindings: {entry['name']}: unknown capability kind "
+                f"{entry['capabilityKind']!r}"
+            )
+        rights = 0
+        for right in entry["rights"]:
+            if right not in _builder.RIGHT:
+                _fail(f"mintedBindings: {entry['name']}: unknown right {right!r}")
+            rights |= _builder.RIGHT[right]
+        if entry["transferable"]:
+            rights |= _builder.RIGHT_TRANSFER
+        try:
+            _builder.validate_capability_rights(
+                entry["name"], entry["capabilityKind"], rights
+            )
+        except SystemExit as error:
+            _fail(f"mintedBindings: {entry['name']}: {error}")
 
     for entry in spec["commandBindings"]:
         if entry["component"] not in admitted:
@@ -382,6 +506,7 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
     _validate_notifications(spec, admitted)
     _validate_interfaces(spec, components, admitted, contract)
     _validate_boot_profiles(spec, admitted)
+    _validate_authority_sections(spec, admitted)
 
 
 def _validate_bounds(spec: dict, contract: ModuleType) -> None:
@@ -396,12 +521,20 @@ def _validate_bounds(spec: dict, contract: ModuleType) -> None:
     for field, ceiling in (
         ("grants", contract.MAX_GRANTS),
         ("slotPins", contract.MAX_SLOT_PINS),
+        ("extraBindings", contract.MAX_EXTRA_BINDINGS),
+        ("mintedBindings", contract.MAX_MINTED_BINDINGS),
         ("notifications", contract.MAX_NOTIFICATIONS),
         ("notificationBindings", contract.MAX_NOTIFICATION_BINDINGS),
         ("bootProfiles", contract.MAX_BOOT_PROFILES),
         ("state", contract.MAX_STATE_BINDINGS),
         ("commandBindings", contract.MAX_COMMAND_BINDINGS),
         ("imageSizes", contract.MAX_IMAGE_SIZES),
+        ("clockAuthority", contract.MAX_CLOCK_AUTHORITY),
+        ("ioResourceBudget", contract.MAX_IO_RESOURCE_BUDGET),
+        ("networkDestinations", contract.MAX_NETWORK_DESTINATIONS),
+        ("blockRingAuthority", contract.MAX_BLOCK_RING_AUTHORITY),
+        ("waitSet", contract.MAX_WAIT_SET_SOURCES),
+        ("recording", contract.MAX_RECORDING_ENTRIES),
     ):
         if len(spec[field]) > ceiling:
             _fail(f"{field}: {len(spec[field])} entries exceeds the declared bound of {ceiling}")
@@ -418,6 +551,26 @@ def _validate_bounds(spec: dict, contract: ModuleType) -> None:
                     f"fabricGraph: route {route['name']} has more participants than the "
                     f"declared bound of {contract.MAX_PARTICIPANTS_PER_ROUTE}"
                 )
+
+    scheduling = spec.get("schedulingClass")
+    if scheduling is not None:
+        if len(scheduling["bands"]) > contract.MAX_SCHEDULING_CLASS_BANDS:
+            _fail("schedulingClass.bands: exceeds the declared bound")
+        if len(scheduling["instances"]) > contract.MAX_SCHEDULING_CLASS_ENTRIES:
+            _fail("schedulingClass.instances: exceeds the declared bound")
+        if len(scheduling["promotions"]) > contract.MAX_SCHEDULING_PROMOTIONS:
+            _fail("schedulingClass.promotions: exceeds the declared bound")
+
+    lifecycle = spec.get("lifecyclePolicy")
+    if lifecycle is not None:
+        if len(lifecycle["transitions"]) > contract.MAX_LIFECYCLE_TRANSITIONS:
+            _fail("lifecyclePolicy.transitions: exceeds the declared bound")
+        if len(lifecycle["restarts"]) > contract.MAX_LIFECYCLE_RESTARTS:
+            _fail("lifecyclePolicy.restarts: exceeds the declared bound")
+        if len(lifecycle["dependencies"]) > contract.MAX_LIFECYCLE_HEALTH_DEPENDENCIES:
+            _fail("lifecyclePolicy.dependencies: exceeds the declared bound")
+        if len(lifecycle["parameters"]) > contract.MAX_LIFECYCLE_PARAMETER_GRANTS:
+            _fail("lifecyclePolicy.parameters: exceeds the declared bound")
 
     # Identifier-shaped fields against `maxNameBytes`, free text against
     # `maxTextBytes`. Both end up in the manifest, which the generation encoder
@@ -466,11 +619,16 @@ def _validate_notifications(spec: dict, admitted: set[str]) -> None:
         if notification["source"] == notification["target"]:
             _fail(f"notifications: {notification['name']}: source and target are the same")
     by_grant = _grouped(spec["notificationBindings"], "grant")
+    notification_by_name = {n["name"]: n for n in spec["notifications"]}
     for name in sorted(names):
         holders = by_grant.get(name, [])
-        roles = sorted(entry["role"] for entry in holders)
-        if roles != ["signal", "wait"]:
-            _fail(f"notifications: {name}: needs exactly one signal and one wait binding")
+        waiters = [entry for entry in holders if entry["role"] == "wait"]
+        signals = [entry for entry in holders if entry["role"] == "signal"]
+        notification = notification_by_name[name]
+        if len(waiters) != 1 or waiters[0]["holder"] != notification["target"]:
+            _fail(f"notifications: {name}: needs exactly one wait binding, held by its target")
+        if not signals or notification["source"] not in {entry["holder"] for entry in signals}:
+            _fail(f"notifications: {name}: needs a signal binding held by its source")
     for binding in spec["notificationBindings"]:
         if binding["grant"] not in names:
             _fail(f"notificationBindings: {binding['grant']!r} names no declared notification")
@@ -478,13 +636,18 @@ def _validate_notifications(spec: dict, admitted: set[str]) -> None:
             _fail(f"notificationBindings: {binding['grant']}: holder is not admitted")
         if binding["role"] not in ("signal", "wait"):
             _fail(f"notificationBindings: {binding['grant']}: unknown role {binding['role']!r}")
-        notification = next(n for n in spec["notifications"] if n["name"] == binding["grant"])
-        expected = notification["source"] if binding["role"] == "signal" else notification["target"]
-        if binding["holder"] != expected:
-            _fail(
-                f"notificationBindings: {binding['grant']}: the {binding['role']} holder must be "
-                f"{expected!r}, not {binding['holder']!r}"
-            )
+        # The wait holder is pinned to the notification's declared target — one
+        # waiter, unambiguous. A signal holder is not pinned to the source: a
+        # notification's whole point can be several signallers waking one
+        # waiter (B83-style fan-in), so long as the declared source is one of
+        # them, which the corpus-level check above already requires.
+        if binding["role"] == "wait":
+            notification = notification_by_name[binding["grant"]]
+            if binding["holder"] != notification["target"]:
+                _fail(
+                    f"notificationBindings: {binding['grant']}: the wait holder must be "
+                    f"{notification['target']!r}, not {binding['holder']!r}"
+                )
 
 
 def _validate_interfaces(
@@ -592,6 +755,66 @@ def _validate_boot_profiles(spec: dict, admitted: set[str]) -> None:
                 _fail(f"bootProfiles: {profile['name']} names unadmitted component {name!r}")
 
 
+def _validate_authority_sections(spec: dict, admitted: set[str]) -> None:
+    """Reference-integrity for the eight declared authority/policy sections.
+
+    Each is copied verbatim into the derived manifest, so the closed
+    vocabularies (`class`, `role`, `kind`, `transport`, ...) and cross-field
+    consistency rules are `build-generation.py`'s own to enforce when the
+    derived manifest reaches the real builder. What is checked here is the one
+    thing no later stage can recover from silently: every named holder,
+    waiter, instance, or subject is an instance this system actually admits.
+    """
+    for entry in spec["clockAuthority"]:
+        if entry["holder"] not in admitted:
+            _fail(f"clockAuthority: holder {entry['holder']!r} is not admitted")
+    for entry in spec["ioResourceBudget"]:
+        if entry["holder"] not in admitted:
+            _fail(f"ioResourceBudget: holder {entry['holder']!r} is not admitted")
+    for entry in spec["networkDestinations"]:
+        if entry["holder"] not in admitted:
+            _fail(f"networkDestinations: holder {entry['holder']!r} is not admitted")
+    for entry in spec["blockRingAuthority"]:
+        if entry["holder"] not in admitted:
+            _fail(f"blockRingAuthority: holder {entry['holder']!r} is not admitted")
+    for entry in spec["waitSet"]:
+        if entry["waiter"] not in admitted:
+            _fail(f"waitSet: waiter {entry['waiter']!r} is not admitted")
+    scheduling = spec.get("schedulingClass")
+    if scheduling is not None:
+        for entry in scheduling["instances"]:
+            if entry["instance"] not in admitted:
+                _fail(f"schedulingClass.instances: {entry['instance']!r} is not admitted")
+        for entry in scheduling["promotions"]:
+            if entry["holder"] not in admitted or entry["subject"] not in admitted:
+                _fail(
+                    f"schedulingClass.promotions: {entry['holder']!r}/{entry['subject']!r} "
+                    "is not admitted"
+                )
+            if entry["holder"] == entry["subject"]:
+                _fail("schedulingClass.promotions: holder and subject must differ")
+    lifecycle = spec.get("lifecyclePolicy")
+    if lifecycle is not None:
+        for entry in lifecycle["restarts"]:
+            if entry["instance"] not in admitted:
+                _fail(f"lifecyclePolicy.restarts: {entry['instance']!r} is not admitted")
+        for entry in lifecycle["dependencies"]:
+            if entry["instance"] not in admitted or entry["dependency"] not in admitted:
+                _fail(
+                    f"lifecyclePolicy.dependencies: {entry['instance']!r}/"
+                    f"{entry['dependency']!r} is not admitted"
+                )
+        for entry in lifecycle["parameters"]:
+            if entry["holder"] not in admitted or entry["subject"] not in admitted:
+                _fail(
+                    f"lifecyclePolicy.parameters: {entry['holder']!r}/{entry['subject']!r} "
+                    "is not admitted"
+                )
+    for entry in spec["recording"]:
+        if entry["instance"] not in admitted:
+            _fail(f"recording: instance {entry['instance']!r} is not admitted")
+
+
 def _capability_sets(
     grants: list[dict], admitted: set[str]
 ) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
@@ -616,13 +839,27 @@ def _capability_sets(
     return provided, required
 
 
-def derive_bindings(grants: list[dict], admitted: set[str]) -> dict[str, set[str]]:
+def derive_bindings(
+    grants: list[dict],
+    admitted: set[str],
+    pins: list[dict] | None = None,
+    extras: list[dict] | None = None,
+) -> dict[str, set[str]]:
     """Which grants each instance binds.
 
     A grant materializes in whichever instance holds it: an `executable` grant in
     its spawner, an `endpoint` in both ends, and every delegated authority in its
     target. This mirrors `build-generation.py`'s own holder resolution, which
     fails a build when an authority-bearing grant has no concrete binding.
+
+    Two declared sources widen that structural set, and both are declared
+    because the grant table genuinely cannot imply them. `slotPins` carries a
+    holder whose slot number is frozen elsewhere — `init` retaining a
+    `sharedBufferFactory`/`directory`/`device`-kind binding beside its target's,
+    which every corpus occurrence pins. `extraBindings` carries the same kind
+    of holder without a pinned number: a spawn broker holding the `executable`
+    grants for the commands it launches, where neither source nor target names
+    it at all.
     """
     bindings: dict[str, set[str]] = {name: set() for name in admitted}
     for grant in grants:
@@ -633,6 +870,9 @@ def derive_bindings(grants: list[dict], admitted: set[str]) -> dict[str, set[str
         if kind == "endpoint":
             bindings[grant["source"]].add(grant["name"])
         bindings[grant["target"]].add(grant["name"])
+    for declared in list(pins or ()) + list(extras or ()):
+        if declared["holder"] in bindings:
+            bindings[declared["holder"]].add(declared["grant"])
     return bindings
 
 
@@ -643,7 +883,9 @@ def derive_manifest(system: CompiledSystem) -> dict:
     placements = {entry["component"]: entry for entry in spec["placements"]}
     commands = {entry["component"]: entry["commands"] for entry in spec["commandBindings"]}
     sizes = {entry["component"]: entry["bytes"] for entry in spec["imageSizes"]}
-    bindings = derive_bindings(spec["grants"], admitted)
+    bindings = derive_bindings(
+        spec["grants"], admitted, spec["slotPins"], spec["extraBindings"]
+    )
     pins = {(pin["holder"], pin["grant"]): pin for pin in spec["slotPins"]}
 
     executables = []
@@ -655,11 +897,12 @@ def derive_manifest(system: CompiledSystem) -> dict:
         component = components[name]
         resource = component["runtime"]["resource"]
         placement = placements.get(name, {})
+        role = placement.get("role", component["componentType"])
         executable = {
             "commandProfile": commands.get(name, []),
             "name": name,
             "object": f"sha256:{name}",
-            "role": component["componentType"],
+            "role": role,
             # How many children this composition launches, which varies by
             # system: `init` is 1 under the channel plane and 18 under the
             # reference generation. The component spec's value is the reference
@@ -668,14 +911,16 @@ def derive_manifest(system: CompiledSystem) -> dict:
         }
         # Only a non-default stack is carried, matching the manifest's optional
         # field: emitting the default everywhere would change the fixture bytes
-        # without changing any admitted image.
-        if resource["stackBytes"] != _builder.COMPONENT_DEFAULT_STACK_BYTES:
-            executable["stackBytes"] = resource["stackBytes"]
+        # without changing any admitted image. A placement may raise it for one
+        # composition without changing the component's reference stack.
+        stack_bytes = placement.get("stackBytes", resource["stackBytes"])
+        if stack_bytes != _builder.COMPONENT_DEFAULT_STACK_BYTES:
+            executable["stackBytes"] = stack_bytes
         executables.append(executable)
         objects.append(
             {
                 "id": f"sha256:{name}",
-                "kind": "bootstrap" if component["componentType"] == "init" else "component",
+                "kind": "bootstrap" if role == "init" else "component",
                 "size": sizes.get(name, spec["defaultImageBytes"]),
             }
         )
@@ -691,9 +936,9 @@ def derive_manifest(system: CompiledSystem) -> dict:
                 else {"grant": grant}
                 for grant in sorted(bindings[name])
             ],
-            "dependencies": component["dependencies"],
+            "dependencies": placement.get("dependencies", component["dependencies"]),
             "executable": name,
-            "health": component["health"],
+            "health": placement.get("health", component["health"]),
             "name": name,
             "owner": placement.get("owner", component["owner"]),
         }
@@ -701,21 +946,34 @@ def derive_manifest(system: CompiledSystem) -> dict:
             if field in placement:
                 instance[field] = placement[field]
         instances.append(instance)
+        # Each ceiling is the component spec's unless this composition declares
+        # its own: a quota is how much of *this* generation's budget the
+        # instance may hold, and the corpus disagrees per plane.
+        quota = {
+            field: placement.get(field, resource[field])
+            for field in (
+                "bufferBytePages",
+                "bufferCount",
+                "mappingCount",
+                "loanCount",
+                "privatePageQuota",
+            )
+        }
         if any(
             (
-                resource["bufferBytePages"],
-                resource["bufferCount"],
-                resource["mappingCount"],
-                resource["loanCount"],
+                quota["bufferBytePages"],
+                quota["bufferCount"],
+                quota["mappingCount"],
+                quota["loanCount"],
             )
         ):
             budget.append(
                 {
-                    "bufferCount": resource["bufferCount"],
-                    "bytePages": resource["bufferBytePages"],
+                    "bufferCount": quota["bufferCount"],
+                    "bytePages": quota["bufferBytePages"],
                     "holder": name,
-                    "loanCount": resource["loanCount"],
-                    "mappingCount": resource["mappingCount"],
+                    "loanCount": quota["loanCount"],
+                    "mappingCount": quota["mappingCount"],
                 }
             )
         # C10.4: the same derivation, from the same record, for the other memory
@@ -724,11 +982,11 @@ def derive_manifest(system: CompiledSystem) -> dict:
         # both, or neither — and because a holder with no quota must be *absent*
         # rather than present with a zero, which is what deny-by-default means
         # here.
-        if resource["privatePageQuota"]:
+        if quota["privatePageQuota"]:
             private_budget.append(
                 {
                     "holder": name,
-                    "pageQuota": resource["privatePageQuota"],
+                    "pageQuota": quota["privatePageQuota"],
                 }
             )
 
@@ -749,6 +1007,26 @@ def derive_manifest(system: CompiledSystem) -> dict:
     # the object is present exactly when some component declared a quota.
     if private_budget:
         objects.append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
+    # The remaining eight sections follow `sharedBufferBudgetObject`'s pattern
+    # exactly: object presence is a declared fact, independent of whether the
+    # accompanying list happens to be empty.
+    for field, object_id in (
+        ("clockAuthorityObject", "clock-authority"),
+        ("ioResourceBudgetObject", "io-resource-budget"),
+        ("networkDestinationsObject", "network-destinations"),
+        ("blockRingAuthorityObject", "block-ring-authority"),
+        ("waitSetObject", "wait-set"),
+        ("recordingObject", "recording-policy"),
+    ):
+        if spec[field]:
+            objects.append({"id": object_id, "kind": "resource", "size": 4096})
+    # `schedulingClass`/`lifecyclePolicy` are optional records rather than
+    # declared/derived pairs: presence of the record is presence of the object,
+    # on the same terms `fabricGraph` already uses.
+    if spec.get("schedulingClass") is not None:
+        objects.append({"id": "scheduling-class", "kind": "resource", "size": 4096})
+    if spec.get("lifecyclePolicy") is not None:
+        objects.append({"id": "lifecycle-policy", "kind": "resource", "size": 4096})
 
     # Canonical order throughout. `build-generation.py` sorts `objects`,
     # `executables`, `instances`, `grants`, and `state` before encoding
@@ -786,11 +1064,15 @@ def derive_manifest(system: CompiledSystem) -> dict:
         "health": {
             "bootAttempts": spec["bootAttempts"],
             "requiredInstances": sorted(
-                name for name in spec["components"] if components[name]["health"] == "required"
+                name
+                for name in spec["components"]
+                if placements.get(name, {}).get("health", components[name]["health"]) == "required"
             ),
         },
         "instances": instances,
-        "mintedBindings": [],
+        # Sorted by name, matching `build-generation.py`, which sorts this
+        # section before encoding so the output is canonical.
+        "mintedBindings": sorted(spec["mintedBindings"], key=lambda entry: entry["name"]),
         "interfaceSchemas": spec["interfaceSchemas"],
         "objects": objects,
         "privateMemoryBudget": private_budget,
@@ -806,6 +1088,24 @@ def derive_manifest(system: CompiledSystem) -> dict:
     graph = spec.get("fabricGraph")
     if graph is not None:
         manifest["fabricGraph"] = graph
+    if spec["clockAuthorityObject"]:
+        manifest["clockAuthority"] = spec["clockAuthority"]
+    if spec["ioResourceBudgetObject"]:
+        manifest["ioResourceBudget"] = spec["ioResourceBudget"]
+    if spec["networkDestinationsObject"]:
+        manifest["networkDestinations"] = spec["networkDestinations"]
+    if spec["blockRingAuthorityObject"]:
+        manifest["blockRingAuthority"] = spec["blockRingAuthority"]
+    if spec["waitSetObject"]:
+        manifest["waitSet"] = spec["waitSet"]
+    scheduling = spec.get("schedulingClass")
+    if scheduling is not None:
+        manifest["schedulingClass"] = scheduling
+    lifecycle = spec.get("lifecyclePolicy")
+    if lifecycle is not None:
+        manifest["lifecyclePolicy"] = lifecycle
+    if spec["recordingObject"]:
+        manifest["recording"] = spec["recording"]
     return manifest
 
 

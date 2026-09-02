@@ -4,6 +4,13 @@
   executables = [
     {
       commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
@@ -16,17 +23,30 @@
       role = "service";
       spawnBudget = 0;
     };
-    {
-      commandProfile = [];
-      name = "console";
-      object = "sha256:console";
-      role = "service";
-      spawnBudget = 0;
-    };
   ];
   formatVersion = 1;
   generation = 1;
   grants = [
+    {
+      name = "console-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "dango-output";
+      capabilityKind = "endpoint";
+      rights = [
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
     {
       name = "init-sample-receiver";
       capabilityKind = "executable";
@@ -49,14 +69,14 @@
       transferable = false;
     };
     {
-      name = "console-shared-buffer-factory";
-      capabilityKind = "sharedBufferFactory";
+      name = "powerbox-client";
+      capabilityKind = "endpoint";
       rights = [
-        "bufferCreate";
+        "recv";
       ];
       source = "init";
       target = "console";
-      transferable = false;
+      transferable = true;
     };
     {
       name = "sample-receiver-side";
@@ -69,26 +89,6 @@
       target = "sample-receiver";
       transferable = true;
     };
-    {
-      name = "dango-output";
-      capabilityKind = "endpoint";
-      rights = [
-        "recv";
-      ];
-      source = "init";
-      target = "console";
-      transferable = false;
-    };
-    {
-      name = "powerbox-client";
-      capabilityKind = "endpoint";
-      rights = [
-        "recv";
-      ];
-      source = "init";
-      target = "console";
-      transferable = true;
-    };
   ];
   health = {
     bootAttempts = 3;
@@ -99,6 +99,31 @@
     ];
   };
   instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "console-shared-buffer-factory";
+        };
+        {
+          grant = "dango-output";
+          slot = 0;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "powerbox-client";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "root";
+    };
     {
       autostart = true;
       bindings = [
@@ -145,35 +170,20 @@
       name = "sample-receiver";
       owner = "init";
     };
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "console-shared-buffer-factory";
-        };
-        {
-          grant = "dango-output";
-          slot = 0;
-          slotReason = "allocatorOrder";
-        };
-        {
-          grant = "powerbox-client";
-          slot = 2;
-          slotReason = "componentAbi";
-        };
-      ];
-      dependencies = [
-        "init";
-      ];
-      executable = "console";
-      health = "required";
-      name = "console";
-      owner = "root";
-    };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
   objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
     {
       id = "sha256:init";
       kind = "bootstrap";
@@ -185,22 +195,20 @@
       size = 65536;
     };
     {
-      id = "sha256:console";
-      kind = "component";
-      size = 65536;
-    };
-    {
       id = "shared-buffer-budget";
       kind = "resource";
       size = 4096;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 2;
+      holder = "console";
+      loanCount = 1;
+      mappingCount = 1;
+    };
     {
       bufferCount = 2;
       bytePages = 4;
@@ -212,13 +220,6 @@
       bufferCount = 1;
       bytePages = 4;
       holder = "sample-receiver";
-      loanCount = 1;
-      mappingCount = 1;
-    };
-    {
-      bufferCount = 1;
-      bytePages = 2;
-      holder = "console";
       loanCount = 1;
       mappingCount = 1;
     };

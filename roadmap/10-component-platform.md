@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, derive generation inputs from that specification, support components authored, built, released, and upgraded outside this repository through a reproducible SDK whose source remains owned here, and close the remaining host-build gap with one canonical system-image closure that deterministically produces a bootable image. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to the existing seL4 product path rather than the full platform that document describes.
 
-**Status:** CP0–CP10 complete. CP11–CP15 are planned; CP11 is the next open gate. CP7's hosted-publication clause closed 2026-08-26: SDK 1.0.0 and 1.1.0 are immutable commits and signed tags on the canonical repository, both recording a source commit present on `origin/main`. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
+**Status:** CP0–CP11 complete. CP12 is partially delivered — 22 of the 42 seL4 compositions are derived from system specs and the other 20 are recorded with closed reasons by `contracts/composition-inventory/v1` — and is the next open gate; CP13–CP15 are planned. CP7's hosted-publication clause closed 2026-08-26: SDK 1.0.0 and 1.1.0 are immutable commits and signed tags on the canonical repository, both recording a source commit present on `origin/main`. `slime_os` stays authoritative; the SDK is a generated one-way mirror described by `contracts/component-sdk-release/v1`.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -503,7 +503,7 @@ One canonical, versioned image closure resolves in two clean build roots to the 
 
 ## CP12 — Complete spec derivation for every test composition
 
-**Status:** Planned.
+**Status:** Partially delivered; the exit condition is not met. 22 of the 42 compositions are derived; the other 20 are recorded, per composition and with a closed reason, by `contracts/composition-inventory/v1` and remain open work.
 
 **Depends on:** CP11.
 
@@ -532,6 +532,16 @@ just system_composition_closure_check
 ### Exit condition
 
 All 42 seL4 test compositions are generated from component/system specifications and complete image closures, with byte-identical resolved manifests and generations and no hand-authored composition remaining authoritative.
+
+**Delivered:** `contracts/system-spec/v1` now expresses what the corpus actually declares. Eight generation-manifest sections it could not represent at all — `clockAuthority`, `ioResourceBudget`, `networkDestinations`, `blockRingAuthority`, `waitSet`, `schedulingClass`, `lifecyclePolicy`, `recording` — are declared with a companion `*Object` presence boolean each, on `sharedBufferBudgetObject`'s own terms: `sel4-io-network` carries a `wait-set` resource object with no declared source, so object presence and list non-emptiness are independent facts and deriving one from the other would change which payload that generation encodes. Two binding facts the grant table cannot imply are declared rather than inferred — `ExtraBinding` for a spawn broker holding an `executable` grant it neither issued nor received, and `SystemMintedBinding` for a capability minted after activation with no object to name. Nine `Placement` overrides carry what varies per composition rather than per component: `health` (`supervision-child` is `required` under `sel4-supervision` and `optional` under `sel4-reclamation`), `role` (`slisp` is an application in the reference generation and its own bootstrap in `sel4-slisp`), `dependencies`, `stackBytes`, the four shared-buffer ceilings, and `privatePageQuota`. `derive_bindings` admits a source's retained binding only where a slot pin or extra binding declares it, which is what the corpus measures: 23 of 24 `sharedBufferFactory`, 12 of 12 `directory`, and 13 of 14 `device`-kind source-side bindings are pinned, and the sole unpinned case grants a component authority over itself. Notification validation now matches the builder's real rule — one waiter, one or more signallers including the declared source. 11 new component specs cover every executable the converted compositions declare, and `contracts/composition-inventory/v1` is the closed record of which compositions are derived and why the rest are not.
+
+**Exit condition (observed, partial):** `just system_composition_closure_check` compiles 23 system specs, derives 23 manifests semantically identical to their committed fixtures, refuses 21 named derivation mutations, inventories all 42 compositions (22 derived, 20 hand-authored) with every row backed by a real owning gate, and refuses 7 named inventory mutations. Each converted composition's `generation.bin` was rebuilt from its frozen pre-migration text and from its derived text under one toolchain: 21 of 22 are byte-identical, and the 22nd (`sel4-channel`) is a file this milestone does not modify. `just sel4_boot_layout_check` resolved 31 plane layouts against their frozen fixtures, and 23 QEMU plane gates plus `just sel4_gate_control_check` (45 gates, 1748 mutated transcripts) and `just generation_check` passed. The generator carries no condition keyed on a composition, test, plane, or generation number.
+
+**Not delivered:** the 20 remaining compositions. 17 are `multiInstanceExecutable` — they spawn one executable under several instance names, or an instance depends on another instance of the same executable — which needs a system-spec instance record distinct from the executable it runs, carrying its own dependencies. `sel4-filesystem` is blocked on an executable-name collision with the `filesystem-service` spec's implementation binary, `sel4-matrix` on per-composition fabric route naming, and `sel4-c-runtime` on its C implementation having no committed content identity to pin. All four reasons are enumerated in the inventory contract's closed vocabulary and tracked in [`roadmap/00-backlog.md`](00-backlog.md).
+
+**Gates:** `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just devlog_check`.
+
+**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md)
 
 ## CP13 — Data-driven seL4 image builder cutover
 

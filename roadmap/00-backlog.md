@@ -50,6 +50,30 @@ Evidence for all three: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-0
 
 Evidence for both: [`devlog/2026-08-24-c10-4-adoption-and-leak-evidence/`](../devlog/2026-08-24-c10-4-adoption-and-leak-evidence/index.md).
 
+- CP12 left 20 of the 42 seL4 compositions hand-authored rather than derived,
+  for four reasons the closed
+  [`contracts/composition-inventory/v1`](../contracts/composition-inventory/v1/schema.zt)
+  vocabulary names and `just system_composition_closure_check` enforces per
+  composition. Seventeen are `multiInstanceExecutable`: they spawn one
+  executable under several instance names
+  (`clock-authority-probe` becomes five instances, `supervision-child` 26), or
+  an instance depends on another instance of the same executable
+  (`lifecycle-worker` on `lifecycle-supervisor`). `contracts/system-spec/v1`
+  maps one component spec to one instance, so these need an instance record
+  distinct from the executable it runs, carrying its own dependencies — the
+  generalization CP15's whole-corpus cutover requires. `sel4-filesystem` is
+  `executableNameCollision`: its executable is named `sel4-filesystem-service`,
+  which is already the pre-existing `filesystem-service` spec's implementation
+  binary, so a spec of that name would resolve two specs to one implementation.
+  `sel4-matrix` is `routeNameVariance`: it gives `fabric-publisher-b` an output
+  role on `telemetry-alt` while that component's spec declares `telemetry`,
+  which another composition fixed. `sel4-c-runtime` is
+  `unpinnedExternalImplementation`: its component is a freestanding C source
+  built by a helper script at gate time with no committed content identity to
+  pin.
+
+Evidence: [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md).
+
 **Closed 2026-08-21:** B65's remaining half — "the 52-binary fixture population
 uncollapsed" — is resolved by CP3 in the [Component platform
 track](10-component-platform.md). `components/bins` is now 52 independent

@@ -1,0 +1,228 @@
+{
+  bootAction = "loan";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "sample-receiver";
+      object = "sha256:sample-receiver";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-sample-receiver";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sample-receiver";
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "init";
+      transferable = false;
+    };
+    {
+      name = "console-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "sample-receiver-side";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sample-receiver";
+      transferable = true;
+    };
+    {
+      name = "dango-output";
+      capabilityKind = "endpoint";
+      rights = [
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "powerbox-client";
+      capabilityKind = "endpoint";
+      rights = [
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = true;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "console";
+      "init";
+      "sample-receiver";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "dango-output";
+        };
+        {
+          grant = "init-sample-receiver";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-shared-buffer-factory";
+        };
+        {
+          grant = "powerbox-client";
+          slot = 3;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "sample-receiver-side";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "sample-receiver-side";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sample-receiver";
+      health = "required";
+      name = "sample-receiver";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "console-shared-buffer-factory";
+        };
+        {
+          grant = "dango-output";
+          slot = 0;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "powerbox-client";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sample-receiver";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 2;
+      bytePages = 4;
+      holder = "init";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+    {
+      bufferCount = 1;
+      bytePages = 4;
+      holder = "sample-receiver";
+      loanCount = 1;
+      mappingCount = 1;
+    };
+    {
+      bufferCount = 1;
+      bytePages = 2;
+      holder = "console";
+      loanCount = 1;
+      mappingCount = 1;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

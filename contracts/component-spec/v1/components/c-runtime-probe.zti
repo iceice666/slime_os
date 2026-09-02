@@ -1,0 +1,58 @@
+{
+  formatVersion = 1;
+  name = "c-runtime-probe";
+  componentType = "init";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "A freestanding C executable proving the Slime component ABI is callable from C: writes to the console endpoint and exits via the lifecycle service.";
+  implementation = {
+    provider = "undeclared";
+    binary = "";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_c_runtime_check gate boots a generation declaring c-runtime-probe";
+    expectedResult = "the C component invokes the generated ABI labels and exits cleanly";
+    passFailCriteria = "[c-runtime-probe] C component ready";
+    requiredTestEnvironment = "sel4_c_runtime_check";
+  };
+}

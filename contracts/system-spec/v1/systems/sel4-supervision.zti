@@ -1,0 +1,91 @@
+{
+  formatVersion = 1;
+  name = "sel4-supervision";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "supervision";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "supervision-child";
+    "sysinfo";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 4;
+    };
+    {
+      component = "sysinfo";
+      owner = "init";
+      health = "required";
+      dependencies = [
+        "init";
+      ];
+    };
+  ];
+  grants = [
+    {
+      name = "init-supervision-child";
+      capabilityKind = "executable";
+      source = "init";
+      target = "supervision-child";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = true;
+    };
+    {
+      name = "init-sysinfo";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-supervision-child";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sysinfo";
+      slot = 2;
+      reason = "bootLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

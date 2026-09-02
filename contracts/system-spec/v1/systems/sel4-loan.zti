@@ -1,0 +1,160 @@
+{
+  formatVersion = 1;
+  name = "sel4-loan";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "loan";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "console";
+    "init";
+    "sample-receiver";
+  ];
+  placements = [
+    {
+      component = "console";
+      bufferBytePages = 2;
+      bufferCount = 1;
+      mappingCount = 1;
+      loanCount = 1;
+    };
+    {
+      component = "init";
+      spawnBudget = 1;
+      bufferBytePages = 4;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 1;
+    };
+    {
+      component = "sample-receiver";
+      owner = "init";
+      health = "required";
+      role = "service";
+      bufferBytePages = 4;
+      mappingCount = 1;
+    };
+  ];
+  grants = [
+    {
+      name = "init-sample-receiver";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sample-receiver";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "console-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "console";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sample-receiver-side";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sample-receiver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "dango-output";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "console";
+      rights = [
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "powerbox-client";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "console";
+      rights = [
+        "recv";
+      ];
+      transferable = true;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sample-receiver";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "powerbox-client";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-receiver";
+      grant = "sample-receiver-side";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "console";
+      grant = "dango-output";
+      slot = 0;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "console";
+      grant = "powerbox-client";
+      slot = 2;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

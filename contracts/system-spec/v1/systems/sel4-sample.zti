@@ -1,0 +1,187 @@
+{
+  formatVersion = 1;
+  name = "sel4-sample";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "sample";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "sample-lender";
+    "sample-receiver";
+    "sample-worker";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 2;
+    };
+    {
+      component = "sample-lender";
+      owner = "init";
+      autostart = false;
+      health = "required";
+      role = "service";
+    };
+    {
+      component = "sample-receiver";
+      owner = "init";
+      autostart = false;
+      health = "required";
+      role = "service";
+    };
+    {
+      component = "sample-worker";
+      extraThreads = 1;
+      workerPriority = 100;
+    };
+  ];
+  grants = [
+    {
+      name = "init-sample-lender";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sample-lender";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-sample-receiver";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sample-receiver";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sample-worker-loopback";
+      capabilityKind = "endpoint";
+      source = "sample-worker";
+      target = "sample-worker";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sample-plane-channel";
+      capabilityKind = "endpoint";
+      source = "sample-lender";
+      target = "sample-receiver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sample-lender-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "sample-lender";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sample-lender";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sample-receiver";
+      slot = 2;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-shared-buffer-factory";
+      slot = 4;
+      reason = "bootLayout";
+    };
+    {
+      holder = "sample-lender";
+      grant = "sample-lender-shared-buffer-factory";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-lender";
+      grant = "sample-plane-channel";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-receiver";
+      grant = "sample-plane-channel";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sample-worker";
+      grant = "sample-worker-loopback";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [
+    {
+      name = "sample-receiver-supervision";
+      owner = "init";
+      holder = "sample-lender";
+      capabilityKind = "supervision";
+      slot = 2;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+  ];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

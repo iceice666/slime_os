@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "robot-supervisor";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "C9.6's userspace supervisor: observes the controller's death, waits the declared backoff, and spawns a replacement with reissued fabric authority.";
+  implementation = {
+    provider = "workspace";
+    binary = "robot-supervisor";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "executable";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 4;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the robot_runtime_check gate boots a generation declaring robot-supervisor";
+    expectedResult = "the supervisor restarts the controller after an injected fault, reinstalling fabric authority and the retained parameter configuration";
+    passFailCriteria = "[robot-supervisor] running";
+    requiredTestEnvironment = "robot_runtime_check";
+  };
+}

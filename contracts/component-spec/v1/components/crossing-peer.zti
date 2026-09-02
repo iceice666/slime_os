@@ -1,0 +1,61 @@
+{
+  formatVersion = 1;
+  name = "crossing-peer";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "Receives an endpoint delegated across a capability crossing, proves the sender retained its copy, then sustains traffic past the old channel lifetime bound.";
+  implementation = {
+    provider = "workspace";
+    binary = "crossing-peer";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_crossing_check gate boots a generation declaring crossing-peer";
+    expectedResult = "the crossing plane completes with this peer sustaining traffic on its delegated endpoint";
+    passFailCriteria = "[init] crossing plane complete";
+    requiredTestEnvironment = "sel4_crossing_check";
+  };
+}

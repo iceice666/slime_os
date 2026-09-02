@@ -28,6 +28,16 @@
   generation = 49;
   grants = [
     {
+      name = "io-queue-client-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "io-queue-client";
+      transferable = false;
+    };
+    {
       name = "io-queue-peer";
       capabilityKind = "endpoint";
       rights = [
@@ -37,16 +47,6 @@
       source = "io-queue-client";
       target = "io-queue-driver";
       transferable = true;
-    };
-    {
-      name = "io-queue-client-shared-buffer-factory";
-      capabilityKind = "sharedBufferFactory";
-      rights = [
-        "bufferCreate";
-      ];
-      source = "init";
-      target = "io-queue-client";
-      transferable = false;
     };
   ];
   health = {
@@ -71,13 +71,13 @@
       autostart = true;
       bindings = [
         {
-          grant = "io-queue-peer";
-          slot = 0;
+          grant = "io-queue-client-shared-buffer-factory";
+          slot = 1;
           slotReason = "componentAbi";
         };
         {
-          grant = "io-queue-client-shared-buffer-factory";
-          slot = 1;
+          grant = "io-queue-peer";
+          slot = 0;
           slotReason = "componentAbi";
         };
       ];
@@ -103,8 +103,76 @@
       owner = "root";
     };
   ];
-  interfaceSchemas = [];
   mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-queue-client";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-queue-driver";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "wait-set";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 1;
+      holder = "io-queue-client";
+      loanCount = 1;
+      mappingCount = 1;
+    };
+    {
+      bufferCount = 0;
+      bytePages = 0;
+      holder = "io-queue-driver";
+      loanCount = 1;
+      mappingCount = 1;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  notificationGrants = [
+    {
+      name = "io-queue-request-ready";
+      source = "io-queue-client";
+      target = "io-queue-driver";
+    };
+    {
+      name = "io-queue-completion-ready";
+      source = "io-queue-driver";
+      target = "io-queue-client";
+    };
+    {
+      name = "io-queue-state-changed";
+      source = "io-queue-driver";
+      target = "io-queue-client";
+    };
+  ];
   notificationBindings = [
     {
       grant = "io-queue-request-ready";
@@ -143,81 +211,13 @@
       slot = 2;
     };
   ];
-  notificationGrants = [
-    {
-      name = "io-queue-request-ready";
-      source = "io-queue-client";
-      target = "io-queue-driver";
-    };
-    {
-      name = "io-queue-completion-ready";
-      source = "io-queue-driver";
-      target = "io-queue-client";
-    };
-    {
-      name = "io-queue-state-changed";
-      source = "io-queue-driver";
-      target = "io-queue-client";
-    };
-  ];
-  objects = [
-    {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
-    };
-    {
-      id = "sha256:io-queue-client";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "sha256:io-queue-driver";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "shared-buffer-budget";
-      kind = "resource";
-      size = 4096;
-    };
-    {
-      id = "wait-set";
-      kind = "resource";
-      size = 4096;
-    };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
-  ];
-  privateMemoryBudget = [];
-  sharedBufferBudget = [
-    {
-      bufferCount = 1;
-      bytePages = 1;
-      holder = "io-queue-client";
-      loanCount = 1;
-      mappingCount = 1;
-    };
-    {
-      bufferCount = 0;
-      bytePages = 0;
-      holder = "io-queue-driver";
-      loanCount = 1;
-      mappingCount = 1;
-    };
-  ];
-  state = [];
-  target = "aarch64-sel4-qemu-virt";
   waitSet = [
     {
-      waiter = "io-queue-client";
-      notification = "io-queue-completion-ready";
       badgeBit = 1;
-      kind = "stream";
       drainSlot = 0;
+      kind = "stream";
+      notification = "io-queue-completion-ready";
+      waiter = "io-queue-client";
     };
   ];
 }

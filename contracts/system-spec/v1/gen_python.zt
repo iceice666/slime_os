@@ -22,6 +22,8 @@ render :: Text = t.join "" {
   line "MAX_TEXT_BYTES" schema.maxTextBytes;
   line "MAX_GRANTS" schema.maxGrants;
   line "MAX_SLOT_PINS" schema.maxSlotPins;
+  line "MAX_EXTRA_BINDINGS" schema.maxExtraBindings;
+  line "MAX_MINTED_BINDINGS" schema.maxMintedBindings;
   line "MAX_NOTIFICATIONS" schema.maxNotifications;
   line "MAX_NOTIFICATION_BINDINGS" schema.maxNotificationBindings;
   line "MAX_BOOT_PROFILES" schema.maxBootProfiles;
@@ -32,6 +34,19 @@ render :: Text = t.join "" {
   line "MAX_INTERFACE_SCHEMAS" schema.maxInterfaceSchemas;
   line "MAX_COMMAND_BINDINGS" schema.maxCommandBindings;
   line "MAX_IMAGE_SIZES" schema.maxImageSizes;
+  line "MAX_CLOCK_AUTHORITY" schema.maxClockAuthority;
+  line "MAX_IO_RESOURCE_BUDGET" schema.maxIoResourceBudget;
+  line "MAX_NETWORK_DESTINATIONS" schema.maxNetworkDestinations;
+  line "MAX_BLOCK_RING_AUTHORITY" schema.maxBlockRingAuthority;
+  line "MAX_WAIT_SET_SOURCES" schema.maxWaitSetSources;
+  line "MAX_SCHEDULING_CLASS_BANDS" schema.maxSchedulingClassBands;
+  line "MAX_SCHEDULING_CLASS_ENTRIES" schema.maxSchedulingClassEntries;
+  line "MAX_SCHEDULING_PROMOTIONS" schema.maxSchedulingPromotions;
+  line "MAX_LIFECYCLE_TRANSITIONS" schema.maxLifecycleTransitions;
+  line "MAX_LIFECYCLE_RESTARTS" schema.maxLifecycleRestarts;
+  line "MAX_LIFECYCLE_HEALTH_DEPENDENCIES" schema.maxLifecycleHealthDependencies;
+  line "MAX_LIFECYCLE_PARAMETER_GRANTS" schema.maxLifecycleParameterGrants;
+  line "MAX_RECORDING_ENTRIES" schema.maxRecordingEntries;
 };
 
 main :: { write : FsWrite; env : Env; }
