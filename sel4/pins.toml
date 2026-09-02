@@ -258,6 +258,27 @@ boot_partition = "mmc 0:1"
 # eMMC 8-bit with an SD card inserted. `0x0001` is the loader's SD rescue mode,
 # which reflashes firmware, and is never the position for booting a payload.
 sw18_boot_position = "0x1001"
+
+# Read off the board by the P6.A probe on 2026-09-02; transcript in
+# devlog/2026-09-01-p6a-nt98690-probe/. These are the measurements P6.B's
+# kernel configuration is built from, not restatements of the device tree.
+entry_el_observed = 2
+midr = "0x411fd090"
+parange = 2
+physical_address_bits = 40
+# CNTFRQ_EL0 *is* programmed on the primary core, contrary to the reading of
+# TF-A's plat_helpers.S that shaped the P6.B plan: it holds 12 MHz, and an
+# independent estimate against the 115200 line rate agreed to 0.33%. P6.B can
+# therefore take the timer frequency from the register and needs no pinned
+# override of the kind the Milk-V Duo required.
+cntfrq_el0_primary_hz = 12000000
+counter_hz_estimated = 11960950
+# GICv2, ARM GIC-400: ID_AA64PFR0_EL1.GIC reads 0, so there is no system
+# register interface and the memory-mapped distributor is the only path.
+gicd_typer = "0x0000fc6a"
+gicd_iidr = "0x0200143b"
+gic_irqs = 352
+gic_cpu_interfaces = 4
 boot_files = ["slime-nt98690-probe.bin"]
 
 [observed_prefix_cv1800b_duo]

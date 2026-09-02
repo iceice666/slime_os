@@ -140,24 +140,24 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_NT98690 midr_part  = 0x0{13}d09",
     ),
     (
-        "the implemented physical-address range was read",
-        r"SLIME_NT98690 parange    = 0x[0-9a-f]{16}",
+        "the implemented physical-address range is the pinned 40-bit encoding",
+        r"SLIME_NT98690 parange    = 0x0{15}2",
     ),
     (
-        "the primary core's CNTFRQ_EL0 was read",
-        r"SLIME_NT98690 cntfrq     = 0x[0-9a-f]{16}",
+        "the primary core's CNTFRQ_EL0 holds the pinned 12 MHz",
+        r"SLIME_NT98690 cntfrq     = 0x0{10}b71b00",
     ),
     (
         "the counter's rate was estimated against the line rate",
         r"SLIME_NT98690 cnt_hz_est = 0x[0-9a-f]{16}",
     ),
     (
-        "the interrupt controller answered above 4 GiB",
-        r"SLIME_NT98690 gicd_typer = 0x[0-9a-f]{16}",
+        "the interrupt controller answered above 4 GiB with the pinned identity",
+        r"SLIME_NT98690 gicd_typer = 0x0{12}fc6a",
     ),
     (
-        "its interrupt line count decoded",
-        r"SLIME_NT98690 gic_irqs   = 0x[0-9a-f]{16}",
+        "its interrupt line count decoded to the pinned 352",
+        r"SLIME_NT98690 gic_irqs   = 0x0{13}160",
     ),
     (
         "the image ran where it was linked",
