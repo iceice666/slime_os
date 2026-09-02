@@ -66,6 +66,13 @@ system_image_builder_check: system_composition_closure_check
     python3 scripts/generate/generate-system-image-closures.py --check
     python3 scripts/check/check-system-image-builder.py
 
+# Every shipped or tested image traces to exactly one closure, and every
+# closure is exercised by an owning gate. Cheap by design: a mapping only
+# checked before a release is a mapping that drifts between releases.
+[group('contracts')]
+system_image_closure_aggregate_check:
+    python3 scripts/check/check-system-image-aggregate.py
+
 [group('contracts')]
 system_image_scenario_check: system_image_builder_check
     python3 scripts/check/check-system-image-scenario.py
