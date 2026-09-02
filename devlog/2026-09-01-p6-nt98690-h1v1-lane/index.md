@@ -174,3 +174,33 @@ is unobserved.
 - Vendor BSP consulted for every board fact: `/srv/novatek/sdk/worktrees/h1v1-dev` (Novatek NS02201 SDK; U-Boot 2021.10, TF-A 2.2, Linux 5.10)
 - Vendor serial/flash tooling that established the console loop is scriptable: `~/nt98690-ubuntu/_recovery_h1v1/raw_flash/flash_emmc_raw.py`
 - Related roadmap items: [P6](../../roadmap/07-architecture-portability.md#p6-novatek-nt98690-ns02201-h1v1-physical-lane), and [P4](../../roadmap/07-architecture-portability.md#p4-raspberry-pi-5-physical-architecture-qualification), whose blocked evidence path motivated this lane
+
+## Corrections
+
+Appended 2026-09-02, when Session 2 (P6.B) was planned against the board's
+measurements and the forks' actual shape. `plan.md` beside this entry is the
+plan of record and carries the corrected Part A in full; these are the
+corrections themselves.
+
+1. **Line numbers and one claim in the fork survey were wrong.** The hypervisor
+   `DEPENDS` list is `src/arch/arm/config.cmake:78-84`, not 109; the cache-line
+   list is lines 238-244, not 142-144; and `src/plat/bcm2712/overlay-rpi5.dts`
+   contains no `seL4,boot-cpu`. Adding a Cortex option touches seven sites, not
+   three: the three above plus `configs/seL4Config.cmake`'s default-off list,
+   `config_set`, and CPU-name chain, and a `constants_cortex_a73.h`. A platform
+   also needs `libsel4/sel4_plat_include/<KernelPlatform>/`, whose name must
+   equal the `declare_platform` name.
+2. **The seL4 platform is named `ns02201-h1v1`, not `ns02201`**, for the reason
+   in point 1 and the fork's own `cv1800b-duo` precedent.
+3. **The root-driven reset moved from Session 3 into Session 2.** The Duo's
+   three-boot gate is autonomous because its root resets the board; the H1V1's
+   analogue is the watchdog sequence its TF-A performs, and P6.B's roadmap text
+   already assumed autonomy. Session 3 keeps only the terminator's use of it.
+4. **Two risks closed the other way.** `CNTFRQ_EL0` is programmed on the primary
+   core (12 MHz, corroborated to 0.33%), so no pinned override exists; and the
+   vendor `booti` places an image at `ALIGN(0, 2 MiB) + text_offset` with no
+   alignment requirement on `text_offset` itself, so the loader's 4 KiB-aligned
+   link base is loaded directly.
+5. **Fork pushes are not this host's to make.** Its GitHub identity has no push
+   access to `iceice666/{seL4,rust-sel4}`; fork commits are local on
+   `slime-ns02201-h1v1` branches and pinned by hash until the operator pushes.

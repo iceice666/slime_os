@@ -944,7 +944,7 @@ A named Novatek NT98690 H1V1 loads a pinned Slime-built payload from removable m
 
 ### P6.B — seL4 and `slime-root` on the H1V1
 
-**Status:** Planned, and unblocked: P6.A's observed facts now select this milestone's kernel configuration. `KernelArmCortexA73` takes 40-bit physical addresses, `MAX_IRQ` is 352 over GICv2 with no system register interface, `TIMER_FREQUENCY` is 12000000 read from `CNTFRQ_EL0` rather than pinned, and the loader is entered at EL2.
+**Status:** In progress. The host side landed on 2026-09-02 -- the fork platform, the loader console, the target profile, the platform record, the wrapped image, the root's watchdog reset, and the three-boot gate, all built and rehearsed -- and the milestone waits on the board session. P6.A's observed facts select the kernel configuration: `KernelArmCortexA73` takes 40-bit physical addresses, `MAX_IRQ` is 352 over GICv2 with no system register interface, `TIMER_FREQUENCY` is 12000000 read from `CNTFRQ_EL0` rather than pinned, and the loader is entered at EL2. Work record: [the P6.B devlog entry](../devlog/2026-09-02-p6b-sel4-nt98690-h1v1/index.md).
 
 #### Deliverables
 
@@ -960,6 +960,10 @@ A named Novatek NT98690 H1V1 loads a pinned Slime-built payload from removable m
 - three consecutive boots produce byte-identical normalized semantic traces and the board recovers autonomously after each;
 - wrong-target artifacts, unsupported page or interrupt profiles, and incompatible firmware handoffs fail explicitly rather than being guessed from the running machine.
 
+#### Exit condition
+
+A named Novatek NT98690 H1V1 loads the pinned sample-plane seL4 image from removable media through its unmodified vendor U-Boot, runs the seL4 kernel loader, the kernel, and `slime-root` at the pinned addresses, admits only the `aarch64-sel4-nt98690-h1v1` generation, delivers timer interrupts before and after graph activation, reaches ready naming that profile, and resets itself through the SoC watchdog -- three times, with byte-identical normalized semantic traces, zero framing errors, and the vendor firmware's banner observed after every run without an operator; the three transcripts are committed as evidence. Unobserved until they are.
+
 ### P6.C — Interactive Slisp over UART0 on the H1V1
 
 **Status:** Planned. Depends on P6.B.
@@ -968,7 +972,7 @@ A named Novatek NT98690 H1V1 loads a pinned Slime-built payload from removable m
 
 - feed the board's UART0 receive path through the existing declared `InputRead` authority, without granting the shell any device or MMIO capability;
 - make the root's product-UART build inputs board-neutral rather than named for one board;
-- reach the resident Slisp prompt on the board and answer typed commands, with a gate-only terminator that returns the board to its vendor firmware.
+- reach the resident Slisp prompt on the board and answer typed commands, with a gate-only terminator that returns the board to its vendor firmware through the watchdog reset P6.B's root already performs.
 
 #### Required checks
 

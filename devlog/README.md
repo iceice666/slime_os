@@ -392,3 +392,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-01 | [The SDK could not build a component for the board P3.F had just qualified](2026-09-01-sdk-riscv-profiles/index.md) | Change | Verified | CP8, P3.E, P3.F |
 | 2026-09-01 | [P6 - opening a second physical AArch64 lane on the Novatek NT98690 H1V1](2026-09-01-p6-nt98690-h1v1-lane/index.md) | Decision | Proposed | P6, P6.A, P6.B, P6.C |
 | 2026-09-01 | [P6.A - the H1V1 handoff probe, its builder, and its gate](2026-09-01-p6a-nt98690-probe/index.md) | Change | Verified | P6.A |
+| 2026-09-02 | [P6.B - seL4 and slime-root on the H1V1](2026-09-02-p6b-sel4-nt98690-h1v1/index.md) | Change | Proposed | P6.B |
