@@ -64,6 +64,25 @@ RECOVERY_SECONDS = 90.0
 #: observed. Pinned from `[ns02201_h1v1].uboot_version`.
 BANNER_PATTERN = r"U-Boot 2021\.10"
 
+#: Read-only questions for `--survey`, asked at the prompt before any scored
+#: run. Each one settles something this gate would otherwise have to assume:
+#: which slot the card is in (the eMMC answers as `mmc2`, so the SD is not
+#: necessarily device 0), what `${fdtcontroladdr}` actually holds on a board
+#: whose loader stages one tree at 0x100000 and whose U-Boot uses another, and
+#: whether the prompt string in the pins is the real one. Nothing here writes:
+#: no `saveenv`, no `mmc write`, no eMMC access at all.
+SURVEY_COMMANDS: tuple[str, ...] = (
+    "printenv fdtcontroladdr",
+    "printenv bootcmd",
+    "printenv bootdelay",
+    "md.l ${fdtcontroladdr} 1",
+    "mmc list",
+    "mmc dev 0",
+    "mmc dev 1",
+    "fatls mmc 0:1",
+    "bdinfo",
+)
+
 #: Ordered evidence for one probe run, from selecting the card through the
 #: board's return to its own firmware.
 #:
@@ -349,6 +368,34 @@ def report_facts(transcript: str) -> None:
     print("--- end board facts ---")
 
 
+def survey(console: Console, prompt: str, timeout: float) -> str:
+    """Ask the board the read-only questions, asserting nothing.
+
+    The scored run needs a slot number, a device-tree address, and a prompt
+    string that the vendor's autoboot transcript cannot supply, because it
+    never stops at the prompt. Getting them wrong costs a power cycle each;
+    asking for them costs one.
+    """
+    reach_uboot(console, prompt, min(timeout, PROMPT_WINDOW_SECONDS), fail)
+    collected = ""
+    for command in SURVEY_COMMANDS:
+        print(f"[survey] {command}")
+        output = send_command(console, command, prompt, 15.0, fail)
+        collected += output
+        # Drop the command's own echo by matching it, not by position: whether
+        # a line comes back at all depends on the console's echo behaviour, and
+        # skipping index 0 blindly eats the first line of the answer when it
+        # does not.
+        for line in output.replace("\r", "").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped == prompt.strip():
+                continue
+            if stripped == command or stripped == f"{prompt}{command}".strip():
+                continue
+            print(f"    {line}")
+    return collected
+
+
 def monitor(console: Console, timeout: float) -> None:
     """Print whatever the board says, asserting nothing.
 
@@ -386,6 +433,11 @@ def main() -> None:
     )
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--monitor", action="store_true", help="print the console, assert nothing")
+    parser.add_argument(
+        "--survey",
+        action="store_true",
+        help="ask the board the read-only questions a scored run depends on",
+    )
     parser.add_argument("--transcript", type=Path, help="write the captured transcript here")
     parser.add_argument("--no-build", action="store_true")
     arguments = parser.parse_args()
@@ -408,6 +460,10 @@ def main() -> None:
     try:
         if arguments.monitor:
             monitor(console, arguments.timeout)
+            return
+
+        if arguments.survey:
+            transcript += survey(console, str(profile["uboot_prompt"]), arguments.timeout)
             return
 
         if not arguments.no_build:
