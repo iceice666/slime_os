@@ -534,9 +534,16 @@ def check_profile(pins: dict[str, object]) -> None:
         )
     if memory_base % 0x20_0000 != 0:
         fail("ns02201-h1v1 memory base must be 2 MiB-aligned")
-    expected_h1v1_boot_files = ["slime-nt98690-probe.bin", "slime-sel4-sample-ns02201-h1v1.bin"]
+    expected_h1v1_boot_files = [
+        "slime-nt98690-probe.bin",
+        "slime-sel4-sample-ns02201-h1v1.bin",
+        "slime-sel4-ns02201-h1v1-test-terminator.bin",
+    ]
     if h1v1.get("boot_files") != expected_h1v1_boot_files:
-        fail("ns02201-h1v1 boot files must pin the P6.A probe and the P6.B sample image")
+        fail(
+            "ns02201-h1v1 boot files must pin the P6.A probe, the P6.B sample "
+            "image, and the P6.C resident-product gate image"
+        )
 
     rpi5 = parse_cmake_cache(RPI5_CONFIG_PATH)
     include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/AARCH64_bcm2712_verified.cmake"

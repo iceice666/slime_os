@@ -321,7 +321,13 @@ sel4_memory_size = "0x30000000"
 # from the non-secure world; absent until it has run.
 reset_cg_base = "0x2f0020000"
 reset_wdt_base = "0x2f0060000"
-boot_files = ["slime-nt98690-probe.bin", "slime-sel4-sample-ns02201-h1v1.bin"]
+boot_files = [
+    "slime-nt98690-probe.bin",
+    "slime-sel4-sample-ns02201-h1v1.bin",
+    # P6.C's resident-product gate artifact: the graph image with the
+    # gate-only 0x1d terminator compiled in, distinct from every plane image.
+    "slime-sel4-ns02201-h1v1-test-terminator.bin",
+]
 
 [observed_prefix_ns02201_h1v1]
 # Recorded from the exact fork commits, toolchain, and NS02201 config above,

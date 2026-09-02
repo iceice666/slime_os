@@ -436,6 +436,7 @@ def build_sel4(
         "platform": SEL4_PLATFORM,
         "target_profile": SEL4_TARGET_PROFILE,
         "variant": image_identity.get("variant"),
+        "test_terminator": image_identity.get("test_terminator", False),
         "boot_file": name,
         "load_address": f"{base:#x}",
         "entry_address": f"{entry:#x}",
