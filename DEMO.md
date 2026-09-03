@@ -65,10 +65,10 @@ slisp> sysinfo
 ```
 
 `sysinfo` spawns a real component through spawn-service under
-generation-declared authority, prints its report, and exits cleanly; `echo`
+generation-declared authority, prints its report, and exits cleanly; `echo-agent`
 is the other command in the spawn profile. Definitions persist for the life
-of the session, backspace works, and a typo answers with `! parse` or
-`! arity` rather than anything dying.
+of the session, backspace works, and malformed input answers with `! syntax`
+or `! arity` rather than anything dying.
 
 ## Leave
 
