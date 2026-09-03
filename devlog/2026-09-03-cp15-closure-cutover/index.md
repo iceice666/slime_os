@@ -1,4 +1,4 @@
-# CP15 — plane gates build by closure identity, and two reproducibility defects it exposed
+# CP15 — plane gates build by closure identity, and three reproducibility defects it exposed
 
 | Field | Value |
 |---|---|
@@ -10,10 +10,11 @@
 | Gates | `just system_image_closure_aggregate_check`, `just system_test_run_check`, `just sel4_capability_layout_check`, `just sel4_qos_check`, `just sel4_call_check`, `just sel4_stream_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check` |
 | Trigger | CP14 closed with four of five deliverables; CP15's cutover began from `0f71321d` |
 | Baseline | 49 seL4 plane gates each built their image with `build-sel4.py --<name>-plane`; one test-run record existed of 45 planes; no gate proved the closure corpus and the booted-image corpus were the same set |
+| Correction | 2026-09-03: extended from 36 to 41 migrated gates; the third defect and the reverted per-profile keying are recorded below |
 
 ## Summary
 
-CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that boot a seL4 QEMU image now have a frozen test-run record declaring their execution-only inputs; 36 of 49 gates build their image by closure identity rather than by a plane flag; and one aggregate gate proves the closure corpus and the booted-image corpus are the same set in both directions. The cutover exposed two genuine reproducibility defects in the CP13/CP14 closure builder — both invisible while only the closure gates, which compare a closure against itself, exercised it — and one gap in CP14's own scenario modelling. All three are fixed and verified by byte comparison against the legacy path.
+CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that boot a seL4 QEMU image now have a frozen test-run record declaring their execution-only inputs; 36 of 49 gates build their image by closure identity rather than by a plane flag; and one aggregate gate proves the closure corpus and the booted-image corpus are the same set in both directions. The cutover exposed three genuine reproducibility defects in the CP13/CP14 closure builder — all invisible while only the closure gates, which compare a closure against itself, exercised it — and one gap in CP14's own scenario modelling. All are fixed and verified by byte comparison against the legacy path.
 
 ## Changes
 
@@ -30,6 +31,11 @@ CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that
 | `sel4-qos-death` scenario closure | `build-sel4.py` listed the qos variant in `STREAM_DEATH_VARIANTS`, so its publisher was compiled to exit mid-stream. CP14 converted that for the stream and fault planes but missed qos, whose closure declared every implementation `default` |
 | `sel4_capability_layout_check` routed through CP14's `NegativeBuildCase` records | It selected each mutated root with an ambient `SLIME_B40_MUTATION` and rebuilt into `build/slime-sel4-boot.elf`, the path every other seL4 gate boots — requiring a rebuild-to-clean whose interruption would leave a mutated root where unrelated gates boot it |
 | Eight plane flags deleted: io-block, io-driver-authority, io-link, io-network, io-queue, private-memory, reclamation, saturation | Reachable from no `just` target and no checker after migration. A build flag nobody invokes is a second way to produce an image no gate verifies |
+| Three further flags deleted: fault-plane, traffic-plane, stress-plane | Orphaned by the second migration batch, by the same rule |
+| `closure_image.build` removes a superseded build directory instead of building over it | The builder refuses a non-empty output, which is what stops a stale artifact being reported as this build's result — so reaching the rebuild path means nothing there may survive. Six gates failed on exactly this after a Justfile edit moved every closure identity |
+| `sel4-boot-selector` closure over `sel4-channel` | CP14 declared the role but no closure carried it, because the legacy variant named the undrivable `sel4` graph. A selector root embeds no generation, so its base composition supplies only build inputs and can be any derived composition |
+| The scenario byte arm digests each build's components immediately after that build | It globbed under the build output, which the reproducibility fix emptied of components; pointed at the canonical directory it then read one build's ELF as another's, because the three builds share that directory |
+| An attempt to key the component target directory per build profile, reverted | CP3 established the directory name reaches the shipped ELF's symbols, so per-profile directories move *every* component's bytes and make a scenario appear to change components no profile names. Observed directly: the arm failed with "fabric-intruder changed although no profile names it" |
 
 ## Regression guards
 
@@ -43,7 +49,7 @@ CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that
 |---|---|---|
 | A closure build equals the legacy build of the same composition | `sel4-call` generation `8d1efed96a441fd1` from both paths after the two fixes, having differed as `8d1efed96a441fd1` vs `0c2d7be211f482a3` before | Direct |
 | The output-path defect was real | `./build/closure/sel4-call/cargo/components/aarch...` found at six offsets inside `generation.bin`, in `core::panic::Location` strings | Direct |
-| 36 gates pass from closure-built images | Booted and observed: call (47 markers, 10 chains), stream (57 frozen markers), qos (14 markers, 9 chains, including peer-dead retirement), loan, spawn, crossing, directory, operation, sample, supervision, visibility, traffic, boot, input, fault, clock-authority, wait-set, private-memory, lifecycle-restart, powerbox, saturation, scheduling-class, all five IO planes, storage, store, filesystem, replay, robot-runtime, transfer, reclamation | Direct |
+| 41 gates pass from closure-built images | Booted and observed: call (47 markers, 10 chains), stream (57 frozen markers), qos (14 markers, 9 chains, including peer-dead retirement), loan, spawn, crossing, directory, operation, sample, supervision, visibility, traffic, boot, input, fault, clock-authority, wait-set, private-memory, lifecycle-restart, powerbox, saturation, scheduling-class, all five IO planes, storage, store, filesystem, replay, robot-runtime, transfer, reclamation, demo, stress, the boot-layout composer over all 31 plane layouts, the fabric aggregate's four boots (139 + 140 semantically identical records), and the aarch64 arms of generation and rollback | Direct |
 | The B40 audit still refuses every mutation | `just sel4_capability_layout_check`: all 6 refused through typed negative cases; unmutated graph reached its supervisor terminal | Direct |
 | Migration broke no unmigrated gate | `just sel4_gate_control_check` (45 gates, 1748 mutations), `just sel4_boot_layout_check` (31 layouts), `sel4_fabric_aggregate_check`, `sel4_component_graph_check`, `sel4_device_check` | Direct |
 | Contracts and hosts still hold | `contracts_check`, `system_spec_check`, `system_composition_closure_check`, `system_image_builder_check`, `system_image_closure_check`, `system_test_run_check`, `system_image_closure_aggregate_check`, `test_host`, `ruff`, `devlog_check` | Direct |
@@ -60,7 +66,8 @@ CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that
 
 ## Open risks and follow-ups
 
-- [ ] 13 gates remain on plane flags: the boot-layout composer, fabric aggregate, component-graph, device, demo, matrix, c-runtime, stress, generation, rollback, recovery, and boot-selection planes, and the root-boot aggregate. `VARIANT_MANIFESTS`, `VARIANT_TARGET_DIRS`, `VARIANT_IMAGES`, `VARIANT_GENERATION_DELTAS`, and the identity manifest's `variant` authority survive because those gates call them.
+- [ ] 6 gates remain on plane flags, each blocked on an input CP15 cannot supply: the component-graph and device gates boot the `sel4` composition's image, which admits an external product Slisp with no committed identity; matrix and c-runtime are CP12's hand-authored residuals; boot-selection reads a per-arm `boot_bundle_identity` that is test-run data rather than a build key; and the root-boot aggregate has no plane of its own. `VARIANT_MANIFESTS`, `VARIANT_TARGET_DIRS`, `VARIANT_IMAGES`, `VARIANT_GENERATION_DELTAS`, and the identity manifest's `variant` authority survive because those gates call them.
+- [ ] Four gates are declared dual-path with named reasons: the boot-layout composer (29 of 31 planes have closures), the demo gate (its boot-selection and wrong-target arms), and the generation and rollback gates (their riscv64 arms; the closures name platform `qemu-arm-virt`).
 - [ ] The 18 legacy-only `SLIME_*` knobs are enumerated and may only shrink; each should disappear with its last caller.
 - [ ] CP15's two-clean-corpus-build check, the source guard against hard-coded checker image paths, and the SDK publication clause are not started.
 - [ ] The gates consume their test-run records only as a freeze; making the records the execution input is the remaining half of CP14's fifth deliverable in practice.
