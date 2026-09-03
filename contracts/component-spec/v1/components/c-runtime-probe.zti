@@ -6,9 +6,9 @@
   owner = "root";
   purpose = "A freestanding C executable proving the Slime component ABI is callable from C: writes to the console endpoint and exits via the lifecycle service.";
   implementation = {
-    provider = "undeclared";
-    binary = "";
-    contentHash = "";
+    provider = "external";
+    binary = "c-runtime-probe-external";
+    contentHash = "bc4b0f96fa16800e9bab5b8b10a0d03ad2e59bd6a83baed69acfeaa281a4ecca";
   };
   provides = [];
   requires = [];

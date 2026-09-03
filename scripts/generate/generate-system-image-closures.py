@@ -162,6 +162,15 @@ ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sel4-boot-selector": ("sel4-channel", "boot-selector", ()),
 }
 
+# Ordinary compositions whose default `embedded-generation` root still needs a
+# declared root parameter. `sel4` is the one interactive plane: its console
+# component `requires: input`, and only the emulated QEMU keyboard feed
+# supplies that capability's bytes, which the legacy `GRAPH_VARIANT` build set
+# unconditionally rather than as a composition-scoped parameter.
+ROOT_PARAMETERS: dict[str, tuple[str, ...]] = {
+    "sel4": ("qemuKeyboard",),
+}
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"system image closure generation: {message}")
@@ -186,9 +195,9 @@ def implementation_path(spec: dict) -> tuple[str, str]:
     """Where a component's implementation lives, and how it is identified.
 
     A `workspace` provider is identified by its crate tree, which is what a
-    rebuild reads. An `external` provider is identified by the ELF the
-    component spec already pins by content hash. An `undeclared` provider has
-    no implementation to name, so a composition admitting one gets no closure.
+    rebuild reads. An `external` provider is identified by the committed ELF
+    the component spec pins by content hash. An `undeclared` provider has no
+    implementation to name, so a composition admitting one gets no closure.
     """
     from component_paths import crate_path
 
@@ -196,6 +205,16 @@ def implementation_path(spec: dict) -> tuple[str, str]:
     if provider == CONTRACT.PROVIDER_WORKSPACE:
         crate = crate_path(spec["implementation"]["binary"])
         return str(crate.relative_to(ROOT)), "tree"
+    if provider == CONTRACT.PROVIDER_EXTERNAL:
+        binary = spec["implementation"]["binary"]
+        artifacts = {
+            "slisp-external": "slisp.elf",
+            "c-runtime-probe-external": "c-runtime-probe.elf",
+        }
+        name = artifacts.get(binary)
+        if name is None:
+            raise LookupError(provider)
+        return f"contracts/system-image-closure/v1/inputs/components/{name}", "file"
     raise LookupError(provider)
 
 
@@ -326,7 +345,9 @@ def outputs() -> dict[Path, str]:
     for name in sorted(DERIVED_GENERATION_FIXTURES):
         if name in EXCLUDED:
             continue
-        closure = closure_for(name, specs, components)
+        closure = closure_for(
+            name, specs, components, root_parameters=ROOT_PARAMETERS.get(name, ())
+        )
         if closure is None:
             continue
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"

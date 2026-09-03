@@ -1,13 +1,35 @@
 {
   formatVersion = 1;
-  name = "sel4-reclamation";
+  name = "sel4";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-reclamation.zti";
+    path = "contracts/system-spec/v1/systems/sel4.zti";
     kind = "file";
-    identity = "50dea6c229f3aadf93b499116b8a348a08202e7851de09b8458292decb1e4f7f";
+    identity = "dca5b9e229d6d455026843bb3de1a66dbf231091c9f7cfb0a52c249142fb608f";
   };
-  systemIdentity = "9a3f828e408d5c7111a8d4e9c6304cf9664e208996738d6b3bfd61da4b946b4a";
+  systemIdentity = "e80f03105df572ef34426e9f4f06c9db4f58fc9f713c771b5e8cffb897d18a8e";
   implementations = [
+    {
+      component = "console";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/console";
+        kind = "tree";
+        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
+      };
+      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
+      buildProfile = "default";
+    };
+    {
+      component = "echo-agent";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/echo-agent";
+        kind = "tree";
+        identity = "dcc5d6f0ee098ab18b8a273abb8e2cf1dc2fd22e1cfb0710b00ed5ce469acfb1";
+      };
+      identity = "9dd589b3b6cb995c9aabdc9206a40d6e0f22d5f19ec1258090d3edf38ee7ab4f";
+      buildProfile = "default";
+    };
     {
       component = "init";
       provider = "workspace";
@@ -20,25 +42,36 @@
       buildProfile = "default";
     };
     {
-      component = "reclamation-fault";
-      provider = "workspace";
+      component = "slisp";
+      provider = "external";
       artifact = {
-        path = "components/testkit/reclamation-fault";
-        kind = "tree";
-        identity = "6c0dc841ebbd3c578d5431ac953370b961b023dbe3c97ea0ca602b8021171502";
+        path = "contracts/system-image-closure/v1/inputs/components/slisp.elf";
+        kind = "file";
+        identity = "6beed78ca825bea848c1b42a006867c000918255dc5dbc3f6e781bbcba91a1f6";
       };
-      identity = "1705cbd4a33511238a5bc4aa3fc6ded7c56f284d0b21baa2b4381f913e4d71c2";
+      identity = "e842edb19549b52e74f7f3919b85f4950e6def3709270bf255dc08ab9189b5ba";
       buildProfile = "default";
     };
     {
-      component = "supervision-child";
+      component = "spawn-service";
       provider = "workspace";
       artifact = {
-        path = "components/testkit/supervision-child";
+        path = "components/services/spawn-service";
         kind = "tree";
-        identity = "e932e4188967d12d88d752983710633e9e182cc8a5aa376e6c88828936c4e0c8";
+        identity = "b125e025d6bd12d32f0ca33b460b9681e46c87352658d292514beb135564a14f";
       };
-      identity = "213c7dd13deb5cf65430dfed4aa36ff9856f9211b76a7d1fdaa0f02ff74abf7c";
+      identity = "fe3c4c014d15d585582384f186e11f9396001f0c2bd97f9793612ff4ae9a5513";
+      buildProfile = "default";
+    };
+    {
+      component = "sysinfo";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/sysinfo";
+        kind = "tree";
+        identity = "dbc05730c12bc11ec2aab8eb22e95efa37645a2ad21fa884eb24cd61051a8c3f";
+      };
+      identity = "3e003d274ba105610d887b52ba85f8fcdd10197447ef8766a4b9c3bd03f4ff61";
       buildProfile = "default";
     };
   ];
@@ -65,7 +98,9 @@
       kind = "tree";
       identity = "611933442a6a268e20828bed99384823dd2c939da6c46d96de63dce7909d48fc";
     };
-    parameters = [];
+    parameters = [
+      "qemuKeyboard";
+    ];
   };
   loader = {
     role = "kernel-loader";
