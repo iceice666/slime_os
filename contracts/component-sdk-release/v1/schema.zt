@@ -240,7 +240,7 @@ maxVersionBytes :: Int = 32;
 maxFiles :: Int = 32;
 maxCrates :: Int = 16;
 maxContracts :: Int = 64;
-maxProfiles :: Int = 4;
+maxProfiles :: Int = 8;
 maxRows :: Int = 16;
 maxEvidence :: Int = 12;
 

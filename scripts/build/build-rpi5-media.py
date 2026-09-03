@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 import arm64_image  # noqa: E402
-from arm64_image import ELF_MAGIC, Arm64ImageError, Segment, elf_entry  # noqa: E402,F401
+from arm64_image import ELF_MAGIC, Arm64ImageError, Segment, elf_entry  # noqa: E402
 from typing import NoReturn
 
 ROOT = Path(__file__).resolve().parents[2]

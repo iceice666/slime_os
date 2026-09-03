@@ -215,6 +215,14 @@ def run(command: list[str]) -> str:
     return completed.stdout
 
 
+def display_path(path: Path) -> str:
+    """Repository-relative when possible, absolute otherwise."""
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(ROOT))
+    except ValueError:
+        return str(resolved)
+
 def build_binary(prefix: str, *, output_name: str, qemu_variant: bool) -> tuple[Path, Path, int, str]:
     """Assemble and flatten the probe. Returns (binary, elf, entry, toolchain)."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -249,7 +257,9 @@ def build_binary(prefix: str, *, output_name: str, qemu_variant: bool) -> tuple[
         fail("could not read the ELF entry point")
     entry = int(match.group(1), 16)
 
-    toolchain = run([f"{prefix}gcc", "--version"]).splitlines()[0].strip()
+    compiler = Path(shutil.which(f"{prefix}gcc") or f"{prefix}gcc").resolve()
+    version = run([str(compiler), "--version"]).splitlines()[0].strip()
+    toolchain = f"{compiler}: {version}"
     return binary, elf, entry, toolchain
 
 
@@ -368,13 +378,14 @@ def build_sel4(
     """
     if not image.is_file() or not image_identity_path.is_file():
         fail(
-            f"the seL4 image {image.relative_to(ROOT)} or its identity is missing; run "
-            "`python3 scripts/build/build-sel4.py --platform ns02201-h1v1 --sample-plane` first"
+            f"the seL4 image {display_path(image)} or its identity "
+            f"{display_path(image_identity_path)} is missing; run `python3 "
+            "scripts/build/build-sel4.py --platform ns02201-h1v1 --sample-plane` first"
         )
     try:
         image_identity = json.loads(image_identity_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {image_identity_path.relative_to(ROOT)}: {error}")
+        fail(f"cannot parse {display_path(image_identity_path)}: {error}")
     if image_identity.get("target_profile") != SEL4_TARGET_PROFILE:
         fail("the packaged seL4 image identity names the wrong target profile")
     if image_identity.get("platform") != SEL4_PLATFORM:
@@ -401,6 +412,8 @@ def build_sel4(
     end = base + len(flat)
     if not base <= entry < end:
         fail(f"entry {entry:#x} lies outside the loaded span {base:#x}..{end:#x}")
+    if base % 0x20_0000 != 0:
+        fail(f"seL4 image base {base:#x} is not 2 MiB-aligned for the arm64 booti placement rule")
 
     memory_base = hex_pin(profile, "sel4_memory_base")
     memory_end = memory_base + hex_pin(profile, "sel4_memory_size")
@@ -445,7 +458,7 @@ def build_sel4(
         "image_size": f"{len(payload):#x}",
         "payload_bytes": len(payload),
         "payload_sha256": hashlib.sha256(payload).hexdigest(),
-        "elf_path": str(image.relative_to(ROOT)),
+        "elf_path": display_path(image),
         "elf_sha256": image_record["sha256"],
         "generation_identity": generation["identity"],
         "generation_sha256": generation.get("sha256"),
@@ -454,9 +467,9 @@ def build_sel4(
     identity_path = OUT_DIR / f"{output_stem}.identity.json"
     identity_path.write_text(json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    print(f"sel4:     {binary.relative_to(ROOT)} ({len(payload)} bytes)")
-    print(f"from:     {image.relative_to(ROOT)} (variant {image_identity.get('variant')})")
-    print(f"identity: {identity_path.relative_to(ROOT)}")
+    print(f"sel4:     {display_path(binary)} ({len(payload)} bytes)")
+    print(f"from:     {display_path(image)} (variant {image_identity.get('variant')})")
+    print(f"identity: {display_path(identity_path)}")
     print(f"load:     {base:#x} (link base, header text_offset, and fatload address); entry {entry:#x}")
     print()
     print("This wrote no block device. To stage the image for a board run:")
@@ -486,7 +499,7 @@ def main() -> None:
     profile = load_profile()
     if arguments.sel4:
         image = arguments.image.resolve()
-        identity = arguments.identity or image.with_suffix(".identity.json")
+        identity = (arguments.identity or image.with_suffix(".identity.json")).resolve()
         build_sel4(
             profile, image=image, image_identity_path=identity, output_stem=arguments.output_stem
         )

@@ -120,6 +120,8 @@ class Segment:
 def read_load_segments(path: Path) -> list[Segment]:
     """Every PT_LOAD segment of a little-endian AArch64 ELF64, by physical address."""
     data = path.read_bytes()
+    if len(data) < 64:
+        raise Arm64ImageError(f"{path} is shorter than an ELF64 header")
     if data[:4] != ELF_MAGIC:
         raise Arm64ImageError(f"{path} is not an ELF file")
     if data[4] != 2 or data[5] != 1:
@@ -129,15 +131,23 @@ def read_load_segments(path: Path) -> list[Segment]:
         raise Arm64ImageError(f"{path} is not an AArch64 ELF (e_machine={e_machine})")
     (e_phoff,) = struct.unpack_from("<Q", data, 32)
     e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
+    if e_phentsize < 56 or e_phoff + e_phnum * e_phentsize > len(data):
+        raise Arm64ImageError(f"{path} has a truncated ELF program-header table")
     segments = []
     for index in range(e_phnum):
-        base = e_phoff + index * e_phentsize
-        (p_type,) = struct.unpack_from("<I", data, base)
+        header = e_phoff + index * e_phentsize
+        (p_type,) = struct.unpack_from("<I", data, header)
         if p_type != PT_LOAD:
             continue
         p_offset, _p_vaddr, p_paddr, p_filesz, p_memsz = struct.unpack_from(
-            "<QQQQQ", data, base + 8
+            "<QQQQQ", data, header + 8
         )
+        if p_filesz > p_memsz:
+            raise Arm64ImageError(
+                f"{path} PT_LOAD {index} has file size {p_filesz:#x} larger than memory size {p_memsz:#x}"
+            )
+        if p_offset > len(data) or p_filesz > len(data) - p_offset:
+            raise Arm64ImageError(f"{path} PT_LOAD {index} extends past the end of the file")
         segments.append(Segment(p_offset, p_paddr, p_filesz, p_memsz))
     if not segments:
         raise Arm64ImageError(f"{path} declares no PT_LOAD segment")
@@ -145,7 +155,10 @@ def read_load_segments(path: Path) -> list[Segment]:
 
 
 def elf_entry(path: Path) -> int:
-    return struct.unpack_from("<Q", path.read_bytes(), 24)[0]
+    data = path.read_bytes()
+    if len(data) < 64 or data[:4] != ELF_MAGIC or data[4] != 2 or data[5] != 1:
+        raise Arm64ImageError(f"{path} is not a complete little-endian ELF64 file")
+    return struct.unpack_from("<Q", data, 24)[0]
 
 
 def flatten(path: Path, segments: list[Segment]) -> tuple[bytearray, int]:
