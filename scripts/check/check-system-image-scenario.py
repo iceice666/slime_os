@@ -566,39 +566,72 @@ def check_profile_bytes(name: str) -> tuple[str, str]:
             fail(f"{closure_name}: build failed:\n{tail}")
         return output
 
-    def elf(output: Path, executable: str) -> str:
-        hits = sorted(output.glob(f"cargo/components/**/release/{executable}.elf"))
-        if not hits:
-            fail(f"{output}: built no {executable}.elf")
-        return hashlib.sha256(hits[0].read_bytes()).hexdigest()
+    def digests(closure_name: str, output: Path, executables: list[str]) -> dict[str, str]:
+        """Digest each named component ELF from the build that just ran.
+
+        Components build into the repository's canonical component target
+        directory rather than under `output`, because Cargo records the target
+        directory in panic-location strings and only the canonical path is
+        normalized by `--remap-path-prefix`.
+
+        That directory is keyed by composition, not by build profile: CP3
+        established the name reaches the shipped ELF's symbols, so a
+        per-profile directory would move every component's bytes and make a
+        scenario appear to change components it does not name. Two closures
+        over one composition therefore share the directory and overwrite each
+        other, which is why this is called immediately after each build rather
+        than once at the end.
+        """
+        resolved = resolve_closure(CLOSURE_ROOT / f"{closure_name}.zti")
+        result = json.loads((output / "build-result.json").read_text(encoding="utf-8"))
+        directory = (
+            ROOT
+            / "target"
+            / "components"
+            / result["targetProfile"]
+            / f"{resolved.system.name}-{resolved.manifest['generation']}"
+        )
+        found: dict[str, str] = {}
+        for executable in executables:
+            hits = sorted(directory.glob(f"**/release/{executable}.elf"))
+            if not hits:
+                fail(f"{closure_name}: built no {executable}.elf under {directory}")
+            found[executable] = hashlib.sha256(hits[0].read_bytes()).hexdigest()
+        return found
+
+    # Which components to digest: the scenario's own component, plus up to
+    # three the scenario does not name, to prove the knob did not leak.
+    profiles = resolve_closure(CLOSURE_ROOT / f"{name}.zti").build_profiles
+    untouched = sorted(
+        entry
+        for entry, profile in profiles.items()
+        if profile == CONTRACT.BUILD_PROFILE_DEFAULT
+    )[:3]
+    wanted = [component, *untouched]
 
     with tempfile.TemporaryDirectory(prefix=f"slime-profile-bytes-{name}-") as scope:
         root = Path(scope)
+        # Digested immediately after each build: the three builds share one
+        # component target directory, so a later build overwrites an earlier
+        # one's ELFs.
         base = build(base_name, root / "base")
+        base_digests = digests(base_name, base, wanted)
         scenario = build(name, root / "scenario")
+        scenario_digests = digests(name, scenario, wanted)
         again = build(name, root / "again")
+        again_digests = digests(name, again, wanted)
 
-        base_elf, scenario_elf, again_elf = (
-            elf(base, component),
-            elf(scenario, component),
-            elf(again, component),
-        )
+        base_elf = base_digests[component]
+        scenario_elf = scenario_digests[component]
         if base_elf == scenario_elf:
             fail(f"{name}: the {component} profile changed no ELF byte")
-        if scenario_elf != again_elf:
+        if scenario_elf != again_digests[component]:
             fail(f"{name}: the scenario {component} ELF is not reproducible")
 
         # A component the profile does not name is byte-identical, so the knob
         # did not leak across the graph.
-        untouched = sorted(
-            entry
-            for entry, profile in resolve_closure(
-                CLOSURE_ROOT / f"{name}.zti"
-            ).build_profiles.items()
-            if profile == CONTRACT.BUILD_PROFILE_DEFAULT
-        )
-        for entry in untouched[:3]:
-            if elf(base, entry) != elf(scenario, entry):
+        for entry in untouched:
+            if base_digests[entry] != scenario_digests[entry]:
                 fail(f"{name}: {entry} changed although no profile names it")
 
         left = json.loads((base / "build-result.json").read_text(encoding="utf-8"))

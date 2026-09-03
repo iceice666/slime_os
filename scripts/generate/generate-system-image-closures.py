@@ -143,6 +143,12 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
 ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
     "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
+    # CP14 declared the `boot-selector` role but no closure carried it. A
+    # selector root embeds no generation and reads one from disk, so its base
+    # composition supplies only the build inputs, never an embedded payload —
+    # which is why it can be a derived composition even though the legacy
+    # boot-selection variant named the undrivable `sel4` graph.
+    "sel4-boot-selector": ("sel4-channel", "boot-selector", ()),
 }
 
 

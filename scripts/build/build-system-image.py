@@ -268,6 +268,14 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
             # component's bytes whenever any closure input changed. Passing the
             # composition name makes a closure build byte-identical to the
             # legacy build of the same composition.
+            # The composition name, deliberately not keyed by build profile.
+            # CP3 established that this name reaches the shipped ELF's symbols,
+            # so a per-profile directory would move every component's bytes
+            # and make a scenario look like it changed all of them. Two
+            # closures over one composition therefore share this directory and
+            # overwrite each other, which is what the legacy path did too; a
+            # consumer comparing their bytes must capture each build's digests
+            # before the next build runs.
             closure_target_name=resolved.system.name,
         )
         generation = generation_dir / "generation.bin"
