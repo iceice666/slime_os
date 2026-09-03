@@ -443,6 +443,8 @@ def check_migration_is_monotone() -> tuple[int, int]:
     DUAL_PATH = {
         "check-sel4-boot-layout.py": "composes all 31 planes; 29 have closures and 2 do not",
         "check-sel4-demo-plane.py": "its boot-selection arm has no closure and its wrong-target arm needs a scrubbed input",
+        "check-sel4-generation-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
+        "check-sel4-rollback-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
     }
     migrated, legacy, dual = [], [], []
     for path in sorted(CHECK_ROOT.glob("check-sel4-*.py")):
