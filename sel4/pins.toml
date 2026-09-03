@@ -8,7 +8,8 @@ commit = "f25b760aad33b03ef631fc67a5a16edd72e37ddb"
 [rust_sel4]
 # Forked from seL4/rust-sel4 at v5.0.0 (d441a880938209f661201704dfbee7b91c5aa905)
 # for the two physical platforms Slime boots, one x86-64 correctness fix, and
-# one x86-64 capability the safe wrapper did not expose.
+# one x86-64 capability the safe wrapper did not expose. The pinned commit is
+# the fork's `main`, where that work is merged; it is not a topic branch.
 #
 # The fork adds bcm2712's UART10 loader path and CV1800B's single-hart path:
 # the Duo's OpenSBI 0.9 exposes no HSM extension, so the generic RISC-V loader
@@ -19,7 +20,7 @@ commit = "f25b760aad33b03ef631fc67a5a16edd72e37ddb"
 # port authority cannot use it.
 repository = "https://github.com/iceice666/rust-sel4.git"
 release = "v5.0.0-slime-physical-platforms"
-commit = "6d3ee82ecd6b1c1e08d4b100253630a4ff006ebe"
+commit = "14d98403c1dd95fd97109919e13466f0ecb37c01"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
