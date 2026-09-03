@@ -211,21 +211,22 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
             faults += 1
 
         identity = record["imageClosureIdentity"]
+        checker = next(
+            path
+            for path in GENERATOR_MODULE.plane_checkers()
+            if GENERATOR_MODULE.run_name(path) == name
+        )
         if identity:
             if identity not in closures:
                 fail(f"{name}: names closure identity {identity} that resolves to no closure")
-            if closures[identity] != name:
+            expected_closure = GENERATOR_MODULE.closure_name_for(checker, name)
+            if closures[identity] != expected_closure:
                 fail(
-                    f"{name}: names the closure for {closures[identity]!r}, so a run would "
-                    "exercise another plane's image"
+                    f"{name}: names the closure for {closures[identity]!r}, but its own "
+                    f"checker declares closure {expected_closure!r}"
                 )
             resolved += 1
         else:
-            checker = next(
-                path
-                for path in GENERATOR_MODULE.plane_checkers()
-                if GENERATOR_MODULE.run_name(path) == name
-            )
             image = GENERATOR_MODULE.booted_image(checker)
             if image not in exempt_images:
                 fail(

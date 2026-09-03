@@ -101,6 +101,21 @@ def booted_image(path: _Path) -> str:
     return found[0]
 
 
+def closure_name_for(path: _Path, name: str) -> str:
+    """The closure this checker's own source declares, or its run name.
+
+    Most checkers' closure matches their run name (`sel4-channel` builds the
+    `sel4-channel` closure). A checker whose plane image predates the closure
+    naming convention — `check-sel4-component-graph.py` and
+    `check-sel4-device-plane.py` both build the `sel4` closure — declares a
+    `CLOSURE = "..."` constant that names it explicitly; reading that instead
+    of guessing from the run name is what keeps this generic rather than a
+    second hand-maintained mapping beside the aggregate gate's.
+    """
+    match = re.search(r'^CLOSURE = "([a-z0-9-]+)"', path.read_text(encoding="utf-8"), re.MULTILINE)
+    return match.group(1) if match is not None else name
+
+
 def closure_identity_for(name: str) -> str:
     """The closure this run exercises, or the empty string when none exists.
 
@@ -264,7 +279,7 @@ def outputs() -> dict[_Path, str]:
     for path in plane_checkers():
         name = run_name(path)
         emitted[RUN_ROOT / f"{name}.zti"] = render(
-            name, closure_identity_for(name), extract(path)
+            name, closure_identity_for(closure_name_for(path, name)), extract(path)
         )
     return emitted
 
