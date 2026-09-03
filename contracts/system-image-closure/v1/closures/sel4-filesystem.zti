@@ -149,7 +149,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "fac6390bafe8ba62470f68fd1a8a0e4404e88b23456229e46040e7e4a4ecc3f4";
+        identity = "70ce1f3379aee88f77587132d4b8afcb9da250fb71e3dde786903e785922c1fe";
       };
     };
     {

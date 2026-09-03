@@ -92,7 +92,6 @@ EXCLUDED = {"reference"}
 #
 # The numbers are the ones that table declares, so each scenario's generation
 # identity is unchanged by becoming closure data. `matrix-unsatisfiable` has no
-# entry because its base composition (`sel4-matrix`) is not derived yet.
 # Each entry is `(base composition, build parameters, {component: profile})`.
 # The profiles are the executable-changing scenarios: `build-sel4.py` set the
 # same knobs per variant from `FAULT_VARIANT`/`STREAM_DEATH_VARIANTS`, so the
@@ -125,6 +124,18 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
     # `STREAM_DEATH_VARIANTS`; as closure data it is a scenario over its own
     # composition rather than a property of the base graph, because the base
     # `sel4-qos` closure must stay the plane without a dying publisher.
+    # C8.12's negative control: one participant's reliability flipped so the
+    # pair becomes incompatible and admission must refuse the graph. That one
+    # field is the whole test, which is why it is a declared parameter rather
+    # than a second copy of the matrix composition.
+    "sel4-matrix-unsatisfiable": (
+        "sel4-matrix",
+        {
+            "generationNumber": "35",
+            "fabricQosOverride": "telemetry-alt:fabric-publisher-b:reliability:bestEffort",
+        },
+        {},
+    ),
     "sel4-qos-death": (
         "sel4-qos",
         {},

@@ -1,22 +1,99 @@
 {
   formatVersion = 1;
-  name = "sel4-channel";
+  name = "sel4-matrix-unsatisfiable";
   systemSpec = {
-    path = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    path = "contracts/system-spec/v1/systems/sel4-matrix.zti";
     kind = "file";
-    identity = "092ece2252c92914f707d38dedcc58bd4f5250ef506d132f8d8717ad67cc60fe";
+    identity = "4c1faedd5da76cb1ddbb96eff7b12b0ac9511af38c58aec46ea53d1403463e8d";
   };
-  systemIdentity = "9c98f48ade19b668fdac280547a1affefc1a7306cea1bcfa286a4b1b99eb9327";
+  systemIdentity = "0a2d9e1e356420c142b539d69e5b9f71b20fb020dd2a5de5149d3b2cc266b33a";
   implementations = [
     {
-      component = "console";
+      component = "fabric-observer";
       provider = "workspace";
       artifact = {
-        path = "components/system/console";
+        path = "components/testkit/fabric-observer";
         kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
+        identity = "15bd47355975faffa5d0362cf80510f4818c264db2894cc8c230081625ab22dc";
       };
-      identity = "d703470ed19bd21a1723f553221b4da1c982d5c40096ced3bea48f488c76a875";
+      identity = "08d33cf0f2666eace64905d42e81ce75ee1ff4d89818d8744e2281b995d143bf";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-probe";
+        kind = "tree";
+        identity = "e79ae574a947038a54422ba9d26c1ac34d98c15dbbe29d8bd2f07a51f98f0bff";
+      };
+      identity = "f415dc69a8be56779a28c5bd073ae5a38893c3ee622b99e85e4fb3a40774cd69";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-proxy";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-proxy";
+        kind = "tree";
+        identity = "4b70dd90f3d028df74866c39b7e3321ed01c8a397d4034c17557483f9b6d0ce7";
+      };
+      identity = "3efaf64e11c6bb15ff1f00995b800f0326b4790ac1f83a8a185aa63ab4c47890";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-publisher";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-publisher";
+        kind = "tree";
+        identity = "4c7dfd82add7aa67859db4f8c0f235d672926f9df67305ab0209e667d6d48fb6";
+      };
+      identity = "1d9c92fe0221afb391cedc825557bf8b6681004f650359c3ad13cbdd1d8acf37";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-publisher-b";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-publisher-b";
+        kind = "tree";
+        identity = "90589dadf1c31e9e97bdc44757c8f31aa6fc1a85ed9bdfd395f333b29216ddfa";
+      };
+      identity = "a13841224e6faecf200ee849ec491990d0fe92ed5d76a4076383c0a949187cf8";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-service";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/fabric-service";
+        kind = "tree";
+        identity = "8a0ccfdd939bee0edbcaed163373255b3825bd899f455fa9eb673f8fb1455ac8";
+      };
+      identity = "c825f80940562ad7f0231f9f0db5855b7b006b48d2bf1edb1a2fe179c4d42732";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-subscriber";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-subscriber";
+        kind = "tree";
+        identity = "46ab5dfcaf2ed8de6bbf935d09e9f97bc93b6e97f20967c50b5cda82e03a651a";
+      };
+      identity = "dcf6f8e85f20c16320edffbe4b34b9df9f938cabfe9fd2e0c721381920a409bf";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-subscriber-b";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-subscriber-b";
+        kind = "tree";
+        identity = "394269082d6e1d76dd8fd8ffe203ae303bd3084210a993a44148d39b37aaaf35";
+      };
+      identity = "e68f1e3d4364d93a160f941335a5ac5d3813a38943c905f03a038cf8c284a6de";
       buildProfile = "default";
     };
     {
@@ -187,7 +264,16 @@
       };
     };
   ];
-  buildParameters = [];
+  buildParameters = [
+    {
+      name = "fabricQosOverride";
+      value = "telemetry-alt:fabric-publisher-b:reliability:bestEffort";
+    };
+    {
+      name = "generationNumber";
+      value = "35";
+    };
+  ];
   expectedOutputs = [
     "generation";
     "root";

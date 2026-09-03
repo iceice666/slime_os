@@ -63,11 +63,9 @@ IMAGES_WITHOUT_CLOSURE = {
     # artifact, and the graph image is built from the `sel4` composition.
     "slime-sel4-graph.elf": "built from the sel4 composition, which admits an external product Slisp",
     "slime-sel4-slisp.elf": "admits the external product Slisp with no committed artifact",
-    # Compositions CP12 left hand-authored, so there is no system spec to
-    # resolve a closure against.
-    "slime-sel4-c-runtime.elf": "sel4-c-runtime is hand-authored: its C implementation has no committed content identity",
-    "slime-sel4-matrix.elf": "sel4-matrix is hand-authored: its fabric route names conflict with the reference graph",
-    "slime-sel4-matrix-unsatisfiable.elf": "a scenario over the hand-authored sel4-matrix composition",
+    # `sel4-c-runtime` derives its graph but its component's implementation
+    # provider is `undeclared`, so no closure can name its bytes.
+    "slime-sel4-c-runtime.elf": "its component's implementation provider is undeclared, so no closure names its bytes",
     # Root roles and platform images CP14 declared but whose host composition
     # still builds through the legacy path.
     "slime-sel4-boot-selection.elf": "the boot-selector root role is declared and gated but its host composition builds legacy",

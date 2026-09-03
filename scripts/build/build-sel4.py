@@ -1619,14 +1619,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--matrix-unsatisfiable-plane",
-        action="store_true",
-        help=(
-            "embed C8.12's negative arm: the matrix graph with one incompatible "
-            "QoS pair, which admission must refuse"
-        ),
-    )
-    parser.add_argument(
         "--boot-plane",
         action="store_true",
         help=(
@@ -1782,7 +1774,6 @@ def main() -> None:
             (OPERATION_VARIANT, arguments.operation_plane),
             (VISIBILITY_VARIANT, arguments.visibility_plane),
             (MATRIX_VARIANT, arguments.matrix_plane),
-            (MATRIX_UNSATISFIABLE_VARIANT, arguments.matrix_unsatisfiable_plane),
             (BOOT_VARIANT, arguments.boot_plane),
             (STORAGE_VARIANT, arguments.storage_plane),
             (STORE_VARIANT, arguments.store_plane),

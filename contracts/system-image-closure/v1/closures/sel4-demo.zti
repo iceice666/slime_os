@@ -60,7 +60,7 @@
         kind = "tree";
         identity = "90589dadf1c31e9e97bdc44757c8f31aa6fc1a85ed9bdfd395f333b29216ddfa";
       };
-      identity = "f54fd407bd85207bda8be378992f3c80e9deb70fdb823da414cd87556e96c829";
+      identity = "a13841224e6faecf200ee849ec491990d0fe92ed5d76a4076383c0a949187cf8";
       buildProfile = "default";
     };
     {
@@ -93,7 +93,7 @@
         kind = "tree";
         identity = "394269082d6e1d76dd8fd8ffe203ae303bd3084210a993a44148d39b37aaaf35";
       };
-      identity = "db90343030973d65e2df2736db97adcff7c103cecf3a1a4b79fb57751e8b8164";
+      identity = "e68f1e3d4364d93a160f941335a5ac5d3813a38943c905f03a038cf8c284a6de";
       buildProfile = "default";
     };
     {
@@ -248,7 +248,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "fac6390bafe8ba62470f68fd1a8a0e4404e88b23456229e46040e7e4a4ecc3f4";
+        identity = "70ce1f3379aee88f77587132d4b8afcb9da250fb71e3dde786903e785922c1fe";
       };
     };
     {
