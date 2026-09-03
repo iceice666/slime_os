@@ -7,12 +7,19 @@ commit = "f25b760aad33b03ef631fc67a5a16edd72e37ddb"
 
 [rust_sel4]
 # Forked from seL4/rust-sel4 at v5.0.0 (d441a880938209f661201704dfbee7b91c5aa905)
-# for the two physical platforms Slime boots. The fork adds bcm2712's UART10
-# loader path and CV1800B's single-hart path: the Duo's OpenSBI 0.9 exposes no
-# HSM extension, so the generic RISC-V loader would panic before printing.
+# for the two physical platforms Slime boots, one x86-64 correctness fix, and
+# one x86-64 capability the safe wrapper did not expose.
+#
+# The fork adds bcm2712's UART10 loader path and CV1800B's single-hart path:
+# the Duo's OpenSBI 0.9 exposes no HSM extension, so the generic RISC-V loader
+# would panic before printing. It corrects the x86-64 root-task entry's stack
+# alignment, which must leave Rust entered with the stack pointer plus 8
+# 16-byte aligned as the SysV ABI requires. And it declares the `IOPort`
+# capability type with its 8-bit accessors, without which a root task holding
+# port authority cannot use it.
 repository = "https://github.com/iceice666/rust-sel4.git"
 release = "v5.0.0-slime-physical-platforms"
-commit = "070c6a384a01ce0f6c60e081fddc8c40fb2a6132"
+commit = "6d3ee82ecd6b1c1e08d4b100253630a4ff006ebe"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
@@ -97,6 +104,17 @@ virtio_mmio_count = 8
 #    `FSGSBASE` in `CPUID.07h:EBX[0]` and halts with a diagnostic if it does
 #    not. `Nehalem` and earlier models do not implement it; `Haswell` is the
 #    first QEMU model that does, and the Framework's Ryzen AI 300 does too.
+#  * `cpu_features` are the exact model deltas the kernel's boot path forces,
+#    each one a boot-halt or refusal without it. `pdpe1gb` is required because
+#    the inherited x64 profile keeps `KernelHugePage` on and the kernel maps
+#    its own window with 1 GiB PDPT entries (`head.S`'s `huge_page_check`,
+#    then `map_kernel_window`); QEMU's `Haswell` model does not advertise it
+#    even though TCG implements it. Nothing here may name a feature TCG does
+#    not implement: `qemu_features_unavailable` records the reverse direction,
+#    the features this profile must *not* require, which is why the CMake
+#    profile turns `KernelSupportPCID` off.
+#  * `pcid` is the resulting kernel setting, pinned beside the emulator fact
+#    that forces it so the two cannot drift apart.
 #  * `interrupt_controller` and `lapic_mode` are what the installed kernel
 #    configuration reports (`KERNEL_IRQ_CONTROLLER`, `KERNEL_LAPIC_MODE`),
 #    not a Slime choice. `IRQ_PIC` is off, so the legacy 8259 pins are
@@ -108,6 +126,16 @@ virtio_mmio_count = 8
 #  * `virtio` records that this machine exposes no virtio-mmio window at all.
 #    Its virtio devices are PCI functions, and P6 does not enumerate PCI, so
 #    the root's bootstrap inventory finds nothing here by construction.
+#  * `firmware`/`bootloader` are P6.2's boot contract. P6.1 pinned no firmware
+#    because it never launched an emulator; a boot claim needs the exact UEFI
+#    firmware and the exact bootloader that supplies the Multiboot2 modules,
+#    since either one silently changing changes what booted. `firmware_vars`
+#    is the writable variable store, copied per boot: OVMF mutates it, so the
+#    pinned hash describes the pristine template rather than a boot's residue.
+#  * `grub_modules` is the exact bounded module set linked into `BOOTX64.EFI`.
+#    A standalone image with a fixed module list is what makes the boot
+#    reproducible: nothing is loaded from the medium at run time, so the
+#    bootloader cannot acquire behavior the identity manifest does not name.
 [qemu_pc99]
 platform = "pc99"
 sel4_arch = "x86_64"
@@ -124,6 +152,9 @@ qemu_version = "11.0.1"
 fsgs_base = "inst"
 fpu = "XSAVE"
 vtx = false
+pcid = false
+cpu_features = ["pdpe1gb"]
+qemu_features_unavailable = ["pcid", "invpcid"]
 interrupt_controller = "ioapic"
 lapic_mode = "XAPIC"
 irq_pic = false
@@ -132,6 +163,50 @@ timer_frequency_hz = 10000000
 serial = "com1-16550a-0x3f8"
 serial_baud = 115200
 virtio_mmio_count = 0
+efi_boot_file = "EFI/BOOT/BOOTX64.EFI"
+grub_config = "boot/grub/grub.cfg"
+kernel_module = "slime/kernel.elf"
+root_module = "slime/slime-root.elf"
+grub_modules = [
+    "part_gpt",
+    "part_msdos",
+    "fat",
+    "normal",
+    "multiboot2",
+    "configfile",
+    "serial",
+    "terminal",
+    "echo",
+    "search",
+    "search_fs_file",
+    "minicmd",
+    "boot",
+    "halt",
+    "reboot",
+]
+
+# P6.2's boot inputs: the two host artifacts that are not built from this
+# repository yet decide what a boot claim means. Both are provided by the
+# development shell as absolute store paths, for the same reason
+# `X86_64_COMPILER_PREFIX` is — the ambient `PATH` does not name one exact
+# firmware build or one exact GRUB build.
+#
+# `grub_modules_sha256` is an order-sensitive digest over the pinned module
+# list rather than a hash of the produced `BOOTX64.EFI`: `grub-mkimage` embeds
+# a build-time-derived prefix and its output is not byte-stable across GRUB
+# builds, while the module bytes it links, in the order it links them, are
+# exactly what determines the bootloader's behavior. `check-sel4-pins.py`
+# recomputes it and refuses drift, and `scripts/lib/pc99_media.py` recomputes
+# it again before assembling anything.
+[qemu_pc99_boot]
+firmware = "OVMF"
+firmware_release = "202605"
+firmware_code_sha256 = "1ca959a064594f9bb8932cb8a4a004cf7445617db6174976483699003e8a7fbe"
+firmware_vars_sha256 = "5d2ac383371b408398accee7ec27c8c09ea5b74a0de0ceea6513388b15be5d1e"
+bootloader = "GRUB"
+bootloader_version = "2.12"
+bootloader_format = "x86_64-efi"
+grub_modules_sha256 = "228596ecc55a1226784041f155e3275eb278516699caeecf4dae1489d542d4ad"
 
 # P4's physical target. Every value here is read from seL4's own platform
 # description or the board's firmware device tree, never asserted by Slime:
@@ -334,6 +409,6 @@ platform_info_sha256 = "1e386f61b9578985a7cdfff93e647cbfab0468ff88fbf339ff715619
 # `platform_gen.yaml`, and the install has no `support/` directory at all.
 # `check-sel4-pins.py` asserts that absence rather than skipping it.
 [observed_prefix_qemu_pc99]
-kernel_sha256 = "18e676b802e5edac2a969fa350754e9e7c26ede859beca73e876ecabb8a53a33"
-kernel_config_sha256 = "d18f277ed2b9ad9f9d4e1f4903dfac0197597c2068d5f2dfc558e89d7517be18"
+kernel_sha256 = "d92810ec8481e32f5bcc6d2c3f8dc9bc0f87e5811170ec8e27b06f7b1daf84ab"
+kernel_config_sha256 = "eb5cd161f5c698687e47280ce8ca60d2c7ab217aa6b02671b0e84becca3c4aff"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"

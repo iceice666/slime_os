@@ -72,6 +72,16 @@
           # `X86_64_COMPILER_PREFIX` is one exact store path rather than
           # whatever `gcc` the shell's `PATH` happens to resolve.
           x86CC = pkgs.pkgsCross.gnu64.stdenv.cc;
+          # P6.2's boot inputs. Neither is built from this repository, and both
+          # decide what "it booted" means, so each is named by absolute store
+          # path in `sel4/pins.toml` rather than resolved from `PATH`.
+          #
+          # `grub2_efi` is the EFI-format build: `grub-mkimage -O x86_64-efi`
+          # needs `lib/grub/x86_64-efi`, which the BIOS-format package does not
+          # install. The image is built standalone from a pinned module list,
+          # so nothing is loaded from the boot medium at run time.
+          ovmfFirmware = pkgs.OVMF.fd;
+          grubEfi = pkgs.grub2_efi;
           # The seL4 build drives host Python generators (bitfield, invocation,
           # hardware/DTS) through a bare `python3`.
           sel4Python = pkgs.python3.withPackages (ps: [
@@ -113,6 +123,11 @@
                 riscvCrossCC
                 x86CC
                 sel4Python
+                # P6.2 assembles the EFI file tree with `grub-mkimage` and, for
+                # P6.5's raw medium, writes FAT32 with mtools rather than
+                # requiring a privileged loopback mount.
+                grubEfi
+                mtools
               ];
 
             # `sel4-sys` generates the libsel4 bindings with bindgen, which
@@ -140,6 +155,12 @@
             # must bind one compiler and assembler rather than whichever `gcc`
             # the ambient `PATH` resolves first.
             X86_64_COMPILER_PREFIX = "${x86CC}/bin/${x86CC.targetPrefix}";
+
+            # P6.2's boot contract. `[qemu_pc99_boot]` pins these artifacts'
+            # hashes, so the build and the boot gate must read the same exact
+            # firmware and bootloader rather than whichever the host provides.
+            SLIME_OVMF_DIR = "${ovmfFirmware}/FV";
+            SLIME_GRUB_PREFIX = "${grubEfi}";
 
             # Freestanding C components use Clang's target driver and LLD.
             # Do not inherit mkShell's ambient CC: on Linux it is GCC, which
