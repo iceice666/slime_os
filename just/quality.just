@@ -281,8 +281,9 @@ test_sel4_root:
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${CROSS_COMPILER_PREFIX}gcc"
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -L $sysroot"
             export CC_aarch64_unknown_linux_gnu="${CROSS_COMPILER_PREFIX}gcc"
+            rustup +"$toolchain" target list --installed | grep -qx "$target" \
+                || rustup +"$toolchain" target add "$target"
             ;;
-
     esac
     # Do not use command substitution: `set -e` must preserve build failures,
     # and the per-checkout capture under `build/` avoids concurrent-run clashes.
