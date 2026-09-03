@@ -104,6 +104,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-storage": "sel4-storage.zti",
     "sel4-store": "sel4-store.zti",
     "sel4-stream": "sel4-stream.zti",
+    "sel4-matrix": "sel4-matrix.zti",
     "sel4-stress": "sel4-stress.zti",
     "sel4-supervision": "sel4-supervision.zti",
     "sel4-traffic": "sel4-traffic.zti",

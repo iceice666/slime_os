@@ -25,6 +25,11 @@
       tag = "output";
       interface = "TelemetryStream";
     };
+    {
+      interface = "TelemetryStream";
+      name = "telemetry-alt";
+      tag = "output";
+    };
   ];
   dependencies = [
     "fabric-service";

@@ -153,12 +153,12 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-loan.zti";
     };
     {
-      baseline = "";
+      baseline = "contracts/system-spec/v1/baselines/sel4-matrix.zti";
       composition = "sel4-matrix";
-      deferralReason = "routeNameVariance";
+      deferralReason = "";
       owningGate = "sel4_matrix_check";
-      state = "handAuthored";
-      systemSpec = "";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-matrix.zti";
     };
     {
       baseline = "contracts/system-spec/v1/baselines/sel4-operation.zti";
