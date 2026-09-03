@@ -101,11 +101,11 @@ duo_serial_monitor serial timeout="120":
 duo_gate_control_check:
     python3 scripts/check/check-duo-gate-control.py
 
-# P6.A: deterministic and hermetic — it needs no board, and it writes no block
-# device: staging the card is an operator step, because copying onto removable
-# media is the one action that can destroy an unrelated disk. Add
-# `--qemu-variant` to also build the QEMU `virt` retarget of the same source,
-# which is how the instruction stream is executed before it reaches hardware.
+# P6.A's builder is deterministic and hermetic: it needs no board, writes only
+# under `build/`, and never writes a block device. Copying onto removable
+# media is the one action that can destroy an unrelated disk. Run
+# `python3 scripts/build/build-nt98690-payload.py --qemu-variant` to also build
+# the QEMU `virt` retarget used to exercise the instruction stream first.
 #
 # Build the H1V1 probe into the flat arm64 `Image` its vendor U-Boot can start.
 [group('hardware')]
