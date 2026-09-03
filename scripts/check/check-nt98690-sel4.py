@@ -241,8 +241,8 @@ def stage_and_launch(
         remaining -= 0.5
         output += chunk
         if stop.search(output):
-            break
-    return transcript + output
+            return transcript + output
+    fail(f"the board did not reach reset or a named failure within {BOOT_TIMEOUT_SECONDS:.0f}s after `booti`")
 
 
 def banner_line(text: str, banner: str) -> str:
@@ -324,23 +324,31 @@ def main() -> None:
         f"{profile['sw18_boot_position']} (never the loader's rescue position)"
     )
     arguments.evidence_dir.mkdir(parents=True, exist_ok=True)
+    for path in arguments.evidence_dir.glob("sample-run-*.log"):
+        path.unlink()
+    for path in arguments.evidence_dir.glob("sample-run-*.normalized.log"):
+        path.unlink()
     normalized: list[str] = []
     framing_total = 0
     transcript = ""
+    run = 0
     try:
         reach_uboot(console, prompt, boot.PROMPT_WINDOW_SECONDS, fail)
         for run in range(1, RUNS + 1):
+            raw_start = len(console.received_bytes)
             print(f"[gate]   run {run} of {RUNS}")
             transcript = stage_and_launch(console, profile, boot, payload, load)
             if run < RUNS:
-                # The board is resetting itself; catching the next prompt both
-                # proves it came back and stages the next run.
                 recovery = reach_uboot(console, prompt, boot.PROMPT_WINDOW_SECONDS, fail)
             else:
                 print(f"[gate]   waiting up to {boot.RECOVERY_SECONDS:.0f}s for the vendor firmware to return")
                 recovery = boot.wait_for_banner(console, boot.RECOVERY_SECONDS)
+                if re.search(boot.BANNER_PATTERN, recovery) is None:
+                    fail("the vendor firmware banner did not return after the final watchdog reset")
             transcript += "\n" + banner_line(recovery, boot.BANNER_PATTERN)
-            (arguments.evidence_dir / f"sample-run-{run}.log").write_text(transcript, encoding="utf-8")
+            (arguments.evidence_dir / f"sample-run-{run}.log").write_bytes(
+                bytes(console.received_bytes[raw_start:])
+            )
 
             check_run(run, transcript)
             sample.check_transcript(transcript)
@@ -354,8 +362,10 @@ def main() -> None:
             normalized.append(trace)
             print(f"[gate]   run {run}: contract, sample plane, and wire all clean")
     finally:
+        raw = bytes(console.received_bytes[raw_start:]) if run > 0 else b""
         console.close()
-        if transcript:
+        if raw and run > 0:
+            (arguments.evidence_dir / f"sample-run-{run}.log").write_bytes(raw)
             print(f"[gate]   evidence in {arguments.evidence_dir}")
 
     if any(trace != normalized[0] for trace in normalized[1:]):

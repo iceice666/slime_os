@@ -230,10 +230,7 @@ def build_artifacts() -> None:
 
 def check_identity() -> tuple[bytes, dict[str, object]]:
     """The payload on disk is this build's gate artifact, not a plane image."""
-    # The ELF itself is not needed here: the payload identity binds the ELF's
-    # digest, so a board host carrying only the wrapped image and the two
-    # identity files can verify what it is about to boot.
-    for path in (IMAGE_IDENTITY, PAYLOAD, PAYLOAD_IDENTITY):
+    for path in (IMAGE, IMAGE_IDENTITY, PAYLOAD, PAYLOAD_IDENTITY):
         if not path.is_file():
             fail(f"missing {path.relative_to(ROOT)}; build first or drop --no-build")
     image_identity = json.loads(IMAGE_IDENTITY.read_text(encoding="utf-8"))
@@ -249,8 +246,11 @@ def check_identity() -> tuple[bytes, dict[str, object]]:
             fail(f"the {name} identity lacks the explicit gate-only terminator")
     if not image_identity.get("component_graph"):
         fail("the image identity does not carry the component graph")
-    if payload_identity.get("elf_sha256") != image_identity["image"]["sha256"]:
-        fail("the payload was wrapped from a different seL4 image than the one identified")
+    elf_sha256 = hashlib.sha256(IMAGE.read_bytes()).hexdigest()
+    if elf_sha256 != image_identity["image"]["sha256"]:
+        fail("the seL4 ELF on disk does not match its image identity")
+    if payload_identity.get("elf_sha256") != elf_sha256:
+        fail("the payload was wrapped from a different seL4 image than the one on disk")
     payload = PAYLOAD.read_bytes()
     if hashlib.sha256(payload).hexdigest() != payload_identity["payload_sha256"]:
         fail("the payload on disk does not match its identity; rebuild rather than booting it")
@@ -312,15 +312,16 @@ def read_until(console: Console, transcript: str, pattern: str, seconds: float, 
     """
     target = re.compile(pattern)
     failures = re.compile("|".join(FAILURE_MARKERS))
+    start = len(contract_view(transcript))
     remaining = seconds
     while remaining > 0:
         chunk = console.read_for(0.5)
         remaining -= 0.5
         transcript += chunk
-        view = contract_view(transcript)
-        if target.search(view):
+        new_view = contract_view(transcript)[start:]
+        if target.search(new_view):
             return transcript
-        found = failures.search(view)
+        found = failures.search(new_view)
         if found is not None:
             report_transcript(transcript)
             fail(f"failure marker while waiting for {what}: {found.group(0)!r}")
@@ -380,7 +381,7 @@ def drive_session(
     if len(re.findall(HEALTHY_MARKER, view)) != 1:
         report_transcript(transcript)
         fail("the graph was certified healthy more than once; a resident restarted")
-    if console.framing_errors:
+    if console.framing_errors is not None and console.framing_errors != 0:
         fail(f"{console.framing_errors} framing errors on the wire before the terminator")
 
     # Only after every assertion has passed does the gate end the session.
@@ -437,14 +438,19 @@ def main() -> None:
         f"{profile['sw18_boot_position']} (never the loader's rescue position)"
     )
     arguments.evidence_dir.mkdir(parents=True, exist_ok=True)
+    session_log = arguments.evidence_dir / "slisp-session.log"
+    identities_path = arguments.evidence_dir / "slisp-identities.json"
+    session_log.unlink(missing_ok=True)
+    identities_path.unlink(missing_ok=True)
     transcript = ""
     try:
         reach_uboot(console, prompt, boot.PROMPT_WINDOW_SECONDS, fail)
         transcript = drive_session(console, profile, boot, payload, load)
     finally:
+        raw = bytes(console.received_bytes)
         console.close()
-        if transcript:
-            (arguments.evidence_dir / "slisp-session.log").write_text(transcript, encoding="utf-8")
+        if raw:
+            session_log.write_bytes(raw)
             print(f"[gate]   evidence in {arguments.evidence_dir}")
 
     match_marker_contract(
@@ -466,14 +472,14 @@ def main() -> None:
         "serial": profile["serial"],
         "serial_baud": baud,
         "framing_errors": console.framing_errors,
-        "transcript_sha256": hashlib.sha256(transcript.encode()).hexdigest(),
+        "transcript_sha256": hashlib.sha256(raw).hexdigest(),
         "payload_sha256": identity["payload_sha256"],
         "elf_sha256": identity["elf_sha256"],
         "generation_identity": identity["generation_identity"],
         "generation_sha256": identity.get("generation_sha256"),
         "target_profile": TARGET_PROFILE,
     }
-    (arguments.evidence_dir / "slisp-identities.json").write_text(
+    identities_path.write_text(
         json.dumps(identities, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(

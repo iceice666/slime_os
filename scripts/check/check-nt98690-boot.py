@@ -281,20 +281,29 @@ def check_identity(profile: dict[str, object]) -> tuple[Path, bytes, dict[str, o
     """The artifact on disk must be this build's, and agree with the pins."""
     if not IDENTITY.is_file():
         fail(f"missing {IDENTITY.relative_to(ROOT)}; run `just nt98690_payload_check`")
-    identity = json.loads(IDENTITY.read_text(encoding="utf-8"))
-
-    binary = OUT_DIR / identity["boot_file"]
+    try:
+        identity = json.loads(IDENTITY.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"cannot parse {IDENTITY.relative_to(ROOT)}: {error}")
+    required = {"schema", "boot_file", "payload_sha256", "load_address"}
+    missing = sorted(required - identity.keys())
+    if missing:
+        fail(f"the payload identity is missing required keys: {', '.join(missing)}")
+    if identity.get("schema") != 1:
+        fail("the payload identity has the wrong schema")
+    expected_boot_file = str(profile["boot_files"][0])
+    if identity.get("boot_file") != expected_boot_file:
+        fail("the payload identity names the wrong boot file")
+    binary = OUT_DIR / expected_boot_file
     if not binary.is_file():
         fail(f"missing payload {binary.relative_to(ROOT)}")
     image = binary.read_bytes()
-
     digest = hashlib.sha256(image).hexdigest()
     if digest != identity["payload_sha256"]:
         fail(
             f"{binary.relative_to(ROOT)} does not match its identity manifest; "
             "rebuild rather than booting an artifact of unknown provenance"
         )
-
     load = int(str(profile["payload_load_address"]), 16)
     if int(str(identity["load_address"]), 16) != load:
         fail("the built payload's load address disagrees with the pinned one")
@@ -332,7 +341,9 @@ def check_deployed_bytes(console: Console, prompt: str, load: int, image: bytes)
     almost right and wastes a bench session. The `fatload` byte count above
     already rules out a truncated read.
     """
-    for label, offset in (("head", 0), ("tail", (len(image) // 64 - 1) * 64)):
+    if len(image) < 64:
+        fail("the payload is too short for head-and-tail deployment sampling")
+    for label, offset in (("head", 0), ("tail", ((len(image) - 64) // 64) * 64)):
         output = send_command(console, f"md.l {load + offset:#x} 0x10", prompt, 10.0, fail)
         words = read_words(output, 16)
         expected = [
@@ -446,54 +457,38 @@ def read_register(output: str, address: int) -> int | None:
 
 
 def reset_probe(console: Console, prompt: str, timeout: float) -> tuple[str, int | None]:
-    """Perform TF-A's watchdog reset from U-Boot and report which width worked.
-
-    32-bit writes first, since the registers are 32 bits wide and that is what
-    the root's MMIO helper does; 64-bit second, because TF-A itself uses
-    `mmio_write_64` and a block that only latches the wider access is
-    possible. Returns the transcript and the width that reset the board, or
-    `None` when neither did -- which is the finding that sends P6.B down its
-    manual-power-cycle path instead.
-    """
+    """Perform TF-A's 32-bit watchdog reset sequence from U-Boot."""
     reach_uboot(console, prompt, min(timeout, PROMPT_WINDOW_SECONDS), fail)
     transcript = ""
-    for width in (32, 64):
-        suffix = "l" if width == 32 else "q"
-        print(f"[reset]  watchdog sequence with {width}-bit writes")
-        for offset, bit in (
-            (RESET_CG_CLOCK_RESET, RESET_CG_CLOCK_RESET_BIT),
-            (RESET_CG_CLOCK_ENABLE, RESET_CG_CLOCK_ENABLE_BIT),
-        ):
-            address = RESET_CG_BASE + offset
-            output = send_command(console, f"md.{suffix} {address:#x} 1", prompt, 10.0, fail)
-            transcript += output
-            value = read_register(output, address)
-            if value is None:
-                fail(f"could not read the clock-gate register at {address:#x}:\n{output[-300:]}")
-            print(f"[reset]    {address:#x} = {value:#x} -> set bit {bit}")
-            transcript += send_command(
-                console, f"mw.{suffix} {address:#x} {value | (1 << bit):#x}", prompt, 10.0, fail
-            )
-        for key in RESET_WDT_UNLOCK:
-            transcript += send_command(
-                console, f"mw.{suffix} {RESET_WDT_BASE:#x} {key:#x}", prompt, 10.0, fail
-            )
-        # The manual-reset write does not return a prompt if it works.
-        console.flush_input()
-        console.write(f"mw.{suffix} {RESET_WDT_BASE + RESET_WDT_MANUAL:#x} 1\r".encode())
-        print(f"[reset]    fired; waiting up to {RESET_PROBE_SECONDS:.0f}s for the firmware banner")
-        recovery = wait_for_banner(console, RESET_PROBE_SECONDS)
-        transcript += recovery
-        if re.search(BANNER_PATTERN, recovery):
-            print(f"[reset]  the board reset and its firmware returned: {width}-bit writes work")
-            return transcript, width
-        print(f"[reset]  no banner in {RESET_PROBE_SECONDS:.0f}s: the board did not reset")
-        console.write(b"\r")
-        if prompt not in console.read_for(1.5):
-            fail(
-                "the board neither reset nor answers the prompt after the watchdog "
-                "writes; power-cycle it. Nothing on eMMC was touched"
-            )
+    suffix = "l"
+    print("[reset]  watchdog sequence with 32-bit writes")
+    for offset, bit in (
+        (RESET_CG_CLOCK_RESET, RESET_CG_CLOCK_RESET_BIT),
+        (RESET_CG_CLOCK_ENABLE, RESET_CG_CLOCK_ENABLE_BIT),
+    ):
+        address = RESET_CG_BASE + offset
+        output = send_command(console, f"md.{suffix} {address:#x} 1", prompt, 10.0, fail)
+        transcript += output
+        value = read_register(output, address)
+        if value is None:
+            fail(f"could not read the clock-gate register at {address:#x}:\n{output[-300:]}")
+        print(f"[reset]    {address:#x} = {value:#x} -> set bit {bit}")
+        transcript += send_command(
+            console, f"mw.{suffix} {address:#x} {value | (1 << bit):#x}", prompt, 10.0, fail
+        )
+    for key in RESET_WDT_UNLOCK:
+        transcript += send_command(
+            console, f"mw.{suffix} {RESET_WDT_BASE:#x} {key:#x}", prompt, 10.0, fail
+        )
+    console.flush_input()
+    console.write(f"mw.{suffix} {RESET_WDT_BASE + RESET_WDT_MANUAL:#x} 1\r".encode())
+    print(f"[reset]    fired; waiting up to {RESET_PROBE_SECONDS:.0f}s for the firmware banner")
+    recovery = wait_for_banner(console, RESET_PROBE_SECONDS)
+    transcript += recovery
+    if re.search(BANNER_PATTERN, recovery):
+        print("[reset]  the board reset and its firmware returned: 32-bit writes work")
+        return transcript, 32
+    print(f"[reset]  no banner in {RESET_PROBE_SECONDS:.0f}s: the board did not reset")
     return transcript, None
 
 
@@ -580,9 +575,8 @@ def main() -> None:
             transcript += probed
             if width is None:
                 fail(
-                    "neither 32- nor 64-bit watchdog writes reset the board from the "
-                    "non-secure world; P6.B's root cannot reset it and must use the "
-                    "manual power-cycle path"
+                    "32-bit watchdog writes did not reset the board from the non-secure world; "
+                    "P6.B's root cannot reset it and must use the manual power-cycle path"
                 )
             print(f"nt98690 reset probe: PASS, {width}-bit writes reset the named {profile['board']}")
             return
@@ -654,15 +648,18 @@ def main() -> None:
             payload += chunk
             if re.search(r"SLIME_NT98690 (reset request kind=psci|PAYLOAD_FAIL|FAULT)", payload):
                 break
+        if not payload:
+            fail(f"the board printed nothing for {PAYLOAD_SECONDS:.0f}s after `booti`; the payload hung or UART output stopped")
         transcript += payload
 
         print(f"[gate]   waiting up to {RECOVERY_SECONDS:.0f}s for the vendor firmware to return")
         transcript += wait_for_banner(console, RECOVERY_SECONDS)
     finally:
+        raw = bytes(console.received_bytes)
         console.close()
-        if arguments.transcript and transcript:
+        if arguments.transcript and raw:
             arguments.transcript.parent.mkdir(parents=True, exist_ok=True)
-            arguments.transcript.write_text(transcript, encoding="utf-8")
+            arguments.transcript.write_bytes(raw)
             print(f"[gate]   transcript written to {arguments.transcript}")
 
     report_facts(transcript)

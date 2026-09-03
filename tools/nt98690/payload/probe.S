@@ -23,14 +23,13 @@
  * register is the PSCI SYSTEM_RESET that returns the board to its vendor
  * firmware. Nothing here touches eMMC.
  *
- * Building with -DSLIME_PROBE_QEMU_VIRT retargets the three board addresses at
- * QEMU's `virt` machine so this exact instruction stream can be executed
- * before it is ever carried to hardware. That is the only thing the define
- * changes: the register reads, the calibration, the verdicts, the fault
- * vectors, and the reset path are the same code either way. The placement
- * check is expected to report FAIL there, because QEMU places the image at its
- * own RAM base plus `text_offset` rather than at the address this is linked
- * for -- which is itself worth seeing, since it proves the check can fail.
+ * Building with -DSLIME_PROBE_QEMU_VIRT retargets the board addresses and
+ * selects QEMU `virt`'s PL011 output routine so the remaining instruction
+ * stream can execute before it reaches hardware. Register reads, calibration,
+ * verdicts, fault vectors, and reset flow are otherwise shared.
+ * The placement check is expected to report FAIL there, because QEMU places
+ * the image at its own RAM base plus `text_offset` rather than at the address
+ * where the board image is linked -- which is itself worth seeing, since it proves the check can fail.
  *
  * Two values are meaningless under that variant and must not be read as
  * evidence about anything: `cnt_hz_est`, because QEMU does not throttle its
@@ -528,6 +527,18 @@ fault_entry:
     adrp    x0, __stack_top
     add     x0, x0, :lo12:__stack_top
     mov     sp, x0
+
+    /* The handler may run before normal entry establishes these invariants. */
+    mrs     x24, CurrentEL
+    lsr     x24, x24, #2
+#ifdef SLIME_PROBE_QEMU_VIRT
+    movz    x25, #0x0000
+    movk    x25, #0x0900, lsl #16
+#else
+    movz    x25, #0x0000
+    movk    x25, #0xf013, lsl #16
+    movk    x25, #0x0002, lsl #32
+#endif
 
     adr     x0, msg_fault
     bl      puts
