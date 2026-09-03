@@ -534,6 +534,8 @@ def check_profile(pins: dict[str, object]) -> None:
         )
     if memory_base % 0x20_0000 != 0:
         fail("ns02201-h1v1 memory base must be 2 MiB-aligned")
+    if memory_base + memory_size > 0x3FF0_0000:
+        fail("ns02201-h1v1 memory window must end below U-Boot's observed DTB relocation")
     expected_h1v1_boot_files = [
         "slime-nt98690-probe.bin",
         "slime-sel4-sample-ns02201-h1v1.bin",

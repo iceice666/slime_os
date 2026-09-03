@@ -8,7 +8,7 @@ schema = 1
 # change; anything else moving is a finding.
 repository = "https://github.com/iceice666/seL4.git"
 release = "16.0.0"
-commit = "1b93edf532c5b53e607b4f4f9fa226f78a63ec13"
+commit = "4aa98b2b6e0e9190e80d0175f433457dbfccee97"
 
 [rust_sel4]
 # Forked from seL4/rust-sel4 at v5.0.0 (d441a880938209f661201704dfbee7b91c5aa905)
@@ -310,11 +310,11 @@ timer_irq = 30
 timer_frequency_hz = 12000000
 max_irq = 352
 # The kernel's memory window: the platform overlay's single `memory` node, and
-# on aarch64 therefore the kernel's physical base. Above every firmware
-# reservation, below U-Boot's device-tree relocation zone, inside the 1 GiB
-# the vendor tree declares.
+# on aarch64 therefore the kernel's physical base. It begins above every
+# firmware reservation and ends on a 1 MiB boundary below U-Boot's observed
+# device-tree relocation at 0x3ffc3000.
 sel4_memory_base = "0x10000000"
-sel4_memory_size = "0x30000000"
+sel4_memory_size = "0x2ff00000"
 # The SoC reset the root drives after a scored run: the clock-gate and
 # watchdog blocks TF-A's own nova_system_reset programs (`nvt_ns02201/pm.c`,
 # `novatek_def.h`). `reset_write_width` is what the P6.B reset probe observed
