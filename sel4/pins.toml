@@ -1,18 +1,25 @@
 schema = 1
 
 [sel4]
+# A fork commit that declares a platform or a CPU option adds that option --
+# off -- to every platform's generated kernel config, so `kernel_config_sha256`
+# moves for all of them while every other pinned artifact stays byte-identical.
+# When that is the whole of the drift, re-pin the config hashes in the same
+# change; anything else moving is a finding.
 repository = "https://github.com/iceice666/seL4.git"
 release = "16.0.0"
-commit = "f25b760aad33b03ef631fc67a5a16edd72e37ddb"
+commit = "4aa98b2b6e0e9190e80d0175f433457dbfccee97"
 
 [rust_sel4]
 # Forked from seL4/rust-sel4 at v5.0.0 (d441a880938209f661201704dfbee7b91c5aa905)
-# for the two physical platforms Slime boots. The fork adds bcm2712's UART10
-# loader path and CV1800B's single-hart path: the Duo's OpenSBI 0.9 exposes no
-# HSM extension, so the generic RISC-V loader would panic before printing.
+# for the physical platforms Slime boots. The fork adds bcm2712's UART10
+# loader path, CV1800B's single-hart path (the Duo's OpenSBI 0.9 exposes no
+# HSM extension, so the generic RISC-V loader would panic before printing),
+# and the NT98690 H1V1's inline 16550 console at 0x2f0130000, for which no
+# driver crate exists.
 repository = "https://github.com/iceice666/rust-sel4.git"
 release = "v5.0.0-slime-physical-platforms"
-commit = "070c6a384a01ce0f6c60e081fddc8c40fb2a6132"
+commit = "20905bef6b93b7d863ac6dc5d7053f96aa09765a"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
@@ -186,10 +193,156 @@ timer_irq = 17
 max_irq = 101
 usable_memory_bytes = 66060288
 fit_config = "config-duo-sel4"
+
+# P6.A: the Novatek NT98690 (NS02201) H1V1, a physical AArch64 bring-up target.
+#
+# Board facts only. This table carries no seL4 product keys -- no `platform`,
+# `sel4_arch`, or printing options -- because P6.A builds no kernel: it
+# qualifies the firmware handoff and measures what the board actually reports.
+# P6.B adds the product half beside these, along with its own
+# `[observed_prefix_ns02201_h1v1]`.
+#
+# Sources, since none of this may be asserted by Slime:
+#   vendor device tree  /srv/novatek/sdk/worktrees/h1v1-dev/configs/Linux/
+#                       cfg_690_IPC_EMMC_RAMDISK_CM2504/nvt-{basic,peri,mem-tbl}.dtsi
+#   TF-A                BSP/trusted-firmware-a/plat/novatek/nvt_ns02201/
+#   U-Boot              BSP/u-boot/configs/nvt-ns02201_a64_pci_emmc_defconfig
+#   board switches      ~/nt98690-ubuntu/project_env.sh
+# Keys marked "observed" are filled from a recorded serial transcript, not from
+# any of the above; until P6.A runs they are absent rather than guessed.
+[ns02201_h1v1]
+soc = "ns02201"
+board = "novatek-h1v1"
+cpu = "cortex-a73"
+cpus = 4
+# 16550-compatible, and the same port BL31 and U-Boot print through -- so the
+# console is continuous from firmware into anything Slime loads. `reg-shift`
+# and `reg-io-width` are why the holding and line-status registers sit at byte
+# offsets 0x00 and 0x14 with 32-bit accesses.
+serial = "uart0-ns16550a-0x2f0130000"
+serial_reg_shift = 2
+serial_reg_io_width = 4
+serial_clock_hz = 48000000
+serial_baud = 115200
+# Two GiB is populated, but the vendor `/memory` node declares one, which is
+# what U-Boot's `gd->ram_size` reports and therefore all any loader may assume.
+dram_base = "0x0"
+dram_size = "0x80000000"
+firmware_memory_size = "0x40000000"
+# BL31 lives here and the device tree marks it `no-map`. TF-A's TZASC
+# programming protects it from DMA masters only, so nothing stops a CPU write:
+# it is reserved by agreement, and every payload address is chosen around it.
+atf_base = "0x01f00000"
+atf_size = "0x00100000"
+# GICv2, with every bank above 4 GiB like the rest of this SoC's MMIO.
+interrupt_controller = "arm-gicv2-0x2fff01000"
+gicd_base = "0x2fff01000"
+gicc_base = "0x2fff02000"
+gich_base = "0x2fff04000"
+gicv_base = "0x2fff06000"
+# What the device tree claims. TF-A writes `CNTFRQ_EL0` on secondary cores
+# only, so the primary's value is a separate, observed key below.
+dts_timer_frequency_hz = 12000000
+psci = "0.2-smc"
+# The U-Boot facts below were read off the board on 2026-09-02 and are no
+# longer inferred from vendor source; the transcript is
+# devlog/2026-09-01-p6a-nt98690-probe/uboot-survey.log. `mmc list` reports
+# MMC0 as the SD slot and MMC2 as the eMMC, so device 0 is the removable card
+# and no gate command addresses the eMMC.
+uboot_version = "2021.10-novatek-ns02201"
+uboot_prompt = "nvt: "
+uboot_select_device = "mmc dev 0"
+# `booti` is the only entry command this U-Boot has: `go`, `bootelf`, and
+# `bootm` are all compiled out. The device-tree argument is not optional --
+# omitting it panics U-Boot -- and `${fdtcontroladdr}` is the tree the vendor
+# loader passed in, which U-Boot relocates and hands to us in x0.
+uboot_launch = "booti {load} - ${fdtcontroladdr}"
+# Where the payload is linked, where it is loaded, and what its Image header
+# declares as `text_offset`; this U-Boot relocates to `text_offset` regardless
+# of the header's placement flag, so all three must be this value.
+payload_load_address = "0x10000000"
+boot_partition = "mmc 0:1"
+# eMMC 8-bit with an SD card inserted. `0x0001` is the loader's SD rescue mode,
+# which reflashes firmware, and is never the position for booting a payload.
+sw18_boot_position = "0x1001"
+
+# Read off the board by the P6.A probe on 2026-09-02; transcript in
+# devlog/2026-09-01-p6a-nt98690-probe/. These are the measurements P6.B's
+# kernel configuration is built from, not restatements of the device tree.
+entry_el_observed = 2
+midr = "0x411fd090"
+parange = 2
+physical_address_bits = 40
+# CNTFRQ_EL0 *is* programmed on the primary core, contrary to the reading of
+# TF-A's plat_helpers.S that shaped the P6.B plan: it holds 12 MHz, and an
+# independent estimate against the 115200 line rate agreed to 0.33%. P6.B can
+# therefore take the timer frequency from the register and needs no pinned
+# override of the kind the Milk-V Duo required.
+cntfrq_el0_primary_hz = 12000000
+counter_hz_estimated = 11960950
+# GICv2, ARM GIC-400: ID_AA64PFR0_EL1.GIC reads 0, so there is no system
+# register interface and the memory-mapped distributor is the only path.
+gicd_typer = "0x0000fc6a"
+gicd_iidr = "0x0200143b"
+gic_irqs = 352
+gic_cpu_interfaces = 4
+
+# The exact physical seL4 product profile for the board facts above, P6.B.
+# `platform` selects the in-tree seL4 port (`src/plat/ns02201` in the pinned
+# fork); the kernel is a hypervisor build because firmware enters at EL2 and
+# the loader asserts it; `timer_irq` is CNTP's PPI 30, the one architected
+# timer line a hypervisor-mode seL4 leaves to userspace; `timer_frequency_hz`
+# restates the observed `cntfrq_el0_primary_hz` because the kernel's
+# TIMER_FREQUENCY must be pinned at build time even though the root reads the
+# register. `max_irq` is the observed `gic_irqs`. UART0 is the kernel's debug
+# console and the root's only output path.
+platform = "ns02201-h1v1"
+sel4_arch = "aarch64"
+hypervisor = true
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+export_pcnt_user = true
+export_ptmr_user = true
+timer_irq = 30
+timer_frequency_hz = 12000000
+max_irq = 352
+# The kernel's memory window: the platform overlay's single `memory` node, and
+# on aarch64 therefore the kernel's physical base. It begins above every
+# firmware reservation and ends on a 1 MiB boundary below U-Boot's observed
+# device-tree relocation at 0x3ffc3000.
+sel4_memory_base = "0x10000000"
+sel4_memory_size = "0x2ff00000"
+# The SoC reset the root drives after a scored run: the clock-gate and
+# watchdog blocks TF-A's own nova_system_reset programs (`nvt_ns02201/pm.c`,
+# `novatek_def.h`). `reset_write_width` is what the P6.B reset probe observed
+# from the non-secure world; absent until it has run.
+reset_cg_base = "0x2f0020000"
+reset_wdt_base = "0x2f0060000"
+boot_files = [
+    "slime-nt98690-probe.bin",
+    "slime-sel4-sample-ns02201-h1v1.bin",
+    # P6.C's resident-product gate artifact: the graph image with the
+    # gate-only 0x1d terminator compiled in, distinct from every plane image.
+    "slime-sel4-ns02201-h1v1-test-terminator.bin",
+]
+
+[observed_prefix_ns02201_h1v1]
+# Recorded from the exact fork commits, toolchain, and NS02201 config above,
+# on the first build of the platform (2026-09-02). The device tree is in-tree,
+# so `dtb_sha256` binds the board description itself, not an emulator's dump.
+kernel_sha256 = "481fe1b1bd2f1f8939098802d985a214f98660e6a2c0d2a4d08399891cdfa1b9"
+kernel_config_sha256 = "b64c92a963f5b96bc995b05040de454b1714e4fdaba7328631346f69b59a1dc6"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
+dtb_sha256 = "cfc8088b03392223808848a0a49f9f7064819adad881bcc0e7bc1e65bb6af85e"
+platform_info_sha256 = "64e8a68e789b407d3260b8c022966fda78805dc2de812a247d3b8a8e8f84cbcf"
+
 [observed_prefix_cv1800b_duo]
 # Recorded from the exact fork commits, toolchain, and CV1800B config above.
 kernel_sha256 = "bf743ec2f8f51bd260d9c3b700ddc01b199039e5af2075de9501967c65c2e4f2"
-kernel_config_sha256 = "22474fc08122a089aec92c1eec1510900f31c80bf64f8089de8c1aad7f5c708c"
+kernel_config_sha256 = "54505da3732f8b07251bd6fbbdb96d211cbce17cad0d9ddb91a5924be5067f69"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "a9e15726b591cf86777a4a2db9a6a7c1155eda62a6067a70a28fa2435d675bae"
 platform_info_sha256 = "992415a47d0ccd67a180b01bb35a49e5a5545165458e6e3027e68f531bc90a0d"
@@ -232,14 +385,14 @@ platform_info_sha256 = "992415a47d0ccd67a180b01bb35a49e5a5545165458e6e3027e68f53
 # toolchain.
 [observed_prefix_qemu_riscv_virt]
 kernel_sha256 = "ef24f1fbc8084cb307d12e73a72d41d0944e67ffc3e872079fc44eda56a40d9f"
-kernel_config_sha256 = "7026cd7e3d045afd5a9feeaa077519c65f0aef1a6ea500d13b93ab4cf8578ba3"
+kernel_config_sha256 = "8d0ef4446b1332312dd9f2ab0557c8027fb2df6f391bb04f08a0c74b73b83ca6"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "7e60b8954a02e149a36e3e58eb70af2f4853ae347e9d8df0194c3fcb5f1e9c87"
 platform_info_sha256 = "1433a46cdc40b51d91b3f6c2dc7a7d5d1692fe2aae3c401c02d12622d5fb85e2"
 
 [observed_prefix]
 kernel_sha256 = "97dcb029127bcc0fac1fd6cc83950ba878040a773a380e2d000b0ebc20d875ce"
-kernel_config_sha256 = "95c3915943690458d5280560b71a06a5ca9f1b7e45e97dd476c67918e84f1e79"
+kernel_config_sha256 = "3a76491c41dc53e6c5c754cd839d350a67298e9d19fc47c9cc9544db91497e2f"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"
 platform_info_sha256 = "9a8eca4b07ddf06130d713ce4e4a7d52944955fc29fa826b5e28c9a318d65f6c"
@@ -256,7 +409,7 @@ platform_info_sha256 = "9a8eca4b07ddf06130d713ce4e4a7d52944955fc29fa826b5e28c9a3
 # moves it, which is the intended alarm.
 [observed_prefix_bcm2712_rpi5]
 kernel_sha256 = "4c29234e4d811baa21af74783377d3fdd80161bfe26582eff96f3fa4d1520a4c"
-kernel_config_sha256 = "cd840a2d821a9c6aa57fbb095c3c2522d49b6341747e4605cea1014b902de61e"
+kernel_config_sha256 = "f421bc279b09c90834401a7e2f0be5ec563bf90f1e088db0c2f0378ab073fa25"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "5e38d5dad9b4e1b3e600330acb7750599c0a0d146c5c790ff8175b9d24e9db1b"
 platform_info_sha256 = "1e386f61b9578985a7cdfff93e647cbfab0468ff88fbf339ff715619d7ce138a"

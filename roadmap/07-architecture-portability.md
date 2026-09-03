@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
-**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence.
+**Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence. P6 opened a second physical AArch64 lane on the Novatek NT98690 H1V1, whose vendor firmware keeps a serial console the Raspberry Pi 5 lane lacks; P6.A, P6.B, and P6.C are complete with observed board transcripts — the H1V1 boots seL4 and `slime-root` from SD through its unmodified vendor firmware and answers typed Slisp input over UART0, and storage, network, and display on that board remain unclaimed.
 
 **Decision:** Milk-V Duo remains the current physical execution target because P3.D established the observed hands-off deployment loop and P3.E used it to qualify upstream seL4, `slime-root`, a target-qualified generation, repeated sample-plane semantics, timer delivery, bounded fault evidence, and autonomous recovery. This is not a product-equivalence claim: Raspberry Pi 5 and Framework releases retain their own board and peripheral gates, and neither can be completed from Duo evidence.
 
@@ -17,6 +17,7 @@ Slime targets 64-bit little-endian systems with an MMU and user/supervisor isola
 | `aarch64-rpi5` | Deferred physical demo target | Raspberry Pi 5, exact board/firmware/media profile selected by RP0/RP3 | AArch64, 4 KiB translation granule, EL1/EL0 or documented firmware entry state, GIC, generic timer, device tree, serial console, reproducible removable media |
 | `riscv64-sel4-qemu-virt` | Current RV64 reference profile | Pinned QEMU `virt` machine and firmware | RV64 little-endian, S/U mode, Sv39, atomic operations, pinned interrupt/timer/UART devices, virtio |
 | `riscv64-sel4-milkv-duo` | Current physical bring-up target | Named Milk-V Duo with CV1800B/C906 and pinned firmware | RV64 little-endian, S/U mode, Sv39 subject to observed MAEE state, PLIC context confirmed before driver selection, 63.25 MiB DRAM window, serial console, FIT handoff |
+| `aarch64-sel4-nt98690-h1v1` | Physical AArch64 bring-up target opened by P6 | Named Novatek NT98690 (NS02201) H1V1 with its vendor loader, TF-A, and U-Boot | AArch64, 4 KiB translation granule, firmware entry state observed rather than assumed, GICv2 with register banks above 4 GiB, generic timer whose primary-core frequency is measured, 16550 UART0 console, removable-media `booti` handoff at a pinned load address, PSCI reset |
 
 A profile name identifies a complete executable and platform contract, not only an instruction set. A different page granule, privilege model, interrupt controller, firmware handoff, board revision, or incompatible device topology is a new profile until its own checks pass.
 
@@ -40,6 +41,7 @@ A profile name identifies a complete executable and platform contract, not only 
 6. P3.D supplies the observed Duo handoff and deployment loop; P3.E closed the memory-fit, PLIC-layout, C906 memory-attribute, seL4/root, generation, component, timer, and bounded-fault gates on that exact board.
 7. P3.F reuses that qualified board path and P5.2's resident product graph to add an interactive Slisp session without broadening P3.E into storage, USB, network, display, sensor, or actuator qualification.
 8. P4 and RP3–RP8 retain their Raspberry Pi 5 acceptance conditions but are deferred until their physical evidence path is available and reprioritized.
+9. P6 opens a second physical AArch64 lane on the Novatek NT98690 H1V1, in the same order P3.D–P3.F established: qualify the firmware handoff and measure the board's facts first (P6.A), port seL4 and `slime-root` onto that qualified handoff second (P6.B), and add the interactive shell only after the board is qualified (P6.C). It does not reopen or substitute for P4.
 
 ## P0: Architecture, target, and executable-artifact contracts
 
@@ -893,6 +895,103 @@ interruption at each append/commit boundary.
 **Evidence:** [`devlog/2026-08-08-p5-4-final-deletion-audit/`](../devlog/2026-08-08-p5-4-final-deletion-audit/index.md), [`devlog/2026-08-09-p5-4-final-kernel-retirement/`](../devlog/2026-08-09-p5-4-final-kernel-retirement/index.md)
 
 **Depends on:** every P5.4.2+ slice.
+
+## P6: Novatek NT98690 (NS02201) H1V1 physical lane
+
+**Status:** Complete. P6.A, P6.B, and P6.C were each observed on the named board on 2026-09-02. The lane claims the firmware handoff, the seL4/`slime-root` port with autonomous watchdog recovery, and the resident interactive Slisp product over UART0 — and nothing else: storage, network, display, and generation management on this board remain unclaimed.
+
+**Decision:** The H1V1 is opened as a second physical AArch64 lane because its evidence path already exists and P4's does not. The vendor firmware keeps a 16550 UART0 console alive from BL31 through U-Boot, and the board's own vendor tooling drives that console programmatically, so the ordered-marker evidence P4 is blocked on is available here today. The lane deliberately reuses the vendor loader, TF-A, and U-Boot unmodified and boots from removable media only: no image in this lane writes the board's eMMC, and the stock firmware remains the recovery path. Duo and Raspberry Pi 5 evidence cannot complete an H1V1 gate, and H1V1 evidence completes neither of theirs.
+
+**Depends on:** P5 for the seL4 product this lane carries, and P3.D–P3.F as the precedent for what a physical lane must prove before it may claim a board.
+
+### P6.A — H1V1 environment bootstrap and firmware handoff evidence
+
+**Status:** Complete, observed on the named board on 2026-09-02. It claims a firmware handoff and a set of measured board facts, not seL4, `slime-root`, or any Slime generation on this board; those are P6.B. Evidence: [the P6.A devlog entry](../devlog/2026-09-01-p6a-nt98690-probe/index.md) and its `probe-boot.log`.
+
+**Why the probe comes before the port:** every value the seL4 platform port needs — the exception level the payload is entered at, the physical address `booti` places it at, the primary core's `CNTFRQ_EL0`, the implemented physical-address range, and the GIC's line count — is a property of this board's firmware rather than of its documentation. The vendor device tree states a timer frequency, but TF-A programs `CNTFRQ_EL0` only on secondary cores, so the primary's value is unknown until read. Pinning those numbers from documents and discovering later that the board disagrees is the failure mode this milestone exists to prevent.
+
+**Depends on:** nothing in-tree; it qualifies a board and a handoff, not Slime code.
+
+#### Deliverables
+
+- pin the board's SoC, CPU, exception level at handoff, UART register layout, DRAM window and vendor reservations, interrupt-controller bases, PSCI conventions, U-Boot version, prompt, launch command, load address, and boot partition, each sourced from the vendor firmware's own tree or observed on the board rather than asserted;
+- build a flat AArch64 payload carrying the arm64 `Image` header this board's `booti` requires, deterministically, with an identity manifest binding the artifact digest to the pinned load address;
+- stage it on removable media and verify the bytes the board actually loaded, by length and by comparison against the built image, before spending a boot on them;
+- drive the board's U-Boot over serial — local tty or a TCP bridge, so the board may sit on another host — and require ordered evidence that the payload was placed at the pinned address, ran at the exception level the port assumes, received a device-tree pointer, and read a running counter and a live GIC;
+- exit through PSCI so the board returns to its vendor firmware without physical intervention;
+- prove the marker chain rejects deleted, reordered, and failure-marked evidence.
+
+#### Required checks
+
+- the payload's linked base, its `Image` header `text_offset`, its ELF entry, and the pinned load address agree, and a stale artifact is rejected by digest;
+- an absent serial endpoint, unreachable TCP bridge, non-tty device, silent wire, unprobed SD slot, short or over-long load, missing marker, out-of-order marker, or failure marker each fail nonzero rather than skipping;
+- a relocation by `booti` away from the pinned address fails the gate rather than being tolerated, because the same placement contract carries P6.B's seL4 image;
+- the payload never writes eMMC, never programs the GIC or the timer, and installs fault vectors so a fault reports and resets rather than stranding the board.
+
+#### Verification target
+
+```sh
+just nt98690_payload_check
+just nt98690_boot_check /dev/ttyUSB0
+just sel4_gate_control_check
+```
+
+#### Exit condition
+
+A named Novatek NT98690 H1V1 loads a pinned Slime-built payload from removable media through its unmodified vendor U-Boot, runs it at the pinned physical address, prints every ordered marker including its measured exception level, counter, and interrupt-controller facts, and returns to the vendor firmware without physical intervention; the measured values are then pinned as the board's profile.
+
+**Exit condition (observed):** on 2026-09-02 a named Novatek NT98690 H1V1 loaded the pinned payload from SD through its unmodified vendor U-Boot, ran it at `0x10000000` with no `Moving Image` relocation, and reported EL2, a device-tree pointer at `0x3ffc3000` carrying `d00dfeed`, Cortex-A73 (`midr` `0x411fd090`), 40-bit physical addresses, `CNTFRQ_EL0` of 12 MHz corroborated to 0.33% by a line-rate estimate, and a live GIC-400 with 352 lines; all 25 markers matched in order with 0 framing errors, and PSCI `SYSTEM_RESET` returned the board to its vendor firmware unattended.
+
+### P6.B — seL4 and `slime-root` on the H1V1
+
+**Status:** Complete, observed on the named board on 2026-09-02. The H1V1 boots the seL4 kernel loader, the kernel, and `slime-root` from SD through its unmodified vendor U-Boot, admits only the `aarch64-sel4-nt98690-h1v1` generation, delivers CNTP interrupts before and after graph activation, runs the architecture-neutral sample plane three times with byte-identical normalized traces and zero framing errors, and resets itself through the SoC watchdog after every run. It claims the AArch64 architecture, root, timer, and sample-plane behaviour exercised here and nothing else: storage, network, display, and UART input on this board remain unclaimed. Evidence: [the P6.B devlog entry](../devlog/2026-09-02-p6b-sel4-nt98690-h1v1/index.md). P6.A's observed facts select the kernel configuration: `KernelArmCortexA73` takes 40-bit physical addresses, `MAX_IRQ` is 352 over GICv2 with no system register interface, `TIMER_FREQUENCY` is 12000000 read from `CNTFRQ_EL0` rather than pinned, and the loader is entered at EL2. Work record: [the P6.B devlog entry](../devlog/2026-09-02-p6b-sel4-nt98690-h1v1/index.md).
+
+#### Deliverables
+
+- add the upstream seL4 platform for this SoC in the pinned fork, with its device tree, timer, and interrupt facts taken from the vendor tree and P6.A's observations, using `src/plat/bcm2712` and the fork's own `src/plat/cv1800b` as structural precedent;
+- add the matching `sel4-kernel-loader` platform arm with a 16550 console, and the AArch64 CPU option the kernel currently lacks for this core;
+- add `aarch64-sel4-nt98690-h1v1` to the target-profile contract, admit it in the generation builder, and give the platform its own prefix, cargo target directories, generation, image, identity manifest, and pinned artifact hashes;
+- wrap the loader image in the same `Image` header P6.A qualified, and boot it over the same handoff.
+
+#### Required checks
+
+- the `aarch64-sel4-qemu-virt` reference profile passes first;
+- the board boots elfloader, kernel, and `slime-root`, admits only its own target generation, delivers timer interrupts before and after graph activation, and reaches the same ordered root evidence the reference planes require;
+- three consecutive boots produce byte-identical normalized semantic traces and the board recovers autonomously after each;
+- wrong-target artifacts, unsupported page or interrupt profiles, and incompatible firmware handoffs fail explicitly rather than being guessed from the running machine.
+
+#### Exit condition
+
+A named Novatek NT98690 H1V1 loads the pinned sample-plane seL4 image from removable media through its unmodified vendor U-Boot, runs the seL4 kernel loader, the kernel, and `slime-root` at the pinned addresses, admits only the `aarch64-sel4-nt98690-h1v1` generation, delivers timer interrupts before and after graph activation, reaches ready naming that profile, and resets itself through the SoC watchdog -- three times, with byte-identical normalized semantic traces, zero framing errors, and the vendor firmware's banner observed after every run without an operator; the three transcripts are committed as evidence.
+
+**Exit condition (observed):** on 2026-09-02 the named H1V1 loaded the 1,285,200-byte sample-plane image from SD in 66 ms, the loader placed the kernel at `0x10000000` and entered it, seL4 dropped to userspace, and `slime-root` reported `untypeds=26 bytes=798838800`, `SLIME_TIMER acquired irq=30 freq_hz=12000000`, the generation admitted, the graph activated with timer delivery live after it, and `SLIME_ROOT READY target_profile=aarch64-sel4-nt98690-h1v1`; the root's `reset request kind=wdt` was followed by the vendor U-Boot banner on all three runs. Raw transcripts are 120,204 bytes each and the normalized traces 9,448 bytes each, byte-identical, with 0 framing errors on a local tty.
+
+### P6.C — Interactive Slisp over UART0 on the H1V1
+
+**Status:** Complete, observed on the named board on 2026-09-02. The resident product graph — init, console, spawn-service, and Slisp, with sysinfo and echo-agent spawnable — runs on the H1V1 with UART0 receive reaching the shell only through the declared `InputRead` authority, and the gate-only terminator returns the board to its vendor firmware through P6.B's watchdog reset. The first campaign found and fixed a product-only defect: the reset granules must be carved before the UART granule, which sits above them in the same device untyped. Work record and evidence: [the P6.C devlog entry](../devlog/2026-09-02-p6c-nt98690-slisp/index.md).
+
+#### Deliverables
+
+- feed the board's UART0 receive path through the existing declared `InputRead` authority, without granting the shell any device or MMIO capability;
+- make the root's product-UART build inputs board-neutral rather than named for one board;
+- reach the resident Slisp prompt on the board and answer typed commands, with a gate-only terminator that returns the board to its vendor firmware through the watchdog reset P6.B's root already performs.
+
+#### Required checks
+
+- the shell remains resident across its input waits and never exits;
+- an empty receive FIFO reports `WouldBlock` rather than blocking the root's console dispatcher;
+- deterministic plane images keep their scripted input source and compile no board address;
+- the `aarch64-sel4-qemu-virt` product graph and the Slisp core vectors pass first, and the gate's marker contract is covered by the shared tamper control.
+
+#### Verification target
+
+`just nt98690_slisp_check <serial>` — build the resident product-graph image with the gate-only terminator, wrap it in the qualified `Image` header, stage it over P6.A's handoff, and drive one bounded interactive session on the named board; `just sel4_gate_control_check` proves the marker chain fails on tampered evidence.
+
+#### Exit condition
+
+A named Novatek NT98690 H1V1 loads the pinned resident product-graph seL4 image from removable media through its unmodified vendor U-Boot, reaches the resident `slisp> ` prompt over the declared `InputRead` path with the root reporting its product input ready at the pinned UART address, answers typed commands — a definition, an arithmetic use of it, and a `sysinfo` spawn through spawn-service — stays resident past the 32768-iteration checkpoint and answers again, and returns to its vendor firmware only through the gate-only `0x1d` terminator routed into P6.B's watchdog reset; the session transcript is committed as evidence with zero framing errors.
+
+**Exit condition (observed):** on 2026-09-02 the named H1V1 loaded the 1,432,240-byte resident product image from SD in 73 ms, `slime-root` reported `product input ready uart=0x2f0130000`, admitted the product generation (`executables=6 instances=6 grants=11`), certified `required=4 live=4 idle=4 failed=0` healthy, and reached READY naming `aarch64-sel4-nt98690-h1v1`; the resident prompt answered `(define answer 40)` with `=> 40`, `(+ answer 2)` with `=> 42`, and spawned `sysinfo` through spawn-service with clean exit and collected supervision; the dispatcher crossed `resident checkpoint live=4 iterations=32768` and the shell answered `(+ answer 3)` with `=> 43` after it; the gate-only `0x1d` terminator produced `SLIME_NT98690 test terminator accepted` and `reset request kind=wdt`, and the vendor U-Boot banner returned unattended — all 34 markers in order, 0 framing errors on a local tty, from a single power-on. The transcript and identity record are committed beside [the P6.C devlog entry](../devlog/2026-09-02-p6c-nt98690-slisp/index.md).
 
 ## MCU and embedded-companion boundary
 

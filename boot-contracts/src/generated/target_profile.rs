@@ -3,7 +3,7 @@
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MAX_NAME_BYTES: usize = 32;
-pub const PROFILE_COUNT: usize = 7;
+pub const PROFILE_COUNT: usize = 8;
 
 pub const ARCH_X86_64: u32 = 1;
 pub const ARCH_AARCH64: u32 = 2;
@@ -35,6 +35,7 @@ pub const PROFILE_AARCH64_SEL4_QEMU_VIRT: u32 = 5;
 pub const PROFILE_RISCV64_QEMU_VIRT: u32 = 4;
 pub const PROFILE_RISCV64_SEL4_QEMU_VIRT: u32 = 6;
 pub const PROFILE_RISCV64_SEL4_MILKV_DUO: u32 = 7;
+pub const PROFILE_AARCH64_SEL4_NT98690_H1V1: u32 = 8;
 
 pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
     TargetProfile {
@@ -123,6 +124,19 @@ pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
         page_profile: 3,
         required_features: 144,
         elf_machine: 243,
+        page_bytes: 4096,
+        kernel_preferred_base: 0xFFFF_FFFF_8000_0000,
+        kernel_load_base: 0xFFFF_FFFF_9000_0000,
+        component_base: 0x0040_0000,
+    },
+    TargetProfile {
+        id: 8,
+        name: "aarch64-sel4-nt98690-h1v1",
+        architecture: 2,
+        abi: 4,
+        page_profile: 2,
+        required_features: 66,
+        elf_machine: 183,
         page_bytes: 4096,
         kernel_preferred_base: 0xFFFF_FFFF_8000_0000,
         kernel_load_base: 0xFFFF_FFFF_9000_0000,

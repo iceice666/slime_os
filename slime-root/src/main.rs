@@ -109,6 +109,8 @@ enum LoanLifecycleRequest {
 macro_rules! fatal {
     ($($arg:tt)*) => {{
         sel4::debug_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
+        #[cfg(slime_ns02201_h1v1)]
+        crate::request_ns02201_reset_after_fatal();
         sel4::init_thread::suspend_self()
     }};
 }
@@ -344,6 +346,42 @@ fn run_duo_early_fault_control(
     }
 }
 
+/// Reset the NT98690 through its watchdog once an autonomous physical proof
+/// completes, so the next scored boot needs no operator.
+#[cfg(slime_ns02201_h1v1)]
+fn request_ns02201_reset() -> ! {
+    sel4::debug_println!("SLIME_NT98690 reset request kind=wdt");
+    // SAFETY: root startup wrote the value before any other thread existed;
+    // both MMIO mappings remain live for the root's lifetime.
+    let registers = unsafe { ptr::addr_of!(NS02201_RESET_REGISTERS).read() };
+    let issued = registers.is_some_and(|(clock_gate, watchdog)| {
+        platform_timer::request_ns02201_watchdog_reset(clock_gate, watchdog)
+    });
+    if !issued {
+        sel4::debug_println!("SLIME_NT98690 reset failed");
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// The H1V1's vendor Linux offers no console to reboot from, so a root parked
+/// on a fatal condition costs the bench a manual power cycle. Once the reset
+/// granules are mapped, a fatal resets the board instead; before that, there
+/// is nothing to do but park, exactly as on every other platform.
+#[cfg(slime_ns02201_h1v1)]
+fn request_ns02201_reset_after_fatal() {
+    // SAFETY: root startup writes the value once, before any thread but the
+    // root runs; both MMIO mappings remain live for the root's lifetime.
+    let registers = unsafe { ptr::addr_of!(NS02201_RESET_REGISTERS).read() };
+    if let Some((clock_gate, watchdog)) = registers {
+        sel4::debug_println!("SLIME_NT98690 reset request kind=wdt cause=fatal");
+        if !platform_timer::request_ns02201_watchdog_reset(clock_gate, watchdog) {
+            sel4::debug_println!("SLIME_NT98690 reset failed");
+        }
+    }
+}
+
 #[cfg(slime_cv1800b_duo)]
 fn request_duo_cold_reset(
     timer_registers: device::MappedGranule,
@@ -358,7 +396,16 @@ fn request_duo_cold_reset(
     }
 }
 
-#[cfg(slime_duo_test_terminator)]
+/// The gate-only terminator byte routes into the same watchdog reset an
+/// autonomous proof uses, so a scored session ends by returning the board to
+/// its vendor firmware without an operator.
+#[cfg(all(slime_product_test_terminator, slime_ns02201_h1v1))]
+fn request_ns02201_test_reset() -> ! {
+    sel4::debug_println!("SLIME_NT98690 test terminator accepted");
+    request_ns02201_reset()
+}
+
+#[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 fn request_duo_test_reset() -> ! {
     sel4::debug_println!("SLIME_DUO test terminator accepted");
     // SAFETY: root startup writes both `Some` values before the console thread
@@ -371,7 +418,7 @@ fn request_duo_test_reset() -> ! {
     }
 }
 
-#[cfg(slime_duo_uart)]
+#[cfg(slime_product_uart)]
 const fn const_parse_hex_usize(value: &str) -> usize {
     let bytes = value.as_bytes();
     assert!(
@@ -410,9 +457,9 @@ static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the selected product terminal receiver.
 ///
-/// QEMU maps PL011 at `0x0900_0000`; the Duo product maps UART0 at the physical
-/// address supplied from the pinned board profile. Plane images map neither.
-#[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
+/// QEMU maps PL011 at `0x0900_0000`; a physical board's product maps UART0 at
+/// the address supplied from its pinned board profile. Plane images map neither.
+#[cfg(any(slime_qemu_keyboard, slime_product_uart))]
 static mut PRODUCT_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
@@ -439,9 +486,9 @@ static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// timer granule: both come from one device untyped and retype is monotonic.
 #[cfg(slime_cv1800b_duo)]
 static mut RESET_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
-#[cfg(slime_duo_test_terminator)]
+#[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 static mut DUO_RESET_REGISTERS: Option<device::MappedGranule> = None;
-#[cfg(slime_duo_test_terminator)]
+#[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 static mut DUO_TIMER_REGISTERS: Option<device::MappedGranule> = None;
 
 /// Standing MMIO windows for the userspace-authority inventory, one per
@@ -469,8 +516,24 @@ const TIMER_PADDR: usize = 0x0010_1000;
 const TIMER_PADDR: usize = 0x0502_6000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
-#[cfg(slime_duo_uart)]
-const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR"));
+
+/// Standing windows for the NT98690's clock-gate and watchdog granules, the
+/// two pages TF-A's own system reset programs. Mapped at startup so both an
+/// autonomous proof's completion and a fatal condition can reset the board.
+#[cfg(slime_ns02201_h1v1)]
+static mut NS02201_CLOCK_GATE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+#[cfg(slime_ns02201_h1v1)]
+static mut NS02201_WATCHDOG_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+#[cfg(slime_ns02201_h1v1)]
+static mut NS02201_RESET_REGISTERS: Option<(device::MappedGranule, device::MappedGranule)> = None;
+/// `CG_BASE` and `WDT_BASE` from TF-A's `nvt_ns02201/include/novatek_def.h`;
+/// the vendor tree lists them as `cg@2,f0020000` and `wdt@2,f0060000`.
+#[cfg(slime_ns02201_h1v1)]
+const NS02201_CLOCK_GATE_PADDR: usize = 0x2_f002_0000;
+#[cfg(slime_ns02201_h1v1)]
+const NS02201_WATCHDOG_PADDR: usize = 0x2_f006_0000;
+#[cfg(slime_product_uart)]
+const PRODUCT_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_PRODUCT_UART_PADDR"));
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
@@ -720,7 +783,47 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
-    #[cfg(all(any(slime_qemu_keyboard, slime_duo_uart), not(slime_root_fixture)))]
+    // The clock-gate (0x2_f002_0000) and watchdog (0x2_f006_0000) granules
+    // sit below UART0 (0x2_f013_0000) in the same device untyped, and device
+    // untypeds retype monotonically upward -- so these two must be carved
+    // before the product input maps the UART, or a product image loses its
+    // reset path (observed on the board as Allocate(DeviceFramePassed)).
+    #[cfg(slime_ns02201_h1v1)]
+    {
+        let mut granules = [None; 2];
+        for (slot, (page, paddr)) in [
+            (
+                ptr::addr_of!(NS02201_CLOCK_GATE_PAGE) as usize,
+                NS02201_CLOCK_GATE_PADDR,
+            ),
+            (
+                ptr::addr_of!(NS02201_WATCHDOG_PAGE) as usize,
+                NS02201_WATCHDOG_PADDR,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Err(error) = ScratchPage::claim(bootinfo, page) {
+                fatal!("NT98690 reset page unavailable: {error:?}")
+            }
+            granules[slot] = match device::DeviceRegion::map(
+                allocator,
+                sel4::init_thread::slot::VSPACE.cap(),
+                page,
+                paddr,
+            ) {
+                Ok(region) => Some(region.granule()),
+                Err(error) => fatal!("NT98690 reset registers unavailable: {error:?}"),
+            };
+        }
+        let registers = (granules[0].unwrap(), granules[1].unwrap());
+        // SAFETY: written once here, before any other thread exists.
+        unsafe {
+            ptr::addr_of_mut!(NS02201_RESET_REGISTERS).write(Some(registers));
+        }
+    }
+    #[cfg(all(any(slime_qemu_keyboard, slime_product_uart), not(slime_root_fixture)))]
     let product_input = {
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
@@ -742,29 +845,34 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 device::TerminalReceiver::Pl011(device::Pl011Input::new(registers)),
             )
         };
-        #[cfg(slime_duo_uart)]
+        #[cfg(slime_product_uart)]
         let (paddr, receiver) = {
             let registers = match device::DeviceRegion::map(
                 allocator,
                 sel4::init_thread::slot::VSPACE.cap(),
                 uart_addr,
-                DUO_UART_PADDR,
+                PRODUCT_UART_PADDR,
             ) {
                 Ok(registers) => registers,
-                Err(error) => fatal!("Duo product UART unavailable: {error:?}"),
+                Err(error) => fatal!("product UART unavailable: {error:?}"),
             };
             (
-                DUO_UART_PADDR,
+                PRODUCT_UART_PADDR,
                 device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
             )
         };
         sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
         let input = device::TerminalInput::new(receiver);
-        #[cfg(slime_duo_test_terminator)]
+        #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
         let input = input.with_test_terminator(0x1d, request_duo_test_reset);
+        #[cfg(all(slime_product_test_terminator, slime_ns02201_h1v1))]
+        let input = input.with_test_terminator(0x1d, request_ns02201_test_reset);
         Some(input)
     };
-    #[cfg(all(not(any(slime_qemu_keyboard, slime_duo_uart)), not(slime_root_fixture)))]
+    #[cfg(all(
+        not(any(slime_qemu_keyboard, slime_product_uart)),
+        not(slime_root_fixture)
+    ))]
     let product_input: Option<device::TerminalInput> = None;
     // ---- timer phase ----
     // Proves `TimerScheduler` (see `timer.rs`) is driven by a real seL4 IRQ
@@ -794,7 +902,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Err(error) => fatal!("reset registers unavailable: {error:?}"),
         }
     };
-    #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+    #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
     let timer_registers;
     #[cfg(target_arch = "riscv64")]
     {
@@ -811,11 +919,11 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Ok(region) => region.granule(),
             Err(error) => fatal!("timer registers unavailable: {error:?}"),
         };
-        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         {
             timer_registers = registers;
         }
-        #[cfg(slime_duo_test_terminator)]
+        #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
         unsafe {
             ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(registers));
             ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
@@ -1046,8 +1154,10 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );
-        #[cfg(all(slime_cv1800b_duo, not(slime_duo_uart)))]
+        #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         request_duo_cold_reset(timer_registers, reset_registers);
+        #[cfg(all(slime_ns02201_h1v1, not(slime_product_uart)))]
+        request_ns02201_reset();
         loop {
             core::hint::spin_loop();
         }

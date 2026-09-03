@@ -321,12 +321,14 @@ impl Pl011Input {
     }
 }
 
-/// Polling receive half of the CV1800B UART0 DW APB controller.
+/// Polling receive half of a 16550-compatible UART with `reg-shift 2` and
+/// `reg-io-width 4`. Every board mapped through this adapter must pin that
+/// layout; the Duo's DW-APB UART0 and the H1V1's `ns16550a` UART0 both do.
 ///
-/// The board device tree pins a 32-bit register width and a shift of two, so
-/// the 16550 receive buffer and line-status registers are at byte offsets 0x00
-/// and 0x14. Firmware owns configuration; this adapter only observes RX state
-/// and consumes one byte, leaving the shared debug-console TX path untouched.
+/// That shift and width place the receive buffer and line-status registers at
+/// byte offsets 0x00 and 0x14 under 32-bit accesses. Firmware owns
+/// configuration; this adapter only observes RX state and consumes one byte,
+/// leaving the shared debug-console TX path untouched.
 pub struct DwApbInput {
     registers: DeviceRegion,
 }

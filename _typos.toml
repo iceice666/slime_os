@@ -43,3 +43,14 @@ ded = "ded"
 bui = "bui"
 # AArch64 translation-table field name from the Arm architecture.
 Indx = "Indx"
+# 16550 UART register names from the NS02201's UART0, which is what the H1V1
+# probe writes: the transmit holding register and its "holding register empty"
+# line-status bit.
+THR = "THR"
+THRE = "THRE"
+
+[default.extend-identifiers]
+# `ser2net`, the serial-over-TCP bridge a remote board console is reached
+# through. Accepted as a whole identifier rather than by adding `ser` to the
+# word list, which would suppress a real misspelling everywhere else.
+ser2net = "ser2net"

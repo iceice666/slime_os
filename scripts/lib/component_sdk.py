@@ -169,6 +169,24 @@ PROFILE_PLATFORMS: dict[str, dict[str, object]] = {
             "build-std-features=compiler-builtins-mem",
         ),
     },
+    # P6's physical AArch64 board: the same JSON target and build-std flags as
+    # the seL4 reference, against the H1V1 prefix and its own pinned hashes.
+    "aarch64-sel4-nt98690-h1v1": {
+        "platform": "ns02201-h1v1",
+        "prefix": "build/sel4-ns02201-h1v1-prefix",
+        "pins": "observed_prefix_ns02201_h1v1",
+        "cargo_target": target_spec_sdk_path("aarch64-sel4-minimal"),
+        "cargo_target_is_spec": True,
+        "rust_flags": ("-C", "link-arg=--build-id=none"),
+        "cargo_flags": (
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ),
+    },
     "aarch64-rpi5": {
         "platform": "bcm2712-rpi5",
         "prefix": "build/sel4-rpi5-prefix",

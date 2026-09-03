@@ -49,6 +49,7 @@
           rustTargets = [
             "x86_64-unknown-none"
             "aarch64-unknown-none"
+            "aarch64-unknown-linux-gnu"
           ];
           # The exact GNU AArch64 cross toolchain the pinned seL4 kernel and
           # kernel loader are built with (`CROSS_COMPILER_PREFIX`, `CC`).
@@ -104,7 +105,10 @@
                 crossCC
                 riscvCrossCC
                 sel4Python
-              ];
+              ]
+              ++ nixpkgs.lib.optionals
+                (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64)
+                [ pkgs.qemu-user ];
 
             # `sel4-sys` generates the libsel4 bindings with bindgen, which
             # resolves libclang at run time rather than at link time.
@@ -144,6 +148,7 @@
               # RUSTUP_TOOLCHAIN, so it is installed but not made default.
               rustup toolchain install ${sel4RustToolchain} \
                 --profile minimal \
+                --target aarch64-unknown-linux-gnu \
                 --component rust-src,rustfmt,clippy \
                 --no-self-update
             '';

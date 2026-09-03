@@ -268,6 +268,14 @@ test_sel4_root:
         aarch64-*) target="$host" ;;
         *)
             target="aarch64-unknown-linux-gnu"
+            if [ -z "${CROSS_COMPILER_PREFIX:-}" ]; then
+                echo "test_sel4_root: CROSS_COMPILER_PREFIX is unset; run inside 'nix develop'" >&2
+                exit 1
+            fi
+            if ! command -v qemu-aarch64 >/dev/null 2>&1; then
+                echo "test_sel4_root: qemu-aarch64 is missing; run inside 'nix develop'" >&2
+                exit 1
+            fi
             libc="$("${CROSS_COMPILER_PREFIX}gcc" -print-file-name=libc.so)"
             sysroot="$(dirname "$(dirname "$libc")")"
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${CROSS_COMPILER_PREFIX}gcc"

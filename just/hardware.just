@@ -100,3 +100,82 @@ duo_serial_monitor serial timeout="120":
 [group('hardware')]
 duo_gate_control_check:
     python3 scripts/check/check-duo-gate-control.py
+
+# P6.A's builder is deterministic and hermetic: it needs no board, writes only
+# under `build/`, and never writes a block device. Copying onto removable
+# media is the one action that can destroy an unrelated disk. Run
+# `python3 scripts/build/build-nt98690-payload.py --qemu-variant` to also build
+# the QEMU `virt` retarget used to exercise the instruction stream first.
+#
+# Build the H1V1 probe into the flat arm64 `Image` its vendor U-Boot can start.
+[group('hardware')]
+nt98690_payload_check:
+    python3 scripts/build/build-nt98690-payload.py
+
+# P6.A: boot the pinned probe on the named H1V1 and require ordered evidence on
+# UART0 at the baud `sel4/pins.toml [ns02201_h1v1]` pins.
+#
+# Physical: it proves the artifact is this build's, drives the unmodified vendor
+# U-Boot over serial, checks the card's bytes against the built image before
+# spending a boot, launches with `booti`, and reads the probe's measured facts
+# and verdicts. Nothing writes eMMC; the probe returns the board to its vendor
+# firmware through PSCI, so a run needs no physical intervention.
+#
+# The board may be on another machine: `serial` takes a tty path or a
+# `tcp:HOST:PORT` bridge. Omitting it runs and fails, never skips.
+#
+#   just nt98690_boot_check /dev/ttyUSB0
+#   just nt98690_boot_check tcp:127.0.0.1:5000
+[group('hardware')]
+nt98690_boot_check serial="": nt98690_payload_check
+    python3 scripts/check/check-nt98690-boot.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
+# Bring-up aid, not a gate: print whatever the H1V1's UART0 emits and assert
+# nothing. It answers the one question `nt98690_boot_check` cannot when the wire
+# is silent — whether any byte reaches this host — and it is how the vendor
+# banner wording is observed before the gate's markers are frozen against it.
+# Exits on its own after 10s of quiet or the timeout.
+#
+# just nt98690_serial_monitor /dev/ttyUSB0
+[group('hardware')]
+nt98690_serial_monitor serial timeout="180":
+    python3 scripts/check/check-nt98690-boot.py --monitor --serial {{ serial }} --timeout {{ timeout }}
+
+# P6.B: build the H1V1's seL4 kernel, loader, root task, and generation for
+# the `aarch64-sel4-nt98690-h1v1` profile into their own prefix and
+# directories, and pin the kernel artifacts' hashes. Hermetic; it needs no
+# board and writes no block device.
+[group('hardware')]
+sel4_nt98690_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform ns02201-h1v1 --skip-pin-check
+
+# P6.B: boot the sample-plane image on the named H1V1 three times over the
+# same `booti` handoff P6.A qualified, and require the same ordered root
+# evidence the reference planes require, byte-identical normalized traces
+# across the three runs, and the board's own return to its firmware after
+# each. The AArch64 reference profile passes first, as the roadmap requires.
+#
+# The root resets the board through the SoC watchdog after every run, so the
+# operator power-cycles once, at the start. `serial` takes a tty path or a
+# `tcp:HOST:PORT` bridge; omitting it runs and fails, never skips.
+#
+#   just nt98690_sel4_check /dev/ttyUSB0
+[group('hardware')]
+nt98690_sel4_check serial="": sel4_root_boot_check sel4_sample_check
+    python3 scripts/check/check-nt98690-sel4.py {{ if serial == "" { "" } else { "--serial " + serial } }}
+
+# P6.C: build the target-qualified resident product graph with H1V1 UART0
+# input and the gate-only terminator, wrap it in the qualified arm64 `Image`
+# header, and drive one bounded Slisp session on the named board: staged over
+# P6.A's handoff, typed commands answered at the resident prompt, residency
+# proven past the former iteration ceiling, and the board returned to its
+# vendor firmware only through the terminator's watchdog reset. The QEMU
+# product graph and the Slisp core vectors pass first, as the roadmap
+# requires. Staging the card is the operator's step; nothing here writes a
+# block device. `serial` takes a tty path or a `tcp:HOST:PORT` bridge;
+# omitting it runs and fails, never skips.
+#
+#   just nt98690_slisp_check /dev/ttyUSB0
+[group('hardware')]
+nt98690_slisp_check serial="": slisp_core_check sel4_component_graph_check
+    python3 scripts/check/check-nt98690-slisp.py {{ if serial == "" { "" } else { "--serial " + serial } }}

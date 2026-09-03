@@ -46,7 +46,7 @@
 //! delay of arbitrary length can still separate the compare condition becoming
 //! true from this task next running.
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", slime_ns02201_h1v1))]
 use crate::device::MappedGranule;
 use crate::event::MonotonicInstant;
 use crate::object_allocator::{AllocError, ObjectAllocator};
@@ -237,6 +237,40 @@ pub fn request_cv1800b_cold_reset(timer: MappedGranule, control: MappedGranule) 
     timer.write32(ENABLE_POWER_CYCLE, 1)
         && control.write32(CTRL_UNLOCK_KEY, UNLOCK_KEY)
         && control.write32(CTRL0, POWER_CYCLE_REQUEST)
+}
+
+/// Reset the NT98690 through its watchdog from already-mapped clock-gate and
+/// watchdog granules.
+///
+/// The sequence is TF-A's own `nova_system_reset` for this SoC
+/// (`plat/novatek/nvt_ns02201/pm.c`, watchdog branch), with offsets and bits
+/// from its `novatek_def.h`: release the watchdog's clock reset, enable its
+/// clock, unlock it with the two key writes, then request a manual reset.
+/// `cg` maps `0x2_f002_0000` and `wdt` maps `0x2_f006_0000`. Success means
+/// every bounded register write was issued; working hardware resets before
+/// the caller can continue.
+#[cfg(slime_ns02201_h1v1)]
+pub fn request_ns02201_watchdog_reset(cg: MappedGranule, wdt: MappedGranule) -> bool {
+    const CLOCK_RESET: usize = 0x09c;
+    const CLOCK_RESET_WDT: u32 = 1 << 4;
+    const CLOCK_ENABLE: usize = 0x400;
+    const CLOCK_ENABLE_WDT: u32 = 1 << 24;
+    const CONTROL: usize = 0x000;
+    const MANUAL_RESET: usize = 0x00c;
+    const UNLOCK_FIRST: u32 = 0x5a96_0112;
+    const UNLOCK_SECOND: u32 = 0x5a96_0113;
+
+    let Some(clock_reset) = cg.read32(CLOCK_RESET) else {
+        return false;
+    };
+    let Some(clock_enable) = cg.read32(CLOCK_ENABLE) else {
+        return false;
+    };
+    cg.write32(CLOCK_RESET, clock_reset | CLOCK_RESET_WDT)
+        && cg.write32(CLOCK_ENABLE, clock_enable | CLOCK_ENABLE_WDT)
+        && wdt.write32(CONTROL, UNLOCK_FIRST)
+        && wdt.write32(CONTROL, UNLOCK_SECOND)
+        && wdt.write32(MANUAL_RESET, 1)
 }
 
 impl PlatformTimer for PhysicalTimerAdapter {

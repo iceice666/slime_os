@@ -302,11 +302,15 @@ SEL4_RISCV64_TARGET_PROFILE = "riscv64-sel4-qemu-virt"
 # identity. Rewriting the manifest target forces every embedded executable to be
 # rebuilt and admitted for the named Duo profile.
 SEL4_RISCV64_DUO_TARGET_PROFILE = "riscv64-sel4-milkv-duo"
+# P6's physical AArch64 board, the Novatek NT98690 H1V1. Same userspace ABI as
+# the AArch64 seL4 reference, distinct exact identity.
+SEL4_NT98690_TARGET_PROFILE = "aarch64-sel4-nt98690-h1v1"
 SEL4_TARGET_PROFILES = (
     SEL4_TARGET_PROFILE,
     SEL4_BOARD_TARGET_PROFILE,
     SEL4_RISCV64_TARGET_PROFILE,
     SEL4_RISCV64_DUO_TARGET_PROFILE,
+    SEL4_NT98690_TARGET_PROFILE,
 )
 # Additional seL4 manifests carry distinct authenticated boot actions and
 # generation-derived component tables while sharing the same target profile.
@@ -1098,6 +1102,7 @@ def sel4_component_environment(
         SEL4_BOARD_TARGET_PROFILE: ROOT / "build" / "sel4-rpi5-prefix",
         SEL4_RISCV64_TARGET_PROFILE: ROOT / "build" / "sel4-riscv64-prefix",
         SEL4_RISCV64_DUO_TARGET_PROFILE: ROOT / "build" / "sel4-cv1800b-duo-prefix",
+        SEL4_NT98690_TARGET_PROFILE: ROOT / "build" / "sel4-ns02201-h1v1-prefix",
     }
     prefix = prefix_by_profile.get(target_profile.name)
     if prefix is None:

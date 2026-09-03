@@ -1,0 +1,54 @@
+printenv fdtcontroladdr
+fdtcontroladdr=7f9c5ea0
+nvt: printenv bootcmd
+bootcmd=nvt_boot
+nvt: printenv bootdelay
+bootdelay=0
+nvt: md.l ${fdtcontroladdr} 1
+7f9c5ea0: edfe0dd0                             ....
+nvt: mmc list
+V0.02.007_NVT_MMC0: 0 (SD)
+V0.02.007_NVT_MMC1: 1
+V0.02.007_NVT_MMC2: 2 (eMMC)
+nvt: mmc dev 0
+switch to partitions #0, OK
+mmc0 is current device
+nvt: mmc dev 1
+Card did not respond to voltage select! : -110
+nvt: fatls mmc 0:1
+     5703   slime-nt98690-probe.bin
+
+1 file(s), 0 dir(s)
+
+nvt: bdinfo
+boot_params = 0x0000000000000000
+DRAM bank   = 0x0000000000000000
+-> start    = 0x0000000000000000
+-> size     = 0x0000000080000000
+flashstart  = 0x0000000000000000
+flashsize   = 0x0000000000000000
+flashoffset = 0x0000000000000000
+baudrate    = 115200 bps
+relocaddr   = 0x000000007ff75000
+reloc off   = 0x0000000001f75000
+Build       = 64-bit
+current eth = eth0@2,f04a0000
+ethaddr     = 0a:0b:0c:0d:0e:01
+IP addr     = 192.168.1.99
+fdt_blob    = 0x000000007f9c5ea0
+new_fdt     = 0x000000007f9c5ea0
+fdt_size    = 0x0000000000039f40
+lmb_dump_all:
+ memory.cnt  = 0x1
+ memory[0]	[0x0-0x7fffffff], 0x80000000 bytes flags: 0
+ reserved.cnt  = 0x3
+ reserved[0]	[0x1f00000-0x1ffffff], 0x00100000 bytes flags: 4
+ reserved[1]	[0x4800000-0xabfffff], 0x06400000 bytes flags: 0
+ reserved[2]	[0x7f9c4a40-0x7fffffff], 0x0063b5c0 bytes flags: 0
+arch_number = 0x0000000000000000
+TLB addr    = 0x000000007fff0000
+irq_sp      = 0x000000007f9c5e90
+sp start    = 0x000000007f9c5e90
+Board Type  = 0
+Early malloc usage: c8 / 400
+nvt: 

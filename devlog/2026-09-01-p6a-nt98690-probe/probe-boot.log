@@ -1,0 +1,132 @@
+mmc dev 0
+switch to partitions #0, OK
+mmc0 is current device
+nvt: md.l ${fdtcontroladdr} 1
+7f9c5ea0: edfe0dd0                             ....
+nvt: fatload mmc 0:1 0x10000000 slime-nt98690-probe.bin
+5703 bytes read in 11 ms (505.9 KiB/s)
+nvt: booti 0x10000000 - ${fdtcontroladdr}
+## Flattened Device Tree blob at 7f9c5ea0
+   Booting using the fdt blob at 0x7f9c5ea0
+   Loading Device Tree to 000000003ffc3000, end 000000003fffff3c ... OK
+
+Starting kernel ...
+
+==================== flush cache ==================== 
+=== SLIME_NT98690 probe: entry reached ===
+SLIME_NT98690 el         = 0x0000000000000002
+SLIME_NT98690 base       = 0x0000000010000000
+SLIME_NT98690 pc         = 0x00000000100000c4
+SLIME_NT98690 x0         = 0x000000003ffc3000
+SLIME_NT98690 x1         = 0x0000000000000000
+SLIME_NT98690 x2         = 0x0000000000000000
+SLIME_NT98690 x3         = 0x0000000000000000
+SLIME_NT98690 fdt_magic  = 0x00000000d00dfeed
+SLIME_NT98690 fdt_size   = 0x000000000003b000
+SLIME_NT98690 midr       = 0x00000000411fd090
+SLIME_NT98690 midr_part  = 0x0000000000000d09
+SLIME_NT98690 mpidr      = 0x0000000080000000
+SLIME_NT98690 mmfr0      = 0x0000000000101122
+SLIME_NT98690 parange    = 0x0000000000000002
+SLIME_NT98690 pfr0       = 0x1100000000002222
+SLIME_NT98690 cntfrq     = 0x0000000000b71b00
+SLIME_NT98690 cntpct0    = 0x00000000057057dc
+SLIME_NT98690 calib      = ......................................................................................................................................................................................................................................
+SLIME_NT98690 cntpct1    = 0x00000000057532d0
+SLIME_NT98690 cnt_delta  = 0x000000000003a673
+SLIME_NT98690 cnt_hz_est = 0x0000000000b68276
+SLIME_NT98690 sctlr      = 0x0000000030c50830
+SLIME_NT98690 hcr_el2    = 0x0000000000000002
+SLIME_NT98690 cnthctl    = 0x0000000000000013
+SLIME_NT98690 cntvoff    = 0x0000000000000000
+SLIME_NT98690 gicd_ctlr  = 0x0000000000000000
+SLIME_NT98690 gicd_typer = 0x000000000000fc6a
+SLIME_NT98690 gicd_iidr  = 0x000000000200143b
+SLIME_NT98690 gic_irqs   = 0x0000000000000160
+SLIME_NT98690 check placement   = ok
+SLIME_NT98690 check el2         = ok
+SLIME_NT98690 check fdt_magic   = ok
+SLIME_NT98690 check mmu_off     = ok
+SLIME_NT98690 check cnt_advance = ok
+SLIME_NT98690 check gicd        = ok
+SLIME_NT98690 PAYLOAD_OK
+SLIME_NT98690 reset request kind=psci
+NE188>TLZMA
+
+UNZOK!ini ver[0x240903, 0x240903]
+zq_trim[11, 13]
+ddr_speed [4266 4266]
+CPU1400 DONE
+>S
+-+
+-+
+-+
+-+
+tRFC 190ns
+ddr0 4096MB
+nw2k
+S
+-+
+-+-8
+-+
+-+
+tRFC 190ns
+ddr1 4096MB
+nw2k
+RPA
+ddr init done
+
+UNZOK!
+Loader Start ...
+LD_VER 01.09.04
+
+690_LPDDR4X_MIN2_2133MHz 01/28/2026 16:29:40
+
+[8bit]
+RRRRRReMMC 1.8V setting
+EMMC: 8 bits
+FW config 0x0
+BOOT USER 0x0
+BOOT WP 0x0
+Erase Grp Size 1
+WP Grp Size 16
+EMMC
+RRtmp_addr 0x08000000
+LdCtrl2 0x00000000
+l_bl31
+RRbl31_addr 0x01F00000
+bl31_size 0x0000C088
+l_uboot
+Ruboot_addr 0x7E000000
+Ruboot_size 0x0006CE78
+core_cnt= 0x00000004
+smp(bl31)
+fdt 0x00100000
+shm 0x00A00000
+        core2_jump 0xF1210FBC
+  code2JumpCodelen 0x00000010
+      core2_entry2 0x00010000
+       core2_entry 0xF1210FCC
+ code2EntryCodelen 0x00000188
+      core2_entry2 0x00010000
+bl_core2_reset
+64core2_jump_program 0x0100596E
+64code2JumpCodelen 0x00000228
+warm reset core0
+jump_entry 0x01F00000
+ARC64**2*431###NOTICE:  BL31: v2.2(release)
+NOTICE:  BL31: Built : 17:40:39, Jul  7 2026
+NOTICE:  BL31: Found DTB
+NOTICE:  TZASC config:
+NOTICE:  	0x00100000@0x01f00000 	(RW/N)	Ree
+NOTICE:  arb_enable_wp level 0
+NOTICE:  arb_enable_wp level 2
+INFO:    ARM GICv2 driver initialized
+INFO:    BL31: Platform setup done
+INFO:    BL31: Initializing runtime services
+INFO:    BL31: Preparing for EL3 exit to normal world
+INFO:    Entry point address = 0x7e000000
+INFO:    SPSR = 0x3c9
+
+
+U-Boot 2021.10 (Jul 15 2026 - 11:20:07 +0800)
