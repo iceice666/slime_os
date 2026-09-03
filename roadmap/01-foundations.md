@@ -213,19 +213,19 @@
 
 ### M5.7 — Framework NVMe transport and safety promotion
 
-**Status:** Deferred and blocked. The custom-kernel/QEMU implementation was retired with P5; no seL4 NVMe transport or physical Framework evidence exists. This is the only open M5 item, and the Milk-V Duo execution pivot does not change or satisfy it.
+**Status:** Deferred behind P6.6, H1, H2, H4, and the seL4 userspace NVMe transport. P6 restores only the removable-media CPU/product boot and grants no internal-storage access; it does not satisfy any M5.7 transport, DMA, or persistence gate.
 
-**Depends on:** M5.1–M5.6c and M4 removable-media safety.
+**Depends on:** M5.1–M5.6c, M4's historical removable-media safety invariant, [P6.6](07-architecture-portability.md#p66--framework-removable-media-cpu-boot), H1's observed inventory, H2's exact PCI binding, and H4's AMD-IOMMU containment.
 
 **Historical implementation:** The retired custom kernel carried bounded controller and namespace discovery, queue setup, timeout/reset handling, and read-only I/O over the common block protocol. That path was not part of the seL4 product cutover. Internal-NVMe writes remain unavailable.
 
-**Still required:** Implement the transport behind the seL4 userspace driver boundary, then observe and record a removable-media Framework boot of the storage-aware isolated slice without modifying internal NVMe. Destructive writes and interruption experiments may run only on a dedicated replaceable external test device.
+**Still required:** After P6.6 has proven the no-storage product boot, implement the NVMe transport behind the seL4 userspace-driver boundary using H1's observed controller/namespace identity, H2-bound PCI/MMIO/IRQ resources, H4 DMA containment, and IO2's `BlockDevice` contract; then observe a storage-aware removable-media Framework boot without modifying internal NVMe. Destructive writes and interruption experiments may run only on a dedicated replaceable external test device.
 
 **Promotion gates before any internal NVMe write may be enabled:** deterministic bounds and malformed-command tests; DMA isolation suitable for the physical target; timeout/reset recovery; flush ordering and durable-write tests; interrupted metadata and generation-transition tests; malformed GPT/object-store/generation/BootState tests; an explicit write capability held only by the intended service; and an operator-visible distinction between removable test media and internal NVMe. Production IOMMU enforcement and internal-disk promotion remain a later hardware reliability gate.
 
-**Verification targets:** `just storage_nvme_read_check` currently fails closed to make the missing seL4 NVMe path explicit; `just framework_safety_check` preserves the non-physical contract checks. QEMU, Milk-V Duo, or another board cannot replace the required Framework observation.
+**Verification targets:** `just storage_nvme_read_check` continues to fail closed until the seL4 NVMe path exists; `just framework_safety_check` preserves the non-physical contract checks. `just framework_cpu_boot_check` and `just framework_inventory_check` are prerequisites, not evidence of NVMe transport. QEMU, Milk-V Duo, or another board cannot replace the required Framework observation.
 
-**Exit condition:** A physical Framework runs the storage-aware isolated slice over the common protocol while internal NVMe writes remain disabled unless every physical promotion gate has been observed. No such physical success is claimed yet.
+**Exit condition:** Starting from the P6.6/H1-proven no-write boot path, a physical Framework runs the storage-aware isolated slice over the common protocol while internal NVMe writes remain disabled unless every physical promotion gate has been observed. No such physical storage success is claimed yet.
 
 ### M5.8 — Signed generation release metadata
 

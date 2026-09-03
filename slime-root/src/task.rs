@@ -934,6 +934,16 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 {
                     worker_context.inner_mut().tp = index as sel4::Word;
                 }
+                // x86-64 has no dedicated thread-pointer register; seL4 keeps
+                // `fs_base` in the saved user context and reloads it on every
+                // switch, which is the same per-thread guarantee. The
+                // component runtime reads it back through `rdfsbase`, legal in
+                // userspace because this profile builds the kernel with
+                // `KernelFSGSBase "inst"`, which sets `CR4.FSGSBASE` at boot.
+                #[cfg(target_arch = "x86_64")]
+                {
+                    worker_context.inner_mut().fs_base = index as sel4::Word;
+                }
                 worker_tcb
                     .tcb_write_all_registers(false, &mut worker_context)
                     .map_err(TaskError::WriteRegisters)?;

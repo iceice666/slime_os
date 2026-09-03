@@ -33,8 +33,8 @@ use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
-    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
-    transfer_window, wait_set,
+    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, thread_abi,
+    timer, transfer_window, vm_attributes, wait_set,
 };
 
 use core::ptr;
@@ -371,7 +371,7 @@ fn request_duo_test_reset() -> ! {
     }
 }
 
-#[cfg(slime_duo_uart)]
+#[cfg(any(slime_duo_uart, slime_pc99_com1))]
 const fn const_parse_hex_usize(value: &str) -> usize {
     let bytes = value.as_bytes();
     assert!(
@@ -430,8 +430,10 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for the selected RV64 platform's userspace timer registers.
-#[cfg(target_arch = "riscv64")]
+/// Standing window for the platform's memory-mapped timer registers, on the
+/// profiles whose monotonic source is a device rather than an architected
+/// register the kernel grants userspace access to.
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the CV1800B RTC control granule used to reset the board
@@ -467,23 +469,52 @@ static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
 const TIMER_PADDR: usize = 0x0010_1000;
 #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
 const TIMER_PADDR: usize = 0x0502_6000;
+/// The IA-PC HPET's architectural base address on QEMU q35.
+///
+/// A pinned machine fact, not discovery: firmware reports it in the ACPI HPET
+/// table, and P6 reads no ACPI (H1 owns the real inventory). This is the
+/// address that machine's HPET is fixed at, and a machine whose firmware
+/// relocates it is a different platform profile.
+#[cfg(target_arch = "x86_64")]
+const TIMER_PADDR: usize = 0xfed0_0000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
 #[cfg(slime_duo_uart)]
 const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR"));
+/// pc99's COM1 base I/O port, supplied by the build from `[qemu_pc99].serial`
+/// so the emulator fact and the compiled-in port cannot disagree.
+///
+/// Narrowed with a compile-time bound rather than an `as` cast: x86 I/O ports
+/// are 16 bits, and a truncating cast would turn an out-of-range pin into a
+/// plausible-looking port instead of a build failure.
+#[cfg(slime_pc99_com1)]
+const PC99_COM1_PORT: u16 = {
+    let port = const_parse_hex_usize(env!("SLIME_PC99_COM1_PORT"));
+    assert!(port <= u16::MAX as usize, "I/O port must fit in 16 bits");
+    port as u16
+};
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
 /// driver owns device semantics; root uses the constants only for the bounded
 /// bootstrap inventory and IRQ-capability handoff.
+///
+/// QEMU q35 has no virtio-mmio window at all: virtio devices there are PCI
+/// functions behind an ACPI-described host bridge. P6 explicitly does not
+/// enumerate PCI or enable bus mastering — that is H2's — so this profile
+/// declares an empty transport range and its bootstrap inventory finds no
+/// devices. The range is stated as zero granules rather than omitted so the
+/// scan is a real bounded loop over nothing instead of a separate code path.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_BASE: usize = 0;
 /// Bytes between consecutive transports.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 const VIRTIO_MMIO_STRIDE: usize = 0x1000;
 const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
 /// Number of transport granules to scan.
@@ -491,11 +522,16 @@ const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
 const VIRTIO_MMIO_GRANULES: usize = 4;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_GRANULES: usize = 8;
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_GRANULES: usize = 0;
 /// Interrupt number of the first transport in seL4's IRQ namespace.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
+/// Unreachable on this profile: no transport exists to derive an IRQ for.
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 0;
 /// Badge the device notification carries, distinct from the timer's.
 const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
 
@@ -660,7 +696,14 @@ static mut OBJECT_ALLOCATOR: core::mem::MaybeUninit<ObjectAllocator> =
 /// a read-only mapping, one branch into an execute-never page. A third fault
 /// from the clean-exit fixture is not part of the contract and is treated as a
 /// real failure.
+///
+/// x86-64 expects only the first: seL4 exposes no execute-never frame
+/// attribute there, so a data page is executable and the branch probe cannot
+/// fault. See `slime_root::vm_attributes`.
+#[cfg(not(target_arch = "x86_64"))]
 const SHARED_EXPECTED_PROBES: usize = 2;
+#[cfg(target_arch = "x86_64")]
+const SHARED_EXPECTED_PROBES: usize = 1;
 
 /// What the root observed while supervising the clean-exit fixture's
 /// shared-buffer phase.
@@ -720,9 +763,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
-    #[cfg(all(any(slime_qemu_keyboard, slime_duo_uart), not(slime_root_fixture)))]
+    #[cfg(all(
+        any(slime_qemu_keyboard, slime_duo_uart, slime_pc99_com1),
+        not(slime_root_fixture)
+    ))]
     let product_input = {
+        #[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
+        #[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
             fatal!("product input page unavailable: {error:?}")
         }
@@ -758,13 +806,53 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
             )
         };
+        // pc99 legacy serial is behind I/O ports rather than a mapped page, so
+        // this arm claims a capability over the COM1 port range instead of a
+        // device frame.
+        #[cfg(slime_pc99_com1)]
+        let (paddr, receiver) = {
+            let port_slot = match allocator.reserve_slot::<sel4::cap_type::IOPort>() {
+                Ok(slot) => slot,
+                Err(error) => fatal!("COM1 port slot unavailable: {error:?}"),
+            };
+            let first = PC99_COM1_PORT;
+            // The 16550's eight registers, no wider: `IOPortControl` will issue
+            // any span, and a wider one would hand the root authority over
+            // neighbouring legacy devices it does not drive.
+            //
+            // Checked rather than wrapped: a pinned base near the top of the
+            // port space would otherwise wrap to a reversed range, and a range
+            // whose end precedes its start is authority over nothing that
+            // nonetheless issues successfully.
+            let Some(last) = first.checked_add(7) else {
+                fatal!("COM1 port base {first:#x} leaves no room for the 16550's eight registers")
+            };
+            let root_cnode = sel4::init_thread::slot::CNODE.cap();
+            if let Err(error) = sel4::init_thread::slot::IO_PORT_CONTROL
+                .cap()
+                .ioport_control_issue(
+                    first.into(),
+                    last.into(),
+                    &root_cnode.absolute_cptr(port_slot.cptr()),
+                )
+            {
+                fatal!("COM1 port authority refused: {error:?}")
+            }
+            (
+                usize::from(first),
+                device::TerminalReceiver::Com1(device::Com1Input::new(port_slot.cap(), first)),
+            )
+        };
         sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
         let input = device::TerminalInput::new(receiver);
         #[cfg(slime_duo_test_terminator)]
         let input = input.with_test_terminator(0x1d, request_duo_test_reset);
         Some(input)
     };
-    #[cfg(all(not(any(slime_qemu_keyboard, slime_duo_uart)), not(slime_root_fixture)))]
+    #[cfg(all(
+        not(any(slime_qemu_keyboard, slime_duo_uart, slime_pc99_com1)),
+        not(slime_root_fixture)
+    ))]
     let product_input: Option<device::TerminalInput> = None;
     // ---- timer phase ----
     // Proves `TimerScheduler` (see `timer.rs`) is driven by a real seL4 IRQ
@@ -820,6 +908,23 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(registers));
             ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
         }
+        timer_adapter.attach_registers(registers);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let timer_addr = ptr::addr_of!(TIMER_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, timer_addr) {
+            fatal!("timer page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            timer_addr,
+            TIMER_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("timer registers unavailable: {error:?}"),
+        };
         timer_adapter.attach_registers(registers);
     }
     sel4::debug_println!(

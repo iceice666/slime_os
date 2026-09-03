@@ -3,46 +3,54 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import (
-    load_qemu_profile,
-    profile_text,
-    profile_integer,
-    qemu_kernel_arguments,
-    sha256_file,
-)  # noqa: E402
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths as platform_artifact_paths,
+    boot_command,
+    report_transcript,
+    run as run_boot,
+    verify_identity,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-PLATFORMS = {
-    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
-    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
-}
 
-TARGET_PROFILES = {
-    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
-    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
+# The userspace timer each platform's root drives: the ARM generic timer's
+# secure physical PPI, RISC-V's goldfish RTC alarm, and the IA-PC HPET's first
+# comparator, on the IOAPIC pin `platform_timer::TIMER_IRQ` names.
+TIMER_IRQS = {"qemu-arm-virt": 30, "qemu-riscv-virt": 11, "qemu-pc99": 20}
+
+# x86-64 seL4 exposes no execute-never frame attribute — `seL4_X86_VMAttributes`
+# is a cache-policy selector — so P6.1 recorded W^X on child data pages as
+# *unenforced* on this profile rather than claiming it. The fixture drops the
+# execute probe entirely there rather than letting it pass vacuously, and the
+# root prints `wx_execute=unenforced` so a transcript cannot read as an
+# enforced mapping.
+#
+# `WX_PROBES` pins the verdict line per platform, and `WX_ENFORCED_MARKERS`
+# names the markers that exist only where the attribute does. Both are pinned
+# per platform rather than relaxed everywhere, so a future profile that
+# silently stopped enforcing W^X on ARM or RISC-V would fail this gate.
+WX_PROBES = {
+    "qemu-arm-virt": r"ro_write=refused wx_execute=refused probes=2",
+    "qemu-riscv-virt": r"ro_write=refused wx_execute=refused probes=2",
+    "qemu-pc99": r"ro_write=refused wx_execute=unenforced probes=1",
 }
-TIMER_IRQS = {"qemu-arm-virt": 30, "qemu-riscv-virt": 11}
+WX_ENFORCED_MARKERS = frozenset({"execute-never mapping refused execution from a data page"})
+WX_ENFORCED_PLATFORMS = frozenset({"qemu-arm-virt", "qemu-riscv-virt"})
 
 
 def artifact_paths(platform: str) -> tuple[Path, Path]:
-    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
-    return (
-        ROOT / "build" / f"slime-sel4{suffix}.elf",
-        ROOT / "build" / f"slime-sel4{suffix}.identity.json",
-    )
+    return platform_artifact_paths("slime-sel4", platform)
 
 
 # The boot is bounded: a wedged guest must fail loudly instead of hanging the
@@ -295,9 +303,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_BUF readback vaddr=0x40000040 root_wrote=0x534255465f525721 "
         r"child_read=0x534255465f525721 child_wrote=0x4348494c445f4f4b match=1",
     ),
+    # `{wx_probes}` is substituted per platform from `WX_PROBES`: the number of
+    # protection probes and the W^X verdict differ because x86-64 seL4 has no
+    # execute-never frame attribute. Everything else about the marker — the
+    # read-only refusal and the single supervised fault — holds everywhere.
     (
-        "both mapping protections were enforced and supervised",
-        r"SLIME_BUF rights enforced ro_write=refused wx_execute=refused probes=2 supervised=1",
+        "the mapping protections were enforced and supervised",
+        r"SLIME_BUF rights enforced {wx_probes} supervised=1",
     ),
     # The root's own private-memory verdict, adjudicated in the same pass as the
     # shared-buffer one: after both fixtures have finished, from the root's page
@@ -435,123 +447,23 @@ def build_image(platform: str) -> None:
         fail(f"seL4 image build failed with exit status {process.returncode}")
 
 
-def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict[str, object]:
-    if not manifest_path.is_file():
-        fail(f"missing identity manifest {manifest_path.relative_to(ROOT)}")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {manifest_path.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{manifest_path.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    if manifest.get("platform") != platform:
-        fail(
-            f"{manifest_path.relative_to(ROOT)} describes {manifest.get('platform')!r}, not {platform!r}"
-        )
-    image = manifest.get("image")
-    expected_profile = TARGET_PROFILES[platform]
-    if manifest.get("target_profile") != expected_profile:
-        fail(
-            f"{manifest_path.relative_to(ROOT)} describes target profile "
-            f"{manifest.get('target_profile')!r}, not {expected_profile!r}"
-        )
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not image_path.is_file():
-        fail(f"missing packaged image {image_path.relative_to(ROOT)}")
-    actual = sha256_file(image_path, fail)
-    if actual != image["sha256"]:
-        fail(
-            f"{image_path.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
-        )
-    return manifest
+def required_markers(platform: str) -> tuple[tuple[str, str], ...]:
+    """The marker chain this platform's transcript must satisfy.
 
-
-def boot(
-    profile: dict[str, object],
-    *,
-    section: str,
-    qemu_binary: str,
-    image_path: Path,
-) -> str:
-    """Boot the image and return the serial transcript.
-
-    The root task ends by suspending itself, so QEMU stays alive forever after
-    the slice completes: waiting for an exit would always hit the timeout.
-    Serial output is read line by line instead, and the guest is terminated as
-    soon as the terminal marker — or any failure marker — appears. Reaching the
-    deadline without the terminal marker is the failure, and the transcript
-    collected so far is what gets reported.
+    One ordered sequence for every platform, with two platform-specific
+    adjustments and no others: the W^X verdict line is substituted from
+    `WX_PROBES`, and the markers naming an execute-never refusal are dropped
+    where the architecture has no such attribute. A platform may differ in what
+    a marker says or in whether a mechanism exists at all; it may never differ
+    in the order of the mechanisms it does have.
     """
-    qemu = shutil.which(qemu_binary)
-    if qemu is None:
-        fail(f"{qemu_binary} is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail, section),
-        "-cpu",
-        profile_text(profile, "cpu", fail, section),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail, section)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        *qemu_kernel_arguments(qemu_binary, image_path, fail),
-    ]
-    print(f"[boot] {' '.join(command)}", flush=True)
-    terminal = re.compile(REQUIRED_MARKERS[-1][1])
-    failures = re.compile("|".join(FAILURE_MARKERS))
-    lines: list[str] = []
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except OSError as error:
-        fail(f"cannot run QEMU: {error}")
-    # A wedged guest emits nothing at all, so the deadline cannot live inside
-    # the read loop: it would never be evaluated. A watchdog kills QEMU instead,
-    # which closes the pipe and ends the loop with whatever was captured.
-    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
-    watchdog.start()
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
-            if terminal.search(line) or failures.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    transcript = "\n".join(lines)
-    if timed_out and terminal.search(transcript) is None:
-        report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
-    return transcript
-
-
-def report_transcript(transcript: str) -> None:
-    tail = transcript.splitlines()[-40:]
-    if tail:
-        sys.stdout.write("--- serial transcript (tail) ---\n")
-        sys.stdout.write("\n".join(tail) + "\n")
-        sys.stdout.write("--- end transcript ---\n")
-        sys.stdout.flush()
+    probes = WX_PROBES[platform]
+    enforced = platform in WX_ENFORCED_PLATFORMS
+    return tuple(
+        (description, pattern.format(wx_probes=probes) if "{wx_probes}" in pattern else pattern)
+        for description, pattern in REQUIRED_MARKERS
+        if enforced or description not in WX_ENFORCED_MARKERS
+    )
 
 
 def check_transcript(transcript: str, platform: str) -> None:
@@ -561,7 +473,7 @@ def check_transcript(transcript: str, platform: str) -> None:
             report_transcript(transcript)
             fail(f"failure marker in serial transcript: {match.group(0)!r}")
     position = 0
-    for description, pattern in REQUIRED_MARKERS:
+    for description, pattern in required_markers(platform):
         match = re.compile(pattern).search(transcript, position)
         if match is None:
             report_transcript(transcript)
@@ -660,21 +572,30 @@ def main() -> None:
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    section, qemu_binary = PLATFORMS[arguments.platform]
     image_path, manifest_path = artifact_paths(arguments.platform)
-    profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
         build_image(arguments.platform)
-    check_manifest(image_path, manifest_path, arguments.platform)
-    check_transcript(
-        boot(
-            profile,
-            section=section,
-            qemu_binary=qemu_binary,
-            image_path=image_path,
-        ),
-        arguments.platform,
+    manifest = verify_identity(
+        manifest_path,
+        platform=arguments.platform,
+        variant=None,
+        image_path=image_path,
+        fail=fail,
     )
+    transcript = run_boot(
+        boot_command(
+            manifest,
+            platform=arguments.platform,
+            image_path=image_path,
+            fail=fail,
+        ),
+        terminal=re.compile(
+            required_markers(arguments.platform)[-1][1] + "|" + "|".join(FAILURE_MARKERS)
+        ),
+        timeout=BOOT_TIMEOUT_SECONDS,
+        fail=fail,
+    )
+    check_transcript(transcript, arguments.platform)
     print(
         "seL4 root boot check: ordered generation, timer, task, IPC, fault, and "
         f"ready markers observed on the pinned {arguments.platform} profile"

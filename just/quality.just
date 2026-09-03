@@ -144,8 +144,43 @@ lint_sel4_root clippy_flags='-D warnings':
             --target-dir "../build/sel4-cargo/lint-components-$group" "${build_std[@]}" -- {{ clippy_flags }}
     done <<< "$groups"
 
+# P6.1's x86-64 arms. A separate recipe rather than a parameter on the one
+# above: this platform's prefix, target specifications, and child artifact path
+# all differ, and it lints code paths `lint_sel4_root` never compiles — the
+# `#[cfg(target_arch = "x86_64")]` arms in the root, the HPET timer driver, and
+# the IOAPIC interrupt acquisition.
 [group('quality')]
-lint_all: lint_boot_contracts lint_components_host lint_sel4_root
+lint_sel4_root_x86_64 clippy_flags='-D warnings':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$PWD/build/sel4-pc99-prefix"
+    if [ ! -f "$prefix/libsel4/include/kernel/gen_config.json" ]; then
+        echo "lint_sel4_root_x86_64: no installed seL4 prefix at $prefix; run 'just x86_64_sel4_image_check' first" >&2
+        exit 1
+    fi
+    child_elf="$PWD/build/sel4-cargo/qemu-pc99/child/x86_64-sel4-minimal/release/slime-root-child.elf"
+    if [ ! -f "$child_elf" ]; then
+        echo "lint_sel4_root_x86_64: no root child ELF at $child_elf; run 'just x86_64_sel4_image_check' first" >&2
+        exit 1
+    fi
+    toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
+    # Repo-owned rather than rust-sel4's; see sel4/targets/README.md.
+    targets="$PWD/sel4/targets"
+    export SEL4_PREFIX="$prefix" RUSTUP_TOOLCHAIN="$toolchain" CHILD_ELF="$child_elf"
+    export SLIME_TARGET_PROFILE=x86_64-sel4-qemu-pc99
+    build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
+    cargo clippy -p slime-root --target "$targets/x86_64-sel4-roottask-minimal.json" \
+        --target-dir build/sel4-cargo/lint-root-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
+    cargo clippy --manifest-path slime-root/child/Cargo.toml -p slime-root-child \
+        --target "$targets/x86_64-sel4-minimal.json" \
+        --target-dir build/sel4-cargo/lint-child-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
+    cd components
+    cargo clippy -p slime-rt -p slime-proto -p slime-components \
+        --target "$targets/x86_64-sel4-minimal.json" \
+        --target-dir ../build/sel4-cargo/lint-components-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
+
+[group('quality')]
+lint_all: lint_boot_contracts lint_components_host lint_sel4_root lint_sel4_root_x86_64
 
 [group('quality')]
 lint_components: lint_sel4_root
@@ -250,9 +285,10 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    # P3.E adds the sparse device-untyped preflight test: the retained virtual
-    # anchor must participate in contiguous-slot planning without mutating the pool.
-    expected=214
+    # Raised by P6.3's `thread_abi`: the stack pointer a directly started thread
+    # is entered with must satisfy the callee ABI, stay inside the reservation,
+    # and not underflow. Three tests, one new module.
+    expected=217
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"
@@ -278,7 +314,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 19 modules"
+    echo "slime-root host tests: $actual/$expected across 21 modules"
 
 [group('quality')]
 ruff:

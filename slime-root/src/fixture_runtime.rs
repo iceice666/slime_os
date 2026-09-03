@@ -270,6 +270,7 @@ fn serve_fault(
         && buffer_phase.probes < SHARED_EXPECTED_PROBES
     {
         buffer_phase.probes += 1;
+        #[cfg(not(target_arch = "x86_64"))]
         if probe == Probe::Execute {
             buffer_phase.flags |= REPORT_EXECUTE_REFUSED;
         }
@@ -364,6 +365,11 @@ enum Probe {
     /// A store refused by a read-only mapping.
     ReadOnlyWrite,
     /// A branch refused by an execute-never mapping.
+    ///
+    /// Absent on x86-64: `seL4_X86_VMAttributes` is a cache-policy selector
+    /// with no execute bit, so a data mapping there is executable and no such
+    /// fault can occur. See `crate::vm_attributes`.
+    #[cfg(not(target_arch = "x86_64"))]
     Execute,
 }
 
@@ -371,6 +377,7 @@ impl Probe {
     const fn name(self) -> &'static str {
         match self {
             Self::ReadOnlyWrite => "ro-write",
+            #[cfg(not(target_arch = "x86_64"))]
             Self::Execute => "wx-execute",
         }
     }
@@ -392,6 +399,7 @@ fn classify_probe(record: &fault::FaultRecord) -> Option<Probe> {
         {
             Some(Probe::ReadOnlyWrite)
         }
+        #[cfg(not(target_arch = "x86_64"))]
         fault::AccessKind::Execute
             if (SHARED_RW_VADDR..SHARED_RW_VADDR + PAGE_SIZE).contains(&address) =>
         {
@@ -403,17 +411,26 @@ fn classify_probe(record: &fault::FaultRecord) -> Option<Probe> {
 
 /// Step a probing thread past the instruction that faulted, then let it run.
 ///
-/// Data faults report the store itself. AArch64 instructions are fixed-width;
-/// the RV64 fixture emits its probing store inside an explicit `.option norvc`
-/// block, so this one instruction is fixed-width even though the image otherwise
-/// uses the compressed extension. Execute faults report the non-executable
-/// branch target, so resume at the link register the indirect call set.
+/// Data faults report the store itself, so resuming means advancing the PC by
+/// exactly that store's width. AArch64 instructions are fixed-width; the RV64
+/// fixture emits its probing store inside an explicit `.option norvc` block so
+/// this one instruction is fixed-width even though the image otherwise uses the
+/// compressed extension; the x86-64 fixture emits a pinned three-byte encoding
+/// (`48 89 01`, `mov %rax, (%rcx)`) for the same reason. Each width is stated
+/// beside the architecture that emits it, because a mismatch resumes the thread
+/// mid-instruction rather than failing.
+///
+/// Execute faults report the non-executable branch target, so resume at the
+/// link register the indirect call set.
 fn resume_past_probe(
     tasks: &TaskTable<MAX_TASKS>,
     id: TaskId,
     probe: Probe,
 ) -> Result<(), sel4::Error> {
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
     const DATA_INSTRUCTION_BYTES: sel4::Word = 4;
+    #[cfg(target_arch = "x86_64")]
+    const DATA_INSTRUCTION_BYTES: sel4::Word = 3;
 
     let Some(task) = tasks.get(id) else {
         return Err(sel4::Error::InvalidCapability);
@@ -421,6 +438,7 @@ fn resume_past_probe(
     let mut context = task.tcb.tcb_read_all_registers(false)?;
     let resume_at = match probe {
         Probe::ReadOnlyWrite => context.pc().wrapping_add(DATA_INSTRUCTION_BYTES),
+        #[cfg(not(target_arch = "x86_64"))]
         Probe::Execute => {
             #[cfg(target_arch = "aarch64")]
             {
@@ -495,7 +513,7 @@ fn write_pattern_through_scratch(
         sel4::init_thread::slot::VSPACE.cap(),
         scratch.addr(),
         sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        vm_attributes::data(),
     )?;
     // SAFETY: `scratch.addr()` is a granule-aligned page mapped read-write into
     // this VSpace for the duration of this store and aliased by no live Rust
@@ -517,7 +535,7 @@ fn read_word_through_scratch(
         sel4::init_thread::slot::VSPACE.cap(),
         scratch.addr(),
         sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        vm_attributes::data(),
     )?;
     // SAFETY: as for `write_pattern_through_scratch`; the same page, offset,
     // and alignment, and the mapping is live for the duration of this load.
@@ -584,8 +602,18 @@ pub(super) fn report_buffer_phase(
     if phase.flags & REPORT_RO_WRITE_REFUSED == 0 {
         fatal!("SLIME_BUF FAIL read-only mapping accepted a child write")
     }
+    #[cfg(not(target_arch = "x86_64"))]
     if phase.flags & REPORT_EXECUTE_REFUSED == 0 {
         fatal!("SLIME_BUF FAIL execute-never mapping did not refuse execution")
+    }
+    // The inverse assertion on x86-64: the flag is only ever set from an
+    // observed Execute fault, and no such fault can occur where the frame
+    // attribute does not exist. Seeing it would mean the fault vocabulary or
+    // the probe classification changed, which must fail rather than pass
+    // quietly.
+    #[cfg(target_arch = "x86_64")]
+    if phase.flags & REPORT_EXECUTE_REFUSED != 0 {
+        fatal!("SLIME_BUF FAIL execute fault reported where no execute attribute exists")
     }
     if phase.probes != SHARED_EXPECTED_PROBES {
         fatal!(
@@ -593,8 +621,17 @@ pub(super) fn report_buffer_phase(
             phase.probes
         )
     }
+    #[cfg(not(target_arch = "x86_64"))]
     sel4::debug_println!(
         "SLIME_BUF rights enforced ro_write=refused wx_execute=refused probes={} supervised=1",
+        phase.probes,
+    );
+    // Distinct text on purpose: this profile did not observe an execute
+    // refusal, and printing the other marker would make an unenforced mapping
+    // read as an enforced one in a transcript.
+    #[cfg(target_arch = "x86_64")]
+    sel4::debug_println!(
+        "SLIME_BUF rights enforced ro_write=refused wx_execute=unenforced probes={} supervised=1",
         phase.probes,
     );
 }

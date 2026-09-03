@@ -183,8 +183,9 @@ pub(super) fn start_console_dispatcher(
     // clippy refuses: the address is the same, the intent is explicit.
     let entry: extern "C" fn(usize) -> ! = console_entry;
     *registers.pc_mut() = entry as usize as sel4::Word;
-    // AArch64 requires a 16-byte aligned stack pointer.
-    *registers.sp_mut() = (stack_top & !0xf) as sel4::Word;
+    // This thread is entered by the kernel rather than by a call, so the ABI's
+    // entry alignment is not simply "16-byte aligned"; see `thread_abi`.
+    *registers.sp_mut() = thread_abi::initial_stack_pointer(stack_top) as sel4::Word;
     *registers.c_param_mut(0) = context as usize as sel4::Word;
     let started = tcb.tcb_write_all_registers(true, &mut registers);
     if let Err(error) = started {

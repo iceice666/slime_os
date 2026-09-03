@@ -94,11 +94,7 @@ void slime_component_main(uint32_t startup_arg)
                 write_text("\n[slisp] resident input wait\nslisp> ");
                 resident_wait_observed = 1;
             }
-#if defined(CONFIG_ARCH_RISCV64)
-            __asm__ volatile("nop");
-#else
-            __asm__ volatile("yield");
-#endif
+            __asm__ volatile(SLIME_SPIN_HINT);
             continue;
         }
         if (status != SLIME_ERR_SUCCESS) {

@@ -31,6 +31,34 @@ ARCHITECTURES = {
         "linker": RUNTIME / "c" / "component-riscv64.ld",
         "machine_flags": ("-march=rv64imac", "-mabi=lp64"),
     },
+    "x86_64": {
+        "target": "x86_64-none-elf",
+        "prefix": ROOT / "build" / "sel4-pc99-prefix",
+        "start": RUNTIME / "c" / "start-x86_64.S",
+        "linker": RUNTIME / "c" / "component-x86_64.ld",
+        # No `-mno-sse`: seL4 pc99 saves and restores x87/SSE state per thread
+        # (`KERNEL_X86_FPU = "XSAVE"`), so a component may use those registers,
+        # and the Rust side of this profile relies on the same fact
+        # (`sel4/targets/README.md`). `-mno-red-zone` matches what the Rust
+        # target specifications set with `disable-redzone`: a signal-free
+        # freestanding component gains nothing from the red zone, and the
+        # kernel's own entry paths do not preserve it.
+        #
+        # `-fno-pic` with the small code model is what makes the fixed 0x400000
+        # link base in `component-x86_64.ld` usable. Clang defaults to PIC on
+        # this target, which emits 32-bit absolute relocations against local
+        # symbols that `ld.lld` then refuses ("cannot be used against local
+        # symbol; recompile with -fPIC"). The component is loaded at exactly
+        # the address it links to, so position independence buys nothing and
+        # the absolute addressing the model permits is correct.
+        "machine_flags": ("-mno-red-zone", "-fno-pic", "-mcmodel=small"),
+        # `--no-pie` at the linker, not `-no-pie` at the driver: on this bare
+        # target the driver reports the latter as unused and still produces a
+        # `ET_DYN` image whose 32-bit absolute relocations `ld.lld` refuses.
+        # A component is loaded at the exact address it links to, so a
+        # position-independent image would be strictly worse.
+        "link_flags": ("-Wl,--no-pie",),
+    },
 }
 COMMON_FLAGS = ("-ffreestanding", "-fno-stack-protector", "-fno-builtin", "-nostdlib")
 
@@ -42,12 +70,18 @@ def run(command: list[str]) -> None:
 def compiler_for_target(compiler: str, architecture: str) -> str:
     """Use Nix's underlying Clang for a foreign LLVM target.
 
-    The Darwin wrapper injects host-only hardening flags after the command
-    line; RISC-V rejects one of them before compiling. Its `orig-cc` record is
-    the wrapper's authoritative route to the same pinned Clang without those
-    host flags.
+    The wrapper injects host-only flags around the command line and routes the
+    link through the host `gcc`. Neither survives a target it was not built
+    for: RISC-V rejects one of the injected hardening flags before compiling,
+    and an `x86_64-none-elf` link reaches a `gcc` that does not recognize the
+    wrapper's own Clang-specific options. Its `orig-cc` record is the wrapper's
+    authoritative route to the same pinned Clang without either.
+
+    AArch64 keeps the wrapper: it is the host toolchain's own target family
+    on this project's Darwin and Linux hosts, and the wrapper's flags are
+    accepted there.
     """
-    if architecture != "riscv64":
+    if architecture == "aarch64":
         return compiler
     path = Path(compiler)
     origin = path.parent.parent / "nix-support" / "orig-cc"
@@ -130,6 +164,7 @@ def main() -> None:
                 compiler,
                 *common_flags,
                 "-fuse-ld=lld",
+                *architecture.get("link_flags", ()),
                 f"-Wl,-T,{architecture['linker']}",
                 "-Wl,--build-id=none",
                 str(start_object),

@@ -13,9 +13,11 @@ a badged endpoint the generation granted. The retired custom kernel's
 trap-numbered surface (`int 0x80`, `SYS_*` 0–30, `SYS_ENDPOINT_CREATE`,
 `SYS_STORE_TRANSACT`, `SYS_GENERATION_TRANSACT`, `SYS_GENERATION_RECEIVE`,
 `SYS_RECOVERY_RECONSTRUCT`, `SYS_HEALTH_CONFIRM`, `SYS_WAIT`, `SYS_CAP_TRANSFER`)
-was deleted by B39–B50. The product ABI identity is `SLIME_AARCH64_SEL4_V1`
+was deleted by B39–B50. The admitted product ABI identities are
+`SLIME_AARCH64_SEL4_V1`, `SLIME_RISCV64_SEL4_V1`, and `SLIME_X86_64_SEL4_V1`
 (`contracts/target-profile/v1/schema.zt`); the three trap-based ABI numbers
-remain in that contract as unadmitted identities no image is built for.
+remain in that contract as unadmitted identities no image is built for. See
+`## Architecture` for what each admitted identity does and does not change.
 
 ## Two paths
 
@@ -297,17 +299,53 @@ transport. A component's generation grants number their own logical slots from
 
 ## Architecture
 
-The product target is `aarch64` under seL4 (`sel4/config/qemu-arm-virt.cmake`).
 Register-level trap entry is seL4's own, not Slime's: components invoke through
 the `sel4` crate's `seL4_Call`/`seL4_Send`/`seL4_NBSend`/`seL4_Recv`/`seL4_Yield`
 wrappers and the per-thread IPC buffer, so Slime defines no calling convention
-of its own and no `arch::<target>::trap` frame accessors exist. AArch64 fault
-entry is decoded from seL4's fault messages by `slime-root/src/fault.rs` into the
-architecture-neutral fault vocabulary supervision reports.
+of its own and no `arch::<target>::trap` frame accessors exist. Each
+architecture's fault entry is decoded from seL4's fault messages by
+`slime-root/src/fault.rs` into the architecture-neutral fault vocabulary
+supervision reports.
+
+The admitted seL4 profiles are AArch64 (`aarch64-sel4-qemu-virt`,
+`aarch64-rpi5`), RV64 (`riscv64-sel4-qemu-virt`, `riscv64-sel4-milkv-duo`), and
+x86-64 (`x86_64-sel4-qemu-pc99`, `x86_64-sel4-framework13-ai300`). Each carries
+its own architecture-qualified ABI identifier in
+`contracts/target-profile/v1/schema.zt` — `SLIME_AARCH64_SEL4_V1`,
+`SLIME_RISCV64_SEL4_V1`, `SLIME_X86_64_SEL4_V1` — so an image built for one is
+refused by another before any executable byte is mapped, even though the
+semantic operation table below is identical across all three.
+
+A distinct identifier is required rather than cosmetic: the numbers also
+separate these profiles from the retired custom kernel's trap ABIs
+(`SLIME_X86_64_V1`, `SLIME_AARCH64_V1`, `SLIME_RISCV64_V1`), which are retained
+unadmitted so rollback-window artifacts still decode. `SLIME_X86_64_V1` in
+particular names the deleted `int 0x80` path and shares x86-64's architecture
+and page profile with `SLIME_X86_64_SEL4_V1`; only the ABI, required-feature
+set, and profile id distinguish them.
 
 Porting to another architecture therefore changes the seL4 configuration and the
-platform mechanisms (`slime-root/src/platform_timer.rs`, the device path), not
-this table: labels, operand packings, reply convention, error values, bounds, and
-rights checks are architecture-neutral by construction.
-`just x86_portability_check` scans the neutral Rust trees for x86-only tokens to
-keep that true; RV64 stays deferred until after the Raspberry Pi 5 demo.
+platform mechanisms — `slime-root/src/platform_timer.rs`, the device path, and
+the two per-architecture owners `slime-root/src/{vm_attributes,irq_control}.rs`
+— not this table: labels, operand packings, reply convention, error values,
+bounds, and rights checks are architecture-neutral by construction.
+
+Two places where an architecture is *not* neutral, recorded because a caller
+would otherwise assume it is:
+
+- The per-thread index a component reads with `slime_rt::thread_index()` lives
+  in `tpidr_el0` on AArch64, `tp` on RV64, and `fs_base` on x86-64. seL4 saves
+  and restores all three with the user context, so the guarantee is the same;
+  x86-64 additionally requires the kernel to set `CR4.FSGSBASE`, which
+  `sel4/config/qemu-pc99.cmake` selects with `KernelFSGSBase "inst"`.
+- Frame mappings carry an execute-never attribute on AArch64 and RV64 and none
+  on x86-64, where `seL4_X86_VMAttributes` is a cache-policy selector. W^X on
+  component data pages is enforced by the page tables on the first two and
+  unenforced on the third; `slime-root/src/vm_attributes.rs` owns that
+  statement.
+
+`just x86_portability_check` scans the architecture-neutral Rust trees for
+privileged x86 mechanism — ring-0 and port instructions, control/debug/general
+registers, relocation and ELF constants — keeping platform mechanism behind its
+boundary while admitting the ordinary `cfg(target_arch)` arms every one of the
+three architectures uses.

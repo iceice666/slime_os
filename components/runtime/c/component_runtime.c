@@ -17,11 +17,7 @@ void __assert_fail(
     (void)line;
     (void)function;
     for (;;) {
-#if defined(CONFIG_ARCH_RISCV64)
-        __asm__ volatile("nop");
-#else
-        __asm__ volatile("yield");
-#endif
+        __asm__ volatile(SLIME_SPIN_HINT);
     }
 }
 
@@ -172,11 +168,7 @@ void slime_exit(int64_t status)
         SLIME_ROOT_SERVICE_SLOT, info, &mr0, &mr1, &mr2, &mr3);
     (void)answer;
     for (;;) {
-#if defined(CONFIG_ARCH_RISCV64)
-        __asm__ volatile("nop");
-#else
-        __asm__ volatile("yield");
-#endif
+        __asm__ volatile(SLIME_SPIN_HINT);
     }
 }
 

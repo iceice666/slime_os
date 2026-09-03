@@ -263,6 +263,20 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
             options(nostack),
         );
     }
+    // x86-64 instructions are variable-width, so the encoding is pinned rather
+    // than left to the assembler: `mov %rax, (%rcx)` is exactly the three
+    // bytes `48 89 01`. The supervisor advances the faulting PC by a fixed
+    // width, so an encoding the compiler was free to widen (a REX-prefixed
+    // displacement form, say) would resume mid-instruction.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!(
+            ".byte 0x48, 0x89, 0x01",
+            in("rax") SHARED_RO_INTRUSION,
+            in("rcx") ro_pattern_addr,
+            options(nostack),
+        );
+    }
     // SAFETY: as for the read in probe 1; the read-only mapping permits loads.
     let after_write = unsafe { (ro_pattern_addr as *const u64).read_volatile() };
     if after_write != SHARED_RO_INTRUSION {
@@ -284,11 +298,18 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
     // would also have returned. The two paths are indistinguishable from here,
     // so the verdict belongs to the root, which either observed an Execute
     // fault at this address or did not.
-    sel4::debug_println!("SLIME_CHILD wx exec probe vaddr={SHARED_RW_VADDR:#x}");
-    branch_to_data_page(SHARED_RW_VADDR);
-    // Reached either way: on an instruction fault the root resumes at the
-    // architecture's link register, exactly where a successful call returns.
-    sel4::debug_println!("SLIME_CHILD wx exec probe returned vaddr={SHARED_RW_VADDR:#x}");
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        sel4::debug_println!("SLIME_CHILD wx exec probe vaddr={SHARED_RW_VADDR:#x}");
+        branch_to_data_page(SHARED_RW_VADDR);
+        // Reached either way: on an instruction fault the root resumes at the
+        // architecture's link register, exactly where a successful call returns.
+        sel4::debug_println!("SLIME_CHILD wx exec probe returned vaddr={SHARED_RW_VADDR:#x}");
+    }
+    // Skipped on x86-64: seL4 has no execute-never frame attribute there, so
+    // the root maps this page executable and the branch would *succeed*,
+    // running whatever data bytes are at the target. That is not a probe, it
+    // is undefined execution, so the fixture must not perform it.
 
     // Hand every observation to the root in one bounded message. The root, not
     // this fixture, decides whether the phase passed, and it supplies the
@@ -473,6 +494,10 @@ fn call_grow(service: sel4::cap::Endpoint, delta: sel4::Word) -> (i64, sel4::Wor
 ///
 /// The indirect call writes the architecture's link register, so the root can
 /// resume this thread at the instruction after it records the execute fault.
+///
+/// Absent on x86-64, which has neither an execute-never frame attribute to
+/// probe nor a link register to resume from.
+#[cfg(not(target_arch = "x86_64"))]
 fn branch_to_data_page(addr: usize) {
     #[cfg(target_arch = "aarch64")]
     unsafe {

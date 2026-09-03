@@ -7,23 +7,21 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import (
-    GENERATION_COMPOSITIONS,
-    load_qemu_profile,
-    profile_integer,
-    profile_text,
-    qemu_kernel_arguments,
-    sha256_file,
-)  # noqa: E402
+from harness import GENERATION_COMPOSITIONS  # noqa: E402
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths as platform_artifact_paths,
+    boot_command,
+    run as run_boot,
+    verify_identity,
+)
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
@@ -32,24 +30,11 @@ BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-wait-set.zti"
 IMAGE_VARIANT = "wait-set"
-PLATFORMS = {
-    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
-    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
-}
-
-TARGET_PROFILES = {
-    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
-    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
-}
 TIMEOUT = 240
 
 
 def artifact_paths(platform: str) -> tuple[Path, Path]:
-    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
-    return (
-        ROOT / "build" / f"slime-sel4-wait-set{suffix}.elf",
-        ROOT / "build" / f"slime-sel4-wait-set{suffix}.identity.json",
-    )
+    return platform_artifact_paths("slime-sel4-wait-set", platform)
 
 
 # The three declared sources, by the badge bit each names and the kind it is
@@ -135,7 +120,7 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 wait-set plane check: {message}")
 
 
-def build_image(platform: str, image_path: Path, manifest_path: Path) -> None:
+def build_image(platform: str, image_path: Path, manifest_path: Path) -> dict[str, object]:
     process = subprocess.run(
         [
             sys.executable,
@@ -147,85 +132,27 @@ def build_image(platform: str, image_path: Path, manifest_path: Path) -> None:
         cwd=ROOT,
         check=False,
     )
-    if process.returncode != 0 or not image_path.is_file():
+    if process.returncode != 0:
         fail("image build failed")
-    if not manifest_path.is_file():
-        fail("identity manifest missing")
-    identity = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    if identity.get("platform") != platform:
-        fail(f"identity platform is {identity.get('platform')!r}, not {platform!r}")
-    expected_profile = TARGET_PROFILES[platform]
-    if identity.get("target_profile") != expected_profile:
-        fail(
-            f"identity target profile is {identity.get('target_profile')!r}, "
-            f"not {expected_profile!r}"
-        )
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(image_path, fail):
-        fail("packaged image digest does not match identity manifest")
+    return verify_identity(
+        manifest_path,
+        platform=platform,
+        variant=IMAGE_VARIANT,
+        image_path=image_path,
+        fail=fail,
+    )
 
 
-def boot(
-    profile: dict[str, object],
-    *,
-    section: str,
-    qemu_binary: str,
-    image_path: Path,
-) -> str:
-    qemu = shutil.which(qemu_binary)
-    if qemu is None:
-        fail(f"{qemu_binary} is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail, section),
-        "-cpu",
-        profile_text(profile, "cpu", fail, section),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail, section)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        *qemu_kernel_arguments(qemu_binary, image_path, fail),
-    ]
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
+    return run_boot(
+        boot_command(manifest, platform=platform, image_path=image_path, fail=fail),
+        terminal=re.compile(
+            r"SLIME_GRAPH HEALTHY generation=42 required=4 live=0 completed=4 failed=0"
+            r"|SLIME_ROOT FATAL|SLIME_WAIT FAIL|\[wait-set\] FAIL"
+        ),
+        timeout=TIMEOUT,
+        fail=fail,
     )
-    watchdog = threading.Timer(TIMEOUT, process.kill)
-    watchdog.start()
-    lines: list[str] = []
-    terminal = re.compile(
-        r"SLIME_GRAPH HEALTHY generation=42 required=4 live=0 completed=4 failed=0"
-        r"|SLIME_ROOT FATAL|SLIME_WAIT FAIL|\[wait-set\] FAIL"
-    )
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
-            if terminal.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    if timed_out:
-        fail("QEMU timed out")
-    return "\n".join(lines)
 
 
 def fixture_manifest() -> dict[str, object]:
@@ -381,16 +308,9 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     check_fixture_shape()
-    section, qemu_binary = PLATFORMS[arguments.platform]
     image_path, manifest_path = artifact_paths(arguments.platform)
-    build_image(arguments.platform, image_path, manifest_path)
-    profile = load_qemu_profile(fail, PINS, section)
-    transcript = boot(
-        profile,
-        section=section,
-        qemu_binary=qemu_binary,
-        image_path=image_path,
-    )
+    manifest = build_image(arguments.platform, image_path, manifest_path)
+    transcript = boot(manifest, arguments.platform, image_path)
     match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
     for pattern in EXPECTED_UNORDERED:
         if re.search(pattern, transcript) is None:

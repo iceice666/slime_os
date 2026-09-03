@@ -67,6 +67,29 @@ pub(crate) fn probe_authority_devices(
     bootinfo: &sel4::BootInfo,
     allocator: &mut ObjectAllocator,
 ) -> AuthorityInventory {
+    // This machine has no virtio-mmio transport window: on QEMU q35 the virtio
+    // devices are PCI functions behind an ACPI-described host bridge, and P6
+    // deliberately enumerates no PCI (H2 owns that). Returning the empty
+    // inventory before claiming a scratch page states that absence, rather
+    // than iterating a zero-length range and leaving a reader to work out that
+    // the loop body is unreachable.
+    #[cfg(target_arch = "x86_64")]
+    {
+        let _ = (bootinfo, allocator);
+        sel4::debug_println!(
+            "SLIME_ROOT io authority inventory devices=0 mode=userspace transport=absent"
+        );
+        AuthorityInventory::new()
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    probe_virtio_mmio_transports(bootinfo, allocator)
+}
+
+#[cfg(all(not(slime_boot_selector), not(target_arch = "x86_64")))]
+fn probe_virtio_mmio_transports(
+    bootinfo: &sel4::BootInfo,
+    allocator: &mut ObjectAllocator,
+) -> AuthorityInventory {
     let mut inventory = AuthorityInventory::new();
     if allocator.device_untyped_count() == 0 {
         return inventory;

@@ -623,6 +623,7 @@ ABI_SLIME_AARCH64_V1 = 2
 ABI_SLIME_RISCV64_V1 = 3
 ABI_SLIME_AARCH64_SEL4_V1 = 4
 ABI_SLIME_RISCV64_SEL4_V1 = 5
+ABI_SLIME_X86_64_SEL4_V1 = 6
 PAGE_PROFILE_X86_64_4K = 1
 PAGE_PROFILE_AARCH64_4K = 2
 PAGE_PROFILE_RISCV64_SV39_4K = 3
@@ -634,6 +635,7 @@ FEATURE_AARCH64_GENERIC_TIMER = 8
 FEATURE_RISCV64_BASELINE = 16
 FEATURE_AARCH64_SEL4 = 64
 FEATURE_RISCV64_SEL4 = 128
+FEATURE_X86_64_SEL4 = 256
 PROFILE_X86_64_QEMU_VIRTIO = 1
 PROFILE_AARCH64_QEMU_VIRT = 2
 PROFILE_AARCH64_RPI5 = 3
@@ -641,6 +643,8 @@ PROFILE_AARCH64_SEL4_QEMU_VIRT = 5
 PROFILE_RISCV64_QEMU_VIRT = 4
 PROFILE_RISCV64_SEL4_QEMU_VIRT = 6
 PROFILE_RISCV64_SEL4_MILKV_DUO = 7
+PROFILE_X86_64_SEL4_QEMU_PC99 = 8
+PROFILE_X86_64_SEL4_FRAMEWORK13_AI300 = 9
 
 class TargetProfile(typing.NamedTuple):
     id: int
@@ -762,6 +766,36 @@ TARGET_PROFILES = (
         kernel_load_base=0xFFFF_FFFF_9000_0000,
         component_base=0x0040_0000,
         cargo_target="deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json",
+        qemu_binary="",
+    ),
+    TargetProfile(
+        id=8,
+        name="x86_64-sel4-qemu-pc99",
+        architecture=1,
+        abi=6,
+        page_profile=1,
+        required_features=257,
+        elf_machine=62,
+        page_bytes=4096,
+        kernel_preferred_base=0xFFFF_FFFF_8000_0000,
+        kernel_load_base=0xFFFF_FFFF_9000_0000,
+        component_base=0x0040_0000,
+        cargo_target="sel4/targets/x86_64-sel4-minimal.json",
+        qemu_binary="qemu-system-x86_64",
+    ),
+    TargetProfile(
+        id=9,
+        name="x86_64-sel4-framework13-ai300",
+        architecture=1,
+        abi=6,
+        page_profile=1,
+        required_features=257,
+        elf_machine=62,
+        page_bytes=4096,
+        kernel_preferred_base=0xFFFF_FFFF_8000_0000,
+        kernel_load_base=0xFFFF_FFFF_9000_0000,
+        component_base=0x0040_0000,
+        cargo_target="sel4/targets/x86_64-sel4-minimal.json",
         qemu_binary="",
     ),
 )
