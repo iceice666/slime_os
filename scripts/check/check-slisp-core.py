@@ -3,9 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import re
 import shutil
 import subprocess
@@ -17,16 +14,13 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from component_spec import admit_specs  # noqa: E402
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import load_qemu_profile, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILD_COMPONENT = ROOT / "scripts" / "build" / "build-c-component.py"
-BUILD_IMAGE = ROOT / "scripts" / "build" / "build-sel4.py"
+CLOSURE = "sel4-slisp"
+IMAGE: Path | None = None
 SLISP_ROOT = ROOT / "components" / "slisp"
-IMAGE = ROOT / "build" / "slime-sel4-slisp.elf"
-IDENTITY = ROOT / "build" / "slime-sel4-slisp.identity.json"
-IMPLEMENTATION = "slisp-external"
 READY = "[slisp] repl done"
 TERMINAL = "SLIME_GRAPH HEALTHY generation=43 required=1 live=0 completed=1 failed=0"
 TIMEOUT = 240
@@ -35,82 +29,9 @@ TIMEOUT = 240
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"Slisp core check: {message}")
 
-def zti(value: object, indent: int = 0) -> str:
-    padding = " " * indent
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=True)
-    if isinstance(value, list):
-        if not value:
-            return "[]"
-        return "[\n" + "".join(
-            f"{padding}  {zti(item, indent + 2)};\n" for item in value
-        ) + padding + "]"
-    if isinstance(value, dict):
-        return "{\n" + "".join(
-            f"{padding}  {key} = {zti(item, indent + 2)};\n"
-            for key, item in value.items()
-        ) + padding + "}"
-    raise TypeError(type(value))
 
 
-def write_specs(root: Path, digest: str) -> None:
-    root.mkdir()
-    for entry in admit_specs():
-        (root / f"{entry.name}.zti").write_text(zti(entry.spec) + "\n", encoding="utf-8")
-    slisp = {
-        "formatVersion": 1,
-        "name": "slisp",
-        "componentType": "init",
-        "version": "1.0.0",
-        "owner": "root",
-        "purpose": "Runs the bounded pure S-expression Slisp reader and lexical evaluator as a non-Rust Slime component.",
-        "implementation": {
-            "provider": "external",
-            "binary": IMPLEMENTATION,
-            "contentHash": digest,
-        },
-        "provides": ["supervision"],
-        "requires": ["input"],
-        "interfaces": [],
-        "dependencies": [],
-        "communication": {"semantic": "none", "qos": []},
-        "configuration": [],
-        "lifecycle": ["Initialize", "Start", "Ready", "Running", "Stop", "Error"],
-        "runtime": {
-            "executionEnvironment": "aarch64-sel4-qemu-virt",
-            "resource": {
-                "stackBytes": 65536,
-                "spawnBudget": 0,
-                "extraThreads": 0,
-                "bufferBytePages": 0,
-                "bufferCount": 0,
-                "mappingCount": 0,
-                "loanCount": 0,
-                "privatePageQuota": 0,
-            },
-            "devices": ["input"],
-        },
-        "health": "required",
-        "compatibility": {
-            "platform": "aarch64-sel4-qemu-virt",
-            "interface": "contracts/interface-schema/v1",
-            "dependency": "none",
-            "resource": "atMost",
-            "runtime": "exact",
-            "qos": "none",
-        },
-        "test": {
-            "testCondition": "the slisp_core_check gate runs host vectors and drives the external Slisp REPL",
-            "expectedResult": "the reader, lexical closures, persistent definitions, evaluation, and structural refusals behave identically",
-            "passFailCriteria": READY,
-            "requiredTestEnvironment": "slisp_core_check",
-        },
-    }
-    (root / "slisp.zti").write_text(zti(slisp) + "\n", encoding="utf-8")
+
 
 
 def run_host_vectors(output: Path) -> None:
@@ -146,48 +67,20 @@ def run_host_vectors(output: Path) -> None:
         fail(f"host behavior vectors failed: {result.stderr.strip() or result.stdout.strip()}")
 
 def build() -> None:
+    global IMAGE
     with tempfile.TemporaryDirectory(prefix="slisp-core-check-") as temporary:
-        root = Path(temporary)
-        run_host_vectors(root / "slisp-host")
-        elf = root / "slisp.elf"
-        component = subprocess.run(
-            [
-                sys.executable,
-                str(BUILD_COMPONENT),
-                str(SLISP_ROOT / "slisp.c"),
-                str(SLISP_ROOT / "main.c"),
-                str(elf),
-            ],
-            cwd=ROOT,
-            check=False,
+        run_host_vectors(Path(temporary) / "slisp-host")
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    actual = sha256_file(built.image, fail)
+    if actual != built.digest():
+        fail(
+            f"{built.image} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
         )
-        if component.returncode != 0 or not elf.is_file():
-            fail("Slisp component build failed")
-        digest = hashlib.sha256(elf.read_bytes()).hexdigest()
-        specs = root / "specs"
-        write_specs(specs, digest)
-        image = subprocess.run(
-            [
-                sys.executable,
-                str(BUILD_IMAGE),
-                "--slisp-plane",
-                "--component-spec-root",
-                str(specs),
-                "--external-component",
-                f"{IMPLEMENTATION}={elf}",
-            ],
-            cwd=ROOT,
-            env=os.environ.copy(),
-            check=False,
-        )
-        if image.returncode != 0 or not IMAGE.is_file() or not IDENTITY.is_file():
-            fail("Slisp image build failed")
-    identity = json.loads(IDENTITY.read_text(encoding="utf-8"))
-    if identity.get("variant") != "slisp":
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
+    IMAGE = built.image
 
 
 def boot(profile: dict[str, object]) -> str:

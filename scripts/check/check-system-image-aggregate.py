@@ -58,14 +58,6 @@ SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 # stops being reachable from a closure has to be added here by hand, which is a
 # reviewed edit, instead of quietly matching a wildcard.
 IMAGES_WITHOUT_CLOSURE = {
-    # The compositions with no closure at all, from CP13's own exemption list:
-    # both admit the external product Slisp whose ELF is not a committed
-    # artifact, and the graph image is built from the `sel4` composition.
-    "slime-sel4-graph.elf": "built from the sel4 composition, which admits an external product Slisp",
-    "slime-sel4-slisp.elf": "admits the external product Slisp with no committed artifact",
-    # `sel4-c-runtime` derives its graph but its component's implementation
-    # provider is `undeclared`, so no closure can name its bytes.
-    "slime-sel4-c-runtime.elf": "its component's implementation provider is undeclared, so no closure names its bytes",
     # Root roles and platform images CP14 declared but whose host composition
     # still builds through the legacy path.
     "slime-sel4-boot-selection.elf": "the boot-selector root role is declared and gated but its host composition builds legacy",
@@ -74,6 +66,7 @@ IMAGES_WITHOUT_CLOSURE = {
     # closure-resolvable.
     "slime-sel4-bcm2712-rpi5.elf": "a physical Raspberry Pi 5 image, outside the QEMU closure corpus",
     "slime-sel4-graph-cv1800b-duo-test-terminator.elf": "a Milk-V Duo board image, outside the QEMU closure corpus",
+    "slime-sel4-graph.elf": "check-sel4-component-graph.py's --no-build reads this fixed legacy path only for check-external-component-admission.py's mixed-source generation",
 }
 
 
@@ -439,7 +432,6 @@ def check_migration_is_monotone() -> tuple[int, int]:
     # and each must still route its *closure-covered* planes through the
     # closure path.
     DUAL_PATH = {
-        "check-sel4-boot-layout.py": "composes all 31 planes; 29 have closures and 2 do not",
         "check-sel4-demo-plane.py": "its boot-selection arm has no closure and its wrong-target arm needs a scrubbed input",
         "check-sel4-generation-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
         "check-sel4-rollback-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
@@ -504,7 +496,7 @@ def check_gate_controls(images: dict[str, set[str]]) -> int:
             "an exemption whose reason is not a reason",
             lambda: _with_exemption(
                 {
-                    key: ("x" if key == "slime-sel4-c-runtime.elf" else value)
+                    key: ("x" if key == "slime-sel4-boot-selection.elf" else value)
                     for key, value in IMAGES_WITHOUT_CLOSURE.items()
                 },
                 lambda: check_image_closure_correspondence(copy.deepcopy(images)),

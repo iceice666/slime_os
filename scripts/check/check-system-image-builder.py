@@ -43,6 +43,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -73,17 +74,8 @@ SELECTED = "sel4-channel"
 #
 #   `reference` targets `x86_64-qemu-virtio`, for which no seL4 platform asset
 #   exists to name.
-#   `sel4` and `sel4-slisp` admit the product Slisp, whose implementation is an
-#   `external` ELF built from C source at gate time: not a committed artifact
-#   this repository can name by path, so a closure over it would invent one.
 WITHOUT_CLOSURE = {
     "reference": "targets x86_64-qemu-virtio, which has no seL4 platform asset",
-    "sel4": "admits an external product Slisp implementation with no committed artifact",
-    "sel4-slisp": "admits an external product Slisp implementation with no committed artifact",
-    # Derived since CP12's closure, but its component is freestanding C built
-    # by a helper script at gate time: the implementation provider is
-    # `undeclared`, so no closure can name the bytes it would build.
-    "sel4-c-runtime": "its component's implementation provider is undeclared, so no closure names its bytes",
 }
 
 
@@ -273,10 +265,14 @@ def check_no_plane_flags() -> None:
             fail(f"the closure builder names composition {name!r} in source")
 
 
-def build(closure: Path, output: Path) -> dict:
+def build(closure: Path, output: Path, *, cargo_target: Path | None = None) -> dict:
+    environment = os.environ.copy()
+    if cargo_target is not None:
+        environment["CARGO_TARGET_DIR"] = str(cargo_target)
     process = subprocess.run(
         [sys.executable, str(BUILDER), str(closure), str(output)],
         cwd=ROOT,
+        env=environment,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -286,9 +282,12 @@ def build(closure: Path, output: Path) -> dict:
         tail = "\n".join(process.stdout.strip().splitlines()[-15:])
         fail(f"{closure.stem}: closure build failed:\n{tail}")
     result = output / "build-result.json"
-    if not result.is_file():
-        fail(f"{closure.stem}: build wrote no build-result.json")
-    return json.loads(result.read_text(encoding="utf-8"))
+    identity = output / "build-result.identity"
+    if not result.is_file() or not identity.is_file():
+        fail(f"{closure.stem}: build wrote no build-result record and identity")
+    value = json.loads(result.read_text(encoding="utf-8"))
+    value["buildResultIdentity"] = identity.read_text(encoding="utf-8").strip()
+    return value
 
 
 def digest(path: Path) -> str:
@@ -330,6 +329,51 @@ def check_build(name: str, path: Path, identity: str) -> None:
         if "output directory is not empty" not in collision.stdout:
             fail(f"{name}: wrong refusal for a non-empty output directory: {collision.stdout[-200:]}")
 
+def complete_corpus_pass(
+    closures: dict[str, Path], identities: dict[str, str], root: Path
+) -> dict[str, tuple[str, ...]]:
+    """Build every closure below one clean root and retain only identity claims."""
+    cargo_target = root / "cargo"
+    observed: dict[str, tuple[str, ...]] = {}
+    for name, path in sorted(closures.items()):
+        result = build(path, root / "outputs" / name, cargo_target=cargo_target)
+        if result["closureIdentity"] != identities[name]:
+            fail(
+                f"{name}: build result names closure {result['closureIdentity']} "
+                f"not {identities[name]}"
+            )
+        observed[name] = (
+            result["closureIdentity"],
+            result["systemIdentity"],
+            *(result[field]["sha256"] for field in (
+                "generation", "root", "loader", "image", "identityManifest"
+            )),
+            result["buildResultIdentity"],
+        )
+    return observed
+
+
+def check_complete_corpus_reproducibility(
+    closures: dict[str, Path], identities: dict[str, str]
+) -> None:
+    """Two isolated complete-corpus builds must agree at every identity layer."""
+    with tempfile.TemporaryDirectory(prefix="slime-closure-corpus-a-") as left_scope, \
+         tempfile.TemporaryDirectory(prefix="slime-closure-corpus-b-") as right_scope:
+        left = complete_corpus_pass(closures, identities, Path(left_scope))
+        right = complete_corpus_pass(closures, identities, Path(right_scope))
+    for name in sorted(closures):
+        if left[name] != right[name]:
+            labels = (
+                "closure", "system", "generation", "root", "loader", "image",
+                "identity-manifest", "build-result",
+            )
+            changed = [
+                label
+                for label, a, b in zip(labels, left[name], right[name], strict=True)
+                if a != b
+            ]
+            fail(f"{name}: two clean corpus builds disagree on {changed}")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -359,10 +403,10 @@ def main() -> None:
     check_no_plane_flags()
 
     selected = sorted(closures) if arguments.exhaustive else [SELECTED]
-    for name in selected:
-        if name not in closures:
-            fail(f"{name}: selected for build but has no closure")
-        check_build(name, closures[name], identities[name])
+    if arguments.exhaustive:
+        check_complete_corpus_reproducibility(closures, identities)
+    else:
+        check_build(SELECTED, closures[SELECTED], identities[SELECTED])
 
     print(
         f"system image builder check: {len(closures)} closures resolve with distinct "
@@ -370,7 +414,7 @@ def main() -> None:
         f"{len(WITHOUT_CLOSURE)} derived compositions declared closure-exempt, "
         f"{len(scenarios)} scenario and {len(root_roles)} root-role closure(s); "
         f"{len(selected)} closure(s) built twice byte-identically through one command "
-        "shape with no plane flag, variant table, or composition named in builder source"
+        "shape from clean corpus roots with no plane flag, variant table, or composition named in builder source"
     )
 
 
