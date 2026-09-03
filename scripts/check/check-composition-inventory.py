@@ -262,16 +262,20 @@ def add_unknown_row(value: dict) -> None:
 
 
 def claim_deferred_is_derived(value: dict) -> None:
+    """A row cannot be derived *and* carry a deferral reason.
+
+    Stated over a derived row rather than by promoting a hand-authored one,
+    because the corpus reached 42 of 42 derived and there is no longer a
+    hand-authored row to promote. The invariant is the same one either way --
+    `state` and `deferralReason` cannot both be claimed -- and phrasing it from
+    the derived side keeps the control alive in exactly the state the milestone
+    was working toward.
+    """
     for row in value["entries"]:
-        if row["state"] == CONTRACT.STATE_HAND_AUTHORED:
-            row.update(
-                state=CONTRACT.STATE_DERIVED,
-                systemSpec=f"contracts/system-spec/v1/systems/{row['composition']}.zti",
-                baseline=f"contracts/system-spec/v1/baselines/{row['composition']}.zti",
-                deferralReason="",
-            )
+        if row["state"] == CONTRACT.STATE_DERIVED:
+            row.update(deferralReason=CONTRACT.DEFERRAL_ROUTE_NAME_VARIANCE)
             return
-    fail("no hand-authored row to mutate")
+    fail("no derived row to mutate")
 
 
 def claim_derived_is_deferred(value: dict) -> None:
@@ -288,11 +292,27 @@ def claim_derived_is_deferred(value: dict) -> None:
 
 
 def unknown_reason(value: dict) -> None:
+    """A deferral reason outside the closed vocabulary is refused.
+
+    Applied to a hand-authored row when one exists and otherwise to a derived
+    row demoted in the same mutation, so the vocabulary stays checked now that
+    the corpus is fully derived. The reason string is what this control is
+    about; which state carries it is incidental.
+    """
     for row in value["entries"]:
         if row["state"] == CONTRACT.STATE_HAND_AUTHORED:
             row["deferralReason"] = "becauseISaidSo"
             return
-    fail("no hand-authored row to mutate")
+    for row in value["entries"]:
+        if row["state"] == CONTRACT.STATE_DERIVED:
+            row.update(
+                state=CONTRACT.STATE_HAND_AUTHORED,
+                systemSpec="",
+                baseline="",
+                deferralReason="becauseISaidSo",
+            )
+            return
+    fail("no row to mutate")
 
 
 def unknown_gate(value: dict) -> None:

@@ -50,24 +50,21 @@ Evidence for all three: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-0
 
 Evidence for both: [`devlog/2026-08-24-c10-4-adoption-and-leak-evidence/`](../devlog/2026-08-24-c10-4-adoption-and-leak-evidence/index.md).
 
-- CP12 left 2 of the 42 seL4 compositions hand-authored rather than derived,
-  for the two reasons the closed
-  [`contracts/composition-inventory/v1`](../contracts/composition-inventory/v1/schema.zt)
-  vocabulary names and `just system_composition_closure_check` enforces per
-  composition. `sel4-matrix` is `routeNameVariance`: it gives
-  `fabric-publisher-b` and `fabric-subscriber-b` roles on a `telemetry-alt`
-  route and `fabric-observer` a role on `diagnostics`, none of which those
-  components' specs declare — and they cannot be added, because
-  `just component_spec_check` requires a spec's interface list to match
-  `valid.zti`'s graph exactly, so one spec cannot describe two compositions'
-  route sets. Resolving it needs either per-composition interface entries or a
-  system-level route-role override. `sel4-c-runtime` is
-  `unpinnedExternalImplementation`: its component is a freestanding C source
-  built by a helper script at gate time, with no committed content identity to
-  pin as an external implementation, so its component spec records an
-  `undeclared` provider and no closure can name its bytes.
+**Resolved 2026-09-03:** CP12's two remaining hand-authored compositions are
+derived, and `contracts/composition-inventory/v1` reports 42 derived and 0
+hand-authored. `sel4-matrix`'s recorded blocker was misattributed: the
+composition was fine, and the obstacle was `check-component-spec.py`
+authorizing a spec's interface entries only from the reference generation's
+graph, which made a role a component holds in one composition and not another
+unstateable. Authorization now draws on every committed composition's graph, so
+an invented role stays refused while a real one is declarable.
+`sel4-c-runtime`'s recorded blocker did not bear on derivation at all: a system
+spec derives the graph, and its implementation provider stays `undeclared`
+exactly as before. Both planes build the identical `generation.bin` from the
+frozen baseline and from the derived composition, and both QEMU gates pass.
 
-Evidence: [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md).
+Evidence: [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md)
+and [`devlog/2026-09-03-cp15-closure-cutover/`](../devlog/2026-09-03-cp15-closure-cutover/index.md).
 
 **Closed 2026-08-21:** B65's remaining half — "the 52-binary fixture population
 uncollapsed" — is resolved by CP3 in the [Component platform

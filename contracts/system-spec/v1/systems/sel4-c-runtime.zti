@@ -1,0 +1,51 @@
+{
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  bootAction = "c-runtime";
+  bootAttempts = 3;
+  bootLayoutObject = true;
+  bootProfiles = [];
+  bootstrapInstance = "c-runtime-probe";
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  commandBindings = [];
+  components = [
+    "c-runtime-probe";
+  ];
+  defaultImageBytes = 131072;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  extraBindings = [];
+  formatVersion = 1;
+  generation = 42;
+  grants = [];
+  imageSizes = [];
+  instances = [];
+  interfaceSchemas = [];
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  mintedBindings = [];
+  name = "sel4-c-runtime";
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  notificationBindings = [];
+  notifications = [];
+  placements = [
+    {
+      autostart = true;
+      component = "c-runtime-probe";
+      health = "required";
+      owner = "root";
+      role = "init";
+      spawnBudget = 0;
+    };
+  ];
+  recording = [];
+  recordingObject = false;
+  sharedBufferBudgetObject = false;
+  slotPins = [];
+  state = [];
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  waitSet = [];
+  waitSetObject = false;
+}

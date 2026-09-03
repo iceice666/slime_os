@@ -17,12 +17,12 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-boot.zti";
     };
     {
-      baseline = "";
+      baseline = "contracts/system-spec/v1/baselines/sel4-c-runtime.zti";
       composition = "sel4-c-runtime";
-      deferralReason = "unpinnedExternalImplementation";
+      deferralReason = "";
       owningGate = "sel4_c_runtime_check";
-      state = "handAuthored";
-      systemSpec = "";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-c-runtime.zti";
     };
     {
       baseline = "contracts/system-spec/v1/baselines/sel4-call.zti";
