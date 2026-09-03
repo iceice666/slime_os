@@ -101,6 +101,8 @@ class Console:
 
     def __init__(self, endpoint: str, baud: int, fail: Reject) -> None:
         self._fail = fail
+        self._parmrk_pending = b""
+        self.received_bytes = bytearray()
         self.endpoint = endpoint
         if endpoint.startswith(TCP_PREFIX):
             host, _, port = endpoint[len(TCP_PREFIX) :].rpartition(":")
@@ -132,29 +134,67 @@ class Console:
         else:
             os.close(self.fd)
 
+    def received_text(self) -> str:
+        """All received console bytes, decoded only for human-readable evidence."""
+        return bytes(self.received_bytes).decode("utf-8", "replace")
+
     def _strip_markers(self, raw: bytes) -> bytes:
-        """Remove PARMRK error markers (\\377\\000X), counting each one."""
+        """Remove PARMRK error markers (\377\000X), counting each one."""
         if self.framing_errors is None:
             return raw
+        raw = self._parmrk_pending + raw
+        self._parmrk_pending = b""
         out = bytearray()
         index = 0
         while index < len(raw):
-            if raw[index] == 0o377 and index + 2 < len(raw) and raw[index + 1] == 0:
-                self.framing_errors += 1
-                index += 3
-            elif raw[index] == 0o377 and index + 1 < len(raw) and raw[index + 1] == 0o377:
-                out.append(0o377)
-                index += 2
-            else:
+            if raw[index] != 0o377:
                 out.append(raw[index])
                 index += 1
+                continue
+            remaining = len(raw) - index
+            if remaining == 1:
+                self._parmrk_pending = raw[index:]
+                break
+            if raw[index + 1] == 0o377:
+                out.append(0o377)
+                index += 2
+                continue
+            if raw[index + 1] == 0:
+                if remaining < 3:
+                    self._parmrk_pending = raw[index:]
+                    break
+                self.framing_errors += 1
+                index += 3
+                continue
+            out.append(raw[index])
+            index += 1
         return bytes(out)
 
-    def write(self, data: bytes) -> None:
-        if self._socket is not None:
-            self._socket.sendall(data)
-        else:
-            os.write(self.fd, data)
+    def write(self, data: bytes, timeout: float = 10.0) -> None:
+        """Write every byte under one deadline; nonblocking short writes are normal."""
+        view = memoryview(data)
+        deadline = time.monotonic() + timeout
+        while view:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._fail(f"writing to {self.endpoint} timed out after {timeout:.0f}s")
+            try:
+                _, writable, _ = select.select([], [self.fd], [], min(remaining, 0.1))
+            except OSError as error:
+                self._fail(f"waiting to write to {self.endpoint} failed: {error}")
+            if not writable:
+                continue
+            try:
+                written = (
+                    self._socket.send(view) if self._socket is not None else os.write(self.fd, view)
+                )
+            except OSError as error:
+                if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    continue
+                self._fail(f"writing to {self.endpoint} failed: {error}")
+            if written == 0:
+                self._fail(f"writing to {self.endpoint} made no progress")
+            view = view[written:]
 
     def read_for(self, seconds: float) -> str:
         collected = b""
@@ -181,18 +221,13 @@ class Console:
                     continue
                 self._fail(f"reading {self.endpoint} failed: {error}")
             if chunk:
+                self.received_bytes.extend(chunk)
                 collected += self._strip_markers(chunk)
         return collected.decode("utf-8", "replace")
 
     def flush_input(self) -> None:
-        """Discard anything already buffered, so the next read is this command's."""
-        if self._socket is not None:
-            self.read_for(0.2)
-        else:
-            try:
-                termios.tcflush(self.fd, termios.TCIFLUSH)
-            except termios.error:
-                pass
+        """Drain pending input into the append-only capture before the next command."""
+        self.read_for(0.2)
 
 
 def reach_uboot(
@@ -225,9 +260,11 @@ def reach_uboot(
 
     console.write(b"\r")
     opening = console.read_for(1.5)
+    search_text = opening
     if pattern.search(opening):
         print("[console] already at the prompt; resetting for a clean boot")
         console.write(b"reset\r")
+        search_text = ""
     elif re.search(r"login:\s*$", opening):
         fail(
             "the board is sitting at a vendor login prompt this gate has no "
@@ -236,6 +273,7 @@ def reach_uboot(
     elif re.search(r"[#$] $", opening):
         print("[console] at a vendor shell; rebooting")
         console.write(b"reboot\r")
+        search_text = ""
     elif opening.strip():
         print("[console] board is talking; waiting for the next boot to interrupt")
     else:
@@ -250,7 +288,8 @@ def reach_uboot(
         if chunk:
             seen_any_byte = True
             collected += chunk
-        if pattern.search(collected[-400:]):
+            search_text += chunk
+        if pattern.search(search_text[-400:]):
             break
     else:
         if not seen_any_byte:
@@ -282,14 +321,11 @@ def send_command(
     timeout: float,
     fail: Reject,
 ) -> str:
-    """Issue one U-Boot command and return everything it printed.
-
-    Completion is the prompt coming back. That is the only sentinel available:
-    this U-Boot has no `echo`, so a command cannot be followed by a marker of
-    the gate's own choosing.
-    """
+    """Issue exactly one U-Boot command and return everything it printed."""
+    if not command or "\r" in command or "\n" in command or not command.isascii():
+        fail("a U-Boot command must be one non-empty ASCII line")
     console.flush_input()
-    console.write(command.encode() + b"\r")
+    console.write(command.encode("ascii") + b"\r")
     collected = ""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
