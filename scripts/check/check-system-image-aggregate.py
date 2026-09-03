@@ -434,11 +434,24 @@ def check_migration_is_monotone() -> tuple[int, int]:
     `build-sel4.py`: holding both is how a gate silently keeps booting the
     legacy artifact while appearing migrated.
     """
-    migrated, legacy = [], []
+    # Gates that legitimately hold both paths, and why. A composer over every
+    # plane must, while some planes have closures and some do not; a gate whose
+    # negative arm needs an input a closure build scrubs must, until that input
+    # is closure data. Each is named so the exception cannot spread silently,
+    # and each must still route its *closure-covered* planes through the
+    # closure path.
+    DUAL_PATH = {
+        "check-sel4-boot-layout.py": "composes all 31 planes; 29 have closures and 2 do not",
+        "check-sel4-demo-plane.py": "its boot-selection arm has no closure and its wrong-target arm needs a scrubbed input",
+    }
+    migrated, legacy, dual = [], [], []
     for path in sorted(CHECK_ROOT.glob("check-sel4-*.py")):
         text = path.read_text(encoding="utf-8")
         uses_closure = "closure_image" in text
         uses_flag = bool(re.search(r'"--[a-z0-9-]+-plane"', text)) or "build-sel4.py" in text
+        if uses_closure and uses_flag and path.name in DUAL_PATH:
+            dual.append(path.name)
+            continue
         if uses_closure and uses_flag:
             fail(
                 f"{path.name}: builds through closure_image *and* invokes the legacy builder; "
@@ -450,7 +463,10 @@ def check_migration_is_monotone() -> tuple[int, int]:
             legacy.append(path.name)
     if not migrated:
         fail("no plane gate builds by closure identity, so CP15 has not started")
-    return len(migrated), len(legacy)
+    stale = sorted(set(DUAL_PATH) - set(dual))
+    if stale:
+        fail(f"gate(s) listed as dual-path that no longer hold both: {stale}")
+    return len(migrated), len(legacy), len(dual)
 
 
 def check_gate_controls(images: dict[str, set[str]]) -> int:
@@ -546,7 +562,7 @@ flag_count = check_plane_flags_are_owned()
 check_record_kinds_are_disjoint()
 negative_count = check_negative_cases_have_no_image()
 closure_knobs, non_keying_knobs, legacy_knobs = check_no_undeclared_build_knobs()
-migrated_gates, legacy_gates = check_migration_is_monotone()
+migrated_gates, legacy_gates, dual_gates = check_migration_is_monotone()
 control_count = check_gate_controls(images)
 
 print(
@@ -558,7 +574,7 @@ print(
     f"SLIME_* build knobs classified {closure_knobs} closure-declared / {non_keying_knobs} "
     f"non-keying / {legacy_knobs} legacy pending CP15 deletion, with none unclassified, none "
     f"misfiled, and every closure-declared knob reachable from the closure builder; "
-    f"{migrated_gates} plane gate(s) build by closure identity with {legacy_gates} still on the "
-    f"legacy flag and none holding both; "
+    f"{migrated_gates} plane gate(s) build by closure identity, {legacy_gates} still on the legacy "
+    f"flag, and {dual_gates} declared dual-path with none holding both undeclared; "
     f"and {control_count} named drift control(s) refused"
 )

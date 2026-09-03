@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-lifecycle-restart";
-  imageClosureIdentity = "98be9ab95a5fb24fdddebb45473540ad549c60b2b6b60aa9d6ed2c93a72f4393";
+  imageClosureIdentity = "a34b9f6717ee64c526b44cfcd0ba2e0e336663d06ac992a1ed31456ae3772ad2";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

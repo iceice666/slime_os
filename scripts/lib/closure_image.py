@@ -25,6 +25,7 @@ folding them in would rebuild the closure/test-run separation CP11 drew.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -111,7 +112,15 @@ def build(name: str, *, output: Path | None = None, reuse: bool = True) -> Built
         if existing is not None and existing.get("closureIdentity") == identity:
             return _built(name, identity, destination, existing)
 
-    destination.mkdir(parents=True, exist_ok=True)
+    # The builder refuses a non-empty output directory, which is what stops a
+    # stale artifact from being reported as this build's result. So a
+    # superseded build must be removed rather than built over: reaching here
+    # means either there was no previous build or its recorded identity no
+    # longer matches, and in both cases nothing in the directory may survive
+    # into the new one.
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
     command = [sys.executable, str(BUILDER), str(closure_path(name)), str(destination)]
     print(f"[closure build] {name} {identity[:12]}", flush=True)
     process = subprocess.run(

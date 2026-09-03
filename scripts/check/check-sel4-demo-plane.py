@@ -78,6 +78,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import (  # noqa: E402
     GENERATION_COMPOSITIONS,
     profile_integer,
@@ -88,15 +89,20 @@ from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-demo.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-demo.identity.json"
+# CP15: the demo closure identity names the build's inputs and is re-resolved
+# from repository state before each build. The image path is bound to that
+# verified build result rather than to a potentially stale plane artifact.
+CLOSURE = "sel4-demo"
+IMAGE: Path | None = None
+
+# CP15 cannot migrate this arm yet: the `boot-selector` root role is declared
+# but carried by no closure, so its image and identity manifest remain legacy.
 SELECTOR_IMAGE = ROOT / "build" / "slime-sel4-boot-selection.elf"
 SELECTOR_MANIFEST = ROOT / "build" / "slime-sel4-boot-selection.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+SELECTOR_BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
 STORE_FIXTURE = ROOT / "scripts" / "build" / "build-store-fixture.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-demo.zti"
-IMAGE_VARIANT = "demo"
 MANIFEST_NAME = "sel4-demo"
 AUTOMATIC_BINDING_SLOTS = {
     "spawn-service-rpc": 0,
@@ -266,14 +272,29 @@ def run(command: list[str], environment: dict[str, str] | None = None) -> None:
 
 
 def build_image(*, wrong_target: bool = False) -> None:
-    environment = dict(os.environ)
+    global IMAGE
     if wrong_target:
+        environment = dict(os.environ)
         environment["SLIME_WRONG_TARGET_EXECUTABLE"] = (
             f"{WRONG_TARGET_EXECUTABLE}={WRONG_TARGET_PROFILE}"
         )
-    else:
-        environment.pop("SLIME_WRONG_TARGET_EXECUTABLE", None)
-    run([sys.executable, str(BUILD_SCRIPT), "--demo-plane"], environment)
+        # This arm deliberately mutates generated inputs outside the product
+        # closure; keep its legacy artifact distinct from the clean closure image.
+        run([sys.executable, str(SELECTOR_BUILD_SCRIPT), "--demo-plane"], environment)
+        IMAGE = ROOT / "build" / "slime-sel4-demo.elf"
+        return
+
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
 
 
 def check_manifest(manifest_path: Path, image: Path, variant: str, flag: str) -> None:
@@ -622,7 +643,7 @@ def check_rollback_pair(profile: dict[str, object]) -> None:
     demo runs. The selector image embeds no generation of its own, so the two
     generations under test are exactly the ones written to this disk.
     """
-    run([sys.executable, str(BUILD_SCRIPT), "--boot-selection"])
+    run([sys.executable, str(SELECTOR_BUILD_SCRIPT), "--boot-selection"])
     check_manifest(SELECTOR_MANIFEST, SELECTOR_IMAGE, "boot-selection", "--boot-selection")
     bundle = str(json.loads(SELECTOR_MANIFEST.read_text(encoding="utf-8"))["boot_bundle_identity"])
     with tempfile.TemporaryDirectory(prefix="slime-rp2-") as temporary:
@@ -704,7 +725,6 @@ def check_wrong_target(profile: dict[str, object]) -> None:
 
 def check_wrong_target_arm(profile: dict[str, object]) -> None:
     build_image(wrong_target=True)
-    check_manifest(MANIFEST, IMAGE, IMAGE_VARIANT, "--demo-plane")
     transcript = boot(
         profile,
         IMAGE,
@@ -783,7 +803,6 @@ def main() -> None:
     if arguments.arm in ("slice", "all"):
         if not arguments.no_build:
             build_image()
-        check_manifest(MANIFEST, IMAGE, IMAGE_VARIANT, "--demo-plane")
         transcript = boot(profile, IMAGE, terminal=TERMINAL_MARKER)
         check_transcript(transcript)
         check_ordered_across_chains(transcript)

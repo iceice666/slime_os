@@ -1598,14 +1598,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--stress-plane",
-        action="store_true",
-        help=(
-            "embed the 48-instance generation (B49): the admitted ceiling, so "
-            "the largest graph admission accepts actually boots"
-        ),
-    )
-    parser.add_argument(
         "--operation-plane",
         action="store_true",
         help="embed the native-operation generation (C8.7), writing a separate image",
@@ -1640,24 +1632,6 @@ def main() -> None:
         help=(
             "embed the full-graph bootstrap generation (C8.10): every C8 role "
             "in one collision-free layout, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--traffic-plane",
-        action="store_true",
-        help=(
-            "embed the concurrent cross-plane traffic generation (C8.13): the "
-            "C8.10 three-worker layout driving real stream, call, and operation "
-            "traffic together, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--fault-plane",
-        action="store_true",
-        help=(
-            "embed the degradation and fault-isolation generation (C8.14): the "
-            "identical traffic-action scenario, built with the proxy "
-            "early-death injection enabled, writing a separate image"
         ),
     )
     parser.add_argument(
@@ -1805,14 +1779,11 @@ def main() -> None:
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),
-            (STRESS_VARIANT, arguments.stress_plane),
             (OPERATION_VARIANT, arguments.operation_plane),
             (VISIBILITY_VARIANT, arguments.visibility_plane),
             (MATRIX_VARIANT, arguments.matrix_plane),
             (MATRIX_UNSATISFIABLE_VARIANT, arguments.matrix_unsatisfiable_plane),
             (BOOT_VARIANT, arguments.boot_plane),
-            (TRAFFIC_VARIANT, arguments.traffic_plane),
-            (FAULT_VARIANT, arguments.fault_plane),
             (STORAGE_VARIANT, arguments.storage_plane),
             (STORE_VARIANT, arguments.store_plane),
             (ROLLBACK_VARIANT, arguments.rollback_plane),

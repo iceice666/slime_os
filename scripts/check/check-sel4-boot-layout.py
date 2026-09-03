@@ -51,6 +51,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import profile_text, profile_integer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,6 +68,43 @@ BOOT_TIMEOUT_SECONDS = 180
 #
 # `fixture` (P5.1) is absent deliberately: it embeds the retained x86 generation
 # and launches no component graph, so it has no init and emits no block.
+# The planes whose closures exist. A plane here builds from its identity; the
+# rest still build from their flag until CP15 gives them closures. Listed
+# rather than probed so adding a closure is a reviewed edit in this gate too.
+CLOSURE_PLANES = frozenset(
+    {
+        "sel4-boot",
+        "sel4-call",
+        "sel4-channel",
+        "sel4-clock-authority",
+        "sel4-crossing",
+        "sel4-demo",
+        "sel4-directory",
+        "sel4-filesystem",
+        "sel4-generation",
+        "sel4-input",
+        "sel4-lifecycle-restart",
+        "sel4-loan",
+        "sel4-operation",
+        "sel4-powerbox",
+        "sel4-qos",
+        "sel4-recovery",
+        "sel4-replay",
+        "sel4-robot-runtime",
+        "sel4-rollback",
+        "sel4-sample",
+        "sel4-scheduling-class",
+        "sel4-spawn",
+        "sel4-storage",
+        "sel4-store",
+        "sel4-stream",
+        "sel4-supervision",
+        "sel4-transfer",
+        "sel4-visibility",
+        "sel4-wait-set",
+    }
+)
+
 PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4", "--component-graph", "slime-sel4-graph.elf"),
     # RP2's demo-scoped slice: the only generation declaring the product graph,
@@ -158,14 +196,26 @@ def load_pins() -> dict[str, object]:
     return profile
 
 
-def build(flag: str) -> None:
+def build(name: str, flag: str) -> Path:
+    """Build one plane's image, by closure identity when it has a closure.
+
+    This gate composes every plane, so it is the one place both build paths
+    must coexist while CP15 migrates: a plane with a closure builds from its
+    identity, and one without still uses its flag. Returning the image path
+    rather than writing a fixed location is what lets the two coexist without
+    either overwriting the other's artifact.
+    """
+    if name in CLOSURE_PLANES:
+        try:
+            return build_closure_image(name).image
+        except ClosureImageError as error:
+            fail(str(error))
     command = [sys.executable, str(BUILD_SCRIPT), flag, "--skip-pin-check"]
     print(f"[build] {' '.join(command)}", flush=True)
-    process = subprocess.run(command, cwd=ROOT, check=False, capture_output=True, text=True)
+    process = subprocess.run(command, cwd=ROOT, check=False)
     if process.returncode != 0:
-        sys.stdout.write(process.stdout[-4000:])
-        sys.stderr.write(process.stderr[-4000:])
         fail(f"image build failed for {flag}")
+    return None
 
 
 def capture(name: str, image: Path, profile: dict[str, object]) -> str:
@@ -294,9 +344,10 @@ def main() -> None:
 
     failures: list[str] = []
     for name, flag, image_name in PLANES:
+        built = None
         if not arguments.no_build:
-            build(flag)
-        image = ROOT / "build" / image_name
+            built = build(name, flag)
+        image = built if built is not None else ROOT / "build" / image_name
         if not image.is_file():
             fail(f"{name}: missing image {image.relative_to(ROOT)}")
         observed = capture(name, image, profile)

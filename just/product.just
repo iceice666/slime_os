@@ -32,7 +32,6 @@ riscv64_qemu_check: sel4_pin_check
 # Each gate must boot its own embedded-generation artifact.
 [group('product')]
 sel4_stress_check: sel4_pin_check
-    python3 scripts/build/build-sel4.py --stress-plane
     python3 scripts/check/check-sel4-stress-plane.py
 
 [group('product')]
