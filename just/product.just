@@ -20,13 +20,32 @@ riscv64_qemu_image_check: sel4_pin_check
     python3 scripts/build/build-sel4.py --platform qemu-riscv-virt --skip-pin-check
 
 # P6.1 builds the admitted x86-64 seL4 kernel, root task, child fixture, and
-# generation for the pinned QEMU pc99 profile. Deliberately no boot claim: this
-# platform is on the native Multiboot2 route, so no packaged image exists until
-# P6.2 builds the GRUB file tree that supplies the two ELFs as modules.
+# generation for the pinned QEMU pc99 profile, and P6.2 assembles the GRUB
+# Multiboot2 EFI tree that supplies the two ELFs as modules. Deliberately no
+# boot here: `x86_64_sel4_root_boot_check` owns the boot claim.
 [group('product')]
 x86_64_sel4_image_check: sel4_pin_check
     python3 scripts/build/build-sel4.py --platform qemu-pc99 --skip-pin-check
     python3 scripts/check/check-sel4-x86-64-image.py
+
+# P6.2's boot contract and P6.3's native execution slice. One gate because they
+# are one observation: the ordered marker chain only exists if the shared GRUB
+# Multiboot2 layout booted pinned q35/OVMF *and* the root's native x86-64 task,
+# fault, timer, thread-pointer, and reclamation arms all behaved.
+[group('product')]
+x86_64_sel4_root_boot_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py --platform qemu-pc99
+
+# P6.4 replays the architecture-neutral corpus on the pinned x86-64 reference,
+# in the same shape as `riscv64_qemu_check`.
+[group('product')]
+x86_64_qemu_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-wait-set-plane.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-sample-plane.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-component-graph.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-boot-layout.py --platform qemu-pc99
+    python3 scripts/check/check-architecture-portability.py
 
 [group('product')]
 riscv64_qemu_check: sel4_pin_check

@@ -19,49 +19,33 @@ claimed by this product gate.
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from component_paths import source_path  # noqa: E402
-from harness import (
-    GENERATION_COMPOSITIONS,
-    load_qemu_profile,
-    profile_integer,
-    profile_text,
-    qemu_kernel_arguments,
-    sha256_file,
-)  # noqa: E402
+from harness import GENERATION_COMPOSITIONS  # noqa: E402
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths as platform_artifact_paths,
+    boot_command,
+    run as run_boot,
+    verify_identity,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-sample.zti"
 IMAGE_VARIANT = "sample"
-PLATFORMS = {
-    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
-    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
-}
-
-TARGET_PROFILES = {
-    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
-    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
-}
 
 
 def artifact_paths(platform: str) -> tuple[Path, Path]:
-    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
-    return (
-        ROOT / "build" / f"slime-sel4-sample{suffix}.elf",
-        ROOT / "build" / f"slime-sel4-sample{suffix}.identity.json",
-    )
+    return platform_artifact_paths("slime-sel4-sample", platform)
 
 
 BOOT_TIMEOUT_SECONDS = 180
@@ -381,112 +365,23 @@ def build_image(platform: str) -> None:
         fail(f"seL4 image build failed with exit status {process.returncode}")
 
 
-def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> None:
-    if not manifest_path.is_file():
-        fail(f"missing identity manifest {manifest_path.relative_to(ROOT)}")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {manifest_path.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{manifest_path.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    if manifest.get("variant") != IMAGE_VARIANT:
-        fail(f"{manifest_path.relative_to(ROOT)} records variant {manifest.get('variant')!r}")
-    if manifest.get("platform") != platform:
-        fail(
-            f"{manifest_path.relative_to(ROOT)} describes {manifest.get('platform')!r}, not {platform!r}"
-        )
-    expected_profile = TARGET_PROFILES[platform]
-    if manifest.get("target_profile") != expected_profile:
-        fail(
-            f"{manifest_path.relative_to(ROOT)} describes target profile "
-            f"{manifest.get('target_profile')!r}, not {expected_profile!r}"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not image_path.is_file():
-        fail(f"missing packaged image {image_path.relative_to(ROOT)}")
-    actual = sha256_file(image_path, fail)
-    if actual != image["sha256"]:
-        fail(
-            f"{image_path.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
-        )
+def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict[str, object]:
+    return verify_identity(
+        manifest_path,
+        platform=platform,
+        variant=IMAGE_VARIANT,
+        image_path=image_path,
+        fail=fail,
+    )
 
 
-def boot(
-    profile: dict[str, object],
-    *,
-    section: str,
-    qemu_binary: str,
-    image_path: Path,
-) -> str:
-    """Boot the image and return the serial transcript.
-
-    The root task suspends itself once the graph has drained, so QEMU stays
-    alive afterwards and waiting for an exit would always time out. Serial
-    output is read line by line and the guest is killed as soon as the terminal
-    or any failure marker appears.
-    """
-    qemu = shutil.which(qemu_binary)
-    if qemu is None:
-        fail(f"{qemu_binary} is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail, section),
-        "-cpu",
-        profile_text(profile, "cpu", fail, section),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail, section)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        *qemu_kernel_arguments(qemu_binary, image_path, fail),
-    ]
-    print(f"[boot] {' '.join(command)}", flush=True)
-    terminal = re.compile(REQUIRED_MARKERS[-1][1])
-    failures = re.compile("|".join(FAILURE_MARKERS))
-    lines: list[str] = []
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except OSError as error:
-        fail(f"cannot run QEMU: {error}")
-    # A wedged guest emits nothing, so the deadline cannot live in the read
-    # loop; a watchdog kills QEMU, which closes the pipe and ends the loop.
-    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
-    watchdog.start()
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
-            if terminal.search(line) or failures.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    transcript = "\n".join(lines)
-    if timed_out and terminal.search(transcript) is None:
-        report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
-    return transcript
+def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
+    return run_boot(
+        boot_command(manifest, platform=platform, image_path=image_path, fail=fail),
+        terminal=re.compile(REQUIRED_MARKERS[-1][1] + "|" + "|".join(FAILURE_MARKERS)),
+        timeout=BOOT_TIMEOUT_SECONDS,
+        fail=fail,
+    )
 
 
 def report_transcript(transcript: str) -> None:
@@ -653,20 +548,11 @@ def main() -> None:
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    section, qemu_binary = PLATFORMS[arguments.platform]
     image_path, manifest_path = artifact_paths(arguments.platform)
-    profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
         build_image(arguments.platform)
-    check_manifest(image_path, manifest_path, arguments.platform)
-    check_transcript(
-        boot(
-            profile,
-            section=section,
-            qemu_binary=qemu_binary,
-            image_path=image_path,
-        )
-    )
+    manifest = check_manifest(image_path, manifest_path, arguments.platform)
+    check_transcript(boot(manifest, arguments.platform, image_path))
     print(
         "seL4 sample plane check: the unmodified sample-lender and sample-receiver "
         "exchanged and returned a payload larger than the control-message bound over "

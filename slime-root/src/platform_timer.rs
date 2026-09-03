@@ -59,8 +59,7 @@ pub const TIMER_IRQ: sel4::Word = 30;
 pub const TIMER_IRQ: sel4::Word = 11;
 #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
 pub const TIMER_IRQ: sel4::Word = 17;
-/// The QEMU q35 HPET's first comparator, IOAPIC pin 2 relative to the
-/// user-interrupt base (raw pin 18).
+/// The QEMU q35 HPET's first comparator, on IOAPIC pin 20.
 ///
 /// x86 pc99 does not export a userspace timer the way the other two profiles
 /// do. seL4 claims the local APIC timer for its own non-MCS tick at boot
@@ -70,12 +69,27 @@ pub const TIMER_IRQ: sel4::Word = 17;
 /// nor a root-readable cycle counter. A monotonic source must therefore come
 /// from a firmware-described device this root task maps and drives itself.
 ///
-/// P6.3 owns selecting and driving that device; this constant exists so the
-/// acquisition path is real rather than absent, and [`PhysicalTimerAdapter`]'s
-/// operations fail closed with [`PlatformTimerAckError::RegistersUnavailable`]
-/// until it is attached.
+/// Pin 20 rather than 2, and the choice is load-bearing. q35 advertises this
+/// comparator's routing capability as `0xff0104`, whose set bits are pins 2,
+/// 8, and 16 through 23; only those are legal, and the kernel does not check —
+/// [`hpet_timer0_base_config`]'s 5-bit field accepts any value, so an illegal
+/// pin is programmed silently and simply never delivers.
+///
+/// Of the legal pins, 2 and 8 are shared with legacy devices that are *still
+/// running*: the firmware's MADT remaps ISA IRQ 0 to GSI 2 for the 8254 PIT,
+/// which QEMU leaves enabled unless the HPET is put in legacy-replacement
+/// mode, and pin 8 is the RTC. Routing here to pin 2 makes the root's handler
+/// receive PIT ticks it never armed; each is serviced, finds nothing due,
+/// reprograms, and is immediately followed by the next, so the condition never
+/// settles.
+///
+/// Pin 20 is in the 16-23 range, all of which sits above the legacy ISA pins
+/// and drives no legacy device, so the interrupt this root acknowledges is only
+/// ever the comparator it armed. Legacy replacement mode is deliberately not
+/// used to silence the PIT instead: it would route comparator 0 to pin 0 and
+/// take over the RTC, claiming two devices this milestone does not own.
 #[cfg(target_arch = "x86_64")]
-pub const TIMER_IRQ: sel4::Word = 2;
+pub const TIMER_IRQ: sel4::Word = 20;
 
 /// Badge minted onto the notification copy bound to the IRQ handler. The
 /// notification object's own (unbadged, full-rights) capability is used to
@@ -649,9 +663,22 @@ fn program_hpet(registers: MappedGranule, deadline: u64) -> bool {
     let Some(base) = hpet_timer0_base_config() else {
         return false;
     };
-    // Configure before arming: the route and trigger mode must be in place
-    // before delivery is enabled, or the first expiry can be delivered on the
-    // wrong input.
+    // Configure, then arm, then clear, then enable — in that order.
+    //
+    // The route and trigger mode must be in place before delivery is enabled,
+    // or the first expiry can be delivered on the wrong input. The latched
+    // status must be cleared before delivery is enabled for a separate reason:
+    // `GINTR_STA` accumulates comparator expiries whether or not delivery is
+    // enabled, so a deadline that elapsed while the comparator was disarmed
+    // leaves its bit set. Enabling delivery with that bit set asserts the line
+    // immediately, and the root then services an expiry for a deadline it has
+    // already retired: each such wake finds nothing due, reprograms, and
+    // re-asserts, so the condition does not settle on its own.
+    //
+    // Clearing after writing the comparator rather than before is what makes
+    // this sound: writing either register re-arms the device against the value
+    // then present, so a clear that preceded the comparator write could be
+    // followed by a fresh latch from the stale deadline.
     //
     // 32-bit comparator mode, so only the low half of the deadline is
     // compared. Truncating is correct rather than lossy: the caller's deadline
@@ -659,6 +686,7 @@ fn program_hpet(registers: MappedGranule, deadline: u64) -> bool {
     // would already exceed the wrap this mode inherently has.
     registers.write32(HPET_TIMER0_CONFIG, base)
         && registers.write32(HPET_TIMER0_COMPARATOR, deadline as u32)
+        && clear_hpet_interrupt(registers)
         && registers.write32(HPET_TIMER0_CONFIG, base | HPET_T0_INTERRUPT_ENABLE)
         && registers.write32(HPET_GENERAL_CONFIG, HPET_ENABLE)
 }
@@ -670,6 +698,11 @@ fn disarm_hpet(registers: MappedGranule) -> bool {
     // route and trigger mode are preserved for the same reason they are
     // programmed at all — the next `program_hpet` must not have to reinstate
     // them before the comparator can fire on the claimed input.
+    //
+    // The status clear here is best-effort tidiness, not the invariant: the
+    // retained comparator value can latch again at any point after this
+    // returns, so what actually prevents a spurious delivery is
+    // `program_hpet` clearing immediately before it enables the line.
     let Some(base) = hpet_timer0_base_config() else {
         return false;
     };

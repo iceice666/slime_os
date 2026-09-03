@@ -32,7 +32,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
-from harness import ROOT, sha256_file  # noqa: E402
+from harness import ROOT, load_qemu_profile, sha256_file  # noqa: E402
+from pc99_media import PINS_SECTION, boot_media  # noqa: E402
 
 import boot_contracts  # noqa: E402
 
@@ -41,6 +42,7 @@ PROFILE_NAME = "x86_64-sel4-qemu-pc99"
 FRAMEWORK_PROFILE_NAME = "x86_64-sel4-framework13-ai300"
 MANIFEST_PATH = ROOT / "build" / f"slime-sel4-{PLATFORM}.identity.json"
 GENERATION_PATH = ROOT / "build" / PLATFORM / "sel4-generation" / "generation.bin"
+PINS_PATH = ROOT / "sel4" / "pins.toml"
 BUILD_SEL4 = ROOT / "scripts" / "build" / "build-sel4.py"
 
 # `e_machine` for x86-64, from the ELF specification. Asserted against the
@@ -138,12 +140,47 @@ def check_manifest(manifest: dict[str, object], profile: boot_contracts.TargetPr
         record(
             f"identity names target {manifest.get('target_profile')!r}, expected {PROFILE_NAME!r}"
         )
-    # The whole point of the boot-route field: this platform must not claim a
-    # packaged image, because none exists until P6.2 builds the GRUB tree.
+    # The boot-route field's whole point: this platform must not claim a
+    # packaged image, because the Multiboot2 route has none. What it must claim
+    # instead is the EFI file tree P6.2 assembles, whose digest is the identity
+    # a boot binds to the way the loader platforms bind a packaged ELF.
     if manifest.get("boot_route") != "multiboot2":
         record(f"identity boot route is {manifest.get('boot_route')!r}, expected 'multiboot2'")
     if "image" in manifest:
         record("identity claims a packaged image; the Multiboot2 route has none")
+    media = manifest.get("media")
+    if not isinstance(media, dict):
+        record("identity records no boot media tree")
+    else:
+        if not isinstance(media.get("tree_sha256"), str):
+            record("identity records no boot media tree digest")
+        files = media.get("files")
+        if not isinstance(files, dict):
+            record("identity records no boot media file table")
+        else:
+            observed = boot_media(
+                ROOT / str(media["tree"]),
+                profile=load_qemu_profile(fail, PINS_PATH, PINS_SECTION),
+                fail=fail,
+            )
+            if observed["tree_sha256"] != media["tree_sha256"]:
+                record(
+                    f"boot media tree digest is {observed['tree_sha256']}, "
+                    f"identity records {media['tree_sha256']}"
+                )
+            for relative, entry in files.items():
+                if observed["files"].get(relative) != entry:
+                    record(f"boot media file {relative} does not match the identity")
+    # The firmware and bootloader are not built here, so what the identity can
+    # bind is the pins they were verified against. Absent, a boot claim would
+    # name no firmware at all.
+    inputs = manifest.get("boot_inputs")
+    if not isinstance(inputs, dict):
+        record("identity records no firmware or bootloader identity")
+    else:
+        for required in ("firmware_code_sha256", "grub_modules_sha256"):
+            if not isinstance(inputs.get(required), str):
+                record(f"identity boot inputs record no {required}")
     elf = manifest.get("elf")
     if not isinstance(elf, dict):
         fail("identity has no `elf` section")
@@ -307,6 +344,12 @@ def check_reproducible() -> None:
         "component": ROOT / "build" / "slisp-product-x86_64.elf",
         "generation": GENERATION_PATH,
         "identity": MANIFEST_PATH,
+        # P6.2's EFI tree is what a boot reads, so it belongs here beside the
+        # artifacts it contains. Its per-file digests are folded into the
+        # identity, but comparing the identity alone would not catch a tree
+        # that changed *and* was faithfully described both times.
+        "boot media": ROOT / "build" / "media" / PLATFORM / "EFI" / "BOOT" / "BOOTX64.EFI",
+        "grub config": ROOT / "build" / "media" / PLATFORM / "boot" / "grub" / "grub.cfg",
     }
     rounds = []
     for round_index in (1, 2):

@@ -23,6 +23,10 @@ BUILD_ROOT = ROOT / "build"
 CARGO_BUILD = BUILD_ROOT / "sel4-cargo"
 ARTIFACTS = BUILD_ROOT / "sel4-artifacts"
 
+sys.path.insert(0, str(ROOT / "scripts" / "lib"))
+
+from pc99_media import assemble_media  # noqa: E402
+
 
 @dataclass(frozen=True)
 class Platform:
@@ -1146,6 +1150,20 @@ def build_application(
         # Plane images keep deterministic scripts, and physical targets do not
         # compile a QEMU address into their root task.
         root_environment["SLIME_QEMU_KEYBOARD"] = "1"
+    if platform is QEMU_PC99 and variant == GRAPH_VARIANT:
+        # The same interactive product path on pc99, over COM1 rather than a
+        # PL011: x86 legacy serial is behind I/O ports, so the root holds a
+        # capability over the port range instead of mapping a page. The base is
+        # read from the pins rather than written here, so the emulator fact and
+        # the compiled-in port cannot disagree.
+        serial = text(table(pins, platform.pins_section), "serial", platform.pins_section)
+        match = re.fullmatch(r"com1-16550a-(0x[0-9a-fA-F]+)", serial)
+        if match is None:
+            fail(
+                f"sel4/pins.toml [{platform.pins_section}].serial must name "
+                "com1-16550a-<hex-port>"
+            )
+        root_environment["SLIME_PC99_COM1_PORT"] = match.group(1)
     if platform is CV1800B_DUO and variant == GRAPH_VARIANT:
         serial = text(table(pins, platform.pins_section), "serial", platform.pins_section)
         match = re.fullmatch(r"uart0-dw-apb-(0x[0-9a-fA-F]+)", serial)
@@ -1327,6 +1345,21 @@ def package_image(
     require_file(image, "packaged seL4 image")
 
 
+def media_tree(variant: str, platform: Platform, arguments: argparse.Namespace) -> Path:
+    """Where one variant's EFI boot tree is assembled.
+
+    Named per variant and platform for the same reason packaged images are: two
+    gates booting different generations must not read one tree whichever build
+    ran last.
+    """
+    suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
+    if arguments.duo_early_fault:
+        suffix += "-early-fault"
+    if arguments.duo_test_terminator:
+        suffix += "-test-terminator"
+    return BUILD_ROOT / "media" / f"{platform.name}{suffix}"
+
+
 def copy_artifact(source: Path, name: str, platform: Platform = QEMU_ARM_VIRT) -> Path:
     # Board and QEMU artifacts of the same name are different binaries, so the
     # board's live in their own subdirectory rather than overwriting the ones
@@ -1349,6 +1382,7 @@ def write_manifest(
     loader: Path | None,
     payload_tool: Path | None,
     image: Path | None = IMAGE,
+    media: dict[str, object] | None = None,
     manifest_path: Path = MANIFEST,
     variant: str = FIXTURE_VARIANT,
     platform: Platform = QEMU_ARM_VIRT,
@@ -1434,9 +1468,37 @@ def write_manifest(
         },
         # How the kernel and root task reach execution. `multiboot2` records
         # that no single packaged image exists: a bootloader supplies the two
-        # ELFs as separate modules, and P6.2 owns building that file tree.
+        # ELFs as separate modules, and `media` below names that file tree.
         "boot_route": platform.boot_route,
         **({} if image is None else {"image": file_record(image)}),
+        # P6.2's boot contract. On the Multiboot2 route this is what `image` is
+        # on the loader route: the exact bytes a boot reads. `tree_sha256` folds
+        # each file's path in with its contents, so a module moved to a path the
+        # GRUB configuration does not name is a different tree even when every
+        # file is byte-identical.
+        **({} if media is None else {"media": media}),
+        # The firmware and bootloader that decide what "it booted" means. They
+        # are not built here, so the manifest names the pins they were verified
+        # against rather than hashing host paths a reader cannot resolve later.
+        **(
+            {}
+            if media is None
+            else {
+                "boot_inputs": {
+                    key: table(pins, f"{platform.pins_section}_boot")[key]
+                    for key in (
+                        "firmware",
+                        "firmware_release",
+                        "firmware_code_sha256",
+                        "firmware_vars_sha256",
+                        "bootloader",
+                        "bootloader_version",
+                        "bootloader_format",
+                        "grub_modules_sha256",
+                    )
+                }
+            }
+        ),
         # Which startup path this image takes, so a gate cannot boot a different
         # one and assert against markers it will never emit.
         #
@@ -1977,10 +2039,25 @@ def main() -> None:
                 ".identity.json", "-test-terminator.identity.json"
             )
         )
+    media: dict[str, object] | None = None
     if platform.boot_route == "kernel-loader":
         package_image(payload_tool, loader, root_elf, image, platform)
     else:
+        # P6.2. There is no packaged image on the Multiboot2 route, so what the
+        # emulator and later the removable medium actually read is an EFI file
+        # tree. It is assembled here, beside the artifacts it contains, so the
+        # identity manifest can name the exact bytes that boot.
         image = None
+        media = assemble_media(
+            media_tree(variant, platform, arguments),
+            kernel=require_file(
+                platform.prefix_dir / "bin" / "kernel.elf", "installed seL4 kernel"
+            ),
+            root_task=root_elf,
+            profile=table(pins, platform.pins_section),
+            boot_pins=table(pins, f"{platform.pins_section}_boot"),
+            fail=fail,
+        )
     write_manifest(
         pins,
         child_elf=child_elf,
@@ -1988,6 +2065,7 @@ def main() -> None:
         loader=loader,
         payload_tool=payload_tool,
         image=image,
+        media=media,
         manifest_path=manifest_path,
         variant=variant,
         platform=platform,
@@ -1995,12 +2073,13 @@ def main() -> None:
         duo_early_fault=arguments.duo_early_fault,
         duo_test_terminator=arguments.duo_test_terminator,
     )
-    if image is None:
+    if media is not None:
         print(
             "seL4 image build: wrote "
-            f"{root_elf.relative_to(ROOT)}, {child_elf.relative_to(ROOT)}, and "
-            f"{manifest_path.relative_to(ROOT)} "
-            f"({platform.boot_route}: no packaged image; the bootloader supplies the modules)"
+            f"{root_elf.relative_to(ROOT)}, {child_elf.relative_to(ROOT)}, "
+            f"{media['tree']}, and {manifest_path.relative_to(ROOT)} "
+            f"({platform.boot_route}: the bootloader supplies the two ELFs as "
+            f"modules; tree {media['tree_sha256'][:16]}…)"
         )
     else:
         print(

@@ -33,8 +33,8 @@ use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
-    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
-    transfer_window, vm_attributes, wait_set,
+    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, thread_abi,
+    timer, transfer_window, vm_attributes, wait_set,
 };
 
 use core::ptr;
@@ -371,7 +371,7 @@ fn request_duo_test_reset() -> ! {
     }
 }
 
-#[cfg(slime_duo_uart)]
+#[cfg(any(slime_duo_uart, slime_pc99_com1))]
 const fn const_parse_hex_usize(value: &str) -> usize {
     let bytes = value.as_bytes();
     assert!(
@@ -481,6 +481,18 @@ const TIMER_PADDR: usize = 0xfed0_0000;
 const RESET_PADDR: usize = 0x0502_5000;
 #[cfg(slime_duo_uart)]
 const DUO_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_DUO_UART_PADDR"));
+/// pc99's COM1 base I/O port, supplied by the build from `[qemu_pc99].serial`
+/// so the emulator fact and the compiled-in port cannot disagree.
+///
+/// Narrowed with a compile-time bound rather than an `as` cast: x86 I/O ports
+/// are 16 bits, and a truncating cast would turn an out-of-range pin into a
+/// plausible-looking port instead of a build failure.
+#[cfg(slime_pc99_com1)]
+const PC99_COM1_PORT: u16 = {
+    let port = const_parse_hex_usize(env!("SLIME_PC99_COM1_PORT"));
+    assert!(port <= u16::MAX as usize, "I/O port must fit in 16 bits");
+    port as u16
+};
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
@@ -751,9 +763,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
-    #[cfg(all(any(slime_qemu_keyboard, slime_duo_uart), not(slime_root_fixture)))]
+    #[cfg(all(
+        any(slime_qemu_keyboard, slime_duo_uart, slime_pc99_com1),
+        not(slime_root_fixture)
+    ))]
     let product_input = {
+        #[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
+        #[cfg(any(slime_qemu_keyboard, slime_duo_uart))]
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
             fatal!("product input page unavailable: {error:?}")
         }
@@ -789,13 +806,53 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
             )
         };
+        // pc99 legacy serial is behind I/O ports rather than a mapped page, so
+        // this arm claims a capability over the COM1 port range instead of a
+        // device frame.
+        #[cfg(slime_pc99_com1)]
+        let (paddr, receiver) = {
+            let port_slot = match allocator.reserve_slot::<sel4::cap_type::IOPort>() {
+                Ok(slot) => slot,
+                Err(error) => fatal!("COM1 port slot unavailable: {error:?}"),
+            };
+            let first = PC99_COM1_PORT;
+            // The 16550's eight registers, no wider: `IOPortControl` will issue
+            // any span, and a wider one would hand the root authority over
+            // neighbouring legacy devices it does not drive.
+            //
+            // Checked rather than wrapped: a pinned base near the top of the
+            // port space would otherwise wrap to a reversed range, and a range
+            // whose end precedes its start is authority over nothing that
+            // nonetheless issues successfully.
+            let Some(last) = first.checked_add(7) else {
+                fatal!("COM1 port base {first:#x} leaves no room for the 16550's eight registers")
+            };
+            let root_cnode = sel4::init_thread::slot::CNODE.cap();
+            if let Err(error) = sel4::init_thread::slot::IO_PORT_CONTROL
+                .cap()
+                .ioport_control_issue(
+                    first.into(),
+                    last.into(),
+                    &root_cnode.absolute_cptr(port_slot.cptr()),
+                )
+            {
+                fatal!("COM1 port authority refused: {error:?}")
+            }
+            (
+                usize::from(first),
+                device::TerminalReceiver::Com1(device::Com1Input::new(port_slot.cap(), first)),
+            )
+        };
         sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
         let input = device::TerminalInput::new(receiver);
         #[cfg(slime_duo_test_terminator)]
         let input = input.with_test_terminator(0x1d, request_duo_test_reset);
         Some(input)
     };
-    #[cfg(all(not(any(slime_qemu_keyboard, slime_duo_uart)), not(slime_root_fixture)))]
+    #[cfg(all(
+        not(any(slime_qemu_keyboard, slime_duo_uart, slime_pc99_com1)),
+        not(slime_root_fixture)
+    ))]
     let product_input: Option<device::TerminalInput> = None;
     // ---- timer phase ----
     // Proves `TimerScheduler` (see `timer.rs`) is driven by a real seL4 IRQ

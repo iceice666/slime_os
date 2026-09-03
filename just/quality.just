@@ -285,9 +285,10 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    # P3.E adds the sparse device-untyped preflight test: the retained virtual
-    # anchor must participate in contiguous-slot planning without mutating the pool.
-    expected=214
+    # Raised by P6.3's `thread_abi`: the stack pointer a directly started thread
+    # is entered with must satisfy the callee ABI, stay inside the reservation,
+    # and not underflow. Three tests, one new module.
+    expected=217
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"
@@ -313,7 +314,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 19 modules"
+    echo "slime-root host tests: $actual/$expected across 21 modules"
 
 [group('quality')]
 ruff:

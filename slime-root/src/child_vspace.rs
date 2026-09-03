@@ -151,11 +151,14 @@ impl<'a> ChildImage<'a> {
     pub fn worker(&self) -> Option<WorkerImage> {
         let entry = self.symbol(WORKER_ENTRY_SYMBOL)?;
         let (stack_base, stack_size) = self.symbol_with_size(WORKER_STACK_SYMBOL)?;
+        let top = usize::try_from(stack_base + stack_size).ok()?;
         Some(WorkerImage {
             entry,
-            // Both supported ABIs require a 16-byte stack alignment at public
-            // interfaces; the symbol's own alignment only guarantees its base.
-            stack_top: (stack_base + stack_size) & !0xf,
+            // The kernel enters this thread by writing PC and SP, so what the
+            // callee's ABI requires there is not the symbol's own alignment;
+            // `thread_abi` owns that difference for every directly started
+            // thread.
+            stack_top: crate::thread_abi::initial_stack_pointer(top) as u64,
         })
     }
 

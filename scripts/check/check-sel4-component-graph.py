@@ -23,12 +23,9 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import threading
 import time
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
@@ -37,16 +34,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from harness import (  # noqa: E402
     GENERATION_COMPOSITIONS,
     GENERATION_CONTRACT,
-    profile_integer,
-    profile_text,
-    sha256_file,
+)
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths,
+    boot_command,
+    run as run_boot,
+    verify_identity,
 )
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-graph.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-graph.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4.zti"
@@ -231,20 +230,6 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 component graph check: {message}")
 
 
-def load_pins() -> dict[str, object]:
-    if not PINS_PATH.is_file():
-        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
-    try:
-        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
-    if pins.get("schema") != 1:
-        fail("unsupported sel4/pins.toml schema (expected 1)")
-    if not isinstance(pins.get("qemu_arm_virt"), dict):
-        fail("sel4/pins.toml is missing [qemu_arm_virt]")
-    return pins
-
-
 def generator_module(name: str):
     spec = importlib.util.spec_from_file_location(name, GENERATOR)
     if spec is None or spec.loader is None:
@@ -309,8 +294,8 @@ def check_automatic_binding_slots() -> None:
     )
 
 
-def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--component-graph"]
+def build_image(platform: str) -> None:
+    command = [sys.executable, str(BUILD_SCRIPT), "--component-graph", "--platform", platform]
     print(f"[build] {' '.join(command)}", flush=True)
     try:
         process = subprocess.run(command, cwd=ROOT, check=False)
@@ -320,100 +305,53 @@ def build_image() -> None:
         fail(f"seL4 image build failed with exit status {process.returncode}")
 
 
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_component_graph_check`"
-        )
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    # The two images are built from the same sources and differ only in which
+def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict[str, object]:
+    manifest = verify_identity(
+        manifest_path,
+        platform=platform,
+        variant=None,
+        image_path=image_path,
+        fail=fail,
+    )
+    # The images are built from the same sources and differ only in which
     # generation the root task embeds, so booting the wrong one would fail on
     # markers rather than on identity. Checking the flag reports the actual
     # cause instead.
     if manifest.get("component_graph") is not True:
         fail(
-            f"{MANIFEST.relative_to(ROOT)} does not record a component-graph image; "
+            f"{manifest_path.relative_to(ROOT)} does not record a component-graph image; "
             "rebuild with `--component-graph`"
         )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    actual = sha256_file(IMAGE, fail)
-    if actual != image["sha256"]:
-        fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
-        )
+    return manifest
 
 
-def boot(profile: dict[str, object]) -> str:
-    """Boot the image and return the serial transcript.
+def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
+    """Boot the resident product graph and drive one bounded input session.
 
-    The root task suspends itself once the graph has drained, so QEMU stays
-    alive afterwards and waiting for an exit would always time out. Serial
-    output is read line by line and the guest is killed as soon as the terminal
-    or any failure marker appears.
+    Unlike the fixture planes, this graph never drains: init stays alive
+    supervising its services. The gate therefore ends the boot on the terminal
+    marker after feeding input, and the feed itself waits for the guest to
+    announce that it is waiting for input rather than sending on a timer.
     """
-    qemu = shutil.which("qemu-system-aarch64")
-    if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail),
-        "-cpu",
-        profile_text(profile, "cpu", fail),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        "-kernel",
-        str(IMAGE),
-    ]
-    print(f"[boot] {' '.join(command)}", flush=True)
     input_wait = re.compile(INPUT_WAIT_MARKER)
     terminal = re.compile(TERMINAL_MARKER)
     failures = re.compile("|".join(FAILURE_MARKERS))
-    lines: list[str] = []
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except OSError as error:
-        fail(f"cannot run QEMU: {error}")
-    assert process.stdin is not None
-    # A wedged guest emits nothing, so the deadline cannot live in the read
-    # loop; a watchdog kills QEMU, which closes the pipe and ends the loop.
-    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
-    watchdog.start()
-    sent_expression = False
-    try:
+
+    def feed(process: subprocess.Popen[str], lines: list[str]) -> None:
+        assert process.stdin is not None
         assert process.stdout is not None
+        sent_expression = False
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
             if failures.search(line):
                 break
             if not sent_expression and input_wait.search(line):
+                # Pauses between characters force the FIFO empty between
+                # keystrokes, so a diagnostic redrawn mid-command cannot be
+                # mistaken for the shell losing input.
                 time.sleep(0.5)
-                for command in ("(+ 1 1)\n", "sysinfo\n"):
-                    for character in command:
+                for text in ("(+ 1 1)\n", "sysinfo\n"):
+                    for character in text:
                         process.stdin.write(character)
                         process.stdin.flush()
                         time.sleep(0.05)
@@ -421,20 +359,14 @@ def boot(profile: dict[str, object]) -> str:
                 continue
             if sent_expression and terminal.search(line):
                 break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    transcript = "\n".join(lines)
-    if timed_out and terminal.search(transcript) is None:
-        print(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without completing sysinfo")
-    return transcript
+
+    return run_boot(
+        boot_command(manifest, platform=platform, image_path=image_path, fail=fail),
+        terminal=terminal,
+        timeout=BOOT_TIMEOUT_SECONDS,
+        fail=fail,
+        feed=feed,
+    )
 
 
 def report_transcript(transcript: str) -> None:
@@ -547,24 +479,28 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+        help="the pinned QEMU profile and image to build and boot",
+    )
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    pins = load_pins()
     check_automatic_binding_slots()
+    image_path, manifest_path = artifact_paths("slime-sel4-graph", arguments.platform)
     if not arguments.no_build:
-        build_image()
-    check_manifest()
+        build_image(arguments.platform)
+    manifest = check_manifest(image_path, manifest_path, arguments.platform)
     check_deleted_compatibility_surface()
-    profile = pins["qemu_arm_virt"]
-    assert isinstance(profile, dict)
-    check_transcript(boot(profile))
+    check_transcript(boot(manifest, arguments.platform, image_path))
     print(
         "seL4 component graph check: init launched console, spawn-service, and "
         "Slisp with generation-declared authority; QEMU serial input evaluated "
         "and launched sysinfo through its declared context endpoint; all four "
-        "required resident instances remained live"
+        f"required resident instances remained live on {arguments.platform}"
     )
 
 

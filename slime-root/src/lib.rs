@@ -75,6 +75,7 @@ pub mod scheduling;
 pub mod shared_buffer;
 pub mod supervision;
 pub mod task;
+pub mod thread_abi;
 pub mod timer;
 pub mod transfer_window;
 pub mod vm_attributes;

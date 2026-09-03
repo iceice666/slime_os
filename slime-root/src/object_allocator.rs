@@ -20,8 +20,21 @@ pub(crate) fn take_forced_unwind() -> bool {
     FORCE_UNWIND_ONCE.swap(false, Ordering::Relaxed)
 }
 
-pub const MAX_KERNEL_UNTYPEDS: usize = 64;
-pub const MAX_DEVICE_UNTYPEDS: usize = 64;
+/// Untyped regions the root accepts from BootInfo, kernel and device each.
+///
+/// Derived from the kernel's own `MAX_NUM_BOOTINFO_UNTYPED_CAPS` rather than
+/// chosen: that constant is the exact number of descriptors seL4 can place in
+/// the boot info at all, so a table this size cannot be overrun by any kernel
+/// the root is built against, and the `UntypedTableFull`/`DeviceTableFull`
+/// refusals become unreachable-by-construction rather than a bound a new
+/// machine can exceed. A fixed 64 was enough for the ARM and RISC-V reference
+/// machines and is not enough for a q35 PC, which declares 78 device regions
+/// for its ACPI, APIC, PCI ECAM, and firmware-reserved ranges.
+///
+/// Both roles share one bound because the kernel emits them into one list; the
+/// two arrays stay separate because the root treats their authority differently.
+pub const MAX_KERNEL_UNTYPEDS: usize = sel4::sel4_cfg_usize!(MAX_NUM_BOOTINFO_UNTYPED_CAPS);
+pub const MAX_DEVICE_UNTYPEDS: usize = MAX_KERNEL_UNTYPEDS;
 /// Maximum BootInfo empty-slot span accepted by the reusable slot allocator.
 pub const MAX_ROOT_CSLOTS: usize = 262_144;
 /// Maximum simultaneously provisioned task-arena parents.
