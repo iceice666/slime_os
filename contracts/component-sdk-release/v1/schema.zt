@@ -124,6 +124,25 @@ TargetProfileAsset :: type {
   prefix : PrefixAsset;
 };
 
+-- One complete system-image build corpus published beside the component SDK.
+--
+-- The archive expands to a repository-shaped, self-contained source root. Its
+-- closure and test-run paths are relative to that root, so the canonical
+-- resolver and builder run unchanged rather than learning an SDK-only path
+-- convention. `archiveHash` binds the transferred bytes and `treeHash` binds
+-- the extracted inputs the build actually reads.
+SystemImageAsset :: type {
+  name : Text;
+  archive : Text;
+  archiveHash : Text;
+  treeHash : Text;
+  closure : Text;
+  closureIdentity : Text;
+  testRun : Text;
+  testRunIdentity : Text;
+};
+
+
 -- The scalar identities CP9 classifies a release change by.
 --
 -- Each is a digest over something that can make a component disagree with the
@@ -168,6 +187,7 @@ ComponentSdkRelease :: type {
   crates : List CrateIdentity;
   contracts : List ContractIdentity;
   profiles : List TargetProfileAsset;
+  systems : List SystemImageAsset;
   compatibility : CompatibilityIdentity;
 };
 
@@ -207,6 +227,7 @@ FromData @ContractIdentity :: derive
 FromData @PrefixAsset :: derive
 FromData @TargetProfileAsset :: derive
 FromData @CompatibilityIdentity :: derive
+FromData @SystemImageAsset :: derive
 FromData @ComponentSdkRelease :: derive
 FromData @MatrixRow :: derive
 FromData @CompatibilityMatrix :: derive
@@ -241,6 +262,7 @@ maxFiles :: Int = 32;
 maxCrates :: Int = 16;
 maxContracts :: Int = 64;
 maxProfiles :: Int = 8;
+maxSystems :: Int = 4;
 maxRows :: Int = 16;
 maxEvidence :: Int = 12;
 
@@ -283,6 +305,7 @@ breakingAxes :: List Text = {
 structuralAxes :: List Text = {
   "crates";
   "profiles";
+  "systems";
 };
 
 -- The key field each structural axis's entries are identified by, in the same
@@ -292,6 +315,7 @@ structuralAxes :: List Text = {
 structuralKeys :: List Text = {
   "name";
   "profile";
+  "name";
 };
 
 decodeComponentSdkRelease :: Data -> Validation DecodeIssue ComponentSdkRelease
@@ -306,6 +330,7 @@ decodeCompatibilityMatrix :: Data -> Validation DecodeIssue CompatibilityMatrix
   ContractIdentity =;
   PrefixAsset =;
   TargetProfileAsset =;
+  SystemImageAsset =;
   CompatibilityIdentity =;
   ComponentSdkRelease =;
   MatrixRow =;
@@ -331,6 +356,7 @@ decodeCompatibilityMatrix :: Data -> Validation DecodeIssue CompatibilityMatrix
   maxContracts =;
   maxProfiles =;
   maxRows =;
+  maxSystems =;
   maxEvidence =;
   classificationInitial =;
   classificationPatch =;

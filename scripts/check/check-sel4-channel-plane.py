@@ -287,7 +287,21 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--image",
+        type=Path,
+        help="boot this verified closure image (requires --no-build)",
+    )
     arguments = parser.parse_args()
+    global IMAGE
+    if arguments.image is not None:
+        if not arguments.no_build:
+            fail("--image requires --no-build")
+        IMAGE = arguments.image.resolve()
+        if not IMAGE.is_file():
+            fail(f"missing image: {IMAGE}")
+    elif arguments.no_build:
+        fail("--no-build requires --image naming the already-built closure image")
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")

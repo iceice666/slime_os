@@ -115,6 +115,7 @@ jobs:
       # release lifecycle (idempotence, immutable tags, reverse drift).
       - run: nix develop --command just component_sdk_export_check
       - run: nix develop --command just component_sdk_release_check
+      - run: nix develop --command just component_sdk_system_image_check
 
       - uses: actions/upload-artifact@v4
         with:

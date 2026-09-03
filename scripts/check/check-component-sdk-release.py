@@ -376,29 +376,30 @@ def prove_reverse_drift(root: Path, url: str) -> None:
     )
     try:
         # `git worktree add` leaves submodules unpopulated, and the export needs
-        # `deps/rust-sel4` whole. The recorded commit pins its gitlink, so the
-        # bytes are checked against that pin rather than assumed.
-        pinned = run(
-            ["git", "rev-parse", f"{record['sourceCommit']}:deps/rust-sel4"],
-            cwd=ROOT,
-            description="read the recorded rust-sel4 pin",
-        ).stdout.strip()
-        current = run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT / "deps" / "rust-sel4",
-            description="read the checked-out rust-sel4 commit",
-        ).stdout.strip()
-        if pinned != current:
-            fail(
-                "the recorded source commit pins rust-sel4 at "
-                f"{pinned[:12]} but this checkout has {current[:12]}"
+        # `deps/rust-sel4` and `deps/zutai` whole. The recorded commit pins each
+        # gitlink, so the bytes are checked against that pin rather than assumed.
+        for submodule in ("deps/rust-sel4", "deps/zutai"):
+            pinned = run(
+                ["git", "rev-parse", f"{record['sourceCommit']}:{submodule}"],
+                cwd=ROOT,
+                description=f"read the recorded {submodule} pin",
+            ).stdout.strip()
+            current = run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=ROOT / submodule,
+                description=f"read the checked-out {submodule} commit",
+            ).stdout.strip()
+            if pinned != current:
+                fail(
+                    f"the recorded source commit pins {submodule} at "
+                    f"{pinned[:12]} but this checkout has {current[:12]}"
+                )
+            shutil.copytree(
+                ROOT / submodule,
+                worktree / submodule,
+                ignore=component_sdk.COPY_IGNORE,
+                dirs_exist_ok=True,
             )
-        shutil.copytree(
-            ROOT / "deps" / "rust-sel4",
-            worktree / "deps" / "rust-sel4",
-            ignore=component_sdk.COPY_IGNORE,
-            dirs_exist_ok=True,
-        )
         regenerated = component_sdk.export(
             root / "regenerated",
             version=record["version"],
