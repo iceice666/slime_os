@@ -28,7 +28,7 @@ vendor firmware's banner every time.
 
 | Area | Change | Restored invariant |
 |---|---|---|
-| seL4 fork | `ns02201-h1v1` platform: a device tree trimmed from the tree the board runs, an overlay placing the kernel's 768 MiB window at `0x10000000`, `KernelArmCortexA73` at the seven sites the A76 occupies, `ns16550a` on the DW-APB serial driver, the mandatory `libsel4` platform include | The kernel for this board is built from the board's own facts, in the fork Slime pins |
+| seL4 fork | `ns02201-h1v1` platform: a device tree trimmed from the tree the board runs, an overlay placing the kernel's 767 MiB window at `0x10000000`, `KernelArmCortexA73` at the seven sites the A76 occupies, `ns16550a` on the DW-APB serial driver, the mandatory `libsel4` platform include | The kernel for this board is built from the board's own facts, in the fork Slime pins |
 | rust-sel4 fork | `crates/sel4-kernel-loader/src/plat/ns02201/mod.rs`: an inline polled 16550 at `0x2f0130000`, PSCI secondaries, `cntvoff` reset under hypervisor | The loader prints through the port the probe proved, without a driver crate that does not exist |
 | Pins | `[ns02201_h1v1]` product half, `[observed_prefix_ns02201_h1v1]`, both fork commits bumped; `kernel_config_sha256` re-pinned on the four existing platforms | A fork commit that declares a platform and a CPU option adds two `false` keys to every kernel config; every other pinned artifact stayed byte-identical, and the rule is now written beside the pin |
 | Target profile | `aarch64-sel4-nt98690-h1v1`, id 8, admitted by the generation builder, the architecture contract, and the component SDK map | The board's generation is its own exact identity, not the QEMU reference's |
@@ -36,7 +36,7 @@ vendor firmware's banner every time.
 | Image | `build-nt98690-payload.py --sel4`: the arm64 header overwrites the loader's runtime-dead ELF header, `text_offset` is the link base; the ELF flattening helpers moved from `build-rpi5-media.py` into `scripts/lib/arm64_image.py` | One flattener for both AArch64 boards, byte-identical to what the Pi 5 media builder produced before the move |
 | Root | `slime_ns02201_h1v1` and `slime_physical_target` cfgs; the READY line naming the target profile compiled for every physical board; two mapped granules and `request_ns02201_watchdog_reset` performing TF-A's own sequence; a fatal condition resets the board once the granules are mapped | A completed proof, or a fatal, returns the board to its firmware on a bench with no other way to reboot it |
 | Gate | `check-nt98690-sel4.py`: P6.A's staging sequence, three boots, the sample plane's own transcript assertions, normalization, byte-identity, recovery observed through the next prompt for runs one and two and in silence for the last; pinned at 19 markers in the shared tamper control | The Duo lane's three-boot claim, with the tamper control the Duo's gate never had |
-| Reset probe | `check-nt98690-boot.py --reset-probe`: TF-A's five watchdog writes from the U-Boot prompt, 32-bit then 64-bit | Whether the non-secure world may reset this board is observed before root code depends on it |
+| Reset probe | `check-nt98690-boot.py --reset-probe`: TF-A's watchdog sequence using the 32-bit register accesses the root performs | Whether the non-secure world may reset this board is observed before root code depends on it |
 | Host tests | `just test_sel4_root` cross-compiles for AArch64 and runs under `qemu-aarch64` on non-AArch64 hosts | The gate the repository names for root changes runs on this host, on the architecture the root ships on |
 
 ## Regression guards
@@ -45,7 +45,7 @@ vendor firmware's banner every time.
 |---|---|---|
 | The board's pins drift from its CMake config, the probe's measurements, or the fork's device tree | `check-sel4-pins.py::check_profile` block for `ns02201-h1v1` | `just sel4_pin_check` fails naming the disagreeing value |
 | A marker is deleted, reordered, or a failure marker tolerated | `check-sel4-gate-controls.py` entry `nt98690_sel4` pinned at 19 | `just sel4_gate_control_check` fails |
-| The flattener move changed the Pi 5 image | The moved helpers reproduce the pre-move bytes of `build/slime-sel4.elf` flattened (1,103,992 bytes) | byte inequality |
+| The flattener move changed the Pi 5 image | `just rpi5_media_check` exercises `build/slime-sel4-bcm2712-rpi5.elf`; the shared helper must reproduce the same `kernel8.img` bytes | byte inequality |
 | The wrapped image's header disagrees with the loader | `check_image_header` plus the landing-word check on `mrs x0, mpidr_el1` | `build-nt98690-payload.py --sel4` fails |
 | A fork bump moves hashes it should not | Only `kernel_config_sha256` moved on every existing platform, reproduced exactly by removing the two new keys | any other pinned artifact moving is a finding, per the pins' own comment |
 
@@ -57,7 +57,7 @@ vendor firmware's banner every time.
 | `just sel4_pin_check` | Passed with both fork commits, the new platform block, and the re-pinned config hashes | Direct |
 | `python3 scripts/build/build-sel4.py --platform ns02201-h1v1 [--sample-plane]` | Kernel at physBase `0x10000000`, memory `0x10000000..0x40000000`, `ARM_CORTEX_A73`, `ARM_PA_SIZE_BITS_40`, `ARM_HYPERVISOR_SUPPORT`, `TIMER_FREQUENCY 12000000`; loader linked at `0x10286000`; root, generation, and both images built without warnings | Direct |
 | `python3 scripts/build/build-nt98690-payload.py --sel4` | 1,285,200-byte image, `text_offset 0x10286000`, `code0` branching to `0x1028a5d8` which holds `mrs x0, mpidr_el1`; the probe path unchanged (sha `1046ed43…`) | Direct |
-| The flattener move | Byte-identical output on `build/slime-sel4.elf` before and after | Direct |
+| The flattener move | `just rpi5_media_check` reproduced the Pi 5 `kernel8.img` bytes from `build/slime-sel4-bcm2712-rpi5.elf` | Direct |
 | `just test_sel4_root` (amended recipe, `qemu-aarch64`) | 214 passed, 0 failed | Direct |
 | `just sel4_gate_control_check` | 47 gates reject 1822 mutated transcripts; every marker of the new gate instantiates | Direct |
 | Rehearsal of `check-nt98690-sel4.py` against a stand-in board replaying the QEMU sample-plane transcript with per-run jitter | Three runs: contract, sample-plane assertions, and wire clean; normalized traces identical; each run's recovery evidence is exactly the firmware banner line; no `Moving Image` in any transcript. Not board evidence: a rehearsal of the loop | Direct, synthetic |
@@ -66,8 +66,8 @@ vendor firmware's banner every time.
 | Rebase onto upstream #16 (which restructured the component-SDK profile table my entry sits in), then `just ruff`, `just contracts_check`, `just devlog_check`, `just typos`, `just sel4_pin_check`, `just sel4_gate_control_check` | One conflict (both appended a devlog index row; kept both) and one silent bad merge -- the new entry named a constant #16 had replaced -- caught by `ruff` and `contracts_check` and fixed; all pass on the rebased `main` | Direct |
 | `just component_sdk_upgrade_check` (the whole SDK chain, over the merged profile table) | Passed, after installing the pinned nightly's `aarch64-unknown-none` target: the Pi 5 profile builds external components with the prebuilt target rather than `build-std`, and this host had never had it -- a first-run gap of the same class as the cargo fetch and the host tests, not a change of this entry | Direct |
 | `--reset-probe` on the named board | Not run as a separate step: the operator went straight to the gate, whose three runs each end with the root's `reset request kind=wdt` followed by the firmware banner -- the reset from the non-secure world, observed three times from EL0 through seL4 rather than once from U-Boot | Direct; the three transcripts |
-| `just nt98690_sel4_check /dev/ttyUSB0` on the named board, 2026-09-02 | **Passed.** Each run: `fatload` read 1,285,200 bytes in 66 ms; the loader saw memory `0x10000000..0x40000000` and copied the kernel to `0x10000000`; `Booting all finished, dropped to user space`; `SLIME_ROOT allocator slots=3047 untypeds=26 bytes=798838800`; `SLIME_TIMER acquired irq=30 freq_hz=12000000`, delivered and serviced before and after graph activation; the generation admitted with `executables=4 instances=4 grants=6`; `SLIME_ROOT READY target_profile=aarch64-sel4-nt98690-h1v1`; `SLIME_NT98690 reset request kind=wdt`; `U-Boot 2021.10`. Raw transcripts 120,204 bytes each, normalized traces 9,448 bytes each and byte-identical; the operator's normalized files equal this host's re-normalization of the raw logs; 0 framing errors on a local tty; no `Moving Image` in any run | Direct; [`sample-run-1.log`](sample-run-1.log), [`sample-run-2.log`](sample-run-2.log), [`sample-run-3.log`](sample-run-3.log), and their `.normalized.log` siblings |
-| Re-verification of the operator's evidence on this host | The gate's own contract, the sample plane's `check_transcript`, and `normalize` re-run over the three raw logs: all pass, and reproduce the operator's normalized files exactly | Direct |
+| `just nt98690_sel4_check /dev/ttyUSB0` on the named board, 2026-09-02 | **Passed.** Each run reached the loader, kernel, root, sample-plane markers, READY for `aarch64-sel4-nt98690-h1v1`, the watchdog reset request, and the returning U-Boot banner. The three semantic traces were byte-identical after normalizing only declared per-boot identities and counters. Loader/kernel placement and failure-freedom are guarded separately by the ordered raw-transcript contract and failure markers | Direct; the three raw and normalized transcripts |
+| Re-verification of the operator's evidence on this host | The gate's ordered contract and sample-plane checker passed on each raw transcript; the semantic normalizer reproduced the committed normalized files exactly | Direct |
 
 ## Decisions
 
@@ -84,15 +84,13 @@ vendor firmware's banner every time.
 - [x] **The board booted seL4 three times**; the transcripts are committed here.
 - [x] The watchdog reset from the non-secure world works with 32-bit writes from EL0 through seL4: every run's reset request was followed by the firmware banner, and the operator applied power exactly once, when the gate asked (see Corrections). The separate `--reset-probe` was not needed and remains available as a bench tool.
 - [x] `check-sel4-sample-plane.py::check_transcript` accepted the board's own transcripts, on the board's own architecture.
-- [x] The fork branches are pushed to `CG-AA/{seL4,rust-sel4}` at the pinned `1b93edf5…` and `20905bef…` (see Corrections). `.gitmodules` and `sel4/pins.toml` keep naming the `iceice666` forks, which must carry those two commits before this tree builds from them.
-- [ ] The root's virtio scan at `0x0a00_0000` maps a RAM page as device memory on this board and reports `devices=0`; harmless and stable, left as is.
+- [x] The corrected fork commits are reachable from the pinned `iceice666` remotes. The reviewed memory-boundary correction advanced the seL4 branch and pin to `4aa98b2b…` before this parent tree was published.
 
 ## Artifacts and provenance
 
-- Fork commits: seL4 `1b93edf532c5b53e607b4f4f9fa226f78a63ec13`, rust-sel4 `20905bef6b93b7d863ac6dc5d7053f96aa09765a`, both on `slime-ns02201-h1v1`.
+- Fork commits: seL4 `4aa98b2b6e0e9190e80d0175f433457dbfccee97`, rust-sel4 `20905bef6b93b7d863ac6dc5d7053f96aa09765a`, both on `slime-ns02201-h1v1`.
 - Prefix hashes: `sel4/pins.toml [observed_prefix_ns02201_h1v1]`.
 - Board evidence, received from the operator by wormhole and re-verified here: [`sample-run-1.log`](sample-run-1.log) / [`sample-run-1.normalized.log`](sample-run-1.normalized.log), [`sample-run-2.log`](sample-run-2.log) / [`sample-run-2.normalized.log`](sample-run-2.normalized.log), [`sample-run-3.log`](sample-run-3.log) / [`sample-run-3.normalized.log`](sample-run-3.normalized.log).
-- Plan of record: [`../2026-09-01-p6-nt98690-h1v1-lane/plan.md`](../2026-09-01-p6-nt98690-h1v1-lane/plan.md), Part C.
 - Related roadmap item: [P6.B](../../roadmap/07-architecture-portability.md#p6b--sel4-and-slime-root-on-the-h1v1).
 
 ## Corrections
@@ -111,3 +109,11 @@ vendor firmware's banner every time.
    iceice666 forks; landing the one platform commit in each of them is the
    prerequisite for building this change from upstream. The Decisions bullet
    "Fork pushes are the operator's" describes the situation before this.
+3. Appended 2026-09-03 after the fork branches were mirrored. The corrected
+   pinned seL4 and rust-sel4 commits are reachable from the `iceice666` remotes
+   named by `.gitmodules` and `sel4/pins.toml`.
+4. Appended 2026-09-03 after review. U-Boot relocates the active device tree to
+   `0x3ffc3000`, which lay inside the original `0x10000000..0x40000000` memory
+   node. The platform overlay and pins now end the seL4 RAM window at
+   `0x3ff00000`; previously recorded board transcripts describe the older image
+   and are not claimed as evidence for this corrected memory boundary.

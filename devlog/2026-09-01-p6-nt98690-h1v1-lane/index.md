@@ -169,7 +169,6 @@ is unobserved.
 
 ## Artifacts and provenance
 
-- Plan of record, carrying the verified board facts and the P6.B/P6.C outlines: [`plan.md`](plan.md)
 - Implementation and its verification: [`devlog/2026-09-01-p6a-nt98690-probe/`](../2026-09-01-p6a-nt98690-probe/index.md)
 - Vendor BSP consulted for every board fact: `/srv/novatek/sdk/worktrees/h1v1-dev` (Novatek NS02201 SDK; U-Boot 2021.10, TF-A 2.2, Linux 5.10)
 - Vendor serial/flash tooling that established the console loop is scriptable: `~/nt98690-ubuntu/_recovery_h1v1/raw_flash/flash_emmc_raw.py`
@@ -178,9 +177,9 @@ is unobserved.
 ## Corrections
 
 Appended 2026-09-02, when Session 2 (P6.B) was planned against the board's
-measurements and the forks' actual shape. `plan.md` beside this entry is the
-plan of record and carries the corrected Part A in full; these are the
-corrections themselves.
+measurements and the forks' actual shape. The corrections below preserve the
+resulting decisions; the completed milestone evidence lives in the P6.B and
+P6.C entries rather than in a mutable forward plan.
 
 1. **Line numbers and one claim in the fork survey were wrong.** The hypervisor
    `DEPENDS` list is `src/arch/arm/config.cmake:78-84`, not 109; the cache-line
@@ -204,12 +203,10 @@ corrections themselves.
 5. **Fork pushes are not this host's to make.** Its GitHub identity has no push
    access to `iceice666/{seL4,rust-sel4}`; fork commits are local on
    `slime-ns02201-h1v1` branches and pinned by hash until the operator pushes.
-6. **Session 3 was planned on 2026-09-02 against the landed P6.B tree.**
-   `plan.md`'s Part D supersedes Part A's `## A8` outline: the board-neutral
-   rename is wider than `build.rs` (the builder's Duo-only serial parse and the
-   H1V1's unguarded post-graph reset are the real blockers), fork-push risk 9
-   closed the good way (forks at `CG-AA`, pushed and pinned), and the P6.C gate
-   is written to enter the shared tamper control the Duo's slisp gate never had.
+6. **Session 3 was planned on 2026-09-02 against the landed P6.B tree.** The
+   resulting board-neutral rename spans `build.rs`, the builder's Duo-only
+   serial parsing, and the H1V1's previously unguarded post-graph reset;
+   fork-push risk 9 closed with the exact pinned commits mirrored upstream.
 7. **The lane closed on 2026-09-02.** All three sessions ran on the named
    board within two days: P6.A (25 markers), P6.B (three byte-identical seL4
    boots with autonomous watchdog recovery), and P6.C (one resident Slisp

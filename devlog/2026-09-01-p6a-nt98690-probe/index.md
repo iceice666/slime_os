@@ -70,7 +70,7 @@ plausible transcript with two wrong numbers and a passing check.
 | Load address moved to `0x05000000` in both | Refused: lies inside the vendor media CMA pools | Direct |
 | `decode_branch` on ELF magic (`0x7f454c46`) | Refused as not a branch | Direct |
 | Probe executed under QEMU `virt` at EL2 | Ran to completion; `el = 2`, `fdt_magic = d00dfeed`, `midr_part = 0xd08` (A72, correctly decoded), `parange = 4`, `gicd_typer = 0x8` → `gic_irqs = 0x120` (288), `gicd_iidr = 0x43b` (ARM GIC-400), five checks `ok` and `placement` `FAIL` as predicted | Direct, but about QEMU: see the note below |
-| Each gate marker regex matched against the probe's real output lines | All 18 `SLIME_` markers match, including every label's exact column; `PAYLOAD_OK` correctly does not, because that run printed `PAYLOAD_FAIL` | Direct |
+| Each gate marker regex matched against the QEMU probe output | 15 of 19 `SLIME_` markers match. Placement, base, `midr_part`, and `PAYLOAD_OK` differ by construction and are labelled as QEMU-only differences | Direct |
 | `just nt98690_boot_check` with no `--serial` | Exit 1 naming P6.A and both endpoint forms | Direct |
 | `just sel4_gate_control_check` | Pass — 46 gates reject 1788 mutated transcripts, up from 45 | Direct |
 | **The H1V1 itself** | **Not run.** No board attached | — |
@@ -136,18 +136,15 @@ throttle its console to the line rate the estimate assumes.
 - [x] **The board has been booted.** `nt98690_boot_check --serial /dev/ttyUSB0`
       passed on the named H1V1 on 2026-09-02: all 25 markers in order, no failure
       marker, 0 framing errors on a local tty. Transcript: `probe-boot.log`.
-- [x] Before that first scored run, capture `just nt98690_serial_monitor` across a
-      power cycle and confirm the U-Boot banner, the `mmc` device line, and the
-      device-tree line against the real wording. **Done 2026-09-02**, on the board:
-      `vendor-boot.log` (autoboot, 0 framing errors at 115200) and
-      `uboot-survey.log` (the prompt). Every marker matched, and the run found two
-      gate defects recorded under Corrections. The pinned prompt `nvt: `,
-      `mmc dev 0`, and `mmc 0:1` are confirmed: `mmc list` reports MMC0 as the SD
-      slot and MMC2 as the eMMC, so no gate command addresses the eMMC.
-      `${fdtcontroladdr}` is `0x7f9c5ea0` and holds `d00dfeed`. U-Boot's own
-      `lmb_dump_all` reserves `0x1f00000-0x1ffffff`, `0x4800000-0xabfffff`, and
-      `0x7f9c4a40-0x7fffffff`, all three inside the builder's `RESERVED_REGIONS`,
-      and none of them contains the pinned load address `0x10000000`.
+- [x] Before the first scored run, the board was stopped at its U-Boot prompt
+      and surveyed read-only. `uboot-survey.log` confirms the pinned prompt
+      `nvt: `, `mmc dev 0`, and `mmc 0:1`: `mmc list` reports MMC0 as SD and
+      MMC2 as eMMC, so no gate command addresses eMMC. `${fdtcontroladdr}` is
+      `0x7f9c5ea0` and holds `d00dfeed`. U-Boot's `lmb_dump_all` reserves
+      `0x1f00000-0x1ffffff`, `0x4800000-0xabfffff`, and
+      `0x7f9c4a40-0x7fffffff`; none contains the pinned load address
+      `0x10000000`. No separate vendor-autoboot transcript was retained, so no
+      autoboot framing-error claim is made here.
 - [x] `parange`, `cntfrq`, `gicd_typer`, and `gic_irqs` are tightened to the values
       the board reported, so the gate now asserts this board rather than a shape. A
       different H1V1 revision would fail it, which is the intent.
@@ -163,37 +160,29 @@ throttle its console to the line rate the estimate assumes.
 
 ## Artifacts and provenance
 
-- QEMU self-test transcript, with its two by-construction differences labelled: [`qemu-self-test.log`](qemu-self-test.log)
-- Lane decision, board facts, and the P6.B/P6.C outlines: [`devlog/2026-09-01-p6-nt98690-h1v1-lane/`](../2026-09-01-p6-nt98690-h1v1-lane/index.md)
+- Scored physical-board transcript: [`probe-boot.log`](probe-boot.log)
+- Read-only U-Boot survey: [`uboot-survey.log`](uboot-survey.log)
+- QEMU self-test transcript, with its by-construction differences labelled: [`qemu-self-test.log`](qemu-self-test.log)
+- Lane decision and P6.B/P6.C outlines: [`devlog/2026-09-01-p6-nt98690-h1v1-lane/`](../2026-09-01-p6-nt98690-h1v1-lane/index.md)
 - Vendor U-Boot consulted for every expected console string: `/srv/novatek/sdk/worktrees/h1v1-dev/BSP/u-boot` (`cmd/mmc.c`, `cmd/booti.c`, `arch/arm/lib/{image,bootm}.c`, `common/image-fdt.c`, `fs/fs.c`)
 - Related roadmap item: [P6.A](../../roadmap/07-architecture-portability.md#p6a--h1v1-environment-bootstrap-and-firmware-handoff-evidence)
 
 ## Corrections
 
-Appended 2026-09-02, after the first board session. The survey runs below were
-observations, not scored runs; P6.A remains in progress.
+Appended 2026-09-02 after the first board session. The survey runs below were
+observations rather than scored runs.
 
-1. **The recovery step would have failed a correct run.** This board's firmware
-   reaches its kernel handoff about 700 characters after the U-Boot banner and
-   prints `Moving Image from 0x7c700040 to 0x0`. The gate read three further
-   seconds past the banner — roughly 34 kB at 115200 — so that line entered the
-   transcript, where `Moving Image from` is a failure marker asserting where
-   *this gate's* payload was placed. A board recovering exactly as this
-   milestone requires would have rejected the run at its final step, with every
-   earlier check passed. The recovery capture now keeps the banner line and
-   nothing after it (`1427254`).
-
-2. **The device-tree pre-flight asserted nothing.** `md.l ${fdtcontroladdr} 1`
-   was issued and its output appended to the transcript without being examined,
-   so a bad address was caught only at the end by the ordered marker contract —
-   after `booti` had run and this U-Boot had panicked on the missing tree,
-   contradicting the step's own stated purpose. It now fails where it reads
-   (`b1e7e64`).
-
-3. **`--survey` added** (`d5c5910`). The vendor autoboot transcript cannot supply
-   the slot number, `${fdtcontroladdr}`, or the prompt string, because it never
-   stops at the prompt; on a board with no scriptable reboot each wrong guess
-   costs a power cycle. All its commands are read-only.
+1. **Recovery capture scope.** The board's firmware reaches its kernel handoff
+   about 700 characters after the U-Boot banner and prints `Moving Image from
+   0x7c700040 to 0x0`. The gate therefore retains only the recovered banner
+   line; otherwise the vendor's next boot would match a failure marker intended
+   for this gate's payload.
+2. **Device-tree pre-flight.** `md.l ${fdtcontroladdr} 1` must contain the
+   little-endian `edfe0dd0` view of the FDT magic before `booti`; a missing tree
+   now fails before spending a board boot.
+3. **Read-only survey.** `--survey` obtains the SD slot, device-tree address,
+   and prompt string that an uninterrupted vendor autoboot cannot supply. All
+   commands are read-only.
 
 4. The vendor kernel's own relocation confirms the placement model the payload's
    header depends on: loaded at `0x7c700040` with `text_offset` 0, U-Boot moved

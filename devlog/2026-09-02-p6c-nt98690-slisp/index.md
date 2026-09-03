@@ -120,4 +120,3 @@ the shared tamper control, which the Duo's own slisp gate never entered.
   `2550e9e212a786c24aca0de6c46c5c232d2137d7b37726ad2c7a22a41684d5c7`,
   and `framing_errors: 0`.
 - Roadmap: [P6.C](../../roadmap/07-architecture-portability.md#p6c--interactive-slisp-over-uart0-on-the-h1v1)
-- Plan of record: [Part D](../2026-09-01-p6-nt98690-h1v1-lane/plan.md)
