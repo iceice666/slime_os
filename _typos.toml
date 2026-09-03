@@ -48,11 +48,6 @@ Indx = "Indx"
 # line-status bit.
 THR = "THR"
 THRE = "THRE"
-# Synopsys, the DesignWare vendor, which names this board's Ethernet controller
-# (`nvt,synopsys_eth`). Already noted above as a word this dictionary would
-# "correct" in raw captures; it appears in prose too.
-synopsys = "synopsys"
-Synopsys = "Synopsys"
 
 [default.extend-identifiers]
 # `ser2net`, the serial-over-TCP bridge a remote board console is reached
