@@ -54,6 +54,9 @@ CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that
 | Migration broke no unmigrated gate | `just sel4_gate_control_check` (45 gates, 1748 mutations), `just sel4_boot_layout_check` (31 layouts), `sel4_fabric_aggregate_check`, `sel4_component_graph_check`, `sel4_device_check` | Direct |
 | Contracts and hosts still hold | `contracts_check`, `system_spec_check`, `system_composition_closure_check`, `system_image_builder_check`, `system_image_closure_check`, `system_test_run_check`, `system_image_closure_aggregate_check`, `test_host`, `ruff`, `devlog_check` | Direct |
 | Flag deletion is safe | io_block, private_memory, sel4_reclamation, sel4_saturation, and all 31 boot layouts pass after deletion | Direct |
+| The whole corpus is green in the landed state | 44 QEMU gates pass: every migrated plane, plus the 6 still-legacy gates (component-graph, device, matrix, c-runtime, boot-selection, root-boot), `sel4_gate_control_check`, and `sel4_boot_layout_check` | Direct |
+| Host gates are green | `contracts_check`, `system_spec_check`, `component_spec_check`, `system_composition_closure_check`, `system_image_builder_check`, `system_image_closure_check`, `system_image_scenario_check`, `system_image_closure_aggregate_check`, `system_test_run_check`, `generation_check`, `test_host`, `ruff`, `machete`, `fmt_check_all`, `lint_all`, `devlog_check` | Direct |
+| `just typos` fails, and not because of this work | Three hits: two in the CP11-vendored `contracts/system-image-closure/v1/inputs/sel4-prefix` seL4 headers ("pre-empted"), one in the CP12 devlog line documenting that failure. `just typos` fails identically at `26fee8cd~1`, before any of this work | Direct |
 
 ## Decisions
 
