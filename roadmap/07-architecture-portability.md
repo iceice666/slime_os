@@ -13,7 +13,7 @@ Slime targets 64-bit little-endian systems with an MMU and user/supervisor isola
 | Profile | Role | Initial machine | Required baseline |
 | --- | --- | --- | --- |
 | `x86_64-qemu-virtio` | Retired with P5; historical regression oracle only | QEMU q35/UEFI | x86-64, 4 KiB pages, ring 0/ring 3, APIC, virtio |
-| `x86_64-sel4-qemu-pc99` | Admitted x86-64 seL4 reference profile; builds reproducibly (P6.1), no boot claim until P6.2 | Pinned QEMU `pc-q35-11.0` with `-cpu Haswell`; GRUB Multiboot2 and OVMF arrive with P6.2 | x86-64, 4 KiB pages, seL4 pc99, IOAPIC/XAPIC, HPET monotonic source, `CR4.FSGSBASE` for the userspace thread pointer |
+| `x86_64-sel4-qemu-pc99` | Admitted x86-64 seL4 reference profile; boots the product graph under QEMU (P6.1–P6.4) | Pinned QEMU `pc-q35-11.0` with `-cpu Haswell,+pdpe1gb`, GRUB 2.12 Multiboot2 EFI tree, pinned OVMF 202605 | x86-64, 4 KiB pages, seL4 pc99, IOAPIC/XAPIC, HPET monotonic source, COM1 16550A input, `CR4.FSGSBASE` for the userspace thread pointer |
 | `x86_64-sel4-framework13-ai300` | Admitted exact physical CPU-boot profile (P6.5–P6.6); no physical observation exists | Framework Laptop 13, AMD Ryzen AI 300 Series, exact firmware revision | x86-64, UEFI removable-media handoff, GOP evidence, exact machine/firmware identity, internal-NVMe writes absent |
 | `aarch64-sel4-qemu-virt` | Established AArch64 reference profile | QEMU `virt` with upstream seL4 | AArch64, 4 KiB translation granule, EL1/EL0, GICv3, generic timer, PL011, virtio |
 | `aarch64-rpi5` | Deferred physical demo target | Raspberry Pi 5, exact board/firmware/media profile selected by RP0/RP3 | AArch64, 4 KiB translation granule, EL1/EL0 or documented firmware entry state, GIC, generic timer, device tree, serial console, reproducible removable media |
@@ -39,8 +39,8 @@ A profile name identifies a complete executable and platform contract, not only 
 3. P1 preserves the architecture/platform source boundary; P6 extends it for the surviving seL4 x86-64 path rather than reviving the retired custom kernel.
 4. P2 preserves the established AArch64 QEMU evidence, P3/P3.D/P3.E/P3.F preserve the completed RV64/Duo lane, and P4 preserves the reproducible Raspberry Pi 5 build path.
 5. P6.1 (complete) admits exact QEMU and Framework seL4 target profiles, pins the pc99 kernel/toolchain inputs, and reproducibly builds the kernel, root, child, and generation without a boot claim. It also lands the x86-64 arms the root needs to *compile* — interrupt acquisition, fault decoding, thread pointer, timer registers — leaving P6.3 to prove they behave.
-6. P6.2 establishes one GRUB Multiboot2 boot contract used by both QEMU and removable media, and pins the OVMF identity P6.1 had no boot to bind; P6.3 then proves the root, component runtime, child loader, faults, thread context, and timer actually run on x86-64.
-7. P6.4 replays the selected architecture-neutral product corpus on QEMU before any physical claim.
+6. P6.2 (complete) establishes one GRUB Multiboot2 boot contract used by both QEMU and removable media, and pins the OVMF and GRUB identities P6.1 had no boot to bind; P6.3 (complete) proves the root, component runtime, child loader, faults, thread context, and timer actually run on x86-64.
+7. P6.4 (complete) replays the resident product graph and the selected architecture-neutral corpus on QEMU before any physical claim.
 8. P6.5 builds a deterministic GPT/EFI removable-media image and proves that exact image under QEMU/OVMF; P6.6 boots it on the named Framework with no internal-storage write authority or device qualification.
 9. H1 begins only after P6.6 and owns the first hardware inventory. H2–H14 retain PCI, DMA, input, storage, network, display, power, and daily-driver qualification.
 
@@ -899,7 +899,7 @@ interruption at each append/commit boundary.
 
 ## P6: x86-64 seL4 QEMU and Framework CPU boot
 
-**Status:** P6.1 complete; P6.2 is next. An admitted, reproducible x86-64 seL4 kernel, root task, child fixture, and generation now build for the pinned `x86_64-sel4-qemu-pc99` profile. No QEMU boot gate, removable-media artifact, or Framework observation exists.
+**Status:** P6.1-P6.4 complete; P6.5 is next. Pinned QEMU q35/OVMF boots upstream seL4 and the x86-64 `slime-root` through one GRUB Multiboot2 EFI tree, the root's native task/IPC/fault/timer/reclamation slice runs, and the resident product graph serves live COM1 input. No removable-media artifact or Framework observation exists.
 
 **Scope:** P6 restores the architecture and boot path only. It does not enumerate Framework hardware for policy, enable PCI bus mastering, read or write NVMe, claim keyboard input, or qualify any device service. The first physical image must boot without input and without internal-storage write authority. H1 consumes that boot path and begins hardware evidence.
 
@@ -926,7 +926,12 @@ interruption at each append/commit boundary.
 
 ### P6.2 — Shared GRUB Multiboot2 boot contract
 
-**Status:** Not started.
+**Status:** Complete.
+**Exit condition (observed):** Observed 2026-09-03. Pinned QEMU `pc-q35-11.0`/OVMF 202605 boots upstream seL4 and the exact x86-64 `slime-root` through one GRUB Multiboot2 EFI tree — `EFI/BOOT/BOOTX64.EFI` built standalone from a pinned module list, a bounded `boot/grub/grub.cfg` that puts the console on COM1 before the kernel starts, and the two ELFs as separate Multiboot2 modules — reaching the same ordered marker chain the AArch64 and RV64 references reach. The identity manifest records a path-sensitive digest over that tree plus every file in it, and the pinned firmware, GRUB version, and order-sensitive module-set digest it was built against; `just sel4_pin_check` recomputes the firmware and module digests, and the boot gate recomputes the tree before launching. Nothing is loaded from the medium at run time.
+**Gates:** `just x86_64_sel4_root_boot_check`, `just x86_64_sel4_image_check`, `just sel4_pin_check`
+**Evidence:** [`devlog/2026-09-03-p6-2-p6-4-x86-64-boot/`](../devlog/2026-09-03-p6-2-p6-4-x86-64-boot/index.md)
+
+**Inherited configuration corrected, not claimed:** the inherited X64 *proof* profile could not boot this machine at all. `KernelSupportPCID` is off because QEMU's TCG accelerator implements neither `pcid` nor `invpcid` on any model, and `KernelMaxNumBootinfoUntypedCaps` and `KernelRootCNodeSizeBits` are restored to seL4's own defaults — 50 untyped caps are exhausted by q35's device regions before any kernel memory is emitted, and a 2^19-slot root CNode exceeds the root's slot bitmap. Each divergence is pinned beside the emulator fact that forces it.
 
 **Depends on:** P6.1.
 
@@ -940,7 +945,12 @@ interruption at each append/commit boundary.
 
 ### P6.3 — Native x86-64 root and component execution
 
-**Status:** Not started.
+**Status:** Complete.
+**Exit condition (observed):** Observed 2026-09-03. The root's native vertical slice runs on x86-64 seL4 with the same observable contracts as the retained references: child ELF admission, page-table construction through rust-sel4's level abstraction, page-fault access decoding, initial task context, the `fs_base` thread pointer the component runtime reads with `rdfsbase`, an HPET monotonic source with observed IRQ delivery, and full reclamation to `SLIME_ROOT READY tasks=2 ... live=0`. One child exits cleanly, one faults without disturbing the root or its sibling, and both are reclaimed with the slot accounting balanced.
+**Gates:** `just x86_64_sel4_root_boot_check`, `just x86_portability_check`
+**Evidence:** [`devlog/2026-09-03-p6-2-p6-4-x86-64-boot/`](../devlog/2026-09-03-p6-2-p6-4-x86-64-boot/index.md)
+
+**Non-equivalence retained, not claimed:** P6.1's W^X finding still holds — x86-64 seL4 exposes no execute-never frame attribute, so the fixture's execute probe is *absent* here rather than vacuously passing, and the gate pins `wx_execute=unenforced probes=1` for this platform against `refused probes=2` for the other two. A profile that silently stopped enforcing W^X on AArch64 or RISC-V fails that same check.
 
 **Depends on:** P6.2.
 
@@ -954,7 +964,12 @@ interruption at each append/commit boundary.
 
 ### P6.4 — x86-64 product graph and semantic corpus
 
-**Status:** Not started.
+**Status:** Complete.
+**Exit condition (observed):** Observed 2026-09-03. `just x86_64_qemu_check` builds and boots the resident `init`/`console`/`spawn-service`/Slisp graph for `x86_64-sel4-qemu-pc99`, feeds `(+ 1 1)` and `sysinfo` through QEMU serial into the declared input service — served by a root-held COM1 I/O-port capability, since x86 legacy serial is not memory-mapped — and observes Slisp evaluate the expression and reach a generation-authorized `sysinfo` spawn through its declared context endpoint, with all four required resident instances live. The root-boot, wait-set, sample, and boot-layout planes replay on the same platform with unmodified component behavior, and init's resolved capability layout is byte-identical to the AArch64 fixture for all three replayed planes.
+**Gates:** `just x86_64_qemu_check`
+**Evidence:** [`devlog/2026-09-03-p6-2-p6-4-x86-64-boot/`](../devlog/2026-09-03-p6-2-p6-4-x86-64-boot/index.md)
+
+**Narrower than planned, recorded rather than claimed:** the generation, rollback, and capability-layout planes are not replayed here. Their generations build only for platforms whose storage transport later milestones own, so the corpus is the resident product graph plus the wait-set, sample, and boot-layout planes.
 
 **Depends on:** P6.3.
 

@@ -392,3 +392,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-01 | [The SDK could not build a component for the board P3.F had just qualified](2026-09-01-sdk-riscv-profiles/index.md) | Change | Verified | CP8, P3.E, P3.F |
 | 2026-09-02 | [P6 returns the active architecture lane to x86-64 seL4](2026-09-02-p6-amd64-sel4-return/index.md) | Decision | Proposed | P6, H1, M5.7 |
 | 2026-09-02 | [P6.1: x86-64 seL4 builds reproducibly and admits nothing else](2026-09-02-p6-1-x86-64-sel4-target/index.md) | Change | Verified | P6.1 |
+| 2026-09-03 | [P6.2-P6.4: x86-64 seL4 boots, runs the root, and serves the product graph](2026-09-03-p6-2-p6-4-x86-64-boot/index.md) | Change | Verified | P6.2, P6.3, P6.4 |
