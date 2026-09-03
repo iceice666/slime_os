@@ -80,6 +80,10 @@ WITHOUT_CLOSURE = {
     "reference": "targets x86_64-qemu-virtio, which has no seL4 platform asset",
     "sel4": "admits an external product Slisp implementation with no committed artifact",
     "sel4-slisp": "admits an external product Slisp implementation with no committed artifact",
+    # Derived since CP12's closure, but its component is freestanding C built
+    # by a helper script at gate time: the implementation provider is
+    # `undeclared`, so no closure can name the bytes it would build.
+    "sel4-c-runtime": "its component's implementation provider is undeclared, so no closure names its bytes",
 }
 
 
