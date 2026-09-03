@@ -571,6 +571,10 @@ def prove_mixed_generation(
         cwd=ROOT,
         description=f"embed mixed external generation ({label})",
     )
+    # `--demo-plane` still writes this fixed legacy path; `DEMO.IMAGE` is
+    # `None` here because `DEMO.build_image()` was never called in this
+    # process, and this caller supplies its own mixed generation instead.
+    demo_image = ROOT / "build" / "slime-sel4-demo.elf"
     identity_manifest = json.loads(
         (ROOT / "build" / "slime-sel4-demo.identity.json").read_text(encoding="utf-8")
     )
@@ -579,7 +583,7 @@ def prove_mixed_generation(
         fail("demo image did not embed the exact signed external generation")
     pins = DEMO.load_pins()
     profile = pins["qemu_arm_virt"]
-    transcript = DEMO.boot(profile, DEMO.IMAGE, terminal=DEMO.TERMINAL_MARKER)
+    transcript = DEMO.boot(profile, demo_image, terminal=DEMO.TERMINAL_MARKER)
     DEMO.check_transcript(transcript)
     expected = {
         "baseline": EXTERNAL_MARKERS
@@ -617,9 +621,10 @@ def prove_fallback() -> None:
         cwd=ROOT,
         description="rebuild in-tree fallback demo",
     )
+    demo_image = ROOT / "build" / "slime-sel4-demo.elf"
     pins = DEMO.load_pins()
     profile = pins["qemu_arm_virt"]
-    transcript = DEMO.boot(profile, DEMO.IMAGE, terminal=DEMO.TERMINAL_MARKER)
+    transcript = DEMO.boot(profile, demo_image, terminal=DEMO.TERMINAL_MARKER)
     DEMO.check_transcript(transcript)
     DEMO.check_ordered_across_chains(transcript)
     if any(marker in transcript for marker in EXTERNAL_MARKERS):
