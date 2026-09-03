@@ -66,6 +66,7 @@ the shared tamper control, which the Duo's own slisp gate never entered.
 | Post-rename host suite: `just ruff`, `typos`, `fmt_check_all` (after one rustfmt wrap of a lengthened cfg), `lint_all`, `test_sel4_root`, `contracts_check`, `generation_check`, `sel4_pin_check`, `sel4_nt98690_image_check`, `riscv64_qemu_check`, `slisp_core_check`, `devlog_check` | PASS | Host/QEMU |
 | First board campaign (2026-09-02): `SLIME_ROOT FATAL NT98690 reset registers unavailable: Allocate(DeviceFramePassed { paddr: 0x2f0060000 })` immediately after `product input ready uart=0x2f0130000` — the product image carved the UART0 granule before the reset granules that sit below it in the same device untyped, and device untypeds retype monotonically upward; only a product image orders them this way, so P6.B's sample runs could not have caught it. The gate misreported the FATAL as a miscounted input wait. Both fixed below | FAILED, root-caused | Direct physical |
 | Second board campaign (2026-09-02): `just`-shaped bundle run of `check-nt98690-slisp.py --no-build --serial /dev/ttyUSB0` on the named H1V1, one power-on — PASS: all 34 markers in order, `(define answer 40)`/`(+ answer 2)`/`sysinfo` answered at the resident prompt, `resident checkpoint live=4 iterations=32768` crossed, `(+ answer 3)` answered after it, terminator accepted, `reset request kind=wdt`, vendor banner returned, 0 framing errors. Transcript re-verified on the host against the full contract; the identities bind this build's payload, ELF, and generation | PASS | Direct physical |
+| Fresh pinned-source recapture (2026-09-03): built from seL4 `1b93edf532c5b53e607b4f4f9fa226f78a63ec13`, rust-sel4 `20905bef6b93b7d863ac6dc5d7053f96aa09765a`, and Zutai `9026fcff5f12e7b2377c25b3d389c2eb06d98e5a`; copied the 1,432,616-byte payload to the removable SD card and ran `check-nt98690-slisp.py --no-build --serial /dev/cu.usbserial-1120` on the named H1V1 — PASS: the shell answered the session, crossed `resident checkpoint live=4 iterations=32768`, answered afterward, accepted the test terminator, reset through the watchdog, returned to vendor firmware, and recorded 0 framing errors | PASS | Direct physical |
 
 ## Decisions
 
@@ -108,5 +109,15 @@ the shared tamper control, which the Duo's own slisp gate never entered.
 - [`slisp-identities.json`](slisp-identities.json) — the gate's identity
   record binding the transcript to this build's payload, ELF, and generation,
   with `framing_errors: 0` on `uart0-ns16550a-0x2f0130000`.
+- [`slisp-session-2026-09-03.log`](slisp-session-2026-09-03.log) — immutable
+  fresh-build recapture from the named H1V1 (117,637 bytes, 832 lines, sha256
+  `3549308fe39935994afda80cbe02fe626c77e7a40c0fca4a2b7a1c064d3a4157`).
+- [`slisp-identities-2026-09-03.json`](slisp-identities-2026-09-03.json) —
+  binds that transcript to payload sha256
+  `b4a7e3ed664ab3d80be9666ca74ba16b609f7501df789cfc852f2030cbb4d8dd`,
+  ELF sha256 `2e12cad027a99257034cfac90942ff4e0e70638689fd09888363a919abd43c04`,
+  generation identity
+  `2550e9e212a786c24aca0de6c46c5c232d2137d7b37726ad2c7a22a41684d5c7`,
+  and `framing_errors: 0`.
 - Roadmap: [P6.C](../../roadmap/07-architecture-portability.md#p6c--interactive-slisp-over-uart0-on-the-h1v1)
 - Plan of record: [Part D](../2026-09-01-p6-nt98690-h1v1-lane/plan.md)

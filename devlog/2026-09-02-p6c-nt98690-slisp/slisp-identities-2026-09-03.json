@@ -1,0 +1,13 @@
+{
+  "board": "novatek-h1v1",
+  "elf_sha256": "2e12cad027a99257034cfac90942ff4e0e70638689fd09888363a919abd43c04",
+  "framing_errors": 0,
+  "generation_identity": "2550e9e212a786c24aca0de6c46c5c232d2137d7b37726ad2c7a22a41684d5c7",
+  "generation_sha256": "e826a821b425bf86fd4c1b718a2b8b5de37e2087990fd959bede1a79cd1d1898",
+  "payload_sha256": "b4a7e3ed664ab3d80be9666ca74ba16b609f7501df789cfc852f2030cbb4d8dd",
+  "serial": "uart0-ns16550a-0x2f0130000",
+  "serial_baud": 115200,
+  "soc": "ns02201",
+  "target_profile": "aarch64-sel4-nt98690-h1v1",
+  "transcript_sha256": "3549308fe39935994afda80cbe02fe626c77e7a40c0fca4a2b7a1c064d3a4157"
+}
