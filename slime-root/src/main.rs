@@ -376,7 +376,9 @@ fn request_ns02201_reset_after_fatal() {
     let registers = unsafe { ptr::addr_of!(NS02201_RESET_REGISTERS).read() };
     if let Some((clock_gate, watchdog)) = registers {
         sel4::debug_println!("SLIME_NT98690 reset request kind=wdt cause=fatal");
-        let _ = platform_timer::request_ns02201_watchdog_reset(clock_gate, watchdog);
+        if !platform_timer::request_ns02201_watchdog_reset(clock_gate, watchdog) {
+            sel4::debug_println!("SLIME_NT98690 reset failed");
+        }
     }
 }
 
