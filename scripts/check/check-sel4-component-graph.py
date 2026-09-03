@@ -151,10 +151,6 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("Slisp requested sysinfo through spawn-service", r"sysinfo\n\[spawn-service\] request"),
     ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
     ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
-    (
-        "spawn-service collected detached supervision",
-        r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
-    ),
     ("Slisp reported the accepted spawn", TERMINAL_MARKER),
 )
 
@@ -162,7 +158,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 # terminal Slisp marker, so product admission checks its declared source string
 # without making it part of the bounded transcript prefix.
 SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
-EXPECTED_UNORDERED: tuple[str, ...] = ()
+
+# Evidence that must appear but whose position cannot be pinned, because a
+# different actor emits it than the marker beside it in the chain.
+#
+# The root collects `sysinfo`'s detached supervision record while Slisp is
+# independently printing its own reply to the same console. Neither waits on
+# the other, so their order is a scheduling detail; asserting it made this gate
+# fail intermittently on whichever ran second.
+EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
+)
 
 # B50 is a repository-wide cutover. Guard every surviving implementation source
 # that could reintroduce the universal dispatcher or product-plane selection;
@@ -335,12 +341,15 @@ def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
     """
     input_wait = re.compile(INPUT_WAIT_MARKER)
     terminal = re.compile(TERMINAL_MARKER)
+    collected = re.compile(EXPECTED_UNORDERED[0])
     failures = re.compile("|".join(FAILURE_MARKERS))
 
     def feed(process: subprocess.Popen[str], lines: list[str]) -> None:
         assert process.stdin is not None
         assert process.stdout is not None
         sent_expression = False
+        saw_terminal = False
+        saw_collected = False
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
             if failures.search(line):
@@ -357,7 +366,16 @@ def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
                         time.sleep(0.05)
                 sent_expression = True
                 continue
+            # Both the terminal marker and the root's supervision record must
+            # be captured, and either can come first: they are emitted by
+            # different actors that do not wait on each other. Stopping on the
+            # terminal alone truncated the transcript before the other arrived
+            # whenever Slisp won the race.
             if sent_expression and terminal.search(line):
+                saw_terminal = True
+            if sent_expression and collected.search(line):
+                saw_collected = True
+            if saw_terminal and saw_collected:
                 break
 
     return run_boot(
