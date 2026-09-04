@@ -30,7 +30,31 @@ EXPECTED_WRITERS = {
 ENTRY = re.compile(r"\{(?P<body>[^{}]*?)\};", re.DOTALL)
 HOLDER = re.compile(r'holder\s*=\s*"([^"]+)"')
 RIGHTS = re.compile(r"rights\s*=\s*\[(.*?)\];", re.DOTALL)
-AUTHORITY_BLOCK = re.compile(r"blockRingAuthority\s*=\s*\[(?P<body>.*?)\];\s*\n", re.DOTALL)
+AUTHORITY_MARKER = re.compile(r"blockRingAuthority\s*=\s*\[")
+
+
+def bracketed_body(text: str, marker: re.Pattern[str]) -> str | None:
+    """Text between a `key = [` marker and its matching `]`, depth-aware.
+
+    A lazy `.*?\\];` regex stops at the first `];` it meets, which is each
+    entry's own nested `rights = [...]` array rather than the table's close,
+    so it must count bracket depth instead of guessing where the table ends.
+    """
+    match = marker.search(text)
+    if match is None:
+        return None
+    depth = 1
+    index = match.end()
+    while index < len(text) and depth > 0:
+        char = text[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+        index += 1
+    if depth != 0:
+        return None
+    return text[match.end() : index - 1]
 
 
 def fail(message: str) -> None:
@@ -45,16 +69,16 @@ def writers(path: Path) -> list[str]:
     carry a `holder`, and matching those would report authority nobody has.
     """
     text = path.read_text(encoding="utf-8")
-    table = AUTHORITY_BLOCK.search(text)
-    if table is None:
+    body = bracketed_body(text, AUTHORITY_MARKER)
+    if body is None:
         return []
     result = []
-    for match in ENTRY.finditer(table.group("body")):
-        body = match.group("body")
-        rights = RIGHTS.search(body)
+    for match in ENTRY.finditer(body):
+        entry = match.group("body")
+        rights = RIGHTS.search(entry)
         if rights is None or '"blockWrite"' not in rights.group(1):
             continue
-        holder = HOLDER.search(body)
+        holder = HOLDER.search(entry)
         if holder is None:
             fail(f"{path.relative_to(ROOT)} has blockWrite without a holder")
         result.append(holder.group(1))
