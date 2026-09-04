@@ -27,6 +27,15 @@ CONFIG_PATHS = {
 RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
 RUST_SEL4_PATH = ROOT / "deps" / "rust-sel4"
+# One independent submodule per patched physical platform, each pinned by its
+# own `[rust_sel4_<platform>]` table rather than the shared `[rust_sel4]`
+# base: `build-sel4.py` builds `sel4-kernel-loader` from here for that
+# platform, so a wrong pin here is a wrong loader for that board only.
+LOADER_SUBMODULE_PATHS = {
+    "rust_sel4_bcm2712_rpi5": ROOT / "deps" / "rust-sel4-bcm2712-rpi5",
+    "rust_sel4_cv1800b_duo": ROOT / "deps" / "rust-sel4-cv1800b-duo",
+    "rust_sel4_ns02201_h1v1": ROOT / "deps" / "rust-sel4-ns02201-h1v1",
+}
 # Each platform installs its own prefix and pins its own artifact hashes: the
 # platforms build different kernels, so one hash set cannot describe all.
 PREFIX_PATHS = {
@@ -245,7 +254,9 @@ def expected_cmake_values(profile: dict[str, object], section: str) -> dict[str,
 
 
 def check_submodules(pins: dict[str, object]) -> None:
-    for section_name, path in (("sel4", SEL4_PATH), ("rust_sel4", RUST_SEL4_PATH)):
+    submodules = [("sel4", SEL4_PATH), ("rust_sel4", RUST_SEL4_PATH)]
+    submodules += list(LOADER_SUBMODULE_PATHS.items())
+    for section_name, path in submodules:
         section = table(pins, section_name)
         expected_commit = text(section, "commit", section_name)
         if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):

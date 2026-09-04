@@ -28,6 +28,18 @@ TEST_CHECKER = TEST_CONTRACT_ROOT / "check.zt"
 SYSTEM_ROOT = ROOT / "contracts" / "system-spec" / "v1" / "systems"
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# Mirrors `generate-system-image-closures.py`'s `LOADER_IMPLEMENTATIONS`: which
+# `deps/rust-sel4*` submodule a platform's kernel-loader role must name. A
+# platform with no loader patch shares the base checkout; a patched platform
+# names its own independent submodule, so this checker -- an authority
+# independent of the generator -- refuses a closure naming the wrong one.
+_LOADER_PATHS = {
+    "qemu-arm-virt": Path("deps") / "rust-sel4",
+    "qemu-riscv-virt": Path("deps") / "rust-sel4",
+    "bcm2712-rpi5": Path("deps") / "rust-sel4-bcm2712-rpi5",
+    "cv1800b-duo": Path("deps") / "rust-sel4-cv1800b-duo",
+    "ns02201-h1v1": Path("deps") / "rust-sel4-ns02201-h1v1",
+}
 
 _IMAGE_FIELDS = {
     "formatVersion",
@@ -500,8 +512,11 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         _fail("this closure requires the kernel-loader role")
     if value["loader"]["parameters"]:
         _fail("kernel-loader accepts no role parameters in closure version 1")
-    if artifacts["loader"] != (base / "deps" / "rust-sel4").resolve():
-        _fail("kernel-loader implementation must be the declared rust-sel4 tree")
+    expected_loader_path = _LOADER_PATHS.get(platform_name)
+    if expected_loader_path is None:
+        _fail(f"no loader submodule declared for platform {platform_name!r}")
+    if artifacts["loader"] != (base / expected_loader_path).resolve():
+        _fail(f"kernel-loader implementation must be the declared {expected_loader_path} tree")
     if artifacts["release:target-spec"].name != Path(profile["cargoTarget"]).name:
         _fail("target-spec release input does not match the selected SDK profile")
     if artifact_identity(artifacts["release:target-spec"], "file") != profile["targetSpecHash"]:

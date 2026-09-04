@@ -74,7 +74,18 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
 )
 
 ROOT_IMPLEMENTATION = ("slime-root", "tree")
-LOADER_IMPLEMENTATION = ("deps/rust-sel4", "tree")
+# Which `deps/rust-sel4*` submodule a closure's loader role names, keyed by
+# `sdk-release.json`'s `platform` field. A platform with no loader patch
+# shares the base checkout; a patched platform names its own independent
+# submodule (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables), so an
+# NDA'd board's fork never appears in another platform's closure identity.
+LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
+    "qemu-arm-virt": ("deps/rust-sel4", "tree"),
+    "qemu-riscv-virt": ("deps/rust-sel4", "tree"),
+    "bcm2712-rpi5": ("deps/rust-sel4-bcm2712-rpi5", "tree"),
+    "cv1800b-duo": ("deps/rust-sel4-cv1800b-duo", "tree"),
+    "ns02201-h1v1": ("deps/rust-sel4-ns02201-h1v1", "tree"),
+}
 
 # Which compositions get a closure. Every derived composition except the
 # reference generation, which targets `x86_64-qemu-virtio` and has no seL4
@@ -299,6 +310,9 @@ def closure_for(
 
     sdk = sdk_profile(profile_name)
     record, profile = sdk["record"], sdk["profile"]
+    loader_implementation = LOADER_IMPLEMENTATIONS.get(profile["platform"])
+    if loader_implementation is None:
+        fail(f"no loader submodule declared for platform {profile['platform']!r}")
     return {
         "formatVersion": CONTRACT.FORMAT_VERSION,
         "name": name,
@@ -322,7 +336,7 @@ def closure_for(
         },
         "loader": {
             "role": CONTRACT.LOADER_ROLE_KERNEL_LOADER,
-            "implementation": artifact(*LOADER_IMPLEMENTATION),
+            "implementation": artifact(*loader_implementation),
             "parameters": [],
         },
         "releaseInputs": [

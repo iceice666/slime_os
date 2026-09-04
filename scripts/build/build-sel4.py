@@ -19,6 +19,15 @@ ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 SEL4_SOURCE = ROOT / "deps" / "sel4"
 RUST_SEL4_SOURCE = ROOT / "deps" / "rust-sel4"
+# Per-platform loader sources. Each physical platform's `sel4-kernel-loader`
+# patch lives on its own branch, diverging directly from `[rust_sel4]`'s base
+# commit rather than stacking on the others (`sel4/pins.toml`), so a platform
+# whose patch cannot be public can point its own table at a private fork with
+# no effect on the others. `qemu-arm-virt` and `qemu-riscv-virt` need no
+# patch and build the loader from `RUST_SEL4_SOURCE` directly.
+RUST_SEL4_BCM2712_RPI5_SOURCE = ROOT / "deps" / "rust-sel4-bcm2712-rpi5"
+RUST_SEL4_CV1800B_DUO_SOURCE = ROOT / "deps" / "rust-sel4-cv1800b-duo"
+RUST_SEL4_NS02201_H1V1_SOURCE = ROOT / "deps" / "rust-sel4-ns02201-h1v1"
 BUILD_ROOT = ROOT / "build"
 CARGO_BUILD = BUILD_ROOT / "sel4-cargo"
 ARTIFACTS = BUILD_ROOT / "sel4-artifacts"
@@ -41,6 +50,11 @@ class Platform:
     `pins_section` names this platform's `sel4/pins.toml` table, and
     `observed_prefix_section` its pinned artifact hashes: the two platforms
     build different kernels, so one set of hashes cannot describe both.
+
+    `loader_source` is where `sel4-kernel-loader` is built from. Platforms
+    with no loader patch share `RUST_SEL4_SOURCE`; a patched platform points
+    at its own submodule, so only its own loader build reads the diverging
+    branch (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables).
     """
 
     name: str
@@ -57,6 +71,7 @@ class Platform:
     child_target_name: str
     loader_target_key: str
     cross_compiler_environment: str
+    loader_source: Path
 
 
 QEMU_ARM_VIRT = Platform(
@@ -77,6 +92,7 @@ QEMU_ARM_VIRT = Platform(
     child_target_name="aarch64-sel4-minimal.json",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_SOURCE,
 )
 
 # P4's physical target. The kernel is a different build from the one above, so
@@ -96,6 +112,7 @@ BCM2712_RPI5 = Platform(
     child_target_name="aarch64-sel4-minimal.json",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_BCM2712_RPI5_SOURCE,
 )
 
 QEMU_RISCV_VIRT = Platform(
@@ -113,6 +130,7 @@ QEMU_RISCV_VIRT = Platform(
     child_target_name="riscv64imac-sel4-minimal.json",
     loader_target_key="riscv64_loader_target",
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_SOURCE,
 )
 
 CV1800B_DUO = Platform(
@@ -130,6 +148,7 @@ CV1800B_DUO = Platform(
     child_target_name="riscv64imac-sel4-minimal.json",
     loader_target_key="riscv64_loader_target",
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_CV1800B_DUO_SOURCE,
 )
 
 # P6's physical target: the Novatek NT98690 (NS02201) H1V1. Its kernel is a
@@ -151,6 +170,7 @@ NS02201_H1V1 = Platform(
     child_target_name="aarch64-sel4-minimal.json",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_NS02201_H1V1_SOURCE,
 )
 
 # The physical boards whose product image polls a real UART, and the serial
@@ -375,7 +395,7 @@ def boot_bundle_identity(platform: Platform) -> str:
     digest.update(b"slime-sel4-boot-bundle-v1\0")
     digest.update(bytes.fromhex(sha256_file(kernel)))
     digest.update(
-        bytes.fromhex(directory_digest(RUST_SEL4_SOURCE / "crates" / "sel4-kernel-loader"))
+        bytes.fromhex(directory_digest(platform.loader_source / "crates" / "sel4-kernel-loader"))
     )
     return digest.hexdigest()
 
@@ -983,10 +1003,13 @@ def build_loader(
 ) -> tuple[Path, Path]:
     """Build the kernel loader and its host packaging tool.
 
-    Both run with `deps/rust-sel4` as the working directory: that workspace's
-    `.cargo/config.toml` supplies the `rust-lld` linker selection and the
-    `RUST_TARGET_PATH` its crates expect. Closure callers pass the toolchain and
-    loader target explicitly; legacy callers retain the pinned manifest route.
+    Both run with `platform.loader_source` as the working directory: that
+    workspace's `.cargo/config.toml` supplies the `rust-lld` linker selection
+    and the `RUST_TARGET_PATH` its crates expect. For a platform with no
+    loader patch this is `RUST_SEL4_SOURCE`; a patched platform builds from
+    its own submodule instead, so its diverging branch never reaches any
+    other platform's loader. Closure callers pass the toolchain and loader
+    target explicitly; legacy callers retain the pinned manifest route.
     """
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
@@ -994,15 +1017,16 @@ def build_loader(
         rust_sel4, platform.loader_target_key, "rust_sel4"
     )
     environment = cargo_environment(toolchain, platform)
+    loader_source = platform.loader_source
 
     loader_target_dir = CARGO_BUILD / platform.name / "loader"
     cargo_build(
-        manifest=RUST_SEL4_SOURCE / "Cargo.toml",
+        manifest=loader_source / "Cargo.toml",
         package="sel4-kernel-loader",
         target=loader_target,
         target_dir=loader_target_dir,
         environment=environment,
-        cwd=RUST_SEL4_SOURCE,
+        cwd=loader_source,
         description="build seL4 kernel loader",
     )
     loader = loader_target_dir / loader_target / "release" / "sel4-kernel-loader"
@@ -1017,13 +1041,13 @@ def build_loader(
             "--offline",
             "--release",
             "--manifest-path",
-            str(RUST_SEL4_SOURCE / "Cargo.toml"),
+            str(loader_source / "Cargo.toml"),
             "--package",
             "sel4-kernel-loader-add-payload",
             "--target-dir",
             str(host_target_dir),
         ],
-        cwd=RUST_SEL4_SOURCE,
+        cwd=loader_source,
         environment=environment,
         description="build loader payload tool",
     )

@@ -50,9 +50,19 @@ runs:
         set -euo pipefail
         toolchain="$(nix develop --command python3 -c \
           "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
-        # Our own workspaces: three of them, each with its own lockfile,
-        # because `cargo fetch` resolves one manifest at a time.
-        for manifest in Cargo.toml slime-root/child/Cargo.toml deps/rust-sel4/Cargo.toml; do
+        # Our own workspaces, each with its own lockfile, because `cargo
+        # fetch` resolves one manifest at a time: the two top-level
+        # workspaces, the shared base rust-sel4 checkout, and one per patched
+        # physical platform's independent loader submodule
+        # (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables).
+        for manifest in \
+          Cargo.toml \
+          slime-root/child/Cargo.toml \
+          deps/rust-sel4/Cargo.toml \
+          deps/rust-sel4-bcm2712-rpi5/Cargo.toml \
+          deps/rust-sel4-cv1800b-duo/Cargo.toml \
+          deps/rust-sel4-ns02201-h1v1/Cargo.toml \
+        ; do
           echo "::group::cargo fetch $manifest"
           nix develop --command cargo fetch --locked --manifest-path "$manifest"
           RUSTUP_TOOLCHAIN="$toolchain" \

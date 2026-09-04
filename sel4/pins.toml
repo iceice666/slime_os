@@ -11,15 +11,16 @@ release = "16.0.0"
 commit = "4aa98b2b6e0e9190e80d0175f433457dbfccee97"
 
 [rust_sel4]
-# Forked from seL4/rust-sel4 at v5.0.0 (d441a880938209f661201704dfbee7b91c5aa905)
-# for the physical platforms Slime boots. The fork adds bcm2712's UART10
-# loader path, CV1800B's single-hart path (the Duo's OpenSBI 0.9 exposes no
-# HSM extension, so the generic RISC-V loader would panic before printing),
-# and the NT98690 H1V1's inline 16550 console at 0x2f0130000, for which no
-# driver crate exists.
+# The shared base: seL4/rust-sel4 v5.0.0, unmodified. Every platform builds
+# `crates/sel4`, `crates/sel4-panicking-env`, `crates/sel4-runtime-common`,
+# and the component/root target specs from this one checkout, because none
+# of the physical-platform loader patches below touch those paths -- each
+# adds exactly one arm to `sel4-kernel-loader`'s platform selector plus its
+# own platform module. Only the *loader* build for a patched platform reads
+# from that platform's own `[rust_sel4_<platform>]` table instead.
 repository = "https://github.com/iceice666/rust-sel4.git"
-release = "v5.0.0-slime-physical-platforms"
-commit = "20905bef6b93b7d863ac6dc5d7053f96aa09765a"
+release = "v5.0.0"
+commit = "d441a880938209f661201704dfbee7b91c5aa905"
 toolchain = "nightly-2026-04-04"
 root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
 root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
@@ -27,6 +28,36 @@ riscv64_root_target = "deps/rust-sel4/support/targets/riscv64imac-sel4-roottask-
 riscv64_root_target_sha256 = "1ba7236f7df19f49777dc2f3bc189ea06ce30d7af1e3746c0183fe94467f64c9"
 loader_target = "aarch64-unknown-none"
 riscv64_loader_target = "riscv64imac-unknown-none-elf"
+
+# One independent branch per physical platform, each diverging directly from
+# the `[rust_sel4]` base commit rather than stacking on the others. A branch
+# carries exactly the arm and platform module its own board needs, so a
+# platform whose patch cannot be public -- an NDA'd board, say -- can point
+# `repository`/`branch`/`commit` at a private fork with no other platform's
+# pin, build, or identity affected. `build-sel4.py` checks out each into its
+# own `deps/rust-sel4-<platform>` submodule and builds `sel4-kernel-loader`
+# from there instead of the shared base.
+[rust_sel4_bcm2712_rpi5]
+# UART10 loader path for the Raspberry Pi 5's dedicated debug header.
+repository = "https://github.com/iceice666/rust-sel4.git"
+branch = "slime/bcm2712-loader-platform"
+commit = "1ef65fb100051a54c74eecc03050fa48ac0dec69"
+
+[rust_sel4_cv1800b_duo]
+# Single-hart start (the Duo's OpenSBI 0.9 exposes no HSM extension, so the
+# generic RISC-V loader would panic before printing), MAEE table encoding,
+# and the RISC-V page-table accessed/dirty-bit fix the board's MMU requires.
+repository = "https://github.com/iceice666/rust-sel4.git"
+branch = "slime-cv1800b-duo"
+commit = "6885bfd155f2405e2eb6176e1a1065e1cab34680"
+
+[rust_sel4_ns02201_h1v1]
+# Inline 16550 console at 0x2f0130000 for the NT98690 H1V1, for which no
+# driver crate exists.
+repository = "https://github.com/iceice666/rust-sel4.git"
+branch = "slime-ns02201-h1v1"
+commit = "7feeb3fedc2d806453bf3fbaed4cd0888d58e0e0"
+
 
 [qemu_arm_virt]
 platform = "qemu-arm-virt"
