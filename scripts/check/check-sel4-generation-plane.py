@@ -490,10 +490,10 @@ def main() -> None:
     if not FIXTURE.is_file():
         fail(f"missing generation fixture {FIXTURE.relative_to(ROOT)}")
     section, qemu_binary = PLATFORMS[arguments.platform]
-    image = image_path(arguments.platform)
     profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
         build_image(arguments.platform)
+    image = image_path(arguments.platform)
     if not image.is_file():
         fail(f"missing packaged image {image.relative_to(ROOT)}")
 
