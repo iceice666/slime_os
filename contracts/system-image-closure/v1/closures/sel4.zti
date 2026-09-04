@@ -96,7 +96,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "611933442a6a268e20828bed99384823dd2c939da6c46d96de63dce7909d48fc";
+      identity = "711479a46e5c1f8be85fdf12f45bbd3c71b7cd9a0ff3c2666dd814ef168354e7";
     };
     parameters = [
       "qemuKeyboard";
@@ -107,7 +107,7 @@
     implementation = {
       path = "deps/rust-sel4";
       kind = "tree";
-      identity = "b58ca7ae386b5c363b8f8b8d544b8234d42b91d52d775b2c00e10d4b2c6d1741";
+      identity = "5dab11d1b195fa22e4aab846fdccdd1578c0f00089f9a8ce0baba536b09a3629";
     };
     parameters = [];
   };
@@ -117,7 +117,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "f1f3ded030da2796caef2582fc5296c7365d623d41fbe46872b04f19729cad79";
+        identity = "ca941aeeea783795d96e2487ef07110edc04c209f92ddc92a474de9e0ac35892";
       };
     };
     {
@@ -189,7 +189,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "6779c78e672ea29b32fb823a39c06472f820ce7e64ac10315c0f2235ffae765e";
+        identity = "416cd08de1c0d415539c0e1b1e1aa29edf3f609b86f8612546b5da0fc9532647";
       };
     };
     {
