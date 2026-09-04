@@ -194,6 +194,8 @@ def prove_negative_controls(first: dict, second: dict) -> None:
         mutated[axis][0] = copy.deepcopy(mutated[axis][0])
         if axis == "crates":
             mutated[axis][0]["identity"] = "e" * 64
+        elif axis == "systems":
+            mutated[axis][0]["archiveHash"] = "e" * 64
         else:
             mutated[axis][0]["prefix"]["archiveHash"] = "e" * 64
         mutated["version"] = "1.2.0"

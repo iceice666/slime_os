@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
 from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
+import component_sdk_system  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
@@ -291,7 +292,8 @@ def prove_refusals(root: Path, url: str) -> None:
     mirror = root / "mutated-source"
     mirror.mkdir()
     for relative in (
-        ("Cargo.toml", "sel4/pins.toml", "contracts")
+        component_sdk_system.COPY_ROOTS
+        + ("Cargo.toml", "sel4/pins.toml", "contracts", "scripts/lib/component_sdk_system_entry.py")
         + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
         + component_sdk.VENDORED
         + component_sdk.LINKER_SCRIPTS
