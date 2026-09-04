@@ -55,6 +55,7 @@ old cumulative tip.
 | `python3 scripts/check/check-sel4-pins.py` | `seL4 pin check: exact source, toolchain, target, config, and host pins verified` | Direct |
 | `python3 scripts/generate/generate-system-image-closures.py` (regenerate) then `--check` | `50 system-image closures are current` | Direct |
 | `python3 -c "import ast; ast.parse(...)"` on every edited `.py` | Parses cleanly | Direct |
+| `just test` (`sel4_root_boot_check`, `sel4_component_graph_check`, `sel4_gate_control_check`) on `qemu-arm-virt`, rebuilding seL4 and the loader from the repinned `deps/rust-sel4` v5.0.0 base | Exit 0. `seL4 root boot check: ordered generation, timer, task, IPC, fault, and ready markers observed`; `seL4 component graph check: init launched console, spawn-service, and Slisp ...; all four required resident instances remained live`; `seL4 gate control check: image identity accepted 1 valid pair and rejected 7 invalid pairs`, `48 gates reject 1879 mutated transcripts and layouts; 8 identity cases and 4 runtime cases passed` | Direct |
 | `just contracts_check` | Not completed: the recipe's Rust release build of `zutai-cli` exceeded this session's time budget and was killed by an external timeout, unrelated to the edits here | Not run |
 | Full physical-platform QEMU/loader build (`build-sel4.py --platform cv1800b-duo` etc.) | Not run: physical-board cross-toolchains were not exercised in this session | Not run |
 
@@ -82,9 +83,9 @@ old cumulative tip.
 ## Open risks and follow-ups
 
 - [ ] `just contracts_check`, `just system_image_builder_check`, and the
-      QEMU-boot gates (`sel4_boot_layout_check`, `sel4_qos_check`,
-      `sel4_fault_check`, …) were not re-run end-to-end in this session; run
-      them before relying on this change for a release.
+      remaining QEMU-plane gates (`sel4_boot_layout_check`, `sel4_qos_check`,
+      `sel4_fault_check`, …) beyond `just test` were not re-run end-to-end in
+      this session; run them before relying on this change for a release.
 - [ ] `ns02201-h1v1` has no `sdk-release.json` profile yet (per
       `roadmap/00-backlog.md` and P6.A/P6.B status), so no closure currently
       exercises its `LOADER_IMPLEMENTATIONS` entry; it will be exercised the
