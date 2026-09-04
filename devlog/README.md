@@ -400,3 +400,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-03 | [CP15 - plane gates build by closure identity, and two reproducibility defects it exposed](2026-09-03-cp15-closure-cutover/index.md) | Change | Verified | CP14, CP15 |
 | 2026-09-04 | [CP15 - the remaining plane gates unblock, the legacy flag surface deletes, and a keyboard parameter the closure model dropped](2026-09-04-cp15-legacy-deletion/index.md) | Change | Verified | CP12, CP15 |
 | 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
+| 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |
