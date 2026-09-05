@@ -158,6 +158,11 @@
   interfaceSchemas = [];
   objects = [
     {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
       id = "sha256:init";
       kind = "bootstrap";
       size = 65536;
@@ -172,12 +177,8 @@
       kind = "component";
       size = 65536;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

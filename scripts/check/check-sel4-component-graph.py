@@ -3,7 +3,7 @@
 """P5.2 gate: a generation of native ELF component images boots its declared
 graph on seL4.
 
-Boots `build/slime-sel4-graph.elf` and asserts that init launches its declared
+Builds the `sel4` closure and boots its packaged image, asserting that init launches its declared
 services with generation-derived native Endpoint capabilities, the services
 exercise their bounded operation surface, and their explicit userspace shutdown
 and supervision protocol completes before the graph is certified healthy. Raw
@@ -41,13 +41,20 @@ from harness import (  # noqa: E402
     profile_text,
     sha256_file,
 )
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-graph.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-graph.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+CLOSURE = "sel4"
+# `--no-build` is used only by `check-external-component-admission.py`, which
+# builds a mixed-source generation through the legacy image builder's
+# `--component-graph --prebuilt-generation` path itself and boots the result
+# this gate already knows how to check. That legacy flag still writes this
+# fixed path, so `--no-build` reads it directly instead of resolving a
+# closure this gate never invokes the legacy builder to produce.
+LEGACY_IMAGE = ROOT / "build" / "slime-sel4-graph.elf"
+IMAGE: Path | None = None
 GENERATOR = ROOT / "scripts" / "build" / "build-generation.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4.zti"
 AUTOMATIC_BINDING_SLOTS = {
@@ -310,48 +317,20 @@ def check_automatic_binding_slots() -> None:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--component-graph"]
-    print(f"[build] {' '.join(command)}", flush=True)
+    global IMAGE
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    actual = sha256_file(built.image, fail)
+    if actual != built.digest():
+        fail(
+            f"{built.image} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
+    IMAGE = built.image
 
 
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_component_graph_check`"
-        )
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    # The two images are built from the same sources and differ only in which
-    # generation the root task embeds, so booting the wrong one would fail on
-    # markers rather than on identity. Checking the flag reports the actual
-    # cause instead.
-    if manifest.get("component_graph") is not True:
-        fail(
-            f"{MANIFEST.relative_to(ROOT)} does not record a component-graph image; "
-            "rebuild with `--component-graph`"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    actual = sha256_file(IMAGE, fail)
-    if actual != image["sha256"]:
-        fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
-        )
 
 
 def boot(profile: dict[str, object]) -> str:
@@ -539,6 +518,7 @@ def check_transcript(transcript: str) -> None:
 
 
 def main() -> None:
+    global IMAGE
     parser = argparse.ArgumentParser(
         description="Boot the seL4 component-graph image and assert ordered markers"
     )
@@ -553,9 +533,10 @@ def main() -> None:
         fail(f"run from repository root: {ROOT}")
     pins = load_pins()
     check_automatic_binding_slots()
-    if not arguments.no_build:
+    if arguments.no_build:
+        IMAGE = LEGACY_IMAGE
+    else:
         build_image()
-    check_manifest()
     check_deleted_compatibility_surface()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)

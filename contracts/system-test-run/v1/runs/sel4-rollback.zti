@@ -1,0 +1,37 @@
+{
+  formatVersion = 1;
+  name = "sel4-rollback";
+  imageClosureIdentity = "aafd7b30163f12d8033a532f448296ed52405afeb4161eaffb96bf4ec95ebe6f";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [
+    {
+      name = "disk-0";
+      path = "";
+      identity = "";
+      writable = true;
+    };
+  ];
+  networks = [];
+  devices = [
+    {
+      name = "virtio-blk-device";
+      path = "";
+      identity = "";
+      writable = false;
+    };
+  ];
+  faultControls = [
+    {
+      kind = "corruption";
+      target = "";
+      value = "";
+    };
+  ];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

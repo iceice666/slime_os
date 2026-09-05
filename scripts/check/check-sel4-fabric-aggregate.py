@@ -38,8 +38,8 @@ What this gate deliberately does not re-assert: every property
 `check-sel4-traffic-plane.py` and `check-sel4-fault-plane.py` already check.
 Those gates are invoked here, in-process, against each boot they take -- so a
 regression in any of them fails this gate too, and the aggregate does not become
-a second, drifting copy of their expectations. `--no-build` is passed through so
-this gate never rebuilds an image a plane gate just built.
+a second, drifting copy of their expectations. The aggregate reuses each closure
+build only after its recorded identity still matches repository state.
 
 The audit half of C8.15's deliverables -- reconciling the final authority,
 resource, and fault corpus against every C8 deliverable -- is recorded in the
@@ -63,6 +63,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_MAX_RESOURCE_COUNTER,
     FABRIC_TRACE_RESOURCE_BUFFERS,
@@ -76,35 +77,39 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_RETAINED,
     FABRIC_TRACE_RESOURCE_RETRIES,
 )
-from harness import load_script  # noqa: E402
+from harness import load_script, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 BOOT_TIMEOUT_SECONDS = 240
+# CP15: each aggregate schedule builds by its own closure identity. The identity
+# names that build's inputs and is re-resolved from repository state before the
+# build, so neither boot can silently use an image produced for the other plane.
+CLOSURE_TRAFFIC = "sel4-traffic"
+CLOSURE_FAULT = "sel4-fault"
+IMAGE_TRAFFIC: Path | None = None
+IMAGE_FAULT: Path | None = None
 
 # The planes this aggregate composes, in the order it exercises them:
-# `(label, gate module name, gate path, build flag, image)`.
+# `(label, gate module name, gate path, closure identity)`.
 #
 # Both run the identical `drive_traffic_plane` composition over the identical
 # declared graph. The fault plane's image differs only in that its declared
 # interposition hop is compiled to exit rather than park and its telemetry
 # publisher to exit without ending its stream, which is why the two are an
 # aggregate over one graph rather than two planes to be compared.
-PLANES: tuple[tuple[str, str, str, str, str], ...] = (
+PLANES: tuple[tuple[str, str, str, str], ...] = (
     (
         "normal concurrent schedule",
         "sel4_traffic_plane",
         "check/check-sel4-traffic-plane.py",
-        "--traffic-plane",
-        "slime-sel4-traffic.elf",
+        CLOSURE_TRAFFIC,
     ),
     (
         "fault schedule over the same graph",
         "sel4_fault_plane",
         "check/check-sel4-fault-plane.py",
-        "--fault-plane",
-        "slime-sel4-fault.elf",
+        CLOSURE_FAULT,
     ),
 )
 
@@ -330,25 +335,43 @@ def load_pins() -> dict[str, object]:
     return profile
 
 
-def build_image(flag: str) -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), flag]
-    print(f"[build] {' '.join(command)}", flush=True)
+def build_images() -> None:
+    global IMAGE_FAULT, IMAGE_TRAFFIC
     try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
+        traffic = build_closure_image(CLOSURE_TRAFFIC)
+        fault = build_closure_image(CLOSURE_FAULT)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE_TRAFFIC = traffic.image
+    IMAGE_FAULT = fault.image
+    for built in (traffic, fault):
+        actual = sha256_file(built.image, fail)
+        if actual != built.digest():
+            fail(
+                f"{built.image} SHA-256 is {actual}, but the build result records "
+                f"{built.digest()}; the image changed after it was built"
+            )
 
 
-def boot(profile: dict[str, object], image: str, attempt: int) -> str:
+def image_for(closure: str) -> Path:
+    if closure == CLOSURE_TRAFFIC:
+        image = IMAGE_TRAFFIC
+    elif closure == CLOSURE_FAULT:
+        image = IMAGE_FAULT
+    else:
+        fail(f"unknown aggregate closure {closure!r}")
+    if image is None:
+        fail(f"{closure}: image was not resolved from its closure")
+    return image
+
+
+def boot(profile: dict[str, object], image: Path, attempt: int) -> str:
     """Boot one image until init's clean exit, returning the transcript."""
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
-    path = ROOT / "build" / image
-    if not path.is_file():
-        fail(f"missing packaged image {path.relative_to(ROOT)}")
+    if not image.is_file():
+        fail(f"missing packaged image {image.relative_to(ROOT)}")
     command = [
         qemu,
         "-machine",
@@ -363,9 +386,9 @@ def boot(profile: dict[str, object], image: str, attempt: int) -> str:
         "-serial",
         "mon:stdio",
         "-kernel",
-        str(path),
+        str(image),
     ]
-    print(f"[boot {attempt}] {image}", flush=True)
+    print(f"[boot {attempt}] {image.relative_to(ROOT)}", flush=True)
     failures = re.compile("|".join(FAILURE_MARKERS))
     init_complete = re.compile(INIT_COMPLETE)
     component_exit = re.compile(TERMINAL_MARKER)
@@ -643,18 +666,18 @@ def main() -> None:
     parser.add_argument(
         "--no-build",
         action="store_true",
-        help="boot the already-built images instead of rebuilding them first",
+        help="reuse closure builds whose recorded identities still match repository state",
     )
-    arguments = parser.parse_args()
+    parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     profile = load_pins()
 
+    build_images()
     total = 0
-    for label, module_name, module_path, flag, image in PLANES:
-        if not arguments.no_build:
-            build_image(flag)
+    for label, module_name, module_path, closure in PLANES:
+        image = image_for(closure)
         gate = load_script(module_name, module_path)
         first = boot(profile, image, 1)
         # Every property the plane's own gate asserts, on this exact boot. Run

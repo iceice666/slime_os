@@ -2,63 +2,248 @@
   bootAction = "wait-set";
   bootstrapInstance = "init";
   executables = [
-    { commandProfile = []; name = "init"; object = "sha256:init"; role = "init"; spawnBudget = 0; };
-    { commandProfile = []; name = "io-driver-probe"; object = "sha256:io-driver-probe"; role = "service"; spawnBudget = 2; };
-    { commandProfile = []; name = "io-driver-intruder"; object = "sha256:io-driver-intruder"; role = "application"; spawnBudget = 0; };
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "io-driver-intruder";
+      object = "sha256:io-driver-intruder";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "io-driver-probe";
+      object = "sha256:io-driver-probe";
+      role = "service";
+      spawnBudget = 2;
+    };
   ];
   formatVersion = 1;
   generation = 50;
   grants = [
-    { name = "io-driver-worker-executable"; capabilityKind = "executable"; rights = [ "exec"; "spawn"; ]; source = "io-driver-supervisor"; target = "io-driver-probe"; transferable = false; };
-    { name = "probe-device"; capabilityKind = "device"; rights = [ "mapMmio"; ]; source = "io-driver-supervisor"; target = "io-driver-worker"; transferable = false; };
-    { name = "probe-mmio"; capabilityKind = "mmioRegion"; rights = [ "mapMmio"; ]; source = "io-driver-supervisor"; target = "io-driver-worker"; transferable = false; };
-    { name = "probe-irq"; capabilityKind = "interruptSource"; rights = [ "irqAck"; ]; source = "io-driver-supervisor"; target = "io-driver-worker"; transferable = false; };
-    { name = "probe-dma"; capabilityKind = "dmaAccount"; rights = [ "dmaPin"; "dmaRelease"; ]; source = "io-driver-supervisor"; target = "io-driver-worker"; transferable = false; };
+    {
+      name = "io-driver-worker-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "io-driver-supervisor";
+      target = "io-driver-probe";
+      transferable = false;
+    };
+    {
+      name = "probe-device";
+      capabilityKind = "device";
+      rights = [
+        "mapMmio";
+      ];
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      transferable = false;
+    };
+    {
+      name = "probe-dma";
+      capabilityKind = "dmaAccount";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      transferable = false;
+    };
+    {
+      name = "probe-irq";
+      capabilityKind = "interruptSource";
+      rights = [
+        "irqAck";
+      ];
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      transferable = false;
+    };
+    {
+      name = "probe-mmio";
+      capabilityKind = "mmioRegion";
+      rights = [
+        "mapMmio";
+      ];
+      source = "io-driver-supervisor";
+      target = "io-driver-worker";
+      transferable = false;
+    };
   ];
-  health = { bootAttempts = 3; requiredInstances = [ "init"; "io-driver-intruder"; "io-driver-supervisor"; ]; };
-  instances = [
-    { autostart = true; bindings = []; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
-    { autostart = true; bindings = [
-        { grant = "io-driver-worker-executable"; };
-        { grant = "probe-device"; };
-        { grant = "probe-mmio"; };
-        { grant = "probe-irq"; slot = 3; slotReason = "allocatorOrder"; };
-        { grant = "probe-dma"; slot = 4; slotReason = "allocatorOrder"; };
-      ]; dependencies = []; executable = "io-driver-probe"; health = "required"; name = "io-driver-supervisor"; owner = "root"; };
-    { autostart = false; bindings = [
-        { grant = "probe-device"; slot = 0; slotReason = "componentAbi"; };
-        { grant = "probe-mmio"; slot = 1; slotReason = "componentAbi"; };
-        { grant = "probe-irq"; slot = 2; slotReason = "componentAbi"; };
-        { grant = "probe-dma"; slot = 3; slotReason = "componentAbi"; };
-      ]; dependencies = [ "io-driver-supervisor"; ]; executable = "io-driver-probe"; health = "optional"; name = "io-driver-worker"; owner = "io-driver-supervisor"; };
-    { autostart = true; bindings = []; dependencies = []; executable = "io-driver-intruder"; health = "required"; name = "io-driver-intruder"; owner = "root"; };
-  ];
-  interfaceSchemas = [];
-  lifecyclePolicy = {
-    initialState = "Initialize";
-    terminalState = "Error";
-    transitions = [ { from = "Initialize"; to = "Running"; }; { from = "Running"; to = "Error"; }; ];
-    restarts = [ { instance = "io-driver-worker"; attempts = 1; causes = [ "fault"; ]; backoffNs = 0; backoffFactor = 256; }; ];
-    dependencies = [];
-    parameters = [];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "io-driver-intruder";
+      "io-driver-supervisor";
+    ];
   };
-  mintedBindings = [];
-  notificationBindings = [];
-  notificationGrants = [];
-  objects = [
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:io-driver-probe"; kind = "component"; size = 65536; };
-    { id = "sha256:io-driver-intruder"; kind = "component"; size = 65536; };
-    { id = "io-resource-budget"; kind = "resource"; size = 4096; };
-    { id = "lifecycle-policy"; kind = "resource"; size = 4096; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "io-driver-intruder";
+      health = "required";
+      name = "io-driver-intruder";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "io-driver-worker-executable";
+        };
+        {
+          grant = "probe-device";
+        };
+        {
+          grant = "probe-dma";
+          slot = 4;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "probe-irq";
+          slot = 3;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "probe-mmio";
+        };
+      ];
+      dependencies = [];
+      executable = "io-driver-probe";
+      health = "required";
+      name = "io-driver-supervisor";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "probe-device";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "probe-dma";
+          slot = 3;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "probe-irq";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "probe-mmio";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "io-driver-supervisor";
+      ];
+      executable = "io-driver-probe";
+      health = "optional";
+      name = "io-driver-worker";
+      owner = "io-driver-supervisor";
+    };
   ];
-  ioResourceBudget = [
-    { holder = "io-driver-worker"; mmioBytes = 4096; mmioMappings = 1; dmaPages = 2; dmaMappings = 1; irqSources = 1; outstandingRequests = 0; bufferLoans = 0; };
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "io-resource-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "lifecycle-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-driver-intruder";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-driver-probe";
+      kind = "component";
+      size = 65536;
+    };
   ];
   privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";
-  waitSet = [];
+  ioResourceBudget = [
+    {
+      bufferLoans = 0;
+      dmaMappings = 1;
+      dmaPages = 2;
+      holder = "io-driver-worker";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 0;
+    };
+  ];
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [];
+    restarts = [
+      {
+        attempts = 1;
+        backoffFactor = 256;
+        backoffNs = 0;
+        causes = [
+          "fault";
+        ];
+        instance = "io-driver-worker";
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+    ];
+  };
 }

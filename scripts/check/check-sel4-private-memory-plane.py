@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
 from sel4_gate_markers import (  # noqa: E402
@@ -59,12 +60,12 @@ from sel4_gate_markers import (  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = ROOT / "build" / "slime-sel4-private-memory.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-private-memory.identity.json"
-BUILD = ROOT / "scripts" / "build" / "build-sel4.py"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before building, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-private-memory"
+IMAGE: Path | None = None
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory.zti"
-IMAGE_VARIANT = "private-memory"
 TIMEOUT = 240
 
 # Causal chains rather than one flat sequence, on B55/B68's rule: a required
@@ -264,24 +265,15 @@ def declared_quotas() -> dict[str, int]:
 
 
 def build_image() -> None:
-    process = subprocess.run(
-        [sys.executable, str(BUILD), "--private-memory-plane"],
-        cwd=ROOT,
-        check=False,
-    )
-    if process.returncode != 0 or not IMAGE.is_file():
-        fail(f"seL4 image build failed with exit status {process.returncode}")
-
-
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail("identity manifest missing")
-    identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    if identity.get("variant") != IMAGE_VARIANT:
-        fail(f"wrong image variant {identity.get('variant')!r}")
-    image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
-        fail("packaged image digest does not match identity manifest")
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
 
 
 def boot(profile: dict[str, object]) -> str:
@@ -689,7 +681,6 @@ def check_the_two_planes_are_independent(transcript: str, declared: dict[str, in
 def main() -> None:
     declared = declared_quotas()
     build_image()
-    check_manifest()
     pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
     profile = pins.get("qemu_arm_virt")
     if not isinstance(profile, dict):

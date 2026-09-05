@@ -16,6 +16,11 @@
   requires = [];
   interfaces = [
     {
+      interface = "DiagnosticsStream";
+      name = "diagnostics";
+      tag = "input";
+    };
+    {
       name = "telemetry";
       tag = "input";
       interface = "TelemetryStream";

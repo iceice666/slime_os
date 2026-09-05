@@ -1,0 +1,299 @@
+{
+  formatVersion = 1;
+  name = "sel4-spawn";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "spawn";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "console";
+    "init";
+    "sysinfo";
+  ];
+  placements = [
+    {
+      component = "console";
+      owner = "init";
+      autostart = false;
+    };
+    {
+      component = "init";
+      spawnBudget = 4;
+    };
+    {
+      component = "sysinfo";
+      owner = "init";
+      autostart = false;
+      health = "required";
+      dependencies = [
+        "init";
+      ];
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      source = "init";
+      target = "console";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-sysinfo";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "console-control";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "console";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sysinfo-context";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "console-view";
+      capabilityKind = "directory";
+      source = "init";
+      target = "console";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-1";
+      capabilityKind = "directory";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-2";
+      capabilityKind = "directory";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-3";
+      capabilityKind = "directory";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-4";
+      capabilityKind = "directory";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-5";
+      capabilityKind = "directory";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-6";
+      capabilityKind = "directory";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "directoryRead";
+      ];
+      transferable = true;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-console";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sysinfo";
+      slot = 2;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "console-control";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-context";
+      slot = 4;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "console-view";
+      slot = 5;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-view-1";
+      slot = 6;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-view-2";
+      slot = 7;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-view-3";
+      slot = 8;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-view-4";
+      slot = 9;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-view-5";
+      slot = 10;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sysinfo-view-6";
+      slot = 11;
+      reason = "bootLayout";
+    };
+    {
+      holder = "console";
+      grant = "console-control";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "console";
+      grant = "console-view";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-context";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-view-1";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-view-2";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-view-3";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-view-4";
+      slot = 4;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-view-5";
+      slot = 5;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "sysinfo-view-6";
+      slot = 6;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

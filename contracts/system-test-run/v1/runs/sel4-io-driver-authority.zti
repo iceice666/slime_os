@@ -1,0 +1,31 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-driver-authority";
+  imageClosureIdentity = "c2af8fd865bbdce40c7efd74e5cac4d410b6a79c25cd427bcd525e509e7ebc13";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [
+    {
+      name = "disk-0";
+      path = "";
+      identity = "";
+      writable = true;
+    };
+  ];
+  networks = [];
+  devices = [
+    {
+      name = "virtio-blk-device";
+      path = "";
+      identity = "";
+      writable = false;
+    };
+  ];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

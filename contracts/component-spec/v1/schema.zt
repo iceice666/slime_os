@@ -252,10 +252,12 @@ identityDomain :: Text = "slime-component-spec-v1:";
 -- the 49th component anywhere in the repository failed a bound describing a
 -- constraint it does not actually violate, which is what the IO track hit.
 --
--- 64 leaves headroom over the current corpus without becoming unbounded. The
--- per-generation instance ceiling stays where it is and is enforced separately,
+-- 96 leaves headroom over the current corpus (CP12 raised it from 64 when
+-- deriving system specs from the composition corpus added the executables
+-- those compositions declare) without becoming unbounded.
+-- The per-generation instance ceiling stays where it is and is enforced separately,
 -- by the generation manifest, which is the contract that genuinely owns it.
-maxSpecs :: Int = 64;
+maxSpecs :: Int = 96;
 maxSourceBytes :: Int = 65536;
 maxNormalizedBytes :: Int = 65536;
 maxNameBytes :: Int = 64;

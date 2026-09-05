@@ -20,6 +20,7 @@
       spawnBudget = 1;
     };
   ];
+  instances = [];
   grants = [
     {
       name = "dango-output";
@@ -44,15 +45,30 @@
     };
   ];
   slotPins = [];
+  extraBindings = [];
+  mintedBindings = [];
   commandBindings = [];
   defaultImageBytes = 65536;
   imageSizes = [];
   sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
   notifications = [];
   notificationBindings = [];
   bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
   deploymentConstraint = "aarch64 seL4 QEMU virt, no block device.";
   acceptanceCriteria = "just sel4_channel_check observes the console channel plane complete.";
 }

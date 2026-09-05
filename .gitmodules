@@ -7,3 +7,15 @@
 [submodule "deps/rust-sel4"]
 	path = deps/rust-sel4
 	url = https://github.com/iceice666/rust-sel4.git
+[submodule "deps/rust-sel4-bcm2712-rpi5"]
+	path = deps/rust-sel4-bcm2712-rpi5
+	url = https://github.com/iceice666/rust-sel4.git
+	branch = slime/bcm2712-loader-platform
+[submodule "deps/rust-sel4-cv1800b-duo"]
+	path = deps/rust-sel4-cv1800b-duo
+	url = https://github.com/iceice666/rust-sel4.git
+	branch = slime-cv1800b-duo
+[submodule "deps/rust-sel4-ns02201-h1v1"]
+	path = deps/rust-sel4-ns02201-h1v1
+	url = https://github.com/iceice666/rust-sel4.git
+	branch = slime-ns02201-h1v1

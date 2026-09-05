@@ -4,33 +4,22 @@
   executables = [
     {
       commandProfile = [];
-      name = "init";
-      object = "sha256:init";
-      role = "init";
-      spawnBudget = 2;
-    };
-    {
-      commandProfile = [];
       name = "crossing-peer";
       object = "sha256:crossing-peer";
       role = "application";
       spawnBudget = 0;
     };
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 2;
+    };
   ];
   formatVersion = 1;
   generation = 1;
   grants = [
-    {
-      name = "init-crossing-peer";
-      capabilityKind = "executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
-      source = "init";
-      target = "crossing-peer";
-      transferable = false;
-    };
     {
       name = "crossing-carrier";
       capabilityKind = "endpoint";
@@ -53,6 +42,17 @@
       target = "crossing-peer";
       transferable = true;
     };
+    {
+      name = "init-crossing-peer";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "crossing-peer";
+      transferable = false;
+    };
   ];
   health = {
     bootAttempts = 3;
@@ -62,31 +62,6 @@
     ];
   };
   instances = [
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "init-crossing-peer";
-          slot = 1;
-          slotReason = "bootLayout";
-        };
-        {
-          grant = "crossing-carrier";
-          slot = 2;
-          slotReason = "encodedLayout";
-        };
-        {
-          grant = "crossing-gate";
-          slot = 3;
-          slotReason = "encodedLayout";
-        };
-      ];
-      dependencies = [];
-      executable = "init";
-      health = "required";
-      name = "init";
-      owner = "root";
-    };
     {
       autostart = true;
       bindings = [
@@ -109,14 +84,39 @@
       name = "crossing-peer";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "crossing-carrier";
+          slot = 2;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "crossing-gate";
+          slot = 3;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "init-crossing-peer";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
   ];
   mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
     };
     {
       id = "sha256:crossing-peer";
@@ -124,16 +124,17 @@
       size = 65536;
     };
     {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
       id = "shared-buffer-budget";
       kind = "resource";
       size = 4096;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

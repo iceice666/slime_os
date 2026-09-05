@@ -57,6 +57,45 @@ system_spec_check: component_spec_check
     python3 scripts/generate/generate-generation-from-spec.py --check
 
 [group('contracts')]
+system_composition_closure_check: system_spec_check
+    python3 scripts/generate/generate-composition-inventory-bindings.py --check
+    python3 scripts/check/check-composition-inventory.py
+
+[group('contracts')]
+system_image_builder_check: system_composition_closure_check
+    python3 scripts/generate/generate-system-image-closures.py --check
+    python3 scripts/check/check-system-image-builder.py
+
+# Execution-only inputs — disks, devices, injected faults, timeouts, marker
+# contracts — are declared per plane and frozen, so a timeout or a disk cannot
+# change without a reviewed record change. Bless with `just system_test_run_bless`.
+[group('contracts')]
+system_test_run_check:
+    python3 scripts/check/check-system-test-run.py
+
+[group('contracts')]
+system_test_run_bless:
+    python3 scripts/generate/generate-system-test-runs.py --bless
+
+# Every shipped or tested image traces to exactly one closure, and every
+# closure is exercised by an owning gate. Cheap by design: a mapping only
+# checked before a release is a mapping that drifts between releases.
+[group('contracts')]
+system_image_closure_aggregate_check:
+    python3 scripts/check/check-system-image-aggregate.py
+
+[group('contracts')]
+system_image_scenario_check: system_image_builder_check
+    python3 scripts/check/check-system-image-scenario.py
+
+
+[group('contracts')]
+system_image_closure_check: system_spec_check
+    python3 scripts/generate/generate-system-image-closure-bindings.py --check
+    python3 scripts/generate/generate-system-test-run-bindings.py --check
+    python3 scripts/check/check-system-image-closure.py
+
+[group('contracts')]
 fabric_manifest_check: contracts_check sel4_stream_check
     python3 scripts/check/check-fabric-manifest.py
 

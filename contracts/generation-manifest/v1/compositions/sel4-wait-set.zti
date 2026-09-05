@@ -1,18 +1,6 @@
 {
   bootAction = "wait-set";
   bootstrapInstance = "init";
-  clockAuthority = [
-    {
-      holder = "wait-set-waiter";
-      monotonicRead = false;
-      timerUse = true;
-      simulatedRead = false;
-      simulatedAdvance = false;
-      timerQuota = 2;
-      timerNotification = "wait-set-wake";
-      timerBadgeBit = 9;
-    };
-  ];
   executables = [
     {
       commandProfile = [];
@@ -23,17 +11,17 @@
     };
     {
       commandProfile = [];
-      name = "wait-set-probe";
-      object = "sha256:wait-set-probe";
-      role = "application";
-      spawnBudget = 1;
-    };
-    {
-      commandProfile = [];
       name = "supervision-child";
       object = "sha256:supervision-child";
       role = "application";
       spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "wait-set-probe";
+      object = "sha256:wait-set-probe";
+      role = "application";
+      spawnBudget = 1;
     };
   ];
   formatVersion = 1;
@@ -66,9 +54,9 @@
     bootAttempts = 3;
     requiredInstances = [
       "init";
-      "wait-set-waiter";
-      "wait-set-signaller";
       "wait-set-denied";
+      "wait-set-signaller";
+      "wait-set-waiter";
     ];
   };
   instances = [
@@ -79,41 +67,6 @@
       executable = "init";
       health = "required";
       name = "init";
-      owner = "root";
-    };
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "wait-set-message";
-          slot = 0;
-          slotReason = "componentAbi";
-        };
-        {
-          grant = "wait-set-peer-executable";
-          slot = 2;
-          slotReason = "encodedLayout";
-        };
-      ];
-      dependencies = [];
-      executable = "wait-set-probe";
-      health = "required";
-      name = "wait-set-waiter";
-      owner = "root";
-    };
-    {
-      autostart = true;
-      bindings = [
-        {
-          grant = "wait-set-message";
-          slot = 0;
-          slotReason = "componentAbi";
-        };
-      ];
-      dependencies = [];
-      executable = "wait-set-probe";
-      health = "required";
-      name = "wait-set-signaller";
       owner = "root";
     };
     {
@@ -136,9 +89,87 @@
       name = "wait-set-peer";
       owner = "wait-set-waiter";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "wait-set-message";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [];
+      executable = "wait-set-probe";
+      health = "required";
+      name = "wait-set-signaller";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "wait-set-message";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "wait-set-peer-executable";
+          slot = 2;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "wait-set-probe";
+      health = "required";
+      name = "wait-set-waiter";
+      owner = "root";
+    };
   ];
-  interfaceSchemas = [];
   mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "clock-authority";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:supervision-child";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:wait-set-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "wait-set";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  notificationGrants = [
+    {
+      name = "wait-set-wake";
+      source = "wait-set-signaller";
+      target = "wait-set-waiter";
+    };
+  ];
   notificationBindings = [
     {
       grant = "wait-set-wake";
@@ -153,69 +184,38 @@
       slot = 0;
     };
   ];
-  notificationGrants = [
+  clockAuthority = [
     {
-      name = "wait-set-wake";
-      source = "wait-set-signaller";
-      target = "wait-set-waiter";
+      holder = "wait-set-waiter";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "wait-set-wake";
+      timerQuota = 2;
+      timerUse = true;
     };
   ];
-  objects = [
-    {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
-    };
-    {
-      id = "sha256:wait-set-probe";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "sha256:supervision-child";
-      kind = "component";
-      size = 65536;
-    };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
-    {
-      id = "clock-authority";
-      kind = "resource";
-      size = 4096;
-    };
-    {
-      id = "wait-set";
-      kind = "resource";
-      size = 4096;
-    };
-  ];
-  privateMemoryBudget = [];
-  sharedBufferBudget = [];
-  state = [];
-  target = "aarch64-sel4-qemu-virt";
   waitSet = [
     {
-      waiter = "wait-set-waiter";
-      notification = "wait-set-wake";
       badgeBit = 3;
-      kind = "stream";
       drainSlot = 0;
+      kind = "stream";
+      notification = "wait-set-wake";
+      waiter = "wait-set-waiter";
     };
     {
-      waiter = "wait-set-waiter";
-      notification = "wait-set-wake";
       badgeBit = 9;
       kind = "timer";
+      notification = "wait-set-wake";
+      waiter = "wait-set-waiter";
     };
     {
-      waiter = "wait-set-waiter";
-      notification = "wait-set-wake";
       badgeBit = 17;
-      kind = "supervision";
       drainSlot = 1;
+      kind = "supervision";
+      notification = "wait-set-wake";
+      waiter = "wait-set-waiter";
     };
   ];
 }

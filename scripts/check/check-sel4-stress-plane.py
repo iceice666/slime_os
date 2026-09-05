@@ -23,8 +23,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+from harness import sha256_file  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = ROOT / "build" / "slime-sel4-stress.elf"
+# The closure identity names the build's inputs and is re-resolved from
+# repository state before the build; IMAGE is bound to that verified result.
+CLOSURE = "sel4-stress"
+IMAGE: Path | None = None
 
 QEMU = "qemu-system-aarch64"
 QEMU_ARGS = (
@@ -77,9 +85,24 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def build_image() -> None:
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
+
+
 def boot(timeout: int) -> str:
-    if not IMAGE.is_file():
-        fail(f"missing {IMAGE}; build it with build-sel4.py --stress-plane")
+    if IMAGE is None or not IMAGE.is_file():
+        fail("the closure build produced no bootable image")
     qemu = subprocess.run(
         ["which", QEMU], capture_output=True, text=True, check=False
     ).stdout.strip()
@@ -157,6 +180,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=int, default=300)
     arguments = parser.parse_args()
+    build_image()
     check(boot(arguments.timeout))
 
 

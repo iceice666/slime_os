@@ -47,20 +47,18 @@
       owner = "root";
     };
   ];
-  interfaceSchemas = [];
   mintedBindings = [];
-  notificationBindings = [];
-  notificationGrants = [];
+  interfaceSchemas = [];
   objects = [
-    {
-      id = "sha256:slisp";
-      kind = "bootstrap";
-      size = 131072;
-    };
     {
       id = "boot-layout";
       kind = "resource";
       size = 4096;
+    };
+    {
+      id = "sha256:slisp";
+      kind = "bootstrap";
+      size = 131072;
     };
   ];
   privateMemoryBudget = [];

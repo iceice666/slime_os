@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-powerbox";
+  imageClosureIdentity = "d92ddf946d68c4c2437c353ea0b546602af54b4a314f9f4ff00ec43f1d79e2b0";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 180;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

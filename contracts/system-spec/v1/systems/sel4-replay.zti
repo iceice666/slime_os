@@ -1,0 +1,384 @@
+{
+  formatVersion = 1;
+  name = "sel4-replay";
+  generation = 45;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "replay";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "replay-probe";
+    "virtio-blk-driver";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "replay-observer";
+      executable = "replay-probe";
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    {
+      name = "replay-recorder";
+      executable = "replay-probe";
+      bufferBytePages = 2;
+      bufferCount = 1;
+      loanCount = 1;
+    };
+    {
+      name = "replay-replayer";
+      executable = "replay-probe";
+      bufferBytePages = 2;
+      bufferCount = 1;
+      loanCount = 1;
+    };
+    {
+      name = "replay-unnamed";
+      executable = "replay-probe";
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+    };
+    {
+      name = "replay-unrecorded";
+      executable = "replay-probe";
+    };
+    {
+      name = "virtio-blk-driver";
+      executable = "virtio-blk-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+  ];
+  grants = [
+    {
+      name = "replay-stream-channel";
+      capabilityKind = "endpoint";
+      source = "replay-recorder";
+      target = "replay-replayer";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "replay-recorder-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "replay-recorder";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "replay-unrecorded-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "replay-unrecorded";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = true;
+    };
+    {
+      name = "replay-block-peer";
+      capabilityKind = "endpoint";
+      source = "replay-unrecorded";
+      target = "virtio-blk-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "replay-block-device";
+      capabilityKind = "device";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "replay-block-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "replay-block-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "replay-block-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "replay-recorder";
+      grant = "replay-stream-channel";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "replay-recorder";
+      grant = "replay-recorder-shared-buffer-factory";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "replay-replayer";
+      grant = "replay-stream-channel";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "replay-unrecorded";
+      grant = "replay-block-peer";
+      slot = 8;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "replay-unrecorded";
+      grant = "replay-unrecorded-buffer-factory";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "replay-block-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "replay-block-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "replay-block-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "replay-block-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "replay-block-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "replay-recorder-tick";
+      source = "init";
+      target = "replay-recorder";
+    };
+    {
+      name = "io-block-request-ready";
+      source = "replay-unrecorded";
+      target = "virtio-blk-driver";
+    };
+    {
+      name = "io-block-completion-ready";
+      source = "virtio-blk-driver";
+      target = "replay-unrecorded";
+    };
+    {
+      name = "io-block-state-changed";
+      source = "virtio-blk-driver";
+      target = "replay-unrecorded";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "replay-recorder-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "replay-recorder-tick";
+      holder = "replay-recorder";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-block-request-ready";
+      holder = "replay-unrecorded";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "io-block-request-ready";
+      holder = "virtio-blk-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-block-completion-ready";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "io-block-completion-ready";
+      holder = "replay-unrecorded";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "io-block-state-changed";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "io-block-state-changed";
+      holder = "replay-unrecorded";
+      role = "wait";
+      slot = 2;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    {
+      holder = "replay-recorder";
+      monotonicRead = true;
+      simulatedAdvance = true;
+      simulatedRead = true;
+      timerBadgeBit = 9;
+      timerNotification = "replay-recorder-tick";
+      timerQuota = 2;
+      timerUse = true;
+    };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [
+    {
+      bufferLoans = 4;
+      dmaMappings = 3;
+      dmaPages = 12;
+      holder = "virtio-blk-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 8;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [
+    {
+      device = 0;
+      holder = "replay-unrecorded";
+      rights = [
+        "blockRead";
+      ];
+      ring = 0;
+      sectorLimit = 1024;
+    };
+  ];
+  blockRingAuthorityObject = true;
+  waitSet = [];
+  waitSetObject = false;
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [];
+    restarts = [];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+    ];
+  };
+  recording = [
+    {
+      deterministic = false;
+      instance = "replay-recorder";
+      recordCapacity = 16;
+      role = "record";
+      stream = "replay-stream";
+    };
+    {
+      deterministic = true;
+      instance = "replay-replayer";
+      recordCapacity = 16;
+      role = "replay";
+      stream = "replay-stream";
+      streamGrant = "replay-stream-channel";
+    };
+    {
+      deterministic = false;
+      instance = "replay-unrecorded";
+      recordCapacity = 8;
+      role = "record";
+      stream = "replay-unrecorded-stream";
+    };
+    {
+      deterministic = false;
+      instance = "replay-observer";
+      recordCapacity = 8;
+      role = "replay";
+      stream = "replay-unrecorded-stream";
+    };
+  ];
+  recordingObject = true;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -51,93 +51,85 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import profile_text, profile_integer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
 
 BOOT_TIMEOUT_SECONDS = 180
 
-# Every seL4 plane, by the build flag that selects its generation and the image
-# it produces. The fixture stem is prefixed `sel4-` so these sort beside the x86
-# ones without colliding: `default.layout` is the oracle's, `sel4.layout` this
-# root's for the component-graph generation.
+# Every seL4 plane, by the image it produces. The fixture stem is prefixed
+# `sel4-` so these sort beside the x86 ones without colliding: `default.layout`
+# is the oracle's, `sel4.layout` this root's for the component-graph
+# generation.
 #
 # `fixture` (P5.1) is absent deliberately: it embeds the retained x86 generation
 # and launches no component graph, so it has no init and emits no block.
-PLANES: tuple[tuple[str, str, str], ...] = (
-    ("sel4", "--component-graph", "slime-sel4-graph.elf"),
+PLANES: tuple[tuple[str, str], ...] = (
+    ("sel4", "slime-sel4-graph.elf"),
     # RP2's demo-scoped slice: the only generation declaring the product graph,
     # the C7 data-path pair, and the C8 fabric six in one layout.
-    ("sel4-demo", "--demo-plane", "slime-sel4-demo.elf"),
-    ("sel4-channel", "--channel-plane", "slime-sel4-channel.elf"),
-    ("sel4-loan", "--loan-plane", "slime-sel4-loan.elf"),
-    ("sel4-spawn", "--spawn-plane", "slime-sel4-spawn.elf"),
-    ("sel4-sample", "--sample-plane", "slime-sel4-sample.elf"),
-    ("sel4-stream", "--stream-plane", "slime-sel4-stream.elf"),
-    ("sel4-qos", "--qos-plane", "slime-sel4-qos.elf"),
-    ("sel4-supervision", "--supervision-plane", "slime-sel4-supervision.elf"),
-    ("sel4-crossing", "--crossing-plane", "slime-sel4-crossing.elf"),
+    ("sel4-demo", "slime-sel4-demo.elf"),
+    ("sel4-channel", "slime-sel4-channel.elf"),
+    ("sel4-loan", "slime-sel4-loan.elf"),
+    ("sel4-spawn", "slime-sel4-spawn.elf"),
+    ("sel4-sample", "slime-sel4-sample.elf"),
+    ("sel4-stream", "slime-sel4-stream.elf"),
+    ("sel4-qos", "slime-sel4-qos.elf"),
+    ("sel4-supervision", "slime-sel4-supervision.elf"),
+    ("sel4-crossing", "slime-sel4-crossing.elf"),
     # P5.4.6. The layout is emitted between channel materialization and
     # activation, so it is complete and observable well before any scenario
     # outcome. What this guards is exactly what B10 exists for — that the table
     # `SEL4_CALL_LAYOUT` declares is the table the root fills.
-    ("sel4-call", "--call-plane", "slime-sel4-call.elf"),
+    ("sel4-call", "slime-sel4-call.elf"),
     # P5.4.7, on the same rule. Six executables: the operation graph declares a
     # restart replacement as its own identity.
-    ("sel4-operation", "--operation-plane", "slime-sel4-operation.elf"),
+    ("sel4-operation", "slime-sel4-operation.elf"),
     # P5.4.8, on the same rule. Six executables, the stream set with
     # `fabric-intruder` as the declared proxy rather than an unauthorized probe.
-    ("sel4-visibility", "--visibility-plane", "slime-sel4-visibility.elf"),
+    ("sel4-visibility", "slime-sel4-visibility.elf"),
     # C8.12. Nine rows: init's eight child executables plus its own buffer
     # factory, in one disjoint layout. The ungranted probe and the declared
     # proxy are distinct rows, which is the half of C8.12 a layout can state.
-    ("sel4-matrix", "--matrix-plane", "slime-sel4-matrix.elf"),
+    ("sel4-matrix", "slime-sel4-matrix.elf"),
     # P5.4.9. Twenty-one rows: every C8 role's executable in disjoint slots,
     # which is the half of C8.10 a boot layout can state.
-    ("sel4-boot", "--boot-plane", "slime-sel4-boot.elf"),
+    ("sel4-boot", "slime-sel4-boot.elf"),
     # P5.4.2c. Two rows: init holds an endpoint factory and the probe's
     # executable. The block capability is *not* here — it is granted to the
     # probe, so the root places it in the probe's own table.
-    ("sel4-storage", "--storage-plane", "slime-sel4-storage.elf"),
+    ("sel4-storage", "slime-sel4-storage.elf"),
     # Generation 24, the store plane. Same two rows and the same reason: the
     # block capability is the probe's, not init's.
-    ("sel4-store", "--store-plane", "slime-sel4-store.elf"),
-    ("sel4-rollback", "--rollback-plane", "slime-sel4-rollback.elf"),
-    ("sel4-recovery", "--recovery-plane", "slime-sel4-recovery.elf"),
-    ("sel4-generation", "--generation-plane", "slime-sel4-generation.elf"),
-    ("sel4-directory", "--directory-plane", "slime-sel4-directory.elf"),
-    ("sel4-filesystem", "--filesystem-plane", "slime-sel4-filesystem.elf"),
-    ("sel4-input", "--input-plane", "slime-sel4-input.elf"),
-    ("sel4-powerbox", "--powerbox-plane", "slime-sel4-powerbox.elf"),
-    ("sel4-transfer", "--transfer-plane", "slime-sel4-transfer.elf"),
+    ("sel4-store", "slime-sel4-store.elf"),
+    ("sel4-rollback", "slime-sel4-rollback.elf"),
+    ("sel4-recovery", "slime-sel4-recovery.elf"),
+    ("sel4-generation", "slime-sel4-generation.elf"),
+    ("sel4-directory", "slime-sel4-directory.elf"),
+    ("sel4-filesystem", "slime-sel4-filesystem.elf"),
+    ("sel4-input", "slime-sel4-input.elf"),
+    ("sel4-powerbox", "slime-sel4-powerbox.elf"),
+    ("sel4-transfer", "slime-sel4-transfer.elf"),
     # C9.1. Init holds the one probe executable and no clock authority slot:
     # clock operations use the already-reserved badged root-service endpoint.
-    ("sel4-clock-authority", "--clock-authority-plane", "slime-sel4-clock-authority.elf"),
+    ("sel4-clock-authority", "slime-sel4-clock-authority.elf"),
     # C9.2. Init holds nothing either: the waiter resolves its own wake
     # notification through CP2 and spawns the peer it supervises, because a
     # supervision source must name a handle its own holder obtained.
-    ("sel4-wait-set", "--wait-set-plane", "slime-sel4-wait-set.elf"),
-    ("sel4-scheduling-class", "--scheduling-class-plane", "slime-sel4-scheduling-class.elf"),
-    (
-        "sel4-lifecycle-restart",
-        "--lifecycle-restart-plane",
-        "slime-sel4-lifecycle-restart.elf",
-    ),
+    ("sel4-wait-set", "slime-sel4-wait-set.elf"),
+    ("sel4-scheduling-class", "slime-sel4-scheduling-class.elf"),
+    ("sel4-lifecycle-restart", "slime-sel4-lifecycle-restart.elf"),
     # C9.5. Init holds nothing here either: the recorder and replayer hold their
     # declared endpoint and factory directly, on the same rule as the two planes
     # above.
-    ("sel4-replay", "--replay-plane", "slime-sel4-replay.elf"),
+    ("sel4-replay", "slime-sel4-replay.elf"),
     # C9.6. Init holds seven executables and its own factory here, and nothing
     # else: every participant including both brokers is root-autostart, and the
     # one spawn in the plane is the supervisor's over the controller it restarts.
-    (
-        "sel4-robot-runtime",
-        "--robot-runtime-plane",
-        "slime-sel4-robot-runtime.elf",
-    ),
+    ("sel4-robot-runtime", "slime-sel4-robot-runtime.elf"),
 )
 
 
@@ -158,14 +150,12 @@ def load_pins() -> dict[str, object]:
     return profile
 
 
-def build(flag: str) -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), flag, "--skip-pin-check"]
-    print(f"[build] {' '.join(command)}", flush=True)
-    process = subprocess.run(command, cwd=ROOT, check=False, capture_output=True, text=True)
-    if process.returncode != 0:
-        sys.stdout.write(process.stdout[-4000:])
-        sys.stderr.write(process.stderr[-4000:])
-        fail(f"image build failed for {flag}")
+def build(name: str) -> Path:
+    """Build one plane's image by closure identity."""
+    try:
+        return build_closure_image(name).image
+    except ClosureImageError as error:
+        fail(str(error))
 
 
 def capture(name: str, image: Path, profile: dict[str, object]) -> str:
@@ -293,10 +283,11 @@ def main() -> None:
     profile = load_pins()
 
     failures: list[str] = []
-    for name, flag, image_name in PLANES:
+    for name, image_name in PLANES:
+        built = None
         if not arguments.no_build:
-            build(flag)
-        image = ROOT / "build" / image_name
+            built = build(name)
+        image = built if built is not None else ROOT / "build" / image_name
         if not image.is_file():
             fail(f"{name}: missing image {image.relative_to(ROOT)}")
         observed = capture(name, image, profile)

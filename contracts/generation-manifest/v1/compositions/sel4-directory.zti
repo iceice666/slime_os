@@ -21,17 +21,6 @@
   generation = 28;
   grants = [
     {
-      name = "init-sel4-directory-probe";
-      capabilityKind = "executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
-      source = "init";
-      target = "sel4-directory-probe";
-      transferable = false;
-    };
-    {
       name = "directory-probe-root";
       capabilityKind = "directory";
       rights = [
@@ -58,11 +47,11 @@
       transferable = false;
     };
     {
-      name = "sel4-directory-probe-run-token";
-      capabilityKind = "endpoint";
+      name = "init-sel4-directory-probe";
+      capabilityKind = "executable";
       rights = [
-        "send";
-        "recv";
+        "exec";
+        "spawn";
       ];
       source = "init";
       target = "sel4-directory-probe";
@@ -77,6 +66,17 @@
       ];
       source = "sel4-directory-probe-idle";
       target = "sel4-directory-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-directory-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-directory-probe";
       transferable = false;
     };
   ];
@@ -156,6 +156,11 @@
   interfaceSchemas = [];
   objects = [
     {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
       id = "sha256:init";
       kind = "bootstrap";
       size = 65536;
@@ -165,12 +170,8 @@
       kind = "component";
       size = 65536;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

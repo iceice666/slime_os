@@ -5,23 +5,24 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+from harness import sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
-from sel4_plane import run_plane, verify_image_identity  # noqa: E402
+from sel4_plane import run_plane  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-io-block.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-io-block.identity.json"
+# The closure identity names the build's inputs and is re-resolved from repository
+# state before building, so stale input is refused instead of silently changing the image.
+CLOSURE = "sel4-io-block"
+IMAGE: Path | None = None
 FIXTURE = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions" / "sel4-io-block.zti"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-IMAGE_VARIANT = "io-block"
 TIMEOUT = 300
 SECTOR_BYTES = 512
 DISK_BYTES = 1 << 20
@@ -79,11 +80,15 @@ def fail(message: str) -> NoReturn:
 
 
 def build_image() -> None:
-    result = subprocess.run(
-        [sys.executable, str(BUILD_SCRIPT), "--io-block-plane"], cwd=ROOT, check=False
-    )
-    if result.returncode != 0:
-        fail(f"image build failed with exit status {result.returncode}")
+    global IMAGE
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
 
 
 def check_fixture() -> None:
@@ -110,12 +115,6 @@ def main() -> None:
     check_fixture()
     if not args.no_build:
         build_image()
-    verify_image_identity(
-        image=IMAGE,
-        manifest=MANIFEST,
-        variant=IMAGE_VARIANT,
-        fail=fail,
-    )
     with tempfile.TemporaryDirectory(prefix="slime-io-block-") as temporary:
         disk = Path(temporary) / "disk.img"
         readonly_disk = Path(temporary) / "readonly-disk.img"

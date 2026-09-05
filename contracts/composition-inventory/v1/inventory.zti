@@ -1,0 +1,341 @@
+{
+  entries = [
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4.zti";
+      composition = "sel4";
+      deferralReason = "";
+      owningGate = "sel4_component_graph_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-boot.zti";
+      composition = "sel4-boot";
+      deferralReason = "";
+      owningGate = "sel4_boot_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-boot.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-c-runtime.zti";
+      composition = "sel4-c-runtime";
+      deferralReason = "";
+      owningGate = "sel4_c_runtime_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-c-runtime.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-call.zti";
+      composition = "sel4-call";
+      deferralReason = "";
+      owningGate = "sel4_call_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-call.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-channel.zti";
+      composition = "sel4-channel";
+      deferralReason = "";
+      owningGate = "sel4_channel_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-channel.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-clock-authority.zti";
+      composition = "sel4-clock-authority";
+      deferralReason = "";
+      owningGate = "clock_authority_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-clock-authority.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-crossing.zti";
+      composition = "sel4-crossing";
+      deferralReason = "";
+      owningGate = "sel4_crossing_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-crossing.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-demo.zti";
+      composition = "sel4-demo";
+      deferralReason = "";
+      owningGate = "sel4_demo_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-demo.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-directory.zti";
+      composition = "sel4-directory";
+      deferralReason = "";
+      owningGate = "sel4_directory_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-directory.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-filesystem.zti";
+      composition = "sel4-filesystem";
+      deferralReason = "";
+      owningGate = "sel4_filesystem_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-filesystem.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-generation.zti";
+      composition = "sel4-generation";
+      deferralReason = "";
+      owningGate = "sel4_generation_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-generation.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-input.zti";
+      composition = "sel4-input";
+      deferralReason = "";
+      owningGate = "sel4_input_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-input.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-io-block.zti";
+      composition = "sel4-io-block";
+      deferralReason = "";
+      owningGate = "io_block_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-block.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-io-driver-authority.zti";
+      composition = "sel4-io-driver-authority";
+      deferralReason = "";
+      owningGate = "io_driver_authority_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-driver-authority.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-io-link.zti";
+      composition = "sel4-io-link";
+      deferralReason = "";
+      owningGate = "io_link_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-link.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-io-network.zti";
+      composition = "sel4-io-network";
+      deferralReason = "";
+      owningGate = "io_network_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-network.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-io-queue.zti";
+      composition = "sel4-io-queue";
+      deferralReason = "";
+      owningGate = "io_queue_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-queue.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-lifecycle-restart.zti";
+      composition = "sel4-lifecycle-restart";
+      deferralReason = "";
+      owningGate = "lifecycle_restart_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-lifecycle-restart.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-loan.zti";
+      composition = "sel4-loan";
+      deferralReason = "";
+      owningGate = "sel4_loan_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-loan.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-matrix.zti";
+      composition = "sel4-matrix";
+      deferralReason = "";
+      owningGate = "sel4_matrix_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-matrix.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-operation.zti";
+      composition = "sel4-operation";
+      deferralReason = "";
+      owningGate = "sel4_operation_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-operation.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-powerbox.zti";
+      composition = "sel4-powerbox";
+      deferralReason = "";
+      owningGate = "sel4_powerbox_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-powerbox.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-private-memory.zti";
+      composition = "sel4-private-memory";
+      deferralReason = "";
+      owningGate = "private_memory_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-qos.zti";
+      composition = "sel4-qos";
+      deferralReason = "";
+      owningGate = "sel4_qos_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-qos.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-reclamation.zti";
+      composition = "sel4-reclamation";
+      deferralReason = "";
+      owningGate = "sel4_reclamation_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-reclamation.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-recovery.zti";
+      composition = "sel4-recovery";
+      deferralReason = "";
+      owningGate = "sel4_recovery_plane_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-recovery.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-replay.zti";
+      composition = "sel4-replay";
+      deferralReason = "";
+      owningGate = "replay_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-replay.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-robot-runtime.zti";
+      composition = "sel4-robot-runtime";
+      deferralReason = "";
+      owningGate = "robot_runtime_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-robot-runtime.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-rollback.zti";
+      composition = "sel4-rollback";
+      deferralReason = "";
+      owningGate = "sel4_rollback_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-rollback.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-sample.zti";
+      composition = "sel4-sample";
+      deferralReason = "";
+      owningGate = "sel4_sample_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-sample.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-scheduling-class.zti";
+      composition = "sel4-scheduling-class";
+      deferralReason = "";
+      owningGate = "scheduling_class_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-scheduling-class.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-slisp.zti";
+      composition = "sel4-slisp";
+      deferralReason = "";
+      owningGate = "slisp_core_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-slisp.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-spawn.zti";
+      composition = "sel4-spawn";
+      deferralReason = "";
+      owningGate = "sel4_spawn_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-spawn.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-storage.zti";
+      composition = "sel4-storage";
+      deferralReason = "";
+      owningGate = "sel4_storage_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-storage.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-store.zti";
+      composition = "sel4-store";
+      deferralReason = "";
+      owningGate = "sel4_store_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-store.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-stream.zti";
+      composition = "sel4-stream";
+      deferralReason = "";
+      owningGate = "sel4_stream_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-stream.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-stress.zti";
+      composition = "sel4-stress";
+      deferralReason = "";
+      owningGate = "sel4_stress_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-stress.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-supervision.zti";
+      composition = "sel4-supervision";
+      deferralReason = "";
+      owningGate = "sel4_supervision_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-supervision.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-traffic.zti";
+      composition = "sel4-traffic";
+      deferralReason = "";
+      owningGate = "sel4_traffic_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-traffic.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-transfer.zti";
+      composition = "sel4-transfer";
+      deferralReason = "";
+      owningGate = "sel4_transfer_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-transfer.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-visibility.zti";
+      composition = "sel4-visibility";
+      deferralReason = "";
+      owningGate = "sel4_visibility_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-visibility.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-wait-set.zti";
+      composition = "sel4-wait-set";
+      deferralReason = "";
+      owningGate = "wait_set_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-wait-set.zti";
+    };
+  ];
+  formatVersion = 1;
+}

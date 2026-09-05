@@ -394,3 +394,10 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-01 | [P6.A - the H1V1 handoff probe, its builder, and its gate](2026-09-01-p6a-nt98690-probe/index.md) | Change | Verified | P6.A |
 | 2026-09-02 | [P6.B - seL4 and slime-root on the H1V1](2026-09-02-p6b-sel4-nt98690-h1v1/index.md) | Change | Verified | P6.B |
 | 2026-09-02 | [P6.C - interactive Slisp over UART0 on the H1V1](2026-09-02-p6c-nt98690-slisp/index.md) | Change | Verified | P6.C |
+| 2026-09-02 | [System-image closures replace composition build variants](2026-09-02-system-image-closure-roadmap/index.md) | Decision | Proposed | CP11, CP12, CP13, CP14, CP15 |
+| 2026-09-02 | [Canonical system-image and test-run closures](2026-09-02-cp11-system-image-closure/index.md) | Change | Verified | CP11 |
+| 2026-09-02 | [CP12/CP13/CP14 - composition derivation, the closure builder, and scenario identities](2026-09-02-cp12-composition-derivation/index.md) | Change | Verified | CP12, CP13, CP14 |
+| 2026-09-03 | [CP15 - plane gates build by closure identity, and two reproducibility defects it exposed](2026-09-03-cp15-closure-cutover/index.md) | Change | Verified | CP14, CP15 |
+| 2026-09-04 | [CP15 - the remaining plane gates unblock, the legacy flag surface deletes, and a keyboard parameter the closure model dropped](2026-09-04-cp15-legacy-deletion/index.md) | Change | Verified | CP12, CP15 |
+| 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
+| 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |

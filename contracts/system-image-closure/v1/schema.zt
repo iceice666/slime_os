@@ -1,0 +1,341 @@
+-- Slime OS canonical system-image closure contract, version 1 (CP11).
+--
+-- A closure names every identity-bearing input to one bootable image build. It
+-- references the logical system and immutable build inputs instead of copying
+-- their records. Paths are normalized, closure-relative locators; their bytes
+-- are never trusted without the recorded identity.
+ArtifactReference :: type {
+  path : Text;
+  kind : Text;
+  identity : Text;
+};
+
+-- Which implementation a composition selects for one component, and under
+-- which build profile.
+--
+-- `buildProfile` is the executable-changing scenario selector. Several planes
+-- need one component compiled to behave differently — a proxy that dies
+-- mid-route, a publisher that ends its stream early, a staging client that
+-- expects a specific refusal — and each is a `option_env!` knob the component
+-- reads at compile time, so it changes that component's ELF bytes. Before
+-- CP14 the knobs arrived as ambient `SLIME_*` variables set per variant by
+-- `build-sel4.py`, which meant the ELF a closure named and the ELF a build
+-- produced could differ with nothing in the identity to say so.
+--
+-- Closed to the profiles below. `default` is the ordinary build every product
+-- closure uses; the rest are test-only and each maps to exactly one knob that
+-- exactly one set of components reads:
+--
+--   `proxyEarlyExit`         -- `SLIME_FABRIC_PROXY_EARLY_EXIT`: the route
+--                               interposition hop dies mid-route, so the graph
+--                               must degrade rather than tolerate a task it
+--                               stopped tracking.
+--   `streamEarlyExit`        -- `SLIME_FABRIC_STREAM_EARLY_EXIT`: a publisher
+--                               dies mid-stream, which must stay distinct from
+--                               an orderly `FLAG_LAST` end.
+--   `generationCmdBadClosure`-- `SLIME_GENERATION_CMD_SCENARIO=bad-closure`:
+--                               the staging client expects the object-closure
+--                               refusal rather than success.
+--   `generationCmdBadRelease`-- `SLIME_GENERATION_CMD_SCENARIO=bad-release`:
+--                               the same client expects the release-signature
+--                               refusal.
+--   `bootSelectionFail`      -- `SLIME_BOOT_SELECTION_FAIL`: init reports
+--                               unhealthy so the selector must roll back.
+--   `recoveryImage`          -- `SLIME_RECOVERY_IMAGE`: the recovery build of
+--                               the graph.
+--
+-- A profile is per implementation rather than per closure because exactly one
+-- component's bytes change: naming it on the closure would make every other
+-- component's ELF look scenario-dependent when it is not.
+ImplementationSelection :: type {
+  component : Text;
+  provider : Text;
+  artifact : ArtifactReference;
+  identity : Text;
+  buildProfile : Text;
+};
+
+buildProfileDefault :: Text = "default";
+buildProfileProxyEarlyExit :: Text = "proxyEarlyExit";
+buildProfileStreamEarlyExit :: Text = "streamEarlyExit";
+buildProfileGenerationCmdBadClosure :: Text = "generationCmdBadClosure";
+buildProfileGenerationCmdBadRelease :: Text = "generationCmdBadRelease";
+buildProfileBootSelectionFail :: Text = "bootSelectionFail";
+buildProfileRecoveryImage :: Text = "recoveryImage";
+
+TargetSelection :: type {
+  profile : Text;
+  platform : Text;
+  sdkRelease : ArtifactReference;
+  prefix : ArtifactReference;
+  toolchain : Text;
+  rustSel4Commit : Text;
+};
+
+BuildRole :: type {
+  role : Text;
+  implementation : ArtifactReference;
+  parameters : List Text;
+};
+
+NamedInput :: type {
+  name : Text;
+  artifact : ArtifactReference;
+};
+
+-- One normalized build parameter: a value that changes generation or
+-- executable bytes and is therefore part of the closure identity.
+--
+-- CP14's reason for existing. Three deltas used to reach the generation
+-- builder as ambient environment variables — `SLIME_GENERATION_NUMBER`,
+-- `SLIME_FABRIC_LIMIT_OVERRIDE`, `SLIME_FABRIC_QOS_OVERRIDE` — set from a
+-- per-variant table in `build-sel4.py`. Each changes what the generation
+-- encodes, so a build key that omitted them described a different build than
+-- the one that ran, and two closures differing only in a saturation ceiling
+-- computed one identity.
+--
+-- `name` is closed to the three below, so a fourth ambient knob cannot appear
+-- here without a contract change, and the resolver refuses any name outside
+-- the set:
+--
+--   `generationNumber`   -- the generation number the manifest is built with,
+--                           overriding what the system spec declares. A
+--                           positive decimal integer.
+--   `fabricLimitOverride`-- one declared `fabricGraph.limits` ceiling,
+--                           narrowed for this build. `<limit>=<value>`, and
+--                           the limit must already exist in the graph.
+--   `fabricQosOverride`  -- one declared participant QoS field, changed for
+--                           this build. `<route>:<component>:<field>:<value>`,
+--                           and every part must resolve against the declared
+--                           graph.
+--
+-- The value stays `Text` rather than a union because each parameter's own
+-- grammar differs and the generation builder is the authority that parses it;
+-- what this contract owns is that the value is *in the identity*.
+BuildParameter :: type {
+  name : Text;
+  value : Text;
+};
+
+parameterGenerationNumber :: Text = "generationNumber";
+parameterFabricLimitOverride :: Text = "fabricLimitOverride";
+parameterFabricQosOverride :: Text = "fabricQosOverride";
+
+SystemImageClosure :: type {
+  formatVersion : Int;
+  name : Text;
+  systemSpec : ArtifactReference;
+  systemIdentity : Text;
+  implementations : List ImplementationSelection;
+  target : TargetSelection;
+  root : BuildRole;
+  loader : BuildRole;
+  releaseInputs : List NamedInput;
+  buildParameters : List BuildParameter;
+  expectedOutputs : List Text;
+};
+
+ResultArtifact :: type {
+  path : Text;
+  bytes : Int;
+  sha256 : Text;
+};
+
+SystemImageBuildResult :: type {
+  formatVersion : Int;
+  closureIdentity : Text;
+  systemIdentity : Text;
+  targetProfile : Text;
+  platform : Text;
+  rootRole : Text;
+  loaderRole : Text;
+  generation : ResultArtifact;
+  root : ResultArtifact;
+  loader : ResultArtifact;
+  image : ResultArtifact;
+  identityManifest : ResultArtifact;
+};
+
+FromData @ArtifactReference :: derive
+FromData @ImplementationSelection :: derive
+FromData @TargetSelection :: derive
+FromData @BuildRole :: derive
+FromData @NamedInput :: derive
+FromData @BuildParameter :: derive
+FromData @SystemImageClosure :: derive
+FromData @ResultArtifact :: derive
+FromData @SystemImageBuildResult :: derive
+
+-- One deliberately invalid build: a valid base closure plus exactly one closed
+-- root mutation, expected to be refused.
+--
+-- B40's six child-CSpace perturbations are the case. Each compiles the root
+-- with one capability wrong — a declared capability deleted, an undeclared one
+-- installed, a badge aliased, a slot or type or rights substituted — so the
+-- capability-layout audit's refusal is *observed* rather than assumed. Before
+-- CP14 the selection was an ambient `SLIME_B40_MUTATION`, which meant an
+-- invalid root was reachable from any build command and nothing distinguished
+-- it from a valid one in any identity.
+--
+-- A negative case is deliberately *not* a `SystemImageClosure`. A closure is a
+-- key for a build whose output is meant to boot; these are builds whose output
+-- must be refused, and giving them the same type would let one be presented as
+-- a valid product image. `baseClosureIdentity` names the closure they perturb,
+-- so the mutation is one delta against a reviewed valid build rather than a
+-- second graph nobody compares.
+--
+-- `expectedRefusal` is the marker the audit must emit. A case that failed for
+-- some *other* reason — a build error, a different refusal — is not evidence
+-- that the mutation was caught, so the expected reason is declared and checked
+-- rather than "it failed, good".
+NegativeBuildCase :: type {
+  formatVersion : Int;
+  name : Text;
+  baseClosureIdentity : Text;
+  mutation : Text;
+  expectedRefusal : Text;
+};
+
+FromData @NegativeBuildCase :: derive
+
+decodeNegativeBuildCase :: Data -> Validation DecodeIssue NegativeBuildCase
+  = data => decode data;
+
+negativeIdentityDomain :: Text = "slime-negative-build-case-v1:";
+
+-- The six B40 child-CSpace mutations, closed. Each maps to exactly one
+-- `--cfg slime_b40_mutate_*` the root's own `build.rs` declares, so a seventh
+-- cannot appear here without the root admitting it too.
+mutationMissing :: Text = "missing";
+mutationExtra :: Text = "extra";
+mutationAliased :: Text = "aliased";
+mutationWrongSlot :: Text = "wrong_slot";
+mutationWrongType :: Text = "wrong_type";
+mutationWrongRights :: Text = "wrong_rights";
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-system-image-closure-v1:";
+buildResultIdentityDomain :: Text = "slime-system-image-build-result-v1:";
+
+artifactKindFile :: Text = "file";
+artifactKindTree :: Text = "tree";
+providerWorkspace :: Text = "workspace";
+providerExternal :: Text = "external";
+-- What the root task is built to be.
+--
+-- `embedded-generation` is the ordinary product and plane root: it carries the
+-- signed generation this closure resolved. `boot-selector` carries none and
+-- reads its generation from disk at boot, which is why the two cannot share an
+-- identity — a selector image that embedded a generation would be the thing
+-- its own gate exists to disprove.
+--
+-- `root-fixture` and `reclamation-unwind` are the two remaining root builds
+-- that were `build-sel4.py` variant branches. Each embeds a generation like
+-- `embedded-generation` and differs in exactly one compile-time property: the
+-- fixture root reports its capability layout for the byte-frozen boot-layout
+-- fixtures, and the unwind root is compiled to force B38's supervised
+-- construction unwind. Both are test-only.
+rootRoleEmbeddedGeneration :: Text = "embedded-generation";
+rootRoleBootSelector :: Text = "boot-selector";
+rootRoleFixture :: Text = "root-fixture";
+rootRoleReclamationUnwind :: Text = "reclamation-unwind";
+loaderRoleKernelLoader :: Text = "kernel-loader";
+
+-- One closed root-role parameter. `BuildRole.parameters` was declared by CP11
+-- and admitted only the empty list; these are the two properties a root build
+-- genuinely varies by beyond its role, and both are platform-qualified.
+--
+--   `qemuKeyboard`      -- the root reads the emulated console's RX FIFO and
+--                          feeds those bytes through the declared input
+--                          capability. QEMU only: a physical target compiles no
+--                          QEMU address into its root task.
+--   `duoTestTerminator` -- the root prints the terminal marker its gate reads.
+--                          `cv1800b-duo` only.
+rootParameterQemuKeyboard :: Text = "qemuKeyboard";
+rootParameterDuoTestTerminator :: Text = "duoTestTerminator";
+
+outputGeneration :: Text = "generation";
+outputRoot :: Text = "root";
+outputLoader :: Text = "loader";
+outputImage :: Text = "image";
+outputIdentityManifest :: Text = "identity-manifest";
+
+maxSourceBytes :: Int = 262144;
+maxNormalizedBytes :: Int = 262144;
+maxNameBytes :: Int = 96;
+maxPathBytes :: Int = 256;
+maxTextBytes :: Int = 256;
+maxDigestBytes :: Int = 64;
+maxImplementations :: Int = 64;
+maxReleaseInputs :: Int = 32;
+maxBuildParameters :: Int = 32;
+maxRoleParameters :: Int = 16;
+maxOutputs :: Int = 8;
+
+decodeSystemImageClosure :: Data -> Validation DecodeIssue SystemImageClosure
+  = data => decode data;
+
+decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildResult
+  = data => decode data;
+{
+  ArtifactReference =;
+  ImplementationSelection =;
+  TargetSelection =;
+  BuildRole =;
+  NamedInput =;
+  BuildParameter =;
+  SystemImageClosure =;
+  ResultArtifact =;
+  SystemImageBuildResult =;
+  NegativeBuildCase =;
+  decodeNegativeBuildCase =;
+  negativeIdentityDomain =;
+  mutationMissing =;
+  mutationExtra =;
+  mutationAliased =;
+  mutationWrongSlot =;
+  mutationWrongType =;
+  mutationWrongRights =;
+  decodeSystemImageClosure =;
+  decodeSystemImageBuildResult =;
+  formatVersion =;
+  identityDomain =;
+  buildResultIdentityDomain =;
+  artifactKindFile =;
+  artifactKindTree =;
+  providerWorkspace =;
+  providerExternal =;
+  buildProfileDefault =;
+  buildProfileProxyEarlyExit =;
+  buildProfileStreamEarlyExit =;
+  buildProfileGenerationCmdBadClosure =;
+  buildProfileGenerationCmdBadRelease =;
+  buildProfileBootSelectionFail =;
+  buildProfileRecoveryImage =;
+  rootRoleEmbeddedGeneration =;
+  rootRoleBootSelector =;
+  rootRoleFixture =;
+  rootRoleReclamationUnwind =;
+  loaderRoleKernelLoader =;
+  rootParameterQemuKeyboard =;
+  rootParameterDuoTestTerminator =;
+  parameterGenerationNumber =;
+  parameterFabricLimitOverride =;
+  parameterFabricQosOverride =;
+  outputGeneration =;
+  outputRoot =;
+  outputLoader =;
+  outputImage =;
+  outputIdentityManifest =;
+  maxSourceBytes =;
+  maxNormalizedBytes =;
+  maxNameBytes =;
+  maxPathBytes =;
+  maxTextBytes =;
+  maxDigestBytes =;
+  maxImplementations =;
+  maxReleaseInputs =;
+  maxBuildParameters =;
+  maxRoleParameters =;
+  maxOutputs =;
+}

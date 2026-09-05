@@ -1,0 +1,318 @@
+{
+  formatVersion = 1;
+  name = "sel4";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "product";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "console";
+    "echo-agent";
+    "init";
+    "slisp";
+    "spawn-service";
+    "sysinfo";
+  ];
+  placements = [
+    {
+      component = "console";
+      owner = "init";
+    };
+    {
+      component = "echo-agent";
+      owner = "spawn-service";
+      autostart = false;
+      dependencies = [
+        "spawn-service";
+      ];
+    };
+    {
+      component = "slisp";
+      owner = "init";
+      dependencies = [
+        "console";
+        "spawn-service";
+      ];
+      stackBytes = 16384;
+    };
+    {
+      component = "spawn-service";
+      owner = "init";
+      health = "required";
+    };
+    {
+      component = "sysinfo";
+      owner = "spawn-service";
+      autostart = false;
+      dependencies = [
+        "spawn-service";
+      ];
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      source = "init";
+      target = "console";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-spawn-service";
+      capabilityKind = "executable";
+      source = "init";
+      target = "spawn-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-slisp";
+      capabilityKind = "executable";
+      source = "init";
+      target = "slisp";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-rpc";
+      capabilityKind = "endpoint";
+      source = "slisp";
+      target = "spawn-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo";
+      capabilityKind = "executable";
+      source = "init";
+      target = "echo-agent";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
+      source = "spawn-service";
+      target = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
+      source = "spawn-service";
+      target = "echo-agent";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "spawn-service";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "slisp-console-rpc";
+      capabilityKind = "endpoint";
+      source = "slisp";
+      target = "console";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "slisp-input";
+      capabilityKind = "input";
+      source = "slisp";
+      target = "slisp";
+      rights = [
+        "inputRead";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-console";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-spawn-service";
+      slot = 5;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-sysinfo";
+      slot = 6;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-echo";
+      slot = 7;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-shared-buffer-factory";
+      slot = 8;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-slisp";
+      slot = 9;
+      reason = "bootLayout";
+    };
+    {
+      holder = "console";
+      grant = "slisp-console-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-echo";
+      slot = 2;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-shared-buffer-factory";
+      slot = 4;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-echo-context";
+      slot = 5;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "slisp";
+      grant = "slisp-console-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "slisp";
+      grant = "slisp-input";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "slisp";
+      grant = "spawn-service-rpc";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sysinfo";
+      grant = "spawn-service-sysinfo-context";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "echo-agent";
+      grant = "spawn-service-echo-context";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-sysinfo";
+    };
+  ];
+  mintedBindings = [];
+  commandBindings = [
+    {
+      component = "spawn-service";
+      commands = [
+        "echo";
+        "sysinfo";
+      ];
+    };
+  ];
+  defaultImageBytes = 65536;
+  imageSizes = [
+    {
+      component = "slisp";
+      bytes = 131072;
+    };
+  ];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [
+    {
+      name = "echo-agent-session";
+      owner = "echo-agent";
+      policy = "ephemeral";
+      schemaVersion = 1;
+    };
+  ];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

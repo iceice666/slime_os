@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
 from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
+import component_sdk_system  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
@@ -291,7 +292,8 @@ def prove_refusals(root: Path, url: str) -> None:
     mirror = root / "mutated-source"
     mirror.mkdir()
     for relative in (
-        ("Cargo.toml", "sel4/pins.toml", "contracts")
+        component_sdk_system.COPY_ROOTS
+        + ("Cargo.toml", "sel4/pins.toml", "contracts", "scripts/lib/component_sdk_system_entry.py")
         + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
         + component_sdk.VENDORED
         + component_sdk.LINKER_SCRIPTS
@@ -376,29 +378,30 @@ def prove_reverse_drift(root: Path, url: str) -> None:
     )
     try:
         # `git worktree add` leaves submodules unpopulated, and the export needs
-        # `deps/rust-sel4` whole. The recorded commit pins its gitlink, so the
-        # bytes are checked against that pin rather than assumed.
-        pinned = run(
-            ["git", "rev-parse", f"{record['sourceCommit']}:deps/rust-sel4"],
-            cwd=ROOT,
-            description="read the recorded rust-sel4 pin",
-        ).stdout.strip()
-        current = run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT / "deps" / "rust-sel4",
-            description="read the checked-out rust-sel4 commit",
-        ).stdout.strip()
-        if pinned != current:
-            fail(
-                "the recorded source commit pins rust-sel4 at "
-                f"{pinned[:12]} but this checkout has {current[:12]}"
+        # `deps/rust-sel4` and `deps/zutai` whole. The recorded commit pins each
+        # gitlink, so the bytes are checked against that pin rather than assumed.
+        for submodule in ("deps/rust-sel4", "deps/zutai"):
+            pinned = run(
+                ["git", "rev-parse", f"{record['sourceCommit']}:{submodule}"],
+                cwd=ROOT,
+                description=f"read the recorded {submodule} pin",
+            ).stdout.strip()
+            current = run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=ROOT / submodule,
+                description=f"read the checked-out {submodule} commit",
+            ).stdout.strip()
+            if pinned != current:
+                fail(
+                    f"the recorded source commit pins {submodule} at "
+                    f"{pinned[:12]} but this checkout has {current[:12]}"
+                )
+            shutil.copytree(
+                ROOT / submodule,
+                worktree / submodule,
+                ignore=component_sdk.COPY_IGNORE,
+                dirs_exist_ok=True,
             )
-        shutil.copytree(
-            ROOT / "deps" / "rust-sel4",
-            worktree / "deps" / "rust-sel4",
-            ignore=component_sdk.COPY_IGNORE,
-            dirs_exist_ok=True,
-        )
         regenerated = component_sdk.export(
             root / "regenerated",
             version=record["version"],

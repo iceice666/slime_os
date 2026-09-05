@@ -112,35 +112,37 @@ def source_worktree(source: Path, commit: str, destination: Path) -> Path:
     rather than a claim.
 
     `git worktree add` leaves submodules unpopulated, and the export needs
-    `deps/rust-sel4` whole, so its bytes are copied from this checkout after
-    confirming the checkout's commit equals the gitlink the recorded commit pins.
+    `deps/rust-sel4` and `deps/zutai` whole, so their bytes are copied from
+    this checkout after confirming the checkout's commit equals the gitlink
+    the recorded commit pins.
     """
     run(
         ["git", "worktree", "add", "--detach", "--quiet", str(destination), commit],
         cwd=source,
         description="check out the source commit",
     )
-    pinned = run(
-        ["git", "rev-parse", f"{commit}:deps/rust-sel4"],
-        cwd=source,
-        description="read the recorded rust-sel4 pin",
-    ).stdout.strip()
-    current = run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=source / "deps" / "rust-sel4",
-        description="read the checked-out rust-sel4 commit",
-    ).stdout.strip()
-    if pinned != current:
-        fail(
-            f"source commit {commit[:12]} pins rust-sel4 at {pinned[:12]} but this "
-            f"checkout has {current[:12]}; run git submodule update"
+    for submodule in ("deps/rust-sel4", "deps/zutai"):
+        pinned = run(
+            ["git", "rev-parse", f"{commit}:{submodule}"],
+            cwd=source,
+            description=f"read the recorded {submodule} pin",
+        ).stdout.strip()
+        current = run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source / submodule,
+            description=f"read the checked-out {submodule} commit",
+        ).stdout.strip()
+        if pinned != current:
+            fail(
+                f"source commit {commit[:12]} pins {submodule} at {pinned[:12]} but this "
+                f"checkout has {current[:12]}; run git submodule update"
+            )
+        shutil.copytree(
+            source / submodule,
+            destination / submodule,
+            ignore=component_sdk.COPY_IGNORE,
+            dirs_exist_ok=True,
         )
-    shutil.copytree(
-        source / "deps" / "rust-sel4",
-        destination / "deps" / "rust-sel4",
-        ignore=component_sdk.COPY_IGNORE,
-        dirs_exist_ok=True,
-    )
     return destination
 
 

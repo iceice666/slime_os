@@ -47,11 +47,13 @@ import shutil
 import subprocess
 import tarfile
 import tomllib
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
 import component_sdk_release_contract as default_contract
+import component_sdk_system
 from harness import ROOT
 
 CONTRACT_ROOT = ROOT / "contracts" / "component-sdk-release" / "v1"
@@ -118,6 +120,7 @@ GENERATED_FILES = (
     "README.md",
     "tools/sdk-build.py",
     "tools/sdk-update.py",
+    "tools/sdk-system-image.py",
     "template/Cargo.toml",
     "template/component/Cargo.toml",
     "template/component/build.rs",
@@ -125,7 +128,9 @@ GENERATED_FILES = (
 )
 
 # What a copied directory never carries out of the source repository.
-COPY_IGNORE = shutil.ignore_patterns("target", ".git", "*.rs.bk")
+COPY_IGNORE = shutil.ignore_patterns(
+    "target", ".git", ".direnv", "__pycache__", "*.pyc", "*.rs.bk"
+)
 
 # Domain separators. Distinct constants rather than one reused string: a tree
 # digest, a set digest, and a scalar axis digest must not be able to collide by
@@ -766,7 +771,7 @@ def load_record() -> dict:
 
 
 def verify_tree(record: dict) -> None:
-    observed = tree_digest(SDK, RECORD_FILES + (".git",))
+    observed = tree_digest(SDK, RECORD_FILES + (".git", ".system-source"))
     if observed != record["treeIdentity"]:
         fail(
             "exported tree identity mismatch: the record describes "
@@ -1238,9 +1243,13 @@ def canonicalize_prefix(prefix: Path, source: Path) -> None:
             path.write_bytes(content.replace(needle, replacement))
 
 
-def assert_no_host_paths(root: Path, source: Path = ROOT) -> None:
+def assert_no_host_paths(
+    root: Path, source: Path = ROOT, *, exclude: tuple[str, ...] = ()
+) -> None:
+    # The system corpus performs its source-checkout scan before archival.
+    # Scanning tar bytes would misclassify source literals as emitted paths.
     needles = host_path_needles(source)
-    for path in tree_files(root):
+    for path in tree_files(root, exclude=exclude):
         content = path.read_bytes()
         for needle in needles:
             if needle in content:
@@ -1449,9 +1458,13 @@ def export(
     (destination / "Cargo.toml").write_text(sdk_workspace_manifest(source), encoding="utf-8")
     tools = destination / "tools"
     tools.mkdir()
+    system_entry = (source / "scripts/lib/component_sdk_system_entry.py").read_text(
+        encoding="utf-8"
+    )
     for name, body in (
         ("sdk-build.py", SDK_BUILD_ENTRY),
         ("sdk-update.py", SDK_UPDATE_ENTRY),
+        ("sdk-system-image.py", system_entry),
     ):
         entry = tools / name
         entry.write_text(body, encoding="utf-8")
@@ -1487,6 +1500,9 @@ def export(
                 ),
             }
         )
+    system_records = [
+        component_sdk_system.export_asset(destination, source, sdk_module=sys.modules[__name__])
+    ]
 
     crates = []
     for relative, package in EXPORT_CRATES:
@@ -1512,6 +1528,7 @@ def export(
         + [target_spec_sdk_path(stem) for stem in TARGET_SPECS]
         + [LINKER_SCRIPT_SDK, *GENERATED_FILES]
         + [profile["prefix"]["archive"] for profile in profile_records]
+        + [system["archive"] for system in system_records]
         + list(contract.RECORD_FILE_NAMES)
     )
     if len(files) > contract.MAX_FILES:
@@ -1591,6 +1608,7 @@ def export(
         "crates": crates,
         "contracts": contracts,
         "profiles": profile_records,
+        "systems": system_records,
         "compatibility": compatibility,
     }
 
@@ -1619,7 +1637,7 @@ def export(
     # this tree: a README that printed `treeIdentity` would put the digest
     # inside its own input.
     (destination / "README.md").write_text(sdk_readme(record), encoding="utf-8")
-    assert_no_host_paths(destination, source)
+    assert_no_host_paths(destination, source, exclude=(component_sdk_system.ARCHIVE_PATH,))
     record["treeIdentity"] = tree_digest(
         destination, exclude=tuple(contract.RECORD_FILE_NAMES)
     )
@@ -1670,7 +1688,9 @@ def load_record(sdk: Path, contract: ModuleType = default_contract) -> dict:
 
 def verify_tree(sdk: Path, record: dict, contract: ModuleType = default_contract) -> str:
     """Recompute an exported tree's identity and compare it to the record."""
-    observed = tree_digest(sdk, exclude=tuple(contract.RECORD_FILE_NAMES) + (".git",))
+    observed = tree_digest(
+        sdk, exclude=tuple(contract.RECORD_FILE_NAMES) + (".git", ".system-source")
+    )
     if observed != record["treeIdentity"]:
         _fail(
             "exported tree identity mismatch: record declares "
@@ -1703,6 +1723,12 @@ def verify_digests(sdk: Path, record: dict, source: Path = ROOT) -> None:
         target = sdk / profile["cargoTarget"]
         if hashlib.sha256(target.read_bytes()).hexdigest() != profile["targetSpecHash"]:
             _fail(f"{profile['profile']}: target specification hash does not match its bytes")
+    for system in record["systems"]:
+        archive = sdk / system["archive"]
+        if not archive.is_file():
+            _fail(f"{system['name']}: missing system-image corpus")
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != system["archiveHash"]:
+            _fail(f"{system['name']}: system-image archive hash does not match its bytes")
 
 
 def verify_prefix_extraction(sdk: Path, record: dict, cache: Path) -> dict[str, Path]:
@@ -1730,7 +1756,12 @@ def allowlisted(relative: str) -> bool:
     unrelated product-only file does not move the identity needs the same
     answer the exporter used, not a second list of directories.
     """
-    roots = [path for path, _ in EXPORT_CRATES] + list(VENDORED) + ["Cargo.toml", "sel4/pins.toml"]
+    roots = (
+        [path for path, _ in EXPORT_CRATES]
+        + list(VENDORED)
+        + ["Cargo.toml", "sel4/pins.toml"]
+        + list(component_sdk_system.COPY_ROOTS)
+    )
     return any(relative == root or relative.startswith(f"{root}/") for root in roots)
 
 

@@ -1,0 +1,22 @@
+{
+  formatVersion = 1;
+  name = "sel4-wait-set";
+  imageClosureIdentity = "f9a9b20735fac24e8110dbb946be78cd8f3f62bb7207b74d3f302d930e4f2918";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [
+    {
+      kind = "peer-death";
+      target = "";
+      value = "";
+    };
+  ];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

@@ -5,13 +5,13 @@
       classification = "initial";
       evidence = [
         "just sel4_component_graph_check";
-        "component-elf:e4afaf77a30a52327d76098ed486e9bc37c2859f6ad4845d7b8944c85165645c";
-        "generation:00f212d5c2100c8101d6d8ff05230b75c469868f3d47618410ae2ab7b07ebfa6";
+        "component-elf:2b33e620b35f4d020d03000ba5a18f788deaf7ba25a514eee12b1a20776eef88";
+        "generation:db790217a428d5b21202b3cfb962441356429f3b11de01592242c57c786f5d58";
       ];
-      productCommit = "726ebb0f8af67510bb91616c729c9adb1ab111cf";
+      productCommit = "9c37692ec717ac80ae465de553fc43ae89371900";
       profile = "aarch64-sel4-qemu-virt";
-      sdkCommit = "5fee7b1a48f6416824033963ef04edf2b61981cb";
-      sdkIdentity = "d97c677d6475102656a1f7955161afd10c94559b5e2f7ecb416689d1275d5c01";
+      sdkCommit = "58dc378563beebf9bec9818921ee1d78e61215f8";
+      sdkIdentity = "2b3427028ba7457633e77f6fb7b2b66c9a53d8ec494330c6d34a29fe786e207b";
       sdkVersion = "1.0.0";
       status = "supported";
     };
@@ -19,13 +19,13 @@
       classification = "compatible-feature";
       evidence = [
         "just sel4_component_graph_check";
-        "component-elf:9c1e2700439f521b579446e0c22c0fcf81aa40f38a8f9046019454e83d218991";
-        "generation:867b4178779ef77cbbac941ae80abaa780bfe507b2429ddfc98f0cacaf626b10";
+        "component-elf:4485b8d3f5bbe1a272f73ed86ebc349b6aa84f40c8cb2eddb4a36869d5349697";
+        "generation:a8cc6b700de08ca5a28ed82c546a3a1515be71651c5749b040476cc7f8571006";
       ];
-      productCommit = "726ebb0f8af67510bb91616c729c9adb1ab111cf";
+      productCommit = "9c37692ec717ac80ae465de553fc43ae89371900";
       profile = "aarch64-sel4-qemu-virt";
-      sdkCommit = "31742d1e6779d35b68456486be1b9c7983bcca21";
-      sdkIdentity = "c960d2a78e29cd37e6da3725d6e3bebde4c2f1383494cb04e4b0b2aea9955534";
+      sdkCommit = "bf99505c4dbf36b21d3af707428cab43dca1a29c";
+      sdkIdentity = "fdd5d4dba2cf5a74492e2c48186f1a627e5959d2fa71a000724a9e1f4aae8242";
       sdkVersion = "1.1.0";
       status = "supported";
     };

@@ -55,6 +55,7 @@ render :: Text = t.join "" {
   line "MAX_CRATES" schema.maxCrates;
   line "MAX_CONTRACTS" schema.maxContracts;
   line "MAX_PROFILES" schema.maxProfiles;
+  line "MAX_SYSTEMS" schema.maxSystems;
   line "MAX_ROWS" schema.maxRows;
   line "MAX_EVIDENCE" schema.maxEvidence;
   tuple "CLASSIFICATIONS" {

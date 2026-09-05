@@ -1,0 +1,62 @@
+{
+  formatVersion = 1;
+  name = "wait-set-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Builds a C9.2 wait set over its declared wake sources as waiter, signaller, and a denied role, draining each badge bit to its declared slot.";
+  implementation = {
+    provider = "workspace";
+    binary = "wait-set-probe";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+    "executable";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 1;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the wait_set_check gate boots a generation declaring wait-set-probe";
+    expectedResult = "each declared wake source dispatches to its own slot and an undeclared waiter registers nothing";
+    passFailCriteria = "[wait-set:signaller] message=1 signal=1";
+    requiredTestEnvironment = "wait_set_check";
+  };
+}

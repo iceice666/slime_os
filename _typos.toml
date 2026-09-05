@@ -48,6 +48,11 @@ Indx = "Indx"
 # line-status bit.
 THR = "THR"
 THRE = "THRE"
+# Fragment of "pre-empted" (seL4's own spelling of "preempted"), which the
+# tokenizer splits at the hyphen; occurs verbatim in a vendored seL4 header
+# under `contracts/system-image-closure/v1/inputs/sel4-prefix/` and in devlog
+# prose citing it.
+empted = "empted"
 
 [default.extend-identifiers]
 # `ser2net`, the serial-over-TCP bridge a remote board console is reached

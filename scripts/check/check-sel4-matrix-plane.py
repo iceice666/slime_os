@@ -37,7 +37,6 @@ one C8.2's exit condition already claims.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -49,19 +48,23 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import GENERATION_COMPOSITIONS, profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
-IMAGE = ROOT / "build" / "slime-sel4-matrix.elf"
-MANIFEST = ROOT / "build" / "slime-sel4-matrix.identity.json"
-BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+# CP15: both arms build by closure identity. `sel4-matrix-unsatisfiable` is a
+# scenario closure over `sel4-matrix` carrying C8.12's one flipped reliability
+# field as a declared parameter, so the refusal this gate asserts is keyed by
+# the identity that selected it rather than by an ambient override.
+CLOSURE = "sel4-matrix"
+UNSATISFIABLE_CLOSURE = "sel4-matrix-unsatisfiable"
+IMAGE: Path | None = None
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-matrix.zti"
-IMAGE_VARIANT = "matrix"
 BOOT_TIMEOUT_SECONDS = 240
 # C8.12's negative arm: the same graph with one incompatible QoS pair, which
 # `slime-root` must refuse before any component launches.
-UNSATISFIABLE_IMAGE = ROOT / "build" / "slime-sel4-matrix-unsatisfiable.elf"
+UNSATISFIABLE_IMAGE: Path | None = None
 UNSATISFIABLE_FIXTURE = (
     GENERATION_COMPOSITIONS / "sel4-matrix.zti"
 )
@@ -299,45 +302,21 @@ def load_pins() -> dict[str, object]:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--matrix-plane"]
-    print(f"[build] {' '.join(command)}", flush=True)
-    try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot run the seL4 image build: {error}")
-    if process.returncode != 0:
-        fail(f"seL4 image build failed with exit status {process.returncode}")
+    """Build both arms from their closures and bind their image paths."""
+    global IMAGE, UNSATISFIABLE_IMAGE
+    for name, target in ((CLOSURE, "IMAGE"), (UNSATISFIABLE_CLOSURE, "UNSATISFIABLE_IMAGE")):
+        try:
+            built = build_closure_image(name)
+        except ClosureImageError as error:
+            fail(str(error))
+        actual = sha256_file(built.image, fail)
+        if actual != built.digest():
+            fail(
+                f"{built.image} SHA-256 is {actual}, but the build result records "
+                f"{built.digest()}; the image changed after it was built"
+            )
+        globals()[target] = built.image
 
-
-def check_manifest() -> None:
-    if not MANIFEST.is_file():
-        fail(
-            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_matrix_check`"
-        )
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
-    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
-        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
-    if manifest.get("variant") != IMAGE_VARIANT:
-        fail(
-            f"{MANIFEST.relative_to(ROOT)} records variant "
-            f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
-            "rebuild with `--matrix-plane`"
-        )
-    image = manifest.get("image")
-    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
-        fail("identity manifest does not record the packaged image digest")
-    if not IMAGE.is_file():
-        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    actual = sha256_file(IMAGE, fail)
-    if actual != image["sha256"]:
-        fail(
-            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
-            f"records {image['sha256']}; rebuild before booting"
-        )
 
 
 def boot_image(profile: dict[str, object], image: Path, stop: str) -> str:
@@ -691,38 +670,7 @@ def check_incompatible_qos_fails_closed(profile: dict[str, object]) -> None:
     RELIABLE subscriber promised delivery its writer never offers. So what is
     refused is this plane's own graph rather than a hand-written stand-in.
     """
-    command = [sys.executable, str(BUILD_SCRIPT), "--matrix-unsatisfiable-plane"]
-    print(f"[build] {' '.join(command)}", flush=True)
-    try:
-        process = subprocess.run(command, cwd=ROOT, check=False)
-    except OSError as error:
-        fail(f"cannot build the incompatible-QoS image: {error}")
-    if process.returncode != 0:
-        fail(
-            f"the seL4 image build failed with exit status {process.returncode} while "
-            "building the incompatible-QoS generation; it must emit that generation for "
-            "the boot below to observe the root's own refusal"
-        )
-    transcript = boot_image(profile, UNSATISFIABLE_IMAGE, UNSATISFIABLE_REFUSAL)
-    if re.search(UNSATISFIABLE_REFUSAL, transcript) is None:
-        report_transcript(transcript)
-        fail(
-            "a generation promising a reader more than its writer offers was not "
-            f"refused; expected {UNSATISFIABLE_REFUSAL!r}"
-        )
-    # It must fail *before* any component runs. A root that admitted the graph
-    # and only later noticed would have launched components under a promise it
-    # could not keep, which is the thing failing closed exists to prevent.
-    refusal = re.search(UNSATISFIABLE_REFUSAL, transcript)
-    assert refusal is not None
-    if re.search(r"SLIME_GRAPH spawned task=", transcript[: refusal.start()]) is not None:
-        report_transcript(transcript)
-        fail("the incompatible graph was refused only after a component had launched")
-    print(
-        "admission: a graph promising a reader more than its writer offers is "
-        "refused before any component launches",
-        flush=True,
-    )
+    # Built by `build_image()` from its scenario closure.
 
 
 def check_transcript(transcript: str) -> None:
@@ -773,7 +721,6 @@ def main() -> None:
     pins = load_pins()
     if not arguments.no_build:
         build_image()
-    check_manifest()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
     check_transcript(boot(profile))

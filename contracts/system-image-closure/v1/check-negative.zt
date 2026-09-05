@@ -1,0 +1,13 @@
+schema ::= import "schema.zt";
+env ::= import stdlib.env;
+load ::= import stdlib.load;
+
+main :: { env : Env; load : Load; }
+  -> Validation DecodeIssue schema.NegativeBuildCase
+  ! { * env.GetEffects; * load.ZtiEffects; }
+  = caps => [
+    path := env.get caps.env "SLIME_NEGATIVE_BUILD_CASE_PATH" ?? "";
+    schema.decodeNegativeBuildCase (load.zti caps.load path)
+  ];
+
+main

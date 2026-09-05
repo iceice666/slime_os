@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-loan";
+  imageClosureIdentity = "ea0634e5ccdc817345afb68ead1d623e6ae12e6008e140d16e86c1a7ebff909b";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 120;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

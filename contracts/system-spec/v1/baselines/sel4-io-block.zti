@@ -1,0 +1,100 @@
+{
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  executables = [
+    { commandProfile = []; name = "init"; object = "sha256:init"; role = "init"; spawnBudget = 0; };
+    { commandProfile = []; name = "io-block-probe"; object = "sha256:io-block-probe"; role = "application"; spawnBudget = 0; };
+    { commandProfile = []; name = "virtio-blk-driver"; object = "sha256:virtio-blk-driver"; role = "service"; spawnBudget = 0; };
+  ];
+  formatVersion = 1;
+  generation = 51;
+  grants = [
+    { name = "io-block-peer"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "io-block-probe"; target = "virtio-blk-driver"; transferable = true; };
+    { name = "io-block-buffer-factory"; capabilityKind = "sharedBufferFactory"; rights = ["bufferCreate";]; source = "init"; target = "io-block-probe"; transferable = false; };
+    { name = "io-block-readonly-peer"; capabilityKind = "endpoint"; rights = ["send";"recv";]; source = "io-block-probe"; target = "virtio-blk-readonly-driver"; transferable = true; };
+    { name = "io-block-device"; capabilityKind = "device"; rights = ["mapMmio";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "io-block-mmio"; capabilityKind = "mmioRegion"; rights = ["mapMmio";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "io-block-interrupt"; capabilityKind = "interruptSource"; rights = ["irqAck";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "io-block-dma"; capabilityKind = "dmaAccount"; rights = ["dmaPin";"dmaRelease";]; source = "virtio-blk-driver"; target = "virtio-blk-driver"; transferable = false; };
+    { name = "io-block-readonly-device"; capabilityKind = "device"; rights = ["mapMmio";]; source = "virtio-blk-readonly-driver"; target = "virtio-blk-readonly-driver"; transferable = false; };
+    { name = "io-block-readonly-mmio"; capabilityKind = "mmioRegion"; rights = ["mapMmio";]; source = "virtio-blk-readonly-driver"; target = "virtio-blk-readonly-driver"; transferable = false; };
+    { name = "io-block-readonly-interrupt"; capabilityKind = "interruptSource"; rights = ["irqAck";]; source = "virtio-blk-readonly-driver"; target = "virtio-blk-readonly-driver"; transferable = false; };
+    { name = "io-block-readonly-dma"; capabilityKind = "dmaAccount"; rights = ["dmaPin";"dmaRelease";]; source = "virtio-blk-readonly-driver"; target = "virtio-blk-readonly-driver"; transferable = false; };
+  ];
+  health = { bootAttempts = 3; requiredInstances = ["init";"io-block-probe";"virtio-blk-driver";"virtio-blk-readonly-driver";]; };
+  instances = [
+    { autostart = true; bindings = []; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
+    { autostart = true; bindings = [
+        { grant = "io-block-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "io-block-buffer-factory"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-peer"; slot = 8; slotReason = "encodedLayout"; };
+      ]; dependencies = []; executable = "io-block-probe"; health = "required"; name = "io-block-probe"; owner = "root"; };
+    { autostart = true; bindings = [
+        { grant = "io-block-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "io-block-device"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "io-block-mmio"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "io-block-interrupt"; slot = 3; slotReason = "componentAbi"; };
+        { grant = "io-block-dma"; slot = 4; slotReason = "componentAbi"; };
+      ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-driver"; owner = "root"; };
+    { autostart = true; bindings = [
+        { grant = "io-block-readonly-peer"; slot = 0; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-device"; slot = 1; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-mmio"; slot = 2; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-interrupt"; slot = 3; slotReason = "componentAbi"; };
+        { grant = "io-block-readonly-dma"; slot = 4; slotReason = "componentAbi"; };
+      ]; dependencies = []; executable = "virtio-blk-driver"; health = "required"; name = "virtio-blk-readonly-driver"; owner = "root"; };
+  ];
+  interfaceSchemas = [];
+  mintedBindings = [];
+  notificationBindings = [
+    { grant = "io-block-request-ready"; holder = "io-block-probe"; role = "signal"; slot = 0; };
+    { grant = "io-block-request-ready"; holder = "virtio-blk-driver"; role = "wait"; slot = 0; };
+    { grant = "io-block-completion-ready"; holder = "virtio-blk-driver"; role = "signal"; slot = 1; };
+    { grant = "io-block-completion-ready"; holder = "io-block-probe"; role = "wait"; slot = 1; };
+    { grant = "io-block-state-changed"; holder = "virtio-blk-driver"; role = "signal"; slot = 2; };
+    { grant = "io-block-state-changed"; holder = "io-block-probe"; role = "wait"; slot = 2; };
+    { grant = "io-block-readonly-request-ready"; holder = "io-block-probe"; role = "signal"; slot = 3; };
+    { grant = "io-block-readonly-request-ready"; holder = "virtio-blk-readonly-driver"; role = "wait"; slot = 0; };
+    { grant = "io-block-readonly-completion-ready"; holder = "virtio-blk-readonly-driver"; role = "signal"; slot = 1; };
+    { grant = "io-block-readonly-completion-ready"; holder = "io-block-probe"; role = "wait"; slot = 4; };
+    { grant = "io-block-readonly-state-changed"; holder = "virtio-blk-readonly-driver"; role = "signal"; slot = 2; };
+    { grant = "io-block-readonly-state-changed"; holder = "io-block-probe"; role = "wait"; slot = 5; };
+  ];
+  notificationGrants = [
+    { name = "io-block-request-ready"; source = "io-block-probe"; target = "virtio-blk-driver"; };
+    { name = "io-block-completion-ready"; source = "virtio-blk-driver"; target = "io-block-probe"; };
+    { name = "io-block-state-changed"; source = "virtio-blk-driver"; target = "io-block-probe"; };
+    { name = "io-block-readonly-request-ready"; source = "io-block-probe"; target = "virtio-blk-readonly-driver"; };
+    { name = "io-block-readonly-completion-ready"; source = "virtio-blk-readonly-driver"; target = "io-block-probe"; };
+    { name = "io-block-readonly-state-changed"; source = "virtio-blk-readonly-driver"; target = "io-block-probe"; };
+  ];
+  objects = [
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:io-block-probe"; kind = "component"; size = 65536; };
+    { id = "sha256:virtio-blk-driver"; kind = "component"; size = 65536; };
+    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "io-resource-budget"; kind = "resource"; size = 4096; };
+    { id = "wait-set"; kind = "resource"; size = 4096; };
+    { id = "block-ring-authority"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [
+    { bufferCount = 4; bytePages = 40; holder = "io-block-probe"; loanCount = 4; mappingCount = 4; };
+    { bufferCount = 0; bytePages = 0; holder = "virtio-blk-driver"; loanCount = 2; mappingCount = 2; };
+    { bufferCount = 0; bytePages = 0; holder = "virtio-blk-readonly-driver"; loanCount = 2; mappingCount = 2; };
+  ];
+  ioResourceBudget = [
+    { holder = "virtio-blk-driver"; device = 0; mmioBytes = 4096; mmioMappings = 1; dmaPages = 12; dmaMappings = 3; irqSources = 1; outstandingRequests = 8; bufferLoans = 4; };
+    { holder = "virtio-blk-readonly-driver"; device = 1; mmioBytes = 4096; mmioMappings = 1; dmaPages = 12; dmaMappings = 3; irqSources = 1; outstandingRequests = 8; bufferLoans = 4; };
+  ];
+  blockRingAuthority = [
+    { holder = "io-block-probe"; device = 0; ring = 0; rights = ["blockRead";"blockWrite";]; sectorLimit = 4096; };
+    { holder = "io-block-probe"; device = 1; ring = 0; rights = ["blockRead";]; sectorLimit = 2048; };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  waitSet = [
+    { waiter = "io-block-probe"; notification = "io-block-completion-ready"; badgeBit = 1; kind = "stream"; drainSlot = 0; };
+  ];
+}

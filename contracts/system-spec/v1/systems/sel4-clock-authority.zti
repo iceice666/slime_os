@@ -1,0 +1,144 @@
+{
+  formatVersion = 1;
+  name = "sel4-clock-authority";
+  generation = 41;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "clock-authority";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "clock-authority-probe";
+    "init";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "clock-denied";
+      executable = "clock-authority-probe";
+    };
+    {
+      name = "clock-monotonic";
+      executable = "clock-authority-probe";
+    };
+    {
+      name = "clock-simulated-advancer";
+      executable = "clock-authority-probe";
+    };
+    {
+      name = "clock-simulated-reader";
+      executable = "clock-authority-probe";
+    };
+    {
+      name = "clock-timer";
+      executable = "clock-authority-probe";
+    };
+    {
+      name = "init";
+      executable = "init";
+    };
+  ];
+  grants = [];
+  slotPins = [];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "clock-simulated-reader-ready";
+      source = "clock-simulated-reader";
+      target = "clock-simulated-advancer";
+    };
+    {
+      name = "clock-timer-expiry";
+      source = "init";
+      target = "clock-timer";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "clock-timer-expiry";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "clock-simulated-reader-ready";
+      holder = "clock-simulated-reader";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "clock-simulated-reader-ready";
+      holder = "clock-simulated-advancer";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "clock-timer-expiry";
+      holder = "clock-timer";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    {
+      holder = "clock-monotonic";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerQuota = 0;
+      timerUse = false;
+    };
+    {
+      holder = "clock-timer";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "clock-timer-expiry";
+      timerQuota = 2;
+      timerUse = true;
+    };
+    {
+      holder = "clock-simulated-reader";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = true;
+      timerQuota = 0;
+      timerUse = false;
+    };
+    {
+      holder = "clock-simulated-advancer";
+      monotonicRead = false;
+      simulatedAdvance = true;
+      simulatedRead = false;
+      timerQuota = 0;
+      timerUse = false;
+    };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -1,0 +1,14 @@
+{
+  formatVersion = 1;
+  name = "sel4-stress";
+  imageClosureIdentity = "a1e4b212ceaf9d1536720b46414c8f9d92025c0e09ca6a4dceb258f3306d8013";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 300;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [];
+}

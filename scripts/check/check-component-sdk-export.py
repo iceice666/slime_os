@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
 from component_paths import build_product_slisp, source_path  # noqa: E402
 import component_sdk  # noqa: E402
+import component_sdk_system  # noqa: E402
 from component_sdk import ComponentSdkError  # noqa: E402
 from component_spec import admit_specs  # noqa: E402
 from harness import load_script  # noqa: E402
@@ -100,18 +101,22 @@ def export(destination: Path, *, source: Path = ROOT, version: str = "1.0.0"):
         fail(str(error))
 
 
-# Everything the exporter reads out of a source tree, plus the two product-only
-# files the sensitivity control perturbs. Every export input is *derived* from
-# `component_sdk`'s own declarations rather than restated, so a new exported path
-# cannot leave the mirror silently incomplete -- which it did once, when the
-# linker scripts became an export input and this list did not know.
-PRODUCT_ONLY_PROBES = (
+# Everything the exporter reads out of a source tree, plus two files now
+# published as system-corpus content and one genuinely unpublished file the
+# negative control perturbs. Every export input is *derived* from
+# `component_sdk`'s own declarations rather than restated, so a new exported
+# path cannot leave the mirror silently incomplete -- which it did once, when
+# the linker scripts became an export input and this list did not know.
+PUBLISHED_PROBES = (
     "slime-root/src/main.rs",
     "contracts/generation-manifest/v1/compositions/sel4-demo.zti",
 )
+UNPUBLISHED_PROBE = "devlog/README.md"
 MIRROR_PATHS = (
-    ("Cargo.toml", "sel4/pins.toml", "contracts")
-    + PRODUCT_ONLY_PROBES
+    component_sdk_system.COPY_ROOTS
+    + ("Cargo.toml", "sel4/pins.toml", "contracts", "scripts/lib/component_sdk_system_entry.py")
+    + PUBLISHED_PROBES
+    + (UNPUBLISHED_PROBE,)
     + tuple(path for path, _ in component_sdk.EXPORT_CRATES)
     + component_sdk.VENDORED
     + component_sdk.LINKER_SCRIPTS
@@ -202,10 +207,27 @@ def prove_identity_sensitivity(root: Path, tree_baseline: str, release_baseline:
             True,
         ),
         ("sel4/pins.toml", retoolchain, True, True),
-        ("slime-root/src/main.rs", append(b"\n// CP6 product-only probe.\n"), False, False),
+        (
+            "slime-root/src/main.rs",
+            append(b"\n// CP6 product-only probe.\n"),
+            True,
+            True,
+        ),
+        (
+            "slime-root/src/main.rs",
+            append(b"\n// CP6 published product-source probe.\n"),
+            True,
+            True,
+        ),
         (
             "contracts/generation-manifest/v1/compositions/sel4-demo.zti",
-            append(b"\n-- CP6 product-only probe.\n"),
+            append(b"\n-- CP6 published product-source probe.\n"),
+            True,
+            True,
+        ),
+        (
+            UNPUBLISHED_PROBE,
+            append(b"\n<!-- CP6 unpublished-file probe. -->\n"),
             False,
             False,
         ),
@@ -232,8 +254,8 @@ def prove_identity_sensitivity(root: Path, tree_baseline: str, release_baseline:
         shutil.rmtree(perturbed.root)
         shutil.rmtree(tree)
     print(
-        "component SDK export: the release identity moves for an allowlisted source and "
-        "for a pin, and holds for two product-only files",
+        "component SDK export: the release identity moves for an allowlisted source, a "
+        "pin, and published product source, and holds for a file the export never reads",
         flush=True,
     )
 

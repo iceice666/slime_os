@@ -1,0 +1,96 @@
+{
+  formatVersion = 1;
+  name = "robot-controller";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "robot-supervisor";
+  purpose = "C9.6's robot call client and stream subscriber: derives a command from each sample and, after a restart, re-requests fabric authority and resumes its config.";
+  implementation = {
+    provider = "workspace";
+    binary = "robot-controller";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "parameters";
+      tag = "command";
+      interface = "ParameterCall";
+    };
+    {
+      name = "telemetry";
+      tag = "input";
+      interface = "TelemetryStream";
+    };
+  ];
+  dependencies = [
+    "robot-supervisor";
+  ];
+  communication = {
+    semantic = "mixed";
+    qos = [
+      {
+        reference = "parameters";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 1000000;
+        lifespanNs = 2000000;
+        leaseNs = 0;
+      };
+      {
+        reference = "telemetry";
+        reliability = "bestEffort";
+        durability = "volatile";
+        liveliness = "automatic";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 0;
+        lifespanNs = 0;
+        leaseNs = 0;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Degraded";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 1;
+      extraThreads = 0;
+      bufferBytePages = 4;
+      bufferCount = 0;
+      mappingCount = 4;
+      loanCount = 0;
+      privatePageQuota = 4;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the robot_runtime_check gate boots a generation declaring robot-controller";
+    expectedResult = "the controller derives commands from telemetry, restarts on an injected fault, and re-requests fresh fabric authority while retaining its parameter configuration";
+    passFailCriteria = "[robot-controller] injected fault";
+    requiredTestEnvironment = "robot_runtime_check";
+  };
+}

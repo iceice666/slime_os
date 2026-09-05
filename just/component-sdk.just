@@ -40,5 +40,9 @@ component_sdk_upgrade_check: component_sdk_compatibility_check
     python3 scripts/check/check-component-sdk-upgrade.py
 
 [group('component sdk')]
+component_sdk_system_image_check: component_sdk_upgrade_check
+    python3 scripts/check/check-component-sdk-system-image.py
+
+[group('component sdk')]
 runtime_binding_resolution_check: test_sel4_root sel4_gate_control_check sel4_channel_check sel4_loan_check sel4_component_graph_check
     @echo "runtime binding resolution: the root resolved named bindings, namespaced boot-layout roles, and unambiguous capability roles for their own instances, refused an ungranted name, and every migrated plane kept its observed behavior"

@@ -1,0 +1,89 @@
+{
+  formatVersion = 1;
+  name = "sel4-reclamation";
+  generation = 38;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "reclamation";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "reclamation-fault";
+    "supervision-child";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+    {
+      component = "supervision-child";
+      health = "optional";
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "init-supervision-child";
+      capabilityKind = "executable";
+      source = "init";
+      target = "supervision-child";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-reclamation-fault";
+      capabilityKind = "executable";
+      source = "init";
+      target = "reclamation-fault";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-supervision-child";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-reclamation-fault";
+      slot = 2;
+      reason = "bootLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

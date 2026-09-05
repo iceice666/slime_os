@@ -71,9 +71,21 @@ SYSTEM_SPEC_CONTRACT = ROOT / "contracts" / "system-spec" / "v1"
 SYSTEM_SPEC_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-system-spec-bindings.py"
 )
+COMPOSITION_INVENTORY_CONTRACT = ROOT / "contracts" / "composition-inventory" / "v1"
+COMPOSITION_INVENTORY_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-composition-inventory-bindings.py"
+)
 COMPONENT_SDK_RELEASE_CONTRACT = ROOT / "contracts" / "component-sdk-release" / "v1"
 COMPONENT_SDK_RELEASE_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-component-sdk-release-bindings.py"
+)
+SYSTEM_IMAGE_CLOSURE_CONTRACT = ROOT / "contracts" / "system-image-closure" / "v1"
+SYSTEM_IMAGE_CLOSURE_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-system-image-closure-bindings.py"
+)
+SYSTEM_TEST_RUN_CONTRACT = ROOT / "contracts" / "system-test-run" / "v1"
+SYSTEM_TEST_RUN_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-system-test-run-bindings.py"
 )
 FABRIC_GRAPH_CONTRACT = ROOT / "contracts" / "fabric-graph" / "v1"
 CAPABILITY_TRANSFER_CONTRACT = ROOT / "contracts" / "capability-transfer" / "v1"
@@ -311,6 +323,14 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(COMPOSITION_INVENTORY_CONTRACT / "schema.zt"))
+run("check", str(COMPOSITION_INVENTORY_CONTRACT / "check.zt"))
+run("check", str(COMPOSITION_INVENTORY_CONTRACT / "gen_python.zt"))
+subprocess.run(
+    [sys.executable, str(COMPOSITION_INVENTORY_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "schema.zt"))
 run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "check.zt"))
 run("check", str(COMPONENT_SDK_RELEASE_CONTRACT / "check-matrix.zt"))
@@ -320,6 +340,18 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+for contract, generator in (
+    (SYSTEM_IMAGE_CLOSURE_CONTRACT, SYSTEM_IMAGE_CLOSURE_BINDING_GENERATOR),
+    (SYSTEM_TEST_RUN_CONTRACT, SYSTEM_TEST_RUN_BINDING_GENERATOR),
+):
+    run("check", str(contract / "schema.zt"))
+    run("check", str(contract / "check.zt"))
+    run("check", str(contract / "gen_python.zt"))
+    subprocess.run([sys.executable, str(generator), "--check"], cwd=ROOT, check=True)
+# The negative-build-case module lives beside the closure contract it perturbs
+# and shares its bindings, so it is type-checked here rather than getting its
+# own generator entry.
+run("check", str(SYSTEM_IMAGE_CLOSURE_CONTRACT / "check-negative.zt"))
 # CP9's published matrix is a committed repository artifact, so it is checked
 # unconditionally: there is no state in which it is legitimately absent, and a
 # conditional check would let deleting it pass silently.
@@ -410,6 +442,6 @@ print(
     "link-device, network-service, powerbox, generation-management, transfer, "
     "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
     "fabric-call, fabric-operation, fabric-visibility, fabric-trace, "
-    "component-spec, system-spec, component-sdk-release, and rpi5-ros2-demo "
-    "contracts passed"
+    "component-spec, system-spec, component-sdk-release, system-image-closure, "
+    "system-test-run, and rpi5-ros2-demo contracts passed"
 )

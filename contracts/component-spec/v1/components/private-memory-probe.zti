@@ -1,0 +1,57 @@
+{
+  formatVersion = 1;
+  name = "private-memory-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Queries and grows a C10.4 task-private region to its declared page quota, and proves a holder with no quota is refused a region entirely.";
+  implementation = {
+    provider = "workspace";
+    binary = "private-memory-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the private_memory_check gate boots a generation declaring private-memory-probe";
+    expectedResult = "a granted holder grows to its quota and a denied holder receives no region";
+    passFailCriteria = "[private-memory-probe] query pages=0 base=0x";
+    requiredTestEnvironment = "private_memory_check";
+  };
+}

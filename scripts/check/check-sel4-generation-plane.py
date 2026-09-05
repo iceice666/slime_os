@@ -30,6 +30,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 from harness import (
     GENERATION_COMPOSITIONS,
     load_qemu_profile,
@@ -50,8 +51,19 @@ PLATFORMS = {
 }
 
 
+# CP15: the aarch64 arm builds by closure identity. The closure declares
+# platform `qemu-arm-virt`, so the riscv64 arm keeps its flag until a closure
+# exists for that platform — a closure cannot describe a build for a platform
+# it does not name.
+CLOSURE = "sel4-generation"
+CLOSURE_PLATFORM = "qemu-arm-virt"
+CLOSURE_IMAGE: Path | None = None
+
+
 def image_path(platform: str) -> Path:
-    suffix = "" if platform == "qemu-arm-virt" else f"-{platform}"
+    if platform == CLOSURE_PLATFORM and CLOSURE_IMAGE is not None:
+        return CLOSURE_IMAGE
+    suffix = "" if platform == CLOSURE_PLATFORM else f"-{platform}"
     return ROOT / "build" / f"slime-sel4-generation{suffix}.elf"
 
 
@@ -183,6 +195,19 @@ def fail(message: str) -> NoReturn:
 
 
 def build_image(platform: str) -> None:
+    """Build this plane's image for `platform`.
+
+    The aarch64 arm builds by closure identity; the closure names platform
+    `qemu-arm-virt` and so cannot describe the riscv64 build, which keeps its
+    flag until a closure exists for that platform.
+    """
+    global CLOSURE_IMAGE
+    if platform == CLOSURE_PLATFORM:
+        try:
+            CLOSURE_IMAGE = build_closure_image(CLOSURE).image
+        except ClosureImageError as error:
+            fail(str(error))
+        return
     command = [
         sys.executable,
         str(BUILD_SCRIPT),
@@ -465,10 +490,10 @@ def main() -> None:
     if not FIXTURE.is_file():
         fail(f"missing generation fixture {FIXTURE.relative_to(ROOT)}")
     section, qemu_binary = PLATFORMS[arguments.platform]
-    image = image_path(arguments.platform)
     profile = load_qemu_profile(fail, PINS_PATH, section)
     if not arguments.no_build:
         build_image(arguments.platform)
+    image = image_path(arguments.platform)
     if not image.is_file():
         fail(f"missing packaged image {image.relative_to(ROOT)}")
 

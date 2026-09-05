@@ -1,0 +1,59 @@
+{
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  executables = [
+    { commandProfile = []; name = "init"; object = "sha256:init"; role = "init"; spawnBudget = 0; };
+    { commandProfile = []; name = "io-link-probe"; object = "sha256:io-link-probe"; role = "application"; spawnBudget = 2; };
+    { commandProfile = []; name = "virtio-net-driver"; object = "sha256:virtio-net-driver"; role = "service"; spawnBudget = 0; };
+    { commandProfile = []; name = "io-link-intruder"; object = "sha256:io-link-intruder"; role = "application"; spawnBudget = 0; };
+  ];
+  formatVersion = 1;
+  generation = 52;
+  grants = [
+    { name = "io-link-peer"; capabilityKind = "endpoint"; rights = ["send"; "recv";]; source = "io-link-probe"; target = "virtio-net-driver"; transferable = true; };
+    { name = "io-link-buffer-factory"; capabilityKind = "sharedBufferFactory"; rights = ["bufferCreate";]; source = "init"; target = "io-link-probe"; transferable = false; };
+    { name = "virtio-net-device"; capabilityKind = "device"; rights = ["mapMmio";]; source = "virtio-net-driver"; target = "virtio-net-driver"; transferable = false; };
+    { name = "virtio-net-mmio"; capabilityKind = "mmioRegion"; rights = ["mapMmio";]; source = "virtio-net-driver"; target = "virtio-net-driver"; transferable = false; };
+    { name = "virtio-net-interrupt"; capabilityKind = "interruptSource"; rights = ["irqAck";]; source = "virtio-net-driver"; target = "virtio-net-driver"; transferable = false; };
+    { name = "virtio-net-dma"; capabilityKind = "dmaAccount"; rights = ["dmaPin"; "dmaRelease";]; source = "virtio-net-driver"; target = "virtio-net-driver"; transferable = false; };
+  ];
+  health = { bootAttempts = 3; requiredInstances = ["init"; "io-link-probe"; "virtio-net-driver"; "io-link-intruder";]; };
+  instances = [
+    { autostart = true; bindings = []; dependencies = []; executable = "init"; health = "required"; name = "init"; owner = "root"; };
+    { autostart = true; bindings = [{ grant = "io-link-peer"; slot = 0; slotReason = "componentAbi"; }; { grant = "io-link-buffer-factory"; slot = 1; slotReason = "componentAbi"; };]; dependencies = []; executable = "io-link-probe"; health = "required"; name = "io-link-probe"; owner = "root"; };
+    { autostart = true; bindings = [{ grant = "io-link-peer"; slot = 0; slotReason = "componentAbi"; }; { grant = "virtio-net-device"; slot = 1; slotReason = "componentAbi"; }; { grant = "virtio-net-mmio"; slot = 2; slotReason = "componentAbi"; }; { grant = "virtio-net-interrupt"; slot = 3; slotReason = "componentAbi"; }; { grant = "virtio-net-dma"; slot = 4; slotReason = "componentAbi"; };]; dependencies = []; executable = "virtio-net-driver"; health = "required"; name = "virtio-net-driver"; owner = "root"; };
+    { autostart = true; bindings = []; dependencies = []; executable = "io-link-intruder"; health = "required"; name = "io-link-intruder"; owner = "root"; };
+  ];
+  interfaceSchemas = [];
+  mintedBindings = [];
+  notificationGrants = [
+    {name="io-link-tx-request-ready";source="io-link-probe";target="virtio-net-driver";};
+    {name="io-link-rx-request-ready";source="io-link-probe";target="virtio-net-driver";};
+    {name="io-link-tx-completion-ready";source="virtio-net-driver";target="io-link-probe";};
+    {name="io-link-rx-completion-ready";source="virtio-net-driver";target="io-link-probe";};
+    {name="io-link-state-changed";source="virtio-net-driver";target="io-link-probe";};
+  ];
+  notificationBindings = [
+    {grant="io-link-tx-request-ready";holder="io-link-probe";role="signal";slot=0;}; {grant="io-link-tx-request-ready";holder="virtio-net-driver";role="wait";slot=0;};
+    {grant="io-link-rx-request-ready";holder="io-link-probe";role="signal";slot=1;}; {grant="io-link-rx-request-ready";holder="virtio-net-driver";role="wait";slot=1;};
+    {grant="io-link-tx-completion-ready";holder="virtio-net-driver";role="signal";slot=2;}; {grant="io-link-tx-completion-ready";holder="io-link-probe";role="wait";slot=2;};
+    {grant="io-link-rx-completion-ready";holder="virtio-net-driver";role="signal";slot=3;}; {grant="io-link-rx-completion-ready";holder="io-link-probe";role="wait";slot=3;};
+    {grant="io-link-state-changed";holder="virtio-net-driver";role="signal";slot=4;}; {grant="io-link-state-changed";holder="io-link-probe";role="wait";slot=4;};
+  ];
+  objects = [
+    {id="sha256:init";kind="bootstrap";size=65536;}; {id="sha256:io-link-probe";kind="component";size=65536;}; {id="sha256:virtio-net-driver";kind="component";size=65536;}; {id="sha256:io-link-intruder";kind="component";size=65536;};
+    {id="shared-buffer-budget";kind="resource";size=4096;}; {id="io-resource-budget";kind="resource";size=4096;}; {id="wait-set";kind="resource";size=4096;}; {id="boot-layout";kind="resource";size=4096;};
+  ];
+  ioResourceBudget = [{holder="virtio-net-driver";mmioBytes=4096;mmioMappings=1;dmaPages=20;dmaMappings=18;irqSources=1;outstandingRequests=16;bufferLoans=16;};];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [
+    {holder="io-link-probe";bytePages=10;bufferCount=10;mappingCount=10;loanCount=10;};
+    {holder="virtio-net-driver";bytePages=0;bufferCount=0;mappingCount=10;loanCount=10;};
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  waitSet = [
+    {waiter="io-link-probe";notification="io-link-tx-completion-ready";badgeBit=2;kind="stream";drainSlot=0;};
+    {waiter="io-link-probe";notification="io-link-rx-completion-ready";badgeBit=3;kind="stream";drainSlot=0;};
+  ];
+}

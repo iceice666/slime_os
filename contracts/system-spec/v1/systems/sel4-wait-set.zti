@@ -1,0 +1,169 @@
+{
+  formatVersion = 1;
+  name = "sel4-wait-set";
+  generation = 42;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "supervision-child";
+    "wait-set-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "wait-set-denied";
+      executable = "wait-set-probe";
+    };
+    {
+      name = "wait-set-peer";
+      executable = "supervision-child";
+      owner = "wait-set-waiter";
+      autostart = false;
+      health = "optional";
+      dependencies = [
+        "wait-set-waiter";
+      ];
+    };
+    {
+      name = "wait-set-signaller";
+      executable = "wait-set-probe";
+    };
+    {
+      name = "wait-set-waiter";
+      executable = "wait-set-probe";
+    };
+  ];
+  grants = [
+    {
+      name = "wait-set-message";
+      capabilityKind = "endpoint";
+      source = "wait-set-signaller";
+      target = "wait-set-waiter";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "wait-set-peer-executable";
+      capabilityKind = "executable";
+      source = "wait-set-waiter";
+      target = "supervision-child";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "wait-set-waiter";
+      grant = "wait-set-message";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "wait-set-waiter";
+      grant = "wait-set-peer-executable";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "wait-set-signaller";
+      grant = "wait-set-message";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "wait-set-wake";
+      source = "wait-set-signaller";
+      target = "wait-set-waiter";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "wait-set-wake";
+      holder = "wait-set-signaller";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "wait-set-wake";
+      holder = "wait-set-waiter";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    {
+      holder = "wait-set-waiter";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "wait-set-wake";
+      timerQuota = 2;
+      timerUse = true;
+    };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [
+    {
+      badgeBit = 3;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "wait-set-wake";
+      waiter = "wait-set-waiter";
+    };
+    {
+      badgeBit = 9;
+      kind = "timer";
+      notification = "wait-set-wake";
+      waiter = "wait-set-waiter";
+    };
+    {
+      badgeBit = 17;
+      drainSlot = 1;
+      kind = "supervision";
+      notification = "wait-set-wake";
+      waiter = "wait-set-waiter";
+    };
+  ];
+  waitSetObject = true;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

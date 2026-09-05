@@ -69,11 +69,11 @@ def zti(value: object, indent: int = 0) -> str:
     raise TypeError(type(value))
 
 
-def load_manifest() -> dict:
+def load_manifest(source: Path = None) -> dict:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
-        [str(binary()), "json", str(GENERATION_SOURCE)],
+        [str(binary()), "json", str(source if source is not None else GENERATION_SOURCE)],
         cwd=ROOT,
         env=environment,
         check=False,
@@ -132,6 +132,7 @@ except ComponentSpecError as error:
 CORPUS_BY_NAME = {entry.name: entry for entry in CORPUS}
 SOURCE_FORMS = {entry.name: entry.spec for entry in CORPUS}
 MANIFEST = load_manifest()
+GENERATION_COMPOSITIONS = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions"
 
 # 1. Corpus coverage: every component the frozen reference generation declares
 # has a spec. Additional specs may describe newer product compositions; their
@@ -351,13 +352,49 @@ for shape, worker_routes in BUILDER.FABRIC_ROUTE_WORKERS:
         if route_name in ROUTE_INTERFACES:
             authorize_relay(worker, route_name, ROUTE_INTERFACES[route_name])
 
+# A spec's interface section is a projection of *every* graph the repository
+# ships, not only the reference one. A component may hold a role in one
+# composition and not in another -- `fabric-publisher-b` publishes
+# `telemetry-alt` under `sel4-matrix` and nowhere else -- and one spec describes
+# the component across all of them. Authorizing only from `valid.zti` made such
+# a role unstateable, which is what blocked `sel4-matrix` from being derived.
+#
+# This still refuses an invented role: the entry must be given by some
+# committed composition's graph, so the set is bounded by what actually boots
+# rather than by what a spec claims.
+for composition in sorted(GENERATION_COMPOSITIONS.glob("*.zti")):
+    other = load_manifest(composition)
+    other_graph = other.get("fabricGraph")
+    if not other_graph:
+        continue
+    other_interfaces = {route["name"]: route["interface"] for route in other_graph["routes"]}
+    for route in other_graph["routes"]:
+        for participant in route["participants"]:
+            authorize(
+                participant["component"],
+                route["name"],
+                DIRECTION_TAGS[participant["direction"]],
+                route["interface"],
+            )
+            for hop in participant["interposition"]:
+                authorize_relay(hop, route["name"], route["interface"])
+    for profile in other_graph["profiles"]:
+        for interposition in profile["interpositions"]:
+            if interposition["route"] in other_interfaces:
+                for hop in interposition["chain"]:
+                    authorize_relay(
+                        hop, interposition["route"], other_interfaces[interposition["route"]]
+                    )
+    for route_name, interface in other_interfaces.items():
+        authorize_relay(other_graph["fabricComponent"], route_name, interface)
+
 for name, entry in sorted(BY_NAME.items()):
     for item in entry.spec["interfaces"]:
         key = (item["name"], item["tag"], item["interface"])
         if key not in authorized[name]:
             fail(
                 f"{name}: declares a {item['tag']} entry for route {item['name']} "
-                f"({item['interface']}) that the fabric graph does not give it"
+                f"({item['interface']}) that no shipped fabric graph gives it"
             )
     declared_routes = {item["name"] for item in entry.spec["interfaces"]}
     for policy in entry.spec["communication"]["qos"]:

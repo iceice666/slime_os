@@ -1,0 +1,402 @@
+{
+  bootAction = "product";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 18;
+    };
+    {
+      commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [
+        "echo";
+        "sysinfo";
+      ];
+      name = "spawn-service";
+      object = "sha256:spawn-service";
+      role = "service";
+      spawnBudget = 8;
+    };
+    {
+      commandProfile = [];
+      name = "slisp";
+      object = "sha256:slisp";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "sysinfo";
+      object = "sha256:sysinfo";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "echo-agent";
+      object = "sha256:echo-agent";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "init-spawn-service";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      name = "init-slisp";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "slisp";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "slisp";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      name = "slisp-console-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "slisp";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "slisp-input";
+      capabilityKind = "input";
+      rights = [
+        "inputRead";
+      ];
+      source = "slisp";
+      target = "slisp";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "console";
+      "init";
+      "spawn-service";
+      "slisp";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-console";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-spawn-service";
+          slot = 5;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "spawn-service-sysinfo";
+          slot = 6;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "spawn-service-echo";
+          slot = 7;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "spawn-service-shared-buffer-factory";
+          slot = 8;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-slisp";
+          slot = 9;
+          slotReason = "bootLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "slisp-console-rpc";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "spawn-service-rpc";
+        };
+        {
+          grant = "spawn-service-sysinfo";
+        };
+        {
+          grant = "spawn-service-echo";
+          slot = 2;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "spawn-service-sysinfo-context";
+        };
+        {
+          grant = "spawn-service-shared-buffer-factory";
+          slot = 4;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 5;
+          slotReason = "allocatorOrder";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "spawn-service";
+      health = "required";
+      name = "spawn-service";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "slisp-console-rpc";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "slisp-input";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "spawn-service-rpc";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "console";
+        "spawn-service";
+      ];
+      executable = "slisp";
+      health = "required";
+      name = "slisp";
+      owner = "init";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "spawn-service";
+      ];
+      executable = "sysinfo";
+      health = "optional";
+      name = "sysinfo";
+      owner = "spawn-service";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "spawn-service-echo-context";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "spawn-service";
+      ];
+      executable = "echo-agent";
+      health = "optional";
+      name = "echo-agent";
+      owner = "spawn-service";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:spawn-service";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:slisp";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:sysinfo";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:echo-agent";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 4;
+      holder = "spawn-service";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+  ];
+  state = [
+    {
+      name = "echo-agent-session";
+      owner = "echo-agent";
+      policy = "ephemeral";
+      schemaVersion = 1;
+    };
+  ];
+  target = "aarch64-sel4-qemu-virt";
+}

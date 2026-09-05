@@ -1,0 +1,22 @@
+{
+  formatVersion = 1;
+  name = "sel4-robot-runtime";
+  imageClosureIdentity = "098fa3b64a1a7b3a5acebcfc5d05b5cc62f3de5cbba92144c72bd16b74fc96e1";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [
+    {
+      kind = "peer-death";
+      target = "";
+      value = "";
+    };
+  ];
+  timeoutSeconds = 420;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

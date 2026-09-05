@@ -32,6 +32,16 @@
       transferable = false;
     };
     {
+      name = "input-probe-idle-source";
+      capabilityKind = "input";
+      rights = [
+        "inputRead";
+      ];
+      source = "sel4-input-probe-idle";
+      target = "sel4-input-probe-idle";
+      transferable = false;
+    };
+    {
       name = "input-probe-source";
       capabilityKind = "input";
       rights = [
@@ -42,10 +52,11 @@
       transferable = false;
     };
     {
-      name = "input-probe-idle-source";
-      capabilityKind = "input";
+      name = "sel4-input-probe-idle-token";
+      capabilityKind = "endpoint";
       rights = [
-        "inputRead";
+        "send";
+        "recv";
       ];
       source = "sel4-input-probe-idle";
       target = "sel4-input-probe-idle";
@@ -60,17 +71,6 @@
       ];
       source = "init";
       target = "sel4-input-probe";
-      transferable = false;
-    };
-    {
-      name = "sel4-input-probe-idle-token";
-      capabilityKind = "endpoint";
-      rights = [
-        "send";
-        "recv";
-      ];
-      source = "sel4-input-probe-idle";
-      target = "sel4-input-probe-idle";
       transferable = false;
     };
   ];
@@ -150,6 +150,11 @@
   interfaceSchemas = [];
   objects = [
     {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
       id = "sha256:init";
       kind = "bootstrap";
       size = 65536;
@@ -159,12 +164,8 @@
       kind = "component";
       size = 65536;
     };
-    {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
-    };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

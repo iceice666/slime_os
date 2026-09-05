@@ -1,0 +1,16 @@
+{
+  formatVersion = 1;
+  name = "sel4-scheduling-class";
+  imageClosureIdentity = "3f816a925c89f35eae7a7ba7d7b46af736b2ffb7820ffcbdbfde5b473a18b1f2";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 300;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

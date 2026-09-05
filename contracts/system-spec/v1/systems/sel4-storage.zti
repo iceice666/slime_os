@@ -1,0 +1,334 @@
+{
+  formatVersion = 1;
+  name = "sel4-storage";
+  generation = 23;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "storage";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "sel4-storage-probe";
+    "virtio-blk-driver";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sel4-storage-probe";
+      executable = "sel4-storage-probe";
+      autostart = false;
+      dependencies = [
+        "init";
+      ];
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+    };
+    {
+      name = "sel4-storage-probe-idle";
+      executable = "sel4-storage-probe";
+      owner = "root";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "virtio-blk-driver";
+      executable = "virtio-blk-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+  ];
+  grants = [
+    {
+      name = "init-sel4-storage-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-storage-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "storage-init-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "storage-probe-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "sel4-storage-probe";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = true;
+    };
+    {
+      name = "storage-block-peer";
+      capabilityKind = "endpoint";
+      source = "sel4-storage-probe";
+      target = "virtio-blk-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "storage-block-device";
+      capabilityKind = "device";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "storage-block-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "storage-block-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "storage-block-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-storage-probe-run-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sel4-storage-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-storage-probe-idle-token";
+      capabilityKind = "endpoint";
+      source = "sel4-storage-probe-idle";
+      target = "sel4-storage-probe-idle";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sel4-storage-probe";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sel4-storage-probe-run-token";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "storage-init-buffer-factory";
+      slot = 4;
+      reason = "bootLayout";
+    };
+    {
+      holder = "sel4-storage-probe-idle";
+      grant = "sel4-storage-probe-idle-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-storage-probe";
+      grant = "sel4-storage-probe-run-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-storage-probe";
+      grant = "storage-block-peer";
+      slot = 8;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-storage-probe";
+      grant = "storage-probe-buffer-factory";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "storage-block-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "storage-block-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "storage-block-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "storage-block-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "storage-block-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "io-block-request-ready";
+      source = "sel4-storage-probe";
+      target = "virtio-blk-driver";
+    };
+    {
+      name = "io-block-completion-ready";
+      source = "virtio-blk-driver";
+      target = "sel4-storage-probe";
+    };
+    {
+      name = "io-block-state-changed";
+      source = "virtio-blk-driver";
+      target = "sel4-storage-probe";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "io-block-request-ready";
+      holder = "sel4-storage-probe";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "io-block-request-ready";
+      holder = "virtio-blk-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-block-completion-ready";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "io-block-completion-ready";
+      holder = "sel4-storage-probe";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "io-block-state-changed";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "io-block-state-changed";
+      holder = "sel4-storage-probe";
+      role = "wait";
+      slot = 2;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      bufferLoans = 4;
+      dmaMappings = 3;
+      dmaPages = 12;
+      holder = "virtio-blk-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 8;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [
+    {
+      device = 0;
+      holder = "sel4-storage-probe";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      ring = 0;
+      sectorLimit = 1024;
+    };
+  ];
+  blockRingAuthorityObject = true;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

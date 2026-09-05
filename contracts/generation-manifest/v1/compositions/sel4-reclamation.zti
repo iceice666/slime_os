@@ -11,15 +11,15 @@
     };
     {
       commandProfile = [];
-      name = "supervision-child";
-      object = "sha256:supervision-child";
+      name = "reclamation-fault";
+      object = "sha256:reclamation-fault";
       role = "application";
       spawnBudget = 0;
     };
     {
       commandProfile = [];
-      name = "reclamation-fault";
-      object = "sha256:reclamation-fault";
+      name = "supervision-child";
+      object = "sha256:supervision-child";
       role = "application";
       spawnBudget = 0;
     };
@@ -27,17 +27,6 @@
   formatVersion = 1;
   generation = 38;
   grants = [
-    {
-      name = "init-supervision-child";
-      capabilityKind = "executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
-      source = "init";
-      target = "supervision-child";
-      transferable = false;
-    };
     {
       name = "init-reclamation-fault";
       capabilityKind = "executable";
@@ -47,6 +36,17 @@
       ];
       source = "init";
       target = "reclamation-fault";
+      transferable = false;
+    };
+    {
+      name = "init-supervision-child";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "supervision-child";
       transferable = false;
     };
   ];
@@ -61,13 +61,13 @@
       autostart = true;
       bindings = [
         {
-          grant = "init-supervision-child";
-          slot = 1;
+          grant = "init-reclamation-fault";
+          slot = 2;
           slotReason = "bootLayout";
         };
         {
-          grant = "init-reclamation-fault";
-          slot = 2;
+          grant = "init-supervision-child";
+          slot = 1;
           slotReason = "bootLayout";
         };
       ];
@@ -83,9 +83,9 @@
       dependencies = [
         "init";
       ];
-      executable = "supervision-child";
+      executable = "reclamation-fault";
       health = "optional";
-      name = "supervision-child";
+      name = "reclamation-fault";
       owner = "init";
     };
     {
@@ -94,9 +94,9 @@
       dependencies = [
         "init";
       ];
-      executable = "reclamation-fault";
+      executable = "supervision-child";
       health = "optional";
-      name = "reclamation-fault";
+      name = "supervision-child";
       owner = "init";
     };
   ];
@@ -104,13 +104,13 @@
   interfaceSchemas = [];
   objects = [
     {
-      id = "sha256:init";
-      kind = "bootstrap";
-      size = 65536;
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
     };
     {
-      id = "sha256:supervision-child";
-      kind = "component";
+      id = "sha256:init";
+      kind = "bootstrap";
       size = 65536;
     };
     {
@@ -119,11 +119,12 @@
       size = 65536;
     };
     {
-      id = "boot-layout";
-      kind = "resource";
-      size = 4096;
+      id = "sha256:supervision-child";
+      kind = "component";
+      size = 65536;
     };
   ];
+  privateMemoryBudget = [];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";

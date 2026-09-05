@@ -19,6 +19,15 @@ ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 SEL4_SOURCE = ROOT / "deps" / "sel4"
 RUST_SEL4_SOURCE = ROOT / "deps" / "rust-sel4"
+# Per-platform loader sources. Each physical platform's `sel4-kernel-loader`
+# patch lives on its own branch, diverging directly from `[rust_sel4]`'s base
+# commit rather than stacking on the others (`sel4/pins.toml`), so a platform
+# whose patch cannot be public can point its own table at a private fork with
+# no effect on the others. `qemu-arm-virt` and `qemu-riscv-virt` need no
+# patch and build the loader from `RUST_SEL4_SOURCE` directly.
+RUST_SEL4_BCM2712_RPI5_SOURCE = ROOT / "deps" / "rust-sel4-bcm2712-rpi5"
+RUST_SEL4_CV1800B_DUO_SOURCE = ROOT / "deps" / "rust-sel4-cv1800b-duo"
+RUST_SEL4_NS02201_H1V1_SOURCE = ROOT / "deps" / "rust-sel4-ns02201-h1v1"
 BUILD_ROOT = ROOT / "build"
 CARGO_BUILD = BUILD_ROOT / "sel4-cargo"
 ARTIFACTS = BUILD_ROOT / "sel4-artifacts"
@@ -41,6 +50,11 @@ class Platform:
     `pins_section` names this platform's `sel4/pins.toml` table, and
     `observed_prefix_section` its pinned artifact hashes: the two platforms
     build different kernels, so one set of hashes cannot describe both.
+
+    `loader_source` is where `sel4-kernel-loader` is built from. Platforms
+    with no loader patch share `RUST_SEL4_SOURCE`; a patched platform points
+    at its own submodule, so only its own loader build reads the diverging
+    branch (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables).
     """
 
     name: str
@@ -57,6 +71,7 @@ class Platform:
     child_target_name: str
     loader_target_key: str
     cross_compiler_environment: str
+    loader_source: Path
 
 
 QEMU_ARM_VIRT = Platform(
@@ -77,6 +92,7 @@ QEMU_ARM_VIRT = Platform(
     child_target_name="aarch64-sel4-minimal.json",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_SOURCE,
 )
 
 # P4's physical target. The kernel is a different build from the one above, so
@@ -96,6 +112,7 @@ BCM2712_RPI5 = Platform(
     child_target_name="aarch64-sel4-minimal.json",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_BCM2712_RPI5_SOURCE,
 )
 
 QEMU_RISCV_VIRT = Platform(
@@ -113,6 +130,7 @@ QEMU_RISCV_VIRT = Platform(
     child_target_name="riscv64imac-sel4-minimal.json",
     loader_target_key="riscv64_loader_target",
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_SOURCE,
 )
 
 CV1800B_DUO = Platform(
@@ -130,6 +148,7 @@ CV1800B_DUO = Platform(
     child_target_name="riscv64imac-sel4-minimal.json",
     loader_target_key="riscv64_loader_target",
     cross_compiler_environment="RISCV64_CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_CV1800B_DUO_SOURCE,
 )
 
 # P6's physical target: the Novatek NT98690 (NS02201) H1V1. Its kernel is a
@@ -151,6 +170,7 @@ NS02201_H1V1 = Platform(
     child_target_name="aarch64-sel4-minimal.json",
     loader_target_key="loader_target",
     cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_NS02201_H1V1_SOURCE,
 )
 
 # The physical boards whose product image polls a real UART, and the serial
@@ -174,126 +194,25 @@ MANIFEST = BUILD_ROOT / "slime-sel4.identity.json"
 # invalidates the other's evidence by being built last.
 GRAPH_IMAGE = BUILD_ROOT / "slime-sel4-graph.elf"
 GRAPH_MANIFEST = BUILD_ROOT / "slime-sel4-graph.identity.json"
-CHANNEL_IMAGE = BUILD_ROOT / "slime-sel4-channel.elf"
-CHANNEL_MANIFEST = BUILD_ROOT / "slime-sel4-channel.identity.json"
-LOAN_IMAGE = BUILD_ROOT / "slime-sel4-loan.elf"
-LOAN_MANIFEST = BUILD_ROOT / "slime-sel4-loan.identity.json"
-IO_QUEUE_IMAGE = BUILD_ROOT / "slime-sel4-io-queue.elf"
-IO_QUEUE_MANIFEST = BUILD_ROOT / "slime-sel4-io-queue.identity.json"
-IO_DRIVER_AUTHORITY_IMAGE = BUILD_ROOT / "slime-sel4-io-driver-authority.elf"
-IO_DRIVER_AUTHORITY_MANIFEST = BUILD_ROOT / "slime-sel4-io-driver-authority.identity.json"
-IO_NETWORK_IMAGE = BUILD_ROOT / "slime-sel4-io-network.elf"
-IO_NETWORK_MANIFEST = BUILD_ROOT / "slime-sel4-io-network.identity.json"
-IO_BLOCK_IMAGE = BUILD_ROOT / "slime-sel4-io-block.elf"
-IO_BLOCK_MANIFEST = BUILD_ROOT / "slime-sel4-io-block.identity.json"
-IO_LINK_IMAGE = BUILD_ROOT / "slime-sel4-io-link.elf"
-IO_LINK_MANIFEST = BUILD_ROOT / "slime-sel4-io-link.identity.json"
-SPAWN_IMAGE = BUILD_ROOT / "slime-sel4-spawn.elf"
-SPAWN_MANIFEST = BUILD_ROOT / "slime-sel4-spawn.identity.json"
 SAMPLE_IMAGE = BUILD_ROOT / "slime-sel4-sample.elf"
 SAMPLE_MANIFEST = BUILD_ROOT / "slime-sel4-sample.identity.json"
-STREAM_IMAGE = BUILD_ROOT / "slime-sel4-stream.elf"
-STREAM_MANIFEST = BUILD_ROOT / "slime-sel4-stream.identity.json"
-SUPERVISION_IMAGE = BUILD_ROOT / "slime-sel4-supervision.elf"
-SUPERVISION_MANIFEST = BUILD_ROOT / "slime-sel4-supervision.identity.json"
-RECLAMATION_IMAGE = BUILD_ROOT / "slime-sel4-reclamation.elf"
-RECLAMATION_MANIFEST = BUILD_ROOT / "slime-sel4-reclamation.identity.json"
-PRIVATE_MEMORY_IMAGE = BUILD_ROOT / "slime-sel4-private-memory.elf"
-PRIVATE_MEMORY_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory.identity.json"
-CLOCK_AUTHORITY_IMAGE = BUILD_ROOT / "slime-sel4-clock-authority.elf"
-CLOCK_AUTHORITY_MANIFEST = BUILD_ROOT / "slime-sel4-clock-authority.identity.json"
-WAIT_SET_IMAGE = BUILD_ROOT / "slime-sel4-wait-set.elf"
-WAIT_SET_MANIFEST = BUILD_ROOT / "slime-sel4-wait-set.identity.json"
-SCHEDULING_CLASS_IMAGE = BUILD_ROOT / "slime-sel4-scheduling-class.elf"
-SCHEDULING_CLASS_MANIFEST = BUILD_ROOT / "slime-sel4-scheduling-class.identity.json"
-LIFECYCLE_RESTART_IMAGE = BUILD_ROOT / "slime-sel4-lifecycle-restart.elf"
-LIFECYCLE_RESTART_MANIFEST = BUILD_ROOT / "slime-sel4-lifecycle-restart.identity.json"
-REPLAY_IMAGE = BUILD_ROOT / "slime-sel4-replay.elf"
-REPLAY_MANIFEST = BUILD_ROOT / "slime-sel4-replay.identity.json"
-ROBOT_RUNTIME_IMAGE = BUILD_ROOT / "slime-sel4-robot-runtime.elf"
-ROBOT_RUNTIME_MANIFEST = BUILD_ROOT / "slime-sel4-robot-runtime.identity.json"
-CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
-CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
-CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
-CALL_MANIFEST = BUILD_ROOT / "slime-sel4-call.identity.json"
-QOS_IMAGE = BUILD_ROOT / "slime-sel4-qos.elf"
-STRESS_IMAGE = BUILD_ROOT / "slime-sel4-stress.elf"
-STRESS_MANIFEST = BUILD_ROOT / "slime-sel4-stress.identity.json"
-QOS_MANIFEST = BUILD_ROOT / "slime-sel4-qos.identity.json"
-OPERATION_IMAGE = BUILD_ROOT / "slime-sel4-operation.elf"
-OPERATION_MANIFEST = BUILD_ROOT / "slime-sel4-operation.identity.json"
-VISIBILITY_IMAGE = BUILD_ROOT / "slime-sel4-visibility.elf"
-VISIBILITY_MANIFEST = BUILD_ROOT / "slime-sel4-visibility.identity.json"
-MATRIX_IMAGE = BUILD_ROOT / "slime-sel4-matrix.elf"
-MATRIX_MANIFEST = BUILD_ROOT / "slime-sel4-matrix.identity.json"
-MATRIX_UNSATISFIABLE_IMAGE = BUILD_ROOT / "slime-sel4-matrix-unsatisfiable.elf"
-MATRIX_UNSATISFIABLE_MANIFEST = BUILD_ROOT / "slime-sel4-matrix-unsatisfiable.identity.json"
-BOOT_IMAGE = BUILD_ROOT / "slime-sel4-boot.elf"
-BOOT_MANIFEST = BUILD_ROOT / "slime-sel4-boot.identity.json"
-TRAFFIC_IMAGE = BUILD_ROOT / "slime-sel4-traffic.elf"
-TRAFFIC_MANIFEST = BUILD_ROOT / "slime-sel4-traffic.identity.json"
-SATURATION_IMAGE = BUILD_ROOT / "slime-sel4-saturation.elf"
-SATURATION_MANIFEST = BUILD_ROOT / "slime-sel4-saturation.identity.json"
-FAULT_IMAGE = BUILD_ROOT / "slime-sel4-fault.elf"
-FAULT_MANIFEST = BUILD_ROOT / "slime-sel4-fault.identity.json"
-STORAGE_IMAGE = BUILD_ROOT / "slime-sel4-storage.elf"
-STORAGE_MANIFEST = BUILD_ROOT / "slime-sel4-storage.identity.json"
-STORE_IMAGE = BUILD_ROOT / "slime-sel4-store.elf"
-STORE_MANIFEST = BUILD_ROOT / "slime-sel4-store.identity.json"
 ROLLBACK_IMAGE = BUILD_ROOT / "slime-sel4-rollback.elf"
 ROLLBACK_MANIFEST = BUILD_ROOT / "slime-sel4-rollback.identity.json"
-RECOVERY_IMAGE = BUILD_ROOT / "slime-sel4-recovery.elf"
-RECOVERY_MANIFEST = BUILD_ROOT / "slime-sel4-recovery.identity.json"
 GENERATION_IMAGE = BUILD_ROOT / "slime-sel4-generation.elf"
 GENERATION_MANIFEST = BUILD_ROOT / "slime-sel4-generation.identity.json"
-DIRECTORY_IMAGE = BUILD_ROOT / "slime-sel4-directory.elf"
-DIRECTORY_MANIFEST = BUILD_ROOT / "slime-sel4-directory.identity.json"
-FILESYSTEM_IMAGE = BUILD_ROOT / "slime-sel4-filesystem.elf"
-FILESYSTEM_MANIFEST = BUILD_ROOT / "slime-sel4-filesystem.identity.json"
-INPUT_IMAGE = BUILD_ROOT / "slime-sel4-input.elf"
-INPUT_MANIFEST = BUILD_ROOT / "slime-sel4-input.identity.json"
-POWERBOX_IMAGE = BUILD_ROOT / "slime-sel4-powerbox.elf"
-POWERBOX_MANIFEST = BUILD_ROOT / "slime-sel4-powerbox.identity.json"
-TRANSFER_IMAGE = BUILD_ROOT / "slime-sel4-transfer.elf"
-TRANSFER_MANIFEST = BUILD_ROOT / "slime-sel4-transfer.identity.json"
 BOOT_SELECTION_IMAGE = BUILD_ROOT / "slime-sel4-boot-selection.elf"
 BOOT_SELECTION_MANIFEST = BUILD_ROOT / "slime-sel4-boot-selection.identity.json"
 DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
-C_RUNTIME_IMAGE = BUILD_ROOT / "slime-sel4-c-runtime.elf"
-C_RUNTIME_MANIFEST = BUILD_ROOT / "slime-sel4-c-runtime.identity.json"
-SLISP_IMAGE = BUILD_ROOT / "slime-sel4-slisp.elf"
-SLISP_MANIFEST = BUILD_ROOT / "slime-sel4-slisp.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
-# images this script builds; see `build_application`.
+# images this script builds; see `build_application`. Every other plane now
+# builds by closure identity (`scripts/lib/closure_image.py`); these seven
+# remain because a legacy or SDK gate still selects them directly.
 FIXTURE_VARIANT = "fixture"
 GRAPH_VARIANT = "graph"
-CHANNEL_VARIANT = "channel"
-LOAN_VARIANT = "loan"
-IO_QUEUE_VARIANT = "io-queue"
-IO_DRIVER_AUTHORITY_VARIANT = "io-driver-authority"
-IO_NETWORK_VARIANT = "io-network"
-IO_BLOCK_VARIANT = "io-block"
-IO_LINK_VARIANT = "io-link"
-SPAWN_VARIANT = "spawn"
 SAMPLE_VARIANT = "sample"
-STREAM_VARIANT = "stream"
-SUPERVISION_VARIANT = "supervision"
-RECLAMATION_VARIANT = "reclamation"
-# C10.2's generation-declared private-memory budget.
-PRIVATE_MEMORY_VARIANT = "private-memory"
-# C9.1's explicit clock and timer service authority.
-CLOCK_AUTHORITY_VARIANT = "clock-authority"
-# C9.2's bounded userspace wait set over one declared Notification.
-WAIT_SET_VARIANT = "wait-set"
-SCHEDULING_CLASS_VARIANT = "scheduling-class"
-LIFECYCLE_RESTART_VARIANT = "lifecycle-restart"
-REPLAY_VARIANT = "replay"
-ROBOT_RUNTIME_VARIANT = "robot-runtime"
 DEMO_VARIANT = "demo"
-C_RUNTIME_VARIANT = "c-runtime"
-SLISP_VARIANT = "slisp"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -305,209 +224,33 @@ B40_MUTATIONS = (
     "wrong_type",
     "wrong_rights",
 )
-CROSSING_VARIANT = "crossing"
-CALL_VARIANT = "call"
-QOS_VARIANT = "qos"
-STRESS_VARIANT = "stress"
-OPERATION_VARIANT = "operation"
-VISIBILITY_VARIANT = "visibility"
-MATRIX_VARIANT = "matrix"
-MATRIX_UNSATISFIABLE_VARIANT = "matrix-unsatisfiable"
-BOOT_VARIANT = "boot"
-TRAFFIC_VARIANT = "traffic"
-SATURATION_VARIANT = "saturation"
-FAULT_VARIANT = "fault"
-
-# Planes whose gates require a stream-family peer death as a distinct structured
-# event, and which therefore script one rather than depend on a publisher's exit
-# racing the broker's drain. The product variants are deliberately absent: the
-# switch is compile-time in `fabric-publisher`, so no shipped image can carry it.
-STREAM_DEATH_VARIANTS = (STREAM_VARIANT, QOS_VARIANT, FAULT_VARIANT)
-STORAGE_VARIANT = "storage"
-STORE_VARIANT = "store"
 ROLLBACK_VARIANT = "rollback"
-RECOVERY_VARIANT = "recovery"
 GENERATION_VARIANT = "generation"
-DIRECTORY_VARIANT = "directory"
-FILESYSTEM_VARIANT = "filesystem"
-INPUT_VARIANT = "input"
-POWERBOX_VARIANT = "powerbox"
-TRANSFER_VARIANT = "transfer"
 BOOT_SELECTION_VARIANT = "boot-selection"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     DEMO_VARIANT: "sel4-demo",
-    CHANNEL_VARIANT: "sel4-channel",
-    LOAN_VARIANT: "sel4-loan",
-    IO_QUEUE_VARIANT: "sel4-io-queue",
-    IO_DRIVER_AUTHORITY_VARIANT: "sel4-io-driver-authority",
-    IO_NETWORK_VARIANT: "sel4-io-network",
-    IO_BLOCK_VARIANT: "sel4-io-block",
-    IO_LINK_VARIANT: "sel4-io-link",
-    SPAWN_VARIANT: "sel4-spawn",
     SAMPLE_VARIANT: "sel4-sample",
-    STREAM_VARIANT: "sel4-stream",
-    SUPERVISION_VARIANT: "sel4-supervision",
-    RECLAMATION_VARIANT: "sel4-reclamation",
-    PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
-    CLOCK_AUTHORITY_VARIANT: "sel4-clock-authority",
-    WAIT_SET_VARIANT: "sel4-wait-set",
-    SCHEDULING_CLASS_VARIANT: "sel4-scheduling-class",
-    LIFECYCLE_RESTART_VARIANT: "sel4-lifecycle-restart",
-    REPLAY_VARIANT: "sel4-replay",
-    ROBOT_RUNTIME_VARIANT: "sel4-robot-runtime",
-    CROSSING_VARIANT: "sel4-crossing",
-    CALL_VARIANT: "sel4-call",
-    QOS_VARIANT: "sel4-qos",
-    STRESS_VARIANT: "sel4-stress",
-    OPERATION_VARIANT: "sel4-operation",
-    VISIBILITY_VARIANT: "sel4-visibility",
-    MATRIX_VARIANT: "sel4-matrix",
-    MATRIX_UNSATISFIABLE_VARIANT: "sel4-matrix",
-    BOOT_VARIANT: "sel4-boot",
-    TRAFFIC_VARIANT: "sel4-traffic",
-    SATURATION_VARIANT: "sel4-traffic",
-    FAULT_VARIANT: "sel4-traffic",
-    STORAGE_VARIANT: "sel4-storage",
-    STORE_VARIANT: "sel4-store",
     ROLLBACK_VARIANT: "sel4-rollback",
-    RECOVERY_VARIANT: "sel4-recovery",
     GENERATION_VARIANT: "sel4-generation",
-    DIRECTORY_VARIANT: "sel4-directory",
-    FILESYSTEM_VARIANT: "sel4-filesystem",
-    INPUT_VARIANT: "sel4-input",
-    POWERBOX_VARIANT: "sel4-powerbox",
-    TRANSFER_VARIANT: "sel4-transfer",
-    C_RUNTIME_VARIANT: "sel4-c-runtime",
-    SLISP_VARIANT: "sel4-slisp",
     BOOT_SELECTION_VARIANT: "sel4",
-}
-# B62: what distinguishes a variant that shares another's manifest.
-#
-# `traffic`, `fault`, and `saturation` are one composition; each was a full
-# 1882-line copy of the same fixture differing only in these fields. The
-# generation number must differ so the three images have distinct identities —
-# `generation_check` builds each twice and compares bytes, so two variants
-# resolving to one identity would make that assertion vacuous. Saturation
-# additionally narrows one declared limit, which is the ceiling its gate drives
-# traffic against.
-#
-# The numbers are the ones the deleted fixtures declared, so every plane's
-# generation identity is unchanged by the collapse.
-VARIANT_GENERATION_DELTAS = {
-    SATURATION_VARIANT: {
-        "SLIME_GENERATION_NUMBER": "39",
-        "SLIME_FABRIC_LIMIT_OVERRIDE": "inFlightOperations=2",
-    },
-    FAULT_VARIANT: {"SLIME_GENERATION_NUMBER": "40"},
-    # C8.12's negative control: one participant's reliability flipped so the
-    # pair becomes incompatible and admission must refuse the graph. That one
-    # field is the whole test, so it is a declared delta rather than a
-    # 1069-line second copy of the matrix fixture.
-    MATRIX_UNSATISFIABLE_VARIANT: {
-        "SLIME_GENERATION_NUMBER": "35",
-        "SLIME_FABRIC_QOS_OVERRIDE": "telemetry-alt:fabric-publisher-b:reliability:bestEffort",
-    },
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
     GRAPH_VARIANT: "root-graph",
     DEMO_VARIANT: "root-demo",
-    CHANNEL_VARIANT: "root-channel",
-    LOAN_VARIANT: "root-loan",
-    IO_QUEUE_VARIANT: "root-io-queue",
-    IO_DRIVER_AUTHORITY_VARIANT: "root-io-driver-authority",
-    IO_NETWORK_VARIANT: "root-io-network",
-    IO_BLOCK_VARIANT: "root-io-block",
-    IO_LINK_VARIANT: "root-io-link",
-    SPAWN_VARIANT: "root-spawn",
     SAMPLE_VARIANT: "root-sample",
-    STREAM_VARIANT: "root-stream",
-    SUPERVISION_VARIANT: "root-supervision",
-    RECLAMATION_VARIANT: "root-reclamation",
-    PRIVATE_MEMORY_VARIANT: "root-private-memory",
-    CLOCK_AUTHORITY_VARIANT: "root-clock-authority",
-    WAIT_SET_VARIANT: "root-wait-set",
-    SCHEDULING_CLASS_VARIANT: "root-scheduling-class",
-    LIFECYCLE_RESTART_VARIANT: "root-lifecycle-restart",
-    REPLAY_VARIANT: "root-replay",
-    ROBOT_RUNTIME_VARIANT: "root-robot-runtime",
-    CROSSING_VARIANT: "root-crossing",
-    CALL_VARIANT: "root-call",
-    QOS_VARIANT: "root-qos",
-    STRESS_VARIANT: "root-stress",
-    OPERATION_VARIANT: "root-operation",
-    VISIBILITY_VARIANT: "root-visibility",
-    MATRIX_VARIANT: "root-matrix",
-    MATRIX_UNSATISFIABLE_VARIANT: "root-matrix-unsatisfiable",
-    BOOT_VARIANT: "root-boot",
-    TRAFFIC_VARIANT: "root-traffic",
-    SATURATION_VARIANT: "root-saturation",
-    FAULT_VARIANT: "root-fault",
-    STORAGE_VARIANT: "root-storage",
-    STORE_VARIANT: "root-store",
     ROLLBACK_VARIANT: "root-rollback",
-    RECOVERY_VARIANT: "root-recovery",
     GENERATION_VARIANT: "root-generation",
-    DIRECTORY_VARIANT: "root-directory",
-    FILESYSTEM_VARIANT: "root-filesystem",
-    INPUT_VARIANT: "root-input",
-    POWERBOX_VARIANT: "root-powerbox",
-    TRANSFER_VARIANT: "root-transfer",
-    C_RUNTIME_VARIANT: "root-c-runtime",
-    SLISP_VARIANT: "root-slisp",
     BOOT_SELECTION_VARIANT: "root-boot-selection",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
     GRAPH_VARIANT: (GRAPH_IMAGE, GRAPH_MANIFEST),
     DEMO_VARIANT: (DEMO_IMAGE, DEMO_MANIFEST),
-    CHANNEL_VARIANT: (CHANNEL_IMAGE, CHANNEL_MANIFEST),
-    LOAN_VARIANT: (LOAN_IMAGE, LOAN_MANIFEST),
-    IO_QUEUE_VARIANT: (IO_QUEUE_IMAGE, IO_QUEUE_MANIFEST),
-    IO_DRIVER_AUTHORITY_VARIANT: (IO_DRIVER_AUTHORITY_IMAGE, IO_DRIVER_AUTHORITY_MANIFEST),
-    IO_NETWORK_VARIANT: (IO_NETWORK_IMAGE, IO_NETWORK_MANIFEST),
-    IO_BLOCK_VARIANT: (IO_BLOCK_IMAGE, IO_BLOCK_MANIFEST),
-    IO_LINK_VARIANT: (IO_LINK_IMAGE, IO_LINK_MANIFEST),
-    SPAWN_VARIANT: (SPAWN_IMAGE, SPAWN_MANIFEST),
     SAMPLE_VARIANT: (SAMPLE_IMAGE, SAMPLE_MANIFEST),
-    STREAM_VARIANT: (STREAM_IMAGE, STREAM_MANIFEST),
-    SUPERVISION_VARIANT: (SUPERVISION_IMAGE, SUPERVISION_MANIFEST),
-    RECLAMATION_VARIANT: (RECLAMATION_IMAGE, RECLAMATION_MANIFEST),
-    PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
-    CLOCK_AUTHORITY_VARIANT: (CLOCK_AUTHORITY_IMAGE, CLOCK_AUTHORITY_MANIFEST),
-    WAIT_SET_VARIANT: (WAIT_SET_IMAGE, WAIT_SET_MANIFEST),
-    SCHEDULING_CLASS_VARIANT: (SCHEDULING_CLASS_IMAGE, SCHEDULING_CLASS_MANIFEST),
-    LIFECYCLE_RESTART_VARIANT: (LIFECYCLE_RESTART_IMAGE, LIFECYCLE_RESTART_MANIFEST),
-    REPLAY_VARIANT: (REPLAY_IMAGE, REPLAY_MANIFEST),
-    ROBOT_RUNTIME_VARIANT: (ROBOT_RUNTIME_IMAGE, ROBOT_RUNTIME_MANIFEST),
-    CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
-    CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
-    QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
-    STRESS_VARIANT: (STRESS_IMAGE, STRESS_MANIFEST),
-    OPERATION_VARIANT: (OPERATION_IMAGE, OPERATION_MANIFEST),
-    VISIBILITY_VARIANT: (VISIBILITY_IMAGE, VISIBILITY_MANIFEST),
-    MATRIX_VARIANT: (MATRIX_IMAGE, MATRIX_MANIFEST),
-    MATRIX_UNSATISFIABLE_VARIANT: (
-        MATRIX_UNSATISFIABLE_IMAGE,
-        MATRIX_UNSATISFIABLE_MANIFEST,
-    ),
-    BOOT_VARIANT: (BOOT_IMAGE, BOOT_MANIFEST),
-    TRAFFIC_VARIANT: (TRAFFIC_IMAGE, TRAFFIC_MANIFEST),
-    SATURATION_VARIANT: (SATURATION_IMAGE, SATURATION_MANIFEST),
-    FAULT_VARIANT: (FAULT_IMAGE, FAULT_MANIFEST),
-    STORAGE_VARIANT: (STORAGE_IMAGE, STORAGE_MANIFEST),
-    STORE_VARIANT: (STORE_IMAGE, STORE_MANIFEST),
     ROLLBACK_VARIANT: (ROLLBACK_IMAGE, ROLLBACK_MANIFEST),
-    RECOVERY_VARIANT: (RECOVERY_IMAGE, RECOVERY_MANIFEST),
     GENERATION_VARIANT: (GENERATION_IMAGE, GENERATION_MANIFEST),
-    DIRECTORY_VARIANT: (DIRECTORY_IMAGE, DIRECTORY_MANIFEST),
-    FILESYSTEM_VARIANT: (FILESYSTEM_IMAGE, FILESYSTEM_MANIFEST),
-    INPUT_VARIANT: (INPUT_IMAGE, INPUT_MANIFEST),
-    POWERBOX_VARIANT: (POWERBOX_IMAGE, POWERBOX_MANIFEST),
-    TRANSFER_VARIANT: (TRANSFER_IMAGE, TRANSFER_MANIFEST),
-    C_RUNTIME_VARIANT: (C_RUNTIME_IMAGE, C_RUNTIME_MANIFEST),
-    SLISP_VARIANT: (SLISP_IMAGE, SLISP_MANIFEST),
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
 }
 
@@ -617,8 +360,12 @@ def sha256_file(path: Path) -> str:
 
 def file_record(path: Path) -> dict[str, object]:
     require_file(path, "build artifact")
+    try:
+        recorded = path.relative_to(ROOT)
+    except ValueError:
+        recorded = Path(path.name)
     return {
-        "path": str(path.relative_to(ROOT)),
+        "path": str(recorded),
         "bytes": path.stat().st_size,
         "sha256": sha256_file(path),
     }
@@ -648,7 +395,7 @@ def boot_bundle_identity(platform: Platform) -> str:
     digest.update(b"slime-sel4-boot-bundle-v1\0")
     digest.update(bytes.fromhex(sha256_file(kernel)))
     digest.update(
-        bytes.fromhex(directory_digest(RUST_SEL4_SOURCE / "crates" / "sel4-kernel-loader"))
+        bytes.fromhex(directory_digest(platform.loader_source / "crates" / "sel4-kernel-loader"))
     )
     return digest.hexdigest()
 
@@ -1074,24 +821,44 @@ def build_application(
     component_spec_root: Path | None = None,
     external_components: list[str] | None = None,
     prebuilt_generation: Path | None = None,
+    resolved_generation: Path | None = None,
     duo_early_fault: bool = False,
     test_terminator: bool = False,
+    toolchain: str | None = None,
+    root_target: Path | None = None,
+    child_target: Path | None = None,
+    # CP14: when a closure drives the build, the root's role and its declared
+    # parameters come from closure data rather than from `variant`. `None`
+    # keeps the legacy variant-derived behavior every existing caller relies
+    # on, so the two paths coexist until CP15 migrates the last checker.
+    closure_root_role: str | None = None,
+    closure_root_parameters: tuple[str, ...] = (),
+    closure_target_name: str | None = None,
+    # CP14: one closed B40 child-CSpace mutation, from a negative build case.
+    # Only the closure path accepts it, so an ambient environment variable can
+    # no longer make any build produce a deliberately invalid root.
+    closure_root_mutation: str | None = None,
 ) -> tuple[Path, Path, Path | None]:
     rust_sel4 = table(pins, "rust_sel4")
-    toolchain = text(rust_sel4, "toolchain", "rust_sel4")
+    toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
     environment = cargo_environment(toolchain, platform)
-    root_target = ROOT / text(rust_sel4, platform.root_target_key, "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+    root_target = root_target or ROOT / text(
+        rust_sel4, platform.root_target_key, "rust_sel4"
+    )
+    child_target = child_target or RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
 
     child_target_dir = CARGO_BUILD / platform.name / "child"
+    child_environment = environment.copy()
+    child_remap = f"--remap-path-prefix={child_target_dir}=./target/sel4/{platform.name}/child"
+    child_environment["RUSTFLAGS"] = f"{child_environment.get('RUSTFLAGS', '')} {child_remap}".strip()
     cargo_build(
         manifest=CHILD_MANIFEST,
         package="slime-root-child",
         target=child_target,
         target_dir=child_target_dir,
-        environment=environment,
+        environment=child_environment,
         description="build root child",
         features=child_features(),
     )
@@ -1101,18 +868,41 @@ def build_application(
     root_environment = environment.copy()
     root_environment["SLIME_TARGET_PROFILE"] = platform.target_profile
     root_environment["CHILD_ELF"] = str(child_elf.resolve())
-    if platform is CV1800B_DUO:
+    if platform.name == CV1800B_DUO.name:
         frequency = table(pins, platform.pins_section).get("timer_frequency_hz")
         if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
             fail(f"sel4/pins.toml [{platform.pins_section}].timer_frequency_hz must be positive")
         root_environment["SLIME_DUO_TIMEBASE_HZ"] = str(frequency)
-    if platform is QEMU_ARM_VIRT and variant == GRAPH_VARIANT:
+    if closure_root_role is not None:
+        # Closure-driven: the role and its parameters are the whole selection,
+        # and the resolver has already refused a wrong-platform parameter.
+        if "qemuKeyboard" in closure_root_parameters:
+            root_environment["SLIME_QEMU_KEYBOARD"] = "1"
+        if "duoTestTerminator" in closure_root_parameters:
+            root_environment["SLIME_DUO_TEST_TERMINATOR"] = "1"
+        if closure_root_role == "boot-selector":
+            root_environment["SLIME_BOOT_SELECTOR"] = "1"
+            root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = boot_bundle_identity(platform)
+            generation = None
+        else:
+            if resolved_generation is None:
+                fail(f"root role {closure_root_role!r} requires a resolved generation")
+            generation = resolved_generation.resolve()
+            root_environment["SLIME_GENERATION"] = str(generation)
+            if closure_root_role == "root-fixture":
+                root_environment["SLIME_ROOT_FIXTURE"] = "1"
+        if closure_root_role == "reclamation-unwind":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_b38_force_unwind".strip()
+            )
+    elif platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011
         # RX FIFO and feeds those bytes through the existing input capability.
         # Plane images keep deterministic scripts, and physical targets do not
         # compile a QEMU address into their root task.
         root_environment["SLIME_QEMU_KEYBOARD"] = "1"
-    if platform in PRODUCT_UART_KINDS and variant == GRAPH_VARIANT:
+    if closure_root_role is None and platform in PRODUCT_UART_KINDS and variant == GRAPH_VARIANT:
         serial = text(table(pins, platform.pins_section), "serial", platform.pins_section)
         kind = PRODUCT_UART_KINDS[platform]
         match = re.fullmatch(rf"uart0-{kind}-(0x[0-9a-fA-F]+)", serial)
@@ -1126,10 +916,16 @@ def build_application(
             root_environment["SLIME_PRODUCT_TEST_TERMINATOR"] = "1"
     if duo_early_fault:
         root_environment["SLIME_DUO_EARLY_FAULT"] = "1"
-    if variant == BOOT_SELECTION_VARIANT:
+    if closure_root_role is not None:
+        pass
+    elif variant == BOOT_SELECTION_VARIANT:
         bundle_identity = boot_bundle_identity(platform)
         root_environment["SLIME_BOOT_SELECTOR"] = "1"
         root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = bundle_identity
+        generation = None
+    elif resolved_generation is not None:
+        generation = resolved_generation.resolve()
+        root_environment["SLIME_GENERATION"] = str(generation)
     else:
         manifest = VARIANT_MANIFESTS.get(variant, "sel4")
         generation_environment = None
@@ -1142,39 +938,7 @@ def build_application(
             generation_environment = dict(os.environ)
             generation_environment["SLIME_PRODUCT_SLISP_SHA256"] = slisp_digest
             external_components = [f"slisp-external={slisp_elf}"]
-        # B62: `traffic`, `fault`, and `saturation` share one manifest. They were
-        # three 1882-line fixtures differing in exactly two fields, and a full
-        # copy per variant is how a fixture goes stale against a rule it restates
-        # (B55). `.zti` is immediate mode by design and cannot compose, so the
-        # delta is declared here. Each variant still gets its own generation
-        # number, which is what keeps their identities — and therefore their
-        # images — distinct.
-        variant_delta = VARIANT_GENERATION_DELTAS.get(variant)
-        if variant_delta:
-            generation_environment = generation_environment or dict(os.environ)
-            generation_environment.update(variant_delta)
-        if variant == FAULT_VARIANT:
-            # C8.14: the one fault this plane must *inject* rather than script.
-            # Every other degradation path -- rejection, malformed reply,
-            # timeout, cancellation, retry exhaustion, duplicate, stale,
-            # expiry, and the call and operation peer deaths -- is already
-            # driven by the traffic action's own participants. A declared
-            # interposition hop dying is the one condition no participant can
-            # ask for, because a proxy that relays correctly cannot also be
-            # absent.
-            generation_environment = generation_environment or dict(os.environ)
-            generation_environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
-        if variant in STREAM_DEATH_VARIANTS:
-            # C8.5/C8.14: the stream family's own peer death, scripted for the
-            # same reason the interposition hop's is. A publisher cannot both
-            # end its route with `FLAG_LAST` and be observed dying mid-stream,
-            # so a plane that asserts peer death is a distinct structured event
-            # has to script one. Left to a race between the peer's exit and the
-            # broker's drain -- which is what these three planes relied on --
-            # the marker appeared or did not depending on which side won, and
-            # made the fault plane's stream record differ between two boots.
-            generation_environment = generation_environment or dict(os.environ)
-            generation_environment["SLIME_FABRIC_STREAM_EARLY_EXIT"] = "1"
+
         generation = build_sel4_generation(
             manifest,
             platform=platform,
@@ -1184,15 +948,21 @@ def build_application(
             prebuilt_generation=prebuilt_generation,
         ).resolve()
         root_environment["SLIME_GENERATION"] = str(generation)
-        if variant == FIXTURE_VARIANT and platform is not CV1800B_DUO:
+        if variant == FIXTURE_VARIANT and platform.name != CV1800B_DUO.name:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
-    if variant == RECLAMATION_VARIANT:
+    if closure_root_mutation is not None:
+        if closure_root_role is None:
+            fail("a root mutation is only selectable through a closure")
+        if closure_root_mutation not in B40_MUTATIONS:
+            fail(f"unknown B40 mutation {closure_root_mutation!r}")
         rustflags = root_environment.get("RUSTFLAGS", "")
-        root_environment["RUSTFLAGS"] = f"{rustflags} --cfg slime_b38_force_unwind".strip()
+        root_environment["RUSTFLAGS"] = (
+            f"{rustflags} --cfg slime_b40_mutate_{closure_root_mutation}".strip()
+        )
     # B40 negative mutations: perturb one child CSpace in exactly one way so
     # the capability-layout audit's refusal is observed rather than assumed.
     # Never set for a product variant.
-    mutation = os.environ.get("SLIME_B40_MUTATION")
+    mutation = None if closure_root_role is not None else os.environ.get("SLIME_B40_MUTATION")
     if mutation:
         if mutation not in B40_MUTATIONS:
             fail(f"unknown B40 mutation {mutation!r}")
@@ -1204,7 +974,11 @@ def build_application(
     # the same reason one level up — the root task compiles against a specific
     # `SEL4_PREFIX`, so a QEMU and a board build of the same variant are
     # different binaries.
-    root_target_dir = CARGO_BUILD / platform.name / VARIANT_TARGET_DIRS[variant]
+    target_name = closure_target_name or VARIANT_TARGET_DIRS[variant]
+    root_target_dir = CARGO_BUILD / platform.name / target_name
+    rustflags = root_environment.get("RUSTFLAGS", "")
+    remap = f"--remap-path-prefix={root_target_dir}=./target/sel4/{platform.name}/{target_name}"
+    root_environment["RUSTFLAGS"] = f"{rustflags} {remap}".strip()
     cargo_build(
         manifest=ROOT / "Cargo.toml",
         package="slime-root",
@@ -1215,36 +989,44 @@ def build_application(
     )
     root_elf = root_target_dir / root_target.stem / "release" / "slime-root.elf"
     require_file(root_elf, "root task ELF")
+    if closure_root_role is not None:
+        return child_elf, root_elf, generation
     return child_elf, root_elf, None if variant == BOOT_SELECTION_VARIANT else generation
 
 
-def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Path]:
+def build_loader(
+    pins: dict[str, object],
+    platform: Platform,
+    *,
+    toolchain: str | None = None,
+    loader_target: str | None = None,
+) -> tuple[Path, Path]:
     """Build the kernel loader and its host packaging tool.
 
-    Both run with `deps/rust-sel4` as the working directory: that workspace's
-    `.cargo/config.toml` supplies the `rust-lld` linker selection and the
-    `RUST_TARGET_PATH` its crates expect, and cargo discovers configuration
-    from the working directory rather than from `--manifest-path`.
-
-    The loader is platform-specific even though its target triple is not: it
-    compiles one `plat` module for the console it prints on and links at an
-    address derived from that platform's `kernel.elf`. It therefore builds into
-    a per-platform target directory, so a board image can never be packaged
-    with a loader left behind by a QEMU build.
+    Both run with `platform.loader_source` as the working directory: that
+    workspace's `.cargo/config.toml` supplies the `rust-lld` linker selection
+    and the `RUST_TARGET_PATH` its crates expect. For a platform with no
+    loader patch this is `RUST_SEL4_SOURCE`; a patched platform builds from
+    its own submodule instead, so its diverging branch never reaches any
+    other platform's loader. Closure callers pass the toolchain and loader
+    target explicitly; legacy callers retain the pinned manifest route.
     """
     rust_sel4 = table(pins, "rust_sel4")
-    toolchain = text(rust_sel4, "toolchain", "rust_sel4")
-    loader_target = text(rust_sel4, platform.loader_target_key, "rust_sel4")
+    toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
+    loader_target = loader_target or text(
+        rust_sel4, platform.loader_target_key, "rust_sel4"
+    )
     environment = cargo_environment(toolchain, platform)
+    loader_source = platform.loader_source
 
     loader_target_dir = CARGO_BUILD / platform.name / "loader"
     cargo_build(
-        manifest=RUST_SEL4_SOURCE / "Cargo.toml",
+        manifest=loader_source / "Cargo.toml",
         package="sel4-kernel-loader",
         target=loader_target,
         target_dir=loader_target_dir,
         environment=environment,
-        cwd=RUST_SEL4_SOURCE,
+        cwd=loader_source,
         description="build seL4 kernel loader",
     )
     loader = loader_target_dir / loader_target / "release" / "sel4-kernel-loader"
@@ -1259,13 +1041,13 @@ def build_loader(pins: dict[str, object], platform: Platform) -> tuple[Path, Pat
             "--offline",
             "--release",
             "--manifest-path",
-            str(RUST_SEL4_SOURCE / "Cargo.toml"),
+            str(loader_source / "Cargo.toml"),
             "--package",
             "sel4-kernel-loader-add-payload",
             "--target-dir",
             str(host_target_dir),
         ],
-        cwd=RUST_SEL4_SOURCE,
+        cwd=loader_source,
         environment=environment,
         description="build loader payload tool",
     )
@@ -1322,7 +1104,9 @@ def write_manifest(
     generation: Path | None = None,
     duo_early_fault: bool = False,
     test_terminator: bool = False,
+    source_platform: Platform | None = None,
 ) -> None:
+    source_platform = source_platform or platform
     prefix = platform.prefix_dir
     kernel = require_file(prefix / "bin" / "kernel.elf", "installed seL4 kernel")
     kernel_config = require_file(
@@ -1337,19 +1121,19 @@ def write_manifest(
     platform_info = require_file(
         prefix / "support" / "platform_gen.yaml", "installed platform metadata"
     )
-    root_target = ROOT / text(table(pins, "rust_sel4"), platform.root_target_key, "rust_sel4")
-    child_target = RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+    root_target = ROOT / text(table(pins, "rust_sel4"), source_platform.root_target_key, "rust_sel4")
+    child_target = RUST_SEL4_SOURCE / "support" / "targets" / source_platform.child_target_name
     suffix = "" if variant == FIXTURE_VARIANT else f"-{variant}"
     if duo_early_fault:
         suffix += "-early-fault"
     if test_terminator:
         suffix += "-test-terminator"
-    stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", platform)
-    stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", platform)
-    stable_loader = copy_artifact(loader, "sel4-kernel-loader", platform)
-    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", platform)
+    stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", source_platform)
+    stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", source_platform)
+    stable_loader = copy_artifact(loader, "sel4-kernel-loader", source_platform)
+    stable_payload_tool = copy_artifact(payload_tool, "sel4-kernel-loader-add-payload", source_platform)
 
-    manifest_platform = table(pins, platform.pins_section)
+    manifest_platform = table(pins, source_platform.pins_section)
     manifest = {
         "schema": 1,
         "kind": "slime-sel4-image-identity",
@@ -1369,7 +1153,7 @@ def write_manifest(
         },
         "config": {
             "pins": file_record(PINS_PATH),
-            "cmake": file_record(platform.config),
+            "cmake": file_record(source_platform.config),
             "root_target": file_record(root_target),
             "child_target": file_record(child_target),
             "kernel_config": file_record(kernel_config),
@@ -1385,39 +1169,28 @@ def write_manifest(
             "payload_tool": file_record(stable_payload_tool),
         },
         "image": file_record(image),
-        # Which startup path this image takes, so a gate cannot boot a different
-        # one and assert against markers it will never emit.
-        #
-        # `component_graph` is retained beside `variant` rather than replaced by
-        # it: P5.1's and P5.2's gates assert on that field, and a third image is
-        # no reason to edit verification code those slices' evidence rests on. A
-        # bool cannot name three images, so `variant` is what a new gate reads.
         "component_graph": variant == GRAPH_VARIANT,
         "variant": variant,
-        # Which board or machine this image is built for. Every field above is
-        # a function of it, so a gate can refuse an image built for the other
-        # platform rather than discovering it from a silent boot failure.
-        "platform": platform.name,
-        "target_profile": platform.target_profile,
+        "platform": source_platform.name,
+        "target_profile": source_platform.target_profile,
     }
     if duo_early_fault:
         manifest["duo_early_fault"] = True
     if test_terminator:
         manifest["test_terminator"] = True
-    if platform.qemu_dtb:
-        # Emulator launch facts, which gates read to build their QEMU command.
+    if source_platform.qemu_dtb:
         manifest["qemu"] = {
-            "machine": text(manifest_platform, "machine", platform.pins_section),
-            "cpu": text(manifest_platform, "cpu", platform.pins_section),
+            "machine": text(manifest_platform, "machine", source_platform.pins_section),
+            "cpu": text(manifest_platform, "cpu", source_platform.pins_section),
             "cpus": manifest_platform["cpus"],
             "memory_mib": manifest_platform["memory_mib"],
-            "version": text(manifest_platform, "qemu_version", platform.pins_section),
+            "version": text(manifest_platform, "qemu_version", source_platform.pins_section),
         }
     else:
         manifest["board"] = {
-            "platform": text(manifest_platform, "platform", platform.pins_section),
-            "soc": text(manifest_platform, "soc", platform.pins_section),
-            "serial": text(manifest_platform, "serial", platform.pins_section),
+            "platform": text(manifest_platform, "platform", source_platform.pins_section),
+            "soc": text(manifest_platform, "soc", source_platform.pins_section),
+            "serial": text(manifest_platform, "serial", source_platform.pins_section),
             "serial_baud": manifest_platform["serial_baud"],
             "boot_files": manifest_platform["boot_files"],
         }
@@ -1460,41 +1233,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--channel-plane",
-        action="store_true",
-        help=("embed the channel-plane generation (P5.3.1), writing a separate image"),
-    )
-    parser.add_argument(
-        "--loan-plane",
-        action="store_true",
-        help="embed the loan-plane generation (P5.3.2), writing a separate image",
-    )
-    parser.add_argument(
-        "--io-queue-plane",
-        action="store_true",
-        help="embed the shared I/O queue proof generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--io-block-plane",
-        action="store_true",
-        help="embed the userspace virtio-blk parity and fault proof generation",
-    )
-    parser.add_argument(
-        "--io-network-plane",
-        action="store_true",
-        help="embed the bounded network-service proof generation",
-    )
-    parser.add_argument(
-        "--io-link-plane",
-        action="store_true",
-        help="embed the supervised userspace virtio-net LinkDevice proof generation",
-    )
-    parser.add_argument(
-        "--spawn-plane",
-        action="store_true",
-        help="embed the spawn-plane generation (P5.3.3), writing a separate image",
-    )
-    parser.add_argument(
         "--sample-plane",
         action="store_true",
         help="embed the sample-plane generation (P5.3.4), writing a separate image",
@@ -1513,205 +1251,12 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--stream-plane",
-        action="store_true",
-        help="embed the stream-plane generation (P5.5.2), writing a separate image",
-    )
-    parser.add_argument(
         "--demo-plane",
         action="store_true",
         help=(
             "embed the RP2 demo-scoped generation, which both launches the "
             "product component graph and runs the bounded data path, writing a "
             "separate image"
-        ),
-    )
-    parser.add_argument(
-        "--supervision-plane",
-        action="store_true",
-        help=("embed the supervision-plane generation (B16), writing a separate image"),
-    )
-    parser.add_argument(
-        "--reclamation-plane",
-        action="store_true",
-        help="embed the B38 task-reclamation generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--private-memory-plane",
-        action="store_true",
-        help=("embed the C10.2 private-memory-budget generation, writing a separate image"),
-    )
-    parser.add_argument(
-        "--clock-authority-plane",
-        action="store_true",
-        help="embed the C9.1 clock-authority generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--wait-set-plane",
-        action="store_true",
-        help="embed the C9.2 wait-set generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--scheduling-class-plane",
-        action="store_true",
-        help="embed the C9.3 scheduling-class generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--lifecycle-restart-plane",
-        action="store_true",
-        help="embed the C9.4 lifecycle-restart generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--replay-plane",
-        action="store_true",
-        help="embed the C9.5 recording/replay generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--crossing-plane",
-        action="store_true",
-        help=("embed the channel-crossing generation (B22), writing a separate image"),
-    )
-    parser.add_argument(
-        "--robot-runtime-plane",
-        action="store_true",
-        help="embed the C9.6 robot-workload generation, writing a separate image",
-    )
-    parser.add_argument(
-        "--call-plane",
-        action="store_true",
-        help="embed the bounded-call generation (C8.6), writing a separate image",
-    )
-    parser.add_argument(
-        "--qos-plane",
-        action="store_true",
-        help=(
-            "embed the timed-QoS generation (C8.5): the stream graph plus a "
-            "monotonic-time channel, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--stress-plane",
-        action="store_true",
-        help=(
-            "embed the 48-instance generation (B49): the admitted ceiling, so "
-            "the largest graph admission accepts actually boots"
-        ),
-    )
-    parser.add_argument(
-        "--operation-plane",
-        action="store_true",
-        help="embed the native-operation generation (C8.7), writing a separate image",
-    )
-    parser.add_argument(
-        "--visibility-plane",
-        action="store_true",
-        help=(
-            "embed the filtered-introspection and declared-interposition "
-            "generation (C8.8), writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--matrix-plane",
-        action="store_true",
-        help=(
-            "embed the matching, visibility, and denial matrix generation "
-            "(C8.12), writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--matrix-unsatisfiable-plane",
-        action="store_true",
-        help=(
-            "embed C8.12's negative arm: the matrix graph with one incompatible "
-            "QoS pair, which admission must refuse"
-        ),
-    )
-    parser.add_argument(
-        "--boot-plane",
-        action="store_true",
-        help=(
-            "embed the full-graph bootstrap generation (C8.10): every C8 role "
-            "in one collision-free layout, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--traffic-plane",
-        action="store_true",
-        help=(
-            "embed the concurrent cross-plane traffic generation (C8.13): the "
-            "C8.10 three-worker layout driving real stream, call, and operation "
-            "traffic together, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--saturation-plane",
-        action="store_true",
-        help=(
-            "embed the adversarial saturation generation (C8.13): the "
-            "identical traffic-action scenario against declared ceilings "
-            "tightened to the traffic plane's own observed peaks, writing a "
-            "separate image"
-        ),
-    )
-    parser.add_argument(
-        "--fault-plane",
-        action="store_true",
-        help=(
-            "embed the degradation and fault-isolation generation (C8.14): the "
-            "identical traffic-action scenario, built with the proxy "
-            "early-death injection enabled, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--storage-plane",
-        action="store_true",
-        help=(
-            "embed the M5 storage generation (P5.4.2c): a probe holding a block "
-            "capability, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--transfer-plane",
-        action="store_true",
-        help=(
-            "embed the M6.7 transfer generation (P5.4.3): a probe holding a "
-            "read-only source device and a writable receiver, writing a "
-            "separate image"
-        ),
-    )
-    parser.add_argument(
-        "--powerbox-plane",
-        action="store_true",
-        help=(
-            "embed the M6.6 powerbox generation (P5.4.3): a chooser holding "
-            "directory authority the requester lacks, handing over one narrowed "
-            "view on selection, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--input-plane",
-        action="store_true",
-        help=(
-            "embed the input generation (P5.4.3): a probe reading the scripted "
-            "key source through a granted capability, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--filesystem-plane",
-        action="store_true",
-        help=(
-            "embed the M6.3 filesystem generation (P5.4.3): a service resolving "
-            "names in a snapshot tree over the object store, and a client that "
-            "must ask it, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--directory-plane",
-        action="store_true",
-        help=(
-            "embed the M6.3 directory generation (P5.4.3): a probe exercising "
-            "scoped views, narrow-only derivation, and the atomic namespace "
-            "commit, writing a separate image"
         ),
     )
     parser.add_argument(
@@ -1724,15 +1269,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--recovery-plane",
-        action="store_true",
-        help=(
-            "embed the M5.9 recovery generation (P5.4.2c): a probe "
-            "reconstructing a verified root from a signed index while an "
-            "ungranted disk stays untouched, writing a separate image"
-        ),
-    )
-    parser.add_argument(
         "--rollback-plane",
         action="store_true",
         help=(
@@ -1740,30 +1276,6 @@ def main() -> None:
             "BootState transition model on two durable slots, writing a "
             "separate image"
         ),
-    )
-    parser.add_argument(
-        "--io-driver-authority-plane",
-        action="store_true",
-        help="embed the IO1 userspace hardware-authority proof generation",
-    )
-    parser.add_argument(
-        "--store-plane",
-        action="store_true",
-        help=(
-            "embed the M5.4 object-store generation (P5.4.2c): a probe running "
-            "GPT validation and the object store in userspace over a block "
-            "capability, writing a separate image"
-        ),
-    )
-    parser.add_argument(
-        "--c-runtime-plane",
-        action="store_true",
-        help="embed the external C component runtime proof generation",
-    )
-    parser.add_argument(
-        "--slisp-plane",
-        action="store_true",
-        help="embed the external freestanding Slisp core generation",
     )
     parser.add_argument(
         "--component-spec-root",
@@ -1797,49 +1309,9 @@ def main() -> None:
         for variant, chosen in (
             (GRAPH_VARIANT, arguments.component_graph),
             (DEMO_VARIANT, arguments.demo_plane),
-            (CHANNEL_VARIANT, arguments.channel_plane),
-            (LOAN_VARIANT, arguments.loan_plane),
-            (IO_QUEUE_VARIANT, arguments.io_queue_plane),
-            (IO_DRIVER_AUTHORITY_VARIANT, arguments.io_driver_authority_plane),
-            (IO_NETWORK_VARIANT, arguments.io_network_plane),
-            (IO_BLOCK_VARIANT, arguments.io_block_plane),
-            (IO_LINK_VARIANT, arguments.io_link_plane),
-            (SPAWN_VARIANT, arguments.spawn_plane),
             (SAMPLE_VARIANT, arguments.sample_plane),
-            (STREAM_VARIANT, arguments.stream_plane),
-            (SUPERVISION_VARIANT, arguments.supervision_plane),
-            (RECLAMATION_VARIANT, arguments.reclamation_plane),
-            (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
-            (CLOCK_AUTHORITY_VARIANT, arguments.clock_authority_plane),
-            (WAIT_SET_VARIANT, arguments.wait_set_plane),
-            (SCHEDULING_CLASS_VARIANT, arguments.scheduling_class_plane),
-            (LIFECYCLE_RESTART_VARIANT, arguments.lifecycle_restart_plane),
-            (REPLAY_VARIANT, arguments.replay_plane),
-            (ROBOT_RUNTIME_VARIANT, arguments.robot_runtime_plane),
-            (CROSSING_VARIANT, arguments.crossing_plane),
-            (CALL_VARIANT, arguments.call_plane),
-            (QOS_VARIANT, arguments.qos_plane),
-            (STRESS_VARIANT, arguments.stress_plane),
-            (OPERATION_VARIANT, arguments.operation_plane),
-            (VISIBILITY_VARIANT, arguments.visibility_plane),
-            (MATRIX_VARIANT, arguments.matrix_plane),
-            (MATRIX_UNSATISFIABLE_VARIANT, arguments.matrix_unsatisfiable_plane),
-            (BOOT_VARIANT, arguments.boot_plane),
-            (TRAFFIC_VARIANT, arguments.traffic_plane),
-            (SATURATION_VARIANT, arguments.saturation_plane),
-            (FAULT_VARIANT, arguments.fault_plane),
-            (STORAGE_VARIANT, arguments.storage_plane),
-            (STORE_VARIANT, arguments.store_plane),
             (ROLLBACK_VARIANT, arguments.rollback_plane),
-            (RECOVERY_VARIANT, arguments.recovery_plane),
             (GENERATION_VARIANT, arguments.generation_plane),
-            (DIRECTORY_VARIANT, arguments.directory_plane),
-            (FILESYSTEM_VARIANT, arguments.filesystem_plane),
-            (INPUT_VARIANT, arguments.input_plane),
-            (POWERBOX_VARIANT, arguments.powerbox_plane),
-            (TRANSFER_VARIANT, arguments.transfer_plane),
-            (C_RUNTIME_VARIANT, arguments.c_runtime_plane),
-            (SLISP_VARIANT, arguments.slisp_plane),
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
         )
         if chosen
