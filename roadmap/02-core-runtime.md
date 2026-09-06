@@ -1,5 +1,10 @@
 # Core runtime track
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Status:** C7 and all of C8 (C8.1–C8.15) are complete under their named QEMU gates. The C8 track closed on 2026-08-17: C8.13's concurrent cross-plane traffic and resource ceilings (with C8.13.1–C8.13.3), C8.14's degradation and fault-isolation envelope, and C8.15's aggregate determinism gate, which boots both aggregate schedules twice over one declared composition and compares 279 semantically identical trace records field by field. The backlog is clear: B55's full-graph boot defects and B56's unpassable C8.9 profile check are both resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C10 (bounded private component memory) closed 2026-08-24 across C10.1–C10.4. C9 (robot runtime authority) is the track's one remaining open milestone, now decomposed into C9.1–C9.6; two of its original deliverables were rescoped against the pinned platform rather than carried as plans — EL0 counter access is a global kernel grant the root itself depends on, and conserved CPU accounts have no mechanism while `KernelIsMCS OFF`.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.

@@ -1,5 +1,10 @@
 # Foreign workloads
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 | | |
 | --- | --- |
 | **Purpose** | Run selected Linux workloads without changing Slime's native ABI or importing Linux's ambient authority model. |

@@ -9,12 +9,18 @@ layout and front-matter contract documented in ``devlog/README.md``:
 * every entry is a ``YYYY-MM-DD-short-topic/`` folder holding ``index.md``;
 * front matter carries the exact field set, in order, with ``Kind``/``Status``
   drawn from the declared vocabularies;
-* ``Roadmap`` ids resolve to one real roadmap heading (apart from two frozen
-  historical backlog collisions) and ``Gates`` name real Justfile targets;
+* ``Work items`` references resolve to a canonical work item in
+  ``.tasks/items/`` — directly when they are UUIDs, and through the committed
+  legacy map when they are historical roadmap ids — and ``Gates`` name real
+  Justfile targets;
 * required ``##`` sections are present for the entry's kind, in template order;
 * the README index lists every entry once, with matching date and status;
 * every devlog path referenced anywhere in the repository exists, and every
   evidence sibling is linked from its ``index.md``.
+
+This checker no longer derives identity from roadmap headings. Work-item
+identity is the UUID under ``.tasks/items/``, ``myque check`` validates that
+store, and ``scripts/lib/work_items.py`` resolves a reference against it.
 """
 
 from __future__ import annotations
@@ -28,49 +34,20 @@ import subprocess
 
 from harness import ROOT
 from just_metadata import targets as just_targets
+from work_items import ambiguous_ids, resolve
 
 DEVLOG = ROOT / "devlog"
 README = DEVLOG / "README.md"
 TEMPLATE = DEVLOG / "TEMPLATE.md"
-ROADMAP = ROOT / "roadmap"
 
 ENTRY_NAME = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-ROADMAP_HEADING = re.compile(r"^#{2,3} (?P<identifier>\S+)")
-ROADMAP_ID_DECLARATION = re.compile(
-    r"^#{2,3} (?P<identifier>[A-Z]+[0-9]+(?:\.(?:[0-9]+[a-z]?|[a-z]+))*)"
-    r"(?:\s+(?:—|--)\s+|:\s+)"
-)
-
-# B29 and B30 were each allocated twice before the backlog made heading text
-# immutable. Preserve those four historical anchors, but reject any changed or
-# additional declaration. New roadmap ids must always be unique.
-LEGACY_ROADMAP_ID_COLLISIONS: dict[str, frozenset[tuple[str, str]]] = {
-    "B29": frozenset(
-        {
-            (
-                "roadmap/00-backlog.md",
-                "### B29 — one block device per granule",
-            ),
-            (
-                "roadmap/00-backlog.md",
-                "### B29 — `ParkedReplies::wake` never deleted the reply CSlot it counted as recycled — **resolved 2026-08-07**",
-            ),
-        }
-    ),
-    "B30": frozenset(
-        {
-            (
-                "roadmap/00-backlog.md",
-                "### B30 — the dango plane launched no commands",
-            ),
-            (
-                "roadmap/00-backlog.md",
-                "### B30 — `release_trust_check` was red, unregistered, and its rotation refusals never reached Rust",
-            ),
-        }
-    ),
-}
+# The work-item field. Entries written before the MyQue migration name it
+# `Roadmap` and carry roadmap ids; entries written after it name it
+# `Work items` and carry canonical UUIDs. Both are accepted in the same
+# position because a merged entry is preserved, not rewritten (`AGENTS.md`):
+# correctness depends on the values resolving, not on the field's name.
+WORK_ITEM_FIELDS = ("Work items", "Roadmap")
 
 FIELD_ORDER = ["Date", "Kind", "Status", "Scope", "Roadmap", "Gates", "Trigger", "Baseline"]
 
@@ -175,71 +152,11 @@ def ragged_rows(text: str) -> list[tuple[str, int, int]]:
     return ragged
 
 
-def roadmap_id_declarations(
-    path: str, text: str
-) -> list[tuple[str, int, str, str]]:
-    declarations: list[tuple[str, int, str, str]] = []
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        match = ROADMAP_ID_DECLARATION.match(line)
-        if match is not None:
-            declarations.append((match.group("identifier"), line_number, path, line))
-    return declarations
-
-
-def duplicate_roadmap_ids(
-    declarations: list[tuple[str, int, str, str]],
-) -> dict[str, list[tuple[str, int, str]]]:
-    occurrences: dict[str, list[tuple[str, int, str]]] = {}
-    for identifier, line_number, path, heading in declarations:
-        occurrences.setdefault(identifier, []).append((path, line_number, heading))
-    return {
-        identifier: found
-        for identifier, found in occurrences.items()
-        if len(found) > 1
-    }
-
-
-def prove_roadmap_collision_guard() -> None:
-    probe = roadmap_id_declarations(
-        "first.md", "## Z99 — first\n### Z99 acceptance and verification stack\n"
-    )
-    probe += roadmap_id_declarations("second.md", "### Z99: second\n")
-    collisions = duplicate_roadmap_ids(probe)
-    if list(collisions) != ["Z99"] or len(collisions["Z99"]) != 2:
-        raise SystemExit("devlog check's roadmap id collision guard failed its probe")
-
-
-def roadmap_ids() -> set[str]:
-    ids: set[str] = set()
-    declarations: list[tuple[str, int, str, str]] = []
-    for path in ROADMAP.glob("*.md"):
-        text = path.read_text()
-        relative = path.relative_to(ROOT).as_posix()
-        declarations.extend(roadmap_id_declarations(relative, text))
-        for line in text.splitlines():
-            match = ROADMAP_HEADING.match(line)
-            if match is not None:
-                ids.add(match.group("identifier").rstrip(":").rstrip("—").strip())
-
-    for identifier, found in sorted(duplicate_roadmap_ids(declarations).items()):
-        signatures = frozenset((path, heading) for path, _, heading in found)
-        legacy = LEGACY_ROADMAP_ID_COLLISIONS.get(identifier)
-        if legacy == signatures and len(found) == len(legacy):
-            continue
-        locations = ", ".join(f"{path}:{line}" for path, line, _ in found)
-        fail(f"Roadmap id {identifier!r} is declared more than once: {locations}")
-    return ids
-
-
-prove_roadmap_collision_guard()
-
-
 def declared_just_targets() -> set[str]:
     """Every recipe in the fully imported repository Justfile."""
     return set(just_targets())
 
 
-KNOWN_IDS = roadmap_ids()
 KNOWN_TARGETS = declared_just_targets()
 
 entries = sorted(path for path in DEVLOG.iterdir() if path.is_dir())
@@ -289,9 +206,15 @@ for entry in entries:
     text = index.read_text()
     fields = front_matter(text)
 
-    present = [field for field in FIELD_ORDER if field in fields]
-    if present != FIELD_ORDER:
-        missing = [field for field in FIELD_ORDER if field not in fields]
+    work_item_field = next((field for field in WORK_ITEM_FIELDS if field in fields), None)
+    if work_item_field is None:
+        fail(f"{name}: front matter names neither {' nor '.join(WORK_ITEM_FIELDS)}")
+        continue
+    expected = [work_item_field if field == "Roadmap" else field for field in FIELD_ORDER]
+
+    present = [field for field in expected if field in fields]
+    if present != expected:
+        missing = [field for field in expected if field not in fields]
         if missing:
             fail(f"{name}: front matter missing {', '.join(missing)}")
         else:
@@ -299,8 +222,8 @@ for entry in entries:
         continue
 
     keys = list(fields)
-    if keys[: len(FIELD_ORDER)] != FIELD_ORDER:
-        fail(f"{name}: front-matter fields out of order: {keys[: len(FIELD_ORDER)]}")
+    if keys[: len(expected)] != expected:
+        fail(f"{name}: front-matter fields out of order: {keys[: len(expected)]}")
 
     if fields["Date"] != name[:10]:
         fail(f"{name}: Date {fields['Date']} does not match the folder date {name[:10]}")
@@ -313,10 +236,21 @@ for entry in entries:
     if status not in STATUSES:
         fail(f"{name}: Status {status!r} is not one of {', '.join(STATUSES)}")
 
-    if fields["Roadmap"] != "none":
-        for identifier in (part.strip() for part in fields["Roadmap"].split(",")):
-            if identifier not in KNOWN_IDS:
-                fail(f"{name}: Roadmap id {identifier!r} matches no roadmap/backlog heading")
+    if fields[work_item_field] != "none":
+        for reference in (part.strip() for part in fields[work_item_field].split(",")):
+            if resolve(reference, entry=name) is not None:
+                continue
+            if reference in ambiguous_ids():
+                fail(
+                    f"{name}: {work_item_field} names {reference!r}, a roadmap id that was "
+                    "allocated twice; no evidence resolves which item this entry meant. "
+                    "Record the resolution in .tasks/legacy-roadmap-ids.json or cite a UUID"
+                )
+            else:
+                fail(
+                    f"{name}: {work_item_field} names {reference!r}, which resolves to no "
+                    "work item in .tasks/items/ and is absent from the legacy id map"
+                )
 
     gates = re.findall(r"`just ([a-z_0-9]+)`", fields["Gates"])
     if fields["Gates"] == "none":

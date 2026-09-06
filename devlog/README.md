@@ -47,12 +47,12 @@ Exactly these eight fields, in this order:
 | `Kind` | `Defect`, `Change`, `Audit`, or `Decision` — selects the required sections. |
 | `Status` | One token from the status vocabulary below. Nothing else: no parentheticals, no dates, no prose. |
 | `Scope` | Subsystems, files, and checks touched. |
-| `Roadmap` | Comma-separated milestone/backlog ids (`C7.4, B3`), each resolving to a real `roadmap/` heading, or `none`. |
+| `Work items` | Comma-separated canonical work-item UUIDs from `.tasks/items/`, or `none`. Entries written before the MyQue migration name this field `Roadmap` and carry roadmap ids (`C7.4, B3`), which resolve through `.tasks/legacy-roadmap-ids.json`; both names are accepted in this position, and a landed entry is never rewritten to change it. |
 | `Gates` | The narrowest `` `just <target>` `` commands guarding this entry's claim, or `none`. Every name must be a real Justfile target. |
 | `Trigger` | Commit, change, or first observed condition. |
 | `Baseline` | Last known-good behavior or invariant. |
 
-`Roadmap` and `Gates` exist so "which entry covers C7.4?" and "what evidence backs `transfer_check`?" are answerable by reading the index and grepping front matter, instead of reading twenty bodies.
+`Work items` and `Gates` exist so "which entry covers this milestone?" and "what evidence backs `transfer_check`?" are answerable by reading the index and grepping front matter, instead of reading twenty bodies. Human keys such as `C7.4` are display aliases only, so a reference is stored as a UUID: renaming or dropping a key leaves every entry resolving.
 
 A `Status` of `Fixed`, `Verified`, or `Monitoring` asserts an observed result, so it requires at least one gate. `Gates` names the *guards*, not every command run — the exhaustive list belongs in *Verification*. Repository hygiene targets (`fmt_check`, `lint`, `framework_safety_check`, and the `_components` variants) are assumed on every permanent Rust change and are not listed as gates.
 
@@ -103,11 +103,11 @@ When `Status` changes, update the same entry's row in the index below; the check
 - Mark unobserved conclusions as **[INFERENCE]**.
 - Preserve raw logs as evidence siblings rather than pasting them into the entry; never edit one after the fact.
 - Never place credentials, account banners, tokens, or unrelated terminal metadata in curated entries.
-- Roadmap completion remains authoritative in `roadmap/`; devlog entries explain how conclusions were reached.
+- Work-item state remains authoritative in `.tasks/items/`; devlog entries explain how conclusions were reached.
 
 ## Checking
 
-`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, `Roadmap` ids against real roadmap headings, `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It runs no guest code, so it is cheap enough to run on any documentation change.
+`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, work-item references against `.tasks/items/` (UUIDs directly, pre-migration roadmap ids through `.tasks/legacy-roadmap-ids.json`), `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It reads the tree and runs no guest code or external binary, so it is cheap enough to run on any documentation change; `just tasks_check` separately validates the store itself.
 
 ## Entries
 
@@ -401,3 +401,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-04 | [CP15 - the remaining plane gates unblock, the legacy flag surface deletes, and a keyboard parameter the closure model dropped](2026-09-04-cp15-legacy-deletion/index.md) | Change | Verified | CP12, CP15 |
 | 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
 | 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |
+| 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | 01a07486-0f9c-7aac-a688-b2a01e5d5c29 |

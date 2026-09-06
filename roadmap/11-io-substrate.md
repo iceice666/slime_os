@@ -1,5 +1,10 @@
 # Native I/O substrate
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
 **Status:** IO0–IO3 and IO5–IO7 complete; IO4 is complete only for its exact-

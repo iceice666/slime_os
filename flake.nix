@@ -13,10 +13,28 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The work-item tracker that owns `.tasks/`. `follows` keeps one nixpkgs:
+    # both pins carry GHC 9.10.3, so sharing avoids a second Haskell closure.
+    #
+    # `myque-bin` is `justStaticExecutables`, a 4-path/75 MB runtime closure.
+    # There is no published binary cache, so an uncached consumer builds it
+    # through GHC — which is why `devlog_check` stays binary-free and only
+    # `tasks_check` needs this input.
+    #
+    # The lock currently pins db1c81f, which predates the store-relative
+    # abbreviation fix. `myque check` is unaffected — the schema did not change
+    # and this store validates under both revisions — but `myque list` on that
+    # revision prints the first UUID group for every keyless item, which is one
+    # repeated token for the nine items here that have no key. Run
+    # `nix flake update myque` once the fix is published.
+    myque = {
+      url = "github:mozufu/myque";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    { nixpkgs, rust-overlay, myque, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -105,6 +123,10 @@
                 crossCC
                 riscvCrossCC
                 sel4Python
+              ]
+              ++ [
+                # `just tasks_check` and the `tasks_*` views.
+                myque.packages.${system}.myque-bin
               ]
               ++ nixpkgs.lib.optionals
                 (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64)

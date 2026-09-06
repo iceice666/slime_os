@@ -1,5 +1,10 @@
 # Backlog (defects and unmasked debt)
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Track concrete defects, regressions, and latent bugs found in
 implemented code that must be resolved before starting new roadmap-track
 milestones. Backlog items are not new capability; they restore an already

@@ -54,6 +54,26 @@ fmt_check_all: fmt_check
 devlog_check:
     python3 scripts/check/check-devlog.py
 
+# The canonical work-item store: `myque check` validates `.tasks/items/`, then
+# the repository's own policy over it. `devlog_check` deliberately stays
+# binary-free so it runs in a checkout-only CI job; this target is where the
+# MyQue dependency lives.
+[group('quality')]
+tasks_check:
+    python3 scripts/check/check-work-items.py
+
+[group('quality')]
+tasks_list:
+    myque list
+
+[group('quality')]
+tasks_next:
+    myque next
+
+[group('quality')]
+tasks_graph:
+    myque graph
+
 [group('quality')]
 x86_portability_check:
     python3 scripts/check/check-architecture-portability.py

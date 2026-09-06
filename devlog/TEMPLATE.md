@@ -6,7 +6,7 @@
 | Kind | Defect / Change / Audit / Decision |
 | Status | Investigating / Root-caused / Fixed / Verified / Monitoring / Proposed |
 | Scope | Subsystems, files, and checks touched |
-| Roadmap | Milestone and backlog ids this entry bears on, comma-separated (`C7.4, B3`), or `none` |
+| Work items | Canonical work-item UUIDs from `.tasks/items/` this entry bears on, comma-separated, or `none` |
 | Gates | The narrowest `just` targets that guard this entry's claim, or `none` |
 | Trigger | Commit, change, or first observed condition |
 | Baseline | Last known-good behavior or invariant |
@@ -77,4 +77,4 @@ Describe the source-level mechanism and violated invariant. Distinguish the root
 - Focused report:
 - Raw transcript:
 - Serial/debugger/model output:
-- Related roadmap item:
+- Related work item:

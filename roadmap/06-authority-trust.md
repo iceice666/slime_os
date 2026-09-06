@@ -1,5 +1,10 @@
 # Authority and trust roadmap
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Define the remaining authority and physical-trust work: revocable and leased grants, non-recordable secrets, rights-gated accelerator compute, TPM-bound boot state and attestation, and capabilities transported between machines. This track owns authority mechanisms, not scheduling policy, foreign-workload translation, or ROS 2 wire interoperability.
 
 **Status:** Planned; A1–A5 are not implemented.

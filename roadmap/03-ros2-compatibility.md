@@ -1,5 +1,10 @@
 # ROS 2 compatibility track
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Status:** Not started. The first ROS milestone is now R0: a minimal bounded Zenoh topic profile sufficient for two ROS 2 nodes on Raspberry Pi 5 to exchange bounded data.
 
 This track makes ROS 2 a bounded userspace compatibility profile over Slime's native typed data fabric and explicit network/datagram authority. It does not make ROS, a middleware wire protocol, a ROS graph, or a topic namespace part of the kernel ABI. Existing unmodified ROS binaries remain later R3 scope unless the RPi5 demo explicitly selects a Linux-personality route, but the first demo is no longer local-only: it must exercise a real ROS 2 middleware topic path.

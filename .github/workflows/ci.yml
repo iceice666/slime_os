@@ -136,6 +136,37 @@ jobs:
       - run: just devlog_check
       - run: just sel4_gate_control_check
 
+  work_items:
+    name: Canonical work-item store
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Separate from `docs_gates` on purpose. That job's whole toolchain is a
+    # checkout plus `just`, and `devlog_check` is deliberately binary-free so
+    # it stays that cheap. This gate runs `myque check`, which needs the dev
+    # shell, so the Nix closure is paid for here and nowhere else.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      # Keyed on the flake alone: `myque-bin` has no published binary cache, so
+      # a cold run builds it through GHC. An unrelated `Cargo.lock` change must
+      # not evict that closure.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            myque-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix')
+            }}
+          restore-prefixes-first-match: myque-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+
+      - run: nix develop --command just tasks_check
+
   kani_proofs:
     name: Kani IO wire and device-boundary proofs
     # An ordinary x64 runner, not the arm64 seL4 pool: nothing here builds for
