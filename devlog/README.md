@@ -402,3 +402,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
 | 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |
 | 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | 01a07486-0f9c-7aac-a688-b2a01e5d5c29 |
+| 2026-09-06 | [The backlog file becomes an index over the work-item store](2026-09-06-backlog-as-index/index.md) | Change | Verified | 01a07762-1202-7450-b60b-31b4210da8da |

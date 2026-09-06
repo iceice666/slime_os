@@ -11,8 +11,9 @@ Two responsibilities, deliberately in one checker rather than two:
   that here would fork the schema, which the migration explicitly does not do.
 
 * **Repository policy** is Slime OS's own and MyQue is generic, so it cannot
-  live upstream: backlog-first ordering, and the invariants that make a
-  migrated item auditable. These are consumers of the store, not extensions of
+  live upstream: backlog-first ordering, the integrity of the backlog index
+  that 75 devlog entries link into, and the invariants that make a migrated
+  item auditable. These are consumers of the store, not extensions of
   ``work-item/v1``.
 
 Adding this checker rather than extending an existing one is deliberate: the
@@ -29,11 +30,23 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import re
 import shutil
 import subprocess
 
 from harness import ROOT
 from work_items import ITEMS, LEGACY_MAP, identities, items, legacy, open_backlog
+
+BACKLOG = ROOT / "roadmap" / "00-backlog.md"
+
+# A resolved backlog heading and the item id that carries its state. The
+# heading is a stable anchor for devlog links; the id is what makes it
+# resolvable. `B29` and `B30` were each allocated twice, so an id is named
+# per entry rather than derived from the key.
+RESOLVED_ENTRY = re.compile(
+    r"^### (?P<key>B\d+) — .+\n\n\*\*Evidence:\*\* .+? \*\*Item:\*\* `(?P<uuid>[0-9a-f-]{36})`$",
+    re.MULTILINE,
+)
 
 failures: list[str] = []
 
@@ -82,6 +95,39 @@ def check_backlog_first() -> None:
         fail(
             f"backlog-first: {opened} is active while backlog items are neither "
             f"resolved nor explicitly deferred: {names}"
+        )
+
+
+def check_backlog_index_resolves() -> None:
+    """Every resolved backlog heading names an item that exists and is closed.
+
+    The backlog file is an index, not a record: 75 devlog entries link into it
+    by heading, which is why the headings survive, and the state behind each
+    one lives in the store. That only holds while the id beside a heading
+    resolves, so it is checked rather than trusted — a heading pointing at a
+    deleted or reopened item is a dangling record with no visible symptom.
+    """
+    if not BACKLOG.is_file():
+        fail(f"{BACKLOG.relative_to(ROOT)} is missing: 75 devlog entries link into it")
+        return
+    text = BACKLOG.read_text()
+    known = identities()
+    state = {item["id"]: item["state"] for item in items()}
+    seen: set[str] = set()
+    for match in RESOLVED_ENTRY.finditer(text):
+        key, uuid = match.group("key"), match.group("uuid")
+        if uuid not in known:
+            fail(f"backlog index: {key} names {uuid}, which is not in {ITEMS.relative_to(ROOT)}")
+            continue
+        if state[uuid] not in {"done", "cancelled"}:
+            fail(f"backlog index: {key} is under '## Resolved' but its item is {state[uuid]}")
+        seen.add(uuid)
+
+    headings = len(re.findall(r"^### B\d+ — ", text, re.MULTILINE))
+    if headings != len(seen):
+        fail(
+            f"backlog index: {headings} resolved heading(s) but {len(seen)} resolve to an item; "
+            "every heading needs its `**Item:** `<uuid>`` line"
         )
 
 
@@ -158,6 +204,7 @@ def main() -> int:
         raise SystemExit(f"{ITEMS.relative_to(ROOT)} does not exist; run scripts/migrate-roadmap-to-myque.py")
     run_myque_check()
     check_backlog_first()
+    check_backlog_index_resolves()
     check_migration_auditability()
     check_undated_closures_declare_themselves()
 
@@ -168,7 +215,8 @@ def main() -> int:
 
     total = len(identities())
     mapped = len(legacy()["ids"])
-    print(f"work-item check passed: {total} items, {mapped} legacy ids mapped")
+    indexed = len(RESOLVED_ENTRY.findall(BACKLOG.read_text())) if BACKLOG.is_file() else 0
+    print(f"work-item check passed: {total} items, {mapped} legacy ids mapped, {indexed} backlog entries indexed")
     return 0
 
 

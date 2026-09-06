@@ -100,14 +100,19 @@ def items() -> list[dict[str, object]]:
 
 
 def open_backlog() -> list[dict[str, object]]:
-    """Backlog items that are neither closed nor explicitly deferred.
+    """Backlog items that are neither closed, deferred, nor externally blocked.
 
-    The repository's standing rule (``AGENTS.md``) is that these are cleared
-    or explicitly deferred before a new track milestone opens. ``deferred`` is
-    the explicit deferral, so it satisfies the rule rather than violating it.
+    The repository's standing rule (``AGENTS.md``) is that these are cleared or
+    explicitly deferred before a new track milestone opens. ``deferred`` is that
+    explicit deferral, so it satisfies the rule rather than violating it.
+
+    ``blocked`` also satisfies it, for a different reason: it means the item
+    waits on something outside this repository, which no amount of milestone
+    sequencing resolves. Counting it as blocking would wedge every milestone
+    behind work nobody here can start.
     """
     return [
         item
         for item in items()
-        if "backlog" in item["tags"] and item["state"] in {"open", "active", "blocked"}
+        if "backlog" in item["tags"] and item["state"] in {"open", "active"}
     ]
