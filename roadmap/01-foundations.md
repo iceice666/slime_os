@@ -1,5 +1,10 @@
 # Foundations and implemented history (Milestones 1–6)
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Preserve the implemented kernel, isolation, bootstrap, storage/generation, and native-environment contracts that later roadmap tracks build on.
 
 **Status:** Milestones 1–4 and 6 are complete. Milestone 5 is open only because M5.7 still lacks a seL4 NVMe transport and the required physical Framework observation; M5.1–M5.6c, M5.8, and M5.9 are complete. Retired custom-kernel/QEMU evidence does not satisfy M5.7.

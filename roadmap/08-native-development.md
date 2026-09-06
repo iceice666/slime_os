@@ -1,5 +1,10 @@
 # Native development, live update, and on-device build track
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Let a user author source inside Slime OS, compile a native program directly into the admitted component-image format, execute it without rebooting under explicit development authority, turn tested artifacts into release-authorized generations, switch compatible userspace components at runtime, and eventually reproduce a complete generation on-device.
 
 **Status:** Not started.

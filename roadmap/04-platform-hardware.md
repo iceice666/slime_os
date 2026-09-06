@@ -1,5 +1,10 @@
 # Platform hardware
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Preserve the deferred x86-64 Framework daily-driver qualification plan: bind the common [Native I/O substrate](11-io-substrate.md) to the target's firmware and buses, implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
 
 **Status:** Deferred while Milk-V Duo is the current physical architecture bring-up lane. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard. No Duo result changes this status.

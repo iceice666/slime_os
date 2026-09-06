@@ -1,5 +1,10 @@
 # Raspberry Pi 5 ROS 2 two-node demo track
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Preserve the defined Raspberry Pi 5 ROS 2 two-node product track and its completed contract, artifact, and AArch64 QEMU evidence while physical execution proceeds on Milk-V Duo.
 
 **Status:** Deferred after RP0, RP1, and RP2 completed. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`. RP3–RP8 retain their original Raspberry Pi 5 exit conditions, but they are not the current execution lane because the available USB-UART adapter yields no serial evidence and seL4 ships no display driver to substitute.

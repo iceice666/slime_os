@@ -1,6 +1,15 @@
 # Slime OS roadmap
 
-This directory is the canonical plan for Slime OS. The current physical execution goal is:
+**This directory is architectural documentation, not the canonical plan.** Work-item
+identity, state, hierarchy, and dependencies live in `.tasks/items/`, one Markdown
+file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque).
+The headings below allocate no identity: ids such as `C9.4`, `IO4`, and `B92` are
+display aliases carried as MyQue keys, and `.tasks/legacy-roadmap-ids.json` maps the
+pre-migration ones. Read `just tasks_list` for state and `just tasks_next` for what is
+actionable; read this directory for the reasoning, boundaries, and sequencing that no
+work-item body should have to restate.
+
+The current physical execution goal is:
 
 > **Boot upstream seL4 and a verified Slime generation on the named Milk-V Duo, then replay the architecture-neutral root and component evidence through its observed hands-off deployment and serial loop.**
 

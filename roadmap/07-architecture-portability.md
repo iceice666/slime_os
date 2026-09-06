@@ -1,5 +1,10 @@
 # Architecture portability track
 
+> **Not authoritative.** Work-item identity, state, and relationships live in
+> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
+> This file holds the problem statements, boundaries, and sequencing behind them.
+> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
+
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while using Milk-V Duo as the current physical bring-up and evidence lane.
 
 **Status:** Complete for the active Milk-V Duo architecture lane — P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, and P5 are complete. P2.3–P2.6 are superseded by P5. P3.F added the resident Slisp shell on the already-qualified board and did not reopen P3.E's architecture qualification. P4's reproducible Raspberry Pi 5 build path remains complete, while its board boot is deferred with the RPi5 demo because the available USB-UART adapter produces no evidence. P6 opened a second physical AArch64 lane on the Novatek NT98690 H1V1, whose vendor firmware keeps a serial console the Raspberry Pi 5 lane lacks; P6.A, P6.B, and P6.C are complete with observed board transcripts — the H1V1 boots seL4 and `slime-root` from SD through its unmodified vendor firmware and answers typed Slisp input over UART0, and storage, network, and display on that board remain unclaimed.
