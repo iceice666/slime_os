@@ -5,9 +5,9 @@
 | Date | 2026-09-06 |
 | Kind | Change |
 | Status | Verified |
-| Scope | `.tasks/`, `scripts/lib/{roadmap_inventory,work_items}.py`, `scripts/migrate-roadmap-to-myque.py`, `scripts/check/{check-devlog,check-work-items}.py`, `just/quality.just`, `flake.nix`, `.github/workflows/ci.yml`, `AGENTS.md`, `devlog/{README,TEMPLATE}.md`, `roadmap/` |
+| Scope | `.tasks/`, `scripts/lib/{roadmap_inventory,work_items}.py`, `scripts/migrate-roadmap-to-myque.py`, `scripts/check/{check-devlog,check-work-items}.py`, `just/quality.just`, `flake.nix`, `.github/workflows/ci.yml`, `AGENTS.md`, `devlog/{README,TEMPLATE}.md`, `roadmap/`, `contracts/system-image-closure/v1/closures/` |
 | Work items | 01a07486-0f9c-7aac-a688-b2a01e5d5c29 |
-| Gates | `just tasks_check`, `just devlog_check`, `just ruff`, `just typos` |
+| Gates | `just tasks_check`, `just devlog_check`, `just ruff`, `just typos`, `just sel4_rollback_check` |
 | Trigger | Reviewing a handoff plan to replace roadmap-heading identity with the finished `work-item/v1` tracker in `mozufu/myque` |
 | Baseline | 266 work items declared by Markdown headings under `roadmap/`; `check-devlog.py` scraping those headings for identity and carrying a 26-line hard-coded exception for `B29`/`B30`; 288 devlog entries referencing 240 distinct roadmap ids as foreign keys |
 
@@ -39,6 +39,7 @@ carried forward. No merged devlog entry was rewritten.
 | `flake.nix` | `myque` input with `inputs.nixpkgs.follows`; `myque-bin` in the default shell | One nixpkgs, one GHC closure |
 | `.github/workflows/ci.yml` | New `work_items` job with Nix quick-install plus a flake-keyed store cache | `docs_gates` stays a checkout-plus-`just` job |
 | `roadmap/`, `AGENTS.md`, `devlog/{README,TEMPLATE}.md` | Non-authoritative banners; identity, backlog, and front-matter guidance rewritten | Guidance names the canonical store |
+| `contracts/system-image-closure/v1/closures/` | All 50 closures regenerated: `releaseInputs[just-recipes].artifact.identity` only | The reproducible build key still resolves after `just/` changed |
 
 ## Regression guards
 
@@ -50,9 +51,11 @@ carried forward. No merged devlog entry was rewritten.
 | A collision is reintroduced as a key | `just tasks_check` | `must not be carried as a key: the UUID distinguishes the two items` |
 | A synthetic closure date reads as an observation | `just tasks_check` | `closed on the migration date without saying the original date is unrecorded` |
 | Store-level identity, cycle, or schema breakage | `just tasks_check` (`myque check`) | `myque check reported findings: …` |
+| A `just/` recipe change silently invalidates every image closure | `just system_image_builder_check`, and any closure-building plane gate | `releaseInputs[just-recipes].artifact: identity mismatch for just` |
 
 Each of the first five was verified by mutation, not by inspection: see
-*Verification*.
+*Verification*. The sixth was observed for real: CI run 34034592305 failed
+`sel4_rollback_check` on it before the closures were regenerated.
 
 ## Verification
 
@@ -73,6 +76,9 @@ Each of the first five was verified by mutation, not by inspection: see
 | Dependency cycle `P3 → P3.E → P3` | Caught by `myque check` on the first import; fixed at the source (see *Decisions*) | Direct |
 | `myque list --state <s>` across all six states | 218 done, 42 deferred, 8 cancelled, 3 blocked, 1 active, 0 open — 272 total | Direct |
 | `myque next` | Empty. The only advanceable item is `P5.4.2` (`active`), and `M5.7`/`H1`/`RP3` are blocked on hardware evidence that does not exist | Direct |
+| `just sel4_rollback_check` after regenerating the closures | `sel4-rollback 3ae63fa9f95c` built and booted; 19 markers, 7 durable transitions at strictly increasing sequences | Direct |
+| `generate-system-image-closures.py --check` | `50 system-image closures are current` | Direct |
+| `git diff` over the regenerated closures | 50 files, one changed line each, every one a `just-recipes` identity | Direct |
 
 ## Decisions
 
