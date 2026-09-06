@@ -71,6 +71,8 @@ Each of the first five was verified by mutation, not by inspection: see
 | `typos` | Clean over 272 UUID-named files | Direct |
 | `nix develop --command myque check` | `checked 271 work item(s): no findings` on the locked `db1c81f`, confirming the store does not depend on the unpublished CLI fixes | Direct |
 | Dependency cycle `P3 → P3.E → P3` | Caught by `myque check` on the first import; fixed at the source (see *Decisions*) | Direct |
+| `myque list --state <s>` across all six states | 218 done, 42 deferred, 8 cancelled, 3 blocked, 1 active, 0 open — 272 total | Direct |
+| `myque next` | Empty. The only advanceable item is `P5.4.2` (`active`), and `M5.7`/`H1`/`RP3` are blocked on hardware evidence that does not exist | Direct |
 
 ## Decisions
 
@@ -98,11 +100,16 @@ Each of the first five was verified by mutation, not by inspection: see
 - Rationale: They are the only open work the backlog admits to, tracked as prose bullets under one shared heading with no id. Omitting them would silently lose that work from the canonical store; minting `B61a` would be the artificial naming this migration exists to avoid. Each records its owning item as a dependency, which is the relation the prose states.
 - Rejected alternative: Leaving them in Markdown, or inventing ids.
 
+- Decision: An item's state comes from its own `**Status:**`, except that a track the roadmap's status table defers overrides an otherwise-available item to `deferred`.
+- Rationale: Item-level status alone put 33 explicitly-postponed milestones into `myque next` — `H8`'s desktop shell, `A1`'s revocation work, `X1`'s Linux personality — because `H2` reads "Not started" on its own line while the hardware track above it is deferred. A store that answers "what is next" with work the repository has postponed manufactures exactly the false confidence the roadmap's own sequencing exists to prevent. The override is read from `roadmap/README.md`'s track table rather than each track's preamble, because the preamble disagrees: `06-authority-trust.md` opens "Planned; A1–A5 are not implemented" while the table says "Deferred", and the table is the column a reader consults to decide what to start. Only `open` is overridden — a deferral says nothing about work already finished, abandoned, or blocked on something concrete — so `H1`, `RP3`, and `M5.7` stay `blocked` and the 226 items already in a terminal state are untouched.
+- Rejected alternative: Item status alone, which over-reports actionable work; or a hard-coded list of deferred tracks, which would drift from the roadmap the moment a track resumes.
+
 ## Open risks and follow-ups
 
 - [ ] `flake.lock` pins myque `db1c81f`, which predates the store-relative abbreviation fix. `myque check` is unaffected and this store validates under both revisions, but `myque list` on that revision prints the first UUID group for every keyless item — one repeated token for the nine keyless items here, because a UUIDv7's first group is the top 32 bits of its millisecond timestamp and advances only every 65.536 s. Run `nix flake update myque` once the fix is published.
 - [ ] `myque-bin` has no published binary cache, so a cold `work_items` CI run builds it through GHC: 117 fetched paths, 516 MiB, 3.4 GiB unpacked on `x86_64-linux`. The job is cached on `flake.lock`; publishing to a binary cache would remove the cost.
 - [ ] 50 devlog links carry `roadmap/` heading anchors. They still resolve because the item sections were kept, but `check-devlog.py` validates only the file, not the anchor, so deleting a section later would rot them silently.
+- [ ] `roadmap/README.md`'s track table says "CP0–CP10 complete; CP11–CP15 planned", but each of CP11–CP15 declares Complete or Delivered in its own section, and the store carries them as `done`. The summary is stale, not the items. Left as found rather than edited here, because reconciling a track narrative is a separate change from moving identity — but a generated or manual view contradicting the canonical store is exactly what must not persist.
 - [ ] 5 items — `C8.13.1`, `C8.13.2`, `P3.D`, `IO2`, `IO4` — are `done` with named unfinished residue, faithfully reproducing the roadmap's deliberately narrowed exit conditions. Readiness propagates from that `done`, so a consumer must read the exit condition rather than the state alone.
 - [ ] `devlog/README.md` remains a 288-row central index every new entry appends to, so branch-concurrent devlog entries still conflict even though work items no longer do.
 
