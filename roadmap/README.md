@@ -19,19 +19,21 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 ## Current state
 
+This table is a narrative of `.tasks/items/`, not a second record of it. `just tasks_list` prints the canonical state and `just tasks_next` prints what is actionable; the store currently reports 218 done, 42 deferred, 8 cancelled, 3 blocked, 1 active, 0 open.
+
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B91 resolved; **no open items** — B91 closed 2026-08-30 when every pinned instance binding slot gained a machine-readable, builder-verified reason (`bootLayout`/`allocatorOrder`/`encodedLayout`/`componentAbi`), leaving 260 `componentAbi` pins as the counted residue a future migration can shrink | No open backlog item gates the next milestone. B61/B63/B65 each record a deliberately deferred half a future audit should start from, and B91's devlog names the four follow-ups its classification made visible |
+| [Backlog](00-backlog.md) | B1–B92 resolved or cancelled; **no open items** — B92 closed 2026-09-01 when the authenticated product graph lost the verification plane's 32768-request lifetime while every finite boot action kept its watchdog | No open backlog item gates the next milestone. `F1`–`F5` record the deliberately deferred halves of B60/B61/B63 and C10.4 that a future audit should start from |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
 | [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate. **C10 closed 2026-08-24** across C10.1–C10.4: one task-private 2 MiB window per child, an authenticated `private-memory-budget/v1` resource fixing every component's ceiling, a `GlobalAlloc` over that region, and adoption by `fabric-service` — the graph's own broker, in ten fixtures — which now sizes its role and frame tables from the graph a generation declares rather than from the contract's ceilings, freeing 29960 bytes of `.bss` plus `.data` per generation. A repeated spawn/exit cycle returns the frame allocator's own watermarks exactly, and a shared buffer cannot be mapped into a private window. **C9 closed 2026-08-26** across C9.1–C9.6: a root-brokered clock/timer service behind declared authority, a bounded userspace wait set that blocks once per ready set on one declared Notification and recovers every ready source from the coalesced badge word, a declared scheduling class whose band mapping is manifest data — the builder reads it once and writes the resulting priority into the `ScheduleRecord`, so a class *is* a priority rather than a second number beside one — a `lifecycle-policy/v1` transition graph, restart bound, health dependency set, and parameter authority under which a *userspace* supervisor restarts a failed component while the root charges the declared attempt and refuses everything the policy does not admit, and a generation can declare a component deterministic with the claim constrained to the authority a recorder genuinely captures. **C9.6 closed 2026-08-26**: a simulated sensor → controller → actuator graph on the `sel4-robot-runtime` plane, the controller a dual-contract-kind participant, running to completion under declared best-effort contention and surviving an injected controller restart with its fabric authority reissued, asserted by a two-boot semantic trace comparison. Both of RP5's named dependencies on this track are therefore closed. | The track is fully closed; nothing remains open. RP5's two named dependencies (C9.3, C9.4) are met, and C9.5's `recorded` source set is still clock-only — widening it is its own follow-up, not a C9 milestone.
-| [Component platform](10-component-platform.md) | **CP0–CP10 complete; CP11–CP15 planned.** The completed SDK path already supplies immutable component sources, target-qualified platform prefixes, external artifact admission, compatibility evidence, upgrade, and rollback. The new closure sequence binds those inputs to `system-spec/v1`, converts all 42 seL4 test compositions to generated closures, replaces `build-sel4.py`'s plane variants with one data-driven image build, makes every scenario and negative mutation identity-bearing, and cuts the whole QEMU/SDK corpus over before deleting the legacy surface | CP11 defines the canonical `system-image-closure/v1` and separate `system-test-run/v1` contracts, then proves one closure produces the same bootable image in two clean roots without absorbing the test oracle |
+| [Component platform](10-component-platform.md) | **CP0–CP15 complete.** The SDK path supplies immutable component sources, target-qualified platform prefixes, external artifact admission, compatibility evidence, upgrade, and rollback. The closure sequence bound those inputs to `system-spec/v1`: all 42 seL4 compositions derive from system specs with `contracts/composition-inventory/v1` reporting 42 derived and 0 hand-authored, one generic command builds any of 50 generated closures with no plane flag or composition named in builder source, every scenario and negative mutation is identity-bearing, and 44 of 49 seL4 plane gates build by closure identity — the residue being the handful of gates a closure structurally cannot describe | The track is fully closed; nothing remains open |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | Deferred after RP0, RP1, and RP2 completed. RP2 closed 2026-08-20 with the demo-scoped AArch64 QEMU product graph; RP3–RP8 retain their original Raspberry Pi 5 acceptance conditions | Resume at RP3 when a working USB-UART evidence path is available and the physical demo is reprioritized |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, P5, and P6 complete; P2.3–P2.6 superseded by P5. The named Milk-V Duo physically boots upstream seL4 and a target-qualified generation, runs the architecture-neutral sample plane with repeatable normalized evidence, proves timer/fault behavior, recovers autonomously, and serves Slisp as the resident shell through declared `InputRead` authority. P6 closed 2026-09-02: the named Novatek NT98690 H1V1 boots seL4 and `slime-root` from SD through unmodified vendor firmware and answers typed Slisp input over UART0 | No Duo or H1V1 architecture gate is open. Storage, USB, network, display, sensor, and actuator qualification remain separate future scope; H1V1 storage, network, and display are explicitly unclaimed. P4/RP3 and Framework retain their own physical blockers, and evidence from one board cannot complete another board's gate |
+| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P3, P3.D, P3.E, P3.F, P5, and P6 complete; P2.2 cancelled and P2.3–P2.6 superseded by P5. The named Milk-V Duo physically boots upstream seL4 and a target-qualified generation, runs the architecture-neutral sample plane with repeatable normalized evidence, proves timer/fault behavior, recovers autonomously, and serves Slisp as the resident shell through declared `InputRead` authority. P6 closed 2026-09-02: the named Novatek NT98690 H1V1 boots seL4 and `slime-root` from SD through unmodified vendor firmware and answers typed Slisp input over UART0 | No Duo or H1V1 architecture gate is open. Storage, USB, network, display, sensor, and actuator qualification remain separate future scope; H1V1 storage, network, and display are explicitly unclaimed. P4/RP3 and Framework retain their own physical blockers, and evidence from one board cannot complete another board's gate |
 | [Native I/O substrate](11-io-substrate.md) | IO0–IO3 and IO5–IO7 complete; **IO4 is complete only for its exact-destination authority boundary and its network data plane is unfinished**. IO2's root cutover closed 2026-08-29, and IO5/IO6/IO7 added the track's host verification layers the same day. Five QEMU gates: `io_queue_check`, `io_driver_authority_check`, `io_block_check`, `io_link_check`, `io_network_check`, all registered in `sel4_gate_control_check`; two host model gates, `io_queue_model_check` and `io_resource_model_check`, registered in `contracts_check`; two host proof gates, `kani_io_proofs` and `kani_virtio_proofs` | IO0 fixes request/epoch/lease/queue semantics; IO1 grants bounded device/MMIO/IRQ/DMA authority with numeric reclamation on death; IO2's userspace virtio-blk is now the only product block path; IO3 proves userspace virtio-net duplex on the same substrate; IO4 enforces exact-destination networking, with IPv6/DHCP/SLAAC/listen declared and refused, but Ethernet framing, ARP, IPv4, ICMP, UDP, TCP, and exact-name DNS are unimplemented and unclaimed, so R0/RP5 cannot yet obtain a byte stream from it; IO5 quantifies IO0's lease/epoch rules and IO1's charge conservation over every interleaving rather than one schedule, with 13 must-fail mutations; IO6 proves the wire arithmetic those models disclaim — slot indexing, cursor subtraction, slice bounds — of the shipped source over every value of the declared types, with 18 must-fail mutations; IO7 closes the *device* side after B86/B87 showed it unguarded, proving used-ring index, descriptor-id, and transfer-length handling over all values with 13 harnesses and 8 must-fail mutations. All trusted-DMA on QEMU — no containment claim |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Deferred with the RPi5 demo | Resume R0/IO4 transport work when the robotics demo is reprioritized; the frozen contract and completed authority work remain valid |
 | [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist; Duo evidence is not a substitute |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Resume only for a selected product workload that needs a Linux userspace personality |
-| [Authority and trust](06-authority-trust.md) | Deferred | Resume when a selected product or hardware release needs a specific authority primitive |
+| [Authority and trust](06-authority-trust.md) | A0 complete; A1–A5 deferred | Resume when a selected product or hardware release needs a specific authority primitive |
 | [Native development](08-native-development.md) | Deferred | Resume after a physical product path is stable enough to justify on-device build and live-update work |
 
 ## Physical bring-up sequencing
@@ -53,38 +55,38 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog: B1–B91 resolved\nno open items"]
+    Backlog["Backlog: B1–B92 resolved\nno open items"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.15 fabric\ncomplete"]
     P0["P0 target/artifact contracts"]
     P1["P1 x86 boundary extraction"]
-    P2["P2.1–P2.2 AArch64\nhistorical; P2.3–P2.6 superseded"]
+    P2["P2.1 AArch64\nP2.2 cancelled; P2.3–P2.6 superseded"]
     P5["P5 seL4 substitution\ncomplete; product path"]
-    P4["P4 Raspberry Pi 5 qualification"]
-    C9["C9 robot runtime authority\nC9.1–C9.6"]
+    P4["P4 Raspberry Pi 5 qualification\ndeferred"]
+    C9["C9 robot runtime authority\nC9.1–C9.6 complete"]
     C10["C10 private component memory\ncomplete"]
-    IO0["IO0 queue, epoch, lease"]
-    IO1["IO1 hardware resource authority"]
-    IO2["IO2 userspace virtio-blk"]
-    IO3["IO3 userspace virtio-net + LinkDevice"]
+    IO0["IO0 queue, epoch, lease\ncomplete"]
+    IO1["IO1 hardware resource authority\ncomplete"]
+    IO2["IO2 userspace virtio-blk\ncomplete"]
+    IO3["IO3 userspace virtio-net + LinkDevice\ncomplete"]
     IO4["IO4 network + destination authority\nauthority done; data plane open"]
     CP0["CP0 component-spec/v1\ncomplete"]
     CP1["CP1 system-spec/v1 + generation derivation\ncomplete"]
-    CP2["CP2 runtime binding resolution"]
-    CP3["CP3 crate-per-component SDK"]
-    CP4["CP4 external artifact admission"]
-    CP5["CP5 out-of-tree proof"]
+    CP2["CP2 runtime binding resolution\ncomplete"]
+    CP3["CP3 crate-per-component SDK\ncomplete"]
+    CP4["CP4 external artifact admission\ncomplete"]
+    CP5["CP5 out-of-tree proof\ncomplete"]
     CP6["CP6 deterministic SDK export\ncomplete"]
     CP7["CP7 permanent SDK publication\ncomplete (hosting deferred)"]
     CP8["CP8 platform prefix assets\ncomplete"]
     CP9["CP9 compatibility matrix\ncomplete"]
     CP10["CP10 consumer upgrade + rollback\ncomplete"]
-    CP11["CP11 image/test-run closure contracts\nplanned; next"]
-    CP12["CP12 all 42 compositions spec-derived\nplanned"]
-    CP13["CP13 data-driven image builder\nplanned"]
-    CP14["CP14 explicit scenario identities\nplanned"]
-    CP15["CP15 whole-corpus cutover\nplanned"]
+    CP11["CP11 image/test-run closure contracts\ncomplete"]
+    CP12["CP12 all 42 compositions spec-derived\ncomplete"]
+    CP13["CP13 data-driven image builder\ncomplete"]
+    CP14["CP14 explicit scenario identities\ncomplete"]
+    CP15["CP15 whole-corpus cutover\ncomplete"]
     R0["R0 minimal Zenoh topic profile\ndeferred"]
     RP0["RP0 demo contract\ncomplete"]
     RP1["RP1 target-qualified build path\ncomplete"]
@@ -205,14 +207,15 @@ Deferred unless selected as the implementation route for a future product worklo
 
 Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. Architecture changes run the target-specific QEMU gate before any physical board claim. Milk-V Duo promotion requires the P3 RV64 QEMU corpus plus a recorded Duo run with exact image, firmware, generation, memory-placement, and serial evidence. Raspberry Pi 5 and Framework promotion retain their own recorded board and device-authority requirements.
 
-Documentation-only roadmap edits do not run runtime tests; their verification is link, status, identifier, and content consistency, currently guarded by `just devlog_check` when devlog entries are added or touched.
+Documentation-only roadmap edits do not run runtime tests; their verification is link, identifier, and content consistency, guarded by `just devlog_check` when devlog entries are added or touched and by `just tasks_check` when the work-item store changes.
 
-## Updating this roadmap
+## Updating this directory
 
-- Update the owning track file, not this index, for detailed deliverables and checks.
-- Update this index when track status, dependency edges, or release composition changes.
+- State changes go to the store, not here. Close an item with `myque close`, which records the closure date, and record the exit condition that was *observed* in the item's body. Never allocate an id by scanning for the next number.
+- Update the owning track file, not this index, for detailed problem statements and boundaries.
+- Update this index when a track's narrative, dependency edges, or release composition changes. Its summaries restate the store and must never contradict it; when they disagree, the store is right.
 - Preserve completed evidence; do not rewrite an observed check as a future intention.
 - When a milestone turns Complete, replace its specification body with the outcome: `**Status:**`, one `**Delivered:**` sentence, one `**Exit condition (observed):**` sentence, a `**Gates:**` line naming the exact Justfile targets, and an `**Evidence:**` link to the devlog entry. Delete the `Deliverables`, `Required checks`, and `Verification target` sections — they described work that is now done, and `01-foundations.md` is the reference for the resulting shape.
 - `Preserve completed evidence` is satisfied by a reachable devlog link, not by retaining the specification prose in this directory. A completed milestone whose evidence is only readable here has not been recorded properly.
-- Move exploratory work from `../docs/directions/` only after it has dependencies, bounded deliverables, required checks, and an observable exit condition here.
+- Move exploratory work from `../docs/directions/` only after it has dependencies, bounded deliverables, required checks, and an observable exit condition — and create the work item that owns it.
 - Never mark a milestone complete from implementation status alone when its exit condition requires QEMU or physical evidence.

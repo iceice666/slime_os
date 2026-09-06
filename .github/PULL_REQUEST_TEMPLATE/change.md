@@ -20,5 +20,5 @@
 
 ## Related
 
-<!-- Backlog / roadmap / devlog links. -->
+<!-- Work item (key or UUID from `.tasks/items/`) / devlog links. -->
 -

@@ -7,9 +7,11 @@ change belongs.
 
 ## Before anything: the standing order
 
-1. **Backlog first.** `roadmap/00-backlog.md` tracks known defects. Open
-   items are resolved (or explicitly deferred, with the reason recorded)
-   before new milestone work starts.
+1. **Backlog first.** The `backlog`-tagged items in `.tasks/items/` track
+   known defects; their problem statements live in `roadmap/00-backlog.md`.
+   Open items are resolved (or explicitly deferred, with the reason
+   recorded) before new milestone work starts, which `just tasks_check`
+   enforces. `just tasks_next` lists what is actionable.
 2. **Route, don't search.** Find your change's row in `AGENTS.md`'s
    task-to-file index and read the named module root first. Broad
    symbol-grepping across the tree is how you end up editing a generated
@@ -81,12 +83,14 @@ Then the record-keeping, which is not optional ceremony here:
 
 - **Devlog** (`devlog/`): non-trivial fixes, decisions, regressions, and
   milestone completions get an entry — a dated folder with a curated
-  `index.md` from `devlog/TEMPLATE.md`. Run `just devlog_check`. The devlog
-  is *how* a conclusion was reached; the roadmap keeps only the outcome plus
-  a link.
-- **Backlog hygiene**: a fixed defect's entry moves to the backlog's
-  resolved log, collapsed to the five prescribed lines, heading text
-  untouched — devlog links resolve against it.
+  `index.md` from `devlog/TEMPLATE.md`, whose `Work items` front-matter field
+  names canonical work-item UUIDs. Run `just devlog_check`. The devlog is
+  *how* a conclusion was reached; the work item holds the state and the
+  roadmap holds the problem statement.
+- **Work-item hygiene**: close the item with `myque close`, which records the
+  closure date, and record the exit condition that was *observed* in the
+  item's body. Never allocate an id by scanning for the next number — `myque`
+  assigns a UUID. Run `just tasks_check`.
 
 `AGENTS.md` carries the full statement of these rules; this page is the
 tour, that file is the law.

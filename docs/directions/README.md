@@ -7,21 +7,23 @@ were originally README's "Differentiating directions" section, moved here so
 README carries a single pointer.
 
 Active entries (parked or probing) live in one file each in this directory.
-Promoted entries collapse to a pointer row in the index below; the canonical
-[roadmap](../../roadmap/README.md) owns their content from that point on.
+Promoted entries collapse to a pointer row in the index below; a work item in
+`.tasks/items/` owns the work from that point on, and the matching
+[roadmap](../../roadmap/README.md) file keeps its design context.
 
 ## Rules
 
 - A direction here is not a commitment. It becomes real only when promoted
-  into the canonical [roadmap](../../roadmap/README.md) with an observable exit condition.
+  into a work item with an observable exit condition.
 - At most one direction may be in `probing` status at a time. A probe is
   time-boxed work (design note or minimal experiment) that ends in either
-  promotion to the roadmap or a return to `parked` with the reason recorded.
+  promotion to a work item or a return to `parked` with the reason recorded.
 - A direction that requires violating project invariants (ambient authority,
   kernel-owned policy, non-deterministic formats) is `rejected`, not shelved.
-- Dependencies name the roadmap milestone whose mechanisms the direction
-  consumes. A direction whose dependency has not landed can only be probed
-  as a host-side or paper exercise, never as kernel code.
+- Dependencies name the milestone whose mechanisms the direction consumes, by
+  its human key; `just tasks_list` gives that milestone's current state. A
+  direction whose dependency has not landed can only be probed as a host-side
+  or paper exercise, never as kernel code.
 - New entries take the next free number; numbers are never reused, and
   existing entry files are never renumbered.
 
@@ -29,7 +31,7 @@ Promoted entries collapse to a pointer row in the index below; the canonical
 
 `parked` — registered, no active work.
 `probing` — the single active exploration slot.
-`promoted` — moved into the canonical [roadmap](../../roadmap/README.md); this register keeps only a pointer.
+`promoted` — a work item owns it; this register keeps only a pointer, and the design context stays in [`roadmap/`](../../roadmap/README.md).
 `rejected` — decided against, with reason.
 
 ## Entry index
@@ -120,7 +122,6 @@ without waiting for any milestone:
 
 | Entry | Legal work today | Why |
 | --- | --- | --- |
-| 24 | active probe: checked model of the rights algebra | depends on nothing; methodology established by M5.6a/M5.6b |
 | 9 | grant-graph query engine (host-side half) | M5.5 machine-readable grants complete |
 | 1 | generation authority diff + CI sign-off gate | M5.5 complete; consumes 9's engine |
 | 27 | invariant-section format, builder computation, verification-hook design | M5.5 and the M5.6 activation path both complete |
@@ -135,12 +136,14 @@ without waiting for any milestone:
 | 32 | scheduling-class schema and authority-vs-policy design note (paper) | M6 prerequisites are complete; Core C9.3 owns the class half, and entry 25's conserved CPU account is blocked on the MCS assurance decision rather than on C9 |
 | 33 | Secret matrix amendment + recorder/revocation interaction (paper) | M6 prerequisites are complete; at-rest sealing interim vs Authority A4 TPM binding remains open |
 
+No entry currently holds the `probing` slot: entry 24 vacated it on promotion to Authority A0, which is closed.
+
 ## Sequencing
 
 | Wave | Directions | Why then |
 | --- | --- | --- |
 | 0 — before M5.6 implementation (done) | 6 (M5.6a), 4 (M5.6b) | Both promoted checked contracts landed; transition and state/GC semantics froze before implementation. |
-| 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13, 24 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. Entry 24 is dependency-free contracts work in the M5.6a methodology and is the current probe. |
+| 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13, 24 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. Entry 24 landed as Authority A0. |
 | 2 — late M5 through M6 (foundation complete) | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay), 25, 26, 27, 29, 30 | Release trust, recovery, spawn, supervision, accounting, powerbox, and minimal transfer foundations have landed. The listed directions retain only their broader generalization work: provenance, replay, restart policy, sync transport, migration, conserved accounts, and merge/build semantics. |
 | 3 — independent future tracks | 17, 18, 19; 2 (A1), 32 (C9), 33 (A2), 31 (X1), 28 (A3), 5 (A4), 10 (A5) | Daily-driver hardware quality (energy 17, network 18, MPK 19) lands in the Hardware H track. The promoted work proceeds on independent tracks: Authority A1 adds revocation, Core C9 adds scheduling authority, and Authority A2 adds secrets; Foreign X1 supplies the compatibility personality; Authority A3 adds accelerator authority on Hardware H4 IOMMU containment; Authority A4 binds boot state to the TPM; Authority A5 extends capabilities across machines on sync plus A1 revocation. |
 

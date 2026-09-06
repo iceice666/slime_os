@@ -149,5 +149,7 @@ prints, and compare against the marker table in its
 - [Boot walkthrough](03-boot-walkthrough.md) — what happens between `just run`
   and the terminal `SLIME_GRAPH HEALTHY` marker.
 - `AGENTS.md` — the code map and the task-to-file index for making a change.
-- [`roadmap/`](../../roadmap/README.md) — what is done, what is open, and the
-  backlog that comes first.
+- `just tasks_list` / `just tasks_next` — what is done, what is open, and what
+  is actionable, from the canonical work-item store.
+- [`roadmap/`](../../roadmap/README.md) — the design context behind those
+  items: problem statements, boundaries, and sequencing.
