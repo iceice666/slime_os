@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from harness import ROOT
 
@@ -90,6 +91,26 @@ TRACK_TAGS: dict[str, str] = {
     "11-io-substrate.md": "io",
 }
 
+# The track-status table in `roadmap/README.md`, which is where the roadmap
+# states whether a whole track is deferred. A track's own preamble is not
+# enough: `06-authority-trust.md` opens "Planned; A1–A5 are not implemented"
+# while the table says "Deferred", and the table is the sequencing statement —
+# it is the column a reader consults to decide what is next.
+#
+# Track deferral has to reach the items inside it. `H2` reads "Not started" on
+# its own line, but its track is deferred, so `H2` is postponed rather than
+# available. Reading only the item put 33 explicitly-postponed milestones into
+# `myque next`.
+TRACK_TABLE_ROW = re.compile(
+    r"^\| \[[^\]]+\]\((?P<file>[0-9]{2}-[a-z0-9-]+\.md)\) \| (?P<status>[^|]*)\|",
+    re.MULTILINE,
+)
+
+# States that a deferred track overrides. A track's deferral says nothing about
+# work already finished, abandoned, or actively blocked on something concrete —
+# only about work that is otherwise available to start.
+DEFERRABLE_STATES = frozenset({"open"})
+
 
 @dataclass
 class Declaration:
@@ -110,6 +131,9 @@ class Declaration:
     closed_source: str = "none"
     """How ``closed`` was recovered: ``status``, ``devlog-link``, ``body``, or
     ``none``. ``none`` means no evidence in the repository dates this closure."""
+    track_deferred: bool = False
+    """Whether this item's state came from its track's deferral rather than
+    from its own ``**Status:**`` line."""
     depends_text: str | None = None
     tags: list[str] = field(default_factory=list)
     kind: str = "milestone"
@@ -162,6 +186,19 @@ def recover_closed(declaration: Declaration) -> tuple[str | None, str]:
     return None, "none"
 
 
+@lru_cache(maxsize=1)
+def deferred_tracks() -> frozenset[str]:
+    """Track files the roadmap's own status table defers as a whole."""
+    text = (ROADMAP / "README.md").read_text()
+    return frozenset(
+        row.group("file")
+        for row in TRACK_TABLE_ROW.finditer(text)
+        # The cell opens with the track's disposition; a later "deferred"
+        # inside prose about one milestone does not defer the track.
+        if row.group("status").strip().lower().startswith("deferred")
+    )
+
+
 def parse_track(name: str, text: str) -> list[Declaration]:
     """Every declaration in one track file, in source order."""
     lines = text.splitlines()
@@ -170,6 +207,7 @@ def parse_track(name: str, text: str) -> list[Declaration]:
         for index, line in enumerate(lines)
         if (match := DECLARATION.match(line)) is not None
     ]
+    deferred = name in deferred_tracks()
     declarations: list[Declaration] = []
     for position, (index, match) in enumerate(starts):
         end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
@@ -186,6 +224,9 @@ def parse_track(name: str, text: str) -> list[Declaration]:
             raise ValueError(f"{name}:{declaration.line}: {declaration.identifier} declares no Status")
         declaration.status_text = status.group("text").strip()
         declaration.state = classify_state(declaration.status_text)
+        if deferred and declaration.state in DEFERRABLE_STATES:
+            declaration.state = "deferred"
+            declaration.track_deferred = True
         declaration.closed, declaration.closed_source = recover_closed(declaration)
         depends = DEPENDS.search(declaration.body)
         declaration.depends_text = depends.group("text").strip() if depends else None
