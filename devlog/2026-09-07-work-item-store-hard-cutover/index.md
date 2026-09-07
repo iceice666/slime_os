@@ -5,7 +5,7 @@
 | Date | 2026-09-07 |
 | Kind | Change |
 | Status | Verified |
-| Scope | 288 devlog front matters, `devlog/README.md`, `scripts/check/{check-devlog,check-work-items}.py`, `scripts/lib/work_items.py`, deleted `.tasks/legacy-roadmap-ids.json`, `scripts/migrate-roadmap-to-myque.py`, `scripts/lib/roadmap_inventory.py`, `AGENTS.md`, `roadmap/{README,00-backlog}.md`, `docs/README.md`, `docs/getting-started/04-first-change.md`, `.github/PULL_REQUEST_TEMPLATE/` |
+| Scope | 288 devlog front matters, `devlog/README.md`, `scripts/check/{check-devlog,check-work-items}.py`, `scripts/lib/work_items.py`, deleted `.tasks/legacy-roadmap-ids.json`, `scripts/migrate-roadmap-to-myque.py`, `scripts/lib/roadmap_inventory.py`, `AGENTS.md`, `roadmap/{README,00-backlog}.md`, `README.md`, `docs/README.md`, `docs/getting-started/{01-orientation,02-build-and-run,04-first-change}.md`, `docs/directions/README.md`, `.github/PULL_REQUEST_TEMPLATE/` |
 | Work items | 01a07967-a93b-7145-a633-25ed418b3d69 |
 | Gates | `just tasks_check`, `just devlog_check`, `just ruff`, `just typos` |
 | Trigger | The MQ1/MQ2 migration left a compatibility layer that could still reconstruct the store from `roadmap/`, and documentation that still named `roadmap/` authoritative for completion |
@@ -43,6 +43,8 @@ was the wrong fix).
 | `roadmap/README.md` | Replaced the `Current state` table (per-track status + "next open gate" + aggregate counts) with a `Tracks` table of ownership and boundary; stripped `complete`/`deferred`/`cancelled` strings from all 50 Mermaid nodes and two edge labels | `roadmap/` mirrors no mutable state and is not a dependency graph |
 | `AGENTS.md` | Deleted the roadmap-completion-authority sentence and the legacy-map paragraph; stated the one-way data flow explicitly | No live guidance contradicts the store's authority |
 | PR templates | `Work item (key or UUID)` → UUID required, key permitted parenthetically | The resolvable reference is the UUID |
+| `README.md` | Replaced the per-track "M1–M4 complete, IO0–IO7 complete, RP0–RP2 complete" status list — the same mirroring mechanism at repository-front-page scale — with a capability summary: what runs, what has physical evidence, what fails closed and why, and what is deferred by decision | The front page describes capability and evidence, not item state |
+| Getting-started and directions docs | `roadmap/` described as holding "problem statements" in four places (`docs/getting-started/{01-orientation,02-build-and-run}.md`, `docs/directions/README.md`, `README.md`) → architectural rationale, with the problem statement named as the item's | No reader is routed to `roadmap/` for a live defect's problem statement |
 
 ## Regression guards
 

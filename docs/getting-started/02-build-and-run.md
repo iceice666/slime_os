@@ -151,5 +151,5 @@ prints, and compare against the marker table in its
 - `AGENTS.md` — the code map and the task-to-file index for making a change.
 - `just tasks_list` / `just tasks_next` — what is done, what is open, and what
   is actionable, from the canonical work-item store.
-- [`roadmap/`](../../roadmap/README.md) — the design context behind those
-  items: problem statements, boundaries, and sequencing.
+- [`roadmap/`](../../roadmap/README.md) — the architectural context behind
+  those items: track ownership, boundaries, and sequencing.

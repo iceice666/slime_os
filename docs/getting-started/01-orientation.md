@@ -39,9 +39,10 @@ Three files answer most "where is..." questions:
 - `just tasks_list` / `just tasks_next` — what is done, open, blocked, or
   deferred, from the canonical work-item store in `.tasks/items/`. Open
   backlog items come before milestone work; `just tasks_check` enforces it.
-- [`roadmap/README.md`](../../roadmap/README.md) — the design context behind
-  those items: problem statements, boundaries, sequencing, architectural
-  invariants, and release-gate composition. It records no state.
+- [`roadmap/README.md`](../../roadmap/README.md) — the architectural context
+  behind those items: track ownership, boundaries, sequencing, invariants, and
+  release-gate composition. It records no state and owns no problem statement;
+  each item owns its own.
 
 ## The house epistemology
 

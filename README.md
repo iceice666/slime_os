@@ -8,17 +8,17 @@ Two named physical boards run the system today: the Milk-V Duo (`riscv64-sel4-mi
 
 ## Current status
 
-Work-item state is canonical in `.tasks/items/`; `just tasks_list` prints it and `just tasks_next` prints what is actionable. The summary below is a narrative of that store, not a second record of it.
+What the system does today, and what it explicitly does not. This is a
+capability summary, not a state record: `just tasks_list` prints every item's
+state and `just tasks_next` prints what is actionable, from the canonical store
+in `.tasks/items/`.
 
 - The automated target is `aarch64-sel4-qemu-virt` under `qemu-system-aarch64 -machine virt,virtualization=on`. `just run` boots it; `just test` runs the product behavioral aggregate.
-- M1–M4 and M6 are complete, and M5 is complete except M5.7, which is blocked: no seL4 NVMe transport or physical Framework storage evidence exists, so `just storage_nvme_read_check` fails closed rather than reporting a false pass.
-- Core runtime C7, all of C8 (C8.1–C8.15), C9, and C10 are complete under named QEMU gates.
-- The native I/O substrate IO0–IO7 is complete. IO4's exact-destination authority boundary is closed; its network data plane is unfinished and resumes with the robotics demo.
-- The component platform CP0–CP15 is complete: 42 seL4 compositions derive from system specs, and one data-driven builder produces any of 50 generated image closures.
-- Architecture portability P0, P1, P2.1, P3, P3.D, P3.E, P3.F, P5, and P6 are complete; P2.2 and P2.3–P2.6 were cancelled or superseded by P5. Milk-V Duo and NT98690 H1V1 both have observed physical evidence. P4 (Raspberry Pi 5 qualification) is deferred: its media builds reproducibly, but the available USB-UART adapter produces no serial evidence.
-- The RPi5 ROS 2 demo has RP0–RP2 complete; RP3 is blocked on that same evidence path and RP4–RP8 are deferred with it.
-- ROS 2 compatibility, platform hardware H1–H14, foreign workloads, distributed authority, and native development D1–D7 are deferred or blocked. ROS 2 is a bounded userspace compatibility profile over native Slime contracts, never a kernel ABI.
-- The backlog is clear: B1–B92 are resolved or cancelled with no open items. Five deferred follow-ups (`F1`–`F5`) surfaced by resolved entries remain tracked as their own items.
+- The foundations, core runtime, native I/O substrate, and component platform tracks are closed under named QEMU gates: bounded shared-sample and typed-fabric planes, robot-runtime authority (clock/timer, wait sets, scheduling class, lifecycle policy), task-private component memory, userspace virtio-blk and virtio-net drivers over declared device authority, and 42 spec-derived seL4 compositions built by one data-driven builder from any of 50 generated image closures.
+- Two named boards have observed physical evidence: Milk-V Duo and Novatek NT98690 H1V1 both boot upstream seL4, `slime-root`, and a target-qualified generation from removable media through unmodified vendor firmware.
+- **Unclaimed, and failing closed rather than reporting a false pass:** physical Framework storage — no seL4 NVMe transport exists, so `just storage_nvme_read_check` fails closed; Raspberry Pi 5 qualification — its media builds reproducibly but the available USB-UART adapter produces no serial evidence, so `just rpi5_boot_check` fails closed; IO4's network data plane — Ethernet framing, ARP, IPv4, ICMP, UDP, TCP, and DNS are unimplemented, so no byte stream is obtainable from it.
+- Deferred by decision: the RPi5 ROS 2 demo beyond its contract and build path, ROS 2 wire compatibility, Framework daily-driver hardware, foreign workloads, distributed authority, and on-device native development. ROS 2 is a bounded userspace compatibility profile over native Slime contracts, never a kernel ABI.
+- All DMA on QEMU is trusted; no containment claim is made. QEMU evidence completes no physical milestone, and one board's evidence completes no other board's gate.
 
 ## Vision
 
@@ -235,9 +235,9 @@ just tasks_graph   # the dependency graph
 just tasks_check   # validate the store and the repository's ordering policy
 ```
 
-[`roadmap/`](roadmap/README.md) is architectural documentation, not the plan: it holds the problem statements, boundaries, sequencing, architectural invariants, and release-gate composition that no work-item body should have to restate.
+[`roadmap/`](roadmap/README.md) is architectural documentation, not the plan: it holds the track ownership, boundaries, sequencing, architectural invariants, and release-gate composition that no work-item body should have to restate. It records no state and owns no problem statement — each item owns its own.
 
-- [Backlog: defects and unmasked debt](roadmap/00-backlog.md)
+- [Backlog: frozen index of pre-cutover defects](roadmap/00-backlog.md)
 - [Foundations and implemented history](roadmap/01-foundations.md)
 - [Core runtime C7–C10](roadmap/02-core-runtime.md)
 - [ROS 2 compatibility R0–R3](roadmap/03-ros2-compatibility.md)

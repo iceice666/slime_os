@@ -8,8 +8,9 @@ README carries a single pointer.
 
 Active entries (parked or probing) live in one file each in this directory.
 Promoted entries collapse to a pointer row in the index below; a work item in
-`.tasks/items/` owns the work from that point on, and the matching
-[roadmap](../../roadmap/README.md) file keeps its design context.
+`.tasks/items/` owns the work and its state from that point on, and the
+matching [roadmap](../../roadmap/README.md) file keeps the architectural
+rationale.
 
 ## Rules
 
@@ -31,7 +32,7 @@ Promoted entries collapse to a pointer row in the index below; a work item in
 
 `parked` — registered, no active work.
 `probing` — the single active exploration slot.
-`promoted` — a work item owns it; this register keeps only a pointer, and the design context stays in [`roadmap/`](../../roadmap/README.md).
+`promoted` — a work item owns it; this register keeps only a pointer, and the architectural rationale stays in [`roadmap/`](../../roadmap/README.md).
 `rejected` — decided against, with reason.
 
 ## Entry index
