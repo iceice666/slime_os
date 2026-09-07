@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src/runtime/bootstrap.rs`, `kernel/src/runtime/generation.rs`, `contracts/boot-layout/v1/`, `boot-contracts/src/boot_layout.rs`, `scripts/build/boot_layout.py`, `scripts/check/check-boot-layout-resource.py` |
-| Roadmap | B10 |
+| Work items | 019fb8e7-6400-7e95-b349-16e4c7073161 |
 | Gates | `just boot_layout_check`, `just contracts_check` |
 | Trigger | B10: `launch_init` built init's capability vector by writing fixed indices, so a profile's participant set was kernel source rather than generation data, and each gate's `SLIME_*_CHECK` flag built a different kernel binary. |
 | Baseline | The eighteen layouts frozen in `contracts/boot-layout/v1/fixtures/`, captured in `devlog/2026-07-31-boot-layout-baseline/`. |

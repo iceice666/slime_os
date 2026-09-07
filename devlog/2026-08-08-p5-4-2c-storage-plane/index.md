@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,ipc,graph,transfer_window}.rs`, `components/runtime/src/{lib,syscall}.rs`, `components/runtime/src/syscall/{sel4_transport,legacy}.rs`, `components/bins/src/bin/{sel4-storage-probe,init}.rs`, `contracts/generation/v1/fixtures/sel4-storage.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{storage-plane,component-graph,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.2, P5.4, M5.2, M5.3 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7432-90d1-d15eec07e220, 01a0724c-5400-7e3a-9249-4b96b0e78665 |
 | Gates | `just sel4_storage_check`, `just sel4_device_check`, `just sel4_component_graph_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.2b moved sectors from the root; nothing in userspace could reach the device |
 | Baseline | `BlockTransact` answered `Mediation::Unavailable`; no component had ever touched a disk on seL4 |

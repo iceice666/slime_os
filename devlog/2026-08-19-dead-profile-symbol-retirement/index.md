@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/build/build-generation.py`, `scripts/check/check-data-fabric-profile.py`, `components/bins/src/default_fabric_profile.rs` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just data_fabric_profile_check`, `just generation_check`, `just contracts_check`, `just sel4_boot_layout_check`, `just sel4_qos_check`, `just sel4_visibility_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_stream_check`, `just sel4_traffic_check`, `just sel4_matrix_check`, `just sel4_fault_check`, `just sel4_fabric_aggregate_check`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just test_host`, `just machete` |
 | Trigger | Continuation of `dc9e9e4`; the compiled-in profile still rendered symbols no component reads |
 | Baseline | `dc9e9e4` — participant assertion repaired, generation `65f60c11…`, all gates green |

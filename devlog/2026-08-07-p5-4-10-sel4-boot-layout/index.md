@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,graph}.rs`, `scripts/check/check-sel4-boot-layout.py`, `contracts/boot-layout/v1/fixtures/sel4-*.layout`, `Justfile`, `AGENTS.md` |
-| Roadmap | P5.4.10, P5.4, P5.4.1, B10 |
+| Work items | 019fd7cd-8c00-79d7-909d-d1d5483e9d88, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fb8e7-6400-7e95-b349-16e4c7073161 |
 | Gates | `just sel4_boot_layout_check` |
 | Trigger | P5.4.1's inventory, which recorded B10 as covered only obliquely on seL4 |
 | Baseline | Nine seL4 gates passing; nineteen x86 layout fixtures and none for seL4 |

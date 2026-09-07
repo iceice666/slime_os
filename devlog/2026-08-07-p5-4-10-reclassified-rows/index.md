@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `roadmap/07-architecture-portability.md`, `contracts/generation/v1/fixtures/sel4*.zti`, `boot-contracts/src/generation.rs` |
-| Roadmap | P5.4.10, P5.4.1, C7.1, B11 |
+| Work items | 019fd7cd-8c00-79d7-909d-d1d5483e9d88, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019f9a01-3c00-71a6-a4c1-7b88b8b693d9, 019fb8e7-6400-718f-84ee-7ede540da059 |
 | Gates | `just test_host`, `just sel4_root_boot_check` |
 | Trigger | P5.4.10's remaining rows, worked in order |
 | Baseline | Six open rows after the B10 layout fixtures landed |

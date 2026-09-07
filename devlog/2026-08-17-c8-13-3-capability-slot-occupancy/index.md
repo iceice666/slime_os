@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{cspace.rs,task.rs,graph.rs,main.rs,generation.rs,peer_endpoint.rs,lib.rs}`, `components/runtime/src/{lib.rs,syscall.rs,syscall/sel4_transport.rs}`, `components/bins/src/bin/fabric-service.rs`, `components/proto/tests/fabric_trace.rs`, `contracts/fabric-trace/v1/{schema.zt,gen_rust.zt}`, `scripts/lib/fabric_graph_limits.py`, `scripts/check/check-sel4-{traffic,saturation}-plane.py`, `docs/{syscall-abi.md,capability-matrix.md}`, `Justfile`, `AGENTS.md` |
-| Roadmap | C8.13.3, C8.13 |
+| Work items | 01a00b4d-2400-7dbe-8826-35338484263c, 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_traffic_check`, `just sel4_saturation_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all` |
 | Trigger | Implementing C8.13.3, the last of C8.13's three broken-out resource slices |
 | Baseline | `capabilitySlots` was compared only to a fixed `LIMIT_CAPABILITY_SLOTS` at decode time and to `graph::MAX_TASK_CAPS` at admission; nothing anywhere counted a live holder's slots |

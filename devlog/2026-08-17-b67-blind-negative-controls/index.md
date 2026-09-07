@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/task.rs` (`ChildSlots`, `audit_child_cspace`, B40 mutation arms), `just sel4_capability_layout_check` |
-| Roadmap | B67, B40, B57 |
+| Work items | 01a00b4d-2400-7312-88cd-595d915ffae6, 019fe740-a000-7e18-b5a8-c9df6403f4d8, 01a00b4d-2400-7d7c-82e2-df8402734f41 |
 | Gates | `just sel4_capability_layout_check`, `just sel4_boot_check`, `just sel4_boot_layout_check` |
 | Trigger | Running B57's verification sweep found `sel4_capability_layout_check` red on its `extra` arm |
 | Baseline | The gate reported "all 6 negative mutations refused" at some earlier point; two of the six had stopped perturbing what they named |

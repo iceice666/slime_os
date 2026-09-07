@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,generation,graph,transfer_window,child_vspace,task}.rs`, `components/runtime/src/{runtime,syscall}.rs`, `components/bins/{build.rs,Cargo.toml}`, `components/component-aarch64.ld`, `components/bins/src/bin/init.rs`, `contracts/component/v2/`, `contracts/target-profile/v1/`, `contracts/generation/v1/fixtures/sel4.{zti,md}`, `boot-contracts/src/component_image.rs`, `scripts/build/build-{generation,sel4}.py`, `scripts/check/check-sel4-component-graph.py`, `Justfile` |
-| Roadmap | P5.2, P5.3, P5 |
+| Work items | 01a03ecc-bc00-708d-a6fe-fffc759caf66, 019fc85a-7800-7e49-9f0b-185238940245, 01a0724c-5400-7208-b5a1-7008c0e2bdc3 |
 | Gates | `just sel4_component_graph_check`, `just sel4_root_boot_check`, `just contracts_check`, `just generation_check`, `just boot_layout_check` |
 | Trigger | P5.1 closed with the note that no legacy component image runs and that rebuilding them as native ELF is P5.2 |
 | Baseline | P5.1: `slime-root` boots and proves its mechanism against a native fixture; the generation's 25 payloads are `SLIMECM` images admitted but never activated |

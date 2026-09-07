@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | roadmap index, RPi5 demo track, ROS 2 compatibility, architecture portability, Framework hardware deferral |
-| Roadmap | RP0, RP1, RP2, RP3, RP4, RP5, RP6, RP7, RP8, R0, P0, P1, P2, P4 |
+| Work items | 01a0724c-5400-701b-b2c7-d0a5b9533503, 01a0724c-5400-7715-bad2-72a76852749b, 01a01ac0-3800-727f-b113-f7ce726f08c6, 01a0724c-5400-7cb4-ab51-0bcb23a882b5, 01a0724c-5400-7019-a587-694c834f91cc, 01a0724c-5400-7b6b-ad3a-f388c30d5ed1, 01a0724c-5400-72f4-998b-6d7b21b59e0e, 01a0724c-5400-75e6-803a-7a56bd28c492, 01a0724c-5400-75db-8908-dffc253181e4, 01a00b4d-2400-7987-93d6-19201c397dff, 019fbe0d-c000-7ace-97cd-aae461a1248a, 019fbe0d-c000-7b72-a9c2-f9b8a43bd455, 019fe21a-4400-7fe0-881a-f308c0314bd1, 01a02f59-a800-78b6-9398-6b22bfbc6fdd |
 | Gates | none |
 | Trigger | Project goal changed to running two ROS 2 nodes exchanging data on Raspberry Pi 5 |
 | Baseline | Roadmap previously led with x86-64 QEMU as the deterministic reference, Framework hardware qualification, external ROS wire compatibility, and later AArch64 replay |

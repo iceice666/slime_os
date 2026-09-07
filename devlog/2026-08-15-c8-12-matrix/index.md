@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-matrix{,-unsatisfiable}.zti`, `contracts/fabric-trace/v1/{schema.zt,gen_rust.zt}`, `components/proto/src/{fabric_trace.rs,lib.rs}`, `components/proto/tests/fabric_trace.rs`, `components/bins/src/{matrix_broker.rs,fabric_matrix.rs,lib.rs}`, `components/bins/src/bin/{fabric-service,init,fabric-publisher,fabric-subscriber,fabric-publisher-b,fabric-subscriber-b,fabric-observer,fabric-probe,fabric-proxy}.rs`, `boot-contracts/src/generation.rs`, `scripts/build/{build-generation.py,build-sel4.py,boot_layout.py}`, `scripts/check/{check-sel4-matrix-plane.py,check-sel4-boot-layout.py,check-boot-layout-resource.py,check-sel4-gate-controls.py}`, `contracts/boot-layout/v1/fixtures/sel4-matrix.layout`, `Justfile` |
-| Roadmap | C8.12 |
+| Work items | 01a00100-6c00-7443-9fb6-a276a98bd3b2 |
 | Gates | `just sel4_matrix_check`, `just data_fabric_matrix_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check` |
 | Trigger | C8.12 was the next uncompleted milestone with a fully specified exit condition; B55 (its C8.10 dependency) resolved earlier the same day |
 | Baseline | C8.1–C8.11 complete; four trace families (`schema`, `visibility`, `interposition`, `denial`) had validator arms and generated codes but no emitter, per C8.11's own open-risk note |

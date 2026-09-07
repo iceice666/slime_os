@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/07-architecture-portability.md`, `roadmap/README.md`, `roadmap/00-backlog.md` |
-| Roadmap | P5.4, P5.4.1, C8.5, C8.6, C8.7, C8.8, C8.9, C8.10, B12, B16, B22, B23 |
+| Work items | 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fa44d-f400-701b-b07c-8aa780e6da65, 019fa44d-f400-7baa-9558-197cd14820e5, 019fa974-5000-7be4-9b9f-b59912e69ed9, 019fae9a-ac00-71ee-9fbe-7daabca639b8, 019fae9a-ac00-70b9-a711-daeca1b2b4cc, 01a00100-6c00-7843-9ed8-9a1672933b4b, 019fd7cd-8c00-7a24-907a-86c137e6e62a, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a, 019fd7cd-8c00-70b2-91d1-8670457ab82e, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3 |
 | Gates | `just devlog_check` |
 | Trigger | P5.4 selected as the next uncompleted milestone; found unimplementable as written |
 | Baseline | P5.4 a single "Not started" milestone with an exit condition and no deliverables |

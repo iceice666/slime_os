@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/{channel,main}.rs`, `components/bins/src/bin/sample-receiver.rs`, `scripts/check/check-sel4-sample-plane.py` |
-| Roadmap | B51 |
+| Work items | 019fe740-a000-748f-9d82-241cef6cd4c4 |
 | Gates | `just sel4_sample_check`, `just sel4_spawn_check`, `just sel4_reclamation_check`, `just sel4_component_graph_check` |
 | Trigger | `sel4_sample_check` failed at `[init] sample plane fail: budget did not recover after a child exited`. |
 | Baseline | The gate was red before this backlog run; the stack fix in B46 unblocked it into this assertion. |

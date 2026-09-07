@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/system-spec/v1/`, `contracts/generation/v1/fixtures/{valid,sel4-channel}.zti`, `scripts/lib/system_spec.py`, `scripts/check/check-system-spec.py`, `scripts/generate/generate-generation-from-spec.py`, `scripts/generate/generate-system-spec-bindings.py`, `scripts/build/build-generation.py`, `components/bins/src/default_fabric_profile.rs`, `scripts/check/check-contracts.py`, `Justfile` |
-| Roadmap | CP1, B70 |
+| Work items | 01a01073-8000-74df-8b0c-a60c49aa9ec0, 01a0250c-f000-7b2a-92d3-fde78c957925 |
 | Gates | `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_generation_check`, `just sel4_boot_check` |
 | Trigger | CP0 landed the component model; CP1 is the milestone that makes generation manifests derive from it |
 | Baseline | `valid.zti` and every `sel4-*.zti` were hand-authored in parallel with the component model, which is the coupling B70 names |

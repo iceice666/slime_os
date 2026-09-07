@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v5/{vocab/rights.zt,gen_rust.zt}`, `boot-contracts/src/{generation.rs,generated/generation.rs}`, `slime-root/src/{graph,ipc,generation,graph_runtime}.rs` and `graph_runtime/{console_runtime.rs,services/spawn.rs}`, `scripts/build/{build-generation.py,boot_layout.py}`, `scripts/check/{check-generation,check-system-spec,check-component-spec}.py`, `scripts/lib/component_spec.py`, `contracts/system-spec/v1/systems/reference.zti`, `contracts/generation-manifest/v1/fixtures/valid.zti`, five `contracts/component-spec/v1/components/*.zti`, `contracts/store/v1/README.md`, `docs/{capability-matrix,syscall-abi}.md`, `README.md`, `AGENTS.md` |
-| Roadmap | B90, B83 |
+| Work items | 01a04e3f-d000-7cac-b464-71870be338de, 01a04919-7400-7839-b017-2e9566a3dac7 |
 | Gates | `just contracts_check`, `just system_spec_check`, `just component_spec_check`, `just architecture_contract_check`, `just test_sel4_root`, `just test_host`, `just framework_safety_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos` |
 | Trigger | Asked to research B90's two proposed cutovers before choosing one; the research disproved the blocker on the option the entry called blocked |
 | Baseline | B83 (resolved 2026-08-29) deleted `BLOCK TRANSACT` and left the `Block` kind, its two rights bits, `SERVICE_BLOCK`, and two launch-order ordinal counters compiled into every product image with no operation able to resolve them |

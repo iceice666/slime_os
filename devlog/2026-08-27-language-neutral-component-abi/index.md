@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Component startup ABI, root/runtime constants, external component admission, C runtime support, C probe generation, QEMU gate |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just sel4_c_runtime_check`, `just contracts_check` |
 | Trigger | Replacing Dango with a Lisp shell requires a non-Rust implementation path that obeys the same capability and lifecycle boundary as Rust components. |
 | Baseline | Component images were ELF and therefore language-neutral in principle, but startup slots, transfer descriptors, and console labels were exposed only through Rust code and no non-Rust component booted through the product graph. |

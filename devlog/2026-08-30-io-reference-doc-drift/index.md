@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `docs/capability-matrix.md`, `docs/syscall-abi.md`, `docs/README.md`, `docs/concepts/{channels,components,contracts,generations}.md`, `docs/getting-started/{03-boot-walkthrough,04-first-change}.md`, `scripts/generate/generate-component-runtime-abi-bindings.py` |
-| Roadmap | IO1, IO2, IO4, B83, B90 |
+| Work items | 01a043f3-1800-71ae-adf3-3c7b0b5cf426, 01a043f3-1800-7628-808c-22dc5ce41c1a, 01a04919-7400-75da-bdab-760af8f246f1, 01a04919-7400-7839-b017-2e9566a3dac7, 01a04e3f-d000-7cac-b464-71870be338de |
 | Gates | `just contracts_check`, `just devlog_check`, `just ruff`, `just typos` |
 | Trigger | Asked whether the new I/O substrate needed a new document; audited what the existing reference documents already claimed about it |
 | Baseline | `docs/capability-matrix.md` and `docs/syscall-abi.md` each declare in their own opening paragraph that they must change in the same commit as the surface they describe |

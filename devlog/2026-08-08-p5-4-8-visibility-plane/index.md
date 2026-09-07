@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-visibility.{zti,md}`, `contracts/boot-layout/v1/fixtures/sel4-visibility.layout`, `slime-root/src/main.rs`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{visibility-plane,boot-layout,gate-controls}.py`, `components/bins/build.rs`, `components/bins/src/bin/init.rs`, `Justfile` |
-| Roadmap | P5.4.8, P5.4, C8.8 |
+| Work items | 019fdcf3-e800-74e8-b39e-61fa34064cb4, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fae9a-ac00-71ee-9fbe-7daabca639b8 |
 | Gates | `just sel4_visibility_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.1 recorded C8.8 as uncovered on seL4; P5.4.7 closed the slice before it |
 | Baseline | Twelve seL4 plane gates, none asserting a visibility or interposition property |

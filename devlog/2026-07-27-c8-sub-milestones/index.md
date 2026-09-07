@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/02-core-runtime.md`, C8 sequencing, contracts, authority, QoS, and planned verification gates |
-| Roadmap | C8 |
+| Work items | 01a00b4d-2400-77ed-a3dd-39becc4893af |
 | Gates | none |
 | Trigger | C8 combined schema identity, capability provisioning, streams, QoS, calls, operations, visibility, and integration behind one planned gate |
 | Baseline | C7 and B2 complete; C8 not started with one parent deliverable list and one planned `data_fabric_check` |

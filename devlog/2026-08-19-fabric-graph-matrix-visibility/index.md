@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/matrix_broker.rs`, `roadmap/00-backlog.md` |
-| Roadmap | B70, CP2, B73 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3, 01a01ac0-3800-7348-9883-de37f9f57462 |
 | Gates | `just sel4_matrix_check`, `just sel4_fabric_aggregate_check`, `just fmt_check_all`, `just lint_all` |
 | Trigger | Continuing the B70/CP2 migration off `build.rs`-private tables after `bfb9264` moved the visibility plane |
 | Baseline | `bfb9264` — visibility plane migrated; `matrix_broker` still read `FABRIC_VISIBILITY` at three sites |

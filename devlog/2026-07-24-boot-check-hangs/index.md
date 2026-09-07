@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `stage0`, `kernel/memory` (vmm), `kernel/bootstrap` (scheduler idle exit), `components/dango`, `components/init`, `contracts/bootstate` model, generation build tooling, QEMU check scripts |
-| Roadmap | B1, M5.6, M5.6c, M6.3, M6.4 |
+| Work items | 019f8fb4-8400-7ead-be2d-c5e980505613, 01a0724c-5400-78a8-b1e1-8a90a39b11a5, 01a0724c-5400-7f9f-83f2-d825a862f82d, 01a0724c-5400-7acb-a31e-5d7494c84123, 01a0724c-5400-7dfa-ba32-7e826cc38c92 |
 | Gates | `just bootstate_model_check`, `just bootstate_trace_check`, `just recovery_check`, `just rollback_check`, `just directory_check`, `just dango_check`, `just powerbox_check` |
 | Trigger | `boot-contracts` growth (`660f703`, `8a73ff1`); dango interactive runtime (`f7d63e8`); model bump (`e5e9531`); gen-1 build change (`2fcaea5`) |
 | Baseline | Stage-0 checks previously reached `[generation] vertical slice healthy` and exited QEMU |

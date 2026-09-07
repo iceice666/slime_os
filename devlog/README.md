@@ -47,7 +47,7 @@ Exactly these eight fields, in this order:
 | `Kind` | `Defect`, `Change`, `Audit`, or `Decision` — selects the required sections. |
 | `Status` | One token from the status vocabulary below. Nothing else: no parentheticals, no dates, no prose. |
 | `Scope` | Subsystems, files, and checks touched. |
-| `Work items` | Comma-separated canonical work-item UUIDs from `.tasks/items/`, or `none`. Entries written before the MyQue migration name this field `Roadmap` and carry roadmap ids (`C7.4, B3`), which resolve through `.tasks/legacy-roadmap-ids.json`; both names are accepted in this position, and a landed entry is never rewritten to change it. |
+| `Work items` | Comma-separated canonical work-item UUIDs from `.tasks/items/`, or `none`. UUIDs only: a human key such as `C7.4` is a display alias and is not a resolvable reference. |
 | `Gates` | The narrowest `` `just <target>` `` commands guarding this entry's claim, or `none`. Every name must be a real Justfile target. |
 | `Trigger` | Commit, change, or first observed condition. |
 | `Baseline` | Last known-good behavior or invariant. |
@@ -92,7 +92,8 @@ Every **Defect** entry must identify:
 A published entry is a fixed record of what was observed, not a live tracker. Once an entry is committed:
 
 - **Frozen:** the curated `index.md` body — summary, investigation log, root cause, changes, verification results — and every evidence sibling (focused reports, `transcript.txt`, captures). Do not rewrite an observed result, a raw log, or the reasoning that led to it. Corrections go in a new dated note appended under a `## Corrections` heading (with the date and what changed), never by editing the original claim.
-- **Mutable:** the front-matter `Status` field as the situation evolves (e.g. `Verified` → `Monitoring` once physical evidence lands), and cross-links in *Open risks and follow-ups*. Keep the live truth in `.tasks/items/`; the entry only points at that canonical home, so downstream state changes never require editing the frozen body. The direction is explicit both ways: the work item holds current state and the observed exit condition, `roadmap/` holds the problem statement behind it, and this entry holds the investigation and evidence. None restates the others.
+- **Mutable:** the front-matter `Status` field as the situation evolves (e.g. `Verified` → `Monitoring` once physical evidence lands), and cross-links in *Open risks and follow-ups*. Keep the live truth in `.tasks/items/`; the entry only points at that canonical home, so downstream state changes never require editing the frozen body. The direction is explicit both ways: the work item holds current state and the observed exit condition, `roadmap/` holds the architectural rationale behind it, and this entry holds the investigation and evidence. None restates the others.
+- **Migratable:** the front matter's *machine* fields, when the repository changes the format they are written in. Re-expressing a reference the tree can still resolve — as the work-item cutover did when it rewrote every `Roadmap` row of roadmap ids into a `Work items` row of the same items' UUIDs — preserves what the entry asserts and is not a historical rewrite. Prose is never migrated this way: an entry may keep saying that `roadmap/` was authoritative when it was written.
 
 When `Status` changes, update the same entry's row in the index below; the checker requires the two to agree.
 
@@ -107,11 +108,13 @@ When `Status` changes, update the same entry's row in the index below; the check
 
 ## Checking
 
-`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, work-item references against `.tasks/items/` (UUIDs directly, pre-migration roadmap ids through `.tasks/legacy-roadmap-ids.json`), `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It reads the tree and runs no guest code or external binary, so it is cheap enough to run on any documentation change; `just tasks_check` separately validates the store itself.
+`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, every `Work items` UUID resolving to a file in `.tasks/items/`, `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It reads the tree and runs no guest code or external binary, so it is cheap enough to run on any documentation change; `just tasks_check` separately validates the store itself.
 
 ## Entries
 
-| Date | Entry | Kind | Status | Roadmap |
+The `Keys` column carries the human aliases the entries are searched by, so "which entry covers C8.14?" stays answerable by eye. It is a display column and resolves nothing: the entry's own `Work items` front matter holds the canonical UUIDs, and an alias the store later renames does not invalidate a row here.
+
+| Date | Entry | Kind | Status | Keys |
 |---|---|---|---|---|
 | 2026-07-24 | [B2 — scheduler Blocked task state (busy-poll pathology)](2026-07-24-b2-blocked-task-state/index.md) | Defect | Verified | B2 |
 | 2026-07-24 | [Stage-0 boot-check hangs: stack overflow and dango REPL](2026-07-24-boot-check-hangs/index.md) | Defect | Verified | B1, M5.6, M5.6c, M6.3, M6.4 |
@@ -401,5 +404,6 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-09-04 | [CP15 - the remaining plane gates unblock, the legacy flag surface deletes, and a keyboard parameter the closure model dropped](2026-09-04-cp15-legacy-deletion/index.md) | Change | Verified | CP12, CP15 |
 | 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
 | 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |
-| 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | 01a07486-0f9c-7aac-a688-b2a01e5d5c29 |
-| 2026-09-06 | [The backlog file becomes an index over the work-item store](2026-09-06-backlog-as-index/index.md) | Change | Verified | 01a07762-1202-7450-b60b-31b4210da8da |
+| 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | MQ1 |
+| 2026-09-06 | [The backlog file becomes an index over the work-item store](2026-09-06-backlog-as-index/index.md) | Change | Verified | MQ2 |
+| 2026-09-07 | [The work-item store hard cutover: deleting the pre-MyQue identifier system](2026-09-07-work-item-store-hard-cutover/index.md) | Change | Verified | MQ3 |

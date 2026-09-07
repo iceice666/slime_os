@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/08-native-development.md`, roadmap dependency/release index, P0 producer contract, language ownership, promoted build directions |
-| Roadmap | D1, D2, D3, D4, D5, D6, D7, P0 |
+| Work items | 01a0724c-5400-7dac-b4e7-2c9f4634f555, 01a0724c-5400-751f-8152-27b6f86dc4a3, 01a0724c-5400-76b9-a691-989205b9a2a4, 01a0724c-5400-78f5-ba28-f7a44ba8fc8a, 01a0724c-5400-75bc-a3a6-4b94817cd072, 01a0724c-5400-7cc4-81bb-5d534577d4c0, 01a0724c-5400-7d8f-bfb2-e4d5f18ac1f4, 019fbe0d-c000-7ace-97cd-aae461a1248a |
 | Gates | none |
 | Trigger | Request to plan in-system program authoring/execution and admit a new language that emits Slime's native component format |
 | Baseline | M6 could execute only generation-declared images built on the host; runtime partial replacement and on-device native builds had no canonical roadmap milestone |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,generation}.rs`, `scripts/check/check-sel4-stream-plane.py` |
-| Roadmap | P5.4.10, P5.4, P5.4.1, C8.4 |
+| Work items | 019fd7cd-8c00-79d7-909d-d1d5483e9d88, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fa44d-f400-7db3-aac2-f3ffcfa5c6ba |
 | Gates | `just sel4_stream_check` |
 | Trigger | P5.4.10's remaining rows, worked in order |
 | Baseline | `sel4_stream_check` asserting C8.4's live arm only; four rows open |

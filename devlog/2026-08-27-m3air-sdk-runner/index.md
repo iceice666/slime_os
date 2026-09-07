@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `.github/workflows/publish-sdk.yml`, GitHub `release` environment, repository self-hosted runner `m3air`, `iceice666@m3air` LaunchAgent |
-| Roadmap | CP7 |
+| Work items | 01a039a6-6000-7b7d-aef7-4602e99880f3 |
 | Gates | `just component_sdk_release_check`, `just component_sdk_prefix_check`, `just devlog_check` |
 | Trigger | CP7's canonical SDK releases still required an operator to SSH into m3air and run the publisher by hand because the signing and push credentials intentionally exist only on that machine |
 | Baseline | `iceice666/slime_os` had no registered self-hosted runner and no workflow could reach the release credentials; prefix construction and publication were one manual operation with no GitHub environment approval boundary |

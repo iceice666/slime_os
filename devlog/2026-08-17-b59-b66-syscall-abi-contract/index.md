@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/syscall-abi/v1/`, `contracts/fabric-graph/v1/schema.zt`, `components/proto/src/syscall_abi.rs`, `components/runtime/src/syscall.rs` + `syscall/sel4_transport.rs`, `slime-root/src/{main,ipc,graph,generation,console,directory,peer_endpoint}.rs`, 14 userspace components, `scripts/build/build-generation.py`, `docs/{syscall-abi,capability-matrix}.md` |
-| Roadmap | B59, B66, B57, B46 |
+| Work items | 01a00b4d-2400-7c5a-86f1-3469a46c2c25, 01a00b4d-2400-77c8-a3bf-e1cc8040486d, 01a00b4d-2400-7d7c-82e2-df8402734f41, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just contracts_check`, `just generation_check`, `just test_host`, `just sel4_boot_check`, `just data_fabric_profile_check` |
 | Trigger | B57 fixed the rights *predicate* but left the duplication; the structural audit had counted 97 declaration sites and four hand-synchronized tables |
 | Baseline | Four number tables crossing the root/userspace boundary, each hand-authored once and re-typed elsewhere, agreeing by discipline only |

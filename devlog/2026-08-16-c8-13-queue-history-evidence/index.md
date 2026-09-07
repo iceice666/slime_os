@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/fabric-trace/v1/{schema.zt,gen_rust.zt}`, `components/proto/src/fabric_trace.rs`, `components/proto/tests/fabric_trace.rs`, `scripts/lib/fabric_trace_contract.py`, `components/bins/src/bin/fabric-service.rs`, `scripts/check/check-sel4-traffic-plane.py`, `roadmap/02-core-runtime.md` |
-| Roadmap | C8.13 |
+| Work items | 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_traffic_check`, `just data_fabric_traffic_check`, `just sel4_trace_check`, `just sel4_gate_control_check` |
 | Trigger | C8.13's 2026-08-15 partial-exit pass named "queue, history, event, mapping, loan, and capability-slot resource evidence" as its largest open item |
 | Baseline | C8.13 emits bounded peak(+baseline) evidence for 6 of 11 declared resource classes: frames, shared buffers, retries, in-flight calls, in-flight operations, retained operation results |

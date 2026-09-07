@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | eleven `contracts/generation/v1/fixtures/*.zti`, 24 `contracts/boot-layout/v1/fixtures/*.layout`, `scripts/check/check-boot-layout-resource.py` |
-| Roadmap | B50, B46 |
+| Work items | 019ffbda-1000-7716-9d07-a3a799b8eb97, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just contracts_check`, `just sel4_boot_layout_check`, `just test_sel4_root`, `just lint_all` |
 | Trigger | `just contracts_check` red at `e02a232`; `SLIME_GRAPH FAIL binding init-endpoint-factory names no installable resource` on three plane gates |
 | Baseline | `endpointCreate` declared in eleven fixtures, refused by admission on every plane that used it |

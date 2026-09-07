@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/schema.zt`, `scripts/build/build-generation.py`, `components/bins/src/bin/init.rs`, `components/bins/src/default_fabric_profile.rs`, `contracts/generation/v1/fixtures/sel4-stream.zti` |
-| Roadmap | B50, B46 |
+| Work items | 019ffbda-1000-7716-9d07-a3a799b8eb97, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_stream_check`, `just sel4_visibility_check`, `just sel4_channel_check`, `just sel4_crossing_check`, `just sel4_root_boot_check`, `just ruff`, `just lint_all` |
 | Trigger | B46's cutover produced six consecutive slot-collision failures, every one a hand-written number disagreeing with another hand-written number |
 | Baseline | Every `bindings[].slot`, `mintedBindings[].slot`, and `notificationBindings[].slot` hand-assigned across 25 fixtures; init carrying one hardcoded spawn-grant list |

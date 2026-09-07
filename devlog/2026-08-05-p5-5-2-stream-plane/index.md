@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,channel,shared_buffer}.rs`, `components/bins/src/bin/{init,fabric-publisher,fabric-subscriber}.rs`, `components/bins/build.rs`, `contracts/generation/v1/fixtures/sel4-stream.{zti,md}`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-stream-plane.py`, `Justfile` |
-| Roadmap | P5.5.2, P5.5, B17, B18, B16, B12 |
+| Work items | 019fcd80-d400-7ae3-98e0-940271e79bc5, 019fc85a-7800-7e7b-8c8a-56f889dccbed, 019fcd80-d400-7b8a-bd67-244e04f6ac14, 019fd2a7-3000-7949-9c37-f642fdfc7d18, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a, 019fd7cd-8c00-7a24-907a-86c137e6e62a |
 | Gates | `just sel4_stream_check`, `just fabric_stream_check` |
 | Trigger | P5.5.2 opened as the next uncompleted milestone after P5.5.1 closed |
 | Baseline | P5.5.1 (`11d9b72`): seven seL4 gates green, one counted seL4 branch in `fabric-subscriber`, B17 open |

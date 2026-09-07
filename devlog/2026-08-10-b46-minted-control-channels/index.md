@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-{call,operation}.zti`, `slime-root/src/shared_buffer.rs`, `slime-root/src/main.rs`, `scripts/check/check-sel4-{call,stream,qos}-plane.py` |
-| Roadmap | B46 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_call_check`, `just sel4_operation_check`, `just sel4_stream_check`, `just sel4_qos_check` |
 | Trigger | The call and operation planes deadlocked with every participant parked; stream and QoS faulted inside the root. |
 | Baseline | Three of B46's seven gates passing. |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/component-sdk-release/v1/`, `scripts/lib/{component_sdk,component_sdk_release_contract}.py`, `scripts/generate/generate-component-sdk-release-bindings.py`, `scripts/build/{build-component-sdk,publish-component-sdk}.py`, `scripts/check/{check-component-sdk-export,check-component-sdk-release,check-component-sdk-prefix,check-component-sdk-compatibility,check-component-sdk-upgrade,check-component-sdk-out-of-tree,check-contracts}.py`, `components/build-support/src/lib.rs`, `sdk/compatibility-matrix.*`, `Justfile`, `roadmap/{10-component-platform,README}.md` |
-| Roadmap | CP6, CP7, CP8, CP9, CP10, CP5 |
+| Work items | 01a03480-0400-7acc-adb9-042c86ecd1a1, 01a039a6-6000-7b7d-aef7-4602e99880f3, 01a03480-0400-7478-a2f3-e21a16591416, 01a03480-0400-7a5e-a4e1-7c788602af11, 01a03480-0400-75b5-a012-54254ea3a7df, 01a0250c-f000-78cb-8be4-6a0f1e8259d9 |
 | Gates | `just component_sdk_export_check`, `just component_sdk_release_check`, `just component_sdk_prefix_check`, `just component_sdk_compatibility_check`, `just component_sdk_upgrade_check`, `just contracts_check`, `just component_crate_split_check`, `just sel4_gate_control_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just ruff` |
 | Trigger | CP5 closed with a temporary pinned SDK bundle built inside its own gate, leaving the permanent repository, the platform build inputs, the version policy, and the consumer update lifecycle unspecified |
 | Baseline | An external component could be built and booted through CP4, but the SDK it built against was constructed by test-local Python, described by nothing, and took `SEL4_PREFIX` from `slime_os/build/` |

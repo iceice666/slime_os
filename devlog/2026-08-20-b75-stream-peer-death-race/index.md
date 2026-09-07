@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Monitoring |
 | Scope | `components/bins/src/bin/fabric-service.rs` publisher supervision sweep, `components/bins/src/bin/fabric-publisher.rs`, `components/bins/build.rs`, `scripts/build/build-{sel4,generation}.py`, `scripts/check/check-sel4-{fabric-aggregate,fault-plane,qos-plane,stream-plane}.py` |
-| Roadmap | B75, B74, C8.5, C8.14, C8.15 |
+| Work items | 01a01ac0-3800-7a5a-a50b-14f34e5f1e4e, 01a01ac0-3800-78cd-81dc-7cecbee5b5cf, 019fa44d-f400-701b-b07c-8aa780e6da65, 01a00b4d-2400-7547-98c5-e93772a0696f, 01a00b4d-2400-7677-8e72-5cad11acefca |
 | Gates | `just sel4_fabric_aggregate_check`, `just sel4_fault_check`, `just sel4_stream_check`, `just sel4_qos_check` |
 | Trigger | B74's second signature: a byte-identical trace comparison diverging on the fault plane's stream route under host load |
 | Baseline | `1bc21a6` closed B75's call-broker wedge; the divergence half was left open by [`devlog/2026-08-20-b74-aggregate-flake/`](../2026-08-20-b74-aggregate-flake/index.md) |

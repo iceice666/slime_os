@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/clock-authority/v1`, generation v5 rights/resources, syscall ABI, `boot-contracts`, `slime-root/src/{clock,generation,ipc,main,notification,platform_timer}.rs`, component runtime, `clock-authority-probe`, seL4 generation/build/check orchestration |
-| Roadmap | C9.1, C9 |
+| Work items | 01a02f59-a800-75d2-80ae-eec3645dabad, 01a00b4d-2400-75f0-82f5-9abe614054e9 |
 | Gates | `just clock_authority_check`, `just sel4_gate_control_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root`, `just test_host`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos` |
 | Trigger | C9's first slice required the root's existing timer mechanism to become explicit component authority |
 | Baseline | `slime-root` owned and boot-tested the physical timer, but no component-facing operation could read a clock, arm a timer, cancel it, or advance deterministic simulated time |

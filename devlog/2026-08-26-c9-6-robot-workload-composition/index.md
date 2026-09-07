@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/{robot-sensor,robot-controller,robot-actuator,robot-supervisor,robot-burner,robot-clock,fabric-call-worker,fabric-service,init}`, `components/lib/src/call_broker.rs`, `slime-root/src/{main,peer_endpoint}.rs`, `boot-contracts/src/generation.rs`, `contracts/generation/v1/fixtures/sel4-robot-runtime.zti`, `contracts/boot-layout/v1/fixtures/sel4-robot-runtime.layout`, `scripts/{build,check}` |
-| Roadmap | C9.6, C9, C9.1, C9.2, C9.3, C9.4, C9.5, C8.10, C8.15, B70, B75, B76 |
+| Work items | 01a039a6-6000-75a9-9845-1d11cfb665fc, 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a02f59-a800-75d2-80ae-eec3645dabad, 01a03480-0400-7ce3-8fa3-0a121910e8b7, 01a03480-0400-7e1f-b198-2d33228dd7f8, 01a03480-0400-7d36-bbdc-7c3e03a7c057, 01a0724c-5400-733a-aecb-ec32b2c53164, 01a00100-6c00-7843-9ed8-9a1672933b4b, 01a00b4d-2400-7677-8e72-5cad11acefca, 01a0250c-f000-7b2a-92d3-fde78c957925, 01a01ac0-3800-7a5a-a50b-14f34e5f1e4e, 01a01ac0-3800-786f-9a5f-99eb8455c3d4 |
 | Gates | `just robot_runtime_check`, `just sel4_boot_check`, `just sel4_call_check`, `just sel4_traffic_check`, `just sel4_fabric_aggregate_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root`, `just test_host` |
 | Trigger | C9.6 was the last open roadmap milestone: the backlog's Open section is empty, C9.1–C9.5 closed, and M5.7/RP3/RP4 are hardware-blocked. |
 | Baseline | C9.1–C9.5 complete. No generation composed a timer-driven sensor, a dual-contract-kind controller, and a call-served actuator over one fabric while surviving a mid-run component restart under declared contention. |

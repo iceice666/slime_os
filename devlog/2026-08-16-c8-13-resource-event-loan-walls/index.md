@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Root-caused |
 | Scope | `components/bins/src/{operation_broker.rs,call_broker.rs}`, `components/runtime/src/syscall.rs`, `components/runtime/src/syscall/sel4_transport.rs`, `deps/rust-sel4/crates/sel4/src/syscalls.rs`, `contracts/fabric-trace/v1/schema.zt`, `components/proto/src/trace_sink.rs`, `roadmap/02-core-runtime.md` |
-| Roadmap | C8.13 |
+| Work items | 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | none |
 | Trigger | Asked to close C8.13's `resourceEvent` gap first; tracing the primitive it depends on found the roadmap's framing understated the difficulty |
 | Baseline | The roadmap described `resourceEvent` as needing "the traffic schedule itself changed to create real backpressure on a client's delivery endpoint" and `resourceLoan` as needing "headroom freed in the call plane's trace sink or the schema's `maxTraceDepth` ceiling reconsidered" |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-boot.{zti,md}`, `contracts/boot-layout/v1/fixtures/sel4-boot.layout`, `slime-root/src/{channel,task}.rs`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{boot-plane,root-boot,boot-layout,gate-controls}.py`, `components/bins/build.rs`, `components/bins/src/bin/init.rs`, `Justfile` |
-| Roadmap | P5.4.9, P5.4, C8.9, C8.10 |
+| Work items | 019fdcf3-e800-7d29-ba4f-6c7571a517d3, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fae9a-ac00-70b9-a711-daeca1b2b4cc, 01a00100-6c00-7843-9ed8-9a1672933b4b |
 | Gates | `just sel4_boot_check`, `just sel4_crossing_check`, `just sel4_root_boot_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.1 recorded C8.9 and C8.10 as uncovered on seL4; P5.4.8 closed the last slice before them |
 | Baseline | Thirteen seL4 plane gates, each booting exactly one plane; no generation running all three at once |

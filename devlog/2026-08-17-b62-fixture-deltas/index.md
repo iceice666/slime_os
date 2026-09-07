@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/build/build-sel4.py` (`VARIANT_GENERATION_DELTAS`), `scripts/build/build-generation.py` (two overrides), `scripts/lib/fabric_graph_limits.py`, `check-sel4-{saturation,fault,matrix}-plane.py`, 3 deleted `.zti` fixtures |
-| Roadmap | B62, B55 |
+| Work items | 01a00b4d-2400-726c-9b23-cc13f9eb292e, 01a00100-6c00-799f-8f9b-f69e2a662d1f |
 | Gates | `just contracts_check`, `just generation_check`, `just sel4_saturation_check`, `just sel4_matrix_check`, `just sel4_fabric_aggregate_check` |
 | Trigger | The structural audit measured nine fixture pairs over 85% identical, three at 99.9% |
 | Baseline | 30 `sel4-*.zti` fixtures, 16978 lines; `diff sel4-traffic.zti sel4-fault.zti` was one hunk |

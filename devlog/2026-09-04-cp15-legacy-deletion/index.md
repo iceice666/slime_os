@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/build/build-sel4.py`, `scripts/lib/closure_image.py`, `scripts/generate/generate-system-image-closures.py`, `scripts/generate/generate-system-test-runs.py`, `scripts/check/check-sel4-component-graph.py`, `scripts/check/check-sel4-device-plane.py`, `scripts/check/check-sel4-c-runtime.py`, `scripts/check/check-slisp-core.py`, `scripts/check/check-sel4-matrix-plane.py`, `scripts/check/check-sel4-boot-layout.py`, `scripts/check/check-system-image-aggregate.py`, `scripts/check/check-system-image-builder.py`, `scripts/check/check-system-test-run.py`, `scripts/check/check-external-component-admission.py`, `scripts/check/check-component-sdk-out-of-tree.py`, `contracts/system-image-closure/v1/`, `contracts/system-test-run/v1/` |
-| Roadmap | CP12, CP15 |
+| Work items | 01a05db2-e400-79bb-994b-abfda53e928e, 01a0724c-5400-77da-8478-c43f706efd86 |
 | Gates | `just system_image_closure_aggregate_check`, `just system_image_builder_check`, `just system_test_run_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check`, `just sel4_component_graph_check`, `just sel4_device_check`, `just sel4_matrix_check`, `just sel4_c_runtime_check`, `just slisp_core_check` |
 | Trigger | CP12 landed `sel4-matrix` and `sel4-c-runtime` (`af2b97d4`, `e511ca3b`), which the CP15 entry of 2026-09-03 had recorded as permanently hand-authored blockers |
 | Baseline | 41 of 49 seL4 plane gates built by closure identity; the product-graph, device, matrix, c-runtime, and Slisp planes on the legacy flag; 40 plane flags surviving in `build-sel4.py`; no two-clean-corpus-build check |

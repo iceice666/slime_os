@@ -1,64 +1,48 @@
-# Backlog (defects and unmasked debt)
+# Backlog (frozen index of pre-cutover defects)
 
-> **Not authoritative.** Work-item identity, state, and relationships live in
-> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
-> This file is an index into that store, kept because 75 devlog entries link
-> into it by heading. Use `just tasks_list` for current state and
-> `just tasks_next` for actionable work.
+> **Frozen index, not the backlog.** The backlog is the `backlog`-tagged items
+> in `.tasks/items/`, which own identity, state, hierarchy, and dependencies.
+> This file indexes the entries that existed before the work-item store became
+> the repository's only tracker, and it survives for one reason: 75 devlog
+> entries link into it, 8 of them anchored at a specific heading. Use
+> `just tasks_list` for current state and `just tasks_next` for actionable work.
 
-**Purpose:** Index the defects, regressions, and latent bugs found in
-implemented code, and route each to the record that owns it. A backlog item is
-not new capability; it restores an already claimed exit condition or removes
-debt that would compound under new work.
+**Purpose:** Keep every landed `### B<N>` anchor resolving, and route each one
+to the records that own it — the devlog entry holding the investigation and the
+work item holding the state. Nothing here is a problem statement, an exit
+condition, or a status; the item owns all three.
 
-**Priority:** Open backlog items are handled before milestone work. A green
-verification suite is a precondition for milestone work, not a milestone
-itself. `just tasks_check` enforces that ordering against the store: an
-`active` milestone alongside an `open` or `active` backlog item fails the gate.
-`deferred` and `blocked` are the two explicit escapes — the first says the work
-is postponed by decision, the second that it waits on something outside this
-repository.
+**New work does not come here.** A defect is
+`myque new "<title>" --kind bug --tag backlog`, which allocates its UUID, plus
+a devlog entry where the investigation warrants one. No heading, no table row,
+and no edit to this file is required, and `just tasks_check` asks for none:
+adding a second place to write a defect down is what this cutover removed.
 
-**Working an item:**
-
-```sh
-myque new "<title>" --kind bug --tag backlog   # allocates a UUID; never pick a number
-myque start <item>                             # state = active
-myque close <item>                             # state = done, closure date recorded
-```
-
-Record the exit condition that was *observed* in the item's body, not the
-implementation status. Then add the heading below, pointing at the devlog entry
-that holds the investigation. `just tasks_check` fails if a heading here names
-an item the store does not have.
+**Priority is unchanged and lives in the store.** Open backlog items are
+handled before milestone work; a green verification suite is a precondition for
+milestone work, not a milestone itself. `just tasks_check` enforces that against
+the store: an `active` milestone alongside an `open` or `active` backlog item
+fails the gate. `deferred` and `blocked` are the two explicit escapes — the
+first says the work is postponed by decision, the second that it waits on
+something outside this repository.
 
 **Entry shape:** each `### B<N> — <title>` heading is a stable link target and
 nothing more. It allocates no identity and resolves no reference; the UUID
 beside it does both. Leave a landed heading's text alone — devlog anchors point
 at it — and note that `B29` and `B30` were each allocated twice, which is why
-their four entries name UUIDs rather than share a key.
-
-## Open
-
-*No open items.* `just tasks_next` is the canonical answer to what is actionable.
+their four entries name UUIDs rather than share a key. `just tasks_check` fails
+when a heading names an item the store does not have, or names one that is not
+closed.
 
 ## Deferred follow-ups
 
-Unclosed work surfaced by resolved entries, not backlog items in their own
-right. Each is a `followup` item in the store, deferred, and depends on the
-item it was surfaced by:
-
-| Key | Deferred from | Follow-up |
-| --- | --- | --- |
-| `F1` | B61 | `serve_instance_graph` untestable pending a seL4 object-invocation seam |
-| `F2` | B60 | two authority-derivation steps in Python rather than schema-declared |
-| `F3` | B63 | marker expectations as Python literals rather than blessable fixtures |
-| `F4` | C10.4 | worst-case-sized components remain unconverted to private memory |
-| `F5` | C10.4 | `fabric-service`'s private-memory quota is uniform rather than graph-derived |
-
-Evidence: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md)
-for F1–F3, [`devlog/2026-08-24-c10-4-adoption-and-leak-evidence/`](../devlog/2026-08-24-c10-4-adoption-and-leak-evidence/index.md)
-for F4–F5.
+Some resolved entries deliberately left half their work undone. Those halves
+are `followup` items in the store, each deferred and each depending on the item
+that surfaced it, so `just tasks_list` answers which exist and what state they
+are in — this file does not restate it. The audits that surfaced them are
+[`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md)
+and
+[`devlog/2026-08-24-c10-4-adoption-and-leak-evidence/`](../devlog/2026-08-24-c10-4-adoption-and-leak-evidence/index.md).
 
 ## Resolved
 

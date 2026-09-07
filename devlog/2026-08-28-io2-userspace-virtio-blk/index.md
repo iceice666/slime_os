@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/block/v2/`, `components/proto/src/block_v2.rs`, `components/lib/src/virtio_mmio.rs`, `components/services/virtio-blk-driver/`, `components/testkit/io-block-probe/`, `contracts/generation-manifest/v1/compositions/sel4-io-block.zti`, `scripts/check/check-sel4-io-block-plane.py`, `scripts/build/build-{generation,sel4}.py`, `scripts/check/check-sel4-gate-controls.py` |
-| Roadmap | IO2 |
+| Work items | 01a043f3-1800-7628-808c-22dc5ce41c1a |
 | Gates | `just io_block_check`, `just sel4_gate_control_check` |
 | Trigger | IO2 is the track's first complete substrate proof: the root owned the virtio-blk driver only because no userspace device-resource model existed, and IO0/IO1 removed that excuse. |
 | Baseline | P5.4.2's root-owned virtio-blk: legacy virtio-mmio v1, descriptors 0→1→2, one outstanding request, a synchronous `COMPLETION_POLLS` spin, poison-on-timeout, and a one-sector `BlockTransact` RPC served from `slime-root/src/console.rs`. |

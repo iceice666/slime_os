@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Monitoring |
 | Scope | `slime-root/src/{main,shared_buffer,buffer_adapter,object_allocator,graph,notification,peer_endpoint}.rs`, `components/runtime/src/syscall{,/sel4_transport}.rs`, `components/bins/src/bin/fabric-*.rs`, `components/bins/src/bin/init.rs`, `contracts/generation/v1/fixtures/sel4-stream.zti`, `contracts/generation/v1/fixtures/valid.zti`, `scripts/build/build-generation.py` |
-| Roadmap | B46, B50 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8, 019ffbda-1000-7716-9d07-a3a799b8eb97 |
 | Gates | `just sel4_channel_check`, `just sel4_crossing_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all` |
 | Trigger | `c8fc792`, deleting `channel.rs`, `transit.rs`, and `parked.rs` |
 | Baseline | All seven B46 plane gates green on logical channels at 2026-08-10 |

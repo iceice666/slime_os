@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `roadmap/07-architecture-portability.md` P2 decomposition, `stage0/src/arch/aarch64.rs`, `kernel/src/arch/aarch64/`, `kernel/src/arch/boot_context.rs`, `kernel/src/memory/vmm.rs`, `kernel/src/bringup_{x86_64,aarch64}.rs`, `kernel/src/drivers/frame_buffer.rs`, `kernel/.cargo/config.toml`, `kernel/scripts/build-iso.sh`, `scripts/build/build-generation.py`, `scripts/check/check-aarch64-boot.py`, `flake.nix`, `rust-toolchain.toml` |
-| Roadmap | P2.1, P2 |
+| Work items | 019fc334-1c00-7b14-b28d-30637a03bd01, 019fe21a-4400-7fe0-881a-f308c0314bd1 |
 | Gates | `just aarch64_boot_check`, `just x86_portability_check`, `just test`, `just product_boot_check`, `just rollback_check`, `just architecture_contract_check`, `just generation_check`, `just contracts_check`, `just test_host`, `just fmt_check_all`, `just lint_all` |
 | Trigger | P1 established the architecture boundary and proved neutral code builds for AArch64; nothing had executed an AArch64 instruction. |
 | Baseline | 191 `just test` assertions and a healthy 45-slot `just product_boot_check` slice on x86-64; no non-x86 execution of any kind. |

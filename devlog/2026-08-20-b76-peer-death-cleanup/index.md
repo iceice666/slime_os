@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Fixed |
 | Scope | `slime-root/src/ipc.rs`, `components/bins/src/{call_broker,operation_broker,matrix_broker,visibility_broker,fabric_call_scenario,fabric_operation_scenario}.rs`, `components/bins/src/bin/{fabric-call-worker,fabric-call-time,fabric-op-time,fabric-service,fabric-subscriber,echo-agent,powerbox-chooser,sel4-filesystem-service}.rs`, `components/bins/src/bin/init.rs`, `contracts/generation/v1/fixtures/{sel4-call,sel4-boot,sel4-traffic}.zti`, `scripts/check/check-sel4-call-plane.py` |
-| Roadmap | B76 |
+| Work items | 01a01ac0-3800-786f-9a5f-99eb8455c3d4 |
 | Gates | `just sel4_call_check`, `just sel4_operation_check`, `just sel4_fabric_aggregate_check`, `just sel4_boot_check`, `just sel4_traffic_check`, `just sel4_boot_layout_check`, `just generation_check`, `just test_sel4_root` |
 | Trigger | Found during B75's `pump_time` audit and recorded as B76; picked up as the next open backlog item after B75/B74 closed |
 | Baseline | B75 fixed the call-broker wedge and the publisher-death race on `da4e207`; both fixes already used supervision as the sole death signal, but left `IpcError::PeerDead` and its ~43 consuming arms in place as unreachable redundancy |

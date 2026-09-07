@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/release.rs` |
-| Roadmap | P5.4.1, P5.4 |
+| Work items | 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just test_host`, `just miri`, `just fmt_check_all`, `just lint_all` |
 | Trigger | Auditing `boot-contracts` for modules with real logic and zero tests; `release.rs` was the largest at 363 lines |
 | Baseline | `boot-contracts` at 142 host tests; `release.rs` had **zero** |

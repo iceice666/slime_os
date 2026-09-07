@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/.cargo/config.toml`, `scripts/build/build-generation.py` |
-| Roadmap | B12 |
+| Work items | 019fd7cd-8c00-7a24-907a-86c137e6e62a |
 | Gates | `just generation_check`, `just contracts_check`, `just fmt_check_all`, `just ruff`, `just typos` |
 | Trigger | Last open backlog item not blocked on a capability-model decision, after B30 was moved to the resolved log |
 | Baseline | `components/.cargo/config.toml:11` and `:21` passing `--remap-path-prefix /home/iceice666/projects/slime_os=.` against a checkout at `/Users/iceice666/code/slime_os` |

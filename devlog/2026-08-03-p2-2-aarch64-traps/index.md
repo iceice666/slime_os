@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src/arch/aarch64/{trap,paging,mod}.rs`, `kernel/src/bringup_aarch64.rs`, `kernel/build.rs`, `scripts/check/check-aarch64-{trap,boot}.py`, `docs/syscall-abi.md`, `Justfile`, `roadmap/07-architecture-portability.md` |
-| Roadmap | P2.2, P2 |
+| Work items | 019fc334-1c00-7940-b848-c0dc279c42b4, 019fe21a-4400-7fe0-881a-f308c0314bd1 |
 | Gates | `just aarch64_trap_check`, `just aarch64_boot_check`, `just x86_portability_check`, `just test` |
 | Trigger | P2.1 reached EL1 with memory online but installed no vector table: any fault escalated silently and `cpu::breakpoint()` was a one-way trip. |
 | Baseline | AArch64 booted to `[bringup] aarch64 EL1 vertical slice reached` and exited; no exception was ever taken, no `svc` served. |

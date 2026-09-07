@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src/arch/`, new `kernel/src/platform/`, `kernel/src/memory/vmm.rs`, `kernel/src/syscall/mod.rs`, `kernel/src/task/mod.rs`, `kernel/src/drivers/`, `kernel/src/time/`, `components/runtime/src/arch/`, `stage0/src/arch/`, `scripts/check/check-x86-portability.py`, `docs/syscall-abi.md` |
-| Roadmap | P1 |
+| Work items | 019fbe0d-c000-7b72-a9c2-f9b8a43bd455 |
 | Gates | `just x86_portability_check`, `just test`, `just product_boot_check`, `just rollback_check`, `just architecture_contract_check`, `just generation_check`, `just contracts_check`, `just test_host`, `just fmt_check_all`, `just lint_all` |
 | Trigger | P1 implementation; P0 left the executable-artifact contracts target-qualified but the kernel still named x86 mechanism throughout architecture-neutral code. |
 | Baseline | 191 `just test` assertions passing and a healthy 45-slot `just product_boot_check` vertical slice, measured on this tree before the change. |

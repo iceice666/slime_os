@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Shared-buffer budget contract, boot-contracts decoder, kernel per-owner accounting/reclamation, syscall enforcement, generation-decode validation, host bindings/checkers |
-| Roadmap | C7.3 |
+| Work items | 019f9a01-3c00-7b7e-a2ee-a32c44051b95 |
 | Gates | `just shared_buffer_accounting_check`, `just shared_buffer_factory_check`, `just contracts_check` |
 | Trigger | Roadmap C7 decomposition; C7.3 adds per-holder quotas and supervision-subtree accounting on top of C7.2's global ceilings |
 | Baseline | C7.2 shared-buffer factory: `SharedBufferTable::create(pages, writable)` bounded only by fixed global byte/object ceilings; no per-holder quota, no owner attribution, no reclamation on peer death |

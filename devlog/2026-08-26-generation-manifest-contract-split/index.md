@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation-manifest/v1`, `contracts/generation/v{2..5}`, generation builders/checks, current documentation, historical devlog links |
-| Roadmap | CP1 |
+| Work items | 01a01073-8000-74df-8b0c-a60c49aa9ec0 |
 | Gates | `just contracts_check`, `just system_spec_check`, `just generation_check`, `just devlog_check` |
 | Trigger | The host manifest source schema and boot binary schemas shared one version namespace, while product compositions were mixed with schema-conformance fixtures. |
 | Baseline | `contracts/generation/v1` was the host source schema, `contracts/generation/v5` was the current boot wire schema, and 49 product inputs lived beside two conformance fixtures. |

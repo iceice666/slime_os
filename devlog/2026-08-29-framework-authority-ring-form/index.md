@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Fixed |
 | Scope | `scripts/check/check-framework-authority.py` |
-| Roadmap | IO2 |
+| Work items | 01a043f3-1800-7628-808c-22dc5ce41c1a |
 | Gates | `just framework_safety_check` |
 | Trigger | CI job `docs_gates` failed in 16 s on PR #11, the IO0–IO6 branch |
 | Baseline | `framework authority check: 7 product fixtures grant blockWrite only to approved service owners` on `origin/main` |

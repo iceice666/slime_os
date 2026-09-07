@@ -20,5 +20,6 @@
 
 ## Related
 
-<!-- Work item (key or UUID from `.tasks/items/`) / devlog links. -->
+<!-- Work item UUID from `.tasks/items/` (a key may follow in parentheses, as
+     `C9.4 (01a0...)`, but the UUID is the reference) / devlog links. -->
 -

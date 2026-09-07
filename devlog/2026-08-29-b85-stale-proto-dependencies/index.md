@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Fixed |
 | Scope | `components/testkit/sel4-store-probe/Cargo.toml`, `components/testkit/sel4-rollback-probe/Cargo.toml`, `components/testkit/io-link-intruder/Cargo.toml`, `roadmap/00-backlog.md` |
-| Roadmap | B85 |
+| Work items | 01a04919-7400-7162-84c9-033adf51e8a4 |
 | Gates | `just machete`, `just lint_all`, `just generation_check`, `just sel4_store_check`, `just sel4_rollback_check`, `just io_link_check` |
 | Trigger | Observed while validating IO6; `just machete` exited 1 on a working tree whose changes did not touch any testkit crate |
 | Baseline | `just machete` is meant to exit 0, reporting no unused dependencies across `boot-contracts`, `components`, and `slime-root` |

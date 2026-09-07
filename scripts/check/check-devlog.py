@@ -10,17 +10,16 @@ layout and front-matter contract documented in ``devlog/README.md``:
 * front matter carries the exact field set, in order, with ``Kind``/``Status``
   drawn from the declared vocabularies;
 * ``Work items`` references resolve to a canonical work item in
-  ``.tasks/items/`` — directly when they are UUIDs, and through the committed
-  legacy map when they are historical roadmap ids — and ``Gates`` name real
-  Justfile targets;
+  ``.tasks/items/``, and ``Gates`` name real Justfile targets;
 * required ``##`` sections are present for the entry's kind, in template order;
 * the README index lists every entry once, with matching date and status;
 * every devlog path referenced anywhere in the repository exists, and every
   evidence sibling is linked from its ``index.md``.
 
-This checker no longer derives identity from roadmap headings. Work-item
-identity is the UUID under ``.tasks/items/``, ``myque check`` validates that
-store, and ``scripts/lib/work_items.py`` resolves a reference against it.
+This checker derives no identity from roadmap headings or human keys. A
+work item *is* its UUID under ``.tasks/items/``, ``myque check`` validates
+that store, and ``scripts/lib/work_items.py`` answers only whether a UUID is
+in it.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import subprocess
 
 from harness import ROOT
 from just_metadata import targets as just_targets
-from work_items import ambiguous_ids, resolve
+from work_items import UUID, identities
 
 DEVLOG = ROOT / "devlog"
 README = DEVLOG / "README.md"
@@ -42,14 +41,7 @@ TEMPLATE = DEVLOG / "TEMPLATE.md"
 
 ENTRY_NAME = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-# The work-item field. Entries written before the MyQue migration name it
-# `Roadmap` and carry roadmap ids; entries written after it name it
-# `Work items` and carry canonical UUIDs. Both are accepted in the same
-# position because a merged entry is preserved, not rewritten (`AGENTS.md`):
-# correctness depends on the values resolving, not on the field's name.
-WORK_ITEM_FIELDS = ("Work items", "Roadmap")
-
-FIELD_ORDER = ["Date", "Kind", "Status", "Scope", "Roadmap", "Gates", "Trigger", "Baseline"]
+FIELD_ORDER = ["Date", "Kind", "Status", "Scope", "Work items", "Gates", "Trigger", "Baseline"]
 
 KINDS = ["Defect", "Change", "Audit", "Decision"]
 
@@ -189,7 +181,7 @@ for line in README.read_text().splitlines():
         fail(f"README index lists {target} more than once")
     index_rows[target] = (row.get("Date", ""), row.get("Status", ""))
 
-for column in ("Date", "Entry", "Kind", "Status", "Roadmap"):
+for column in ("Date", "Entry", "Kind", "Status", "Keys"):
     if column not in index_header:
         fail(f"README index table is missing the {column!r} column")
 
@@ -206,24 +198,18 @@ for entry in entries:
     text = index.read_text()
     fields = front_matter(text)
 
-    work_item_field = next((field for field in WORK_ITEM_FIELDS if field in fields), None)
-    if work_item_field is None:
-        fail(f"{name}: front matter names neither {' nor '.join(WORK_ITEM_FIELDS)}")
-        continue
-    expected = [work_item_field if field == "Roadmap" else field for field in FIELD_ORDER]
-
-    present = [field for field in expected if field in fields]
-    if present != expected:
-        missing = [field for field in expected if field not in fields]
+    present = [field for field in FIELD_ORDER if field in fields]
+    if present != FIELD_ORDER:
+        missing = [field for field in FIELD_ORDER if field not in fields]
         if missing:
             fail(f"{name}: front matter missing {', '.join(missing)}")
         else:
             fail(f"{name}: front-matter fields out of order: {present}")
         continue
 
-    keys = list(fields)
-    if keys[: len(expected)] != expected:
-        fail(f"{name}: front-matter fields out of order: {keys[: len(expected)]}")
+    declared = list(fields)
+    if declared[: len(FIELD_ORDER)] != FIELD_ORDER:
+        fail(f"{name}: front-matter fields out of order: {declared[: len(FIELD_ORDER)]}")
 
     if fields["Date"] != name[:10]:
         fail(f"{name}: Date {fields['Date']} does not match the folder date {name[:10]}")
@@ -236,20 +222,20 @@ for entry in entries:
     if status not in STATUSES:
         fail(f"{name}: Status {status!r} is not one of {', '.join(STATUSES)}")
 
-    if fields[work_item_field] != "none":
-        for reference in (part.strip() for part in fields[work_item_field].split(",")):
-            if resolve(reference, entry=name) is not None:
+    if fields["Work items"] != "none":
+        known = identities()
+        for reference in (part.strip() for part in fields["Work items"].split(",")):
+            if reference in known:
                 continue
-            if reference in ambiguous_ids():
+            if UUID.match(reference):
                 fail(
-                    f"{name}: {work_item_field} names {reference!r}, a roadmap id that was "
-                    "allocated twice; no evidence resolves which item this entry meant. "
-                    "Record the resolution in .tasks/legacy-roadmap-ids.json or cite a UUID"
+                    f"{name}: Work items names {reference!r}, which is not a work item "
+                    "in .tasks/items/"
                 )
             else:
                 fail(
-                    f"{name}: {work_item_field} names {reference!r}, which resolves to no "
-                    "work item in .tasks/items/ and is absent from the legacy id map"
+                    f"{name}: Work items names {reference!r}, which is not a UUID. A human "
+                    "key is a display alias and resolves nothing; cite the item's UUID"
                 )
 
     gates = re.findall(r"`just ([a-z_0-9]+)`", fields["Gates"])

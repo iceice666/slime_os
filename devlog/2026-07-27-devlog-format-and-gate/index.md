@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `devlog/README.md`, `devlog/TEMPLATE.md`, all 20 existing entry folders, `scripts/check/check-devlog.py`, `Justfile`, `AGENTS.md`, `roadmap/README.md` |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just devlog_check` |
 | Trigger | Requested review of the devlog's format and file organization |
 | Baseline | Two coexisting entry shapes, one template for four kinds of entry, prose-only cross-references, and no validation of any of it |

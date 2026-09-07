@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/bins/src/bin/fabric-publisher.rs`, `scripts/check/check-sel4-matrix-plane.py`, `scripts/check/check-sel4-gate-controls.py` |
-| Roadmap | B73 |
+| Work items | 01a01ac0-3800-7348-9883-de37f9f57462 |
 | Gates | `just sel4_matrix_check`, `just sel4_gate_control_check` |
 | Trigger | B73, recorded when the matrix plane's visibility policy moved onto the graph |
 | Baseline | `just sel4_matrix_check` green at `b942d0c`, with the `private` view branch asserted by `fabric-observer` |

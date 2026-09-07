@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/main.rs`, `scripts/check/check-sel4-boot-layout.py`, `contracts/boot-layout/v1/fixtures/sel4-{loan,sample,stream}.layout` |
-| Roadmap | B26, B10, P5.4.6 |
+| Work items | 019fd7cd-8c00-77be-9bbe-b0a3d09a370a, 019fb8e7-6400-7e95-b349-16e4c7073161, 019fdcf3-e800-71c8-8283-78b13fce7bf4 |
 | Gates | `just sel4_boot_layout_check` |
 | Trigger | Fault-injecting the P5.4.6 call plane's newly frozen layout |
 | Baseline | `just sel4_boot_layout_check` freezing nine plane layouts, all matching |

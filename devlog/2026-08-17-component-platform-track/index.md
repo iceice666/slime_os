@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/10-component-platform.md` (new), `roadmap/00-backlog.md` (B70 opened, B65 follow-up cross-referenced), `roadmap/09-rpi5-ros2-demo.md` (RP4 depends on CP5), `roadmap/README.md` (ledger row, track map, sequencing item 5) |
-| Roadmap | CP0, CP1, CP2, CP3, CP4, CP5, B70, RP4, B65 |
+| Work items | 01a01073-8000-749e-b096-51ea49ce9e68, 01a01073-8000-74df-8b0c-a60c49aa9ec0, 01a0250c-f000-7678-9b88-60c1ac29f6b3, 01a01fe6-9400-747c-9990-6720903ced0f, 01a01fe6-9400-751b-9b4d-feb59f6027ba, 01a0250c-f000-78cb-8be4-6a0f1e8259d9, 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0724c-5400-7019-a587-694c834f91cc, 01a00b4d-2400-7af9-b5c1-4546f1b399e0 |
 | Gates | none |
 | Trigger | Investigation of whether a component can be authored and built outside this repository, 2026-08-17 |
 | Baseline | `contracts/generation/v1`'s hand-authored `Executable`/`Instance`/`Object` records were the only definition of "a component"; every component was a `[[bin]]` in one crate whose `build.rs` parsed those fixtures at compile time |

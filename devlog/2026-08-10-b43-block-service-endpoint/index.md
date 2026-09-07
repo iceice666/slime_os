@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{console,device,ipc,main,transfer_window}.rs`, `components/runtime/src/syscall{,.rs}/sel4_transport.rs`, `components/bins/`, `scripts/check/check-sel4-{component-graph,transfer-plane}.py` |
-| Roadmap | B43 |
+| Work items | 019fe740-a000-7141-8813-a58e7b330fce |
 | Gates | `just sel4_device_check`, `just sel4_storage_check`, `just sel4_store_check`, `just sel4_rollback_check`, `just sel4_recovery_plane_check`, `just sel4_transfer_check`, `just sel4_component_graph_check` |
 | Trigger | B43's first exit clause was false: `BlockTransact` and `StoreTransact` were still labels on the universal root dispatcher, so a block request needed no declared service capability. |
 | Baseline | All six named gates green since 2026-08-10, but passing against the universal dispatcher rather than a direct service path. |

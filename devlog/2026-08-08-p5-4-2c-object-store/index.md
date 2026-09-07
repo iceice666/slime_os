@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/main.rs`, `components/runtime/src/{lib,heap}.rs`, `components/runtime/Cargo.toml`, `components/bins/src/bin/{sel4-store-probe,init}.rs`, `components/bins/{Cargo.toml,build.rs}`, `components/bins/src/default_boot_layout.rs`, `contracts/generation/v1/fixtures/sel4-store.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{store-plane,device-plane,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.2, P5.4, M5.4 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7eef-bb24-db634c4e436f |
 | Gates | `just sel4_store_check`, `just sel4_device_check`, `just sel4_storage_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | `BlockTransact` gave userspace sectors; nothing above them existed on seL4 |
 | Baseline | GPT validation and the object store were reachable only from the frozen oracle's kernel |

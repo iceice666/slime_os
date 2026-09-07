@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `flake.nix`, `flake.lock`, `nix/kani.nix`, `just/quality.just` recipe `kani_io_proofs`, `.github/workflows/ci.yml` job `kani_proofs`, IO6 follow-ups |
-| Roadmap | IO6 |
+| Work items | 01a04919-7400-70bd-8fb1-4c7ab1bb6227 |
 | Gates | `just kani_io_proofs` |
 | Trigger | IO6 shipped `just kani_io_proofs` guarded only by a `command -v cargo-kani` check, with Kani installed imperatively per machine; its own follow-up list named flake wiring as the fix |
 | Baseline | 18 harnesses verifying against a developer-local `cargo install kani-verifier && cargo kani setup` install, unpinned by this repository |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Monitoring |
 | Scope | `contracts/fabric-call/v1/{schema.zt,gen_rust.zt}`, `contracts/generation/v1/fixtures/sel4-call.zti`, `scripts/build/build-generation.py`, `boot-contracts/src/generation.rs`, `components/proto/src/{fabric_call.rs,lib.rs}`, `components/bins/src/{call_broker.rs,fabric_call_scenario.rs}`, four call components |
-| Roadmap | B46 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_call_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just contracts_check` |
 | Trigger | `sel4_call_check` stalling in client B's backpressure burst with the broker holding queued terminals |
 | Baseline | Call plane reaching 14 component markers |

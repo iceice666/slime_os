@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `roadmap/07-architecture-portability.md`, `roadmap/00-backlog.md` |
-| Roadmap | P5.4.final, P5.4 |
+| Work items | 019fe21a-4400-7612-a38b-fed08baaa778, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just typos`, `just devlog_check` |
 | Trigger | P5.4.2 and P5.4.3 both completed; P5.4.final was the next item |
 | Baseline | The roadmap recorded P5.4.final as "not started" with no coverage analysis |

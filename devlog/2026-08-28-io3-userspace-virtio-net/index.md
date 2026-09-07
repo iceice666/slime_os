@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/link-device/v1/`, `components/proto/src/link_device.rs`, `components/proto/tests/link_device.rs`, `components/services/virtio-net-driver/`, `components/testkit/io-link-{probe,intruder}/`, `components/lib/src/virtio_mmio.rs`, `contracts/generation-manifest/v1/compositions/sel4-io-link.zti`, `scripts/check/check-sel4-io-link-plane.py`, `scripts/build/build-{generation,sel4}.py`, `scripts/check/check-sel4-gate-controls.py` |
-| Roadmap | IO3 |
+| Work items | 01a04919-7400-778b-93f0-8e99df9aeb79 |
 | Gates | `just io_link_check`, `just sel4_gate_control_check` |
 | Trigger | IO3 is the track's generality test: the substrate was designed against one block device, and a duplex device with continuous receive replenishment is what shows whether the design was actually general or merely block-shaped. |
 | Baseline | No network driver of any kind existed. IO0's queue substrate, IO1's hardware authority, and IO2's userspace virtio-blk driver were the only precedents. |

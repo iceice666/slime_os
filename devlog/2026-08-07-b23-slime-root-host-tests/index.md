@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/Cargo.toml`, `slime-root/src/lib.rs`, `slime-root/src/{main,channel,generation}.rs`, `Justfile` |
-| Roadmap | B23, P5.4.1, P5.4 |
+| Work items | 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just test_sel4_root` |
 | Trigger | B23, opened during the B16 fix and inherited by P5.4.1; every P5.4.2+ slice would inherit it again |
 | Baseline | Nine seL4 gates passing; 102 `#[test]` functions compiled by nothing |

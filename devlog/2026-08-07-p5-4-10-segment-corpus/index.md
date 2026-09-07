@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/component_image.rs` |
-| Roadmap | P5.4.10, P5.4, P5.4.1, P0 |
+| Work items | 019fd7cd-8c00-79d7-909d-d1d5483e9d88, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fbe0d-c000-7ace-97cd-aae461a1248a |
 | Gates | `just test_host`, `just miri` |
 | Trigger | P5.4.1's inventory, which recorded `component_image.rs`'s 11 neutral assertions as coverage that vanishes silently with `kernel/` |
 | Baseline | Nine seL4 gates passing; the segment rules living only in the frozen oracle |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/syscall-abi/v1/schema.zt`, `docs/syscall-abi.md`, `slime-root/src/{ipc,main}.rs`, `components/runtime/src/{lib,syscall}.rs` + `syscall/sel4_transport.rs`, `components/bins/src/fabric_self_view.rs`, `components/bins/src/bin/fabric-{publisher,subscriber,publisher-b,subscriber-b}.rs` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just sel4_stream_check`, `just sel4_qos_check`, `just sel4_visibility_check`, `just sel4_matrix_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_fabric_aggregate_check`, `just runtime_binding_resolution_check`, `just test_sel4_root`, `just contracts_check` |
 | Trigger | Option C step 1 landed the holder-scoped read (17d436c); step 2 is the self-scoped view the four participants need |
 | Baseline | `GRAPH_READ` answered only the declared fabric holder; participants read `FABRIC_HISTORY_DEPTHS` |

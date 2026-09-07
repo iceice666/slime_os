@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,transfer_window,parked}.rs`, `components/bins/src/bin/{init,fabric-subscriber}.rs`, `components/bins/src/{call_broker,operation_broker,default_fabric_profile}.rs`, `contracts/generation/v1/fixtures/sel4-fabric.zti`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-{fabric,spawn,channel}-plane.py`, `Justfile` |
-| Roadmap | P5.5.1, P5.5, B15, B17, B16, B12 |
+| Work items | 019fcd80-d400-7001-a8e8-3d81e4989d38, 019fc85a-7800-7e7b-8c8a-56f889dccbed, 019fcd80-d400-7b3e-ad54-c642ffd3eb4e, 019fcd80-d400-7b8a-bd67-244e04f6ac14, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a, 019fd7cd-8c00-7a24-907a-86c137e6e62a |
 | Gates | `just sel4_stream_check`, `just sel4_spawn_check`, `just sel4_channel_check` |
 | Trigger | P5.5 opened as the next uncompleted milestone after P5.3 closed |
 | Baseline | P5.3.4 (`44d273d`): six seL4 gates green, `Operation::CapTransfer` answering `unimplemented` |

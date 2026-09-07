@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/transfer.rs` |
-| Roadmap | P5.4.3, P5.4, P5.4.1 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9 |
 | Gates | `just test_host`, `just miri`, `just fmt_check_all`, `just lint_all` |
 | Trigger | P5.4.3's M6.7 transfer gap, while looking for a slice of the M6 service class that needs neither a block device nor a new root mechanism |
 | Baseline | `boot-contracts` at 116 host tests; `transfer.rs` had **zero** |

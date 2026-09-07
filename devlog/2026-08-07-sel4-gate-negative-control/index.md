@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-gate-controls.py`, `Justfile`, `AGENTS.md`, `.github/workflows/ci.yml` |
-| Roadmap | P5.4.1, P5.4 |
+| Work items | 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just sel4_gate_control_check`, `just ruff`, `just typos` |
 | Trigger | P5.4.1's own "Other risks" list recorded this as an open item; it was the only entry there closable without new hardware or a capability-model decision |
 | Baseline | Ten marker-matching seL4 gates, nothing in-repo showing a missing marker makes one red |

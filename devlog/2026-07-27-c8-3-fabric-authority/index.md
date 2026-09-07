@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Zutai capability-transfer contract, `SYS_CAP_TRANSFER`, kernel descriptor validation, fabric service and three client components, generation manifest and bootstrap wiring, C8.3 checks |
-| Roadmap | C8.3 |
+| Work items | 019f9f27-9800-790e-b8f1-663928c35f8a |
 | Gates | `just fabric_authority_check` |
 | Trigger | C8.3 opened after C8.2 made the fabric graph authenticated generation data that nothing at runtime consumed |
 | Baseline | C8.2 declared routes, directions, and QoS as generation data, but no component read the graph and the only capability-movement path (`SYS_SEND` attachment) moved a capability at its full held rights, so an attenuated route role could not be expressed |

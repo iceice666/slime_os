@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/main.rs`, `components/bins/src/bin/init.rs`, `components/bins/build.rs`, `contracts/generation/v1/fixtures/sel4-powerbox.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{powerbox-plane,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.3, P5.4, M6.6 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-780c-bbc6-125e5c1a6d59 |
 | Gates | `just sel4_powerbox_check`, all 24 seL4 plane gates, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check`, `just contracts_check` |
 | Trigger | M6.3's directory mechanism and `InputRead` both landed; M6.6 needed only them |
 | Baseline | No powerbox plane; the directory transfer kind had just been added |

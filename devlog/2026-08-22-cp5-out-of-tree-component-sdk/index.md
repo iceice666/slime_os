@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-component-sdk-out-of-tree.py`, `scripts/check/check-generation.py`, `Justfile` |
-| Roadmap | CP5 |
+| Work items | 01a0250c-f000-78cb-8be4-6a0f1e8259d9 |
 | Gates | `just component_sdk_out_of_tree_check` |
 | Trigger | CP5 required the RP4 producer and consumer to build in a separate git checkout against a pinned component SDK, enter the ordinary external-artifact path together, and boot without changing root-side admission |
 | Baseline | CP4 admitted one independently built ELF, but no external repository consumed a versioned SDK bundle or supplied both sides of the bounded Arm data path |

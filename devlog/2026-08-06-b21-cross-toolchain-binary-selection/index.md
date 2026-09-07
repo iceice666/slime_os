@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `flake.nix`, `scripts/build/build-sel4.py`, `scripts/check/check-sel4-pins.py`, `sel4/pins.toml` |
-| Roadmap | B21, B20, B19 |
+| Work items | 019fd2a7-3000-780d-8f18-9aa66c0afff9, 019fd2a7-3000-7239-adb2-62b25802fdf1, 019fd2a7-3000-7ff0-adfa-bd30cd147992 |
 | Gates | `just sel4_pin_check`, `just sel4_qemu_image_check` |
 | Trigger | Review of B20's open follow-up: "the fix neutralizes today's wrapper difference rather than making the wrappers identical" |
 | Baseline | B20 (`63221ed`): `kernel_sha256` `97dcb029…` on three systems, attributed to a per-platform `cc-cflags-before` difference |

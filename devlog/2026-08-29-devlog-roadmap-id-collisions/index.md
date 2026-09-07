@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-devlog.py`, `devlog/README.md` |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just devlog_check`, `just ruff` |
 | Trigger | Review found `roadmap_ids()` collapsed repeated roadmap/backlog IDs into a set, so a new duplicate heading could silently make one devlog ID ambiguous |
 | Baseline | `just devlog_check` validated that a devlog Roadmap ID existed, but not that it resolved to one canonical roadmap heading |

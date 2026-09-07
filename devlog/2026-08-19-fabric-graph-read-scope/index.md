@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `components/bins/src/default_fabric_profile.rs` consumers, `boot-contracts/src/fabric_graph.rs`, `scripts/build/build-generation.py` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just devlog_check`, `just typos` |
 | Trigger | B70's remaining surface was about to be closed by building a `fabric-graph` resource-read syscall, on a backlog figure of "44 graph facts" that had never been measured |
 | Baseline | 18 `include!` sites over three `build.rs`-generated tables; `fabric_profile` at 49 constants after `FABRIC_SUPERVISION`/`FABRIC_SUBSCRIBERS` were deleted |

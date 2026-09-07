@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `Justfile` (`run`, `sel4_product_image`, `test_sel4_root`), `slime-root/src/ipc.rs`, `slime-root/src/main.rs` |
-| Roadmap | B61, B23, B46 |
+| Work items | 01a00b4d-2400-76f2-80fd-3b6c8f7f99d7, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_component_graph_check`, `just test_sel4_root`, `just sel4_boot_check` |
 | Trigger | The structural audit traced `just run` through four indirections to `SLIME_ROOT_FIXTURE=1` |
 | Baseline | `just run` documented as "the seL4 product image"; `lib.rs` states `main.rs` is deliberately untestable |

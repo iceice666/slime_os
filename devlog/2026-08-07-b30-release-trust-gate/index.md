@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/check/check-release-trust.py`, `AGENTS.md` |
-| Roadmap | B30 |
+| Work items | 019fd7cd-8c00-76ca-a4f2-2f2dc6c169a0 |
 | Gates | `just release_trust_check`, `just ruff`, `just typos` |
 | Trigger | The previous entry claimed `apply_rotation` was untested; checking that claim found an existing gate for it, and running the gate found it broken |
 | Baseline | `just release_trust_check` aborting with `AttributeError` before any assertion; target absent from `AGENTS.md`'s gate index |

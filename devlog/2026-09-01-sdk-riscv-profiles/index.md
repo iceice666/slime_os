@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/lib/component_sdk.py`, `scripts/check/check-component-sdk-{export,release}.py` |
-| Roadmap | CP8, P3.E, P3.F |
+| Work items | 01a03480-0400-7478-a2f3-e21a16591416, 01a0588c-8800-73db-ba7e-7c520baedf46, 01a0588c-8800-7c3d-9592-61e0dd0ba7f8 |
 | Gates | `just component_sdk_export_check`, `just component_sdk_preflight` |
 | Trigger | Preparing SDK 3.0.0 after P3/P3.E/P3.F landed showed the repository declaring four target profiles while the exporter could produce assets for two |
 | Baseline | CP8 shipped per-profile seL4 prefixes for `aarch64-sel4-qemu-virt` and `aarch64-rpi5`; `PROFILE_PLATFORMS` had no RISC-V entry and the exporter copied exactly one target specification |

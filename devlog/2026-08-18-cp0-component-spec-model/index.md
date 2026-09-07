@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/component-spec/v1/`, `scripts/lib/component_spec.py`, `scripts/check/check-component-spec.py`, `scripts/generate/generate-component-spec-bindings.py`, `scripts/check/check-contracts.py`, `Justfile` |
-| Roadmap | CP0, B70 |
+| Work items | 01a01073-8000-749e-b096-51ea49ce9e68, 01a0250c-f000-7b2a-92d3-fde78c957925 |
 | Gates | `just component_spec_check`, `just contracts_check` |
 | Trigger | `969fbac` opened the component platform track and B70; CP0 is its first milestone and has no unmet dependency |
 | Baseline | No component-level specification existed: `contracts/generation/v1`'s `Executable`/`Instance` pair was the only description of a component anywhere in the repository |

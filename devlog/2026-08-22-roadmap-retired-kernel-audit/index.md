@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `roadmap/{README,01-foundations,02-core-runtime,07-architecture-portability,08-native-development,09-rpi5-ros2-demo,10-component-platform}.md` |
-| Roadmap | C9, C10, C10.1, C10.2, C10.3, P3, P4, D2, D4, M1, M2, RP2, CP2, CP5, B70 |
+| Work items | 01a00b4d-2400-75f0-82f5-9abe614054e9, 019fa44d-f400-7b55-93e9-11b4c78772e2, 01a02a33-4c00-72b4-a52f-851ea1883f50, 01a0724c-5400-70d8-83ad-af7bada609f1, 01a0724c-5400-7d30-b9b2-08fb442efd21, 01a05366-2c00-7c3b-bc96-ce22c9f94c15, 01a02f59-a800-78b6-9398-6b22bfbc6fdd, 01a0724c-5400-751f-8152-27b6f86dc4a3, 01a0724c-5400-78f5-ba28-f7a44ba8fc8a, 01a0724c-5400-7b40-9704-7952f16bf2e6, 01a0724c-5400-7079-879d-c73c9d7327eb, 01a01ac0-3800-727f-b113-f7ce726f08c6, 01a0250c-f000-7678-9b88-60c1ac29f6b3, 01a0250c-f000-78cb-8be4-6a0f1e8259d9, 01a0250c-f000-7b2a-92d3-fde78c957925 |
 | Gates | `just devlog_check` |
 | Trigger | A progress review found `roadmap/README.md` still declaring B70 open one commit after `b9553b7` closed it, which raised the question of what else in `roadmap/` had not followed the P5 seL4 cutover |
 | Baseline | P5.4.final deleted `kernel/` on 2026-08-09 and every *completed* milestone that described it was labeled historical or superseded at that time |

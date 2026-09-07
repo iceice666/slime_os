@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/schema.zt`, `scripts/build/build-generation.py`, `boot-contracts/src/generation.rs` |
-| Roadmap | B47 |
+| Work items | 019fe740-a000-722b-bf6a-29f2db805351 |
 | Gates | `just sel4_channel_check`, `just sel4_boot_check`, `just sel4_spawn_check`, `just sel4_supervision_check`, `just sel4_reclamation_check` |
 | Trigger | B47: one `Task` means image instance, CSpace/VSpace owner, single TCB, service identity, and lifecycle identity at once. |
 | Baseline | v5 separated process and thread records; nothing could declare more than one thread. |

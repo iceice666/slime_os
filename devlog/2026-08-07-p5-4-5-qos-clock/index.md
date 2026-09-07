@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Root-caused |
 | Scope | `contracts/generation/v1/fixtures/sel4-qos.zti`, `scripts/build/{build-generation,build-sel4}.py`, `components/bins/src/bin/init.rs` |
-| Roadmap | P5.4.5, C8.5, B25 |
+| Work items | 019fd7cd-8c00-7832-8548-1e37c412afc3, 019fa44d-f400-701b-b07c-8aa780e6da65, 019fdcf3-e800-75f0-8f8b-39164dfabe16 |
 | Gates | none |
 | Trigger | P5.4.6 blocked on B25; P5.4.5's remaining arms checked for the same dependency |
 | Baseline | Three C8.5 arms asserted by `just sel4_stream_check`; the rest recorded as needing a clock |

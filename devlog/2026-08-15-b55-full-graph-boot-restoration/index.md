@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/main.rs`, `components/bins/src/bin/{init,fabric-service,fabric-observer,fabric-probe,fabric-proxy}.rs`, `components/bins/src/fabric_boot.rs`, `contracts/generation/v1/fixtures/sel4-boot.zti`, `scripts/build/build-generation.py`, `scripts/check/{check-sel4-boot-plane.py,check-sel4-gate-controls.py}` |
-| Roadmap | C8.10, B55 |
+| Work items | 01a00100-6c00-7843-9ed8-9a1672933b4b, 01a00100-6c00-799f-8f9b-f69e2a662d1f |
 | Gates | `just sel4_boot_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check` |
 | Trigger | User asked to discuss B55; investigation found the backlog entry's diagnosis was one of seven defects, not the whole gap |
 | Baseline | `just sel4_boot_check` failed at `SLIME_GRAPH spawn refused task=0 slot=2 ungranted`, before any fabric role was provisioned; identical on unmodified `master` at `84c75f5` |

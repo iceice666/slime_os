@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Zutai fabric-graph contract, boot-contracts decoder, generation manifest schema and fixture, generation builder, kernel generation decode, C8.2 checks |
-| Roadmap | C8.2 |
+| Work items | 019f9f27-9800-7f42-a019-5ca68b4b486a |
 | Gates | `just fabric_manifest_check` |
 | Trigger | C8.2 opened after C8.1 landed the admitted interface set with no persistent route, QoS, or graph data |
 | Baseline | C8.1 admitted interface schemas source-only; no generation carried a fabric graph, so no route, direction, QoS policy, visibility grant, interposition hop, or per-graph resource ceiling existed as generation data |

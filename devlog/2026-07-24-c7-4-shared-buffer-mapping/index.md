@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src/memory/shared_buffer.rs`, `kernel/src/memory/vmm.rs`, `kernel/src/memory/address_space.rs`, `kernel/src/capability/mod.rs`, `kernel/src/syscall/mod.rs`; `just shared_buffer_mapping_check` |
-| Roadmap | C7.4 |
+| Work items | 019f9a01-3c00-79ef-9730-f71214e94c59 |
 | Gates | `just shared_buffer_mapping_check`, `just test` |
 | Trigger | Roadmap C7 decomposition; C7.4 adds map/unmap/irreversible seal on top of C7.2 factory allocation and C7.3 per-holder accounting |
 | Baseline | C7.3 shared-buffer table: bounded factory allocation charged to a supervision-subtree owner with per-holder `byte_pages`/`buffer_count` quotas; `mapping_count`/`loan_count` declared but unconsumed. `RIGHT_BUFFER_MAP`/`RIGHT_BUFFER_WRITE` existed but were ungated — no map/write/seal operation existed. |

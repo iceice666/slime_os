@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-fabric-aggregate.py` (`records_by_participant`, `check_determinism`) |
-| Roadmap | B68, C8.15, B55 |
+| Work items | 01a00b4d-2400-7c50-98e4-b4455b9b29f2, 01a00b4d-2400-7677-8e72-5cad11acefca, 01a00100-6c00-799f-8f9b-f69e2a662d1f |
 | Gates | `just sel4_fabric_aggregate_check`, `just sel4_gate_control_check` |
 | Trigger | The closing full-suite sweep after the structural audit's eleven items landed |
 | Baseline | C8.15 recorded as complete on "280 byte-identical trace records across four boots" |

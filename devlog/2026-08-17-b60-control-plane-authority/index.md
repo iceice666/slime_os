@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/build/build-generation.py` (`_control_sources`, `_assert_declared_control_slots`, `resolve_fabric_profile`), `contracts/generation/v1/schema.zt` (`FabricProfile`), 7 `.zti` fixtures |
-| Roadmap | B60, B55, B56 |
+| Work items | 01a00b4d-2400-7f5d-aba4-9a4c213ab256, 01a00100-6c00-799f-8f9b-f69e2a662d1f, 01a00b4d-2400-732f-b4b2-76a7e272d6b0 |
 | Gates | `just contracts_check`, `just generation_check`, `just data_fabric_profile_check`, `just sel4_boot_check`, `just sel4_boot_layout_check` |
 | Trigger | The structural audit traced one control slot to two independent sources joined only by a comment |
 | Baseline | B55's fix was reactive — the divergence was found by a boot failure, not by the build |

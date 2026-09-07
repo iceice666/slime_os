@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `roadmap/README.md` (invariant 7), `scripts/check/check-sel4-boot-selection.py`, `scripts/check/check-contracts.py` |
-| Roadmap | B64, B50 |
+| Work items | 01a00b4d-2400-706e-9ff9-ee35b95efde4, 019ffbda-1000-7716-9d07-a3a799b8eb97 |
 | Gates | `just sel4_boot_selection_check`, `just contracts_check` |
 | Trigger | The structural audit judged the equality version gate irreconcilable with rollback, and reported five dead schema trees |
 | Baseline | `Generation::decode` refuses a superseded magic and the selector spends the pending attempt before decoding — both undocumented and unexercised |

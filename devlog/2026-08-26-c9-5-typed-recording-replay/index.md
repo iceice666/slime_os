@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/{fabric-trace/v1,recording-policy/v1,generation/v1,generation/v5,syscall-abi/v1}`, `boot-contracts/src/{recording_policy,generation}.rs`, `components/proto/src/{recording_stream,lib}.rs`, `components/{runtime,lib,bins/replay-probe,bins/init}`, `slime-root/src/{generation,ipc,main}.rs`, `scripts/{build,check}`, `docs/{syscall-abi,capability-matrix}.md` |
-| Roadmap | C9.5, C9, C9.1, C9.2, C9.4, C8.11, C8.15, B23, B57, B70, B71 |
+| Work items | 01a0724c-5400-733a-aecb-ec32b2c53164, 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a02f59-a800-75d2-80ae-eec3645dabad, 01a03480-0400-7ce3-8fa3-0a121910e8b7, 01a03480-0400-7d36-bbdc-7c3e03a7c057, 01a00100-6c00-764a-b3eb-fd24599c1cbf, 01a00b4d-2400-7677-8e72-5cad11acefca, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3, 01a00b4d-2400-7d7c-82e2-df8402734f41, 01a0250c-f000-7b2a-92d3-fde78c957925, 01a01073-8000-7273-b1d7-01b585bcaba1 |
 | Gates | `just replay_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root`, `just test_host` |
 | Trigger | C9.5 was the first actionable roadmap milestone: the backlog's Open section is empty, and M5.7/RP3/RP4 are hardware-blocked. |
 | Baseline | C9.1–C9.4 complete. No generation could declare a component deterministic, no nondeterminism source was classified, and nothing recorded or replayed a typed trace. |

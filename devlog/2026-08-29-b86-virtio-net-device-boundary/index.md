@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/services/virtio-net-driver/src/main.rs`, `components/lib/src/{virtio_mmio.rs,lib.rs,build.rs}`, `verification/virtio-proofs/`, `scripts/check/check-sel4-io-link-plane.py`, `just/quality.just`, `.github/workflows/ci.yml` |
-| Roadmap | B86, B87, IO3, IO6, IO7 |
+| Work items | 01a04919-7400-7b50-8817-dfe33ba3920c, 01a04919-7400-7869-bad9-87915e92f21e, 01a04919-7400-778b-93f0-8e99df9aeb79, 01a04919-7400-70bd-8fb1-4c7ab1bb6227, 01a04919-7400-7a53-8f5a-f3622b1f26ce |
 | Gates | `just io_link_check`, `just test_host`, `just kani_virtio_proofs`, `just sel4_gate_control_check` |
 | Trigger | Asking what to verify next after IO0–IO6 closed: a survey of the substrate's unproved arithmetic asked which inputs no capability can constrain, and the used ring was the answer |
 | Baseline | IO3 complete and `just io_link_check` green since 2026-08-28; IO6's eighteen Kani harnesses prove the *client*-facing wire arithmetic of `slime-proto` over all values |

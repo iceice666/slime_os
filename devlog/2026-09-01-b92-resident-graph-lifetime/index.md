@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/graph_runtime/services.rs`, `scripts/check/check-duo-slisp.py`, resident product dispatch |
-| Roadmap | B92, P3.F |
+| Work items | 01a0588c-8800-796d-9195-3321aefc0c6c, 01a0588c-8800-7c3d-9592-61e0dd0ba7f8 |
 | Gates | `just duo_slisp_check`, `just sel4_component_graph_check`, `just sel4_fabric_aggregate_check` |
 | Trigger | A physical Milk-V Duo Slisp session stopped after printing `SLIME_GRAPH exhausted live=4 iterations=32768 certified=1` |
 | Baseline | P3.F declared console, init, spawn-service, and Slisp resident, but its physical gate ended before the dispatcher request ceiling |

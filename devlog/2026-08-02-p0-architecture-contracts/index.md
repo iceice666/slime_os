@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Target profiles, kernel/component image revisions, generation admission, stage-0 admission, profile-aware builders, syscall ABI documentation |
-| Roadmap | P0 |
+| Work items | 019fbe0d-c000-7ace-97cd-aae461a1248a |
 | Gates | `just architecture_contract_check`, `just generation_check`, `just rollback_check`, `just product_boot_check`, `just test`, `just test_host`, `just fmt_check_all`, `just lint_all` |
 | Trigger | P0 implementation |
 | Baseline | Executable images and host builders assumed the x86-64 QEMU profile; component headers had no architecture qualification, kernel V1 qualification was implicit, and stage-0 did not bind the generation closure to one exact declared profile before mapping executable bytes. |

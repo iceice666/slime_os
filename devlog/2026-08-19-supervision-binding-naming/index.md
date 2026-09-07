@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-{boot,traffic,call,operation,generation,sample,matrix,visibility}.zti`, `scripts/build/build-generation.py`, `components/bins/src/{bin/fabric-service.rs,matrix_broker.rs,visibility_broker.rs}` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just contracts_check`, `just generation_check`, `just system_spec_check`, `just sel4_boot_layout_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_sample_check`, `just sel4_generation_check`, `just sel4_matrix_check`, `just sel4_visibility_check`, `just sel4_qos_check`, `just sel4_stream_check`, `just sel4_fabric_aggregate_check`, `just test_sel4_root`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos` |
 | Trigger | B70's `minted:` axis landed (ad34017) but could not be migrated onto: `FABRIC_SUPERVISION`'s 13 uses resolve names spelled three incompatible ways across 8 manifests |
 | Baseline | 55 minted supervision bindings across 10 seL4 manifests, named by three conventions; `minted:<name>` resolvable in principle, unusable from a component in practice |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/object_store.rs`, `boot-contracts/src/lib.rs` |
-| Roadmap | P5.4.2, P5.4, P5.4.1, M5.4 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7eef-bb24-db634c4e436f |
 | Gates | `just test_host`, `just miri`, `just lint_all`, `just fmt_check_all` |
 | Trigger | The remainder of `object_store.rs`'s thirty-two assertions, after the superblock and GPT slices took the parts decidable from bytes alone |
 | Baseline | `boot-contracts` at 180 host tests; the object store lived only in `kernel/src/storage/object_store.rs` with **zero** tests |

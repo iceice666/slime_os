@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `sel4/config/qemu-arm-virt.cmake`, `roadmap/02-core-runtime.md` (C9 architecture decisions), `roadmap/00-backlog.md` (B77), read-only survey of `deps/sel4/`, `deps/rust-sel4/`, `slime-root/src/{task,fault,ipc,main}.rs`, `components/runtime/src/syscall/sel4_transport.rs` |
-| Roadmap | C9, C9.3, B48, B77 |
+| Work items | 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a03480-0400-7e1f-b198-2d33228dd7f8, 019ff18d-5800-70c6-a987-6a926141c775, 01a02f59-a800-71ef-977f-bb263c65b2d4 |
 | Gates | none |
 | Trigger | Asked to discuss what introducing MCS would mean, one commit after `2806be8` recorded "budgets stay undeclarable" as a wall |
 | Baseline | `2806be8`'s C9 decision: MCS off because "the AArch64 functional-correctness proofs do not cover that configuration"; `KernelIsMCS OFF` with the 20-line rationale added by B48 |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/main.rs`, `slime-root/src/channel.rs`, `slime-root/src/ipc.rs`, `scripts/check/check-sel4-qos-plane.py`, `Justfile`, `AGENTS.md` |
-| Roadmap | B28, P5.4.5 |
+| Work items | 019fd7cd-8c00-7fca-8549-1ccc19b7bea7, 019fd7cd-8c00-7832-8548-1e37c412afc3 |
 | Gates | `just sel4_qos_check`, `just sel4_gate_control_check`, `just test_sel4_root` |
 | Trigger | P5.4.5 could not be gated: the `sel4-qos` plane never reached `[init] fabric stream complete` |
 | Baseline | `MAX_GRAPH_ITERATIONS = 512`; the plane wedging with `live=5 parked=4` after 132 logged operations |

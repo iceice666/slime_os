@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/object_allocator.rs`, `components/bins/src/visibility_broker.rs`, the four fabric participants, `components/bins/src/bin/init.rs`, `scripts/build/build-generation.py`, `contracts/generation/v1/fixtures/sel4-visibility.zti`, `scripts/check/check-sel4-visibility-plane.py` |
-| Roadmap | B46, B50 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8, 019ffbda-1000-7716-9d07-a3a799b8eb97 |
 | Gates | `just sel4_stream_check`, `just sel4_visibility_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all` |
 | Trigger | `c8fc792` handoff item R1: `fabric-subscriber` fails to map its ring because `reserve_slot` returns an index the kernel refuses `DeleteFirst` |
 | Baseline | Before the arena's minted-endpoint slots existed, every arena-charged CSlot held an object derived from the arena's own untyped, so the parent revoke emptied all of them |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/proto/src/io_queue_ring.rs`, `components/services/{network-service,virtio-blk-driver,virtio-net-driver}`, `components/lib/src/{block_io,virtio_mmio}.rs`, `components/testkit/io-*`, `slime-root/src/{io_resource,device,peer_endpoint}.rs`, `slime-root/src/graph_runtime/**`, `components/runtime/src/syscall/sel4_transport.rs`, `boot-contracts/src/{network_destination,block_authority,io_resource}.rs`, `contracts/{network-service,block-authority,io-resource,syscall-abi}/v1`, `contracts/generation-manifest/v1/compositions/sel4-io-{block,network}.zti`, `scripts/check/check-sel4-io-*-plane.py`, `scripts/check/check-sel4-gate-controls.py` |
-| Roadmap | IO0, IO1, IO2, IO3, IO4, IO5, B85, B86, B88 |
+| Work items | 01a043f3-1800-7a95-ab01-632668d70c56, 01a043f3-1800-71ae-adf3-3c7b0b5cf426, 01a043f3-1800-7628-808c-22dc5ce41c1a, 01a04919-7400-778b-93f0-8e99df9aeb79, 01a04919-7400-75da-bdab-760af8f246f1, 01a04919-7400-7b26-bab8-c66452b62d56, 01a04919-7400-7162-84c9-033adf51e8a4, 01a04919-7400-7b50-8817-dfe33ba3920c, 01a04919-7400-71d0-99c9-79a20e1974d8 |
 | Gates | `just io_block_check`, `just io_network_check`, `just io_link_check`, `just io_queue_check`, `just io_driver_authority_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just contracts_check`, `just machete` |
 | Trigger | External review of PR #11 (`feat/io-foundation`), 265 files, +29025/-4365, head `3c2a7bc` |
 | Baseline | All five IO plane gates green at `3c2a7bc`, and green for the wrong reason in IO2 and IO4 |

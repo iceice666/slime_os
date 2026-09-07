@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/bin/fabric-service.rs`, `components/bins/src/bin/fabric-publisher.rs`, `scripts/build/build-generation.py`, `scripts/check/check-data-fabric-profile.py`, `components/bins/src/default_fabric_profile.rs` |
-| Roadmap | B70, CP2, B74 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3, 01a01ac0-3800-78cd-81dc-7cecbee5b5cf |
 | Gates | `just data_fabric_profile_check`, `just generation_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just sel4_visibility_check`, `just sel4_matrix_check`, `just sel4_traffic_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_fault_check`, `just sel4_fabric_aggregate_check`, `just fmt_check_all`, `just lint_all`, `just ruff` |
 | Trigger | `48f5876` retired the last two live `FABRIC_PARTICIPANTS` consumers |
 | Baseline | Both components cross-checked a graph read against the compiled-in participant table; `check-data-fabric-profile.py` compared that table against the canonical profile |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `Cargo.toml`, `components/bins/<component>/` ×52 (new), `components/lib/` (was `components/bins/src/`), `components/build-support/` (new), `scripts/build/build-generation.py`, `scripts/lib/component_spec.py`, `scripts/check/check-component-crate-split.py` (new) and 7 retargeted check scripts, `docs/syscall-abi.md`, `Justfile`, `AGENTS.md` |
-| Roadmap | CP3, B70, B65 |
+| Work items | 01a01fe6-9400-747c-9990-6720903ced0f, 01a0250c-f000-7b2a-92d3-fde78c957925, 01a00b4d-2400-7af9-b5c1-4546f1b399e0 |
 | Gates | `just component_crate_split_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just generation_check`, `just system_spec_check`, `just component_spec_check`, the 33 `just sel4_*_check` planes, `just sel4_gate_control_check` |
 | Trigger | CP3's deliverables: `components/bins` was one crate with 52 hand-listed `[[bin]]` entries and a private manifest parser, so a component could not be built anywhere else |
 | Baseline | One package `slime-components`, 52 `[[bin]]`s, `autobins = false`, one `build.rs` privately string-parsing `contracts/generation/v1/fixtures/*.zti`, one `store` feature switching `#[global_allocator]` on for every binary in the crate |

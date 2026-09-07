@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/bootstate.rs`, `stage0/src/lib.rs`, `components/bins/src/bin/{sel4-rollback-probe,init}.rs`, `components/bins/{Cargo.toml,build.rs}`, `components/bins/src/default_boot_layout.rs`, `contracts/generation/v1/fixtures/sel4-rollback.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{rollback-plane,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.2, P5.4, M5.6 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-78a8-b1e1-8a90a39b11a5 |
 | Gates | `just sel4_rollback_check`, `just sel4_store_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | M5.4 landed in userspace; rollback was the next M5 gap needing durable slots |
 | Baseline | BootState transitions were reachable only from the oracle's `generation_service` |

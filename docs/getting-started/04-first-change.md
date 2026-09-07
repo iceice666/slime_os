@@ -7,8 +7,8 @@ change belongs.
 
 ## Before anything: the standing order
 
-1. **Backlog first.** The `backlog`-tagged items in `.tasks/items/` track
-   known defects; their problem statements live in `roadmap/00-backlog.md`.
+1. **Backlog first.** The `backlog`-tagged items in `.tasks/items/` are the
+   known defects, and each one owns its own problem statement.
    Open items are resolved (or explicitly deferred, with the reason
    recorded) before new milestone work starts, which `just tasks_check`
    enforces. `just tasks_next` lists what is actionable.
@@ -84,9 +84,10 @@ Then the record-keeping, which is not optional ceremony here:
 - **Devlog** (`devlog/`): non-trivial fixes, decisions, regressions, and
   milestone completions get an entry — a dated folder with a curated
   `index.md` from `devlog/TEMPLATE.md`, whose `Work items` front-matter field
-  names canonical work-item UUIDs. Run `just devlog_check`. The devlog is
-  *how* a conclusion was reached; the work item holds the state and the
-  roadmap holds the problem statement.
+  names canonical work-item UUIDs — a key such as `IO4` is a display alias
+  and resolves nothing. Run `just devlog_check`. The devlog is *how* a
+  conclusion was reached; the work item holds the problem statement and the
+  state; `roadmap/` holds the architectural rationale.
 - **Work-item hygiene**: close the item with `myque close`, which records the
   closure date, and record the exit condition that was *observed* in the
   item's body. Never allocate an id by scanning for the next number — `myque`

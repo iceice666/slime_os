@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | RPi5 target profile, executable-closure admission fixtures, component build-cache isolation, AArch64 syscall ABI, generation and transfer checks |
-| Roadmap | RP1 |
+| Work items | 01a0724c-5400-7715-bad2-72a76852749b |
 | Gates | `just rpi5_artifact_check`, `just x86_portability_check`, `just generation_check`, `just test`, `just product_boot_check`, `just test_host` |
 | Trigger | RP0 fixed the exact Raspberry Pi 5 DDS/node contract, while P0/P1 supplied generic target-qualified images and architecture boundaries without an RP1-specific closure gate. |
 | Baseline | P0 rejected generic wrong-target kernel/component images, but no gate bound the RP0 DDS runtime and two node artifact names to `aarch64-rpi5`, distinguished the board interrupt profile, or isolated profiles sharing one Cargo target. |

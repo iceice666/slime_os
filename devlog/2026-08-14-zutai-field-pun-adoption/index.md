@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/**/*.zt` (78 files), `deps/zutai` pin `f232532` → `9352235` |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just contracts_check`, `just generation_check`, `just interface_schema_check`, `just bootstate_model_check`, `just architecture_contract_check`, `just data_fabric_profile_check`, `just sample_descriptor_check`, `just rpi5_ros2_demo_contract_check`, `just test_host`, `just fmt_check_all`, `just ruff`, `just typos` |
 | Trigger | `deps/zutai` submodule advanced two commits past its pin with `feat(general/syntax): extend field-pun shorthand to patterns` and `feat(stdlib/reflect): add erased schemaFields accessor` |
 | Baseline | 42 generated artifacts reproduced byte-identically by all 18 `scripts/generate/*.py` at pin `f232532` |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/main.rs`, `contracts/generation/v1/fixtures/sel4-{store,rollback,recovery,transfer}.zti`, `components/bins/src/bin/sel4-recovery-probe.rs`, `scripts/check/check-sel4-{storage,transfer}-plane.py` |
-| Roadmap | B43 |
+| Work items | 019fe740-a000-7141-8813-a58e7b330fce |
 | Gates | `just sel4_transfer_check`, `just sel4_store_check`, `just sel4_rollback_check`, `just sel4_recovery_plane_check`, `just sel4_storage_check`, `just sel4_device_check` |
 | Trigger | B43 names six gates; four were red before any B43 work. |
 | Baseline | `sel4_store_check`, `sel4_rollback_check`, and `sel4_transfer_check` timed out; `sel4_recovery_plane_check` did not compile. |

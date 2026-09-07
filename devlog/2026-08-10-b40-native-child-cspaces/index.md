@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{task,main,graph}.rs`, `slime-root/build.rs`, `boot-contracts/src/generation.rs`, `scripts/build/build-sel4.py`, `scripts/check/{check-generation,check-sel4-capability-layout,check-sel4-boot-plane}.py`, `Justfile` |
-| Roadmap | B40 |
+| Work items | 019fe740-a000-7e18-b5a8-c9df6403f4d8 |
 | Gates | `just sel4_capability_layout_check`, `just sel4_boot_check`, `just test_sel4_root`, `just contracts_check`, `just generation_check` |
 | Trigger | B40, unblocked by B39's admitted v5 plan landing in `4ab5992`'s parent. |
 | Baseline | Every child CNode was `CHILD_CNODE_SIZE_BITS = 2` — four slots — with `CHILD_SLOT_SERVICE`/`CHILD_SLOT_TCB`/`CHILD_SLOT_FAULT` compiled in, while actual authority lived in the root-side `CapabilityTable`. |

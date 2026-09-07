@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-fabric-aggregate.py`, `scripts/check/check-data-fabric-profile.py`, `Justfile`, `roadmap/02-core-runtime.md`, `roadmap/README.md`, `roadmap/00-backlog.md` |
-| Roadmap | C8.15, C8.9, C8 |
+| Work items | 01a00b4d-2400-7677-8e72-5cad11acefca, 019fae9a-ac00-70b9-a711-daeca1b2b4cc, 01a00b4d-2400-77ed-a3dd-39becc4893af |
 | Gates | `just sel4_fabric_aggregate_check`, `just data_fabric_check`, `just data_fabric_profile_check` |
 | Trigger | Implementing C8.15, the C8 track's parent close |
 | Baseline | C8.1–C8.14 complete under their own gates; no gate compared two runs of anything concurrent, and `just data_fabric_profile_check` was red |

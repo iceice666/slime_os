@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/capability-transfer/v1/{schema.zt,gen_rust.zt}`, `components/proto/src/capability_transfer.rs`, `slime-root/src/{graph,main}.rs`, `components/bins/src/bin/{sel4-filesystem-service,init}.rs`, `components/bins/{Cargo.toml,build.rs}`, `components/bins/src/default_boot_layout.rs`, `contracts/generation/v1/fixtures/sel4-filesystem.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{filesystem-plane,directory-plane,root-boot,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.3, P5.4, M6.3 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7acb-a31e-5d7494c84123 |
 | Gates | `just sel4_filesystem_check`, `just sel4_directory_check`, `just sel4_root_boot_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just contracts_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | M6.3's mechanism half landed; the service half was the other blocker for M6.4 and M6.6 |
 | Baseline | No seL4 filesystem service; `objectKindDirectory` did not exist |

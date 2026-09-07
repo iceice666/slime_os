@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation-manifest/v1/{schema.zt,README.md,fixtures/valid.zti,compositions/*.zti}`, `contracts/system-spec/v1/{schema.zt,systems/reference.zti}`, `scripts/build/build-generation.py`, `scripts/lib/system_spec.py`, `scripts/check/{check-slot-pin-reasons.py,check-system-spec.py}`, `just/contracts.just` |
-| Roadmap | B91 |
+| Work items | 01a04e3f-d000-74ca-92da-c7e0142bf2e1 |
 | Gates | `just contracts_check`, `just system_spec_check`, `just ruff` |
 | Trigger | B91's inventory: 616 of 679 instance binding slots explicitly pinned, with no machine-readable distinction between the reasons |
 | Baseline | `devlog/2026-08-28-automatic-binding-slots/` migrated thirteen name-resolved declarations across four compositions and left the classification unbuilt |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Zutai interface contracts, host normalization/admission, generation builder, slime-proto bindings, C8.1 checks |
-| Roadmap | C8.1 |
+| Work items | 019f9f27-9800-77f8-bd53-c91a3e406e9d |
 | Gates | `just interface_schema_check` |
 | Trigger | C8.1 opened after the C7 sample plane and B2 wait-set prerequisites completed |
 | Baseline | C7 carried an unconstrained caller-chosen nonzero `u64` descriptor type identity and had no native interface-schema identity or binding set |

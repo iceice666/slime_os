@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/ipc.rs`, `components/bins/src/bin/init.rs`, `Justfile` (B23 pin) |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just test_sel4_root`, `just sel4_stream_check`, `just sel4_visibility_check`, `just sel4_matrix_check`, `just sel4_boot_layout_check`, `just generation_check` |
 | Trigger | The standing `FABRIC_MINTED_GRANTS` migration, the last live `fabric_profile` symbol in `init.rs` |
 | Baseline | `5803bc7` — `init.rs` `include!`d `fabric_profile.rs` for a per-holder grant count |

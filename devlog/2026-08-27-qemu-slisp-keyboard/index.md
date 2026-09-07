@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | QEMU product build selection, root device mapping, console input dispatch, Slisp line editing, product composition documentation |
-| Roadmap | P5.2, H3 |
+| Work items | 01a03ecc-bc00-708d-a6fe-fffc759caf66, 01a0724c-5400-77c2-aacc-d53341d05706 |
 | Gates | `just sel4_component_graph_check`, `just slisp_core_check` |
 | Trigger | The resident Slisp prompt had an input capability but the product source always returned `WouldBlock`, so `just run` could not accept typed commands |
 | Baseline | Deterministic input planes used root-owned scripts; product generation 1 had an intentionally empty input source |

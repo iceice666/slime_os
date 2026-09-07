@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Kernel boot path, generation fixture, resolver profile layout, fabric service and two new worker binaries, every fabric participant's boot arm, new `data_fabric_boot_check` gate |
-| Roadmap | C8.10 |
+| Work items | 01a00100-6c00-7843-9ed8-9a1672933b4b |
 | Gates | `just data_fabric_boot_check`, `just data_fabric_profile_check`, `just fabric_authority_check`, `just fabric_stream_check`, `just fabric_qos_check`, `just fabric_call_check`, `just fabric_operation_check`, `just fabric_visibility_check`, `just test`, `just fmt_check_all`, `just lint_all` |
 | Trigger | C8.10 bootstrap replacement, the half deferred by the 2026-07-30 route-worker-partition entry |
 | Baseline | The declarative half had landed: plane control slots summed into one disjoint layout, a validated route-worker partition, per-worker `SYS_WAIT` peaks. But the stream, call, and operation planes were still mutually exclusive generation profiles physically aliasing one range of init capability slots, selected by rewriting `caps[46..60]` per generation number, and no boot launched more than one plane. |

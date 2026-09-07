@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src/runtime/bootstrap.rs`, `scripts/check/check-boot-layout.py`, `contracts/boot-layout/v1/fixtures/`, `Justfile` |
-| Roadmap | B10 |
+| Work items | 019fb8e7-6400-7e95-b349-16e4c7073161 |
 | Gates | `just boot_layout_check` |
 | Trigger | Starting B10: init's capability layout is a positional convention with no observable form, so a refactor of it cannot be shown to preserve behavior. |
 | Baseline | The layout resolved by each gate profile at the commit that opened B10, before any layout change. |

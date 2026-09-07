@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Product generation manifest, init supervision, Dango input residence, product boot layout, component-graph and gate-control checks |
-| Roadmap | P5.2 |
+| Work items | 01a03ecc-bc00-708d-a6fe-fffc759caf66 |
 | Gates | `just sel4_component_graph_check`, `just contracts_check`, `just generation_check`, `just sel4_gate_control_check` |
 | Trigger | The product component graph completed its verification scenario and exited instead of leaving usable services running after boot |
 | Baseline | The five-executable product generation launched console and spawn-service, explicitly shut both down, and certified success only after all required tasks exited |

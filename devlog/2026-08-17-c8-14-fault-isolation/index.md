@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-fault-plane.py`, `contracts/generation/v1/fixtures/sel4-fault.zti`, `scripts/build/build-sel4.py`, `scripts/build/build-generation.py`, `components/bins/src/bin/{init,fabric-proxy}.rs`, `scripts/check/check-sel4-gate-controls.py`, `Justfile`, `roadmap/02-core-runtime.md` |
-| Roadmap | C8.14, C8.13 |
+| Work items | 01a00b4d-2400-7547-98c5-e93772a0696f, 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_fault_check`, `just data_fabric_fault_check`, `just sel4_gate_control_check` |
 | Trigger | Implementing C8.14, whose deliverables read as eleven fault paths to exercise |
 | Baseline | C8.13's concurrent traffic graph passed its own gate; no gate asserted any denial, degradation, or fault record it emitted |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation-manifest/v1/compositions/sel4.md`, `scripts/{build,check}/`, `just/hardware.just`, `slime-root` |
-| Roadmap | P3.F |
+| Work items | 01a0588c-8800-7c3d-9592-61e0dd0ba7f8 |
 | Gates | `just slisp_core_check`, `just sel4_component_graph_check`, `just duo_slisp_check`, `just fmt_check_all`, `just lint_all` |
 | Trigger | P3.E qualified upstream seL4 on the Milk-V Duo, leaving the resident Slisp graph without a board input adapter or observed interactive session |
 | Baseline | The Duo graph could boot to READY and Slisp could run under QEMU, but the physical product had no UART0 receive path into `InputRead`, no bounded three-command hardware session, and no product-specific physical gate |

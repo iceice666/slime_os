@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | C7.1–C7.7 gates, full-graph boot paths (`transfer_check`, `spawn_service_check`, `dango_check`), generation budget wiring, shared-buffer syscall coverage |
-| Roadmap | C7, B3, B4, B5, B6, B7, B8 |
+| Work items | 019f9a01-3c00-78e0-a6cc-6b51549bb2d3, 019f9a01-3c00-71a4-a030-dac5023f9522, 019f9a01-3c00-768b-a173-3116d5c9c5ea, 019f9a01-3c00-70d4-b48d-53f80f2c70e7, 019f9a01-3c00-7a85-b473-6dbefa027e6e, 019f9a01-3c00-75ed-9d34-a0b4a282c01a, 019f9a01-3c00-7fea-8d50-eb4f205cd96d |
 | Gates | `just transfer_check`, `just spawn_service_check`, `just dango_check` |
 | Trigger | Requested audit of the complete C7 milestone at `2384bea` |
 | Baseline | `roadmap/02-core-runtime.md` records C7 and every sub-slice as complete; `roadmap/README.md` names C8 as the next open slice |

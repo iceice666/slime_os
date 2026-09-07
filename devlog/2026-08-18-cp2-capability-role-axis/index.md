@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/ipc.rs`, `contracts/generation/v5/gen_rust.zt`, `boot-contracts/src/generated/generation.rs`, `components/bins/build.rs`, `components/bins/src/bin/spawn-service.rs`, `Justfile`, `docs/syscall-abi.md` |
-| Roadmap | CP2, B70 |
+| Work items | 01a0250c-f000-7678-9b88-60c1ac29f6b3, 01a0250c-f000-7b2a-92d3-fde78c957925 |
 | Gates | `just runtime_binding_resolution_check`, `just test_sel4_root`, `just sel4_dango_check`, `just sel4_component_graph_check` |
 | Trigger | Continuing B70's third clause after the boot-layout namespace fix (`devlog/2026-08-18-cp2-runtime-binding-query/`) |
 | Baseline | `CAPABILITY RESOLVE BINDING` answered a grant name or a namespaced boot-layout role; grant-name lookup alone could not migrate sites whose grant name differs across generations |

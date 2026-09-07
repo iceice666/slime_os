@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/_shared/{codec.zt,zutai.zti}`, fifteen `contracts/*/gen_rust.zt` renderers, regenerated `components/proto/src/{fabric_qos,fabric_time}.rs` |
-| Roadmap | B89, B88, IO0 |
+| Work items | 01a04919-7400-7796-8f68-7a1a363fe7bc, 01a04919-7400-71d0-99c9-79a20e1974d8, 01a043f3-1800-7a95-ab01-632668d70c56 |
 | Gates | `just contracts_check`, `just test_host`, `just kani_io_proofs` |
 | Trigger | B88's own follow-up list: adding a fifteenth local copy of `offsetConsts` for the same forced reason made the duplication worth measuring rather than repeating |
 | Baseline | Every generated binding correct and every gate green; the mechanics producing them duplicated fourteen times |

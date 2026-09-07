@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `sel4/pins.toml`, `scripts/build/build-duo-payload.py`, `scripts/check/check-duo-boot.py`, `scripts/check/check-duo-gate-control.py`, `tools/duo/payload/`, `just/hardware.just`, `roadmap/07-architecture-portability.md` |
-| Roadmap | P3.D, P3.E |
+| Work items | 01a04919-7400-731e-b710-84abff26713c, 01a0588c-8800-73db-ba7e-7c520baedf46 |
 | Gates | `just duo_payload_check`, `just duo_boot_check /dev/ttyUSB0`, `just duo_gate_control_check` |
 | Trigger | Deciding to target a physical RISC-V board, with no SD card reader on the development laptop |
 | Baseline | No physical RISC-V board in tree; `riscv64-qemu-virt` declared but unbuilt; P4's media-copy loop is the only physical-board precedent |

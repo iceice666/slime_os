@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/02-core-runtime.md` (C9 body, architecture decisions, track status, sequencing), `roadmap/README.md` (index row, track map), `roadmap/09-rpi5-ros2-demo.md` (RP5 dependency), `roadmap/06-authority-trust.md` (composite boundary, A3 dependency), `roadmap/08-native-development.md` (track dependencies, sequencing, D3, D4), `roadmap/00-backlog.md` (C10.4's deferred follow-ups), `docs/directions/README.md` (lifecycle route, entry-32 row), `devlog/README.md` |
-| Roadmap | C9, C9.1, C9.2, C9.3, C9.4, C9.5, C9.6, C10, C10.4, C8.11, C8.15, RP5, A3, D3, D4, B46, B48 |
+| Work items | 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a02f59-a800-75d2-80ae-eec3645dabad, 01a03480-0400-7ce3-8fa3-0a121910e8b7, 01a03480-0400-7e1f-b198-2d33228dd7f8, 01a03480-0400-7d36-bbdc-7c3e03a7c057, 01a0724c-5400-733a-aecb-ec32b2c53164, 01a039a6-6000-75a9-9845-1d11cfb665fc, 019fa44d-f400-7b55-93e9-11b4c78772e2, 01a0724c-5400-7f2d-9a2d-9a874ae67893, 01a00100-6c00-764a-b3eb-fd24599c1cbf, 01a00b4d-2400-7677-8e72-5cad11acefca, 01a0724c-5400-7b6b-ad3a-f388c30d5ed1, 01a0724c-5400-7c5d-afc5-5db1b8bb202e, 01a0724c-5400-76b9-a691-989205b9a2a4, 01a0724c-5400-78f5-ba28-f7a44ba8fc8a, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8, 019ff18d-5800-70c6-a987-6a926141c775 |
 | Gates | `just devlog_check` |
 | Trigger | C9 became the next uncompleted milestone when C10.4 closed the C10 track on 2026-08-24. The backlog is empty and C9's dependencies (C8, P5) are complete, so nothing else gates it |
 | Baseline | C9 was one undecomposed heading: 16 bullets spanning clocks, wait sets, scheduling classes, lifecycle/restart, record-replay, and a sensor→controller→actuator workload, with one planned gate (`just robot_runtime_check`) for all of it |

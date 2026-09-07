@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/{channel,graph,main,transit}.rs`, `components/bins/src/bin/{init,fabric-call-client,fabric-call-time,crossing-peer}.rs`, `scripts/check/check-sel4-{call,channel,spawn,loan}-plane.py`, `scripts/check/check-sel4-gate-controls.py`, `Justfile`, `roadmap/{00-backlog,07-architecture-portability}.md` |
-| Roadmap | B25, P5.4.6, P5.4, C8.6 |
+| Work items | 019fdcf3-e800-75f0-8f8b-39164dfabe16, 019fdcf3-e800-71c8-8283-78b13fce7bf4, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fa44d-f400-7baa-9558-197cd14820e5 |
 | Gates | `just sel4_call_check`, `just sel4_channel_check`, `just sel4_spawn_check`, `just sel4_loan_check`, `just sel4_crossing_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | The call plane reached parent-vouched supervision delegation only in experimental orderings; the committed endpoint-holder model could not represent the oracle's non-consuming spawn grant |
 | Baseline | `sel4-call` admitted and spawned every component but deadlocked before role provisioning or any C8.6 outcome |

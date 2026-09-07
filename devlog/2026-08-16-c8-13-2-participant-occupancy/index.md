@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/fabric_occupancy_trace.rs`, `components/bins/src/bin/fabric-{publisher,publisher-b,subscriber,subscriber-b}.rs`, `scripts/check/check-sel4-{traffic,saturation}-plane.py`, `contracts/fabric-trace/v1/schema.zt`, `roadmap/02-core-runtime.md` |
-| Roadmap | C8.13.2, C8.13 |
+| Work items | 01a00626-c800-7fee-a779-82d6ffa5b75d, 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_traffic_check`, `just data_fabric_traffic_check`, `just sel4_saturation_check` |
 | Trigger | Implementing C8.13.2, whose text names six new emitters |
 | Baseline | C8.13.1 landed the occupancy query and the stream broker's mapping/loan evidence; the other seven declared holders reported nothing |

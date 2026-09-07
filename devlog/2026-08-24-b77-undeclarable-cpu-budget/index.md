@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/check/check-generation.py`, `boot-contracts/src/generation.rs`, `scripts/check/check-generation-determinism.py`, `boot-contracts/examples/admit_generation.rs`, `roadmap/00-backlog.md` |
-| Roadmap | B77, B48, C9, C9.3 |
+| Work items | 01a02f59-a800-71ef-977f-bb263c65b2d4, 019ff18d-5800-70c6-a987-6a926141c775, 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a03480-0400-7e1f-b198-2d33228dd7f8 |
 | Gates | `just generation_check`, `just contracts_check`, `just test_sel4_root`, `just sel4_root_boot_check` |
 | Trigger | Surfaced by the MCS survey in `797cb93` while answering what enabling MCS would cost |
 | Baseline | `ScheduleRecord` has carried `budget_us`/`period_us` since the v5 wire format; the builder has always written zero, and B48 recorded why |

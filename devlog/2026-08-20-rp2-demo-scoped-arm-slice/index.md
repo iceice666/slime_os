@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/generation.rs`, `components/bins/src/bin/init.rs`, `slime-root/src/boot_selector.rs`, `contracts/generation/v1/fixtures/sel4-demo.zti`, `contracts/boot-layout/v1/fixtures/sel4-demo.layout`, `scripts/build/{build-sel4,build-generation}.py`, `scripts/check/{check-sel4-demo-plane,check-sel4-boot-layout,check-sel4-boot-selection,check-sel4-gate-controls,check-generation}.py`, `Justfile` |
-| Roadmap | RP2 |
+| Work items | 01a01ac0-3800-727f-b113-f7ce726f08c6 |
 | Gates | `just sel4_demo_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just sel4_boot_selection_check` |
 | Trigger | RP2's status recorded two arms — rollback on an AArch64 generation pair and wrong-target rejection — as owed to the demo, with no gate exercising either, plus a demo-scoped replay of the C7/C8 data path under one generation rather than across plane fixtures. |
 | Baseline | `just sel4_sample_check` proved the C7 half, `just sel4_stream_check` the C8 half, and `just sel4_component_graph_check` the product graph — each over its own generation. `just sel4_boot_selection_check` paired two `sel4` product generations. Every wrong-target assertion in the repository was host-side or a unit test. |

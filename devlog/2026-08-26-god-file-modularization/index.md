@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root` boot/runtime and fixture orchestration, init fabric composition, generation resource and fabric-profile construction, host and QEMU verification |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just test_sel4_root`, `just sel4_root_boot_check`, `just generation_check` |
 | Trigger | The largest handwritten source files mixed unrelated policy, dispatch, platform, and orchestration responsibilities. |
 | Baseline | Product behavior and serialized generation output were already correct; this change had to preserve them while establishing module ownership boundaries. |

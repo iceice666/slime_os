@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{generation,main}.rs`, `scripts/check/check-sel4-stream-plane.py`, `Justfile`, `AGENTS.md` |
-| Roadmap | P5.4.4, P5.4, P5.4.1, C8.2 |
+| Work items | 019fd7cd-8c00-7f99-8e9b-a8dafb1ecbd4, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019f9f27-9800-7f42-a019-5ca68b4b486a |
 | Gates | `just sel4_stream_check`, `just test_sel4_root` |
 | Trigger | P5.4.1's inventory, which found C8.2 had no seL4 equivalent at all rather than a partial one |
 | Baseline | Nine seL4 gates passing; `slime-root` decoding only `BootLayout` and `SharedBufferBudget` |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Fabric visibility contract, generated profile, userspace broker and participants, generation graph, bootstrap health policy, and QEMU gate |
-| Roadmap | C8.8 |
+| Work items | 019fae9a-ac00-71ee-9fbe-7daabca639b8 |
 | Gates | `just fabric_visibility_check`, `just test`, `just fmt_check`, `just fmt_check_components`, `just lint`, `just lint_components` |
 | Trigger | C8.8 implementation |
 | Baseline | C8.7 provided bounded streams, calls, and operations, while graph visibility and interposition existed only as admitted manifest metadata and did not affect the live userspace path. |

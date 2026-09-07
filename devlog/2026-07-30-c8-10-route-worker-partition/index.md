@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Resolved fabric-profile contract, generation resolver, generation fixture, generated userspace profile, three split participant binaries, kernel component-identity trackers |
-| Roadmap | C8.10 |
+| Work items | 01a00100-6c00-7843-9ed8-9a1672933b4b |
 | Gates | `just data_fabric_profile_check`, `just fmt_check`, `just fmt_check_components`, `just lint`, `just lint_components` |
 | Trigger | C8.10 implementation |
 | Baseline | C8.9 closed the typed full profile, but the fabric's stream, call, and operation planes remained mutually exclusive generation profiles physically aliasing one range of init capability slots, and nothing declared how the graph would be partitioned across `SYS_WAIT` sets. |

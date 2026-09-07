@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Product generation, init dispatch, external component admission, component contracts, seL4 product gate, Dango build and plane retirement, language documentation |
-| Roadmap | P5.2, P5.4.3, P5.4, M6.4, D1, D2, D3, D4, D5 |
+| Work items | 01a03ecc-bc00-708d-a6fe-fffc759caf66, 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7dfa-ba32-7e826cc38c92, 01a0724c-5400-7dac-b4e7-2c9f4634f555, 01a0724c-5400-751f-8152-27b6f86dc4a3, 01a0724c-5400-76b9-a691-989205b9a2a4, 01a0724c-5400-78f5-ba28-f7a44ba8fc8a, 01a0724c-5400-75bc-a3a6-4b94817cd072 |
 | Gates | `just slisp_core_check`, `just sel4_component_graph_check`, `just component_spec_check`, `just contracts_check`, `just generation_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
 | Trigger | The resident product still booted the Rust Dango shell after the freestanding C Slisp evaluator had proved the language-neutral component path |
 | Baseline | Product generation 1 declared and launched Dango; Slisp existed only as a standalone bounded evaluator/component proof |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/wait-set/v1/`, `contracts/generation/v1/{schema.zt,fixtures/sel4-wait-set.zti}`, `contracts/syscall-abi/v1/schema.zt`, `boot-contracts/src/wait_set/`, `boot-contracts/src/generation.rs`, `slime-root/src/{wait_set,generation,ipc,main,notification}.rs`, `components/runtime/src/{wait_set.rs,syscall.rs,syscall/sel4_transport.rs}`, `components/bins/wait-set-probe/`, `components/bins/init/src/main.rs`, `scripts/build/{build-sel4,build-generation}.py`, `scripts/check/{check-sel4-wait-set-plane,check-sel4-boot-layout,check-sel4-gate-controls}.py`, `docs/syscall-abi.md`, `Justfile` |
-| Roadmap | C9.2, C9, C9.1, C10.4, RP5, B23, B70, B76 |
+| Work items | 01a03480-0400-7ce3-8fa3-0a121910e8b7, 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a02f59-a800-75d2-80ae-eec3645dabad, 01a0724c-5400-7f2d-9a2d-9a874ae67893, 01a0724c-5400-7b6b-ad3a-f388c30d5ed1, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3, 01a0250c-f000-7b2a-92d3-fde78c957925, 01a01ac0-3800-786f-9a5f-99eb8455c3d4 |
 | Gates | `just wait_set_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root`, `just test_host`, `just component_crate_split_check`, `just lint_all`, `just fmt_check_all` |
 | Trigger | C9.2 became the next uncompleted milestone: the backlog is empty, C9.1 closed on 2026-08-24, and RP3/RP4 are deferred on a USB-UART adapter |
 | Baseline | C9.1 delivered timer expiry as a signal on a generation-declared Notification with a declared badge. No component had a wait set: a component wanting several sources blocked on one badged notification and then swept its endpoints by hand (`fabric-service`, `call_broker`, `operation_broker`) |

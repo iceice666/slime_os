@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/{generation,object_allocator,main}.rs`, `scripts/build/build-generation.py`, `scripts/build/build-sel4.py`, `scripts/check/check-sel4-stress-plane.py`, `contracts/generation/v1/fixtures/sel4-stress.zti`, `components/bins/src/bin/init.rs`, `boot-contracts/src/generation.rs`, `Justfile` |
-| Roadmap | B49 |
+| Work items | 019fe740-a000-7a4f-a270-7a921045f9dc |
 | Gates | `just sel4_stress_check`, `just contracts_check`, `just generation_check`, `just sel4_reclamation_check`, `just sel4_boot_check`, `just test_sel4_root` |
 | Trigger | B49's earlier half derived per-instance quotas and refused three classes; its exit condition also required a graph at the admitted ceiling to boot, and none existed. |
 | Baseline | Admission checked CSlots, TCBs, and CNodes per instance. No check compared the plan's total against the root's own CSpace. |

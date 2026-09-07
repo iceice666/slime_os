@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `tools/nt98690/payload/{probe.S,probe.ld}`, `scripts/build/build-nt98690-payload.py`, `scripts/lib/{arm64_image,uboot_console}.py`, `scripts/check/check-nt98690-boot.py`, `scripts/check/check-sel4-gate-controls.py`, `sel4/pins.toml`, `just/hardware.just` |
-| Roadmap | P6.A |
+| Work items | 01a05db2-e400-7ed0-a45e-276be9d94fbf |
 | Gates | `just nt98690_payload_check`, `just nt98690_boot_check`, `just sel4_gate_control_check` |
 | Trigger | [The P6 lane decision](../2026-09-01-p6-nt98690-h1v1-lane/index.md) |
 | Baseline | No NT98690 payload, builder, gate, or board profile existed; `sel4_gate_control_check` covered 45 gates |

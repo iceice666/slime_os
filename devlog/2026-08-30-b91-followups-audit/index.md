@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `scripts/check/check-slot-pin-reasons.py`, `contracts/generation-manifest/v1/compositions/sel4-io-driver-authority.zti` (mutated and restored), `just contracts_check`, `just io_driver_authority_check` |
-| Roadmap | B91 |
+| Work items | 01a04e3f-d000-74ca-92da-c7e0142bf2e1 |
 | Gates | `just contracts_check`, `just io_driver_authority_check` |
 | Trigger | The six follow-ups recorded in `devlog/2026-08-30-b91-slot-pin-reasons/index.md`; three were classified as small self-contained gate work |
 | Baseline | 611 pinned slots labelled and gated; the minimality clause reaches 4 of 260 `componentAbi` pins; five pins removed with no assertion recording that they were once pinned |

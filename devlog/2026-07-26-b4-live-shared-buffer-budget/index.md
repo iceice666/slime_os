@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/build-generation.py` budget emitter, generation manifest fixture, `bootstrap` factory mint, `slime_rt` shared-buffer wrappers, dango/spawn-service startup probe |
-| Roadmap | B4, C7.2, C7.3, C7.7 |
+| Work items | 019f9a01-3c00-768b-a173-3116d5c9c5ea, 019f9a01-3c00-74fb-90f5-c320e9134830, 019f9a01-3c00-7b7e-a2ee-a32c44051b95, 019f94da-e000-7b10-b533-11679ec2fccb |
 | Gates | `just shared_buffer_accounting_check`, `just generation_check`, `just spawn_service_check` |
 | Trigger | Backlog B4, opened by the 2026-07-26 C7 audit (`devlog/2026-07-26-c7-audit/`) |
 | Baseline | Every built generation contained zero `KIND_RESOURCE` objects; no `SharedBufferFactory` was ever minted; every live holder was `HolderQuota::DENY` |

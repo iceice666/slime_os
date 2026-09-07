@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/build-generation.py` rights table; `boot-contracts/src/shared_buffer_budget.rs` validation; `kernel/src/runtime/generation.rs` caller |
-| Roadmap | B7, B8, C7.1, C7.3 |
+| Work items | 019f9a01-3c00-75ed-9d34-a0b4a282c01a, 019f9a01-3c00-7fea-8d50-eb4f205cd96d, 019f9a01-3c00-71a6-a4c1-7b88b8b693d9, 019f9a01-3c00-7b7e-a2ee-a32c44051b95 |
 | Gates | `just generation_check`, `just sample_plane_live_check` |
 | Trigger | Backlog B7 and B8, opened by the 2026-07-26 C7 audit (`devlog/2026-07-26-c7-audit/`) |
 | Baseline | The manifest right for bit 9 was still spelled `map`; budget validation bounded each holder but never the aggregate |

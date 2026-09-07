@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/02-core-runtime.md`, C8 full-graph profiles, bootstrap topology, deterministic traces, authority matrix, resource accounting, and aggregate verification |
-| Roadmap | C8, C8.9, C8.10, C8.11, C8.12, C8.13, C8.14, C8.15 |
+| Work items | 01a00b4d-2400-77ed-a3dd-39becc4893af, 019fae9a-ac00-70b9-a711-daeca1b2b4cc, 01a00100-6c00-7843-9ed8-9a1672933b4b, 01a00100-6c00-764a-b3eb-fd24599c1cbf, 01a00100-6c00-7443-9fb6-a276a98bd3b2, 01a00b4d-2400-7720-b4d4-907330d70285, 01a00b4d-2400-7547-98c5-e93772a0696f, 01a00b4d-2400-7677-8e72-5cad11acefca |
 | Gates | none |
 | Trigger | C8.8 completion exposed that the original C8.9 required several mutually exclusive runtime planes, unlinked resource declarations, new evidence contracts, and the parent aggregate gate in one review unit |
 | Baseline | C8.1–C8.8 complete under independent profiles; stream/QoS, call, operation, and visibility/interposition cannot coexist in one boot because bootstrap slots and broker dispatch are mutually exclusive |

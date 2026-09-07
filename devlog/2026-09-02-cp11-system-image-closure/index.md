@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/system-image-closure/v1`, `contracts/system-test-run/v1`, closure resolver and image builder, generation/image build helpers, contract gates |
-| Roadmap | CP11 |
+| Work items | 01a05db2-e400-780e-b121-d7a1de7b11e5 |
 | Gates | `just system_image_closure_check`, `just sel4_fault_check`, `just sel4_boot_selection_check` |
 | Trigger | CP11 implementation after the component SDK and system-spec foundations |
 | Baseline | Image selection was implicit in `build-sel4.py` variant tables, ambient environment controls, source-owned target directories, and checker-known output paths; no one normalized record named every image input |

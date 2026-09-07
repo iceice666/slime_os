@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root` (`build.rs`, `src/main.rs`, `src/device.rs`), `scripts/build/{build-sel4,build-nt98690-payload,build-duo-payload}.py`, `scripts/check/{check-nt98690-slisp,check-duo-slisp,check-sel4-pins,check-sel4-gate-controls}.py`, `sel4/pins.toml`, `just/hardware.just`, `roadmap/07-architecture-portability.md` |
-| Roadmap | P6.C |
+| Work items | 01a05db2-e400-7695-af49-86d189db768c |
 | Gates | `just nt98690_slisp_check`, `just sel4_gate_control_check`, `just sel4_component_graph_check`, `just slisp_core_check` |
 | Trigger | [P6.B](../2026-09-02-p6b-sel4-nt98690-h1v1/index.md) closed with the root resetting the board through its watchdog, and the roadmap's P6.C unblocked on it |
 | Baseline | The root's product-UART build inputs were named for the Milk-V Duo (`SLIME_DUO_UART_PADDR`, `--duo-test-terminator`) and its build script refused them for any other profile; the H1V1's post-graph reset was unconditional, so a resident product image could not exist for it; no interactive gate, product boot file, or terminator existed for the board |

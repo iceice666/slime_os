@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,supervision,channel,graph,fault}.rs`, `contracts/generation/v1/fixtures/sel4-spawn.{zti,md}`, `components/bins/src/bin/{init,console}.rs`, `components/bins/build.rs`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-{spawn-plane,component-graph,loan-plane}.py`, `Justfile` |
-| Roadmap | P5.3.3, B13, B10, B14, B15, B16 |
+| Work items | 019fcd80-d400-75c2-b009-e5b99f5c6dac, 019fcd80-d400-7c84-b07d-5e6fafe7d13d, 019fb8e7-6400-7e95-b349-16e4c7073161, 019fcd80-d400-7a0f-bda9-4434605b76ad, 019fcd80-d400-7b3e-ad54-c642ffd3eb4e, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a |
 | Gates | `just sel4_spawn_check`, `just sel4_loan_check`, `just sel4_channel_check`, `just sel4_component_graph_check`, `just sel4_root_boot_check` |
 | Trigger | P5.3.3 opened after P5.3.2 landed; `Operation::Spawn` resolved its authority and then refused |
 | Baseline | P5.3.2 complete: loans cross between components against generation-declared quotas, but no component can start another |

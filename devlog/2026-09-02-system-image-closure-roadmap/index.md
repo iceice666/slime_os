@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/10-component-platform.md`, `roadmap/README.md`, future `contracts/system-image-closure/v1`, future `contracts/system-test-run/v1`, `scripts/build/build-sel4.py`, seL4 plane checkers |
-| Roadmap | CP11, CP12, CP13, CP14, CP15 |
+| Work items | 01a05db2-e400-780e-b121-d7a1de7b11e5, 01a05db2-e400-79bb-994b-abfda53e928e, 01a05db2-e400-7585-a440-5105066bc75e, 01a05db2-e400-7831-b250-85244bc4b61d, 01a0724c-5400-77da-8478-c43f706efd86 |
 | Gates | none |
 | Trigger | Request to make every current test composition a Nix-like closure that directly builds a bootable image |
 | Baseline | Forty-two seL4 composition manifests feed a generation builder, while `build-sel4.py` selects them through roughly forty plane flags, four variant tables, environment-applied generation deltas, compile-time scenario switches, and source-owned output paths; checkers name those variants and paths directly |

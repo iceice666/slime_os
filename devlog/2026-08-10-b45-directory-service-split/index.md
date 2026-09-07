@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{directory,console,ipc,main,lib}.rs`, `components/runtime/src/syscall{,.rs}/sel4_transport.rs`, `contracts/generation/v1/fixtures/sel4-{powerbox,filesystem}.zti` |
-| Roadmap | B45 |
+| Work items | 019fe740-a000-7a64-a099-8eae60c22667 |
 | Gates | `just sel4_directory_check`, `just sel4_filesystem_check`, `just sel4_store_check`, `just sel4_powerbox_check`, `just sel4_dango_check` |
 | Trigger | B45: directory and store service policy still reached clients through operation labels on the root endpoint. |
 | Baseline | `DirectoryInspect`, `DirectoryDerive`, `DirectoryCommit` on the universal dispatcher; `StoreTransact` already removed by B43. |

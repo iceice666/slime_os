@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Root-caused |
 | Scope | `boot-contracts/src/fabric_graph.rs`, `components/bins/src/bin/fabric-service.rs`, `components/proto/src/stream_history.rs`, `roadmap/02-core-runtime.md`, `devlog/2026-08-16-c8-13-saturation-ceilings/index.md` |
-| Roadmap | C8.13 |
+| Work items | 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | none |
 | Trigger | Investigating what closing C8.13's "queueDepth, historyDepth graph-wide, capabilitySlots are never checked against real usage" gap would take |
 | Baseline | `devlog/2026-08-16-c8-13-saturation-ceilings/index.md` and the roadmap (as of this morning's edit) stated all three fields have no runtime consumer at all |

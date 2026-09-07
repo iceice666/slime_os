@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/lib/closure_image.py`, `scripts/check/check-system-image-aggregate.py`, `scripts/check/check-system-test-run.py`, `scripts/generate/generate-system-test-runs.py`, 36 `scripts/check/check-sel4-*.py` gates, `scripts/build/build-generation.py`, `scripts/build/build-system-image.py`, `scripts/build/build-sel4.py`, `contracts/system-test-run/v1/runs/`, `contracts/system-image-closure/v1/closures/`, `just/contracts.just` |
-| Roadmap | CP14, CP15 |
+| Work items | 01a05db2-e400-7831-b250-85244bc4b61d, 01a0724c-5400-77da-8478-c43f706efd86 |
 | Gates | `just system_image_closure_aggregate_check`, `just system_test_run_check`, `just sel4_capability_layout_check`, `just sel4_qos_check`, `just sel4_call_check`, `just sel4_stream_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check` |
 | Trigger | CP14 closed with four of five deliverables; CP15's cutover began from `0f71321d` |
 | Baseline | 49 seL4 plane gates each built their image with `build-sel4.py --<name>-plane`; one test-run record existed of 45 planes; no gate proved the closure corpus and the booted-image corpus were the same set |

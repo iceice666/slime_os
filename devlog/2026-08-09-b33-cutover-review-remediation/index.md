@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | seL4 root capability/lifecycle/memory/storage paths; component runtime and services; build, gate, CI, profile, roadmap, and dependency policy |
-| Roadmap | P5.4.final, B33 |
+| Work items | 019fe21a-4400-7612-a38b-fed08baaa778, 019fe21a-4400-7967-8b1f-1a78eed530ac |
 | Gates | `just test_sel4_root`, `just test_host`, `just sel4_qos_check`, `just sel4_root_boot_check`, `just sel4_gate_control_check` |
 | Trigger | Static cutover review recorded CUT-001 through CUT-077 as merge-blocking or same-branch findings |
 | Baseline | P5.4.final had retired the custom kernel, but the review found mechanism defects and gates that could not establish their named claims |

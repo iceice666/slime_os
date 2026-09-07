@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/{main,graph}.rs`, `components/bins/src/bin/init.rs`, `contracts/generation/v1/fixtures/{sel4-dango,sel4-powerbox,sel4-filesystem}.zti`, `scripts/check/check-sel4-{dango-plane,boot-layout,gate-controls}.py`, `Justfile`, `roadmap/00-backlog.md` |
-| Roadmap | P5.4.3, P5.4, M6.4 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7dfa-ba32-7e826cc38c92 |
 | Gates | `just sel4_dango_check`, all 25 seL4 plane gates, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check`, `just contracts_check` |
 | Trigger | B30: the dango plane resolved commands but launched none |
 | Baseline | Dango reached its prompt and read keys; every spawn request was refused |

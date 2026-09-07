@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/bin/{sel4-generation-manager,sel4-generation-client,init}.rs`, `components/bins/{Cargo.toml,build.rs}`, `components/bins/src/default_boot_layout.rs`, `contracts/generation/v1/fixtures/sel4-generation.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{generation-plane,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.3, P5.4, M6.5 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7aeb-97cb-2cd2dd6f5975 |
 | Gates | `just sel4_generation_check`, `just sel4_rollback_check`, `just sel4_store_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just contracts_check`, `just generation_check`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.2 complete; two scouts ranked M6.5 closest to the proven store/rollback pattern |
 | Baseline | `GenerationTransact` was `Mediation::Unavailable`; no seL4 plane had a privileged service |
