@@ -38,15 +38,14 @@ from work_items import ITEMS, identities, items, open_backlog
 
 BACKLOG = ROOT / "roadmap" / "00-backlog.md"
 
-# A resolved backlog heading and the item id that carries its state. The
-# heading is a stable anchor for devlog links; the id beside it is what makes
-# the entry resolvable. The heading text resolves nothing and is never parsed
-# for identity — `B29` and `B30` were each allocated twice, which is why an id
-# is named per entry rather than derived from a key.
-RESOLVED_ENTRY = re.compile(
-    r"^### (?P<key>B\d+) — .+\n\n\*\*Evidence:\*\* .+? \*\*Item:\*\* `(?P<uuid>[0-9a-f-]{36})`$",
-    re.MULTILINE,
-)
+# The backlog index parses as a sequence of heading-delimited sections, never
+# as a set keyed by `B<N>`: `B29` and `B30` were each allocated twice, so two
+# distinct entries share a display key. Keying anything by the heading text
+# would let the first `B29` stand in for the second's evidence — a non-unique
+# human key silently merging two records is precisely the failure this cutover
+# removed. A section is identified by its position.
+HEADING = re.compile(r"^### (B\d+) — (.*)$", re.MULTILINE)
+ITEM_LINE = re.compile(r"^\*\*Evidence:\*\* .+? \*\*Item:\*\* `([0-9a-f-]{36})`$", re.MULTILINE)
 
 # The `### B<N>` headings the cutover froze. Frozen means the set does not
 # shrink: each is a live link target for merged devlog entries, and removing
@@ -128,25 +127,34 @@ def check_backlog_index_resolves() -> None:
         return
     text = BACKLOG.read_text()
     known = identities()
-    resolved: set[str] = set()
-    for match in RESOLVED_ENTRY.finditer(text):
-        key, uuid = match.group("key"), match.group("uuid")
-        if uuid not in known:
-            fail(f"backlog index: {key} names {uuid}, which is not in {ITEMS.relative_to(ROOT)}")
+    matches = list(HEADING.finditer(text))
+    for ordinal, match in enumerate(matches, start=1):
+        key = match.group(1)
+        # The section runs to the next heading, so each duplicate key is
+        # checked against its own evidence. `where` names the ordinal as well
+        # as the key: with two `B29` sections, the key alone cannot say which
+        # one failed.
+        end = matches[ordinal].start() if ordinal < len(matches) else len(text)
+        section = text[match.end() : end]
+        where = f"{key} (heading {ordinal} of {len(matches)})"
+        found = ITEM_LINE.findall(section)
+        if not found:
+            fail(f"backlog index: {where} has no `**Evidence:** … **Item:** `<uuid>`` line")
             continue
-        resolved.add(key)
+        if len(found) > 1:
+            fail(f"backlog index: {where} names {len(found)} items; a heading indexes exactly one")
+            continue
+        uuid = found[0]
+        if uuid not in known:
+            fail(f"backlog index: {where} names {uuid}, which is not in {ITEMS.relative_to(ROOT)}")
 
-    headings = re.findall(r"^### (B\d+) — ", text, re.MULTILINE)
-    for key in headings:
-        if key not in resolved:
-            fail(f"backlog index: {key} has no resolvable `**Item:** `<uuid>`` line")
-    # A heading count is not evidence on its own: deleting every entry leaves
-    # zero headings and zero resolutions, which agree. The landed set is
-    # pinned so bulk removal fails loudly; inbound anchors are what make each
-    # heading load-bearing, and `check-devlog.py` validates those fragments.
-    if len(headings) < LANDED_BACKLOG_HEADINGS:
+    # A per-section pass cannot notice wholesale deletion: no sections means no
+    # failures. The landed set is pinned so bulk removal fails loudly; inbound
+    # anchors are what make each heading load-bearing, and `check-devlog.py`
+    # validates those fragments.
+    if len(matches) < LANDED_BACKLOG_HEADINGS:
         fail(
-            f"backlog index: {len(headings)} `### B<N>` heading(s), fewer than the "
+            f"backlog index: {len(matches)} `### B<N>` heading(s), fewer than the "
             f"{LANDED_BACKLOG_HEADINGS} that landed; a heading is a frozen link target "
             "and devlog entries are anchored at them"
         )
@@ -168,7 +176,7 @@ def main() -> int:
         raise SystemExit(f"work-item check failed with {len(failures)} problem(s)")
 
     total = len(identities())
-    indexed = len(RESOLVED_ENTRY.findall(BACKLOG.read_text())) if BACKLOG.is_file() else 0
+    indexed = len(HEADING.findall(BACKLOG.read_text())) if BACKLOG.is_file() else 0
     print(f"work-item check passed: {total} items, {indexed} frozen backlog headings indexed")
     return 0
 

@@ -5,7 +5,7 @@
 | Date | 2026-09-07 |
 | Kind | Change |
 | Status | Verified |
-| Scope | 288 devlog front matters, `devlog/README.md`, `devlog/2026-09-03-cp15-closure-cutover/index.md`, `scripts/check/{check-devlog,check-work-items}.py`, `scripts/lib/work_items.py`, deleted `.tasks/legacy-roadmap-ids.json`, `scripts/migrate-roadmap-to-myque.py`, `scripts/lib/roadmap_inventory.py`, `AGENTS.md`, `roadmap/{README,00-backlog,07-architecture-portability}.md`, `README.md`, `docs/README.md`, `docs/getting-started/{01-orientation,02-build-and-run,04-first-change}.md`, `docs/directions/README.md`, `.github/PULL_REQUEST_TEMPLATE/` |
+| Scope | 288 devlog front matters, `devlog/README.md`, `devlog/2026-09-03-cp15-closure-cutover/index.md`, `scripts/check/{check-devlog,check-work-items}.py`, `scripts/lib/{work_items,markdown_anchors}.py`, deleted `.tasks/legacy-roadmap-ids.json`, `scripts/migrate-roadmap-to-myque.py`, `scripts/lib/roadmap_inventory.py`, `AGENTS.md`, `roadmap/{README,00-backlog,07-architecture-portability}.md`, `README.md`, `docs/README.md`, `docs/getting-started/{01-orientation,02-build-and-run,04-first-change}.md`, `docs/directions/README.md`, `.github/PULL_REQUEST_TEMPLATE/` |
 | Work items | 01a07967-a93b-7145-a633-25ed418b3d69 |
 | Gates | `just tasks_check`, `just devlog_check`, `just ruff`, `just typos` |
 | Trigger | The MQ1/MQ2 migration left a compatibility layer that could still reconstruct the store from `roadmap/`, and documentation that still named `roadmap/` authoritative for completion |
@@ -46,10 +46,12 @@ was the wrong fix).
 | `README.md` | Replaced the per-track "M1–M4 complete, IO0–IO7 complete, RP0–RP2 complete" status list — the same mirroring mechanism at repository-front-page scale — with a capability summary: what runs, what has physical evidence, what fails closed and why, and what is deferred by decision | The front page describes capability and evidence, not item state |
 | Getting-started and directions docs | `roadmap/` described as holding "problem statements" in four places (`docs/getting-started/{01-orientation,02-build-and-run}.md`, `docs/directions/README.md`, `README.md`) → architectural rationale, with the problem statement named as the item's | No reader is routed to `roadmap/` for a live defect's problem statement |
 | `check-work-items.py` (review) | Deleted the `state in {done, cancelled}` requirement on indexed headings, and replaced the `headings == len(seen)` equality — which `0 == 0` satisfied after deleting every entry — with a floor at the 94 landed headings | A frozen index routes into the store without constraining it, and the anchor set cannot silently empty |
-| `check-devlog.py` (review) | Link fragments are validated against real headings and explicit `<a id>`/`<a name>` anchors using GitHub's slug rules, instead of being stripped with `partition("#")[0]` | An anchored inbound link cannot be broken by a reworded heading |
+| `check-devlog.py` (review) | Link fragments are validated against real headings and explicit `<a id>`/`<a name>` anchors, instead of being stripped with `partition("#")[0]` | An anchored inbound link cannot be broken by a reworded heading |
 | `check-devlog.py` (review) | Front matter parses as ordered rows, rejects duplicate fields, and requires the field list to *equal* `FIELD_ORDER` — not merely match on its first eight distinct keys | "Exactly these eight fields" is the checked claim, and no trailing row can override an earlier value |
 | `roadmap/07-architecture-portability.md` | Added two retained `<a id>` anchors (`p4--raspberry-pi-5-board-bring-up`, `p549-and-c810`) for four merged devlog links whose fragments never matched a heading in 20 revisions of the file | Four inbound URLs resolve without editing frozen devlog bodies |
 | `devlog/2026-09-03-cp15-closure-cutover/index.md` | Moved a stray `\| Correction \|` front-matter row into the `## Corrections` section the format reserves for it; the loose parser had permitted it | Corrections live where `devlog/README.md` says, and the entry now matches the exact field set |
+| `check-work-items.py` (review 2) | The backlog index parses as heading-delimited *sections* validated by position. The previous pass collected resolved `B<N>` keys into a set, so the first `B29` marked the second `B29` verified — a non-unique display key merging two records' evidence | A duplicate display key cannot vouch for another section |
+| `scripts/lib/markdown_anchors.py` (review 2) | New module owning anchor computation, with 11 executable controls `check-devlog.py` runs before trusting it: fences (backtick, tilde, and longer-fence nesting) suppress headings, inline code keeps its literal text, duplicate headings take `-1`/`-2` suffixes, explicit anchors count, closing hashes do not | The rule that decides whether a link is live is itself proven, in both directions |
 
 ## Regression guards
 
@@ -59,9 +61,10 @@ was the wrong fix).
 | A referenced item is deleted or renamed | `just devlog_check` | `Work items names '<uuid>', which is not a work item in .tasks/items/` |
 | `Roadmap` front matter reappears, by replacement *or* as an extra row | `just devlog_check` | `front matter missing Work items` / `front matter carries unknown field(s) Roadmap` |
 | A duplicate front-matter row silently overrides an earlier value | `just devlog_check` | `front matter repeats Work items; a repeated row silently overrides the first one's value` |
-| A landed backlog heading loses its item, or the heading set shrinks | `just tasks_check` | `backlog index: B1 names <uuid>, which is not in .tasks/items` / `0 \`### B<N>\` heading(s), fewer than the 94 that landed` |
+| A landed backlog heading loses its item, including one of a duplicated key | `just tasks_check` | `backlog index: B29 (heading 69 of 94) has no ...Item...` / `0 \`### B<N>\` heading(s), fewer than the 94 that landed` |
 | A reworded heading breaks an inbound anchored link | `just devlog_check` | `link ...#b9--… names no heading or explicit anchor in roadmap/00-backlog.md` |
 | The store itself becomes invalid | `just tasks_check` → `myque check` | schema, graph, alias, and state findings, reported with MyQue's own status distinction |
+| The anchor rules themselves regress | `just devlog_check` | `anchor control: inline code keeps its literal underscores: expected anchor 'b30--release_trust_check-was-red'` |
 
 ## Verification
 
@@ -85,6 +88,16 @@ was the wrong fix).
 | Mutation: reopen an item behind a landed heading, no active milestone | `tasks_check` **passes**: the frozen index no longer vetoes a store transition | Direct |
 | Mutation: same reopen with `P5.4.2` active | fails once, and only as `backlog-first: P5.4.2 is active while backlog items are neither resolved nor explicitly deferred: B1` — the policy that owns the question | Direct |
 | Full-tree audit of all 77 devlog `#fragment` links against GitHub slug rules | 4 pre-existing broken anchors found and restored via `<a id>`; the remaining 73 resolve | Direct |
+| Mutation: strip the *second* `B29` section's `**Item:**` line, heading kept | `tasks_check` fails — `B29 (heading 69 of 94) has no …Item…`. Under the key-set pass this passed, because the first `B29` had already marked the key resolved | Direct |
+| Mutation: same for the second `B30` | `tasks_check` fails — `B30 (heading 68 of 94)`. Also passed before | Direct |
+| Control: strip the non-duplicated `B28`'s `**Item:**` line | fails both before and after — the old pass was specific to duplicated keys | Direct |
+| Mutation: a link to a heading that exists *only* inside a fenced example | `devlog_check` fails; the fence manufactures no anchor. The first anchor implementation accepted it | Direct |
+| Mutation: link `#tracks-1` with two `## Tracks` headings present | `devlog_check` **passes**; duplicate suffixes are computed. The first implementation rejected this valid link | Direct |
+| Mutation: link the inline-code heading `` ### B30 — `release_trust_check` … `` | `devlog_check` **passes**; the underscore survives. The first implementation stripped it, producing `releasetrustcheck` | Direct |
+| Control: regress `slug()` to strip code spans as markup | `devlog_check` fails with two `anchor control:` findings before reaching any entry | Direct |
+| Control: regress fence tracking to ignore fences | `devlog_check` fails with three `anchor control:` findings | Direct |
+| `markdown_anchors.controls()` — 11 cases, both directions | 0 failures. Two of them caught bugs in the first draft of this module: a `\x00` sentinel that punctuation-stripping deleted, and fence tracking that ignored fence length | Direct |
+| Repository survey for latent exposure | 37 inline-code headings contain underscores and 39 slugs repeat across roadmap track files, so both rules are load-bearing rather than hypothetical | Direct |
 | `scripts/generate/generate-system-image-closures.py --check` | `50 system-image closures are current` | Direct |
 | `git status` over the fifteen declared release-input trees plus `just/` and `Justfile` | empty; no closure input changed | Direct |
 
@@ -95,8 +108,16 @@ was the wrong fix).
 - Rejected alternative: keeping the state check because "every entry below is closed" was true when written. That sentence was a snapshot the checker had been promoted into enforcing forever.
 
 - Decision: validate link fragments rather than stripping them, and pin the landed heading count.
-- Rationale: the first round claimed the backlog file survives to protect anchored inbound links, but nothing checked anchors — `check-devlog.py` did `target.partition("#")[0]`, and the heading/resolution count guard was satisfied by `0 == 0` when every entry was deleted. Both holes were reproduced before fixing. A GitHub-compatible slugger plus explicit `<a id>` recognition closes the first; a floor on the landed heading set closes the second. Auditing all 77 fragment links then surfaced 4 that had been broken since they were written — never matching any heading in 20 revisions of `07-architecture-portability.md` — so the addresses were restored with retained anchors rather than editing frozen devlog bodies.
+- Rationale: the first round claimed the backlog file survives to protect anchored inbound links, but nothing checked anchors — `check-devlog.py` did `target.partition("#")[0]`, and the heading/resolution count guard was satisfied by `0 == 0` when every entry was deleted. Both holes were reproduced before fixing. Fragment validation closes the first; a floor on the landed heading set closes the second. Auditing all 77 fragment links then surfaced 4 that had been broken since they were written — never matching any heading in 20 revisions of `07-architecture-portability.md` — so the addresses were restored with retained anchors rather than editing frozen devlog bodies.
 - Rejected alternative: a separate link checker. Fragment validity is the same invariant as link validity, in the checker that already owns it.
+
+- Decision: the backlog index is parsed as heading-delimited sections identified by position, never keyed by `B<N>`.
+- Rationale: the first fix still collected resolved keys into a set, so with two `B29` sections the first one's UUID marked the second verified — reproduced by stripping the second `B29`'s and second `B30`'s `**Item:**` lines, both of which passed. That is the migration's original sin in miniature: a non-unique human key merging two records. Position is the only identifier available that is actually unique, and it appears in the failure text (`B29 (heading 69 of 94)`) because the key alone cannot say which section broke. Inventing new keys to disambiguate would re-introduce exactly the durable-key coupling this cutover removed.
+- Rejected alternative: allocating `B29a`/`B29b`. That mints new durable keys for two frozen link targets and changes anchors 8 devlog entries depend on.
+
+- Decision: anchor computation moves to `scripts/lib/markdown_anchors.py` with executable controls, and its scope is declared rather than described as "GitHub's rules".
+- Rationale: review found three defects in the inline implementation — fenced examples manufactured anchors, duplicate headings had no suffix, and inline code lost its underscores — each of which either accepts a dead link or rejects a live one, invisibly at the destination. A rule that decides link validity has to be verifiable, so the 11 cases are executable and `check-devlog.py` runs them before trusting the computation; regressing either rule fails the gate, observed both ways. Two of those controls immediately caught bugs in my own first draft of the module. The docstring now names what is *outside* scope (Setext headings, raw `<h1>`–`<h6>`) instead of implying full fidelity, because a silent under-approximation was the original failure mode.
+- Rejected alternative: a full CommonMark dependency. Anchor generation is not CommonMark — it is GitHub's post-processing of it — and adding a parser would neither answer the question nor be verifiable without these same cases.
 
 - Decision: parse front matter as ordered rows and require the field set to equal `FIELD_ORDER` exactly.
 - Rationale: the previous parser built a dict and compared the first eight keys, so it verified "the first eight distinct fields are right", not "the fields are exactly right". A trailing `Roadmap` row passed, and a trailing duplicate `Work items | none` passed *while overwriting the real UUID* — the reference silently became `none` with every check still green. Rejecting duplicates before dict conversion is what makes "exactly these eight fields" the checked claim `devlog/README.md` always stated.
@@ -123,6 +144,8 @@ was the wrong fix).
 - [ ] `roadmap/` still carries 183 `**Status:**` lines in per-milestone bodies. They are past-tense records of observed outcomes, which `roadmap/README.md` now scopes as frozen evidence rather than live state, but nothing mechanically prevents a future author from editing one as if it were a tracker. No gate covers this.
 - [ ] `flake.nix` pins a MyQue revision predating the store-relative abbreviation fix, so `myque list` prints a repeated token for the ten keyless items. `myque check` is unaffected. Unchanged by this work; run `nix flake update myque` once the fix is published.
 - [ ] Fragment validation covers links written *inside* devlog entries, which is where the anchored inbound links live. Fragments in `roadmap/`, `docs/`, and `README.md` pointing at each other are unchecked; the four broken anchors this round found were all in devlog entries, so the uncovered direction has no measured defect rate.
+- [ ] Anchors for duplicate headings are positional, so `#deliverables-7` in a roadmap track file moves when a section is inserted above it. `just devlog_check` catches the resulting break, but only after the fact; `roadmap/README.md` now advises an explicit `<a id>` over relying on a duplicate's index. 39 slugs repeat across those files.
+- [ ] `markdown_anchors` covers ATX headings, inline code, duplicate suffixes, and explicit anchors. Setext headings and raw `<h1>`–`<h6>` are declared out of scope rather than handled; neither appears in this repository today, and adding one would silently under-approximate until a control is added for it.
 
 ## Artifacts and provenance
 

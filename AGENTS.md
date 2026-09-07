@@ -74,7 +74,7 @@ Use the Justfile targets from the repository root:
 - `just sel4_fabric_aggregate_check` — C8.15's parent close: both aggregate schedules booted twice over one composition, with byte-identical semantic traces.
 - `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
 - `just devlog_check` — validate devlog structure, front matter (the exact eight fields, in order, no duplicates or extras), gates, and links including their `#fragment` anchors, and that every work-item reference is a UUID the store has. Reads the tree only, so it needs no MyQue binary.
-- `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity of the frozen backlog index in `roadmap/00-backlog.md`.
+- `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity of the frozen backlog index in `roadmap/00-backlog.md`, whose headings are validated one section at a time because `B29` and `B30` are each carried twice.
 - `just tasks_list` / `just tasks_next` / `just tasks_graph` — the work-item store's generated views. Never authoritative; `.tasks/items/` is.
 - `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
 - `just lint_all` — run clippy with warnings denied for components, boot-contracts, and seL4 product crates.

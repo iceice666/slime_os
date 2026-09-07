@@ -30,11 +30,10 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import re
 import subprocess
-from functools import lru_cache
-from pathlib import Path
 
 from harness import ROOT
 from just_metadata import targets as just_targets
+from markdown_anchors import anchors, controls as anchor_controls
 from work_items import UUID, identities
 
 DEVLOG = ROOT / "devlog"
@@ -130,35 +129,6 @@ def sections(text: str) -> list[str]:
     return [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
 
 
-HEADING = re.compile(r"^#{1,6}\s+(.*)$")
-EXPLICIT_ANCHOR = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"")
-
-
-def slug(heading: str) -> str:
-    """A heading's fragment id, by GitHub's rules.
-
-    Inline code, links, and emphasis contribute their text; other punctuation
-    is dropped; spaces become hyphens. Reproduced rather than approximated
-    because an anchor that differs by one character is a broken inbound URL.
-    """
-    text = re.sub(r"`([^`]*)`", r"\1", heading.strip())
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"[*_]", "", text).lower()
-    return re.sub(r"[^\w\- ]", "", text).replace(" ", "-")
-
-
-@lru_cache(maxsize=None)
-def anchors(path: Path) -> frozenset[str]:
-    """Every fragment a link into ``path`` may name."""
-    found: set[str] = set()
-    for line in path.read_text().splitlines():
-        matched = HEADING.match(line)
-        if matched:
-            found.add(slug(matched.group(1)))
-        found.update(EXPLICIT_ANCHOR.findall(line))
-    return frozenset(found)
-
-
 def ragged_rows(text: str) -> list[tuple[str, int, int]]:
     """Report table rows whose cell count disagrees with their header row.
 
@@ -188,6 +158,13 @@ def declared_just_targets() -> set[str]:
 
 
 KNOWN_TARGETS = declared_just_targets()
+
+# The anchor computation decides whether an inbound link is live, so its own
+# rules are proven before they are trusted: a phantom anchor accepts a dead
+# link and a missed one rejects a valid link, and neither shows a symptom at
+# the destination.
+for failure in anchor_controls():
+    fail(f"anchor control: {failure}")
 
 entries = sorted(path for path in DEVLOG.iterdir() if path.is_dir())
 if not entries:
@@ -317,11 +294,12 @@ for entry in entries:
         if sibling.name not in text:
             fail(f"{name}: evidence file {sibling.name} is not referenced from index.md")
 
-    # A fragment is validated, not stripped. Eight merged entries link at a
-    # specific `roadmap/` heading and the rest link at track sections, so a
-    # reworded heading silently breaks an inbound URL: the file still exists
-    # and the old anchor lands the reader at the top of the page. Checking the
-    # file alone would claim a guarantee it does not give.
+    # A fragment is validated, not stripped. 77 merged entries link at a
+    # specific heading, so a reworded one silently breaks an inbound URL: the
+    # file still exists and the old anchor lands the reader at the top of the
+    # page. Checking the file alone would claim a guarantee it does not give.
+    # `markdown_anchors` owns which fragments a file offers, and its own rules
+    # are proven by the controls run above.
     for target in re.findall(r"\]\(([^)\s]+)\)", text):
         if target.startswith(("http://", "https://", "mailto:")):
             continue
