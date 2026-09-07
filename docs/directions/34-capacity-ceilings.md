@@ -2,11 +2,18 @@
 
 | | |
 | --- | --- |
-| Status | parked |
+| Status | Memory portion routed to the [capacity epic](../../.tasks/items/01a07a2c-9c4f-7ca0-8417-aba2b48ce16b.md); thread/core portions remain parked |
 | Route | capacity |
 | Depends on | [Core C10](../../roadmap/02-core-runtime.md) private-memory mechanism (complete) and C7 shared buffers (complete) for the ceilings themselves; **B47**'s process/thread separation (resolved) for the thread half; nothing for the large-page half. The SMP half depends on an assurance decision, not on a milestone. |
 | Enables | workloads whose working set or concurrency exceeds a single 2 MiB window — a foreign-workload guest, an inference component, a multi-queue driver — without which those directions cannot be sized at all |
 | Now | Paper, plus one implementation half that is legal today: `slime-root` allocates only 4 KiB granules while both architectures expose 2 MiB and 1 GiB frame objects. Large-page support is pure mechanism and changes no contract. |
+
+The memory portion now has [architectural sequencing](../../roadmap/02-core-runtime.md#memory-capacity)
+and canonical work items, recorded in the [planning decision](../../devlog/2026-09-07-memory-capacity-milestones/index.md).
+The sketches below are design background, not implementation status or a
+second tracker. Their memory open questions are resolved for this plan by
+exact 4 KiB accounting, target-qualified ceilings, scalable task backing, and
+unchanged shared-buffer authority; the thread/core questions remain separate.
 
 ## Motivation
 
@@ -21,15 +28,21 @@ the hardware they run on:
 | Threads per component | 2 | `contracts/component-runtime-abi/v1/schema.zt:24` |
 | Cores | 1 | `KernelMaxNumNodes` in all four `sel4/config/*.cmake` |
 
-Against the DRAM each target actually reports, the memory figure is not a
-tuning choice, it is a rounding error:
+The private ceiling is a small fraction of the target memory envelopes below.
+These are not measurements of free allocatable RAM after boot reservations:
 
-| Target | DRAM | Live private ceiling | Share |
+| Target | Memory envelope | Live private ceiling | Share of envelope |
 | --- | --- | --- | --- |
-| `qemu-arm-virt` | 2048 MiB | 8 MiB | 0.4% |
+| `qemu-arm-virt` | 1024 MiB kernel DTB / 2048 MiB launcher | 8 MiB | 0.78% of kernel DTB |
 | `qemu-riscv-virt` | 3072 MiB | 8 MiB | 0.26% |
 | `bcm2712-rpi5` | 1019 MiB | 8 MiB | 0.8% |
 | `cv1800b-duo` | 63 MiB | 8 MiB | 13% |
+
+The ARM row distinguishes the kernel-build description from the launcher:
+`scripts/build/build-sel4.py::QEMU_DTB_PARAMETERS` builds the ARM kernel
+DTB with 1024 MiB while the product launches with 2048 MiB. The platform
+milestone qualifies the added ordinary-untyped range; neither number alone
+states usable memory after kernel/root reservations.
 
 Duo is the only target where 8 MiB is a defensible fraction, and
 `private_memory.rs:58` says exactly that — the value is chosen to be
@@ -167,8 +180,8 @@ upstream's own verified file.
 
 ## Design sketch
 
-Four separable pieces. Only the first is unblocked, and the rest are
-much cheaper after it.
+Five separable sketches. The memory work items refine (a)-(c), including
+the task-arena and small-growth costs that large-frame arithmetic alone misses.
 
 ### (a) Large-page allocation in the root — no contract changes
 
@@ -186,9 +199,9 @@ saving as unverified until measured.]
 
 Costs to state rather than hide: allocation granularity coarsens, so a
 component declaring 3 MiB rounds to 4 MiB unless the tail stays 4 KiB;
-`private_memory`'s grow/return path must handle a mixed-granularity
-region, and its all-or-nothing unwind must return blocks of the size it
-took.
+the transactional grow path must handle mixed-granularity regions and return
+objects and alignment capacity on failed growth. There is no live shrink API:
+successful growth is reclaimed with the task, not returned piecemeal.
 
 This piece changes no `.zt` file, no generated binding, and no builder
 check. It is a mechanism slice with existing host tests to extend.
@@ -266,14 +279,14 @@ config line.
 
 ## Open questions
 
-- One ceiling or one per target profile? Duo's 63 MiB and QEMU's 3 GiB
-  do not want the same number, but a per-target ceiling makes the arena
-  plan target-dependent.
-- Does the private window keep a 4 KiB tail for granularity, or does a
-  raised ceiling accept 2 MiB rounding for every declared quota?
-- Should the shared-buffer ceiling rise at all, given that its provenance
-  table is `.bss` and therefore root CSlots? Or should shared buffers stay
-  small and large payloads move to per-task private memory plus a loan?
+- Resolved for the memory plan: use target-qualified ceilings, keeping Duo's
+  conservative budget separate from the QEMU profiles. The arena plan and
+  all spec/admission validators must consume the same target-bound budget.
+- Resolved for the memory plan: retain 4 KiB small heads/tails and exact quota
+  accounting; never round a caller's committed pages up to an uncharged block.
+- Shared-buffer ceilings stay unchanged in the memory plan. Large private
+  working sets remain non-transferable; moving them through a loan would be
+  a separate authority change, not an allocator shortcut.
 - Is `MAX_TASKS = 48` (`task.rs:52`) reached before the memory ceilings in
   any realistic composition, or does it stay slack?
 - For (e): which root invariants currently rely on children being
@@ -297,19 +310,18 @@ Not one exit condition — the pieces are separately observable:
 
 ## Probe guidance
 
-Implementation, not paper, and only (a): add large-page retype and a
-mixed-granularity private region, with the existing `private_memory` and
-`object_allocator` host tests extended to cover the block/tail split and
-the unwind. It changes no contract, so it needs no roadmap promotion to
-be legal; it is the measurement that tells (b) and (c) what they are
-actually buying.
+Start with the large-frame work item's existing-ceiling probe and failure
+unwind evidence. A 2 MiB runtime case can prove block backing without first
+raising a contract; larger mixed extents can be planner cases until the
+budget milestone qualifies them through the live path. Architecture-specific
+mapping evidence and reusable capacity matter, not compilation alone.
 
 Do not raise a ceiling first. Without (a), every page added to a
 reservation costs a root CSlot, and the failure mode is
 `PlanExceedsRootSlots` at boot — a message that names the plan, not the
 constant that caused it.
 
-Promotion to the roadmap should wait for a workload that needs the
-headroom. A ceiling raised for its own sake is a bound nothing is
-charging, which is the same objection A3 already records against
-inheriting a CPU account with no MCS to charge it.
+The user-requested memory plan supplies a named capacity-qualification
+workload; it does not claim an inference engine, foreign guest, or other
+product workload. Work-item state and exit conditions now live only in the
+linked store. No memory planning result promotes the thread or SMP sketches.

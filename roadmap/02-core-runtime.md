@@ -1497,6 +1497,64 @@ fails closed on every bound; the region is invisible to every capability and
 transfer path; and a repeated spawn/exit workload returns every page, leaving
 the frame allocator where it started.
 
+## Memory capacity
+
+The [memory-capacity epic](../.tasks/items/01a07a2c-9c4f-7ca0-8417-aba2b48ce16b.md)
+continues after C10 without reopening that completed work. The store owns all
+state, dependency edges, and exit conditions; the names below are display keys.
+The [planning decision](../devlog/2026-09-07-memory-capacity-milestones/index.md)
+records why the memory portion of [direction 34](../docs/directions/34-capacity-ceilings.md)
+is now a named qualification workload rather than an unspecified ceiling raise.
+
+### Mechanism before capacity
+
+More emulator RAM does not enlarge a component's private window. The current
+window, aggregate budget, root CSlots, task-arena reservation, and platform
+memory map are separate bounds. A 2 MiB frame uses one data capability where
+4 KiB backing uses 512, but that saving does not eliminate page-table costs,
+alignment waste, small incremental requests, or the power-of-two reservation
+of an entire task arena. Enlarging maximum-page arrays in the root also grows
+the root image and consumes boot capacity before any component starts.
+
+| Work item | Responsibility | Architectural boundary |
+|---|---|---|
+| [MEM-LARGE](../.tasks/items/01a07a2d-0017-7efd-9c18-ada16cb8789e.md) | Mixed 2 MiB/4 KiB private backing and compatible VSpace tables | Keep exact page-count growth and existing public ceilings; no implicit live-page promotion |
+| [MEM-ARENAS](../.tasks/items/01a07a2d-003d-77fc-9df8-dda85ed9a083.md) | Bounded extent metadata, real CSpace sizing, and multiple reclaimable backing extents per task | Reserve an honest worst-case resource envelope, including fragmented and small-request cases, without per-task maximum-page arrays |
+| [MEM-64M](../.tasks/items/01a07a2d-0060-7d52-8e8d-1c7f45246f8d.md) | Target-bound budgets and the first larger private working set | Move schema, generator, builder, root admission, VSpace, and runtime together; separate heap payload from allocator overhead |
+| [MEM-PLATFORM](../.tasks/items/01a07a2d-0081-7df4-b7fe-38b933057b4a.md) | Consistent kernel DTB, prefix, closure, and launcher memory configuration | Prove usable ordinary memory beyond the old ARM kernel window, not just a larger QEMU argument |
+| [MEM-1G](../.tasks/items/01a07a2d-00a1-727c-a548-130a4475f5bb.md) | Simultaneous multi-holder capacity with isolation and repeated reclamation | Combine the two branches and distinguish resident working sets from sequential allocation totals |
+
+Large-frame support precedes scalable accounting; those mechanisms precede
+the first raised budget. The platform branch can proceed independently and
+joins the mechanism branch for aggregate qualification. The epic's dependency
+metadata requires every child, not only the final aggregate run. Backlog-first
+ordering and a green implementation baseline remain prerequisites, not new
+milestones or evidence produced by this plan.
+
+### Capacity policy and exclusions
+
+Capacity is target-qualified and generation-bounded. Virtual reservation,
+reserved physical backing, committed quota pages, frame objects, and metadata
+must be reported separately. A small growth request cannot secretly commit an
+uncharged large frame; a quota must not be admitted using only the best-case
+large-frame slot count when legal small requests need more objects. The
+allocator may refuse an unsatisfiable construction, but cannot publish a
+capacity promise its own metadata cannot represent.
+
+Both QEMU architectures require their own execution evidence. The existing
+private-memory gate currently launches AArch64 only, so the mechanism slice
+extends that checker rather than treating ARM output as RV64 proof. Existing
+plane/checker ownership and closure-derived compositions remain the integration
+path; a new milestone does not justify a new top-level checker.
+
+Private memory remains non-transferable, zero-filled on allocation, writable
+but non-executable, and fully reclaimed on task death. There is no live shrink
+API to preserve or extend in this track. Small physical-target budgets remain
+conservative; QEMU capacity proves no board's RAM map or hardware support.
+Shared-buffer and component ELF limits, 1 GiB frames, swap, overcommit, RAM
+hotplug, automatic page promotion, SMP, and additional worker threads are
+separate decisions, not implicit parts of this work.
+
 ## Core verification stack
 
 Each slice runs its narrowest QEMU target. Changes to generation v3 or IPC schemas additionally run:

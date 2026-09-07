@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `docs/directions/34-capacity-ceilings.md`, `docs/directions/README.md`, `sel4/config/qemu-arm-virt.cmake` |
-| Roadmap | none |
+| Work items | none |
 | Gates | none |
 | Trigger | A design conversation asking whether the memory and thread ceilings can be raised, and observing that `KernelMaxNumNodes > 1` will eventually be wanted |
 | Baseline | Three ceilings — 2 MiB per task, 8 MiB system-wide private, 2 threads per component — and `KernelMaxNumNodes 1` on all four targets, each correct but only one of them carrying a written reason |

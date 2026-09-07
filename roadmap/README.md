@@ -40,6 +40,12 @@ record that drifts the moment an item closes, which is why there is none.
 | [Authority and trust](06-authority-trust.md) | The trust primitives above capabilities | Each is pulled in by a product or hardware release that needs it, not built speculatively |
 | [Native development](08-native-development.md) | On-device build and live update | Waits on a stable physical product path |
 
+The core-runtime [memory-capacity continuation](02-core-runtime.md#memory-capacity)
+separates large-frame backing and scalable task accounting from platform RAM
+qualification, then combines them in a simultaneous multi-holder workload.
+Its [epic](../.tasks/items/01a07a2c-9c4f-7ca0-8417-aba2b48ce16b.md) owns state and
+dependencies; this addition does not change the physical bring-up goal.
+
 ## Physical bring-up sequencing
 
 The P3/P3.E [Architecture portability](07-architecture-portability.md) sequence is complete:
