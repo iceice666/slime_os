@@ -29,10 +29,12 @@ something outside this repository.
 **Entry shape:** each `### B<N> — <title>` heading is a stable link target and
 nothing more. It allocates no identity and resolves no reference; the UUID
 beside it does both. Leave a landed heading's text alone — devlog anchors point
-at it — and note that `B29` and `B30` were each allocated twice, which is why
-their four entries name UUIDs rather than share a key. `just tasks_check` fails
-when a heading names an item the store does not have, or names one that is not
-closed.
+at it, and `just devlog_check` validates those fragments — and note that `B29`
+and `B30` were each allocated twice, which is why their four entries name UUIDs
+rather than share a key. `just tasks_check` requires every heading to carry a
+`**Item:**` UUID that is still in the store, and requires the landed set of
+headings not to shrink. It deliberately does not check an item's state: this
+file is a route into the store, never a constraint on it.
 
 ## Deferred follow-ups
 
@@ -46,9 +48,11 @@ and
 
 ## Resolved
 
-Every entry below is closed. The heading is the link target, the devlog entry
-is the investigation, and the work item is the state and the exit condition
-that was observed. None of it is restated here.
+These entries were resolved before the cutover; the heading is the link target
+and the devlog entry is the investigation. Current state belongs to the work
+item, so read `just tasks_list` for it — if one of these is ever legitimately
+reopened under the same UUID, that is the store's business and this index still
+routes to it correctly.
 
 ### B92 — resident product graph stops after 32768 valid requests
 

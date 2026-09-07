@@ -48,6 +48,13 @@ RESOLVED_ENTRY = re.compile(
     re.MULTILINE,
 )
 
+# The `### B<N>` headings the cutover froze. Frozen means the set does not
+# shrink: each is a live link target for merged devlog entries, and removing
+# one breaks an inbound URL with no other symptom. It is not a ceiling — an
+# older pre-cutover heading may still be recovered — so only a shortfall
+# fails.
+LANDED_BACKLOG_HEADINGS = 94
+
 failures: list[str] = []
 
 
@@ -100,36 +107,48 @@ def check_backlog_first() -> None:
 
 
 def check_backlog_index_resolves() -> None:
-    """Every heading in the frozen backlog index names a closed item.
+    """Every heading in the frozen backlog index names an item that exists.
 
-    The backlog file is a frozen index, not a record: 75 devlog entries link
-    into it and 8 of those links are anchored at a specific heading, which is
-    why the headings survive. Nothing new is required to appear there — a new
-    backlog item is a store item and its devlog entry — but a landed heading's
-    UUID must keep resolving, because a heading pointing at a deleted or
-    reopened item is a dangling record with no visible symptom.
+    The backlog file is a frozen index, not a record: devlog entries link into
+    it and several of those links are anchored at a specific heading, which is
+    why the headings survive. A heading is checked for exactly one thing —
+    that the UUID beside it is still an item — because that is what keeps the
+    index a usable route into the store.
+
+    Deliberately *not* checked: the item's state. Freezing the index must not
+    freeze the store. If a defect indexed here is legitimately reopened under
+    the same UUID, the index still routes to it correctly, and whether that
+    reopening blocks milestone work is ``check_backlog_first()``'s question.
+    Requiring a terminal state here would let a historical document veto a
+    state transition in the canonical store, which inverts the authority this
+    cutover established.
     """
     if not BACKLOG.is_file():
-        fail(f"{BACKLOG.relative_to(ROOT)} is missing: 75 devlog entries link into it")
+        fail(f"{BACKLOG.relative_to(ROOT)} is missing: devlog entries link into it")
         return
     text = BACKLOG.read_text()
     known = identities()
-    state = {item["id"]: item["state"] for item in items()}
-    seen: set[str] = set()
+    resolved: set[str] = set()
     for match in RESOLVED_ENTRY.finditer(text):
         key, uuid = match.group("key"), match.group("uuid")
         if uuid not in known:
             fail(f"backlog index: {key} names {uuid}, which is not in {ITEMS.relative_to(ROOT)}")
             continue
-        if state[uuid] not in {"done", "cancelled"}:
-            fail(f"backlog index: {key} is under '## Resolved' but its item is {state[uuid]}")
-        seen.add(uuid)
+        resolved.add(key)
 
-    headings = len(re.findall(r"^### B\d+ — ", text, re.MULTILINE))
-    if headings != len(seen):
+    headings = re.findall(r"^### (B\d+) — ", text, re.MULTILINE)
+    for key in headings:
+        if key not in resolved:
+            fail(f"backlog index: {key} has no resolvable `**Item:** `<uuid>`` line")
+    # A heading count is not evidence on its own: deleting every entry leaves
+    # zero headings and zero resolutions, which agree. The landed set is
+    # pinned so bulk removal fails loudly; inbound anchors are what make each
+    # heading load-bearing, and `check-devlog.py` validates those fragments.
+    if len(headings) < LANDED_BACKLOG_HEADINGS:
         fail(
-            f"backlog index: {headings} resolved heading(s) but {len(seen)} resolve to an item; "
-            "every heading needs its `**Item:** `<uuid>`` line"
+            f"backlog index: {len(headings)} `### B<N>` heading(s), fewer than the "
+            f"{LANDED_BACKLOG_HEADINGS} that landed; a heading is a frozen link target "
+            "and devlog entries are anchored at them"
         )
 
 

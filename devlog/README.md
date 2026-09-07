@@ -39,7 +39,10 @@ Write `index.md` from [TEMPLATE.md](TEMPLATE.md): an `# H1` title, the front-mat
 
 ### Front matter
 
-Exactly these eight fields, in this order:
+Exactly these eight fields, in this order — no extras, no repeats. "Exactly" is
+checked: an additional row (a revived `Roadmap`, say) fails, and so does a
+repeated one, because a second row for the same field overrides the first
+silently rather than adding anything.
 
 | Field | Content |
 |---|---|
@@ -108,7 +111,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 
 ## Checking
 
-`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, every `Work items` UUID resolving to a file in `.tasks/items/`, `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It reads the tree and runs no guest code or external binary, so it is cheap enough to run on any documentation change; `just tasks_check` separately validates the store itself.
+`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, the exact front-matter field set and order with no duplicate or unknown rows, `Kind`/`Status` vocabulary, every `Work items` UUID resolving to a file in `.tasks/items/`, `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, every `devlog/...` path referenced anywhere in the repository resolving to a real file, and every relative link's `#fragment` naming a real heading or explicit `<a id="…">` anchor in its target — a reworded heading breaks an inbound URL while leaving the file in place, so the fragment is checked rather than stripped. It reads the tree and runs no guest code or external binary, so it is cheap enough to run on any documentation change; `just tasks_check` separately validates the store itself.
 
 ## Entries
 

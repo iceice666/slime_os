@@ -30,6 +30,8 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import re
 import subprocess
+from functools import lru_cache
+from pathlib import Path
 
 from harness import ROOT
 from just_metadata import targets as just_targets
@@ -103,22 +105,58 @@ def fail(message: str) -> None:
     failures.append(message)
 
 
-def front_matter(text: str) -> dict[str, str]:
-    fields: dict[str, str] = {}
+def front_matter_rows(text: str) -> list[tuple[str, str]]:
+    """The front-matter table's two-cell rows, in file order, duplicates kept.
+
+    Order and multiplicity are the point. Collapsing straight into a dict
+    loses both: a trailing duplicate row overwrites the earlier value while
+    adding no new key, so a second ``Work items | none`` would silently
+    replace a real UUID and still satisfy a field-order check.
+    """
+    rows: list[tuple[str, str]] = []
     for line in text.splitlines():
         if not line.startswith("|"):
-            if fields:
+            if rows:
                 break
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) != 2 or cells[0] in {"Field", "---"} or set(cells[0]) == {"-"}:
             continue
-        fields[cells[0]] = cells[1]
-    return fields
+        rows.append((cells[0], cells[1]))
+    return rows
 
 
 def sections(text: str) -> list[str]:
     return [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
+
+
+HEADING = re.compile(r"^#{1,6}\s+(.*)$")
+EXPLICIT_ANCHOR = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"")
+
+
+def slug(heading: str) -> str:
+    """A heading's fragment id, by GitHub's rules.
+
+    Inline code, links, and emphasis contribute their text; other punctuation
+    is dropped; spaces become hyphens. Reproduced rather than approximated
+    because an anchor that differs by one character is a broken inbound URL.
+    """
+    text = re.sub(r"`([^`]*)`", r"\1", heading.strip())
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"[*_]", "", text).lower()
+    return re.sub(r"[^\w\- ]", "", text).replace(" ", "-")
+
+
+@lru_cache(maxsize=None)
+def anchors(path: Path) -> frozenset[str]:
+    """Every fragment a link into ``path`` may name."""
+    found: set[str] = set()
+    for line in path.read_text().splitlines():
+        matched = HEADING.match(line)
+        if matched:
+            found.add(slug(matched.group(1)))
+        found.update(EXPLICIT_ANCHOR.findall(line))
+    return frozenset(found)
 
 
 def ragged_rows(text: str) -> list[tuple[str, int, int]]:
@@ -196,20 +234,26 @@ for entry in entries:
         fail(f"{name}: folder name is not YYYY-MM-DD-short-topic in lowercase kebab-case")
 
     text = index.read_text()
-    fields = front_matter(text)
-
-    present = [field for field in FIELD_ORDER if field in fields]
-    if present != FIELD_ORDER:
-        missing = [field for field in FIELD_ORDER if field not in fields]
+    rows = front_matter_rows(text)
+    declared = [field for field, _ in rows]
+    duplicated = sorted({field for field in declared if declared.count(field) > 1})
+    if duplicated:
+        fail(
+            f"{name}: front matter repeats {', '.join(duplicated)}; a repeated row "
+            "silently overrides the first one's value"
+        )
+        continue
+    if declared != FIELD_ORDER:
+        missing = [field for field in FIELD_ORDER if field not in declared]
+        extra = [field for field in declared if field not in FIELD_ORDER]
         if missing:
             fail(f"{name}: front matter missing {', '.join(missing)}")
-        else:
-            fail(f"{name}: front-matter fields out of order: {present}")
+        if extra:
+            fail(f"{name}: front matter carries unknown field(s) {', '.join(extra)}")
+        if not missing and not extra:
+            fail(f"{name}: front-matter fields out of order: {declared}")
         continue
-
-    declared = list(fields)
-    if declared[: len(FIELD_ORDER)] != FIELD_ORDER:
-        fail(f"{name}: front-matter fields out of order: {declared[: len(FIELD_ORDER)]}")
+    fields = dict(rows)
 
     if fields["Date"] != name[:10]:
         fail(f"{name}: Date {fields['Date']} does not match the folder date {name[:10]}")
@@ -273,13 +317,26 @@ for entry in entries:
         if sibling.name not in text:
             fail(f"{name}: evidence file {sibling.name} is not referenced from index.md")
 
-    # An anchor suffix is stripped rather than skipped: a link into a roadmap
-    # heading still has to name a file that exists.
+    # A fragment is validated, not stripped. Eight merged entries link at a
+    # specific `roadmap/` heading and the rest link at track sections, so a
+    # reworded heading silently breaks an inbound URL: the file still exists
+    # and the old anchor lands the reader at the top of the page. Checking the
+    # file alone would claim a guarantee it does not give.
     for target in re.findall(r"\]\(([^)\s]+)\)", text):
-        if target.startswith(("http://", "https://", "mailto:", "#")):
+        if target.startswith(("http://", "https://", "mailto:")):
             continue
-        if not (entry / target.partition("#")[0]).exists():
+        base, _, fragment = target.partition("#")
+        destination = (entry / base) if base else index
+        if not destination.exists():
             fail(f"{name}: dead relative link {target}")
+            continue
+        if not fragment:
+            continue
+        if fragment not in anchors(destination):
+            fail(
+                f"{name}: link {target} names no heading or explicit anchor in "
+                f"{destination.relative_to(ROOT)}"
+            )
 
     if name not in index_rows:
         fail(f"{name}: not registered in devlog/README.md")
