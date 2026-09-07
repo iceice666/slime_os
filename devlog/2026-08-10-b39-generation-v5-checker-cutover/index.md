@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `boot-contracts/src/generation.rs`, `stage0/src/lib.rs`, `slime-root/src/{generation,channel,main,task}.rs`, `components/bins/src/bin/init.rs`, `components/runtime/src/{lib,runtime}.rs`, `contracts/generation/v5/`, `scripts/check/check-generation.py`, `scripts/lib/release_trust.py` |
-| Roadmap | B39 |
+| Work items | 019fe740-a000-7e3d-bf71-94087a9b0fb7 |
 | Gates | `just contracts_check`, `just generation_check`, `just sel4_boot_check`, `just test_sel4_root`, `just test_host` |
 | Trigger | The in-flight generation v4→v5 cutover for B39 left the host-side checkers, stage-0 consumer, and fabric provenance check on the retired v4 header layout and instance model. |
 | Baseline | Before the v5 header grew its process/thread/kernel-object/mapping/binding/schedule/quota plan sections, `just generation_check` passed and every consumer read a 31-field header whose string table began at byte 208. |

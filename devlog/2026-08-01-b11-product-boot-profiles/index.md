@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/generation/v1/`, `scripts/build/build-generation.py`, `scripts/build/boot_layout.py`, `kernel/src/runtime/bootstrap.rs`, `components/bins/src/bin/init.rs`, `kernel/src/storage/block_device.rs`, `scripts/check/`, `Justfile` |
-| Roadmap | B11 |
+| Work items | 019fb8e7-6400-718f-84ee-7ede540da059 |
 | Gates | `just product_boot_check`, `just boot_layout_check`, `just storage_write_check`, `just storage_fault_check`, `just storage_store_check` |
 | Trigger | B11: the only generation manifest declared the sixteen named verification probes/scenario doubles plus `storage-writer` as peers of product services, with real capabilities and one probe in the health policy. |
 | Baseline | `valid.zti` declared 42 components in one shape; every boot received the verification participants, and the default health policy required `storage-probe`. |

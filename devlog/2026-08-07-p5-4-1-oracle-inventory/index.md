@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `Justfile`, `kernel/tests/*.rs` (19), `scripts/check/*.py` (43 before this slice, 44 after), `scripts/lib/harness.py`, `slime-root/src/{channel,graph,transit,main}.rs`, `components/bins/src/bin/{init,crossing-peer}.rs`, `contracts/generation/v1/fixtures/sel4-crossing.{zti,md}`, `scripts/build/{boot_layout,build-sel4,build-generation}.py`, `scripts/check/check-sel4-crossing-plane.py` |
-| Roadmap | P5.4.1, P5.4, B22, B24, B16, B12, B23 |
+| Work items | 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fd7cd-8c00-70b2-91d1-8670457ab82e, 019fd7cd-8c00-7f4d-bff4-21e1cfdc315d, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a, 019fd7cd-8c00-7a24-907a-86c137e6e62a, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3 |
 | Gates | `just devlog_check`, `just sel4_crossing_check` |
 | Trigger | P5.4's decomposition (2026-08-07) named this inventory as the artifact its exit condition asks for and no one has produced |
 | Baseline | Eight seL4 gates passing; P5.4's text claiming "equivalents through C8.4, none for C8.5–C8.10" |

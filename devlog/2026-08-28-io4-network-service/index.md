@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/network-service/v1/`, `contracts/network-destination/v1/`, `boot-contracts/src/network_destination.rs`, `components/proto/src/network_service.rs`, `components/services/network-service/`, `components/testkit/io-network-{probe,intruder}/`, `components/testkit/io-link-loopback/`, `contracts/generation-manifest/v1/compositions/sel4-io-network.zti`, `scripts/check/check-sel4-io-network-plane.py`, `scripts/build/build-{generation,sel4}.py`, `scripts/check/check-sel4-gate-controls.py`, `just/planes-*.just` |
-| Roadmap | IO4 |
+| Work items | 01a04919-7400-75da-bdab-760af8f246f1 |
 | Gates | `just io_network_check`, `just sel4_gate_control_check` |
 | Trigger | IO4 is the consumption point for ROS R0/R1, foreign workloads, and Framework H6; each of those was blocked on there being one network architecture rather than several. |
 | Baseline | No network stack, no socket concept, and no destination authority existed anywhere in the tree. IO0's queue substrate and the `LinkDevice` protocol from IO3 were the only pieces in place. |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/io-queue/model/io-queue.zt`, `contracts/io-resource/model/io-resource.zt`, `just/contracts.just`, `roadmap/11-io-substrate.md` |
-| Roadmap | IO5, IO0, IO1, A0 |
+| Work items | 01a04919-7400-7b26-bab8-c66452b62d56, 01a043f3-1800-7a95-ab01-632668d70c56, 01a043f3-1800-71ae-adf3-3c7b0b5cf426, 01a03ecc-bc00-751b-9d3a-91cb4cd93e0d |
 | Gates | `just io_queue_model_check`, `just io_resource_model_check`, `just contracts_check` |
 | Trigger | Question of whether the IO series should gain independent formal verification, and whether to continue with `zutai model-check` or adopt seL4-style proof |
 | Baseline | IO0–IO4 each observed by one QEMU plane gate; no IO property checked over more than one schedule |

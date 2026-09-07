@@ -11,9 +11,9 @@ Two responsibilities, deliberately in one checker rather than two:
   that here would fork the schema, which the migration explicitly does not do.
 
 * **Repository policy** is Slime OS's own and MyQue is generic, so it cannot
-  live upstream: backlog-first ordering, and the invariants that make a
-  migrated item auditable. These are consumers of the store, not extensions of
-  ``work-item/v1``.
+  live upstream: backlog-first ordering and the integrity of the frozen
+  backlog index that 75 devlog entries link into. These are consumers of the
+  store, not extensions of ``work-item/v1``.
 
 Adding this checker rather than extending an existing one is deliberate: the
 work-item store is a new mechanism with its own execution boundary (an external
@@ -29,11 +29,30 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import re
 import shutil
 import subprocess
 
 from harness import ROOT
-from work_items import ITEMS, LEGACY_MAP, identities, items, legacy, open_backlog
+from work_items import ITEMS, identities, items, open_backlog
+
+BACKLOG = ROOT / "roadmap" / "00-backlog.md"
+
+# The backlog index parses as a sequence of heading-delimited sections, never
+# as a set keyed by `B<N>`: `B29` and `B30` were each allocated twice, so two
+# distinct entries share a display key. Keying anything by the heading text
+# would let the first `B29` stand in for the second's evidence — a non-unique
+# human key silently merging two records is precisely the failure this cutover
+# removed. A section is identified by its position.
+HEADING = re.compile(r"^### (B\d+) — (.*)$", re.MULTILINE)
+ITEM_LINE = re.compile(r"^\*\*Evidence:\*\* .+? \*\*Item:\*\* `([0-9a-f-]{36})`$", re.MULTILINE)
+
+# The `### B<N>` headings the cutover froze. Frozen means the set does not
+# shrink: each is a live link target for merged devlog entries, and removing
+# one breaks an inbound URL with no other symptom. It is not a ceiling — an
+# older pre-cutover heading may still be recovered — so only a shortfall
+# fails.
+LANDED_BACKLOG_HEADINGS = 94
 
 failures: list[str] = []
 
@@ -65,10 +84,11 @@ def run_myque_check() -> None:
 def check_backlog_first() -> None:
     """Backlog defects are cleared or explicitly deferred before track work.
 
-    ``AGENTS.md``: "Resolve open backlog items before starting a new roadmap
-    track milestone. A green verification suite is a precondition for milestone
-    work, not a milestone itself." ``deferred`` is the explicit deferral the
-    rule allows, so it satisfies the rule rather than breaking it.
+    ``AGENTS.md``: "Resolve, defer, or block every open one before starting a
+    new track milestone; a green verification suite is a precondition for
+    milestone work, not a milestone itself." ``deferred`` and ``blocked`` are
+    the explicit escapes the rule allows, so they satisfy it rather than
+    breaking it.
     """
     blocking = open_backlog()
     active_milestones = [
@@ -85,81 +105,70 @@ def check_backlog_first() -> None:
         )
 
 
-def check_migration_auditability() -> None:
-    """Every legacy id maps to an item that exists, and collisions stay keyless.
+def check_backlog_index_resolves() -> None:
+    """Every heading in the frozen backlog index names an item that exists.
 
-    The legacy map is how 288 pre-migration devlog entries keep resolving. If
-    it names an id that no longer exists, those references break silently, so
-    the map is checked against the store rather than trusted.
+    The backlog file is a frozen index, not a record: devlog entries link into
+    it and several of those links are anchored at a specific heading, which is
+    why the headings survive. A heading is checked for exactly one thing —
+    that the UUID beside it is still an item — because that is what keeps the
+    index a usable route into the store.
+
+    Deliberately *not* checked: the item's state. Freezing the index must not
+    freeze the store. If a defect indexed here is legitimately reopened under
+    the same UUID, the index still routes to it correctly, and whether that
+    reopening blocks milestone work is ``check_backlog_first()``'s question.
+    Requiring a terminal state here would let a historical document veto a
+    state transition in the canonical store, which inverts the authority this
+    cutover established.
     """
-    if not LEGACY_MAP.is_file():
-        fail(f"{LEGACY_MAP.relative_to(ROOT)} is missing: historical devlog references cannot resolve")
+    if not BACKLOG.is_file():
+        fail(f"{BACKLOG.relative_to(ROOT)} is missing: devlog entries link into it")
         return
-    table = legacy()
+    text = BACKLOG.read_text()
     known = identities()
-    for identifier, uuid_text in sorted(table["ids"].items()):
-        if uuid_text not in known:
-            fail(f"legacy id {identifier} maps to {uuid_text}, which is not in {ITEMS.relative_to(ROOT)}")
-
-    keys = {item["key"] for item in items() if item["key"]}
-    for identifier, record in sorted(table["ambiguous"].items()):
-        if identifier in keys:
-            fail(
-                f"{identifier} was allocated twice, so it must not be carried as a key: "
-                "the UUID distinguishes the two items"
-            )
-        for allocation in record["allocations"]:
-            if allocation["uuid"] not in known:
-                fail(f"{identifier}: allocation {allocation['uuid']} is not in the store")
-        for reference in record["devlog_references"]:
-            entry = ROOT / reference["entry"]
-            if not entry.is_dir():
-                fail(f"{identifier}: resolved reference names {reference['entry']}, which does not exist")
-            if reference["uuid"] not in known:
-                fail(f"{identifier}: resolved reference names {reference['uuid']}, which is not in the store")
-
-
-def check_undated_closures_declare_themselves() -> None:
-    """An *imported* closure with no dated evidence says so in its body.
-
-    The repository's rule is that a milestone closes only when its exit
-    condition was observed. 34 migrated items have no date anywhere in the
-    repository, so their ``closed`` timestamp is the migration date. That is
-    defensible only while each one admits it: an unlabelled synthetic date
-    reads as an observation.
-
-    Scoped to items the migration created, identified through the legacy map.
-    Work genuinely closed on the migration date is an observed closure and
-    needs no disclaimer — flagging it would be a false positive that pressures
-    the next author into writing a disclaimer that is not true.
-    """
-    migrated = legacy().get("migrated")
-    if migrated is None:
-        return
-    imported = set(legacy()["ids"].values())
-    for record in legacy()["ambiguous"].values():
-        imported.update(allocation["uuid"] for allocation in record["allocations"])
-    stamp = f"closed: {migrated}T"
-    for path in sorted(ITEMS.glob("*.md")):
-        if path.stem not in imported:
+    matches = list(HEADING.finditer(text))
+    for ordinal, match in enumerate(matches, start=1):
+        key = match.group(1)
+        # The section runs to the next heading, so each duplicate key is
+        # checked against its own evidence. `where` names the ordinal as well
+        # as the key: with two `B29` sections, the key alone cannot say which
+        # one failed.
+        end = matches[ordinal].start() if ordinal < len(matches) else len(text)
+        section = text[match.end() : end]
+        where = f"{key} (heading {ordinal} of {len(matches)})"
+        found = ITEM_LINE.findall(section)
+        if not found:
+            fail(f"backlog index: {where} has no `**Evidence:** … **Item:** `<uuid>`` line")
             continue
-        text = path.read_text()
-        if stamp not in text:
+        if len(found) > 1:
+            fail(f"backlog index: {where} names {len(found)} items; a heading indexes exactly one")
             continue
-        if "The original closure date is unrecorded" not in text:
-            fail(
-                f"{path.name}: closed on the migration date without saying the original "
-                "date is unrecorded, which reads as an observed closure"
-            )
+        uuid = found[0]
+        if uuid not in known:
+            fail(f"backlog index: {where} names {uuid}, which is not in {ITEMS.relative_to(ROOT)}")
+
+    # A per-section pass cannot notice wholesale deletion: no sections means no
+    # failures. The landed set is pinned so bulk removal fails loudly; inbound
+    # anchors are what make each heading load-bearing, and `check-devlog.py`
+    # validates those fragments.
+    if len(matches) < LANDED_BACKLOG_HEADINGS:
+        fail(
+            f"backlog index: {len(matches)} `### B<N>` heading(s), fewer than the "
+            f"{LANDED_BACKLOG_HEADINGS} that landed; a heading is a frozen link target "
+            "and devlog entries are anchored at them"
+        )
 
 
 def main() -> int:
     if not ITEMS.is_dir():
-        raise SystemExit(f"{ITEMS.relative_to(ROOT)} does not exist; run scripts/migrate-roadmap-to-myque.py")
+        raise SystemExit(
+            f"{ITEMS.relative_to(ROOT)} does not exist: it is the repository's only "
+            "work-item authority and nothing reconstructs it"
+        )
     run_myque_check()
     check_backlog_first()
-    check_migration_auditability()
-    check_undated_closures_declare_themselves()
+    check_backlog_index_resolves()
 
     if failures:
         for failure in failures:
@@ -167,8 +176,8 @@ def main() -> int:
         raise SystemExit(f"work-item check failed with {len(failures)} problem(s)")
 
     total = len(identities())
-    mapped = len(legacy()["ids"])
-    print(f"work-item check passed: {total} items, {mapped} legacy ids mapped")
+    indexed = len(HEADING.findall(BACKLOG.read_text())) if BACKLOG.is_file() else 0
+    print(f"work-item check passed: {total} items, {indexed} frozen backlog headings indexed")
     return 0
 
 

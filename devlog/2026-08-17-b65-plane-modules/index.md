@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/bin/init.rs`, new `components/bins/src/{loan,spawn,crossing,supervision}_plane.rs`, `scripts/check/check-sel4-supervision-plane.py` |
-| Roadmap | B65, B60 |
+| Work items | 01a00b4d-2400-7af9-b5c1-4546f1b399e0, 01a00b4d-2400-7f5d-aba4-9a4c213ab256 |
 | Gates | `just sel4_loan_check`, `just sel4_spawn_check`, `just sel4_crossing_check`, `just sel4_supervision_check` |
 | Trigger | The structural audit measured 21 plane launchers making up 895 of `init.rs`'s 2286 lines |
 | Baseline | Every plane's edit shared one 2286-line file with every other plane's |

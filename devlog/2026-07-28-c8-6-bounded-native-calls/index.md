@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Zutai call schema and bindings, generation graph admission, userspace call broker/components, IPC send-capacity waits, shared-buffer and task reclamation, QEMU call gate |
-| Roadmap | C8.6 |
+| Work items | 019fa44d-f400-7baa-9558-197cd14820e5 |
 | Gates | `just fabric_call_check`, `just contracts_check`, `just generation_check`, `just test`, `just lint`, `just lint_components`, `just fmt_check`, `just fmt_check_components` |
 | Trigger | First unchecked core-runtime milestone after C8.5 |
 | Baseline | C8.5 supplied authenticated graph roles and explicit time/events, but no native request/reply correlation or terminal call lifecycle existed |

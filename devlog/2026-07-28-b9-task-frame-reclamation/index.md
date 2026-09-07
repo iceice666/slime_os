@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `AddressSpace::drop`, `vmm::free_user_half`, scheduler task reaping, spawn failure path, boot reclamation probe, `just test` and `just dango_check` |
-| Roadmap | B9, C10 |
+| Work items | 019fa44d-f400-7dd6-bdd8-c247dd974dd4, 019fa44d-f400-7b55-93e9-11b4c78772e2 |
 | Gates | `just test`, `just dango_check` |
 | Trigger | Opened by the C10 planning pass: private component memory would turn a fixed one-shot leak into one that scales with allocation and uptime |
 | Baseline | Every spawn permanently consumed its image and stack pages; the fixed boot graph spawns a bounded number of components, so the cost was bounded and never bit |

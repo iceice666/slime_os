@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/build/publish-component-sdk.py`, `scripts/check/check-component-sdk-release.py`, `sdk/compatibility-matrix.{zti,json,identity}`, `roadmap/10-component-platform.md`, `iceice666/slime_os` and `iceice666/slime_os-component_sdk` repository rules, `iceice666@m3air` release credentials |
-| Roadmap | CP7 |
+| Work items | 01a039a6-6000-7b7d-aef7-4602e99880f3 |
 | Gates | `just component_sdk_release_check`, `just component_sdk_prefix_check`, `just contracts_check` |
 | Trigger | Preparing the first publication to the canonical hosted SDK repository exposed that the publisher pushed its branch and tag separately |
 | Baseline | CP7's local bare-repository gate proved generated commits and signed tags, but the canonical repository was empty, carried no credential or ref protections, and the compatibility matrix named local stand-in commits |

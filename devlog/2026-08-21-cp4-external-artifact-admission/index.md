@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/component-spec/v1/`, `scripts/lib/component_spec.py`, `scripts/build/{build-generation.py,build-sel4.py}`, `scripts/check/{check-component-spec.py,check-generation.py,check-external-component-admission.py}`, `boot-contracts/src/component_image.rs`, `Justfile` |
-| Roadmap | CP4 |
+| Work items | 01a01fe6-9400-751b-9b4d-feb59f6027ba |
 | Gates | `just external_component_admission_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff` |
 | Trigger | CP4 required the generation builder to accept an explicitly declared, content-hash-bound ELF produced outside this workspace without adding a second trust root |
 | Baseline | Every component in a seL4 generation was built through this repository's Cargo workspace; the component spec named a provider and binary but could not bind an external declaration to bytes |

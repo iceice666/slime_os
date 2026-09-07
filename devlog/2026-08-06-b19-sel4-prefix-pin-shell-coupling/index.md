@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/build-sel4.py`, `sel4/pins.toml`, `flake.nix` |
-| Roadmap | B19 |
+| Work items | 019fd2a7-3000-7ff0-adfa-bd30cd147992 |
 | Gates | `just sel4_qemu_image_check` |
 | Trigger | B19 opened 2026-08-06 (`8fc61eb`) after `kernel_sha256` failed to reproduce on `aarch64-darwin` |
 | Baseline | `[observed_prefix].kernel_sha256 = 2d88b9a4…`, which did not reproduce here. *Inherited from `8fc61eb`:* recorded on an `x86_64-linux` host; that attribution was not re-observed in this work. |

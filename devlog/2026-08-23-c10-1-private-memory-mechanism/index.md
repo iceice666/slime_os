@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/syscall-abi/v1/schema.zt`, `docs/syscall-abi.md`, generated `components/proto/src/syscall_abi.rs` and its pin test; new `slime-root/src/private_memory.rs`; `slime-root/src/{child_vspace,object_allocator,task,ipc,main}.rs`; `slime-root/child/src/main.rs`; `scripts/check/{check-sel4-root-boot,check-sel4-gate-controls}.py`; `Justfile` |
-| Roadmap | C10.1, C10, C10.2, C7.3, B9, B23 |
+| Work items | 01a02a33-4c00-72b4-a52f-851ea1883f50, 019fa44d-f400-7b55-93e9-11b4c78772e2, 01a0724c-5400-70d8-83ad-af7bada609f1, 019f9a01-3c00-7b7e-a2ee-a32c44051b95, 019fa44d-f400-7dd6-bdd8-c247dd974dd4, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3 |
 | Gates | `just sel4_root_boot_check`, `just test_sel4_root`, `just sel4_gate_control_check` |
 | Trigger | C10.1 was the next roadmap milestone whose dependencies were met: the backlog is empty, and every other open item is either an undecomposed parent (C9) or gated on physical hardware this environment does not have (M5.7 Framework, P4/RP3 Raspberry Pi 5) |
 | Baseline | A component's working memory was fixed at build time — stack from the `SLIMECME` header, `.data`/`.bss` from the linked ELF, no `GlobalAlloc` in `slime-rt` and no operation yielding a page — so every buffer was sized for its worst case in every generation carrying that component |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/{supervision,graph,transit,main}.rs`, `components/bins/src/bin/{init,supervision-child}.rs`, `contracts/generation/v1/fixtures/sel4-supervision.{zti,md}`, `scripts/build/{boot_layout,build-sel4,build-generation}.py`, `scripts/check/check-sel4-supervision-plane.py`, `Justfile` |
-| Roadmap | B16, B22, B23, P5.4 |
+| Work items | 019fd7cd-8c00-7817-aa68-aa49dacd7a0a, 019fd7cd-8c00-70b2-91d1-8670457ab82e, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just sel4_supervision_check` |
 | Trigger | B16, opened during the P5.3.3 review and deferred three times; P5.4 named as its trigger |
 | Baseline | Nine seL4 gates passing; `MAX_RECORDS = 32` never reached by any declared generation |

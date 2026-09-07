@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Verified |
 | Scope | `roadmap/07-architecture-portability.md`, `roadmap/README.md`, `sel4/pins.toml`, `tools/nt98690/`, `scripts/build/build-nt98690-payload.py`, `scripts/check/check-nt98690-boot.py`, `scripts/lib/{arm64_image,uboot_console}.py`, `just/hardware.just` |
-| Roadmap | P6, P6.A, P6.B, P6.C |
+| Work items | 01a05db2-e400-7fd6-ae52-2c044ed2ad0e, 01a05db2-e400-7ed0-a45e-276be9d94fbf, 01a05db2-e400-750d-abb7-6f22b5c59260, 01a05db2-e400-7695-af49-86d189db768c |
 | Gates | `just nt98690_payload_check`, `just nt98690_boot_check`, `just sel4_gate_control_check` |
 | Trigger | A vendor BSP and a working serial-driven firmware loop for the Novatek NT98690 (NS02201) H1V1 became available on the development host |
 | Baseline | Two physical lanes: the Milk-V Duo, qualified through P3.F, and the Raspberry Pi 5, whose P4 build path is complete but whose boot is unobserved because its only console produces no bytes |

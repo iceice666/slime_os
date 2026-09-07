@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/{generation,main}.rs`, `components/bins/src/{matrix,visibility}_broker.rs`, `components/bins/src/default_fabric_profile.rs`, `scripts/build/build-generation.py`, `scripts/check/check-sel4-{matrix,visibility}-plane.py`, `scripts/check/check-sel4-gate-controls.py`, `Justfile` |
-| Roadmap | B70 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925 |
 | Gates | `just sel4_matrix_check`, `just sel4_visibility_check`, `just sel4_gate_control_check`, `just sel4_fabric_aggregate_check`, `just generation_check`, `just contracts_check`, `just test_sel4_root` |
 | Trigger | B70 migration of `FABRIC_INTERPOSITIONS` off the build-time manifest tables |
 | Baseline | Both plane gates green; `assert_declared_chain` present in both brokers |

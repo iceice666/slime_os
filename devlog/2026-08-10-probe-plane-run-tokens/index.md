@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-{input,directory,storage,transfer}.zti`, `slime-root/src/{main,graph}.rs` |
-| Roadmap | B41 |
+| Work items | 019fe740-a000-71ef-b559-5eda9e614867 |
 | Gates | `just sel4_input_check`, `just sel4_directory_check`, `just sel4_storage_check`, `just sel4_dango_check` |
 | Trigger | B41's exit condition names `just sel4_input_check`, which was red before any B41 work. |
 | Baseline | `sel4_input_check` exceeded its 180s bound; `sel4_directory_check` and `sel4_storage_check` failed on a missing idle marker. |

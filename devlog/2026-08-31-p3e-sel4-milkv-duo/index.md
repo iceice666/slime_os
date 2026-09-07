@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/target-profile/v1/`, `scripts/{build,check}/`, `sel4/config/cv1800b-duo.cmake`, `slime-root`, `deps/{sel4,rust-sel4}` |
-| Roadmap | P3.E |
+| Work items | 01a0588c-8800-73db-ba7e-7c520baedf46 |
 | Gates | `just riscv64_qemu_check`, `just duo_sel4_check`, `just duo_gate_control_check` |
 | Trigger | P3.D established a repeatable physical handoff, making the upstream seL4 CV1800B port and first verified Slime generation the next architecture slice |
 | Baseline | The board ran only the minimal P3.D S-mode probe; upstream seL4 had no CV1800B platform, C906 MAEE changed Sv39 memory attributes, and the loader's eager RISC-V leaves had not been exercised on a software-maintained A/D implementation |

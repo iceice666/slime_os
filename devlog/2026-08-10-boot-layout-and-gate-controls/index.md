@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/boot-layout/v1/fixtures/`, `scripts/build/boot_layout.py`, `scripts/check/check-sel4-gate-controls.py` |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just sel4_boot_layout_check`, `just contracts_check`, `just sel4_gate_control_check` |
 | Trigger | `sel4_boot_layout_check` was red with 204 differences across 24 planes. |
 | Baseline | Fixtures frozen at `1eee295`, before the v5 wire-format cutover. |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-stream-plane.py` |
-| Roadmap | P5.4.5, P5.4, P5.4.1, C8.5 |
+| Work items | 019fd7cd-8c00-7832-8548-1e37c412afc3, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fa44d-f400-701b-b07c-8aa780e6da65 |
 | Gates | `just sel4_stream_check` |
 | Trigger | P5.4.5 opened after P5.4.2's device half proved blocked |
 | Baseline | P5.4.1 recorded C8.5 as having no seL4 coverage |

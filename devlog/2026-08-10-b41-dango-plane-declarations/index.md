@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-dango.zti`, `components/bins/build.rs`, `components/bins/src/bin/init.rs`, `slime-root/src/main.rs`, `scripts/check/check-sel4-dango-plane.py` |
-| Roadmap | B41 |
+| Work items | 019fe740-a000-71ef-b559-5eda9e614867 |
 | Gates | `just sel4_dango_check`, `just sel4_component_graph_check`, `just sel4_boot_check` |
 | Trigger | B41's exit condition names `just sel4_dango_check`, which failed before any B41 work — the image did not build. |
 | Baseline | `components/bins/build.rs:272` aborted on `expect("command RPC binding")`. Confirmed inherited by running the gate with `valid.zti` restored from `3228eb6`: identical failure. |

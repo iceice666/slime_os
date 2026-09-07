@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/build-sel4.py`, `sel4/pins.toml`, `flake.nix` |
-| Roadmap | B20, B19 |
+| Work items | 019fd2a7-3000-7239-adb2-62b25802fdf1, 019fd2a7-3000-7ff0-adfa-bd30cd147992 |
 | Gates | `just sel4_qemu_image_check` |
 | Trigger | B19's second-host test (`9637555`) observed `f2d316e1…` on `aarch64-linux` against `e8cbab4f…` on `aarch64-darwin` |
 | Baseline | B19 (`dad310a`): `kernel_sha256` independent of the dev shell, but observed on one platform only |

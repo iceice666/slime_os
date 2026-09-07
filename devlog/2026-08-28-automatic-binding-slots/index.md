@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation-manifest/v1/compositions/{sel4-demo,sel4,sel4-loan,sel4-io-driver-authority}.zti`, matching plane gates, generation slot allocation and QEMU product verification |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just sel4_demo_check`, `just sel4_component_graph_check`, `just sel4_loan_check`, `just fmt_check_all`, `just lint_all`, `just ruff` |
 | Trigger | Inventory found 582 of 600 composition instance bindings still carried explicit slots although the builder already assigns omitted slots deterministically |
 | Baseline | Six `spawn-service` declarations, four loan bindings, and three I/O supervisor bindings pinned slots that their holders already resolve by name |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/{operation_broker.rs,fabric_operation_scenario.rs}`, `components/bins/src/bin/{fabric-service.rs,fabric-op-worker.rs}`, `components/proto/src/{fabric_operation.rs,lib.rs}`, `contracts/fabric-operation/v1/{schema.zt,gen_rust.zt}`, `slime-root/src/main.rs`, `scripts/check/check-sel4-operation-plane.py`, `roadmap/00-backlog.md` |
-| Roadmap | B46 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_channel_check`, `just sel4_crossing_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just sel4_call_check`, `just sel4_operation_check`, `just sel4_visibility_check`, `just lint_all`, `just fmt_check_all`, `just devlog_check` |
 | Trigger | The operation plane was the last B46 gate not completing after the logical IPC cutover. |
 | Baseline | Six native gates passed; `sel4_operation_check` could block when a broker sent a new request while the single-threaded server still owed its explicit idle transition. |

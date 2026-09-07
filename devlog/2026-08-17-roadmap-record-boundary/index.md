@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Verified |
 | Scope | `roadmap/00-backlog.md`, `roadmap/02-core-runtime.md`, `roadmap/07-architecture-portability.md`, `AGENTS.md`, `roadmap/README.md`, `devlog/README.md` |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just devlog_check`, `just typos` |
 | Trigger | `roadmap/` had grown to 12,120 lines, with `00-backlog.md` alone at 5,939 |
 | Baseline | `devlog check passed: 176 entries, 176 indexed` before this entry; `roadmap/` at 12,120 lines with no rule distinguishing "current status" from "how it was verified" |

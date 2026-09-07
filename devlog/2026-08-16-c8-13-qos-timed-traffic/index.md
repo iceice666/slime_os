@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/bin/{fabric-service.rs,fabric-publisher-b.rs}`, `contracts/generation/v1/fixtures/{sel4-traffic.zti,sel4-saturation.zti}`, `contracts/fabric-trace/v1/schema.zt`, `scripts/check/{check-sel4-traffic-plane.py,check-sel4-saturation-plane.py}`, `roadmap/02-core-runtime.md` |
-| Roadmap | C8.13 |
+| Work items | 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_traffic_check`, `just sel4_saturation_check`, `just sel4_qos_check`, `just sel4_gate_control_check` |
 | Trigger | C8.13's open follow-up: "QoS-timed stream traffic running concurrently with call/operation (dropped after its clock-grant wiring proved to need its own multi-step discovery" |
 | Baseline | The stream plane's QoS-timed arm (RELIABLE retry accounting/exhaustion, deadline/lifespan/liveliness expiry) ran only in `sel4-qos.zti`'s standalone plane; `sel4-traffic.zti` never drove it, and a prior attempt to widen `qos_check()` alone was reverted for regressing `sel4_trace_check` |

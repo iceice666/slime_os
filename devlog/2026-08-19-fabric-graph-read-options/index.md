@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Verified |
 | Scope | `slime-root/src/generation.rs` (`fabric_graph_object`), `contracts/syscall-abi/v1`, `components/bins/src/{visibility_broker,matrix_broker,call_broker,operation_broker}.rs`, `components/bins/src/bin/fabric-*.rs` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just sel4_visibility_check`, `just sel4_matrix_check`, `just sel4_fabric_aggregate_check` |
 | Trigger | The const-context blocker was removed (163d834), leaving the read buildable and its authority shape undecided |
 | Baseline | 54 live graph-data uses across 9 files, all runtime reads; no component can reach resource bytes |

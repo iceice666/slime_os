@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/syscall-abi/v1`, `slime-root/src/{ipc,main}.rs`, `components/runtime/src/syscall{,.rs,/sel4_transport.rs}`, `components/bins/src/generation_composition.rs` and 5 migrated call sites, `boot-contracts/src/generation.rs`, `components/proto/tests/syscall_abi.rs`, `scripts/check/check-generation.py`, `docs/syscall-abi.md` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just contracts_check`, `just test_sel4_root`, `just test_host`, `just runtime_binding_resolution_check`, `just sel4_boot_check`, `just sel4_visibility_check`, `just sel4_dango_check`, `just sel4_boot_layout_check` |
 | Trigger | B70's remaining clause: component sources still `include!` `build.rs`-private, manifest-derived constant tables |
 | Baseline | 15 `include!` sites; `GENERATION_BOOT_ACTION` a compile-time `&str` in each |

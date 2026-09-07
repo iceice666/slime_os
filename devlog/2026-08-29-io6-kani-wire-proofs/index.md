@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/proto/src/io_queue_proofs.rs` (new), `components/proto/src/lib.rs`, `components/proto/build.rs` (new), `verification/io-proofs/` (new), `just/quality.just`, `roadmap/11-io-substrate.md` |
-| Roadmap | IO6, IO5, IO0 |
+| Work items | 01a04919-7400-70bd-8fb1-4c7ab1bb6227, 01a04919-7400-7b26-bab8-c66452b62d56, 01a043f3-1800-7a95-ab01-632668d70c56 |
 | Gates | `just kani_io_proofs`, `just lint_all`, `just fmt_check_all`, `just test_host`, `just miri` |
 | Trigger | IO5 shipped two bounded models that explicitly disclaimed the wire layer; the question was whether to keep going with `zutai model-check` or add implementation-level proof |
 | Baseline | IO0–IO4 observed per-schedule under QEMU; IO5's models quantify over interleavings of an abstraction; wire arithmetic covered only by fixed-input `#[test]`s |

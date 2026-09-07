@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Root-caused |
 | Scope | `contracts/generation/v1/fixtures/sel4-call.zti`, `scripts/build/{boot_layout,build-generation}.py`, `components/bins/src/bin/{init,fabric-service}.rs`, `components/bins/build.rs`, `roadmap/00-backlog.md`, `roadmap/07-architecture-portability.md` |
-| Roadmap | P5.4.6, B25, C8.6 |
+| Work items | 019fdcf3-e800-71c8-8283-78b13fce7bf4, 019fdcf3-e800-75f0-8f8b-39164dfabe16, 019fa44d-f400-7baa-9558-197cd14820e5 |
 | Gates | none |
 | Trigger | Reopening P5.4.6 against the recorded `SlotCursors` diagnosis |
 | Baseline | Nine passing seL4 plane gates; the call plane failing at `[fabric] fail: call role request`, recorded in the predecessor entry's [`boot.log`](../2026-08-07-p5-4-6-call-plane/boot.log) |

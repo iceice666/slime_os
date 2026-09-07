@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/sha256.rs`, `boot-contracts/src/crc32.rs` |
-| Roadmap | P5.4.1, P5.4 |
+| Work items | 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just test_host`, `just miri`, `just fmt_check_all`, `just lint_all`, `just typos` |
 | Trigger | Continuing the `boot-contracts` audit for modules with real logic and zero tests, after `transfer.rs`, `recovery.rs`, and `release.rs` |
 | Baseline | `boot-contracts` at 157 host tests; `sha256.rs` and `crc32.rs` had **zero** |

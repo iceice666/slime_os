@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/build-sel4.py`, `scripts/build/build-c-component.py`, `flake.nix`, `slime-root/src/main.rs`, `just sel4_qemu_image_check`, SDK publication workflow runs 33060731037 and 33061886811 |
-| Roadmap | B79, P5.2 |
+| Work items | 01a03ecc-bc00-70a4-8c4e-1b8a80c79561, 01a03ecc-bc00-708d-a6fe-fffc759caf66 |
 | Gates | `just sel4_qemu_image_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
 | Trigger | The first GitHub-dispatched SDK publication run invoked `just sel4_qemu_image_check` in a clean hosted checkout and failed while constructing the default generation |
 | Baseline | The Slisp product cutover taught only the explicit component-graph image path to build and map the external Slisp ELF; local default-image builds had not been re-exercised from a clean checkout |

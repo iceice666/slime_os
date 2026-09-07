@@ -6,11 +6,10 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/lib/closure_image.py`, `scripts/check/check-system-image-aggregate.py`, `scripts/check/check-system-test-run.py`, `scripts/generate/generate-system-test-runs.py`, 36 `scripts/check/check-sel4-*.py` gates, `scripts/build/build-generation.py`, `scripts/build/build-system-image.py`, `scripts/build/build-sel4.py`, `contracts/system-test-run/v1/runs/`, `contracts/system-image-closure/v1/closures/`, `just/contracts.just` |
-| Roadmap | CP14, CP15 |
+| Work items | 01a05db2-e400-7831-b250-85244bc4b61d, 01a0724c-5400-77da-8478-c43f706efd86 |
 | Gates | `just system_image_closure_aggregate_check`, `just system_test_run_check`, `just sel4_capability_layout_check`, `just sel4_qos_check`, `just sel4_call_check`, `just sel4_stream_check`, `just sel4_gate_control_check`, `just sel4_boot_layout_check` |
 | Trigger | CP14 closed with four of five deliverables; CP15's cutover began from `0f71321d` |
 | Baseline | 49 seL4 plane gates each built their image with `build-sel4.py --<name>-plane`; one test-run record existed of 45 planes; no gate proved the closure corpus and the booted-image corpus were the same set |
-| Correction | 2026-09-03: extended from 36 to 41 migrated gates; the third defect and the reverted per-profile keying are recorded below |
 
 ## Summary
 
@@ -82,3 +81,7 @@ CP14's fifth deliverable and the tractable core of CP15. All 45 plane gates that
 - Commits `75ee6fd2` (reproducibility fixes and 35-gate migration), `38174f87` (qos death scenario), `a95e8738` (eight flag deletions), `672c6a1f` (capability-layout negative cases), `fe2e62d3` (aggregate gate), `79deb8c8` (test-run records).
 - Aggregate gate at time of writing: 18 booted plane images, 10 closure-reachable and 8 exempt with declared reasons; 44 closures each exercised; 36 flags each reachable; 36 gates migrated with 13 on the legacy flag and none holding both; 6 controls refused.
 - No `.rs` file changed in this entry's work.
+
+## Corrections
+
+- 2026-09-03: extended from 36 to 41 migrated gates; the third defect and the reverted per-profile keying are recorded above.

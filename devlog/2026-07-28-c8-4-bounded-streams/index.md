@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Zutai fabric-stream contract, `boot-contracts` KEEP_LAST ring, fabric service brokering, two new participant components, a second declared route, generation manifest and bootstrap wiring, C8.4 checks |
-| Roadmap | C8.4 |
+| Work items | 019fa44d-f400-7db3-aac2-f3ffcfa5c6ba |
 | Gates | `just fabric_stream_check` |
 | Trigger | C8.4 opened after C8.3 left a fabric that provisioned route authority but carried no data over it |
 | Baseline | C8.3 minted both halves of one route and handed each participant a narrowed, non-delegable role, then exited after a single provisioning round. Nothing brokered a sample, so KEEP_LAST, BEST_EFFORT loss, and the one-copy fan-out existed only as declared QoS |

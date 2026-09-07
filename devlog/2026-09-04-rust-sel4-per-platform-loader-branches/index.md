@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `.gitmodules`, `sel4/pins.toml`, `scripts/build/build-sel4.py`, `scripts/generate/generate-system-image-closures.py`, `scripts/lib/system_image_closure.py`, `scripts/check/check-sel4-pins.py`, `.github/actions/slime-env/action.yml`, `deps/rust-sel4*` submodules, `contracts/system-image-closure/v1/closures/*.zti`, and the `iceice666/rust-sel4` fork's `slime-cv1800b-duo` / `slime-ns02201-h1v1` / `slime/bcm2712-loader-platform` branches |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just sel4_pin_check`, `just system_image_builder_check` |
 | Trigger | A future physical platform's `sel4-kernel-loader` patch may need to live in a private fork for NDA reasons; the prior pin structure could not isolate one platform's patch from the others |
 | Baseline | `sel4/pins.toml`'s single `[rust_sel4]` table pinned one commit (`20905bef`) on a cumulative branch (`slime-ns02201-h1v1`) that stacked the bcm2712, cv1800b-duo, and ns02201-h1v1 loader patches on top of each other; every platform, including the two QEMU targets that need no patch, built `sel4-kernel-loader` from that one checkout |

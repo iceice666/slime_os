@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/generation.rs`, `slime-root/src/{task,main}.rs`, `scripts/build/build-generation.py`, `contracts/generation/v1/schema.zt`, `contracts/generation/v1/fixtures/sel4-sample.zti`, `components/bins/src/bin/sample-worker.rs`, `scripts/check/check-sel4-{sample-plane,gate-controls}.py` |
-| Roadmap | B48, B47 |
+| Work items | 019ff18d-5800-70c6-a987-6a926141c775, 019fe740-a000-722b-bf6a-29f2db805351 |
 | Gates | `just sel4_sample_check`, `just sel4_qos_check`, `just sel4_root_boot_check`, `just sel4_gate_control_check`, `just test_sel4_root` |
 | Trigger | B48's priority half applied a per-*instance* priority; the exit condition also asks that one busy client not starve an unrelated service, and nothing tested it. |
 | Baseline | `instance_priority` resolved through the process's main thread, and B47's worker inherited it. One priority per process. |

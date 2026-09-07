@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | stage0 panic paths, workspace lint config, Justfile gates, deny/machete/miri/ruff/typos setup, GitHub Actions |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just lint_all`, `just fmt_check_all`, `just deny`, `just machete`, `just miri`, `just test_host`, `just ruff`, `just typos` |
 | Trigger | Audit found no clippy config, no dependency auditing, no CI, and stage0/boot-contracts outside every lint gate |
 | Baseline | `just lint`/`just lint_components` gated kernel and components only; stage0 carried 7 unwrap sites and 4 unchecked slice indexes on the boot path |

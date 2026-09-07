@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/syscall-abi/v1/schema.zt`, `docs/syscall-abi.md`, `slime-root/src/{ipc,main,generation}.rs`, `components/runtime/src/{lib,syscall}.rs` + `syscall/sel4_transport.rs`, `components/bins/src/bin/{fabric-service,fabric-publisher}.rs` |
-| Roadmap | B70, CP2 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a0250c-f000-7678-9b88-60c1ac29f6b3 |
 | Gates | `just sel4_stream_check`, `just sel4_qos_check`, `just sel4_matrix_check`, `just sel4_visibility_check`, `just sel4_fabric_aggregate_check`, `just runtime_binding_resolution_check`, `just test_sel4_root`, `just contracts_check` |
 | Trigger | Option C chosen from [the options entry](../2026-08-19-fabric-graph-read-options/index.md); step 1 is serving the declared holder |
 | Baseline | No component could reach the graph resource; 53 graph-data uses read `build.rs`-generated tables |

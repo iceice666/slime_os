@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/visibility_broker.rs`, `components/bins/src/fabric_self_view.rs`, `roadmap/00-backlog.md` |
-| Roadmap | B70, B72 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a01599-dc00-7f6b-a7b8-3a3aac8fa5df |
 | Gates | `just sel4_visibility_check`, `just sel4_matrix_check`, `just sel4_fabric_aggregate_check`, `just sel4_qos_check` |
 | Trigger | Continuing B70/CP2's migration of `FABRIC_PARTICIPANTS` use sites after `6e7b530` moved `matrix_broker` |
 | Baseline | `51d8280^` — the visibility broker answered every view record from three `build.rs`-generated tables |

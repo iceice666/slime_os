@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/02-core-runtime.md`, C7 sequencing and verification gates |
-| Roadmap | C7 |
+| Work items | 019f9a01-3c00-78e0-a6cc-6b51549bb2d3 |
 | Gates | `just sample_plane_check` |
 | Trigger | C7.2–C7.4 still combined multiple independently risky state machines |
 | Baseline | C7.1 complete; remaining work grouped into factory/accounting, lifecycle/descriptor, and final integration |

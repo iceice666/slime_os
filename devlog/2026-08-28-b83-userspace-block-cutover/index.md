@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/block-authority/v1/`, `boot-contracts/src/block_authority.rs`, `slime-root/src/{ipc,generation}.rs`, `slime-root/src/graph_runtime/services.rs`, `components/lib/src/block_io.rs`, `components/services/virtio-blk-driver/`, six compositions and their clients and gates, `components/system/init/src/{main,dispatch}.rs`, `scripts/build/{boot_layout,generation_resources,build-generation}.py` |
-| Roadmap | B83, B84 |
+| Work items | 01a04919-7400-7839-b017-2e9566a3dac7, 01a043f3-1800-7e49-948c-39a089fe5c20 |
 | Gates | `just sel4_storage_check`, `just sel4_store_check`, `just sel4_rollback_check`, `just replay_check`, `just sel4_generation_check`, `just sel4_filesystem_check`, `just io_block_check`, `just sel4_gate_control_check` |
 | Trigger | B83: IO2 proved a userspace virtio-blk driver matched the root's block behaviour, but the root's implementation was still the product path for every storage-family plane. |
 | Baseline | Before this entry the root served every admitted component's block request through `console.rs::serve_block_transact`, gating each one on the badge-derived caller's own `BlockDevice` capability. |

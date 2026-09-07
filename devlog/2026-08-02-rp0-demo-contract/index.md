@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | RPi5 ROS 2 demo contract, Zutai fixtures, semantic admission checks, contract registry, roadmap |
-| Roadmap | RP0 |
+| Work items | 01a0724c-5400-701b-b2c7-d0a5b9533503 |
 | Gates | `just rpi5_ros2_demo_contract_check`, `just contracts_check` |
 | Trigger | RP0 implementation |
 | Baseline | The RPi5 demo track named a physical DDS-backed two-node outcome but had no versioned target-qualified acceptance contract or executable admission gate. |

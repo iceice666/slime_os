@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-visibility-plane.py`, `contracts/fabric-visibility/v1/{schema,gen_rust}.zt`, `scripts/generate/generate-fabric-visibility-bindings.py`, `scripts/lib/fabric_visibility_contract.py`, `contracts/fabric-visibility/v1/fixtures/sel4-visibility.view`, `Justfile` |
-| Roadmap | B72 |
+| Work items | 01a01599-dc00-7f6b-a7b8-3a3aac8fa5df |
 | Gates | `just sel4_visibility_check`, `just sel4_visibility_bless`, `just contracts_check`, `just sel4_gate_control_check` |
 | Trigger | Observed 2026-08-19 while migrating `visibility_broker` off the generated tables (B70/CP2) |
 | Baseline | The plane's twelve view records were counted; no field of any record was compared to anything |

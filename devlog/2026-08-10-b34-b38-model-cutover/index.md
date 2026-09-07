@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Generation v4 executable/instance contracts, declared launch and capability layout, graph health gating, BootState boot selection, and reclaimable task allocation |
-| Roadmap | P5.4.9, B34, B35, B36, B37, B38 |
+| Work items | 019fdcf3-e800-7d29-ba4f-6c7571a517d3, 019fe740-a000-71ab-824f-d410e5503d96, 019fe740-a000-735c-8140-79780460ecb3, 019fe740-a000-755e-8b9f-df3cc536849e, 019fe740-a000-7e0e-8eb9-53c701c68f6d, 019fe740-a000-7659-8339-ea3d25b232db |
 | Gates | `just generation_check`, `just sel4_boot_selection_check`, `just sel4_reclamation_check`, `just sel4_gate_control_check`, `just test_sel4_root` |
 | Trigger | The B34–B38 audit proved duplicate graphs, an early non-unique terminal, compile-time generation selection, implicit non-bootstrap layout, and monotonic task allocation |
 | Baseline | The seL4 cutover ran components, but loadable executables were also root instances, BootState did not control the next boot, and repeated task lifetimes could exhaust root resources |

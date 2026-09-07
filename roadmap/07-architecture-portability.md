@@ -338,6 +338,8 @@ On the named Milk-V Duo, the digest-verified target-qualified product image reac
 
 **Evidence:** [`devlog/2026-09-01-p3f-duo-slisp/`](../devlog/2026-09-01-p3f-duo-slisp/index.md)
 
+<a id="p4--raspberry-pi-5-board-bring-up"></a>
+
 ## P4: Raspberry Pi 5 physical architecture qualification
 
 **Status:** Deferred after its build path completed. The board boot remains unobserved: the available USB-UART adapter produces no bytes and the debug header is the only console this seL4 image has. The current execution pivot selects Duo rather than waiting on this unavailable evidence path; it does not close or weaken P4's Raspberry Pi 5 exit condition.
@@ -870,6 +872,8 @@ interruption at each append/commit boundary.
 **Evidence:** [`devlog/2026-08-08-p5-4-8-visibility-plane/`](../devlog/2026-08-08-p5-4-8-visibility-plane/index.md)
 
 **Depends on:** P5.4.1.
+
+<a id="p549-and-c810"></a>
 
 ### P5.4.9 — C8.9 typed full-profile closure and C8.10 full-graph bootstrap
 

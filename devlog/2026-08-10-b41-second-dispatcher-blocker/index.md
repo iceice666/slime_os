@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Verified |
 | Scope | `deps/rust-sel4/crates/sel4/src/{state/mod.rs,state/token.rs,syscalls.rs}`, `deps/rust-sel4/crates/sel4-kernel-loader/{add-payload/src/utils.rs,payload-types/src/lib.rs}`, `deps/rust-sel4/support/targets/aarch64-sel4-roottask*.json`, `slime-root/src/main.rs` |
-| Roadmap | B41, B43, B44, B45 |
+| Work items | 019fe740-a000-71ef-b559-5eda9e614867, 019fe740-a000-7141-8813-a58e7b330fce, 019fe740-a000-7043-9dfe-a26a769fd721, 019fe740-a000-7a64-a099-8eae60c22667 |
 | Gates | `just sel4_boot_check` |
 | Trigger | B41, B43, B44, and B45 all require console/block/store traffic to leave the universal dispatcher, which requires something else to receive it. |
 | Baseline | One root thread, one endpoint, `DebugWrite`/`BlockTransact`/`StoreTransact` as universal operation labels. |

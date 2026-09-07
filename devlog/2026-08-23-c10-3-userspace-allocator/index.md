@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | New `components/runtime/src/private_heap.rs` and `private_heap_probe.rs`; `components/runtime/src/{lib.rs,runtime.rs}`; `components/runtime/Cargo.toml`; new `components/bins/private-heap-probe/`; `contracts/generation/v1/fixtures/sel4-private-memory.zti`; `scripts/build/build-generation.py`; `scripts/check/{check-sel4-private-memory-plane,check-component-crate-split,check-sel4-gate-controls}.py`; `Justfile`; `Cargo.toml` |
-| Roadmap | C10.3, C10, C10.1, C10.2, C10.4, C7.3, CP3, B5, B23, B63 |
+| Work items | 01a0724c-5400-7d30-b9b2-08fb442efd21, 019fa44d-f400-7b55-93e9-11b4c78772e2, 01a02a33-4c00-72b4-a52f-851ea1883f50, 01a0724c-5400-70d8-83ad-af7bada609f1, 01a0724c-5400-7f2d-9a2d-9a874ae67893, 019f9a01-3c00-7b7e-a2ee-a32c44051b95, 01a01fe6-9400-747c-9990-6720903ced0f, 019f9a01-3c00-70d4-b48d-53f80f2c70e7, 019fd7cd-8c00-77e1-bc23-fdb64b7d5df3, 01a00b4d-2400-7f8d-ba52-04cbc6b7df71 |
 | Gates | `just private_memory_check`, `just component_crate_split_check`, `just sel4_gate_control_check`, `just lint_all`, `just test_sel4_root`, `just contracts_check`, `just generation_check` |
 | Trigger | C10.3 was the next roadmap milestone with met dependencies: the backlog is empty, C10.2 closed the same day, and every other open item is an undecomposed parent (C9) or gated on physical hardware (M5.7, P4/RP3) |
 | Baseline | C10.1 and C10.2 made a generation-declared page quota the live ceiling, but the only way to reach it was `private_memory_grow`, which hands back raw pages. No component could allocate a `Vec` inside its own quota; the C10.2 probe measured its ceiling by growing one page at a time |

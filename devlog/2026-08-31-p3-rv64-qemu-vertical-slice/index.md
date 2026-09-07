@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | RV64 target profile, seL4 QEMU build and loader route, component runtime, root architecture boundaries, and cross-platform plane checkers |
-| Roadmap | P3 |
+| Work items | 01a05366-2c00-7c3b-bc96-ce22c9f94c15 |
 | Gates | `just riscv64_qemu_check` |
 | Trigger | P3 became the prerequisite reference profile for the active Milk-V Duo P3.E bring-up lane |
 | Baseline | The maintained seL4 product and architecture-neutral acceptance corpus ran only on AArch64 QEMU; RV64 retained no target-qualified root or component path |

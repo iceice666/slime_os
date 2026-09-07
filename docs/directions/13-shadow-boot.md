@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | parked |
 | Route | updates |
-| Depends on | M5.6 rollback and health semantics and M6 spawn machinery (complete); the canonical [roadmap](../../roadmap/README.md) names it a follow-up |
+| Depends on | M5.6 rollback and health semantics and M6 spawn machinery (complete); the [roadmap](../../roadmap/README.md) names it a follow-up |
 | Enables | pre-activation health checking that never spends a real boot attempt |
 | Now | Paper: shadow sub-graph manifest design is legal today. M6 supplies the spawn machinery, but the constrained shadow environment itself does not exist yet. |
 

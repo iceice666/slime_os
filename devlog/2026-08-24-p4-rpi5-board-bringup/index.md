@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `sel4/config/bcm2712-rpi5.cmake`, `sel4/pins.toml`, `.gitmodules`, `deps/rust-sel4` (forked), `scripts/build/build-sel4.py`, `scripts/build/build-generation.py`, `scripts/build/build-rpi5-media.py`, `scripts/check/check-sel4-pins.py`, `scripts/check/check-rpi5-boot.py`, `scripts/check/check-sel4-gate-controls.py`, `Justfile` |
-| Roadmap | P4 |
+| Work items | 01a02f59-a800-78b6-9398-6b22bfbc6fdd |
 | Gates | `just sel4_rpi5_image_check`, `just rpi5_media_check`, `just rpi5_boot_check`, `just sel4_pin_check`, `just sel4_gate_control_check`, `just sel4_root_boot_check`, `just generation_check`, `just contracts_check`, `just test_sel4_root`, `just rpi5_artifact_check` |
 | Trigger | A physical Raspberry Pi 5 and removable media became available, opening P4's hardware half |
 | Baseline | `qemu-arm-virt` was the only seL4 platform the build could produce; `sel4/config/bcm2712-rpi5.cmake` existed but had never been built |

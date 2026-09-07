@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{channel,parked,main,transfer_window,child_vspace,ipc}.rs`, `components/bins/src/bin/init.rs`, `components/bins/build.rs`, `contracts/generation/v1/fixtures/sel4-channel.{zti,md}`, `scripts/build/{build-sel4,build-generation}.py`, `scripts/check/check-sel4-channel-plane.py`, `scripts/check/check-sel4-component-graph.py`, `Justfile` |
-| Roadmap | P5.3.1, P5.3, P5.5, B12 |
+| Work items | 019fc85a-7800-74bb-8eeb-02e398c5d546, 019fc85a-7800-7e49-9f0b-185238940245, 019fc85a-7800-7e7b-8c8a-56f889dccbed, 019fd7cd-8c00-7a24-907a-86c137e6e62a |
 | Gates | `just sel4_channel_check`, `just sel4_component_graph_check`, `just sel4_root_boot_check` |
 | Trigger | P5.3 opened as the next uncompleted milestone after P5.2 |
 | Baseline | P5.2: the declared graph boots and is served, but `Send`, `Recv`, and `Wait` have no handler — every component reaches its first `recv` and exits non-zero |

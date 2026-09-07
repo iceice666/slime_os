@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Fabric QoS/time schemas, graph admission, userspace broker, live participants, bootstrap grants, QEMU gate |
-| Roadmap | C8.5 |
+| Work items | 019fa44d-f400-701b-b07c-8aa780e6da65 |
 | Gates | `just fabric_qos_check` |
 | Trigger | Implement the next open core-runtime milestone after C8.4 |
 | Baseline | C8.4 brokered bounded BEST_EFFORT streams but had no reliable retry, retained replay, or explicit-time QoS transitions |

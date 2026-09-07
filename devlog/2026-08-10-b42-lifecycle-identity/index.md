@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/spawn/v1/schema.zt`, `components/proto/src/spawn.rs`, `components/runtime/src/syscall.rs`, `components/bins/src/bin/{spawn-service,dango,init}.rs`, `scripts/check/check-lifecycle-identity.py`, ten `scripts/check/check-sel4-*-plane.py`, `slime-root/src/main.rs` |
-| Roadmap | B42 |
+| Work items | 019fe740-a000-7a5f-ae63-3815f93d8de3 |
 | Gates | `just sel4_spawn_check`, `just sel4_supervision_check`, `just sel4_reclamation_check`, `just sel4_dango_check`, `just contracts_check` |
 | Trigger | B42: spawn returned a numeric `task_id` that the wait protocol sent back across a process boundary. |
 | Baseline | `sel4_spawn_check` and `sel4_supervision_check` red; `WireSpawnReply.task_id` and `slime_rt::Spawned::task_id` present. |

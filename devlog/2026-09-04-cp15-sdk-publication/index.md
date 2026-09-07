@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/component-sdk-release/v1/`, `scripts/lib/component_sdk.py`, `scripts/lib/component_sdk_system.py`, `scripts/lib/component_sdk_system_entry.py`, `scripts/check/check-component-sdk-system-image.py`, `scripts/check/check-component-sdk-export.py`, `scripts/check/check-component-sdk-release.py`, `scripts/check/check-component-sdk-compatibility.py`, `scripts/check/check-sel4-channel-plane.py`, `scripts/build/publish-component-sdk.py`, `just/component-sdk.just`, `.github/workflows/publish-sdk.yml` |
-| Roadmap | CP15 |
+| Work items | 01a0724c-5400-77da-8478-c43f706efd86 |
 | Gates | `just component_sdk_system_image_check`, `just component_sdk_export_check`, `just component_sdk_release_check`, `just component_sdk_compatibility_check`, `just component_sdk_upgrade_check` |
 | Trigger | CP15's 2026-09-04 legacy-deletion entry closed every migration deliverable but one: "the SDK publication clause... remains unstarted" |
 | Baseline | `component_sdk.py` exported a component-development SDK — crates, a pinned seL4 prefix, target specs, linker scripts, a build/update tool — with no closure, generation builder, image packager, or QEMU runner; `build-system-image.py` and `system_image_closure.py` both required repository-relative paths only a `slime_os` checkout has |

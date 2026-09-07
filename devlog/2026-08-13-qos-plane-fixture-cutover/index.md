@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Monitoring |
 | Scope | `contracts/generation/v1/fixtures/sel4-qos.zti`, `components/bins/src/bin/fabric-service.rs`, `components/bins/src/bin/fabric-subscriber-b.rs`, `components/bins/src/bin/fabric-publisher-b.rs` |
-| Roadmap | B46, B50 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8, 019ffbda-1000-7716-9d07-a3a799b8eb97 |
 | Gates | `just sel4_qos_check`, `just sel4_stream_check`, `just sel4_visibility_check`, `just sel4_channel_check`, `just sel4_crossing_check`, `just sel4_root_boot_check` |
 | Trigger | `sel4_qos_check` failing at `spawn refused … ungranted`, which B50/R2 showed was a fixture shape rather than a slot-allocation problem |
 | Baseline | The QoS plane stalling at 40 component markers, with no participant finishing |

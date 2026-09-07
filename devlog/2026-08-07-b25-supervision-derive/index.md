@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{ipc.rs,main.rs}`, `components/runtime/src/syscall{.rs,/legacy.rs,/sel4_transport.rs}`, `components/runtime/src/lib.rs`, `components/bins/src/bin/init.rs`, `scripts/check/check-sel4-supervision-plane.py`, `scripts/check/check-sel4-gate-controls.py` |
-| Roadmap | B25, P5.4.6, P5.4 |
+| Work items | 019fdcf3-e800-75f0-8f8b-39164dfabe16, 019fdcf3-e800-71c8-8283-78b13fce7bf4, 01a0724c-5400-7d48-8f10-a5383e7c21d9 |
 | Gates | `just sel4_supervision_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all` |
 | Trigger | B25's own proposed-fix section records a third option "cheaper than either and worth weighing first"; it was the only part of B25 implementable without deciding the move/copy question |
 | Baseline | Each spawn returns exactly one supervision handle; no operation produces a second |

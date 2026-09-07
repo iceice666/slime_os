@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `deps/sel4` (`src/plat/ns02201/`, `tools/dts/ns02201-h1v1.dts`, the Cortex-A73 option), `deps/rust-sel4` (`crates/sel4-kernel-loader/src/plat/ns02201/`), `sel4/pins.toml`, `sel4/config/ns02201-h1v1.cmake`, `contracts/target-profile/v1/`, `scripts/build/{build-sel4,build-nt98690-payload,build-generation,build-rpi5-media}.py`, `scripts/lib/{arm64_image,uboot_console,component_sdk}.py`, `scripts/check/{check-nt98690-sel4,check-nt98690-boot,check-sel4-pins,check-sel4-gate-controls,check-architecture-contract}.py`, `slime-root`, `just/{hardware,quality}.just` |
-| Roadmap | P6.B |
+| Work items | 01a05db2-e400-750d-abb7-6f22b5c59260 |
 | Gates | `just sel4_nt98690_image_check`, `just nt98690_sel4_check`, `just sel4_gate_control_check`, `just sel4_pin_check` |
 | Trigger | [P6.A](../2026-09-01-p6a-nt98690-probe/index.md) closed with every value a kernel port needs measured on the board, and the roadmap's P6.B unblocked on them |
 | Baseline | The pinned seL4 fork had no NT98690 platform and no Cortex-A73 option; the loader fork had no 16550 console; no target profile, platform record, or gate existed for the board; `slime-root` announced its target profile and reset the board only on the Milk-V Duo |

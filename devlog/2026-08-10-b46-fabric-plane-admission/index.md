@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Root-caused |
 | Scope | `slime-root/src/channel.rs`, `contracts/generation/v1/fixtures/sel4-{channel,crossing,call,operation,visibility,qos}.zti`, `scripts/check/check-sel4-{channel,crossing,component-graph,visibility}-plane.py` |
-| Roadmap | B46 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_channel_check`, `just sel4_crossing_check`, `just sel4_visibility_check`, `just sel4_component_graph_check` |
 | Trigger | All seven of B46's named gates were red at the start of the item. |
 | Baseline | `sel4_component_graph_check` green; the seven fabric and channel gates red. |

@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Root-caused |
 | Scope | seL4 generation admission and launch, boot selection, full-graph gate termination, capability layout, dependency activation, and task resource reclamation |
-| Roadmap | P5.4.9, B34, B35, B36, B37, B38 |
+| Work items | 019fdcf3-e800-7d29-ba4f-6c7571a517d3, 019fe740-a000-71ab-824f-d410e5503d96, 019fe740-a000-735c-8140-79780460ecb3, 019fe740-a000-755e-8b9f-df3cc536849e, 019fe740-a000-7e0e-8eb9-53c701c68f6d, 019fe740-a000-7659-8339-ea3d25b232db |
 | Gates | `just sel4_boot_check`, `just sel4_generation_check`, `just test_sel4_root` |
 | Trigger | A post-cutover review asked whether unnatural seL4 mechanisms came from Slime's retained capability, component, generation, IPC, and task models |
 | Baseline | B33 recorded the seL4 cutover gates as green, with the custom kernel retired and `slime-root` owning the surviving runtime mechanism |

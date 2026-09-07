@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/io-queue/v1/`, `components/proto/src/{io_queue.rs,io_queue_ring.rs,lib.rs}`, `components/proto/tests/{io_queue.rs,io_queue_ring.rs}`, `components/testkit/io-queue-{client,driver}/`, `contracts/generation-manifest/v1/compositions/sel4-io-queue.zti`, `scripts/build/build-{generation,sel4}.py`, `scripts/check/check-sel4-io-queue-plane.py`, `scripts/check/check-sel4-gate-controls.py`, `scripts/check/check-contracts.py`, `scripts/generate/generate-io-queue-bindings.py`, `just/{generate,planes-mechanism}.just` |
-| Roadmap | IO0 |
+| Work items | 01a043f3-1800-7a95-ab01-632668d70c56 |
 | Gates | `just io_queue_check`, `just sel4_gate_control_check` |
 | Trigger | Opening the Native I/O substrate track: every later slice needed one asynchronous request/completion contract before any driver could be written against it. |
 | Baseline | C7 shared buffers and loans, C9.2 Notification-backed WaitSets, C9.4 supervised restart, and the root-owned single-outstanding virtio-blk path. No asynchronous request identity, driver epoch, or buffer-slice descriptor existed anywhere. |

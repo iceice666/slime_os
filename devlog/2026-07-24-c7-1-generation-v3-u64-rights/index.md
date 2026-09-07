@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Generation wire format, capability rights, spawn-grant ABI, host builder/checkers |
-| Roadmap | C7.1 |
+| Work items | 019f9a01-3c00-71a6-a4c1-7b88b8b693d9 |
 | Gates | `just generation_check`, `just contracts_check`, `just transfer_check` |
 | Trigger | Roadmap C7 decomposition; C7.1 lands the v3 foundation later C7 slices consume |
 | Baseline | Generation format v2 with a flat `u32` rights bitset (bits 0-23 used) |

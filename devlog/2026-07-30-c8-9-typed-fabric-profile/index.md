@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Generation contracts, fabric graph admission, component build profile, normalized schema corpus, host checks |
-| Roadmap | C8.9 |
+| Work items | 019fae9a-ac00-70b9-a711-daeca1b2b4cc |
 | Gates | `just data_fabric_profile_check`, `just test`, `just lint`, `just lint_components`, `just fmt_check`, `just fmt_check_components` |
 | Trigger | C8.9 implementation |
 | Baseline | C8.8 authenticated graph bytes and userspace fabric tables were derived through separate manifest interpretations, while profile and shared-buffer fields were not fully schema-declared. |

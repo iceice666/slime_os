@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/network-destination/v1/{schema.zt,gen_rust.zt}`, `boot-contracts/src/{network_destination.rs,generated/network_destination.rs}` |
-| Roadmap | B88, IO4 |
+| Work items | 01a04919-7400-71d0-99c9-79a20e1974d8, 01a04919-7400-75da-bdab-760af8f246f1 |
 | Gates | `just contracts_check`, `just test_host`, `just io_network_check` |
 | Trigger | The IO device-boundary survey flagged this file as the network path's one hand-written wire parser; the repository's Zutai rule requires generated bindings for any format crossing a persistence or boot boundary |
 | Baseline | IO4 complete and `just io_network_check` green since 2026-08-28; the decoder correct but its layout knowledge duplicated in source literals |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/fabric-trace/v1/`, `contracts/generation/v1/schema.zt`, `contracts/data-fabric-profile/v1/schema.zt`, `components/proto/src/{fabric_trace.rs,trace_sink.rs,lib.rs}`, `components/bins/src/{fabric_trace_log.rs,call_broker.rs,operation_broker.rs}`, `components/bins/src/bin/fabric-service.rs`, `scripts/build/build-generation.py`, `scripts/check/{check-sel4-trace-plane.py,check-data-fabric-profile.py,check-sel4-gate-controls.py,check-contracts.py}` |
-| Roadmap | C8.11, B55 |
+| Work items | 01a00100-6c00-764a-b3eb-fd24599c1cbf, 01a00100-6c00-799f-8f9b-f69e2a662d1f |
 | Gates | `just data_fabric_trace_check`, `just sel4_trace_check`, `just data_fabric_profile_check`, `just sel4_gate_control_check` |
 | Trigger | C8.11 was the next uncompleted milestone with a fully specified exit condition |
 | Baseline | C8.1–C8.10 complete; no bounded semantic-trace contract existed, and each of the three timed fabric workers drove its own disjoint simulated clock |

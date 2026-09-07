@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Justfile imports, devlog gate discovery, component-spec gate evidence, host script metadata helper |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just devlog_check`, `just component_spec_check`, `just fmt_check_all`, `just ruff` |
 | Trigger | Grouping made the 171-command responsibility model visible, but all recipes still lived in one 1,401-line root Justfile and two semantic checks parsed only that physical file |
 | Baseline | Moving any recipe into an imported Justfile made devlog targets or component-spec test environments appear nonexistent, and component marker discovery could not follow an imported recipe body |

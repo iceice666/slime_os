@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/`, workspace membership, component discovery, source-path checks, build support, repository navigation, component onboarding documentation |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just component_crate_split_check`, `just sel4_component_graph_check` |
 | Trigger | The flat `components/bins/` directory mixed shipped system code, resident services, applications, and verification-only components. |
 | Baseline | Each component was already an independent CP3 crate with stable package and binary identities, but physical location carried no lifecycle ownership. |

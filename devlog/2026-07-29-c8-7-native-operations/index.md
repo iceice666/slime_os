@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Fabric operation contract, broker, participants, generation graph, bootstrap, and QEMU checks |
-| Roadmap | C8.7 |
+| Work items | 019fa974-5000-7be4-9b9f-b59912e69ed9 |
 | Gates | `just fabric_operation_check` |
 | Trigger | C8.7 implementation |
 | Baseline | C8.6 provided bounded calls and C8.4 provided bounded streams, but no composed native operation transport existed. |

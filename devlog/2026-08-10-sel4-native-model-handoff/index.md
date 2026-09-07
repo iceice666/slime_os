@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `slime-root` capability/channel/task mechanism, `components/runtime` syscall ABI, `contracts/generation/v1`, `boot-contracts/src/generation.rs`, the seL4 boot/spawn/IPC path |
-| Roadmap | P5, P5.4, P5.5, C8, B34, B35, B36, B37, B38 |
+| Work items | 01a0724c-5400-7208-b5a1-7008c0e2bdc3, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fc85a-7800-7e7b-8c8a-56f889dccbed, 01a00b4d-2400-77ed-a3dd-39becc4893af, 019fe740-a000-71ab-824f-d410e5503d96, 019fe740-a000-735c-8140-79780460ecb3, 019fe740-a000-755e-8b9f-df3cc536849e, 019fe740-a000-7e0e-8eb9-53c701c68f6d, 019fe740-a000-7659-8339-ea3d25b232db |
 | Gates | `just test_sel4_root`, `just contracts_check`, `just generation_check` |
 | Trigger | A post-B34–B38 review asked which unnatural seL4 mechanisms come from Slime's retained capability/component/generation/IPC/task models, with breaking changes explicitly in scope |
 | Baseline | B34–B38 closed the executable/instance conflation, compile-time generation selection, non-unique gate terminal, implicit slot ABI, and monotonic resource watermark; the resulting v4 architecture is internally consistent and green, but is still a userspace re-implementation of a microkernel's capability and IPC mechanism on top of seL4 rather than a mapping onto seL4's own primitives |

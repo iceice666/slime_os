@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/generation/v5/{schema,gen_rust}.zt`, `boot-contracts/src/generation.rs`, `boot-contracts/src/generated/generation.rs`, `scripts/lib/boot_contracts.py`, `scripts/build/build-generation.py`, `scripts/check/check-generation.py`, `scripts/check/check-architecture-contract.py` |
-| Roadmap | B57, B58, B59, B67, B40 |
+| Work items | 01a00b4d-2400-7d7c-82e2-df8402734f41, 01a00b4d-2400-74bc-a59c-23cd48a15c89, 01a00b4d-2400-7c5a-86f1-3469a46c2c25, 01a00b4d-2400-7312-88cd-595d915ffae6, 019fe740-a000-7e18-b5a8-c9df6403f4d8 |
 | Gates | `just generation_check`, `just contracts_check`, `just architecture_contract_check`, `just test_host`, `just sel4_boot_check` |
 | Trigger | The structural audit at `35a95b2` computed `RIGHT_ALL` both ways and found them one bit apart |
 | Baseline | Every rights validator masked with `(1 << 26) - 1`, which had been the spelling since v3 introduced u64 rights |

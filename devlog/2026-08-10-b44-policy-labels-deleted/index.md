@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{ipc,main}.rs`, `components/runtime/src/syscall{,.rs}/sel4_transport.rs`, `components/bins/src/bin/init.rs`, `scripts/check/check-sel4-component-graph.py`, `contracts/generation/v1/fixtures/sel4-generation.zti` |
-| Roadmap | B44 |
+| Work items | 019fe740-a000-7043-9dfe-a26a769fd721 |
 | Gates | `just sel4_generation_check`, `just sel4_boot_selection_check`, `just sel4_rollback_check`, `just sel4_recovery_plane_check`, `just sel4_transfer_check`, `just sel4_component_graph_check` |
 | Trigger | B44: generation and recovery policy still entered the universal root dispatcher through `HealthConfirm`, `RecoveryReconstruct`, `GenerationTransact`, and `GenerationReceive`. |
 | Baseline | Four labels in `Operation`; three classified `Mediation::Unavailable`, one with a handler arm. |

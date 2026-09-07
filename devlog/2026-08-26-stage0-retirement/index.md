@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Workspace membership and lockfile, developer/CI orchestration, Rust target provisioning, boot contracts and generated bindings, selector terminology, normative architecture documentation |
-| Roadmap | P5, P5.4.final |
+| Work items | 01a0724c-5400-7208-b5a1-7008c0e2bdc3, 019fe21a-4400-7612-a38b-fed08baaa778 |
 | Gates | `just sel4_boot_selection_check`, `just contracts_check`, `just generation_check` |
 | Trigger | The current product boots through the pinned upstream kernel loader, seL4, and the immutable disk-backed selector in `slime-root`, while the retired `stage0/` crate and custom-kernel handoff ABI remained in the live workspace and tooling. |
 | Baseline | Generation selection, signed-release and boot-bundle verification, pending-attempt durability, target admission, rollback, promotion, and component loading were already owned by the surviving seL4 path and had to remain behaviorally unchanged. |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Root-caused |
 | Scope | `contracts/generation/v1/fixtures/sel4-call.zti`, `scripts/build/{build-generation,build-sel4}.py` |
-| Roadmap | P5.4.6, P5.4, P5.4.1, C8.6 |
+| Work items | 019fdcf3-e800-71c8-8283-78b13fce7bf4, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fa44d-f400-7baa-9558-197cd14820e5 |
 | Gates | none |
 | Trigger | P5.4.6 opened after P5.4.2's device half proved blocked |
 | Baseline | Nine seL4 plane images; C8.6 with no seL4 coverage |

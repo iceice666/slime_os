@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/system-spec/v1`, `contracts/composition-inventory/v1`, `contracts/component-spec/v1/components/`, `scripts/lib/system_spec.py`, `scripts/check/check-system-spec.py`, `scripts/check/check-composition-inventory.py`, `scripts/generate/generate-composition-inventory-bindings.py`, 21 `contracts/generation-manifest/v1/compositions/*.zti`, `just/contracts.just` |
-| Roadmap | CP12, CP13, CP14 |
+| Work items | 01a05db2-e400-79bb-994b-abfda53e928e, 01a05db2-e400-7585-a440-5105066bc75e, 01a05db2-e400-7831-b250-85244bc4b61d |
 | Gates | `just system_image_scenario_check`, `just system_image_builder_check`, `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check` |
 | Trigger | CP11's closure contract landed, so the composition corpus became the remaining hand-authored input |
 | Baseline | CP1 derived `valid.zti` and `sel4-channel.zti` from system specs; the other 40 compositions were hand-authored |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/slisp/`, external C component builder, Slisp generation, boot-action ABI, host vectors, QEMU gate |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just slisp_core_check`, `just contracts_check` |
 | Trigger | Dango's command-oriented grammar was rejected in favor of a pure Lisp shell implemented outside Rust. |
 | Baseline | The language-neutral C component ABI booted a probe, but no language reader or evaluator existed and no non-Rust language runtime executed inside the Slime component graph. |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/gpt.rs`, `boot-contracts/src/lib.rs`, `boot-contracts/Cargo.toml` |
-| Roadmap | P5.4.2, P5.4, P5.4.1, M5.4 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7eef-bb24-db634c4e436f |
 | Gates | `just test_host`, `just miri`, `just lint_all`, `just fmt_check_all` |
 | Trigger | P5.4.2's remaining M5.4 surface, looking for the part decidable from bytes after the superblock slice took the first eight assertions |
 | Baseline | `boot-contracts` at 168 host tests; GPT validation lived only in `kernel/src/storage/gpt.rs` with **zero** tests |

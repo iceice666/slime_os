@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-fabric-aggregate.py` |
-| Roadmap | B75, C8.15 |
+| Work items | 01a01ac0-3800-7a5a-a50b-14f34e5f1e4e, 01a00b4d-2400-7677-8e72-5cad11acefca |
 | Gates | `just sel4_fabric_aggregate_check` |
 | Trigger | B75's progress note of 2026-08-20, which root-caused two residual trace divergences to faithful observations of genuinely varying quantities and called for a decision entry rather than acting |
 | Baseline | `338c9e8`; the aggregate gate compared every rendered `[trace]` field verbatim and measured 6/10 under 24 spinners on 18 cores |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-traffic.zti`, `contracts/fabric-trace/v1/{schema.zt,gen_rust.zt}`, `components/proto/src/fabric_trace.rs`, `components/proto/tests/fabric_trace.rs`, `scripts/lib/fabric_trace_contract.py`, `components/bins/src/{fabric_boot.rs,call_broker.rs,operation_broker.rs}`, `components/bins/src/bin/{fabric-service,init,fabric-op-worker,fabric-observer,fabric-proxy}.rs`, `boot-contracts/src/generation.rs`, `scripts/build/{build-generation.py,build-sel4.py}`, `scripts/check/{check-sel4-traffic-plane.py,check-sel4-gate-controls.py}`, `Justfile` |
-| Roadmap | C8.13 |
+| Work items | 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_traffic_check`, `just data_fabric_traffic_check`, `just sel4_gate_control_check`, `just sel4_trace_check` |
 | Trigger | C8.13 was the next uncompleted milestone with C8.11 and C8.12 both complete |
 | Baseline | C8.1–C8.12 complete; C8.10's `sel4-boot.zti` proves the three-worker stream/call/operation partition is collision-free, but every participant parks without ever exercising a broker's real relay loop |

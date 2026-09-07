@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/bins/src/bin/{dango,spawn-service}.rs`, `components/bins/src/bin/init.rs`, `contracts/generation/v1/fixtures/sel4-stress.zti` |
-| Roadmap | B53, B54 |
+| Work items | 019ffbda-1000-7c7e-9156-b32338d26679, 019ffbda-1000-7043-9f74-05d2ca292205 |
 | Gates | `just sel4_dango_check`, `just sel4_stress_check` |
 | Trigger | B50's minted-endpoint deletion took both planes from *failing to admit* to booting, exposing what was behind that |
 | Baseline | Both gates were red before B50's conversion and stayed red after it, each one layer deeper |

@@ -58,8 +58,9 @@ in the same commit as the surface it describes.
 
 | Looking for | Go to |
 | --- | --- |
-| Canonical plan, milestone status, acceptance criteria | [`roadmap/`](../roadmap/README.md) |
-| Known defects and regressions (resolve before milestone work) | [`roadmap/00-backlog.md`](../roadmap/00-backlog.md) |
+| Work-item state: what is done, open, blocked, deferred | `just tasks_list`, `just tasks_next` over the canonical store in `.tasks/items/` |
+| Rationale, boundaries, sequencing, invariants, release gates | [`roadmap/`](../roadmap/README.md) — architectural documentation, not the plan |
+| Known defects and regressions (open ones come before milestone work) | the `backlog`-tagged items in the store, which own their problem statements; [`roadmap/00-backlog.md`](../roadmap/00-backlog.md) is a frozen index of the pre-cutover ones |
 | How a userspace driver gets device/MMIO/IRQ/DMA authority, and what the IO gates prove | [`roadmap/11-io-substrate.md`](../roadmap/11-io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and the operations in [`syscall-abi.md`](syscall-abi.md) |
 | How a conclusion was reached: investigations, evidence, decisions | [`devlog/`](../devlog/README.md) |
 | Code map and task-to-file index | [`AGENTS.md`](../AGENTS.md) |

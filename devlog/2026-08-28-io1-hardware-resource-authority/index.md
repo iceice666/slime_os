@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/io_resource.rs`, `slime-root/src/graph_runtime/services/io_resource.rs`, `slime-root/src/graph_runtime/services.rs`, `slime-root/src/graph_runtime/services/spawn.rs`, `slime-root/src/{shared_buffer,object_allocator,device,buffer_adapter,graph,generation,ipc}.rs`, `contracts/io-resource/v1/`, `boot-contracts/src/io_resource.rs`, `contracts/generation/v5/`, `contracts/syscall-abi/v1/`, `components/runtime/src/syscall.rs`, `components/testkit/io-driver-{probe,intruder}/`, `contracts/generation-manifest/v1/compositions/sel4-io-driver-authority.zti`, `scripts/check/check-sel4-io-driver-authority-plane.py`, `docs/capability-matrix.md` |
-| Roadmap | IO1, B82 |
+| Work items | 01a043f3-1800-71ae-adf3-3c7b0b5cf426, 01a043f3-1800-7ba4-b705-998272a17781 |
 | Gates | `just io_driver_authority_check`, `just sel4_gate_control_check`, `just test_sel4_root` |
 | Trigger | IO2 and IO3 needed explicit, bounded hardware authority before a userspace driver could exist at all; the root held device untypeds only because no such model existed. |
 | Baseline | P5.4.2's root-owned device path: `DeviceRegion` mapped only into the root's own VSpace with the frame kept private, `DeviceIrq` bound to root-held notifications, `DmaPage` allocated ad hoc, and no per-driver accounting, epoch, or reclamation anywhere. |

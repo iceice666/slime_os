@@ -10,17 +10,16 @@ layout and front-matter contract documented in ``devlog/README.md``:
 * front matter carries the exact field set, in order, with ``Kind``/``Status``
   drawn from the declared vocabularies;
 * ``Work items`` references resolve to a canonical work item in
-  ``.tasks/items/`` — directly when they are UUIDs, and through the committed
-  legacy map when they are historical roadmap ids — and ``Gates`` name real
-  Justfile targets;
+  ``.tasks/items/``, and ``Gates`` name real Justfile targets;
 * required ``##`` sections are present for the entry's kind, in template order;
 * the README index lists every entry once, with matching date and status;
 * every devlog path referenced anywhere in the repository exists, and every
   evidence sibling is linked from its ``index.md``.
 
-This checker no longer derives identity from roadmap headings. Work-item
-identity is the UUID under ``.tasks/items/``, ``myque check`` validates that
-store, and ``scripts/lib/work_items.py`` resolves a reference against it.
+This checker derives no identity from roadmap headings or human keys. A
+work item *is* its UUID under ``.tasks/items/``, ``myque check`` validates
+that store, and ``scripts/lib/work_items.py`` answers only whether a UUID is
+in it.
 """
 
 from __future__ import annotations
@@ -34,7 +33,8 @@ import subprocess
 
 from harness import ROOT
 from just_metadata import targets as just_targets
-from work_items import ambiguous_ids, resolve
+from markdown_anchors import anchors, controls as anchor_controls
+from work_items import UUID, identities
 
 DEVLOG = ROOT / "devlog"
 README = DEVLOG / "README.md"
@@ -42,14 +42,7 @@ TEMPLATE = DEVLOG / "TEMPLATE.md"
 
 ENTRY_NAME = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-# The work-item field. Entries written before the MyQue migration name it
-# `Roadmap` and carry roadmap ids; entries written after it name it
-# `Work items` and carry canonical UUIDs. Both are accepted in the same
-# position because a merged entry is preserved, not rewritten (`AGENTS.md`):
-# correctness depends on the values resolving, not on the field's name.
-WORK_ITEM_FIELDS = ("Work items", "Roadmap")
-
-FIELD_ORDER = ["Date", "Kind", "Status", "Scope", "Roadmap", "Gates", "Trigger", "Baseline"]
+FIELD_ORDER = ["Date", "Kind", "Status", "Scope", "Work items", "Gates", "Trigger", "Baseline"]
 
 KINDS = ["Defect", "Change", "Audit", "Decision"]
 
@@ -111,18 +104,25 @@ def fail(message: str) -> None:
     failures.append(message)
 
 
-def front_matter(text: str) -> dict[str, str]:
-    fields: dict[str, str] = {}
+def front_matter_rows(text: str) -> list[tuple[str, str]]:
+    """The front-matter table's two-cell rows, in file order, duplicates kept.
+
+    Order and multiplicity are the point. Collapsing straight into a dict
+    loses both: a trailing duplicate row overwrites the earlier value while
+    adding no new key, so a second ``Work items | none`` would silently
+    replace a real UUID and still satisfy a field-order check.
+    """
+    rows: list[tuple[str, str]] = []
     for line in text.splitlines():
         if not line.startswith("|"):
-            if fields:
+            if rows:
                 break
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) != 2 or cells[0] in {"Field", "---"} or set(cells[0]) == {"-"}:
             continue
-        fields[cells[0]] = cells[1]
-    return fields
+        rows.append((cells[0], cells[1]))
+    return rows
 
 
 def sections(text: str) -> list[str]:
@@ -159,6 +159,13 @@ def declared_just_targets() -> set[str]:
 
 KNOWN_TARGETS = declared_just_targets()
 
+# The anchor computation decides whether an inbound link is live, so its own
+# rules are proven before they are trusted: a phantom anchor accepts a dead
+# link and a missed one rejects a valid link, and neither shows a symptom at
+# the destination.
+for failure in anchor_controls():
+    fail(f"anchor control: {failure}")
+
 entries = sorted(path for path in DEVLOG.iterdir() if path.is_dir())
 if not entries:
     raise SystemExit("devlog contains no entries")
@@ -189,7 +196,7 @@ for line in README.read_text().splitlines():
         fail(f"README index lists {target} more than once")
     index_rows[target] = (row.get("Date", ""), row.get("Status", ""))
 
-for column in ("Date", "Entry", "Kind", "Status", "Roadmap"):
+for column in ("Date", "Entry", "Kind", "Status", "Keys"):
     if column not in index_header:
         fail(f"README index table is missing the {column!r} column")
 
@@ -204,26 +211,26 @@ for entry in entries:
         fail(f"{name}: folder name is not YYYY-MM-DD-short-topic in lowercase kebab-case")
 
     text = index.read_text()
-    fields = front_matter(text)
-
-    work_item_field = next((field for field in WORK_ITEM_FIELDS if field in fields), None)
-    if work_item_field is None:
-        fail(f"{name}: front matter names neither {' nor '.join(WORK_ITEM_FIELDS)}")
+    rows = front_matter_rows(text)
+    declared = [field for field, _ in rows]
+    duplicated = sorted({field for field in declared if declared.count(field) > 1})
+    if duplicated:
+        fail(
+            f"{name}: front matter repeats {', '.join(duplicated)}; a repeated row "
+            "silently overrides the first one's value"
+        )
         continue
-    expected = [work_item_field if field == "Roadmap" else field for field in FIELD_ORDER]
-
-    present = [field for field in expected if field in fields]
-    if present != expected:
-        missing = [field for field in expected if field not in fields]
+    if declared != FIELD_ORDER:
+        missing = [field for field in FIELD_ORDER if field not in declared]
+        extra = [field for field in declared if field not in FIELD_ORDER]
         if missing:
             fail(f"{name}: front matter missing {', '.join(missing)}")
-        else:
-            fail(f"{name}: front-matter fields out of order: {present}")
+        if extra:
+            fail(f"{name}: front matter carries unknown field(s) {', '.join(extra)}")
+        if not missing and not extra:
+            fail(f"{name}: front-matter fields out of order: {declared}")
         continue
-
-    keys = list(fields)
-    if keys[: len(expected)] != expected:
-        fail(f"{name}: front-matter fields out of order: {keys[: len(expected)]}")
+    fields = dict(rows)
 
     if fields["Date"] != name[:10]:
         fail(f"{name}: Date {fields['Date']} does not match the folder date {name[:10]}")
@@ -236,20 +243,20 @@ for entry in entries:
     if status not in STATUSES:
         fail(f"{name}: Status {status!r} is not one of {', '.join(STATUSES)}")
 
-    if fields[work_item_field] != "none":
-        for reference in (part.strip() for part in fields[work_item_field].split(",")):
-            if resolve(reference, entry=name) is not None:
+    if fields["Work items"] != "none":
+        known = identities()
+        for reference in (part.strip() for part in fields["Work items"].split(",")):
+            if reference in known:
                 continue
-            if reference in ambiguous_ids():
+            if UUID.match(reference):
                 fail(
-                    f"{name}: {work_item_field} names {reference!r}, a roadmap id that was "
-                    "allocated twice; no evidence resolves which item this entry meant. "
-                    "Record the resolution in .tasks/legacy-roadmap-ids.json or cite a UUID"
+                    f"{name}: Work items names {reference!r}, which is not a work item "
+                    "in .tasks/items/"
                 )
             else:
                 fail(
-                    f"{name}: {work_item_field} names {reference!r}, which resolves to no "
-                    "work item in .tasks/items/ and is absent from the legacy id map"
+                    f"{name}: Work items names {reference!r}, which is not a UUID. A human "
+                    "key is a display alias and resolves nothing; cite the item's UUID"
                 )
 
     gates = re.findall(r"`just ([a-z_0-9]+)`", fields["Gates"])
@@ -287,13 +294,27 @@ for entry in entries:
         if sibling.name not in text:
             fail(f"{name}: evidence file {sibling.name} is not referenced from index.md")
 
-    # An anchor suffix is stripped rather than skipped: a link into a roadmap
-    # heading still has to name a file that exists.
+    # A fragment is validated, not stripped. 77 merged entries link at a
+    # specific heading, so a reworded one silently breaks an inbound URL: the
+    # file still exists and the old anchor lands the reader at the top of the
+    # page. Checking the file alone would claim a guarantee it does not give.
+    # `markdown_anchors` owns which fragments a file offers, and its own rules
+    # are proven by the controls run above.
     for target in re.findall(r"\]\(([^)\s]+)\)", text):
-        if target.startswith(("http://", "https://", "mailto:", "#")):
+        if target.startswith(("http://", "https://", "mailto:")):
             continue
-        if not (entry / target.partition("#")[0]).exists():
+        base, _, fragment = target.partition("#")
+        destination = (entry / base) if base else index
+        if not destination.exists():
             fail(f"{name}: dead relative link {target}")
+            continue
+        if not fragment:
+            continue
+        if fragment not in anchors(destination):
+            fail(
+                f"{name}: link {target} names no heading or explicit anchor in "
+                f"{destination.relative_to(ROOT)}"
+            )
 
     if name not in index_rows:
         fail(f"{name}: not registered in devlog/README.md")

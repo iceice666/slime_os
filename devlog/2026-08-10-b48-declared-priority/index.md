@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/schema.zt`, `scripts/build/build-generation.py`, `boot-contracts/src/generation.rs`, `slime-root/src/{task,main}.rs`, `sel4/config/qemu-arm-virt.cmake`, `contracts/generation/v1/fixtures/sel4-qos.zti` |
-| Roadmap | B48 |
+| Work items | 019ff18d-5800-70c6-a987-6a926141c775 |
 | Gates | `just sel4_qos_check`, `just sel4_root_boot_check`, `just sel4_component_graph_check` |
 | Trigger | B48: every child ran at `CHILD_PRIORITY = 254` with no scheduling authority in generation data. |
 | Baseline | Builder packed a constant priority; the root ignored the record. |

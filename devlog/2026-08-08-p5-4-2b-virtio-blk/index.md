@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{virtio_blk,device,lib,main}.rs`, `scripts/check/check-sel4-{device-plane,root-boot}.py` |
-| Roadmap | P5.4.2, P5.4, M5.2, M5.3 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7432-90d1-d15eec07e220, 01a0724c-5400-7e3a-9249-4b96b0e78665 |
 | Gates | `just sel4_device_check`, `just sel4_root_boot_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.2a gave the root a mapped register bank and a bound IRQ; sectors still could not move |
 | Baseline | The root could identify an attached block device and read nothing from it |

@@ -20,5 +20,6 @@
 
 ## Related
 
-<!-- Backlog / roadmap / devlog links. -->
+<!-- Work item UUID from `.tasks/items/` (a key may follow in parentheses, as
+     `C9.4 (01a0...)`, but the UUID is the reference) / devlog links. -->
 -

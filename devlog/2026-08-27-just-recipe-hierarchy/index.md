@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Justfile recipe navigation and preserved devlog gate identifiers |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just devlog_check`, `just fmt_check_all` |
 | Trigger | The repository exposed 171 public recipes as one flat list spanning product boots, QEMU planes, contracts, generation, SDK work, quality gates, hardware operations, and historical aliases |
 | Baseline | `just --groups` reported no recipe groups, so task discovery exposed no responsibility hierarchy |

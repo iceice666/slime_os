@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/runtime/c/component-aarch64.ld`, `contracts/component-spec/v1/components/slisp.zti`, `scripts/check/check-release-trust.py`, `scripts/check/check-external-component-admission.py`, `just sel4_rpi5_image_check`, SDK publication workflow runs 33063988008, 33065116457, and 33072132822 |
-| Roadmap | B81, P4 |
+| Work items | 01a03ecc-bc00-7b8a-ae5c-f4dd8647ef71, 01a02f59-a800-78b6-9398-6b22bfbc6fdd |
 | Gates | `just sel4_rpi5_image_check`, `just contracts_check`, `just release_trust_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
 | Trigger | The replacement two-profile SDK publication run advanced past the clean-shell Rust target fix and failed while wrapping the product Slisp ELF for the RPi5 generation |
 | Baseline | The QEMU seL4 profile carries native ELF images and therefore admitted the same Slisp bytes by their own program headers; the RPi5 profile converts fixed-base ELF segments into the component-image v2 segment table and requires every load segment to begin on a page boundary |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Fixed |
 | Scope | `components/bins/src/bin/fabric-service.rs`, `components/bins/src/call_broker.rs`, `components/bins/src/fabric_call_scenario.rs`, nine call/operation components, `components/runtime/src/syscall/sel4_transport.rs`, `contracts/generation/v1/fixtures/sel4-call.zti`, four `scripts/check/check-sel4-*-plane.py` |
-| Roadmap | B46 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_qos_check`, `just sel4_stream_check`, `just sel4_visibility_check`, `just sel4_channel_check`, `just sel4_crossing_check` |
 | Trigger | `just sel4_qos_check` failing `diagnostics ended before every QoS condition` |
 | Baseline | Three of seven B46 gates green (channel, crossing, visibility) at `e02a232` |

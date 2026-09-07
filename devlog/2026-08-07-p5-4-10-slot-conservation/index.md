@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/check/check-sel4-root-boot.py` |
-| Roadmap | P5.4.10, P5.4, P5.4.1, B9 |
+| Work items | 019fd7cd-8c00-79d7-909d-d1d5483e9d88, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 019fa44d-f400-7dd6-bdd8-c247dd974dd4 |
 | Gates | `just sel4_root_boot_check` |
 | Trigger | P5.4.10's remaining rows, worked in order |
 | Baseline | Reclamation counts matched as `slots=\d+`; three rows open |

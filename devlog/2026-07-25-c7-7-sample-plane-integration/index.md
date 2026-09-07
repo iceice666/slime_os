@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | Two-component sample-plane composition test over C7.2–C7.6, `just sample_plane_check`, hand-built retained-v2 known-good decode probe |
-| Roadmap | C7.7 |
+| Work items | 019f94da-e000-7b10-b533-11679ec2fccb |
 | Gates | `just sample_plane_check` |
 | Trigger | C7.7 milestone: close the C7 bounded resource and shared-sample plane gate |
 | Baseline | C7.1–C7.6 complete; each shared-buffer primitive (factory allocation, per-holder quotas, mapping/sealing, loan/return lifecycle, sample descriptor) verified in isolation but never composed end to end |

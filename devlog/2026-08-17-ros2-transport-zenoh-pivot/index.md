@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Verified |
 | Scope | `contracts/rpi5-ros2-demo/v2` (new), `scripts/check/check-rpi5-ros2-demo-contract-v2.py` (new), `scripts/check/check-rpi5-artifacts.py`, `scripts/check/check-generation.py`, `Justfile`, `roadmap/03-ros2-compatibility.md`, `roadmap/09-rpi5-ros2-demo.md`, `roadmap/README.md`, `roadmap/02-core-runtime.md`, `roadmap/04-platform-hardware.md`, `roadmap/00-backlog.md`, `docs/capability-matrix.md` |
-| Roadmap | R0, R1, R2, RP0, RP1, RP5, RP6, B69 |
+| Work items | 01a00b4d-2400-7987-93d6-19201c397dff, 01a0724c-5400-7206-ae86-ad13584c8530, 01a0724c-5400-7dd3-9741-a8b35e872e9a, 01a0724c-5400-701b-b2c7-d0a5b9533503, 01a0724c-5400-7715-bad2-72a76852749b, 01a0724c-5400-7b6b-ad3a-f388c30d5ed1, 01a0724c-5400-72f4-998b-6d7b21b59e0e, 01a00b4d-2400-7c99-91f7-75c4ba8368bb |
 | Gates | `just rpi5_ros2_demo_contract_v2_check`, `just rpi5_artifact_check`, `just generation_check`, `just contracts_check`, `just ruff` |
 | Trigger | Request to pivot the ROS 2 transport to Zenoh, reopening `devlog/2026-08-07-ros2-transport-zenoh-vs-dds/` |
 | Baseline | `devlog/2026-08-07-ros2-transport-zenoh-vs-dds/` (Status: Proposed) selected self-built DDSI-RTPS/XCDR for R0/R1 and rejected Zenoh in every form; `contracts/rpi5-ros2-demo/v1` froze that choice into the acceptance contract's own schema; no transport implementation existed in any form |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/capability-rights/model/`, generation v5 rights vocabulary, capability enforcement tests, `Justfile`, capability matrix, direction register, Authority A0 |
-| Roadmap | A0 |
+| Work items | 01a03ecc-bc00-751b-9d3a-91cb4cd93e0d |
 | Gates | `just capability_rights_model_check`, `just test_host`, `just test_sel4_root`, `just contracts_check`, `just generation_check` |
 | Trigger | Direction 24 occupied the register's single probing slot without an executable authority model or a drift guard tying the rights vocabulary to enforcement |
 | Baseline | Capability rights were enforced in Rust and described in the matrix, but no bounded transition model checked delegation and transfer mutations |

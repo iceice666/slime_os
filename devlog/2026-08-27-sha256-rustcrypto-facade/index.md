@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/sha256.rs`, `boot-contracts/Cargo.toml`, `components/runtime/src/lib.rs`, deleted `components/runtime/src/sha256.rs`, `Cargo.lock` |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just test_host`, `just miri`, `just test_sel4_root`, `just sel4_storage_check`, `just sel4_store_check`, `just sel4_transfer_check`, `just deny` |
 | Trigger | The workspace carried two independent hand-written FIPS 180-4 SHA-256 implementations — a streaming one in `boot-contracts` and a one-shot one in `slime-rt` — while `sha2 0.10.9` was already resolved in `Cargo.lock` through `ed25519-dalek` and already covered by `deny.toml`'s trust-chain policy |
 | Baseline | Every digest the workspace computes — generation identity, bootstate and transfer checksums, boot-layout/fabric/lifecycle identities, object-store content addresses, boot-selector directory roots, and the probes' fixed expected digests — was produced by hand-written compression functions |

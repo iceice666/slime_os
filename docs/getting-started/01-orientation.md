@@ -36,9 +36,13 @@ Three files answer most "where is..." questions:
   the navigation traps.
 - `Justfile` — every build, run, check, and regeneration command
   (`just --list`).
-- [`roadmap/README.md`](../../roadmap/README.md) — status, invariants, and
-  what is actually open. The backlog (`roadmap/00-backlog.md`) sits ahead of
-  all milestone work.
+- `just tasks_list` / `just tasks_next` — what is done, open, blocked, or
+  deferred, from the canonical work-item store in `.tasks/items/`. Open
+  backlog items come before milestone work; `just tasks_check` enforces it.
+- [`roadmap/README.md`](../../roadmap/README.md) — the architectural context
+  behind those items: track ownership, boundaries, sequencing, invariants, and
+  release-gate composition. It records no state and owns no problem statement;
+  each item owns its own.
 
 ## The house epistemology
 
@@ -47,8 +51,8 @@ Two habits distinguish this repository; adopting them early saves friction:
 - **Evidence over intention.** A behavior exists when a gate observes it on
   a real boot, not when code for it lands. Gates fail closed: missing
   hardware evidence is a failing check, never a skip. Claims about how
-  conclusions were reached live in `devlog/`, kept separate from the
-  roadmap's outcomes.
+  conclusions were reached live in `devlog/`, kept separate from the work
+  item's recorded state.
 - **Refusal over accommodation.** Malformed data, wrong-target binaries,
   superseded formats, unknown operations, unbudgeted requests — all are
   refused at the boundary rather than tolerated, migrated, or guessed at.

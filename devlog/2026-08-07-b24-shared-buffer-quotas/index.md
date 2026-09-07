@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/shared_buffer.rs`, `slime-root/src/main.rs`, `scripts/check/check-sel4-supervision-plane.py` |
-| Roadmap | B24, B22, B16, P5.4.1 |
+| Work items | 019fd7cd-8c00-7f4d-bff4-21e1cfdc315d, 019fd7cd-8c00-70b2-91d1-8670457ab82e, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a, 019fdcf3-e800-786a-ab69-2ae8b32874e9 |
 | Gates | `just sel4_supervision_check` |
 | Trigger | P5.4.1's lifetime-vs-live bounds class audit, which opened B24 |
 | Baseline | Nine seL4 gates passing; `MAX_CHARGE_HOLDERS = 96` never reached by any declared generation |

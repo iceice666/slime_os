@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/boot_layout.py`, `scripts/build/build-generation.py` |
-| Roadmap | B70, B71 |
+| Work items | 01a0250c-f000-7b2a-92d3-fde78c957925, 01a01073-8000-7273-b1d7-01b585bcaba1 |
 | Gates | `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_component_graph_check` |
 | Trigger | Attempting to extend `devlog/2026-08-18-cp2-capability-role-axis/`'s migration to `init.rs`'s `main()` |
 | Baseline | `just sel4_component_graph_check` passes at `HEAD` (`934ca08`), booting `init.rs` unmigrated against the compiled `boot-layout-1.rs` constant table |

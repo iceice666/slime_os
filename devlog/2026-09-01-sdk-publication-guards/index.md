@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `.github/workflows/publish-sdk.yml`, `scripts/check/check-component-sdk-preflight.py`, `just/component-sdk.just` |
-| Roadmap | CP7, CP9 |
+| Work items | 01a039a6-6000-7b7d-aef7-4602e99880f3, 01a03480-0400-7a5e-a4e1-7c788602af11 |
 | Gates | `just component_sdk_preflight`, `just component_sdk_export_check`, `just component_sdk_release_check` |
 | Trigger | Reviewing whether SDK publication was automated found the workflow already existed, and that three of its preconditions were operator discipline rather than mechanism |
 | Baseline | `publish-sdk.yml` published atomically from `m3air` behind a required reviewer and verified the hosted tag, but accepted any dispatch ref, ran no SDK gate, and took `version` as unchecked free text |

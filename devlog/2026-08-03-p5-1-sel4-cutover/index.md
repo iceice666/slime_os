@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/`, `components/runtime/`, `sel4/`, `scripts/build/build-sel4.py`, `scripts/check/check-sel4-pins.py`, `scripts/check/check-sel4-root-boot.py`, `Justfile`, `flake.nix`, `deps/sel4`, `deps/rust-sel4` |
-| Roadmap | P5.1, P5.2, P5.3, P5.4, P2 |
+| Work items | 019fc334-1c00-7f76-a730-e0cd1f70b706, 01a03ecc-bc00-708d-a6fe-fffc759caf66, 019fc85a-7800-7e49-9f0b-185238940245, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fe21a-4400-7fe0-881a-f308c0314bd1 |
 | Gates | `just sel4_pin_check`, `just sel4_qemu_image_check`, `just sel4_root_boot_check` |
 | Trigger | P2.2–P2.6 each require hand-writing AArch64 exception vectors, isolation, GICv3, timers, and virtio — mechanism upstream seL4 already provides under formal verification |
 | Baseline | The custom x86-64 kernel boots the full 25-component graph; `just test` and `just product_boot_check` are the retained oracle |

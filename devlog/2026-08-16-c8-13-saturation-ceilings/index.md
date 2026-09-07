@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-saturation.zti`, `scripts/check/check-sel4-saturation-plane.py`, `scripts/build/{build-sel4.py,build-generation.py}`, `scripts/check/check-sel4-gate-controls.py`, `Justfile`, `roadmap/02-core-runtime.md` |
-| Roadmap | C8.13 |
+| Work items | 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_saturation_check`, `just data_fabric_saturation_check`, `just sel4_gate_control_check` |
 | Trigger | C8.13's open follow-up: "a saturation scenario that deliberately drives every declared ceiling to its manifest bound at once, and asserts neither an exceeded bound nor a deadlocked route worker" |
 | Baseline | `sel4-traffic.zti` carries real concurrent traffic with comfortable headroom against every declared resource ceiling; nothing before this entry proves any ceiling was ever actually reached rather than merely bounded |

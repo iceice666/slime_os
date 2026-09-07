@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,graph,channel,parked,ipc}.rs`, `components/bins/src/bin/{init,sel4-filesystem-service}.rs`, `components/bins/{Cargo.toml,build.rs}`, `contracts/generation/v1/fixtures/sel4-dango.zti`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{component-graph,root-boot,gate-controls}.py`, `roadmap/00-backlog.md` |
-| Roadmap | P5.4.3, P5.4, M6.4 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7dfa-ba32-7e826cc38c92 |
 | Gates | `just sel4_input_check`, all 23 seL4 plane gates, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check`, `just contracts_check` |
 | Trigger | M6.3 closed; M6.4 was the next gap and `InputRead` was unmediated |
 | Baseline | `InputRead` answered `Mediation::Unavailable`; no seL4 plane read a key |

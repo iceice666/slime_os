@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | seL4 AArch64 scheduling configuration and generation schedule claims |
-| Roadmap | B48 |
+| Work items | 019ff18d-5800-70c6-a987-6a926141c775 |
 | Gates | none |
 | Trigger | B48 required an explicit assurance decision before enabling MCS |
 | Baseline | QEMU AArch64 uses the non-MCS upstream seL4 configuration and enforces declared per-thread priority only |

@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/02-core-runtime.md`, `roadmap/00-backlog.md`, roadmap index invariants and track map; planned `contracts/` budget resource; `kernel/src/task`, `kernel/src/memory`, `components/runtime` |
-| Roadmap | C10, C10.1, C10.2, C10.3, C10.4, B9, C7 |
+| Work items | 019fa44d-f400-7b55-93e9-11b4c78772e2, 01a02a33-4c00-72b4-a52f-851ea1883f50, 01a0724c-5400-70d8-83ad-af7bada609f1, 01a0724c-5400-7d30-b9b2-08fb442efd21, 01a0724c-5400-7f2d-9a2d-9a874ae67893, 019fa44d-f400-7dd6-bdd8-c247dd974dd4, 019f9a01-3c00-78e0-a6cc-6b51549bb2d3 |
 | Gates | none |
 | Trigger | Question of whether `SLIMECMP` manages stack and heap, and whether the WebAssembly linear-memory model could supply the missing half |
 | Baseline | A component's working memory is fixed at build time: stack from the `SLIMECMP` header, `.data`/`.bss` from the linked image, no allocator and no page-yielding syscall |

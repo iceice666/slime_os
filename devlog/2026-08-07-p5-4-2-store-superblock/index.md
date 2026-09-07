@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `boot-contracts/src/store_disk.rs`, `contracts/store/disk/v1/{schema.zt,gen_rust.zt}`, `boot-contracts/src/generated/store_disk.rs` |
-| Roadmap | P5.4.2, P5.4, P5.4.1, M5.4 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fdcf3-e800-786a-ab69-2ae8b32874e9, 01a0724c-5400-7eef-bb24-db634c4e436f |
 | Gates | `just test_host`, `just miri`, `just contracts_check` |
 | Trigger | P5.4.2 opened; `object_store.rs`'s thirty-two ungated assertions are its largest single hole |
 | Baseline | `boot-contracts` at 108 host tests; `store_disk.rs` five lines of `include!` and no logic |

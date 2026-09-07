@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{device,virtio_blk,main,graph}.rs`, `components/bins/src/bin/{sel4-transfer-probe,init}.rs`, `components/bins/{Cargo.toml,build.rs}`, `contracts/generation/v1/fixtures/sel4-transfer.zti`, `scripts/build/{boot_layout,build-generation,build-sel4,build-store-fixture}.py`, `scripts/check/check-sel4-{transfer-plane,boot-layout,gate-controls}.py`, `Justfile`, `roadmap/00-backlog.md` |
-| Roadmap | P5.4.3, P5.4, M6.7 |
+| Work items | 01a03ecc-bc00-77eb-bf2c-1016bb255d71, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7257-b90d-49741c9411ce |
 | Gates | `just sel4_transfer_check`, all 26 seL4 plane gates, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check`, `just contracts_check`, `just generation_check` |
 | Trigger | B29 blocked M6.7, the last M6 gap |
 | Baseline | `slime-root` brought up one block device; `Resource::Block` named no index |

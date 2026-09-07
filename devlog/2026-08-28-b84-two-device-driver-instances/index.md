@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | IO1 device authority (`slime-root/src/io_resource.rs`, `slime-root/src/graph_runtime/services/io_resource.rs`, `slime-root/src/ipc.rs`), `contracts/io-resource/v1`, `contracts/block-authority/v1` numbering, `contracts/generation-manifest/v1` budget schema, the `virtio-blk-driver` and its runtime surface, and the `sel4-recovery` and `sel4-transfer` planes end to end |
-| Roadmap | B84, B83 |
+| Work items | 01a043f3-1800-7e49-948c-39a089fe5c20, 01a04919-7400-7839-b017-2e9566a3dac7 |
 | Gates | `just sel4_recovery_plane_check`, `just sel4_transfer_check` |
 | Trigger | B83 left `sel4-recovery` and `sel4-transfer` on the root's `BlockTransact` path because neither could be expressed against the userspace driver |
 | Baseline | All eight block-holding planes except these two reached storage through the userspace driver; these two held two block capabilities each and were served by `console.rs::serve_block_transact` |

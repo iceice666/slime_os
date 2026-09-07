@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `kernel/src/runtime/bootstrap.rs`, `kernel/src/capability/mod.rs`, `contracts/generation/v1/fixtures/valid.zti`, `scripts/build/build-generation.py`, `scripts/check/*.py`, every `SLIME_*_CHECK` gate |
-| Roadmap | B10, B11, P1, P2, RP2, C8, C8.10 |
+| Work items | 019fb8e7-6400-7e95-b349-16e4c7073161, 019fb8e7-6400-718f-84ee-7ede540da059, 019fbe0d-c000-7b72-a9c2-f9b8a43bd455, 019fe21a-4400-7fe0-881a-f308c0314bd1, 01a01ac0-3800-727f-b113-f7ce726f08c6, 01a00b4d-2400-77ed-a3dd-39becc4893af, 01a00100-6c00-7843-9ed8-9a1672933b4b |
 | Gates | none |
 | Trigger | Reviewing whether the repository has accumulated too many subsystems ahead of the RPi5 ROS 2 pivot |
 | Baseline | C8.10 full-graph boot passes with its own `launch_fabric_boot_init` layout; every earlier fabric gate still observes its declared serial markers |

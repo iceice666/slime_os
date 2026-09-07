@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `.github/workflows/ci.yml`, `.github/actions/slime-env/action.yml`, `Justfile` (`lint_sel4_root`), `scripts/lib/release_trust.py` |
-| Roadmap | B78 |
+| Work items | 01a03ecc-bc00-7b29-a1a7-aedeef16aa5c |
 | Gates | `just lint_sel4_root`, `just test_sel4_root`, `just contracts_check`, `just component_spec_check`, `just bootstate_trace_check`, `just release_trust_check`, `just x86_portability_check`, `just framework_safety_check`, `just sel4_gate_control_check`, `just devlog_check` |
 | Trigger | Every CI run since `84c75f5` red or never-starting; runs 32987525467 and 32990305002 observed |
 | Baseline | `64c838a` added the gates when every one of them ran without a seL4 prefix |

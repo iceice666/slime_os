@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | ROS 2 compatibility roadmap (R0/R1 transport choice), core runtime roadmap (C9 cross-reference), rpi5-ros2-roadmap-pivot open-risk cross-link |
-| Roadmap | R0, R1, R2, C9, X1, P5 |
+| Work items | 01a00b4d-2400-7987-93d6-19201c397dff, 01a0724c-5400-7206-ae86-ad13584c8530, 01a0724c-5400-7dd3-9741-a8b35e872e9a, 01a00b4d-2400-75f0-82f5-9abe614054e9, 01a0724c-5400-75c5-a5ae-775dfb500018, 01a0724c-5400-7208-b5a1-7008c0e2bdc3 |
 | Gates | none |
 | Trigger | Architecture review comparing a self-built rmw/DDS transport against Eclipse Zenoh, prompted by externally sourced material describing Zenoh/zenoh-pico paired with seL4 in robotics contexts |
 | Baseline | `roadmap/03-ros2-compatibility.md` already specified R0-R3 as a self-built DDSI-RTPS/XCDR profile without recording why Zenoh was not selected; `devlog/2026-07-31-rpi5-ros2-roadmap-pivot/index.md` left "whether the node code is Slime-native, source-compatible, or Linux-personality-backed" open; `roadmap/02-core-runtime.md` C9 was cited by R2 as a dependency without stating what R2 would consume it for |

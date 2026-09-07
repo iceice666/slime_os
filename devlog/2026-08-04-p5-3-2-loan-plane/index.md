@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,transit,graph,ipc,buffer_adapter,transfer_window,channel,shared_buffer}.rs`, `components/bins/src/bin/init.rs`, `contracts/generation/v1/fixtures/sel4-loan.{zti,md}`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-loan-plane.py`, `Justfile` |
-| Roadmap | P5.3.2, B13 |
+| Work items | 019fc85a-7800-7b66-ab3a-e31a48ca6e43, 019fcd80-d400-7c84-b07d-5e6fafe7d13d |
 | Gates | `just sel4_loan_check`, `just sel4_channel_check`, `just sel4_component_graph_check`, `just sel4_root_boot_check` |
 | Trigger | P5.3.1 complete; `Spawn`'s sibling planes still unmediated and `SHARED_QUOTA` still a hardcoded constant |
 | Baseline | P5.3.1's channel plane, `just sel4_channel_check` green at `sends=17 receives=17 parks=2 settled=3 parked=0 queues=0` |

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/generation.rs`, `Justfile`, `AGENTS.md` |
-| Roadmap | P5.4.10, P5.4.4, P5.4, C8.2 |
+| Work items | 019fd7cd-8c00-79d7-909d-d1d5483e9d88, 019fd7cd-8c00-7f99-8e9b-a8dafb1ecbd4, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019f9f27-9800-7f42-a019-5ca68b4b486a |
 | Gates | `just test_sel4_root`, `just sel4_stream_check` |
 | Trigger | P5.4.4, which closed C8.2's aggregate half and named the live-graph assertions as still open |
 | Baseline | Nine seL4 gates passing; the root validating aggregate ceilings only |

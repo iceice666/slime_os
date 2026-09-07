@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `slime-root/src/platform_timer.rs`, Milk-V Duo physical timer path |
-| Roadmap | P3.E |
+| Work items | 01a0588c-8800-73db-ba7e-7c520baedf46 |
 | Gates | `just duo_sel4_check` |
 | Trigger | The rebuilt A/D-corrected physical image booted upstream seL4 and entered `slime-root`, then emitted no byte after acquiring RTC IRQ 17 |
 | Baseline | The first physical image had stopped at the loader page-table switch, so the RTC path had never executed on the board |

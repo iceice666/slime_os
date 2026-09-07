@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Verified |
 | Scope | `roadmap/{README,01-foundations,04-platform-hardware,07-architecture-portability,09-rpi5-ros2-demo}.md`, `devlog/README.md` |
-| Roadmap | P3, P3.D, P3.E, P4, RP3, M5.7, H1 |
+| Work items | 01a05366-2c00-7c3b-bc96-ce22c9f94c15, 01a04919-7400-731e-b710-84abff26713c, 01a0588c-8800-73db-ba7e-7c520baedf46, 01a02f59-a800-78b6-9398-6b22bfbc6fdd, 01a0724c-5400-7cb4-ab51-0bcb23a882b5, 01a0724c-5400-7e51-91a6-3529f25f3389, 01a0724c-5400-7321-ac99-8f66ea7449f1 |
 | Gates | `just devlog_check` |
 | Trigger | P3.D established the project's only observed, repeatable, hands-off physical deployment and serial evidence loop, while the available Raspberry Pi 5 USB-UART adapter produced no bytes |
 | Baseline | Raspberry Pi 5 remained the active product-leading physical lane despite having no usable evidence path; Milk-V Duo was recorded as a deferred RV64 follow-up even after its board loop passed three consecutive runs |

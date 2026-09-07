@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `flake.nix`, `rust-toolchain.toml`, `just sel4_rpi5_image_check`, SDK publication workflow run 33063272940 |
-| Roadmap | B80, P4 |
+| Work items | 01a03ecc-bc00-7f23-8d29-7b0f23a82b3a, 01a02f59-a800-78b6-9398-6b22bfbc6fdd |
 | Gates | `just sel4_rpi5_image_check`, `just sel4_pin_check`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just devlog_check` |
 | Trigger | The first two-profile SDK publication run reached the hosted RPi5 build and failed while compiling generation components for `aarch64-unknown-none` |
 | Baseline | The RPi5 image gate passed on machines whose rustup state already carried `aarch64-unknown-none`, but a clean Nix shell installed only `x86_64-unknown-none` for the workspace toolchain |

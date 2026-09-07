@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main.rs,shared_buffer.rs}`, `components/runtime/src/{lib.rs,syscall.rs,syscall/sel4_transport.rs}`, `components/bins/src/bin/fabric-service.rs`, `contracts/fabric-trace/v1/{schema.zt,gen_rust.zt}`, `scripts/check/check-sel4-{traffic,saturation}-plane.py`, `docs/{syscall-abi.md,capability-matrix.md}` |
-| Roadmap | C8.13.1, C8.13 |
+| Work items | 01a00626-c800-7b26-8628-a0338e429e7c, 01a00b4d-2400-7720-b4d4-907330d70285 |
 | Gates | `just sel4_traffic_check`, `just data_fabric_traffic_check`, `just sel4_saturation_check`, `just test_sel4_root` |
 | Trigger | Implementing C8.13.1, whose text describes the slice as "additive only" |
 | Baseline | Eight of C8.13's eleven resource classes emitted evidence; no syscall returned a live shared-buffer occupancy to any component |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-loan.zti`, `components/bins/src/bin/init.rs`, `slime-root/src/main.rs`, `scripts/check/check-sel4-loan-plane.py` |
-| Roadmap | B52 |
+| Work items | 019fe740-a000-7993-bea6-51be10e1ab4b |
 | Gates | `just sel4_loan_check`, `just sel4_sample_check`, `just sel4_spawn_check`, `just sel4_reclamation_check` |
 | Trigger | `just sel4_loan_check` failed at `[init] loan plane fail: loan`; found by auditing Justfile targets no previous turn had run. |
 | Baseline | Red since before the v5 cutover, verified at `8745d18~1`. |

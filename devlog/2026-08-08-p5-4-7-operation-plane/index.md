@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-operation.{zti,md}`, `contracts/boot-layout/v1/fixtures/sel4-operation.layout`, `scripts/build/{boot_layout,build-generation,build-sel4}.py`, `scripts/check/check-sel4-{operation-plane,boot-layout,gate-controls}.py`, `components/bins/build.rs`, `components/bins/src/bin/{init,fabric-op-time}.rs`, `components/bins/src/fabric_operation_scenario.rs`, `Justfile` |
-| Roadmap | P5.4.7, P5.4, C8.7 |
+| Work items | 019fdcf3-e800-7759-9f8a-8c0023134812, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fa974-5000-7be4-9b9f-b59912e69ed9 |
 | Gates | `just sel4_operation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.1 recorded C8.7 as uncovered on seL4; P5.4.6 closed the composition it depends on |
 | Baseline | Eleven seL4 plane gates, none asserting an operation property; C8.7 proven only by the frozen x86 oracle |

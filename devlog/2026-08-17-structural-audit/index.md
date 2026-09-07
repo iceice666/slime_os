@@ -6,7 +6,7 @@
 | Kind | Audit |
 | Status | Root-caused |
 | Scope | `slime-root/src/{main,ipc,graph,generation,directory,console}.rs`, `components/runtime/src/syscall.rs`, `components/bins/{Cargo.toml,src/bin/init.rs}`, `boot-contracts/src/generation.rs`, `scripts/build/build-generation.py`, `scripts/check/` (31 plane gates), `contracts/generation/`, `roadmap/00-backlog.md` |
-| Roadmap | B57, B58, B59, B60, B61, B62, B63, B64, B65, B66, B40, B46, B55, B56 |
+| Work items | 01a00b4d-2400-7d7c-82e2-df8402734f41, 01a00b4d-2400-74bc-a59c-23cd48a15c89, 01a00b4d-2400-7c5a-86f1-3469a46c2c25, 01a00b4d-2400-7f5d-aba4-9a4c213ab256, 01a00b4d-2400-76f2-80fd-3b6c8f7f99d7, 01a00b4d-2400-726c-9b23-cc13f9eb292e, 01a00b4d-2400-7f8d-ba52-04cbc6b7df71, 01a00b4d-2400-706e-9ff9-ee35b95efde4, 01a00b4d-2400-7af9-b5c1-4546f1b399e0, 01a00b4d-2400-77c8-a3bf-e1cc8040486d, 019fe740-a000-7e18-b5a8-c9df6403f4d8, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8, 01a00100-6c00-799f-8f9b-f69e2a662d1f, 01a00b4d-2400-732f-b4b2-76a7e272d6b0 |
 | Gates | none |
 | Trigger | B56 closed the backlog and C8.15 closed the C8 track at `35a95b2`, leaving no open item and no red gate; asked what structural defects remain |
 | Baseline | Every gate green at `35a95b2`; backlog empty since B56 |

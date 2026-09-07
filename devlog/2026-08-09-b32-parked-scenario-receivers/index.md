@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/bins/src/fabric_call_scenario.rs`, `components/bins/src/fabric_operation_scenario.rs` |
-| Roadmap | P5.4.6, P5.4.7, B32 |
+| Work items | 019fdcf3-e800-71c8-8283-78b13fce7bf4, 019fdcf3-e800-7759-9f8a-8c0023134812, 019fe21a-4400-77cf-930a-cb385f3bc818 |
 | Gates | `just sel4_call_check`, `just sel4_operation_check`, `just fmt_check_all`, `just lint_all`, `just devlog_check` |
 | Trigger | P5 closure review found receive loops that yielded instead of registering endpoint waits |
 | Baseline | The call plane and operation plane passed, but three blocked receives remained runnable and invisible to root waiter diagnostics |

@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/10-component-platform.md`, `roadmap/README.md`, `devlog/README.md` |
-| Roadmap | CP6, CP7, CP8, CP9, CP10 |
+| Work items | 01a03480-0400-7acc-adb9-042c86ecd1a1, 01a039a6-6000-7b7d-aef7-4602e99880f3, 01a03480-0400-7478-a2f3-e21a16591416, 01a03480-0400-7a5e-a4e1-7c788602af11, 01a03480-0400-75b5-a012-54254ea3a7df |
 | Gates | `just devlog_check` |
 | Trigger | CP5 proved out-of-tree development with a temporary pinned SDK bundle, leaving the permanent repository, platform inputs, version policy, and consumer update lifecycle unspecified |
 | Baseline | External components can build and boot through CP4, but the proof constructs an ephemeral SDK and still obtains `SEL4_PREFIX` from the `slime_os` checkout |

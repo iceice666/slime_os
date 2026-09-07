@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/bins/src/bin/{sel4-recovery-probe,init}.rs`, `components/bins/{Cargo.toml,build.rs}`, `components/bins/src/default_boot_layout.rs`, `contracts/generation/v1/fixtures/sel4-recovery.zti`, `scripts/lib/recovery_index.py`, `scripts/build/{boot_layout,build-generation,build-sel4,build-store-fixture}.py`, `scripts/check/check-sel4-{recovery-plane,boot-layout,gate-controls}.py`, `Justfile` |
-| Roadmap | P5.4.2, P5.4, M5.9 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7ac2-a7b7-6636777a56b7 |
 | Gates | `just sel4_recovery_plane_check`, `just sel4_rollback_check`, `just sel4_store_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | M5.4 and M5.6 were in userspace; recovery was the last M5 gap with a portable surface |
 | Baseline | `recovery::reconstruct` was reachable only from the oracle's kernel, behind syscall gating |

@@ -4,10 +4,10 @@
 identity, state, hierarchy, and dependencies live in `.tasks/items/`, one Markdown
 file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque).
 The headings below allocate no identity: ids such as `C9.4`, `IO4`, and `B92` are
-display aliases carried as MyQue keys, and `.tasks/legacy-roadmap-ids.json` maps the
-pre-migration ones. Read `just tasks_list` for state and `just tasks_next` for what is
-actionable; read this directory for the reasoning, boundaries, and sequencing that no
-work-item body should have to restate.
+display aliases carried as MyQue keys, and only a UUID is a reference. Read
+`just tasks_list` for state, `just tasks_next` for what is actionable, and
+`just tasks_graph` for dependencies; read this directory for the reasoning,
+boundaries, and sequencing that no work-item body should have to restate.
 
 The current physical execution goal is:
 
@@ -17,22 +17,28 @@ Milk-V Duo is the current physical bring-up target because it is the only availa
 
 A milestone is complete only when its exit condition is observed. Compiled code, a custom payload, a passing QEMU run, or evidence from a different physical target cannot close a board-specific milestone.
 
-## Current state
+## Tracks
 
-| Track | Status | Next open gate |
+What each track owns and where its boundary is. Deliberately no state: which
+items are done, open, deferred, blocked, or actionable is the store's answer,
+and `just tasks_list` / `just tasks_next` / `just tasks_graph` are how it is
+read. A hand-maintained count or "next open gate" here would be a second
+record that drifts the moment an item closes, which is why there is none.
+
+| Track | Owns | Boundary |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B91 resolved; **no open items** — B91 closed 2026-08-30 when every pinned instance binding slot gained a machine-readable, builder-verified reason (`bootLayout`/`allocatorOrder`/`encodedLayout`/`componentAbi`), leaving 260 `componentAbi` pins as the counted residue a future migration can shrink | No open backlog item gates the next milestone. B61/B63/B65 each record a deliberately deferred half a future audit should start from, and B91's devlog names the four follow-ups its classification made visible |
-| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate. **C10 closed 2026-08-24** across C10.1–C10.4: one task-private 2 MiB window per child, an authenticated `private-memory-budget/v1` resource fixing every component's ceiling, a `GlobalAlloc` over that region, and adoption by `fabric-service` — the graph's own broker, in ten fixtures — which now sizes its role and frame tables from the graph a generation declares rather than from the contract's ceilings, freeing 29960 bytes of `.bss` plus `.data` per generation. A repeated spawn/exit cycle returns the frame allocator's own watermarks exactly, and a shared buffer cannot be mapped into a private window. **C9 closed 2026-08-26** across C9.1–C9.6: a root-brokered clock/timer service behind declared authority, a bounded userspace wait set that blocks once per ready set on one declared Notification and recovers every ready source from the coalesced badge word, a declared scheduling class whose band mapping is manifest data — the builder reads it once and writes the resulting priority into the `ScheduleRecord`, so a class *is* a priority rather than a second number beside one — a `lifecycle-policy/v1` transition graph, restart bound, health dependency set, and parameter authority under which a *userspace* supervisor restarts a failed component while the root charges the declared attempt and refuses everything the policy does not admit, and a generation can declare a component deterministic with the claim constrained to the authority a recorder genuinely captures. **C9.6 closed 2026-08-26**: a simulated sensor → controller → actuator graph on the `sel4-robot-runtime` plane, the controller a dual-contract-kind participant, running to completion under declared best-effort contention and surviving an injected controller restart with its fabric authority reissued, asserted by a two-boot semantic trace comparison. Both of RP5's named dependencies on this track are therefore closed. | The track is fully closed; nothing remains open. RP5's two named dependencies (C9.3, C9.4) are met, and C9.5's `recorded` source set is still clock-only — widening it is its own follow-up, not a C9 milestone.
-| [Component platform](10-component-platform.md) | **CP0–CP10 complete; CP11–CP15 planned.** The completed SDK path already supplies immutable component sources, target-qualified platform prefixes, external artifact admission, compatibility evidence, upgrade, and rollback. The new closure sequence binds those inputs to `system-spec/v1`, converts all 42 seL4 test compositions to generated closures, replaces `build-sel4.py`'s plane variants with one data-driven image build, makes every scenario and negative mutation identity-bearing, and cuts the whole QEMU/SDK corpus over before deleting the legacy surface | CP11 defines the canonical `system-image-closure/v1` and separate `system-test-run/v1` contracts, then proves one closure produces the same bootable image in two clean roots without absorbing the test oracle |
-| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | Deferred after RP0, RP1, and RP2 completed. RP2 closed 2026-08-20 with the demo-scoped AArch64 QEMU product graph; RP3–RP8 retain their original Raspberry Pi 5 acceptance conditions | Resume at RP3 when a working USB-UART evidence path is available and the physical demo is reprioritized |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, P3, P3.D, P3.E, P3.F, P5, and P6 complete; P2.3–P2.6 superseded by P5. The named Milk-V Duo physically boots upstream seL4 and a target-qualified generation, runs the architecture-neutral sample plane with repeatable normalized evidence, proves timer/fault behavior, recovers autonomously, and serves Slisp as the resident shell through declared `InputRead` authority. P6 closed 2026-09-02: the named Novatek NT98690 H1V1 boots seL4 and `slime-root` from SD through unmodified vendor firmware and answers typed Slisp input over UART0 | No Duo or H1V1 architecture gate is open. Storage, USB, network, display, sensor, and actuator qualification remain separate future scope; H1V1 storage, network, and display are explicitly unclaimed. P4/RP3 and Framework retain their own physical blockers, and evidence from one board cannot complete another board's gate |
-| [Native I/O substrate](11-io-substrate.md) | IO0–IO3 and IO5–IO7 complete; **IO4 is complete only for its exact-destination authority boundary and its network data plane is unfinished**. IO2's root cutover closed 2026-08-29, and IO5/IO6/IO7 added the track's host verification layers the same day. Five QEMU gates: `io_queue_check`, `io_driver_authority_check`, `io_block_check`, `io_link_check`, `io_network_check`, all registered in `sel4_gate_control_check`; two host model gates, `io_queue_model_check` and `io_resource_model_check`, registered in `contracts_check`; two host proof gates, `kani_io_proofs` and `kani_virtio_proofs` | IO0 fixes request/epoch/lease/queue semantics; IO1 grants bounded device/MMIO/IRQ/DMA authority with numeric reclamation on death; IO2's userspace virtio-blk is now the only product block path; IO3 proves userspace virtio-net duplex on the same substrate; IO4 enforces exact-destination networking, with IPv6/DHCP/SLAAC/listen declared and refused, but Ethernet framing, ARP, IPv4, ICMP, UDP, TCP, and exact-name DNS are unimplemented and unclaimed, so R0/RP5 cannot yet obtain a byte stream from it; IO5 quantifies IO0's lease/epoch rules and IO1's charge conservation over every interleaving rather than one schedule, with 13 must-fail mutations; IO6 proves the wire arithmetic those models disclaim — slot indexing, cursor subtraction, slice bounds — of the shipped source over every value of the declared types, with 18 must-fail mutations; IO7 closes the *device* side after B86/B87 showed it unguarded, proving used-ring index, descriptor-id, and transfer-length handling over all values with 13 harnesses and 8 must-fail mutations. All trusted-DMA on QEMU — no containment claim |
-| [ROS 2 compatibility](03-ros2-compatibility.md) | Deferred with the RPi5 demo | Resume R0/IO4 transport work when the robotics demo is reprioritized; the frozen contract and completed authority work remain valid |
-| [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist; Duo evidence is not a substitute |
-| [Foreign workloads](05-foreign-workloads.md) | Deferred | Resume only for a selected product workload that needs a Linux userspace personality |
-| [Authority and trust](06-authority-trust.md) | Deferred | Resume when a selected product or hardware release needs a specific authority primitive |
-| [Native development](08-native-development.md) | Deferred | Resume after a physical product path is stable enough to justify on-device build and live-update work |
+| [Backlog](00-backlog.md) | Nothing live: a frozen index of the pre-cutover `B<N>` anchors that devlog entries link into | The backlog itself is the `backlog`-tagged items in the store, and open ones precede milestone work |
+| [Foundations](01-foundations.md) | The x86/QEMU-era mechanisms the later tracks were built on, and the Framework removable-media boot claim | A Framework claim requires observed removable-media boot with no internal-NVMe write; no other board's evidence substitutes |
+| [Core runtime](02-core-runtime.md) | The typed data fabric, robot-runtime authority (clock/timer, wait sets, scheduling class, lifecycle policy, determinism claims), and task-private component memory | Mechanism stays in `slime-root`; policy — supervision decisions, health, QoS — is a userspace component's. Runtime memory is task-private, generation-bounded, never executable, and fully reclaimed |
+| [Component platform](10-component-platform.md) | `component-spec/v1` through `system-spec/v1`: immutable component sources, target-qualified platform prefixes, external artifact admission, compatibility evidence, upgrade, rollback, and closure identity as the reproducible build key | A closure is an identity over declared inputs; the handful of plane gates a closure structurally cannot describe stay outside it |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | The two-node bounded-topic demo contract and its target-qualified build path | Only a physical Raspberry Pi 5 run satisfies its board claim; `aarch64-qemu-virt` evidence is regression coverage, not the demo |
+| [Architecture portability](07-architecture-portability.md) | Target/artifact contracts, the x86 boundary extraction, the seL4 substitution, and the RV64 Duo and NT98690 H1V1 physical lanes | An architecture lane proves capability, fault, wait/wake, reclamation, generation, and rollback parity — not storage, USB, network, display, sensor, or actuator support, and never another board's gate |
+| [Native I/O substrate](11-io-substrate.md) | Request/epoch/lease/queue semantics, bounded device/MMIO/IRQ/DMA authority with reclamation on death, the userspace virtio-blk and virtio-net drivers, exact-destination networking, and the host models and proofs under them | Trusted DMA on QEMU with no containment claim. IO4's authority boundary is separate from its network data plane, and an unimplemented protocol layer is unclaimed rather than implied |
+| [ROS 2 compatibility](03-ros2-compatibility.md) | The frozen bounded topic wire profile and the authority model beneath it | Wire interoperability grants nothing: names, types, domains, and destinations still need explicit capabilities. Resumes with the robotics demo |
+| [Platform hardware](04-platform-hardware.md) | Framework daily-driver device authority and its inventory/no-write record | Waits on a seL4 Framework image and observed physical evidence, which no Duo or QEMU run supplies |
+| [Foreign workloads](05-foreign-workloads.md) | An optional Linux userspace personality | Only pursued for a selected product workload that needs one |
+| [Authority and trust](06-authority-trust.md) | The trust primitives above capabilities | Each is pulled in by a product or hardware release that needs it, not built speculatively |
+| [Native development](08-native-development.md) | On-device build and live update | Waits on a stable physical product path |
 
 ## Physical bring-up sequencing
 
@@ -51,57 +57,62 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ## Track map
 
+Sequencing only: which track's result another track's work rests on. It is a
+reading aid over the prose above, not a dependency graph — the store owns
+dependency edges and `just tasks_graph` renders them, so no node here carries
+state and no edge here is authority.
+
 ```mermaid
 flowchart TD
-    Backlog["Backlog: B1–B91 resolved\nno open items"]
-    Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
-    C7["C7 sample plane\ncomplete"]
-    C8["C8.1–C8.15 fabric\ncomplete"]
+    Backlog["Backlog\ndefect and debt items"]
+    Foundations["M1–M6 foundations\nx86/QEMU-era mechanisms"]
+    C7["C7 sample plane"]
+    C8["C8 typed data fabric"]
     P0["P0 target/artifact contracts"]
     P1["P1 x86 boundary extraction"]
-    P2["P2.1–P2.2 AArch64\nhistorical; P2.3–P2.6 superseded"]
-    P5["P5 seL4 substitution\ncomplete; product path"]
+    P2["P2 AArch64 native"]
+    P5["P5 seL4 substitution\nproduct path"]
     P4["P4 Raspberry Pi 5 qualification"]
-    C9["C9 robot runtime authority\nC9.1–C9.6"]
-    C10["C10 private component memory\ncomplete"]
+    C9["C9 robot runtime authority"]
+    C10["C10 private component memory"]
     IO0["IO0 queue, epoch, lease"]
     IO1["IO1 hardware resource authority"]
     IO2["IO2 userspace virtio-blk"]
     IO3["IO3 userspace virtio-net + LinkDevice"]
-    IO4["IO4 network + destination authority\nauthority done; data plane open"]
-    CP0["CP0 component-spec/v1\ncomplete"]
-    CP1["CP1 system-spec/v1 + generation derivation\ncomplete"]
+    IO4["IO4 network + destination authority"]
+    CP0["CP0 component-spec/v1"]
+    CP1["CP1 system-spec/v1 + generation derivation"]
     CP2["CP2 runtime binding resolution"]
     CP3["CP3 crate-per-component SDK"]
     CP4["CP4 external artifact admission"]
     CP5["CP5 out-of-tree proof"]
-    CP6["CP6 deterministic SDK export\ncomplete"]
-    CP7["CP7 permanent SDK publication\ncomplete (hosting deferred)"]
-    CP8["CP8 platform prefix assets\ncomplete"]
-    CP9["CP9 compatibility matrix\ncomplete"]
-    CP10["CP10 consumer upgrade + rollback\ncomplete"]
-    CP11["CP11 image/test-run closure contracts\nplanned; next"]
-    CP12["CP12 all 42 compositions spec-derived\nplanned"]
-    CP13["CP13 data-driven image builder\nplanned"]
-    CP14["CP14 explicit scenario identities\nplanned"]
-    CP15["CP15 whole-corpus cutover\nplanned"]
-    R0["R0 minimal Zenoh topic profile\ndeferred"]
-    RP0["RP0 demo contract\ncomplete"]
-    RP1["RP1 target-qualified build path\ncomplete"]
-    RP2["RP2 AArch64 QEMU product slice\ncomplete"]
-    RP3["RP3 Raspberry Pi 5 serial boot\ndeferred"]
-    RP4["RP4 Arm component data path\ndeferred"]
-    RP5["RP5 node + transport envelope\ndeferred"]
-    RP6["RP6 minimal Zenoh nodes\ndeferred"]
-    RP7["RP7 observed RPi5 data demo\ndeferred"]
-    RP8["RP8 repeatability and fault envelope\ndeferred"]
-    R1["R1 broader ROS 2 topic wire profile\ndeferred"]
-    R2["R2 services/actions\ndeferred"]
-    Framework["Framework daily-driver hardware\ndeferred"]
-    RV64["P3 RV64 QEMU\ncomplete"]
-    Duo["P3.E seL4 on Milk-V Duo\ncomplete architecture lane"]
-    H1V1["P6 NT98690 H1V1 lane\nP6.A-P6.C complete"]
-    X1["X1 Linux personality\noptional/deferred"]
+    CP6["CP6 deterministic SDK export"]
+    CP7["CP7 permanent SDK publication"]
+    CP8["CP8 platform prefix assets"]
+    CP9["CP9 compatibility matrix"]
+    CP10["CP10 consumer upgrade + rollback"]
+    CP11["CP11 image/test-run closure contracts"]
+    CP12["CP12 all compositions spec-derived"]
+    CP13["CP13 data-driven image builder"]
+    CP14["CP14 explicit scenario identities"]
+    CP15["CP15 whole-corpus cutover"]
+    R0["R0 minimal Zenoh topic profile"]
+    RP0["RP0 demo contract"]
+    RP1["RP1 target-qualified build path"]
+    RP2["RP2 AArch64 QEMU product slice"]
+    RP3["RP3 Raspberry Pi 5 serial boot"]
+    RP4["RP4 Arm component data path"]
+    RP5["RP5 node + transport envelope"]
+    RP6["RP6 minimal Zenoh nodes"]
+    RP7["RP7 observed RPi5 data demo"]
+    RP8["RP8 repeatability and fault envelope"]
+    R1["R1 broader ROS 2 topic wire profile"]
+    R2["R2 services/actions"]
+    Framework["Framework daily-driver hardware"]
+    RV64["P3 RV64 QEMU"]
+    Duo["P3.E seL4 on Milk-V Duo"]
+    H1V1["P6 NT98690 H1V1 lane"]
+    X1["X1 Linux personality"]
 
     Backlog --> Foundations
     Foundations --> C7 --> C8
@@ -113,9 +124,9 @@ flowchart TD
     C8 --> RP0
     P0 --> RP1
     P1 --> RP1
-    RP0 --> RP1 --> RP2 -.->|deferred| RP3 --> RP4 --> RP5 --> RP6 --> RP7 --> RP8
+    RP0 --> RP1 --> RP2 -.->|physical board| RP3 --> RP4 --> RP5 --> RP6 --> RP7 --> RP8
     P5 --> RP2
-    P4 -.->|deferred| RP3
+    P4 -.->|board qualification| RP3
     C7 --> RP4
     C8 --> RP4
     Backlog --> CP0
@@ -205,14 +216,16 @@ Deferred unless selected as the implementation route for a future product worklo
 
 Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. Architecture changes run the target-specific QEMU gate before any physical board claim. Milk-V Duo promotion requires the P3 RV64 QEMU corpus plus a recorded Duo run with exact image, firmware, generation, memory-placement, and serial evidence. Raspberry Pi 5 and Framework promotion retain their own recorded board and device-authority requirements.
 
-Documentation-only roadmap edits do not run runtime tests; their verification is link, status, identifier, and content consistency, currently guarded by `just devlog_check` when devlog entries are added or touched.
+Documentation-only roadmap edits do not run runtime tests; their verification is link, identifier, and content consistency, guarded by `just devlog_check` when devlog entries are added or touched and by `just tasks_check` when the work-item store changes.
 
-## Updating this roadmap
+## Updating this directory
 
-- Update the owning track file, not this index, for detailed deliverables and checks.
-- Update this index when track status, dependency edges, or release composition changes.
+- **State never comes here.** Close an item with `myque close`, which records the closure date, and record the exit condition that was *observed* in the item's body. Never allocate an id by scanning for the next number, and never edit this directory to change what an item's state is: nothing reads `roadmap/` for identity, state, or dependencies, and no mechanism turns an edit here into a store change.
+- Update the owning track file, not this index, for detailed rationale and boundaries.
+- Update this index when a track's ownership, boundary, sequencing, or release composition changes — not when an item's state does. Exact counts, per-track status, and "what is open" belong to `just tasks_list` and `just tasks_next`; writing them here recreates the drift this cutover removed.
 - Preserve completed evidence; do not rewrite an observed check as a future intention.
-- When a milestone turns Complete, replace its specification body with the outcome: `**Status:**`, one `**Delivered:**` sentence, one `**Exit condition (observed):**` sentence, a `**Gates:**` line naming the exact Justfile targets, and an `**Evidence:**` link to the devlog entry. Delete the `Deliverables`, `Required checks`, and `Verification target` sections — they described work that is now done, and `01-foundations.md` is the reference for the resulting shape.
+- When a milestone's work lands, replace its specification body with the outcome: one `**Delivered:**` sentence, one `**Exit condition (observed):**` sentence, a `**Gates:**` line naming the exact Justfile targets, and an `**Evidence:**` link to the devlog entry. Those are a frozen record of what was observed, not live state. Delete the `Deliverables`, `Required checks`, and `Verification target` sections — they described work that is now done, and `01-foundations.md` is the reference for the resulting shape.
 - `Preserve completed evidence` is satisfied by a reachable devlog link, not by retaining the specification prose in this directory. A completed milestone whose evidence is only readable here has not been recorded properly.
-- Move exploratory work from `../docs/directions/` only after it has dependencies, bounded deliverables, required checks, and an observable exit condition here.
-- Never mark a milestone complete from implementation status alone when its exit condition requires QEMU or physical evidence.
+- Move exploratory work from `../docs/directions/` only after it has dependencies, bounded deliverables, required checks, and an observable exit condition — and create the work item that owns it.
+- Never treat a milestone as complete from implementation status alone when its exit condition requires QEMU or physical evidence.
+- **A heading is a URL.** 77 merged devlog links name a `#fragment` in this directory, so rewording a heading breaks an inbound link while leaving the file in place — a failure with no symptom at the destination. `just devlog_check` validates every fragment. When a heading must change, keep the old address by putting `<a id="old-slug"></a>` on its own line above the new heading; that is what the two P4 and P5.4.9 anchors are. Note that repeated headings are addressed by position — 39 slugs repeat across these track files, so `#deliverables-7` moves when a section is inserted above it. Prefer an explicit anchor over relying on a duplicate's index.

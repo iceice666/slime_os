@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `components/runtime/src/{runtime,lib}.rs`, `components/runtime/src/syscall/sel4_transport.rs`, `components/bins/src/bin/sample-worker.rs`, `slime-root/src/{child_vspace,task,transfer_window,main}.rs`, `boot-contracts/src/generation.rs`, `contracts/generation/v1/fixtures/sel4-sample.zti`, `scripts/check/check-sel4-{sample-plane,component-graph,gate-controls}.py` |
-| Roadmap | B47 |
+| Work items | 019fe740-a000-722b-bf6a-29f2db805351 |
 | Gates | `just test_sel4_root`, `just sel4_spawn_check`, `just sel4_supervision_check`, `just sel4_reclamation_check`, `just sel4_boot_check`, `just sel4_sample_check`, `just sel4_component_graph_check`, `just sel4_gate_control_check` |
 | Trigger | B47's format half (`f93a55b`, `8e49b5e`) left the runtime half open: a generation could declare a second thread that nothing constructed. |
 | Baseline | One `Task` meant one TCB. `slime_rt::entry!` declared one stack and one entry point, and `runtime::start` claimed the crate's single ambient IPC-buffer slot. |

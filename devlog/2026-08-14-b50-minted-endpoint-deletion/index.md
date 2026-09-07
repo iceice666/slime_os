@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/generation/v1/{schema.zt,fixtures/*.zti}`, `boot-contracts/src/generation.rs`, `scripts/build/build-generation.py`, `scripts/check/check-generation.py`, `slime-root/src/main.rs`, `components/bins/src/bin/{init,directory-probe,sel4-*-probe,sel4-generation-*,sel4-filesystem-service,dango}.rs`, eleven plane gates |
-| Roadmap | B50, B46 |
+| Work items | 019ffbda-1000-7716-9d07-a3a799b8eb97, 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just generation_check`, `just sel4_gate_control_check`, `just contracts_check`, `just sel4_spawn_check`, `just sel4_supervision_check`, `just sel4_generation_check`, `just sel4_filesystem_check`, `just sel4_directory_check`, `just sel4_input_check`, `just sel4_storage_check`, `just sel4_store_check`, `just sel4_rollback_check`, `just sel4_recovery_plane_check`, `just sel4_transfer_check` |
 | Trigger | `SLIME_GRAPH spawn preflight count … requested=0 parent=0 minted=N` on ten plane gates after B50's `endpointCreate` deletion (`ecfc99d`) |
 | Baseline | Before the native IPC cutover, an endpoint was a root-owned logical channel a component created with `EndpointCreate`, so deferring its object identity to a runtime minter was meaningful |

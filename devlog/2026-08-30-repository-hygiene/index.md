@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | PR templates, documentation and devlog lifecycle ownership, verification checker ownership, generation-manifest slot-pin contract checks, Just orchestration, seL4 plane execution runtime and permanent negative controls |
-| Roadmap | none |
+| Work items | none |
 | Gates | `just contracts_check`, `just sel4_gate_control_check`, `just io_network_check`, `just io_queue_check`, `just io_block_check`, `just io_driver_authority_check`, `just ruff`, `just devlog_check`, `just typos`, `just fmt_check_all` |
 | Trigger | Repository hygiene plans for artifact ownership, Just orchestration, and seL4 gate runtime consolidation |
 | Baseline | PRs and comments had no concise ownership rule, the B91 slot-pin invariant remained a backlog-shaped top-level checker, Justfiles duplicated roadmap, checker, and investigation prose, and the inspected I/O plane gates each carried their own image identity and QEMU lifecycle implementation |

@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `deps/rust-sel4/crates/sel4-kernel-loader/add-payload`, `sel4/pins.toml`, RV64 loader images |
-| Roadmap | P3.E |
+| Work items | 01a0588c-8800-73db-ba7e-7c520baedf46 |
 | Gates | `just riscv64_qemu_check`, `just duo_sel4_check` |
 | Trigger | The first physical P3.E seL4 campaign reached the loader's `Entering kernel` marker and then emitted no further byte for 180 seconds |
 | Baseline | RV64 QEMU accepted the loader's eager Sv39 leaves, but no physical run had exercised those descriptors on a core that faults when `A=0` |

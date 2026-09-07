@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/build/build-generation.py`, `scripts/check/check-generation.py`, `boot-contracts/src/generation.rs`, `slime-root/src/{main,task}.rs` |
-| Roadmap | B41 |
+| Work items | 019fe740-a000-71ef-b559-5eda9e614867 |
 | Gates | `just sel4_boot_check`, `just sel4_capability_layout_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root` |
 | Trigger | B41: `DebugWrite` and console-adjacent control share the root's badged endpoint and dispatcher with lifecycle, storage, and fabric traffic. |
 | Baseline | One endpoint object per system, one dispatcher loop, `Mediation::RootService` for `DebugWrite` and `InputRead`. |

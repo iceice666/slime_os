@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,task}.rs`, `contracts/generation/v1/fixtures/sel4-sample.{zti,md}`, `components/bins/src/bin/init.rs`, `components/bins/build.rs`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-sample-plane.py`, `Justfile` |
-| Roadmap | P5.3.4, P5.3, B14, B12, B15, B16 |
+| Work items | 019fcd80-d400-7436-a510-3295c5509a8d, 019fc85a-7800-7e49-9f0b-185238940245, 019fcd80-d400-7a0f-bda9-4434605b76ad, 019fd7cd-8c00-7a24-907a-86c137e6e62a, 019fcd80-d400-7b3e-ad54-c642ffd3eb4e, 019fd7cd-8c00-7817-aa68-aa49dacd7a0a |
 | Gates | `just sel4_sample_check`, `just sel4_spawn_check`, `just sel4_loan_check`, `just sel4_channel_check`, `just sel4_component_graph_check`, `just sel4_root_boot_check` |
 | Trigger | P5.3.4 opened after P5.3.3 landed; P5.3's exit condition had no composed observation |
 | Baseline | P5.3.3 complete: children are constructed and supervised, but no seL4 graph runs the sample plane's own components |

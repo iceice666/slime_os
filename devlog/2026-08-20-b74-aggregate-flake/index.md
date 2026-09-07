@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Fixed |
 | Scope | `slime-root/src/main.rs` graph dispatcher, `scripts/check/check-sel4-fabric-aggregate.py`, `components/bins/src/fabric_trace_log.rs`, `components/bins/src/bin/fabric-service.rs` |
-| Roadmap | B74, B75, C8.15 |
+| Work items | 01a01ac0-3800-78cd-81dc-7cecbee5b5cf, 01a01ac0-3800-7a5a-a50b-14f34e5f1e4e, 01a00b4d-2400-7677-8e72-5cad11acefca |
 | Gates | `just sel4_fabric_aggregate_check` |
 | Trigger | `just sel4_fabric_aggregate_check` failed twice in one session on 2026-08-19 with two different signatures, neither reproducing afterwards |
 | Baseline | B68 closed the same gate as deterministic on 2026-08-17 with 10 consecutive passing runs |

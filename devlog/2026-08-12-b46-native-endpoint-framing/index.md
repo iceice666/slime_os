@@ -6,7 +6,7 @@
 | Kind | Defect |
 | Status | Verified |
 | Scope | `components/runtime` native Endpoint transport and the seL4 sample plane |
-| Roadmap | B46 |
+| Work items | 019ff6b3-b400-7d7e-ab99-1bd3df003fe8 |
 | Gates | `just sel4_sample_check` |
 | Trigger | Fresh reviewer pass over the first component-to-component native rendezvous |
 | Baseline | The sample loopback exchanged the expected bytes, but the new public transport had not been reviewed against hostile message metadata or out-of-range slots |

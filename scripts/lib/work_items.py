@@ -2,21 +2,21 @@
 
 Identity lives in ``.tasks/items/<uuid>.md``. ``myque check`` owns schema,
 graph, and alias validation; this module owns only the question repository
-checks actually ask — *does this reference name a real work item?* — so it
-reads filenames rather than reimplementing MyQue's parser. The specification
-requires the filename to equal the canonical id and makes any disagreement a
-finding, so the filename set *is* the identity set.
+checks actually ask — *is this UUID a real work item?* — so it reads filenames
+rather than reimplementing MyQue's parser. The specification requires the
+filename to equal the canonical id and makes any disagreement a finding, so the
+filename set *is* the identity set.
 
-Legacy roadmap ids resolve through ``.tasks/legacy-roadmap-ids.json``, which
-the migration wrote once. That file is committed data, not a parse of
-``roadmap/*.md``: it lets the 288 devlog entries that predate the migration
-keep resolving without roadmap headings remaining authoritative. An id absent
-from the map does not resolve — there is no fallback to scanning headings.
+Human keys such as ``C9.4`` are display aliases and deliberately do not
+resolve here. A key can be renamed or dropped without touching a reference, and
+that only holds while nothing durable depends on one. Callers match ``UUID``
+and test membership in ``identities()`` directly: the two failures are
+distinct — a malformed reference and an absent item — and a resolver that
+returned one answer for both would hide which happened.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from functools import lru_cache
 
@@ -24,7 +24,6 @@ from harness import ROOT
 
 TASKS = ROOT / ".tasks"
 ITEMS = TASKS / "items"
-LEGACY_MAP = TASKS / "legacy-roadmap-ids.json"
 
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -41,38 +40,6 @@ TAGS = re.compile(r"^tags:\n((?:  - .+\n)+)", re.MULTILINE)
 def identities() -> frozenset[str]:
     """Every canonical work-item id in the store."""
     return frozenset(path.stem for path in ITEMS.glob("*.md"))
-
-
-@lru_cache(maxsize=1)
-def legacy() -> dict:
-    """The committed legacy-id map, or an empty map before the migration."""
-    if not LEGACY_MAP.is_file():
-        return {"ids": {}, "ambiguous": {}}
-    return json.loads(LEGACY_MAP.read_text())
-
-
-def resolve(reference: str, *, entry: str | None = None) -> str | None:
-    """The canonical id a devlog reference names, or ``None``.
-
-    A UUID resolves directly. A legacy roadmap id resolves through the map. An
-    id that was allocated twice resolves only for an entry whose target the
-    migration determined from evidence — never by picking an allocation.
-    """
-    if UUID.match(reference):
-        return reference if reference in identities() else None
-    table = legacy()
-    ambiguous = table["ambiguous"].get(reference)
-    if ambiguous is not None:
-        for known in ambiguous["devlog_references"]:
-            if entry is not None and known["entry"].endswith(entry):
-                return known["uuid"]
-        return None
-    return table["ids"].get(reference)
-
-
-def ambiguous_ids() -> frozenset[str]:
-    """Legacy ids that name more than one historical item."""
-    return frozenset(legacy()["ambiguous"])
 
 
 @lru_cache(maxsize=1)
@@ -100,14 +67,19 @@ def items() -> list[dict[str, object]]:
 
 
 def open_backlog() -> list[dict[str, object]]:
-    """Backlog items that are neither closed nor explicitly deferred.
+    """Backlog items that are neither closed, deferred, nor externally blocked.
 
-    The repository's standing rule (``AGENTS.md``) is that these are cleared
-    or explicitly deferred before a new track milestone opens. ``deferred`` is
-    the explicit deferral, so it satisfies the rule rather than violating it.
+    The repository's standing rule (``AGENTS.md``) is that these are cleared or
+    explicitly deferred before a new track milestone opens. ``deferred`` is that
+    explicit deferral, so it satisfies the rule rather than violating it.
+
+    ``blocked`` also satisfies it, for a different reason: it means the item
+    waits on something outside this repository, which no amount of milestone
+    sequencing resolves. Counting it as blocking would wedge every milestone
+    behind work nobody here can start.
     """
     return [
         item
         for item in items()
-        if "backlog" in item["tags"] and item["state"] in {"open", "active", "blocked"}
+        if "backlog" in item["tags"] and item["state"] in {"open", "active"}
     ]

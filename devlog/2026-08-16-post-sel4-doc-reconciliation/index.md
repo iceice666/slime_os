@@ -6,7 +6,7 @@
 | Kind | Decision |
 | Status | Proposed |
 | Scope | `README.md`, `roadmap/README.md`, `roadmap/01-foundations.md`, `roadmap/02-core-runtime.md`, `roadmap/09-rpi5-ros2-demo.md`, `contracts/fabric-graph/v1/schema.zt`, `contracts/component/v1/README.md`, `contracts/bootstate/v1/gen_rust.zt`, `contracts/store/disk/v1/gen_rust.zt`, `contracts/generation/v1/fixtures/{sel4,sel4-supervision}.md`, `components/component{,-aarch64}.ld`, doc comments in `slime-root/src/`, `components/`, `stage0/src/arch/aarch64.rs` |
-| Roadmap | RP2, RP3, C8.2, C7.7, M5.1, M5.4, M5.6, P5 |
+| Work items | 01a01ac0-3800-727f-b113-f7ce726f08c6, 01a0724c-5400-7cb4-ab51-0bcb23a882b5, 019f9f27-9800-7f42-a019-5ca68b4b486a, 019f94da-e000-7b10-b533-11679ec2fccb, 01a0724c-5400-7902-8af8-ab14fd1cad03, 01a0724c-5400-7eef-bb24-db634c4e436f, 01a0724c-5400-78a8-b1e1-8a90a39b11a5, 01a0724c-5400-7208-b5a1-7008c0e2bdc3 |
 | Gates | none |
 | Trigger | Reading project status found `README.md` last updated 2026-07-30, entirely predating the `84c75f5` seL4 substitution, and `roadmap/README.md:18` carrying its own unactioned note that RP2's deliverables describe the retired custom kernel |
 | Baseline | `84c75f5` retired `kernel/` and made `aarch64-sel4-qemu-virt` the product, but documentation outside `roadmap/07-architecture-portability.md` and `docs/` was not reconciled with it |

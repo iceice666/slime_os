@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{object_allocator,device,lib,main}.rs`, `scripts/check/check-sel4-{device-plane,root-boot,gate-controls}.py`, `Justfile`, `roadmap/07-architecture-portability.md` |
-| Roadmap | P5.4.2, P5.4, M5.1 |
+| Work items | 019fdcf3-e800-7590-95a1-37b6d4950732, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 01a0724c-5400-7902-8af8-ab14fd1cad03 |
 | Gates | `just sel4_device_check`, `just sel4_root_boot_check`, `just sel4_gate_control_check`, `just test_sel4_root`, `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | P5.4.2 recorded the M5 blocker as "`slime-root` has no block device"; the C-series is now closed and M5 is what remains of P5.4 |
 | Baseline | The allocator discarded every device untyped, so the root held no MMIO region and no physical address for any frame |

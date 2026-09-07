@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `kernel/`, `slime-root/`, `components/`, `boot-contracts/`, `scripts/`, `Justfile`, workspace and CI orchestration |
-| Roadmap | P5, P5.4, P5.4.final, B31 |
+| Work items | 01a0724c-5400-7208-b5a1-7008c0e2bdc3, 01a0724c-5400-7d48-8f10-a5383e7c21d9, 019fe21a-4400-7612-a38b-fed08baaa778, 019fe21a-4400-7cc2-bb15-be2c4cc277a9 |
 | Gates | `just sel4_root_boot_check`, `just sel4_component_graph_check`, `just sel4_gate_control_check`, `just test_host`, `just test_sel4_root`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos`, `just devlog_check` |
 | Trigger | B31 was the last blocker to deleting the frozen custom-kernel oracle |
 | Baseline | `kernel/` remained a workspace member and roughly two dozen legacy checks still built or booted it |

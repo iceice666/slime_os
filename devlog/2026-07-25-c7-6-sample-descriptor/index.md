@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `contracts/sample-descriptor/v1/`, `scripts/generate/generate-sample-descriptor-bindings.py`, `components/proto/src/{sample_descriptor.rs,lib.rs}`, `kernel/tests/sample_descriptor.rs`, `scripts/check/check-contracts.py`, `Justfile`, `docs/capability-matrix.md`; `just sample_descriptor_check` |
-| Roadmap | C7.6 |
+| Work items | 019f94da-e000-7b0c-ae6f-fea72d0a85f1 |
 | Gates | `just sample_descriptor_check`, `just contracts_check` |
 | Trigger | Roadmap C7 decomposition; C7.6 defines the versioned sample-descriptor contract over the C7.4/C7.5 sealed-mapping and loan lifecycle |
 | Baseline | C7.5 loan lifecycle: a lender loans one exact sealed, page-aligned subrange to a named receiver through a `SharedBufferLoan` object with an unforgeable single-return identity; the loan mechanism was exercised directly by the gate, with no descriptor contract referencing the loan identity, offset, length, or type |

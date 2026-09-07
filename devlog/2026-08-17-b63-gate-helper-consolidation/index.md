@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `scripts/lib/harness.py`, `scripts/lib/sel4_gate_markers.py`, 34 `scripts/check/check-sel4-*.py` gates |
-| Roadmap | B63, B55 |
+| Work items | 01a00b4d-2400-7f8d-ba52-04cbc6b7df71, 01a00100-6c00-799f-8f9b-f69e2a662d1f |
 | Gates | `just sel4_gate_control_check`, `just sel4_call_check`, `just sel4_boot_layout_check` |
 | Trigger | The structural audit measured 30 `boot()` definitions in 23 distinct bodies and `harness.run_qemu` with zero users |
 | Baseline | `scripts/lib/harness.py` existed for exactly this and was imported by almost no gate |
