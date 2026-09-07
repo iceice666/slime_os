@@ -547,6 +547,31 @@ def check_profile(pins: dict[str, object]) -> None:
         fail("ns02201-h1v1 memory base must be 2 MiB-aligned")
     if memory_base + memory_size > 0x3FF0_0000:
         fail("ns02201-h1v1 memory window must end below U-Boot's observed DTB relocation")
+    # The SoC blocks a servo-PWM output reaches, and the clock arithmetic that
+    # makes one PWM count one microsecond. Pinned here so a later bring-up reads
+    # them rather than restating an address, and so a divider edit that silently
+    # changes the pulse scale fails a check instead of a servo.
+    for key, expected in (
+        ("pwm_base", 0x2_F012_0000),
+        ("pinmux_top_base", 0x2_F001_0000),
+        ("gpio_base", 0x2_F004_0000),
+        ("pad_base", 0x2_F003_0000),
+    ):
+        if int(text(h1v1, key, "ns02201_h1v1"), 16) != expected:
+            fail(f"ns02201-h1v1 {key} must be the vendor BSP's {expected:#x}")
+    source_hz = integer(h1v1, "pwm_clock_source_hz", "ns02201_h1v1")
+    divider = integer(h1v1, "pwm_clock_divider", "ns02201_h1v1")
+    if source_hz != 120_000_000:
+        fail("ns02201-h1v1 PWM clock source must be the 120 MHz fix120m the clock tree names")
+    if not 3 <= divider <= 16383:
+        fail("ns02201-h1v1 PWM clock divider field must be in the encodable 3..16383 range")
+    if integer(h1v1, "pwm_clock_hz", "ns02201_h1v1") != source_hz // (divider + 1):
+        fail(
+            "ns02201-h1v1 PWM clock must equal source / (divider + 1); the divider "
+            "field encodes divisor - 1, and this ratio is what makes one count one "
+            "microsecond for servo timing"
+        )
+
     expected_h1v1_boot_files = [
         "slime-nt98690-probe.bin",
         "slime-sel4-sample-ns02201-h1v1.bin",

@@ -24,6 +24,17 @@ costs no physical intervention and a failed run costs a power cycle.
 The board is physical, so its absence is a failure and never a skip. Without
 `--serial` this exits non-zero, because a gate that passes with no board
 attached is a gate that says nothing.
+
+Beside the scored run are bench modes that assert no marker contract and have
+no `just` recipe, because each answers a hardware question a later gate would
+otherwise assume: `--survey` reads the boot environment, `--reset-probe`
+performs TF-A's watchdog sequence from the non-secure world, and `--gpio-probe`
+and `--pwm-probe` drive one pad -- the first as a plain output slow enough to
+find with a meter, the second as servo PWM held long enough to watch a servo or
+ESC respond. The PWM modes never write a whole clock-generator or pinmux word:
+both blocks are shared with PWM channel 12, which drives this SoC's CPU core
+voltage, so every such write is read-modify-write and four core-rail readings
+are asserted before the first one and after the last.
 """
 
 from __future__ import annotations
@@ -239,6 +250,140 @@ RESET_WDT_BASE = 0x2_F006_0000
 RESET_WDT_MANUAL = 0x0C  # MAN_RST_OFS
 RESET_WDT_UNLOCK = (0x5A96_0112, 0x5A96_0113)
 RESET_PROBE_SECONDS = 30.0
+
+
+#: The blocks `--pwm-probe` and `--gpio-probe` drive, with offsets from the
+#: vendor BSP: the PWM block (`drivers/pwm/pwm-nvtivot.c`, corroborated
+#: independently by U-Boot's own `drivers/pwm/nvt_pwm.c`), the pinmux/TOP block
+#: (`plat-ns02201_a64/top_reg.h`), the clock generator
+#: (`include/dt-bindings/clock/nvt-ns02201.h` with the per-channel wiring in the
+#: board's `nvt-clock.dtsi`), the GPIO block (`plat-ns02201_a64/nvt-gpio.h`), and
+#: the pad block (`plat-ns02201_a64/pad.h`). Bases are asserted against
+#: `sel4/pins.toml` at load, so an edit to either alone fails rather than drives
+#: the wrong address.
+PWM_BASE = 0x2_F012_0000
+PWM_ENABLE = 0x100  # write-1-to-set; also reads back the live enable state
+PWM_DISABLE = 0x104  # write-1-to-clear
+PWM_LOAD = 0x108  # latch a new period while the channel free-runs
+PWM_MAX_PROBE_CHANNEL = 5  # 0-7 are 16-bit; 0-5 are the pads nothing else claims
+CG_BASE = RESET_CG_BASE
+CG_PWM_CLK_DIV0 = 0x30  # bits[13:0] channels 0-3, bits[29:16] channels 4-7
+CG_PWM_CLK_EN = 0x84  # bit per channel, 1 = clock on
+CG_PWM_RESET = 0xA4  # bit 0, shared by every PWM channel
+CG_PWM12_CLK_EN = 0x8C  # bit 22 is channel 12's gate
+TOP_BASE = 0x2_F001_0000
+TOP_PWM_MUX = 0x18  # 4-bit field per channel 0-7; 1 selects the `_1` pad
+TOP_PWM12_MUX = 0x1C  # channel 12's field is bits[19:16]
+TOP_PGPIO_FUNC = 0xA8  # bit per P_GPIO; 0 = FUNCTION, 1 = GPIO
+GPIO_BASE = 0x2_F004_0000
+GPIO_P_DATA = 0x04  # P_GPIO bank: pad level
+GPIO_P_DIR = 0x34  # 1 = output
+GPIO_P_SET = 0x64  # write-1-to-set
+GPIO_P_CLR = 0x94  # write-1-to-clear
+PAD_BASE = 0x2_F003_0000
+PAD_P1_STATUS = 0x210  # bit 4: P1 rail is 1.8 V rather than 3.3 V
+
+#: Channel 12 drives the CPU core-voltage regulator through P_GPIO[42]: U-Boot
+#: programs it during `otp_init` (`nvt-otp.c` `prepare_power_trim`), and the
+#: board runs on what it outputs. Its clock gate, the *shared* PWM reset, its
+#: divider, its pad mux, and its enable bit are therefore never written by
+#: anything here -- every clock-generator and pinmux write goes through
+#: `read_modify_write`, and these four readings are asserted before any of them
+#: and again after the probe restores what it changed.
+CORE_RAIL_INVARIANTS: tuple[tuple[str, int, int, int, int], ...] = (
+    ("cg_pwm_reset", CG_BASE, CG_PWM_RESET, 0x1, 0x1),
+    ("cg_pwm12_clock", CG_BASE, CG_PWM12_CLK_EN, 1 << 22, 1 << 22),
+    ("top_pwm12_mux", TOP_BASE, TOP_PWM12_MUX, 0xF << 16, 0x1 << 16),
+    ("pwm12_enabled", PWM_BASE, PWM_ENABLE, 1 << 12, 1 << 12),
+)
+
+#: Read-only readings `--pwm-probe` reports before it writes anything, and
+#: compares against afterwards. The pinmux words matter most: no firmware in
+#: this board's boot path applies the vendor device tree's pinmux (U-Boot has no
+#: pinctrl driver compiled in and Linux never runs here), so what routes a PWM
+#: channel to a pad is whatever reset left plus whatever U-Boot did for the core
+#: rail -- a fact this gate reads rather than assumes.
+PWM_SURVEY_REGISTERS: tuple[tuple[str, int, int], ...] = (
+    ("top_pwm_mux", TOP_BASE, TOP_PWM_MUX),
+    ("top_pgpio_func", TOP_BASE, TOP_PGPIO_FUNC),
+    ("top_pwm12_mux", TOP_BASE, TOP_PWM12_MUX),
+    ("cg_pwm_divider", CG_BASE, CG_PWM_CLK_DIV0),
+    ("cg_pwm_clock_enable", CG_BASE, CG_PWM_CLK_EN),
+    ("cg_pwm12_clock", CG_BASE, CG_PWM12_CLK_EN),
+    ("cg_pwm_reset", CG_BASE, CG_PWM_RESET),
+    ("pwm_enable", PWM_BASE, PWM_ENABLE),
+    ("gpio_p_data", GPIO_BASE, GPIO_P_DATA),
+    ("gpio_p_dir", GPIO_BASE, GPIO_P_DIR),
+    ("pad_p1_status", PAD_BASE, PAD_P1_STATUS),
+)
+
+PWM_PROBE_PULSES = (1000, 1500, 2000)
+PWM_PROBE_PERIOD_US = 20000
+PWM_PROBE_HOLD_SECONDS = 8
+PWM_PROBE_SAMPLES = 64
+GPIO_PROBE_CYCLES = 6
+GPIO_PROBE_HOLD_SECONDS = 2
+
+
+def pwm_control_offset(channel: int) -> int:
+    """The channel's cycle-count register: 0 means free run."""
+    return channel * 8
+
+
+def pwm_period_offset(channel: int) -> int:
+    return channel * 8 + 0x04
+
+
+def pwm_ext_period_offset(channel: int) -> int:
+    """The upper byte of each period field. Channels 0-7 only."""
+    return 0x230 + channel * 4
+
+
+def pwm_period_words(rise: int, fall: int, base_period: int) -> tuple[int, int]:
+    """Split a servo pulse into the two registers the block concatenates.
+
+    The block compares a counter against `rise` and `fall` over `base_period`
+    counts, driving the pad high between them, and splits each field's low byte
+    into the period register and its high byte into the extended one. The
+    extended register is always concatenated for channels 0-7, so it is written
+    even when it is zero -- leaving it holds a previous run's high bytes and
+    silently scales the pulse.
+    """
+    if not 0 <= rise <= fall <= base_period:
+        raise ValueError(f"rise {rise} <= fall {fall} <= base_period {base_period} is violated")
+    if base_period > 0xFFFF:
+        raise ValueError(f"base_period {base_period} exceeds the 16-bit counter")
+    low = (rise & 0xFF) | ((fall & 0xFF) << 8) | ((base_period & 0xFF) << 16)
+    high = ((rise >> 8) & 0xFF) | (((fall >> 8) & 0xFF) << 8) | (((base_period >> 8) & 0xFF) << 16)
+    return low, high
+
+
+def cg_divider_word(current: int, channel: int, field: int) -> int:
+    """`current` with this channel's 14-bit divider field replaced.
+
+    Channels 0-3 share the low field and 4-7 share the high one, so programming
+    one channel's rate moves its whole group -- and touching neither group is
+    what keeps channel 12's divider, which lives in another register entirely,
+    out of reach.
+    """
+    if not 0 <= channel <= 7:
+        raise ValueError(f"channel {channel} has no divider field in this register")
+    if not 3 <= field <= 0x3FFF:
+        raise ValueError(f"divider field {field} is outside the encodable 3..16383 range")
+    shift = 0 if channel < 4 else 16
+    return (current & ~(0x3FFF << shift)) | (field << shift)
+
+
+def pinmux_words(top_mux: int, top_func: int, channel: int) -> tuple[int, int]:
+    """The two TOP words that route PWM `channel` to P_GPIO[`channel`].
+
+    The mux field selects the `_1` pad function and the P_GPIO word must say
+    FUNCTION rather than GPIO for that pin; either alone leaves the pad silent.
+    """
+    if not 0 <= channel <= 7:
+        raise ValueError(f"channel {channel} is not routed by this register")
+    shift = channel * 4
+    return ((top_mux & ~(0xF << shift)) | (0x1 << shift), top_func & ~(1 << channel))
 
 
 def fail(message: str) -> NoReturn:
@@ -492,6 +637,341 @@ def reset_probe(console: Console, prompt: str, timeout: float) -> tuple[str, int
     return transcript, None
 
 
+def pwm_probe_plan(channel: int, period_us: int, pulses: tuple[int, ...]) -> list[str]:
+    """The write sequence `--pwm-probe` performs, without a board.
+
+    A bench mode that drives registers shared with the CPU's power supply should
+    be reviewable before it is run, so this renders the same sequence the probe
+    executes -- from the same helpers, so the two cannot drift -- and marks
+    every step that reads before it writes.
+    """
+    bit = 1 << channel
+    shift = 0 if channel < 4 else 16
+    period_word, ext_word = pwm_period_words(0, pulses[0], period_us)
+    lines = [
+        f"# channel {channel} -> P_GPIO{channel}, {period_us} us frame, "
+        f"pulses {', '.join(str(pulse) for pulse in pulses)} us at 1 MHz",
+        f"read-only survey of {len(PWM_SURVEY_REGISTERS)} registers, then the core-rail invariants",
+        f"[RMW] {CG_BASE + CG_PWM_CLK_EN:#x} set {bit:#x}            # channel clock on",
+        f"[RMW] {CG_BASE + CG_PWM_CLK_DIV0:#x} field[{shift + 13}:{shift}] = 119   # 1 MHz count clock",
+        f"      mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}        # quiesce before programming",
+        f"      mw.l {PWM_BASE + pwm_control_offset(channel):#x} 0        # free run",
+        f"      mw.l {PWM_BASE + pwm_period_offset(channel):#x} {period_word:#010x}",
+        f"      mw.l {PWM_BASE + pwm_ext_period_offset(channel):#x} {ext_word:#010x}",
+        f"[RMW] {TOP_BASE + TOP_PWM_MUX:#x} field[{channel * 4 + 3}:{channel * 4}] = 1     # route the pad",
+        f"[RMW] {TOP_BASE + TOP_PGPIO_FUNC:#x} clear {bit:#x}          # pad is FUNCTION, not GPIO",
+        f"      mw.l {PWM_BASE + PWM_ENABLE:#x} {bit:#x}        # enable",
+        "      read back enable, period, ext -> check lines",
+    ]
+    for pulse in pulses:
+        low, high = pwm_period_words(0, pulse, period_us)
+        lines += [
+            f"      mw.l {PWM_BASE + pwm_period_offset(channel):#x} {low:#010x}   # {pulse} us",
+            f"      mw.l {PWM_BASE + pwm_ext_period_offset(channel):#x} {high:#010x}",
+            f"      mw.l {PWM_BASE + PWM_LOAD:#x} {bit:#x}        # latch while running",
+            f"      sleep, then sample {GPIO_BASE + GPIO_P_DATA:#x} bit {channel}",
+        ]
+    lines += [
+        f"      mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}        # disable",
+        "[RMW] restore TOP pinmux, TOP pad function, CG divider, CG clock gate",
+        "      re-check the core-rail invariants, then `reset` and wait for the banner",
+        "",
+        "PWM channel 12 drives this SoC's CPU core voltage, so it is held by "
+        "construction rather than by care:",
+        f"  never written at all: {CG_BASE + CG_PWM_RESET:#x} (shared PWM reset), "
+        f"{CG_BASE + CG_PWM12_CLK_EN:#x} (channel 12 clock), "
+        f"{TOP_BASE + TOP_PWM12_MUX:#x} (channel 12 pad mux)",
+        f"  written, but only ever channel {channel}'s bit: "
+        f"{CG_BASE + CG_PWM_CLK_EN:#x}, {CG_BASE + CG_PWM_CLK_DIV0:#x} "
+        f"(channel 12's divider is {CG_BASE + 0x324:#x}), {TOP_BASE + TOP_PWM_MUX:#x}, "
+        f"{TOP_BASE + TOP_PGPIO_FUNC:#x}",
+        f"  write-1-to-set/clear, so other channels are unreachable: "
+        f"{PWM_BASE + PWM_ENABLE:#x}, {PWM_BASE + PWM_DISABLE:#x}, {PWM_BASE + PWM_LOAD:#x}",
+        "  all four core-rail readings are asserted before the first write and after the last",
+    ]
+    return lines
+
+
+def check_pwm_pins(profile: dict[str, object]) -> None:
+    """The addresses this file drives must be the ones the pins declare."""
+    for key, constant in (
+        ("pwm_base", PWM_BASE),
+        ("pinmux_top_base", TOP_BASE),
+        ("gpio_base", GPIO_BASE),
+        ("pad_base", PAD_BASE),
+        ("reset_cg_base", CG_BASE),
+    ):
+        pinned = profile.get(key)
+        if pinned is None:
+            fail(f"sel4/pins.toml [{PINS_SECTION}] must pin {key} before a PWM probe")
+        if int(str(pinned), 16) != constant:
+            fail(f"this probe drives {constant:#x} but the pins declare {key} = {pinned}")
+
+
+def read_modify_write(
+    console: Console, prompt: str, address: int, clear_mask: int, set_mask: int
+) -> tuple[int, int]:
+    """Read a register, change only the named bits, write it back.
+
+    Every clock-generator and pinmux write goes through here. Both blocks are
+    shared with the CPU core-voltage regulator, so a blind `mw.l` of a whole
+    word would drop the rail the board runs on.
+    """
+    output = send_command(console, f"md.l {address:#x} 1", prompt, 10.0, fail)
+    before = read_register(output, address)
+    if before is None:
+        fail(f"could not read the register at {address:#x}:\n{output[-300:]}")
+    after = (before & ~clear_mask) | set_mask
+    if after != before:
+        send_command(console, f"mw.l {address:#x} {after:#x}", prompt, 10.0, fail)
+    return before, after
+
+
+def read_one(console: Console, prompt: str, address: int) -> int:
+    output = send_command(console, f"md.l {address:#x} 1", prompt, 10.0, fail)
+    value = read_register(output, address)
+    if value is None:
+        fail(f"could not read the register at {address:#x}:\n{output[-300:]}")
+    return value
+
+
+def check_core_rail(console: Console, prompt: str, when: str) -> None:
+    """Refuse to continue unless channel 12 still holds the core rail."""
+    for name, base, offset, mask, expected in CORE_RAIL_INVARIANTS:
+        value = read_one(console, prompt, base + offset)
+        if value & mask != expected:
+            fail(
+                f"core-rail invariant {name} does not hold {when}: "
+                f"{base + offset:#x} = {value:#x}, expected {expected:#x} in {mask:#x}. "
+                "PWM channel 12 drives the CPU core voltage on this board, so this "
+                "probe writes nothing further"
+            )
+    print(f"[pwm]    core-rail invariants hold {when}")
+
+
+def pwm_survey(console: Console, prompt: str) -> dict[str, int]:
+    """Report the PWM, clock, pinmux, and pad state, asserting nothing."""
+    readings: dict[str, int] = {}
+    for name, base, offset in PWM_SURVEY_REGISTERS:
+        value = read_one(console, prompt, base + offset)
+        readings[name] = value
+        print(f"[pwm]    {name} ({base + offset:#x}) = {value:#010x}")
+    rail = "1.8V" if readings["pad_p1_status"] & (1 << 4) else "3.3V"
+    print(f"[pwm]    P_GPIO[0..19] pad rail reads {rail}")
+    return readings
+
+
+def gpio_probe(
+    console: Console, prompt: str, channel: int, cycles: int, hold: float, timeout: float
+) -> str:
+    """Toggle P_GPIO[channel] as a plain output so a meter can find the pad.
+
+    Which pads reach a connector is the one fact no vendor source on this host
+    answers, and a square wave slow enough to watch on a multimeter is the
+    cheapest way to answer it. Everything this changes is restored before
+    returning.
+    """
+    reach_uboot(console, prompt, min(timeout, PROMPT_WINDOW_SECONDS), fail)
+    transcript = ""
+    bit = 1 << channel
+    check_core_rail(console, prompt, "before the GPIO probe")
+    print(f"[gpio]   driving P_GPIO{channel} as an output for {cycles} cycles")
+    func_before, _ = read_modify_write(console, prompt, TOP_BASE + TOP_PGPIO_FUNC, 0, bit)
+    dir_before, _ = read_modify_write(console, prompt, GPIO_BASE + GPIO_P_DIR, 0, bit)
+    try:
+        for cycle in range(cycles):
+            for level, offset in (("high", GPIO_P_SET), ("low", GPIO_P_CLR)):
+                transcript += send_command(
+                    console, f"mw.l {GPIO_BASE + offset:#x} {bit:#x}", prompt, 10.0, fail
+                )
+                print(f"[gpio]   cycle {cycle + 1}/{cycles}: P_GPIO{channel} {level}")
+                transcript += send_command(console, f"sleep {hold:g}", prompt, hold + 10.0, fail)
+    finally:
+        # Restore before reporting: leaving a pad driven would carry into the
+        # PWM probe and into the vendor firmware's own next boot.
+        read_modify_write(console, prompt, GPIO_BASE + GPIO_P_DIR, bit, dir_before & bit)
+        read_modify_write(console, prompt, TOP_BASE + TOP_PGPIO_FUNC, bit, func_before & bit)
+    check_core_rail(console, prompt, "after the GPIO probe")
+    return transcript
+
+
+def pwm_probe(
+    console: Console,
+    prompt: str,
+    channel: int,
+    period_us: int,
+    pulses: tuple[int, ...],
+    hold: float,
+    samples: int,
+    timeout: float,
+) -> str:
+    """Drive servo PWM on one channel, holding each pulse width long enough to watch.
+
+    The vendor `pwm` command cannot do this: it forces a 30 MHz count clock, at
+    which a 20 ms frame overflows the 16-bit counter, and it re-applies the
+    board device tree's pinmux -- which selects no pad for channels 0-7 and so
+    clears the routing this needs. The registers are therefore driven directly.
+
+    Between pulse widths the channel keeps free-running and only its period
+    registers are relatched, which is the update path a resident driver uses;
+    the readbacks after each write are what the transcript can be held to, and
+    the servo or ESC responding is the operator's observation.
+    """
+    if not 0 <= channel <= PWM_MAX_PROBE_CHANNEL:
+        fail(
+            f"channel {channel} is outside 0..{PWM_MAX_PROBE_CHANNEL}: only those have "
+            "16-bit periods, a pad no other function on this board claims, and a "
+            "divider group that excludes channel 12's core-rail output"
+        )
+    if not 2000 <= period_us <= 0xFFFF:
+        fail(f"period {period_us} us is outside the 2000..65535 count range at 1 MHz")
+    for pulse in pulses:
+        if not 0 < pulse < period_us:
+            fail(f"pulse {pulse} us must be inside the {period_us} us frame")
+
+    reach_uboot(console, prompt, min(timeout, PROMPT_WINDOW_SECONDS), fail)
+    transcript = ""
+    bit = 1 << channel
+    print("[pwm]    surveying before writing anything")
+    before = pwm_survey(console, prompt)
+    check_core_rail(console, prompt, "before the PWM probe")
+
+    divider = 119  # 120 MHz / (119 + 1) = 1 MHz, so one count is one microsecond
+    period_word, ext_word = pwm_period_words(0, pulses[0], period_us)
+    mux_word, func_word = pinmux_words(before["top_pwm_mux"], before["top_pgpio_func"], channel)
+
+    try:
+        # Clock first, then registers, then the pad: routing a pad to a channel
+        # that is not yet programmed would emit whatever the last run left.
+        read_modify_write(console, prompt, CG_BASE + CG_PWM_CLK_EN, 0, bit)
+        read_modify_write(
+            console,
+            prompt,
+            CG_BASE + CG_PWM_CLK_DIV0,
+            0x3FFF << (0 if channel < 4 else 16),
+            cg_divider_word(0, channel, divider) & (0x3FFF << (0 if channel < 4 else 16)),
+        )
+        transcript += send_command(
+            console, f"mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}", prompt, 10.0, fail
+        )
+        transcript += send_command(
+            console, f"mw.l {PWM_BASE + pwm_control_offset(channel):#x} 0", prompt, 10.0, fail
+        )
+        transcript += send_command(
+            console,
+            f"mw.l {PWM_BASE + pwm_period_offset(channel):#x} {period_word:#x}",
+            prompt,
+            10.0,
+            fail,
+        )
+        transcript += send_command(
+            console,
+            f"mw.l {PWM_BASE + pwm_ext_period_offset(channel):#x} {ext_word:#x}",
+            prompt,
+            10.0,
+            fail,
+        )
+        read_modify_write(
+            console, prompt, TOP_BASE + TOP_PWM_MUX, 0xF << (channel * 4), mux_word & (0xF << (channel * 4))
+        )
+        read_modify_write(console, prompt, TOP_BASE + TOP_PGPIO_FUNC, bit, func_word & bit)
+        transcript += send_command(
+            console, f"mw.l {PWM_BASE + PWM_ENABLE:#x} {bit:#x}", prompt, 10.0, fail
+        )
+
+        enabled = read_one(console, prompt, PWM_BASE + PWM_ENABLE)
+        print(f"check pwm_enable = {'ok' if enabled & bit else 'FAIL'}")
+        readback = read_one(console, prompt, PWM_BASE + pwm_period_offset(channel))
+        print(f"check pwm_period = {'ok' if readback == period_word else 'FAIL'}")
+        ext_readback = read_one(console, prompt, PWM_BASE + pwm_ext_period_offset(channel))
+        print(f"check pwm_ext = {'ok' if ext_readback == ext_word else 'FAIL'}")
+        if not enabled & bit or readback != period_word or ext_readback != ext_word:
+            fail(
+                f"the block did not take the programmed values: enable {enabled:#x}, "
+                f"period {readback:#x} (wanted {period_word:#x}), ext {ext_readback:#x} "
+                f"(wanted {ext_word:#x})"
+            )
+
+        for pulse in pulses:
+            period_word, ext_word = pwm_period_words(0, pulse, period_us)
+            transcript += send_command(
+                console,
+                f"mw.l {PWM_BASE + pwm_period_offset(channel):#x} {period_word:#x}",
+                prompt,
+                10.0,
+                fail,
+            )
+            transcript += send_command(
+                console,
+                f"mw.l {PWM_BASE + pwm_ext_period_offset(channel):#x} {ext_word:#x}",
+                prompt,
+                10.0,
+                fail,
+            )
+            transcript += send_command(
+                console, f"mw.l {PWM_BASE + PWM_LOAD:#x} {bit:#x}", prompt, 10.0, fail
+            )
+            duty = 100.0 * pulse / period_us
+            print(
+                f"[pwm]    pulse_us={pulse} period_us={period_us} duty={duty:.1f}%: "
+                f"observe the servo or ESC now, holding {hold:g}s"
+            )
+            transcript += send_command(console, f"sleep {hold:g}", prompt, hold + 10.0, fail)
+            # Sample the pad through the GPIO block. Whether it reports a pad
+            # held by another function is exactly what this probe is finding
+            # out, so the count is reported and never asserted.
+            high = 0
+            for _ in range(samples):
+                if read_one(console, prompt, GPIO_BASE + GPIO_P_DATA) & bit:
+                    high += 1
+            print(f"[pwm]    gpio_data samples={samples} high={high} (expected ~{duty:.0f}% if the pad reads back)")
+
+        transcript += send_command(
+            console, f"mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}", prompt, 10.0, fail
+        )
+        disabled = read_one(console, prompt, PWM_BASE + PWM_ENABLE)
+        print(f"check pwm_disable = {'ok' if not disabled & bit else 'FAIL'}")
+        if disabled & bit:
+            fail(f"channel {channel} stayed enabled after a disable write: {disabled:#x}")
+    finally:
+        # Put back every shared word this touched, so the vendor firmware's own
+        # next boot sees what it would have seen.
+        read_modify_write(
+            console, prompt, TOP_BASE + TOP_PGPIO_FUNC, bit, before["top_pgpio_func"] & bit
+        )
+        read_modify_write(
+            console,
+            prompt,
+            TOP_BASE + TOP_PWM_MUX,
+            0xF << (channel * 4),
+            before["top_pwm_mux"] & (0xF << (channel * 4)),
+        )
+        read_modify_write(
+            console,
+            prompt,
+            CG_BASE + CG_PWM_CLK_DIV0,
+            0x3FFF << (0 if channel < 4 else 16),
+            before["cg_pwm_divider"] & (0x3FFF << (0 if channel < 4 else 16)),
+        )
+        read_modify_write(
+            console, prompt, CG_BASE + CG_PWM_CLK_EN, bit, before["cg_pwm_clock_enable"] & bit
+        )
+
+    check_core_rail(console, prompt, "after the PWM probe")
+    print("[pwm]    resetting the board to prove its firmware still comes up")
+    console.flush_input()
+    console.write(b"reset\r")
+    recovery = wait_for_banner(console, RECOVERY_SECONDS)
+    transcript += recovery
+    if not re.search(BANNER_PATTERN, recovery):
+        fail(
+            f"no firmware banner within {RECOVERY_SECONDS:.0f}s of `reset`; the board "
+            "may not have survived the probe, so record the survey readings before retrying"
+        )
+    print("[pwm]    the vendor firmware returned")
+    return transcript
+
+
 def monitor(console: Console, timeout: float) -> None:
     """Print whatever the board says, asserting nothing.
 
@@ -542,12 +1022,52 @@ def main() -> None:
             "report whether the non-secure world may reset this board"
         ),
     )
+    parser.add_argument(
+        "--pwm-probe",
+        action="store_true",
+        help=(
+            "drive servo PWM on one channel from the U-Boot prompt, holding each "
+            "pulse width long enough to watch a servo or ESC respond"
+        ),
+    )
+    parser.add_argument(
+        "--gpio-probe",
+        type=int,
+        metavar="CHANNEL",
+        help="toggle P_GPIO[CHANNEL] as a plain output so a meter can find the pad",
+    )
+    parser.add_argument("--pwm-channel", type=int, default=0)
+    parser.add_argument("--pwm-period-us", type=int, default=PWM_PROBE_PERIOD_US)
+    parser.add_argument(
+        "--pwm-pulse-us",
+        default=",".join(str(pulse) for pulse in PWM_PROBE_PULSES),
+        help="comma-separated pulse widths to hold in turn",
+    )
+    parser.add_argument("--pwm-hold-seconds", type=float, default=PWM_PROBE_HOLD_SECONDS)
+    parser.add_argument("--pwm-samples", type=int, default=PWM_PROBE_SAMPLES)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the PWM probe's write sequence and exit; needs no board",
+    )
+    parser.add_argument("--gpio-cycles", type=int, default=GPIO_PROBE_CYCLES)
+    parser.add_argument("--gpio-hold-seconds", type=float, default=GPIO_PROBE_HOLD_SECONDS)
     parser.add_argument("--transcript", type=Path, help="write the captured transcript here")
     parser.add_argument("--no-build", action="store_true")
     arguments = parser.parse_args()
 
     profile = load_profile()
     baud = int(str(profile["serial_baud"]))
+
+    if arguments.dry_run:
+        check_pwm_pins(profile)
+        try:
+            pulses = tuple(int(part) for part in str(arguments.pwm_pulse_us).split(","))
+        except ValueError:
+            fail(f"--pwm-pulse-us must be comma-separated integers: {arguments.pwm_pulse_us!r}")
+        for line in pwm_probe_plan(arguments.pwm_channel, arguments.pwm_period_us, pulses):
+            print(line)
+        return
 
     if arguments.serial is None:
         fail(
@@ -579,6 +1099,46 @@ def main() -> None:
                     "P6.B's root cannot reset it and must use the manual power-cycle path"
                 )
             print(f"nt98690 reset probe: PASS, {width}-bit writes reset the named {profile['board']}")
+            return
+
+        if arguments.gpio_probe is not None:
+            check_pwm_pins(profile)
+            transcript += gpio_probe(
+                console,
+                str(profile["uboot_prompt"]),
+                arguments.gpio_probe,
+                arguments.gpio_cycles,
+                arguments.gpio_hold_seconds,
+                arguments.timeout,
+            )
+            print(
+                f"nt98690 gpio probe: P_GPIO{arguments.gpio_probe} toggled on the named "
+                f"{profile['board']}; which header pin followed it is the operator's reading"
+            )
+            return
+
+        if arguments.pwm_probe:
+            check_pwm_pins(profile)
+            try:
+                pulses = tuple(int(part) for part in str(arguments.pwm_pulse_us).split(","))
+            except ValueError:
+                fail(f"--pwm-pulse-us must be comma-separated integers: {arguments.pwm_pulse_us!r}")
+            transcript += pwm_probe(
+                console,
+                str(profile["uboot_prompt"]),
+                arguments.pwm_channel,
+                arguments.pwm_period_us,
+                pulses,
+                arguments.pwm_hold_seconds,
+                arguments.pwm_samples,
+                arguments.timeout,
+            )
+            print(
+                f"nt98690 pwm probe: PASS, channel {arguments.pwm_channel} took every "
+                f"programmed value on the named {profile['board']} and its firmware "
+                "returned. Whether a servo or ESC followed the pulse widths is the "
+                "operator's observation, not this gate's"
+            )
             return
 
         if not arguments.no_build:

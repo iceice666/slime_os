@@ -352,6 +352,30 @@ sel4_memory_size = "0x2ff00000"
 # from the non-secure world; absent until it has run.
 reset_cg_base = "0x2f0020000"
 reset_wdt_base = "0x2f0060000"
+# The SoC blocks a servo-PWM output needs, from the vendor BSP: the PWM block
+# itself (`nvt-peri.dtsi` `pwm@2,f0120000`, driver `drivers/pwm/pwm-nvtivot.c`),
+# the pinmux/TOP block that routes a channel to a pad (`plat-ns02201_a64/
+# top_reg.h`, `TOP_REG6_OFS 0x18` and `TOP_REGPGPIO0_OFS 0xA8`), the GPIO block
+# that can drive or sample the same pad (`plat-ns02201_a64/nvt-gpio.h`), and the
+# pad block that selects the P1 rail (`plat-ns02201_a64/pad.h`). The clock
+# generator is `reset_cg_base` above -- the same page that arms the watchdog, so
+# nothing outside the root ever holds it.
+#
+# The divider field is `divisor - 1` over the 120 MHz `fix120m` source
+# (`nvt-clk-provider.c:906-913`), so 119 yields a 1 MHz PWM count clock and one
+# count is one microsecond: a 20000-count frame is 50 Hz and a 1500-count pulse
+# is servo centre, both inside the 16-bit range channels 0-7 carry.
+#
+# Which channel and pad are used, and whether that pad reaches a connector, are
+# bench facts. They are absent until the PWM probe has observed them, exactly as
+# `reset_write_width` is.
+pwm_base = "0x2f0120000"
+pinmux_top_base = "0x2f0010000"
+gpio_base = "0x2f0040000"
+pad_base = "0x2f0030000"
+pwm_clock_source_hz = 120000000
+pwm_clock_divider = 119
+pwm_clock_hz = 1000000
 boot_files = [
     "slime-nt98690-probe.bin",
     "slime-sel4-sample-ns02201-h1v1.bin",
