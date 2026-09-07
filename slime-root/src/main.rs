@@ -716,8 +716,7 @@ struct MemoryPhase {
     /// Whether the report arrived at all.
     reported: bool,
 }
-static mut OBJECT_ALLOCATOR: core::mem::MaybeUninit<ObjectAllocator> =
-    core::mem::MaybeUninit::uninit();
+static mut OBJECT_ALLOCATOR: ObjectAllocator = ObjectAllocator::empty();
 
 /// Supervised protection probes the shared-buffer phase expects. One store to
 /// a read-only mapping, one branch into an execute-never page. A third fault
@@ -760,17 +759,12 @@ struct BufferPhase {
 // The bound is stated here rather than discovered a third time.
 #[root_task(stack_size = 1024 * 1024, heap_size = 1024 * 512)]
 fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
-    let allocator = match ObjectAllocator::new(bootinfo) {
-        Ok(value) => unsafe {
-            // SAFETY: root startup is single-threaded and initializes this storage exactly once.
-            (&raw mut OBJECT_ALLOCATOR).write(core::mem::MaybeUninit::new(value));
-            (&raw mut OBJECT_ALLOCATOR)
-                .cast::<ObjectAllocator>()
-                .as_mut()
-                .unwrap()
-        },
-        Err(error) => fatal!("allocator rejected bootinfo: {error:?}"),
-    };
+    // SAFETY: root startup is single-threaded, this is the sole initialization,
+    // and the returned reference is held for the root task's lifetime.
+    let allocator = unsafe { &mut *core::ptr::addr_of_mut!(OBJECT_ALLOCATOR) };
+    if let Err(error) = allocator.initialize(bootinfo) {
+        fatal!("allocator rejected bootinfo: {error:?}")
+    }
     let initial_slots = allocator.slots_remaining();
     let initial_untypeds = allocator.untyped_count();
     let initial_bytes = allocator.untyped_bytes_remaining();

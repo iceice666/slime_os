@@ -293,6 +293,8 @@ pub enum TaskError {
     WriteRegisters(sel4::Error),
     /// Resuming the thread failed.
     Resume(sel4::Error),
+    /// Suspending a task thread before an address-space transaction failed.
+    Suspend(sel4::Error),
     /// The task's entry point does not fit a machine word.
     EntryOutOfRange {
         entry: u64,
@@ -489,7 +491,30 @@ impl Task {
         (live, peak)
     }
 
-    /// Stop the thread. Idempotent from the root task's perspective.
+    /// Stop sibling workers before mutating this task's address space. The main
+    /// thread is already blocked in the grow IPC call; suspending and resuming
+    /// it before the root replies would restart that call on seL4.
+    fn suspend_workers(&self) -> Result<(), TaskError> {
+        for (suspended_workers, worker) in self.workers.iter().flatten().enumerate() {
+            if let Err(error) = worker.tcb_suspend() {
+                for suspended in self.workers.iter().flatten().take(suspended_workers) {
+                    let _ = suspended.tcb_resume();
+                }
+                return Err(TaskError::Suspend(error));
+            }
+        }
+        Ok(())
+    }
+
+    fn resume_workers(&self) -> Result<(), TaskError> {
+        for worker in self.workers.iter().flatten() {
+            worker.tcb_resume().map_err(TaskError::Resume)?;
+        }
+        Ok(())
+    }
+
+    /// Stop the main thread during teardown. Idempotent from the root task's
+    /// perspective; arena revocation destroys every worker with it.
     pub fn suspend(&self) -> Result<(), sel4::Error> {
         self.tcb.tcb_suspend()
     }
@@ -695,6 +720,14 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     remaining: 0,
                 }))?;
         let arena = allocator.begin_task_arena(arena_bits)?;
+        // Reserve the maximum simultaneous backing population this task's own
+        // quota permits. A full 512-page holder must still admit the legal
+        // incremental construction (512 granules plus one leaf table); smaller
+        // holders pay only for their own ceiling.
+        let private_slots = crate::private_memory::backing_slot_reservation(private_memory_pages);
+        if private_slots != 0 {
+            allocator.provision_private_slots(arena, private_slots)?;
+        }
 
         let construction = (|| {
             let vspace = create_child_vspace(
@@ -1107,11 +1140,27 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let Some(task) = self.tasks[index].as_mut() else {
             return Err(TaskError::UnknownTask(id));
         };
+        let suspended = task.activated && delta != 0;
+        if suspended {
+            // The caller is already blocked in the IPC call. Stop only sibling
+            // workers so none can observe or write uncommitted mappings.
+            task.suspend_workers()?;
+        }
         let arena = task.cleanup.arena;
         let vspace = task.vspace.vspace;
-        self.private
+        let result = self
+            .private
             .grow(allocator, arena, vspace, &mut task.private_memory, delta)
-            .map_err(TaskError::PrivateMemory)
+            .map_err(TaskError::PrivateMemory);
+        if suspended && let Err(error) = task.resume_workers() {
+            // Growth is already committed, so keep its answer authoritative;
+            // make the degraded worker state visible to supervision evidence.
+            sel4::debug_println!(
+                "SLIME_MEM worker resume failed task={} error={error:?}",
+                id.0,
+            );
+        }
+        result
     }
 
     /// This table's private-memory accounting, for the root's own markers

@@ -41,6 +41,18 @@ CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
 # chains *within* it, and those chains stay in their owning checker.
 MARKER_CONTRACT = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e"
 
+# Multi-platform checker invocations whose non-default arm is not yet closure
+# reachable. The tuple is `(run name, execution profile, image name)`. Keeping
+# it here makes the second execution a frozen test-run input while CP15's
+# closure migration remains an explicit separate milestone.
+EXTRA_RUNS = {
+    "sel4-private-memory": (
+        "sel4-private-memory-qemu-riscv-virt",
+        "qemu-riscv-virt",
+        "slime-sel4-private-memory-qemu-riscv-virt.elf",
+    ),
+}
+
 # Checkers that boot no seL4 QEMU plane of their own, so they own no test run:
 # board gates, host-only contract gates, aggregate composers that delegate to
 # the planes they compose, and the bless/derivation helpers.
@@ -75,6 +87,21 @@ def run_name(path: _Path) -> str:
     if stem.endswith("-plane"):
         stem = stem[: -len("-plane")]
     return stem
+
+def run_variants(path: _Path) -> list[tuple[str, str, str, str]]:
+    """Every independently invoked target for one plane checker."""
+    name = run_name(path)
+    closure = closure_name_for(path, name)
+    # Closure-backed runs resolve their image through the closure identity.
+    # A default arm with no closure must retain the literal artifact extracted
+    # from its checker so the aggregate exemption remains independently checked.
+    closure_exists = (CLOSURE_ROOT / f"{closure}.zti").is_file()
+    variants = [(name, closure, "qemu-arm-virt", "" if closure_exists else booted_image(path))]
+    extra = EXTRA_RUNS.get(name)
+    if extra is not None:
+        run, profile, image = extra
+        variants.append((run, "", profile, image))
+    return variants
 
 
 def booted_image(path: _Path) -> str:
@@ -200,8 +227,8 @@ def extract(path: _Path) -> dict:
     }
 
 
-def render(name: str, closure: str, facts: dict) -> str:
-    """Render one record. Zutai's JSON projection sorts keys, so field order is fixed."""
+def render(name: str, closure: str, profile: str, facts: dict) -> str:
+    """Render one target-qualified record in canonical field order."""
 
     def text_list(values: list[str], indent: str = "    ") -> str:
         if not values:
@@ -262,7 +289,7 @@ def render(name: str, closure: str, facts: dict) -> str:
         f'  name = "{name}";\n'
         f'  imageClosureIdentity = "{closure}";\n'
         '  executionKind = "emulator";\n'
-        '  executionProfile = "qemu-arm-virt";\n'
+        f'  executionProfile = "{profile}";\n'
         f"  disks = {disks};\n"
         "  networks = [];\n"
         f"  devices = {devices};\n"
@@ -277,10 +304,13 @@ def render(name: str, closure: str, facts: dict) -> str:
 def outputs() -> dict[_Path, str]:
     emitted: dict[_Path, str] = {}
     for path in plane_checkers():
-        name = run_name(path)
-        emitted[RUN_ROOT / f"{name}.zti"] = render(
-            name, closure_identity_for(closure_name_for(path, name)), extract(path)
-        )
+        for name, closure_name, profile, _image in run_variants(path):
+            emitted[RUN_ROOT / f"{name}.zti"] = render(
+                name,
+                closure_identity_for(closure_name) if closure_name else "",
+                profile,
+                extract(path),
+            )
     return emitted
 
 

@@ -67,6 +67,7 @@ IMAGES_WITHOUT_CLOSURE = {
     "slime-sel4-bcm2712-rpi5.elf": "a physical Raspberry Pi 5 image, outside the QEMU closure corpus",
     "slime-sel4-graph-cv1800b-duo-test-terminator.elf": "a Milk-V Duo board image, outside the QEMU closure corpus",
     "slime-sel4-graph.elf": "check-sel4-component-graph.py's --no-build reads this fixed legacy path only for check-external-component-admission.py's mixed-source generation",
+    "slime-sel4-private-memory-qemu-riscv-virt.elf": "MEM-LARGE adds the RV64 execution arm before CP15 migrates its image build to closure identity",
 }
 
 
@@ -436,6 +437,7 @@ def check_migration_is_monotone() -> tuple[int, int]:
         "check-sel4-demo-plane.py": "its boot-selection arm has no closure and its wrong-target arm needs a scrubbed input",
         "check-sel4-generation-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
         "check-sel4-rollback-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
+        "check-sel4-private-memory-plane.py": "MEM-LARGE adds an RV64 arm before CP15 migrates that target's image to closure identity",
     }
     migrated, legacy, dual = [], [], []
     for path in sorted(CHECK_ROOT.glob("check-sel4-*.py")):

@@ -180,12 +180,15 @@ fn serve_request(
                         .map(|task| task.private_memory)
                         .unwrap_or(private_memory::Region::DENIED);
                     sel4::debug_println!(
-                        "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={}",
+                        "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
                         id.0,
                         region.pages(),
                         region.base(),
                         region.quota(),
                         tasks.private_memory().total_pages(),
+                        region.large_frames(),
+                        region.base_frames(),
+                        region.leaf_tables(),
                     );
                     Response::success(previous as i64, region.base() as sel4::Word)
                 }

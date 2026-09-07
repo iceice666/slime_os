@@ -1,6 +1,7 @@
 [group('planes / runtime')]
 private_memory_check: sel4_pin_check
-    python3 scripts/check/check-sel4-private-memory-plane.py
+    python3 scripts/check/check-sel4-private-memory-plane.py --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --platform qemu-riscv-virt
 
 [group('planes / runtime')]
 clock_authority_check: sel4_pin_check

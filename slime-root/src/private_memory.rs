@@ -29,13 +29,14 @@
 //!   fails rather than moving. (WebAssembly runtimes may relocate a linear
 //!   memory base precisely because Wasm code addresses by offset; native code
 //!   has no such freedom.)
-//! * **Address space is reserved at spawn, frames arrive on demand.** The
-//!   child's translation tables cover the whole window from construction, so a
-//!   growth allocates leaf frames only and can never need a table the arena did
-//!   not plan for.
-//! * **Growth is all-or-nothing.** A failure part way through unmaps and
-//!   returns every frame the attempt took, leaving the page count and every
-//!   existing mapping exactly as they were.
+//! * **Address space is reserved at spawn, backing arrives on demand.** Leaf
+//!   tables stay absent until a 4 KiB mapping needs them, so an aligned 2 MiB
+//!   run can occupy the same slot directly. The task arena reserves the larger
+//!   of the all-base-page and mixed-allocation constructions.
+//! * **Growth is all-or-nothing.** A failure part way through unmaps every
+//!   frame and lazily-created table the attempt mapped, retaining those objects
+//!   in the task arena for deterministic reuse while leaving the page count and
+//!   every existing mapping exactly as they were.
 //! * **Pages are user/read-write/execute-never, always.** No growth path can
 //!   derive an executable mapping, so W^X holds by construction.
 //! * **Allocation policy is userspace's.** The root tracks a page count and
@@ -43,8 +44,12 @@
 
 use sel4::CapTypeForObjectOfFixedSize;
 
-use crate::child_vspace::GRANULE_SIZE;
-use crate::object_allocator::{AllocError, ArenaPlan, ObjectAllocator, TaskArenaId};
+use crate::child_vspace::{
+    GRANULE_SIZE, LARGE_FRAME_BYTES, LARGE_FRAME_PAGES, LARGE_FRAME_TYPE, private_leaf_table_type,
+};
+use crate::object_allocator::{
+    AllocError, ArenaPlan, ObjectAllocator, PrivateObjectKind, TaskArenaId,
+};
 
 /// Pages one task's private region may ever hold.
 ///
@@ -126,8 +131,12 @@ pub enum GrowError {
         delta: usize,
         ceiling: usize,
     },
-    /// A frame could not be retyped or mapped. Every frame the attempt had
-    /// already taken has been returned before this is reported.
+    /// A retained leaf table occupies the aligned block entry, so this request
+    /// cannot receive the promised large-frame backing without replacing a
+    /// live translation structure.
+    LargeFrameUnavailable { pages: usize, delta: usize },
+    /// A frame could not be retyped or mapped. Every backing object the attempt
+    /// had already taken has been returned before this is reported.
     Frames { allocated: usize, error: AllocError },
 }
 
@@ -144,6 +153,9 @@ pub struct Region {
     reservation: usize,
     quota: usize,
     pages: usize,
+    large_frames: usize,
+    base_frames: usize,
+    leaf_tables: usize,
 }
 
 impl Region {
@@ -158,6 +170,9 @@ impl Region {
         reservation: 0,
         quota: 0,
         pages: 0,
+        large_frames: 0,
+        base_frames: 0,
+        leaf_tables: 0,
     };
 
     /// A region reserved at `base`, with `quota` pages of growth authorized.
@@ -179,6 +194,9 @@ impl Region {
             reservation: MAX_REGION_PAGES,
             quota,
             pages: 0,
+            large_frames: 0,
+            base_frames: 0,
+            leaf_tables: 0,
         }
     }
 
@@ -193,6 +211,18 @@ impl Region {
 
     pub const fn quota(self) -> usize {
         self.quota
+    }
+
+    pub const fn large_frames(self) -> usize {
+        self.large_frames
+    }
+
+    pub const fn base_frames(self) -> usize {
+        self.base_frames
+    }
+
+    pub const fn leaf_tables(self) -> usize {
+        self.leaf_tables
     }
 
     /// Bytes of address space the window spans, backed or not.
@@ -283,31 +313,59 @@ impl Region {
         Ok(())
     }
 }
-
 /// Kernel memory one child's private region costs, as an addition to the arena
 /// plan its VSpace is sized from.
 ///
-/// Only the leaf frames its quota authorizes. The window's *translation tables*
-/// are already charged: `child_vspace::thread_mapped_span` includes the window
-/// in the range the VSpace maps, so `map_intermediate_tables` builds those
-/// tables at construction and `ChildImage::vspace_arena_plan` plans them in the
-/// same arithmetic. Charging them again here would size every arena for tables
-/// it allocates once, and — worse — the two sides would be free to disagree.
-///
-/// The frames must be planned even though they are allocated on demand: an
-/// arena is fixed at `begin_task_arena` and never grows, so a quota whose
-/// frames the arena has no room for would be a ceiling the task could never
-/// reach. Planning them makes the declared quota the live ceiling, which is
-/// what C10.2's exit condition requires of the generation side.
-///
-/// Returns `None` when the plan overflows, which the caller reports as the same
-/// admission failure any other over-large image produces.
+/// A failed bulk mapping may retain its large frame before the caller retries
+/// incrementally, so a full-window quota reserves the sequential
+/// bulk-then-incremental watermark, including both alignment decisions.
 pub fn arena_reservation(plan: &mut ArenaPlan, quota: usize) -> Option<()> {
     let quota = quota.min(MAX_REGION_PAGES);
-    for _ in 0..quota {
-        plan.add(sel4::cap_type::Granule::object_blueprint())?;
+
+    let mut incremental = *plan;
+    if quota != 0 {
+        incremental.add(private_leaf_table_type().blueprint())?;
+        for _ in 0..quota {
+            incremental.add(sel4::cap_type::Granule::object_blueprint())?;
+        }
     }
+
+    let mut bulk_then_incremental = *plan;
+    if quota == LARGE_FRAME_PAGES {
+        bulk_then_incremental.add(LARGE_FRAME_TYPE.blueprint())?;
+        bulk_then_incremental.add(private_leaf_table_type().blueprint())?;
+        for _ in 0..quota {
+            bulk_then_incremental.add(sel4::cap_type::Granule::object_blueprint())?;
+        }
+    }
+
+    plan.reserve_to(
+        incremental
+            .required_bytes()
+            .max(bulk_then_incremental.required_bytes()),
+    );
     Some(())
+}
+
+/// Root CSlots required to reach `quota` through any legal growth sequence.
+///
+/// A full-window bulk request needs one 2 MiB frame. Every other sequence may
+/// require one leaf table plus one 4 KiB frame per page. Provisioning the larger
+/// of those simultaneous object populations makes retry history irrelevant
+/// without charging every nonzero holder for the global maximum.
+pub const fn backing_slot_reservation(quota: usize) -> usize {
+    let quota = if quota < MAX_REGION_PAGES {
+        quota
+    } else {
+        MAX_REGION_PAGES
+    };
+    if quota == 0 {
+        0
+    } else if quota == LARGE_FRAME_PAGES {
+        MAX_REGION_PAGES + 2
+    } else {
+        quota + 1
+    }
 }
 
 /// Every live private region, and the root-wide page count they share.
@@ -364,11 +422,11 @@ impl Table {
     /// ends without a second operation.
     ///
     /// On any failure `region` and the root-wide total are exactly as they were
-    /// and every frame the attempt took has been unmapped, deleted, and its
-    /// CSlot returned to the arena. That is the whole reason the frames are
-    /// tracked in a local array rather than pushed into the region as they
-    /// land: an all-or-nothing operation cannot commit its bookkeeping until
-    /// the last mapping has succeeded.
+    /// and every backing object the attempt took has been unmapped and retained
+    /// in the task arena for a later retry. That is the whole reason the frames
+    /// are tracked locally rather than committed into the region as they land:
+    /// an all-or-nothing operation cannot commit its bookkeeping until the last
+    /// mapping has succeeded.
     pub fn grow(
         &mut self,
         allocator: &mut ObjectAllocator,
@@ -382,40 +440,111 @@ impl Table {
         if delta == 0 {
             return Ok(previous);
         }
-        let mut taken: [Frame; MAX_REGION_PAGES] = [Frame::EMPTY; MAX_REGION_PAGES];
-        for count in 0..delta {
-            // The destination is claimed *before* the frame is allocated, so a
-            // successful allocation can never be left unrecorded — an
-            // unrecorded frame is one the unwind below could not return.
-            // `admit` bounded `delta` by the reservation, which is this array's
-            // own length, so the slot always exists; the fallible form keeps
-            // that a checked fact rather than an indexing panic in the root.
-            if taken.get(count).is_none() {
-                unwind(allocator, arena, &taken, count);
-                return Err(GrowError::Frames {
-                    allocated: count,
-                    error: AllocError::ArenaSlotTableFull {
-                        limit: MAX_REGION_PAGES,
-                    },
-                });
-            }
-            let vaddr = region.base + (previous + count) * GRANULE_SIZE;
-            match back_page(allocator, arena, vspace, vaddr) {
-                Ok(cap) => {
-                    if let Some(slot) = taken.get_mut(count) {
-                        *slot = Frame { cap, vaddr };
+        let mut taken: [Backing; MAX_REGION_PAGES + 1] = [Backing::EMPTY; MAX_REGION_PAGES + 1];
+        let mut count = 0;
+        let mut pages_backed = 0;
+        let mut large_frames = 0;
+        let mut base_frames = 0;
+        let mut leaf_tables = 0;
+        let retained_leaf = allocator
+            .has_reusable_private_in(
+                arena,
+                PrivateObjectKind::LeafTable,
+                private_leaf_table_type().blueprint().physical_size_bits(),
+                true,
+            )
+            .map_err(|error| GrowError::Frames {
+                allocated: 0,
+                error,
+            })?;
+        let first_vaddr = region.base + previous * GRANULE_SIZE;
+        if retained_leaf
+            && previous == 0
+            && first_vaddr.is_multiple_of(LARGE_FRAME_BYTES)
+            && delta >= LARGE_FRAME_PAGES
+        {
+            return Err(GrowError::LargeFrameUnavailable {
+                pages: previous,
+                delta,
+            });
+        }
+        let mut leaf_available = previous != 0;
+        if retained_leaf {
+            let table =
+                back_leaf_table(allocator, arena, vspace, region.base).map_err(|error| {
+                    GrowError::Frames {
+                        allocated: 0,
+                        error,
                     }
+                })?;
+            taken[count] = table;
+            count += 1;
+            leaf_tables += 1;
+            leaf_available = true;
+        }
+        while pages_backed < delta {
+            let page = previous + pages_backed;
+            let vaddr = region.base + page * GRANULE_SIZE;
+            let remaining = delta - pages_backed;
+            let large = !leaf_available
+                && vaddr.is_multiple_of(LARGE_FRAME_BYTES)
+                && remaining >= LARGE_FRAME_PAGES;
+            let result = if large {
+                back_large(allocator, arena, vspace, vaddr).map(|cap| Backing {
+                    cap,
+                    pages: LARGE_FRAME_PAGES,
+                    size_bits: LARGE_FRAME_TYPE.bits(),
+                    kind: PrivateObjectKind::LargeFrame,
+                })
+            } else {
+                if !leaf_available {
+                    match back_leaf_table(allocator, arena, vspace, region.base) {
+                        Ok(table) => {
+                            taken[count] = table;
+                            count += 1;
+                            leaf_tables += 1;
+                            leaf_available = true;
+                        }
+                        Err(error) => {
+                            unwind(allocator, arena, &taken, count);
+                            return Err(GrowError::Frames {
+                                allocated: pages_backed,
+                                error,
+                            });
+                        }
+                    }
+                }
+                back_page(allocator, arena, vspace, vaddr).map(|cap| Backing {
+                    cap: cap.cast(),
+                    pages: 1,
+                    size_bits: sel4::FrameObjectType::GRANULE.bits(),
+                    kind: PrivateObjectKind::Granule,
+                })
+            };
+            match result {
+                Ok(backing) => {
+                    pages_backed += backing.pages;
+                    if backing.pages == LARGE_FRAME_PAGES {
+                        large_frames += 1;
+                    } else {
+                        base_frames += backing.pages;
+                    }
+                    taken[count] = backing;
+                    count += 1;
                 }
                 Err(error) => {
                     unwind(allocator, arena, &taken, count);
                     return Err(GrowError::Frames {
-                        allocated: count,
+                        allocated: pages_backed,
                         error,
                     });
                 }
             }
         }
         region.pages = previous + delta;
+        region.large_frames += large_frames;
+        region.base_frames += base_frames;
+        region.leaf_tables += leaf_tables;
         self.total_pages += delta;
         self.grown_pages += delta;
         self.grants += 1;
@@ -434,122 +563,168 @@ impl Table {
     pub fn reclaim(&mut self, region: &mut Region) -> usize {
         let pages = region.pages;
         region.pages = 0;
+        region.large_frames = 0;
+        region.base_frames = 0;
+        region.leaf_tables = 0;
         self.total_pages = self.total_pages.saturating_sub(pages);
         self.reclaimed_pages += pages;
         pages
     }
 }
 
-/// One frame an in-flight growth has taken, held only until the growth commits
-/// or unwinds.
+/// One mapping an in-flight growth has taken, held only until commit or unwind.
 #[derive(Clone, Copy)]
-struct Frame {
-    cap: sel4::cap::Granule,
-    vaddr: usize,
+struct Backing {
+    cap: sel4::cap::Unspecified,
+    pages: usize,
+    size_bits: usize,
+    kind: PrivateObjectKind,
 }
 
-impl Frame {
+impl Backing {
     const EMPTY: Self = Self {
-        cap: sel4::cap::Granule::from_bits(0),
-        vaddr: 0,
+        cap: sel4::cap::Unspecified::from_bits(0),
+        pages: 0,
+        size_bits: 0,
+        kind: PrivateObjectKind::Empty,
     };
 }
 
-/// Retype one frame from the task's own arena and map it into the task's VSpace
-/// at `vaddr`, read-write and execute-never.
-///
-/// Frames arrive zeroed from `untyped_retype`, so the "every new page reads as
-/// zero" property is the kernel's rather than a memset this module would have
-/// to be trusted to perform.
-///
-/// **A failed mapping returns its own frame.** The retype has already charged
-/// an arena slot by the time `frame_map` runs, and this function's caller only
-/// learns about frames it was handed back — so a frame stranded here would be
-/// invisible to [`unwind`], which is the likelier of the two failures: a bad
-/// vaddr or a missing table fails at the map, not at the retype. Worse, the
-/// stranded slot would sit at the arena's top, so the next
-/// [`ObjectAllocator::release_last_in`] would name a different slot, be refused
-/// by its own guard, and silently disable slot recovery for that arena. Undoing
-/// it here keeps the invariant local: this function either returns a mapped
-/// frame or leaves the arena exactly as it found it.
+fn back_leaf_table(
+    allocator: &mut ObjectAllocator,
+    arena: TaskArenaId,
+    vspace: sel4::cap::VSpace,
+    vaddr: usize,
+) -> Result<Backing, AllocError> {
+    let ty = private_leaf_table_type();
+    let size_bits = ty.blueprint().physical_size_bits();
+    let (table, _, mapped) =
+        allocator.acquire_private_in(arena, PrivateObjectKind::LeafTable, ty.blueprint())?;
+    let table = table.cast::<sel4::cap_type::UnspecifiedIntermediateTranslationTable>();
+    if !mapped
+        && let Err(error) = table.generic_intermediate_translation_table_map(
+            ty,
+            vspace,
+            vaddr,
+            sel4::VmAttributes::default(),
+        )
+    {
+        let _ = allocator.retain_private_in(
+            arena,
+            table.cast(),
+            PrivateObjectKind::LeafTable,
+            size_bits,
+            false,
+        );
+        return Err(AllocError::Retype { size_bits, error });
+    }
+    Ok(Backing {
+        cap: table.cast(),
+        pages: 0,
+        size_bits,
+        kind: PrivateObjectKind::LeafTable,
+    })
+}
+
+/// Retype or reacquire one zeroed granule and map it read-write,
+/// execute-never into the task's VSpace.
 fn back_page(
     allocator: &mut ObjectAllocator,
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     vaddr: usize,
 ) -> Result<sel4::cap::Granule, AllocError> {
-    let frame = allocator
-        .allocate_fixed_in::<sel4::cap_type::Granule>(arena)?
-        .cap();
+    let size_bits = sel4::FrameObjectType::GRANULE.bits();
+    let (frame, _, mapped) = allocator.acquire_private_in(
+        arena,
+        PrivateObjectKind::Granule,
+        sel4::cap_type::Granule::object_blueprint(),
+    )?;
+    debug_assert!(!mapped);
+    let frame = frame.cast::<sel4::cap_type::Granule>();
     if let Err(error) = frame.frame_map(
         vspace,
         vaddr,
-        // Read plus write, and nothing else. `maskVMRights` reads only these
-        // two bits for a frame mapping, and executability is the separate
-        // `EXECUTE_NEVER` attribute beside it — `VmAttributes::DEFAULT` does
-        // not set it, so omitting it would map the whole private region
-        // executable.
         sel4::CapRights::read_write(),
         sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
     ) {
-        // Nothing to unmap: the mapping is what failed. Delete the capability
-        // so the slot is empty, then give the slot back — in that order, on the
-        // terms `release_last_in` states.
-        let root_cnode = sel4::init_thread::slot::CNODE.cap();
-        let _ = root_cnode.absolute_cptr(frame).delete();
-        let _ = allocator.release_last_in(
+        let _ = allocator.retain_private_in(
             arena,
-            frame.bits() as usize,
-            sel4::FrameObjectType::GRANULE.bits(),
+            frame.cast(),
+            PrivateObjectKind::Granule,
+            size_bits,
+            false,
         );
-        return Err(AllocError::Retype {
-            size_bits: sel4::FrameObjectType::GRANULE.bits(),
-            error,
-        });
+        return Err(AllocError::Retype { size_bits, error });
     }
     Ok(frame)
 }
 
-/// Return every frame a failed growth had taken: unmap it, delete it, and give
-/// its CSlot and arena bytes back.
-///
-/// All three halves are required, and the third is the one that is easy to
-/// miss. The unmap removes the child's view — a frame capability records
-/// exactly one mapping, so a frame left mapped would keep a page visible at an
-/// address the region no longer claims. The delete empties the root CSlot,
-/// which is the precondition for returning it. And
-/// [`ObjectAllocator::release_last_in`] is what actually returns it: an arena's
-/// slot table is append-only, and the only other path that shrinks it is
-/// `release_task_arena` at task death — so without this a task that retried a
-/// part-way failure would leak one `slot_len` per attempt against
-/// `MAX_TASK_SLOTS`, eventually refusing *every* allocation charged to that
-/// arena rather than only its next growth.
-///
-/// Reverse order, because an arena is a bump allocator: only the object at the
-/// watermark can be rewound, which `release_last_in` checks rather than
-/// assumes.
-///
-/// Kernel-call and release failures are deliberately ignored. The caller is
-/// already reporting a growth failure and has nothing better to say, and the
-/// task's arena revoke at termination reaches anything this could not — so the
-/// worst case degrades to the pre-existing behaviour of holding a slot until
-/// the task dies, rather than propagating a second error over the first.
-fn unwind(allocator: &mut ObjectAllocator, arena: TaskArenaId, taken: &[Frame], count: usize) {
-    let root_cnode = sel4::init_thread::slot::CNODE.cap();
-    for frame in taken.iter().take(count).rev() {
-        let _ = frame.cap.frame_unmap();
-        let _ = root_cnode.absolute_cptr(frame.cap).delete();
-        // `cap.bits()` *is* the allocator's slot index. Every arena object is
-        // returned as `init_thread::Slot::from_index(slot)`, whose `cptr_bits`
-        // is that index verbatim, so the capability address and the pool index
-        // are one number in the root's own CSpace. `release_last_in` re-checks
-        // it against the arena's top entry regardless, so a future divergence
-        // is refused rather than mis-accounted.
-        let _ = allocator.release_last_in(
+fn back_large(
+    allocator: &mut ObjectAllocator,
+    arena: TaskArenaId,
+    vspace: sel4::cap::VSpace,
+    vaddr: usize,
+) -> Result<sel4::cap::Unspecified, AllocError> {
+    let size_bits = LARGE_FRAME_TYPE.bits();
+    let (frame, _, mapped) = allocator.acquire_private_in(
+        arena,
+        PrivateObjectKind::LargeFrame,
+        LARGE_FRAME_TYPE.blueprint(),
+    )?;
+    debug_assert!(!mapped);
+    let frame = frame.cast::<sel4::cap_type::UnspecifiedPage>();
+    if let Err(error) = frame.frame_map(
+        vspace,
+        vaddr,
+        sel4::CapRights::read_write(),
+        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+    ) {
+        let _ = allocator.retain_private_in(
             arena,
-            frame.cap.bits() as usize,
-            sel4::FrameObjectType::GRANULE.bits(),
+            frame.cast(),
+            PrivateObjectKind::LargeFrame,
+            size_bits,
+            false,
         );
+        return Err(AllocError::Retype { size_bits, error });
+    }
+    Ok(frame.cast())
+}
+
+/// Roll back an uncommitted growth. The task is suspended for the transaction,
+/// so frames that were freshly retyped remain zero while mapped. Successfully
+/// unmapping and retaining them therefore preserves both zero-fill and the
+/// arena's monotonic physical capacity across repeated failure/retry cycles.
+/// Leaf tables contain no component data and remain mapped for a base-page
+/// retry; their retained state prevents a later block mapping from being
+/// attempted through the occupied parent entry.
+fn unwind(allocator: &mut ObjectAllocator, arena: TaskArenaId, taken: &[Backing], count: usize) {
+    let root_cnode = sel4::init_thread::slot::CNODE.cap();
+    for backing in taken.iter().take(count).rev() {
+        if backing.kind == PrivateObjectKind::LeafTable {
+            let _ = allocator.retain_private_in(
+                arena,
+                backing.cap,
+                backing.kind,
+                backing.size_bits,
+                true,
+            );
+            continue;
+        }
+        let frame = backing.cap.cast::<sel4::cap_type::UnspecifiedPage>();
+        if frame.frame_unmap().is_ok() {
+            let _ = allocator.retain_private_in(
+                arena,
+                backing.cap,
+                backing.kind,
+                backing.size_bits,
+                false,
+            );
+        } else {
+            let _ = root_cnode.absolute_cptr(backing.cap).delete();
+            let _ = allocator.reset_private_in(arena, backing.cap, backing.kind, backing.size_bits);
+        }
     }
 }
 
@@ -682,27 +857,36 @@ mod tests {
 
     #[test]
     fn the_reservation_is_reported_before_the_quota() {
-        // A request past the reservation is impossible rather than merely
-        // unaffordable, and the two answers tell a caller different things:
-        // one says never, the other says not now. Ordering them the other way
-        // would advise an allocator to wait for capacity that cannot arrive.
-        let mut region = Region::reserved(0x1000_0000, MAX_REGION_PAGES);
+        let mut region = Region::reserved(0x1000_0000, MAX_REGION_PAGES * 2);
         region.pages = MAX_REGION_PAGES;
-        assert_eq!(
+        assert!(matches!(
             region.admit(1, 0),
-            Err(GrowError::ReservationExceeded {
-                pages: MAX_REGION_PAGES,
-                delta: 1,
-                reservation: MAX_REGION_PAGES,
-            })
-        );
+            Err(GrowError::ReservationExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn small_quota_reserves_leaf_table_before_base_frames() {
+        let mut plan = ArenaPlan::new();
+        assert_eq!(arena_reservation(&mut plan, 4), Some(()));
+
+        let mut expected = ArenaPlan::new();
+        expected.add(private_leaf_table_type().blueprint()).unwrap();
+        for _ in 0..4 {
+            expected
+                .add(sel4::cap_type::Granule::object_blueprint())
+                .unwrap();
+        }
+        assert_eq!(plan.required_bytes(), expected.required_bytes());
+
+        let mut denied = ArenaPlan::new();
+        assert_eq!(arena_reservation(&mut denied, 0), Some(()));
+        assert_eq!(denied.required_bytes(), 0);
     }
 
     #[test]
     fn the_root_wide_ceiling_is_checked_after_the_per_task_bounds() {
         let region = region();
-        // Affordable for this task, but the machine is full. Reported as its
-        // own cause so a component can tell "my budget" from "the system's".
         assert_eq!(
             region.admit(4, MAX_TOTAL_PAGES - 2),
             Err(GrowError::TotalExceeded {
@@ -712,6 +896,71 @@ mod tests {
             })
         );
         assert_eq!(region.admit(2, MAX_TOTAL_PAGES - 2), Ok(()));
+    }
+
+    #[test]
+    fn backing_slots_scale_with_quota_and_cover_both_full_window_shapes() {
+        assert_eq!(backing_slot_reservation(0), 0);
+        assert_eq!(backing_slot_reservation(8), 9);
+        assert_eq!(
+            backing_slot_reservation(MAX_REGION_PAGES),
+            MAX_REGION_PAGES + 2
+        );
+        assert_eq!(
+            backing_slot_reservation(MAX_REGION_PAGES * 4),
+            MAX_REGION_PAGES + 2
+        );
+    }
+
+    #[test]
+    fn full_window_reservation_covers_incremental_and_bulk_growth() {
+        let mut plan = ArenaPlan::new();
+        plan.add_size_bits(12).unwrap();
+        assert_eq!(arena_reservation(&mut plan, MAX_REGION_PAGES), Some(()));
+
+        let mut incremental = ArenaPlan::new();
+        incremental.add_size_bits(12).unwrap();
+        incremental
+            .add(private_leaf_table_type().blueprint())
+            .unwrap();
+        for _ in 0..MAX_REGION_PAGES {
+            incremental
+                .add(sel4::cap_type::Granule::object_blueprint())
+                .unwrap();
+        }
+
+        let mut bulk_then_incremental = ArenaPlan::new();
+        bulk_then_incremental.add_size_bits(12).unwrap();
+        bulk_then_incremental
+            .add(LARGE_FRAME_TYPE.blueprint())
+            .unwrap();
+        bulk_then_incremental
+            .add(private_leaf_table_type().blueprint())
+            .unwrap();
+        for _ in 0..MAX_REGION_PAGES {
+            bulk_then_incremental
+                .add(sel4::cap_type::Granule::object_blueprint())
+                .unwrap();
+        }
+
+        assert_eq!(
+            plan.required_bytes(),
+            bulk_then_incremental.required_bytes()
+        );
+        assert!(plan.required_bytes() >= incremental.required_bytes());
+    }
+
+    #[test]
+    fn an_over_large_quota_is_charged_only_what_it_can_hold() {
+        let mut plan = ArenaPlan::new();
+        assert_eq!(arena_reservation(&mut plan, MAX_REGION_PAGES * 4), Some(()));
+        let mut bounded = ArenaPlan::new();
+        assert_eq!(arena_reservation(&mut bounded, MAX_REGION_PAGES), Some(()));
+        assert_eq!(plan.required_bytes(), bounded.required_bytes());
+        assert_eq!(
+            Region::reserved(0x1000_0000, MAX_REGION_PAGES * 4).quota(),
+            MAX_REGION_PAGES
+        );
     }
 
     #[test]
@@ -750,35 +999,5 @@ mod tests {
             })
         );
         assert_eq!(untouched.admit(4, 4), Ok(()));
-    }
-
-    #[test]
-    fn a_quota_charges_exactly_its_frames_to_the_arena() {
-        // The frames must be planned even though they are handed out on demand:
-        // an arena is fixed at `begin_task_arena` and never grows, so a quota
-        // whose frames the arena has no room for would be a ceiling the task
-        // could never reach.
-        let mut plan = ArenaPlan::new();
-        assert_eq!(arena_reservation(&mut plan, 4), Some(()));
-        assert_eq!(plan.required_bytes(), 4 * GRANULE_SIZE);
-        // Deny-by-default costs nothing, so a component with no quota is
-        // byte-identical in arena terms to its pre-C10 build.
-        let mut denied = ArenaPlan::new();
-        assert_eq!(arena_reservation(&mut denied, 0), Some(()));
-        assert_eq!(denied.required_bytes(), 0);
-    }
-
-    #[test]
-    fn an_over_large_quota_is_charged_only_what_it_can_hold() {
-        // `Region::reserved` clamps the quota to the reservation, so the plan
-        // must clamp identically or admission would size an arena for pages
-        // the region will refuse to grow into.
-        let mut plan = ArenaPlan::new();
-        assert_eq!(arena_reservation(&mut plan, MAX_REGION_PAGES * 4), Some(()));
-        assert_eq!(plan.required_bytes(), MAX_REGION_PAGES * GRANULE_SIZE);
-        assert_eq!(
-            Region::reserved(0x1000_0000, MAX_REGION_PAGES * 4).quota(),
-            MAX_REGION_PAGES
-        );
     }
 }

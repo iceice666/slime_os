@@ -204,15 +204,18 @@ BOOT_SELECTION_IMAGE = BUILD_ROOT / "slime-sel4-boot-selection.elf"
 BOOT_SELECTION_MANIFEST = BUILD_ROOT / "slime-sel4-boot-selection.identity.json"
 DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
+PRIVATE_MEMORY_IMAGE = BUILD_ROOT / "slime-sel4-private-memory.elf"
+PRIVATE_MEMORY_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`. Every other plane now
-# builds by closure identity (`scripts/lib/closure_image.py`); these seven
+# builds by closure identity (`scripts/lib/closure_image.py`); these eight
 # remain because a legacy or SDK gate still selects them directly.
 FIXTURE_VARIANT = "fixture"
 GRAPH_VARIANT = "graph"
 SAMPLE_VARIANT = "sample"
 DEMO_VARIANT = "demo"
+PRIVATE_MEMORY_VARIANT = "private-memory"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -234,6 +237,7 @@ VARIANT_MANIFESTS = {
     ROLLBACK_VARIANT: "sel4-rollback",
     GENERATION_VARIANT: "sel4-generation",
     BOOT_SELECTION_VARIANT: "sel4",
+    PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -243,6 +247,7 @@ VARIANT_TARGET_DIRS = {
     ROLLBACK_VARIANT: "root-rollback",
     GENERATION_VARIANT: "root-generation",
     BOOT_SELECTION_VARIANT: "root-boot-selection",
+    PRIVATE_MEMORY_VARIANT: "root-private-memory",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -252,6 +257,7 @@ VARIANT_IMAGES = {
     ROLLBACK_VARIANT: (ROLLBACK_IMAGE, ROLLBACK_MANIFEST),
     GENERATION_VARIANT: (GENERATION_IMAGE, GENERATION_MANIFEST),
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
+    PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -1278,6 +1284,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--private-memory-plane",
+        action="store_true",
+        help="embed the private-memory generation, writing a separate image",
+    )
+    parser.add_argument(
         "--component-spec-root",
         type=Path,
         help="load component specifications from this directory",
@@ -1313,6 +1324,7 @@ def main() -> None:
             (ROLLBACK_VARIANT, arguments.rollback_plane),
             (GENERATION_VARIANT, arguments.generation_plane),
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
+            (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
         )
         if chosen
     ]

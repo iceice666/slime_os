@@ -15,13 +15,13 @@ omitted one — and checks four things no single marker states:
   the budget it admitted and `installed=` read back off the task record, so a
   root that resolved the budget and then constructed the task from something
   else disagrees with itself in one line;
-* **the ceiling binds at exactly the declared number.** The granted probe
-  discovers its own ceiling by growing one page at a time until refused, and the
-  gate requires that measurement to equal the fixture's `pageQuota`. The probe
-  never reads the manifest, so this is a measurement rather than a restatement;
+* **the ceiling binds at exactly the declared number.** The granted probe maps
+  the full declared span, then asks for one more page and is refused by the
+  fixed reservation at exactly that extent. The probe never reads the manifest,
+  so the gate's comparison remains a measurement rather than a restatement;
 * **omission denies.** The instance absent from the budget must be refused its
-  first page with `cause=reservation` — the deny-by-default state carries no
-  window at all, so it is refused by the reservation before quota arithmetic is
+  full-window request with `cause=reservation` — the deny-by-default state
+  carries no window at all, so it is refused before quota arithmetic is
   reached, which is a stronger statement than "was given zero";
 * **a refusal has no effect.** The granted probe re-queries after its refusal
   and must find the region unchanged, and the root's growth grants must total
@@ -37,6 +37,7 @@ entirely.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -44,14 +45,20 @@ import shutil
 import subprocess
 import sys
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
-from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
+from harness import (
+    GENERATION_COMPOSITIONS,
+    load_qemu_profile,
+    profile_integer,
+    profile_text,
+    qemu_kernel_arguments,
+    sha256_file,
+)  # noqa: E402
 from sel4_gate_markers import (  # noqa: E402
     chains_from_gate,
     marker_count,
@@ -67,6 +74,13 @@ IMAGE: Path | None = None
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory.zti"
 TIMEOUT = 240
+CLOSURE_PLATFORM = "qemu-arm-virt"
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
+PLATFORMS = {
+    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
+    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
 
 # Causal chains rather than one flat sequence, on B55/B68's rule: a required
 # order must be one the mechanism promises, not one a scheduler happened to
@@ -115,8 +129,10 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # its ceiling, and it reports only after the refusal.
         "the granted holder reached its declared ceiling and was then refused",
         (
-            r"SLIME_MEM refused task=\d+ delta=1 cause=quota "
-            r"detail=QuotaExceeded \{ pages: (\d+), delta: 1, quota: (\d+) \}",
+            r"SLIME_MEM grown task=\d+ delta=512 previous=0 pages=512 "
+            r"base=0x[0-9a-f]+ quota=512 total=\d+ large_frames=1 base_frames=0 leaf_tables=0",
+            r"SLIME_MEM refused task=\d+ delta=1 cause=reservation "
+            r"detail=ReservationExceeded \{ pages: (\d+), delta: 1, reservation: (\d+) \}",
             r"\[private-memory-probe\] granted pages=(\d+) base=0x[0-9a-f]+ "
             r"zeroed=1 survived=1 refused=1",
         ),
@@ -125,8 +141,8 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # The omitted probe's own sequence, independent of the granted one's.
         "the omitted holder was refused its first page by the reservation",
         (
-            r"SLIME_MEM refused task=\d+ delta=1 cause=reservation "
-            r"detail=ReservationExceeded \{ pages: 0, delta: 1, reservation: 0 \}",
+            r"SLIME_MEM refused task=\d+ delta=512 cause=reservation "
+            r"detail=ReservationExceeded \{ pages: 0, delta: 512, reservation: 0 \}",
             r"\[private-memory-probe\] denied pages=0 base=0x0 refused=1",
         ),
     ),
@@ -263,48 +279,83 @@ def declared_quotas() -> dict[str, int]:
         fail("the fixture declares no private-memory quota, so the plane asserts nothing")
     return declared
 
+def image_path(platform: str) -> Path | None:
+    if platform == CLOSURE_PLATFORM:
+        return IMAGE
+    return RV64_IMAGE
 
-def build_image() -> None:
+
+def build_image(platform: str) -> None:
+    """Build this plane through its closure or declared cross-target legacy arm."""
     global IMAGE
+    if platform == CLOSURE_PLATFORM:
+        try:
+            built = build_closure_image(CLOSURE)
+        except ClosureImageError as error:
+            fail(str(error))
+        IMAGE = built.image
+        actual = sha256_file(IMAGE, fail)
+        if actual != built.digest():
+            fail(
+                f"{IMAGE} SHA-256 is {actual}, but the build result records "
+                f"{built.digest()}; the image changed after it was built"
+            )
+        return
+
+    command = [
+        sys.executable,
+        str(BUILD_SCRIPT),
+        "--skip-pin-check",
+        "--private-memory-plane",
+        "--platform",
+        platform,
+    ]
+    print(f"[build] {' '.join(command)}", flush=True)
     try:
-        built = build_closure_image(CLOSURE)
-    except ClosureImageError as error:
-        fail(str(error))
-    IMAGE = built.image
-    actual = sha256_file(IMAGE, fail)
-    if actual != built.digest():
-        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
+        process = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        fail(f"cannot build the RV64 private-memory image: {error}")
+    if process.returncode != 0:
+        fail(f"RV64 private-memory image build failed with exit status {process.returncode}")
 
-
-def boot(profile: dict[str, object]) -> str:
-    qemu = shutil.which("qemu-system-aarch64")
+def boot(
+    profile: dict[str, object],
+    *,
+    section: str,
+    qemu_binary: str,
+    image: Path,
+) -> str:
+    qemu = shutil.which(qemu_binary)
     if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
+        fail(f"{qemu_binary} is not on PATH")
     command = [
         qemu,
         "-machine",
-        str(profile["machine"]),
+        profile_text(profile, "machine", fail, section),
         "-cpu",
-        str(profile["cpu"]),
+        profile_text(profile, "cpu", fail, section),
         "-smp",
-        str(profile["cpus"]),
+        str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile['memory_mib']}M",
+        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-kernel",
-        str(IMAGE),
+        *qemu_kernel_arguments(qemu_binary, image, fail),
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    print(f"[boot] {' '.join(command)}", flush=True)
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as error:
+        fail(f"cannot run QEMU: {error}")
     watchdog = threading.Timer(TIMEOUT, process.kill)
     watchdog.start()
     lines: list[str] = []
@@ -383,10 +434,11 @@ def check_declared_is_installed(transcript: str, declared: dict[str, int]) -> No
 def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
     """The probe's *measured* ceiling equals the declared one.
 
-    This is the assertion the milestone turns on. The probe grows one page at a
-    time until it is refused and reports the total it reached; it never reads the
-    manifest, so agreement here means the declared number is what actually bound
-    it — not that two copies of a constant match.
+    The granted instance maps the complete declared span and reports it without
+    reading the manifest. Its next page is refused by the structural
+    reservation, whose precedence over quota is itself part of the public grow
+    contract. Agreement here therefore proves the declared ceiling is both
+    reachable and exactly the fixed window extent.
     """
     expected = declared["private-memory-granted"]
     measured = re.search(
@@ -400,17 +452,16 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
             f"the granted probe grew to {measured.group(1)} page(s) against a "
             f"declared quota of {expected}"
         )
-    # The refusal must name the same number, so the cause the root recorded is
-    # the ceiling the probe hit rather than a coincidence at a different bound.
     refusal = re.search(
-        r"cause=quota detail=QuotaExceeded \{ pages: (\d+), delta: 1, quota: (\d+) \}",
+        r"cause=reservation detail=ReservationExceeded \{ pages: (\d+), delta: 1, "
+        r"reservation: (\d+) \}",
         transcript,
     )
     if refusal is None:
-        fail("no quota refusal was recorded")
+        fail("no full-window reservation refusal was recorded")
     if int(refusal.group(1)) != expected or int(refusal.group(2)) != expected:
         fail(
-            f"the refusal names pages={refusal.group(1)} quota={refusal.group(2)}, "
+            f"the refusal names pages={refusal.group(1)} reservation={refusal.group(2)}, "
             f"expected both to be {expected}"
         )
     # The base the root reported installing and the base the probe dereferenced
@@ -679,13 +730,27 @@ def check_the_two_planes_are_independent(transcript: str, declared: dict[str, in
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+        help="the pinned QEMU profile and image to build and boot",
+    )
+    arguments = parser.parse_args()
     declared = declared_quotas()
-    build_image()
-    pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
-    profile = pins.get("qemu_arm_virt")
-    if not isinstance(profile, dict):
-        fail("missing qemu profile")
-    transcript = boot(profile)
+    section, qemu_binary = PLATFORMS[arguments.platform]
+    build_image(arguments.platform)
+    image = image_path(arguments.platform)
+    if image is None or not image.is_file():
+        fail(f"missing packaged image for {arguments.platform}")
+    profile = load_qemu_profile(fail, PINS, section)
+    transcript = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image=image,
+    )
     check_markers(transcript)
     check_declared_is_installed(transcript, declared)
     check_measured_ceiling(transcript, declared)
@@ -695,10 +760,9 @@ def main() -> None:
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "
-        f"{len(CHAINS)} causal chains; the declared quota "
-        f"({declared['private-memory-granted']} page(s)) is the measured ceiling, "
-        f"{declared['private-heap-granted']} page(s) is the allocator's ceiling, "
-        "and an omitted holder grows nothing"
+        f"{len(CHAINS)} causal chains on {arguments.platform}; the declared quota "
+        f"({declared['private-memory-granted']} page(s)) is the measured ceiling "
+        "and exactly one 2 MiB frame backs the aligned window"
     )
 
 

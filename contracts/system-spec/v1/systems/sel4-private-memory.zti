@@ -46,7 +46,7 @@
     {
       name = "private-memory-granted";
       executable = "private-memory-probe";
-      privatePageQuota = 3;
+      privatePageQuota = 512;
     };
   ];
   grants = [

@@ -270,10 +270,12 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    # P3.E adds the sparse device-untyped preflight test: the retained virtual
+# P3.E adds the sparse device-untyped preflight test: the retained virtual
     # anchor must participate in contiguous-slot planning without mutating the pool.
     # IO11 adds the clock rate read's authority test beside the monotonic read's.
-    expected=215
+    # MEM-LARGE adds explicit root-ceiling ordering and quota-scaled private
+    # backing CSlot coverage.
+    expected=216
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

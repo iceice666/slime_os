@@ -1576,7 +1576,7 @@ pub fn admit_total_slots(
     generation: &Generation<'_>,
     available: usize,
 ) -> Result<usize, GenerationError> {
-    let mut required = 0usize;
+    let mut declared_objects = 0usize;
     for index in 0..generation.resource_quota_count() {
         let quota = generation.resource_quota(index)?;
         let per_process = (quota.cnode_count
@@ -1585,20 +1585,30 @@ pub fn admit_total_slots(
             + quota.notification_count
             + quota.frame_count
             + quota.page_table_count) as usize;
-        required = required.saturating_add(per_process);
+        declared_objects = declared_objects.saturating_add(per_process);
     }
     // Each declared object costs at least one root CSlot, and in practice
     // more: intermediate page tables the loader creates, the window alias, and
     // the arena's parent untyped are root-side costs no per-process quota
-    // names. Measured on the 48-instance stress plane, construction consumed
-    // 81 slots per instance against 33 declared objects.
-    //
-    // The factor is deliberately a measured constant rather than a model of
-    // every source: a model that claimed precision it does not have would
-    // admit graphs that then die mid-construction, which is the failure this
-    // check exists to prevent. Refusing a graph that would have fit is
-    // recoverable; admitting one that does not is not.
-    let required = required.saturating_mul(ROOT_SLOTS_PER_DECLARED_OBJECT);
+    // names. The factor remains the measured conservative construction cost.
+    let mut required = declared_objects.saturating_mul(ROOT_SLOTS_PER_DECLARED_OBJECT);
+
+    // Private backing CSlots are different: task construction reserves these
+    // eagerly and exactly, before any child starts. Add the authenticated
+    // budget's quota-scaled reservation rather than hiding it inside the
+    // measured factor, so a graph cannot admit and then exhaust root CSpace
+    // partway through construction.
+    if let Some(budget) = private_memory_budget_object(generation) {
+        let budget = budget.map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
+        for index in 0..budget.holder_count() {
+            let quota = budget
+                .holder(index)
+                .ok_or(GenerationError::UnsatisfiablePrivateMemoryBudget)?;
+            required = required.saturating_add(crate::private_memory::backing_slot_reservation(
+                quota.page_quota as usize,
+            ));
+        }
+    }
     if required > available {
         return Err(GenerationError::PlanExceedsRootSlots {
             required,

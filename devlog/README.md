@@ -413,6 +413,7 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | MQ1 |
 | 2026-09-06 | [The backlog file becomes an index over the work-item store](2026-09-06-backlog-as-index/index.md) | Change | Verified | MQ2 |
 | 2026-09-07 | [Memory capacity milestones: mechanism before larger working sets](2026-09-07-memory-capacity-milestones/index.md) | Decision | Proposed | MEM-CAPACITY, MEM-LARGE, MEM-ARENAS, MEM-64M, MEM-PLATFORM, MEM-1G |
+| 2026-09-07 | [Mixed-size private frames preserve exact growth semantics](2026-09-07-mem-large-private-frames/index.md) | Change | Verified | MEM-LARGE |
 | 2026-09-07 | [Driving a motor ESC from the H1V1: opening the lane and its bench probe](2026-09-07-h1v1-esc-lane/index.md) | Decision | Proposed | P6.PWM, P6.PWM.A, IO8, P6.D |
 | 2026-09-08 | [The H1V1 PWM probe: an ESC driven from the vendor prompt, and the pad found](2026-09-08-h1v1-pwm-probe/index.md) | Audit | Verified | P6.PWM.A, P6.PWM |
 | 2026-09-10 | [A MAVLink heartbeat from the H1V1: opening the lane and its bench probe](2026-09-10-h1v1-mavlink-lane/index.md) | Decision | Proposed | P6.MAV, P6.MAV.A, IO9, P6.E |

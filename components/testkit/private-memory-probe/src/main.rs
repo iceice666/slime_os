@@ -52,16 +52,16 @@ fn main(_startup_arg: u32) {
     }
     report_base(b"query", &initial);
 
-    // One page tells this instance which half of the plane it is. A granted
-    // instance grows it; a denied one is refused, and that refusal is its whole
-    // assertion.
-    match slime_rt::private_memory_grow(1) {
+    // The whole reserved span is the discriminator. A granted instance maps it
+    // as one aligned 2 MiB frame; a denied instance is refused before touching
+    // any frame or table.
+    match slime_rt::private_memory_grow(MAX_PROBE_PAGES) {
         Err(ERR_OUT_OF_MEMORY) => denied(initial),
-        Err(error) => fail(b"first growth refused unexpectedly", error),
+        Err(error) => fail(b"full-window growth refused unexpectedly", error),
         Ok(previous) => {
             if previous.pages != 0 || previous.base != initial.base {
                 report(
-                    b"FAIL first growth disagreed with the query",
+                    b"FAIL full-window growth disagreed with query",
                     previous.pages,
                 );
                 slime_rt::exit(1)
@@ -71,64 +71,32 @@ fn main(_startup_arg: u32) {
     }
 }
 
-/// The granted instance: grow to the declared ceiling, then prove the ceiling
-/// binds.
-///
-/// The ceiling is *discovered* rather than declared here. Growing one page at a
-/// time until a refusal is what makes this a measurement of the live ceiling
-/// instead of a restatement of the manifest — the root's own marker carries the
-/// declared number, and the gate compares the two.
+/// The granted instance touches every 4 KiB subpage of the aligned block, then
+/// proves the stable ceiling, base, zero-fill, and write persistence.
 fn granted(initial: PrivateMemory) {
-    // One page is already backed by `main`'s probe growth. Write the pattern
-    // into it now, so every later growth has to preserve it.
-    //
-    // SAFETY: the root answered this base and reported one page backed, mapped
-    // read-write for this task alone. Nothing else in this component addresses
-    // the region.
-    unsafe { (initial.base as *mut u64).write_volatile(PATTERN) }
-
-    let mut pages = 1;
-    loop {
-        match slime_rt::private_memory_grow(1) {
-            Ok(previous) => {
-                if previous.pages != pages || previous.base != initial.base {
-                    report(
-                        b"FAIL growth disagreed with the running count",
-                        previous.pages,
-                    );
-                    slime_rt::exit(1)
-                }
-                // Every newly backed page must read as zero: private memory is
-                // never handed over carrying another task's bytes.
-                //
-                // SAFETY: the page at `pages` was backed by the growth that
-                // just returned, at the base the root answered.
-                let fresh = unsafe {
-                    (initial.base as *const u64)
-                        .add(pages * 512)
-                        .read_volatile()
-                };
-                if fresh != 0 {
-                    report(b"FAIL fresh page was not zeroed", pages);
-                    slime_rt::exit(1)
-                }
-                pages += 1;
-                if pages > MAX_PROBE_PAGES {
-                    report(b"FAIL ceiling never reached", pages);
-                    slime_rt::exit(1)
-                }
-            }
-            // The declared ceiling. Every other error is a real failure: a
-            // refusal must name the quota, not the machine.
-            Err(ERR_OUT_OF_MEMORY) => break,
-            Err(error) => fail(b"growth refused for the wrong reason", error),
+    let pages = MAX_PROBE_PAGES;
+    for page in 0..pages {
+        // SAFETY: the root just admitted and mapped the full 512-page region
+        // read-write for this task; this reads one u64 inside each 4 KiB page.
+        let fresh = unsafe { (initial.base as *const u64).add(page * 512).read_volatile() };
+        if fresh != 0 {
+            report(b"FAIL fresh page was not zeroed", page);
+            slime_rt::exit(1)
+        }
+        // SAFETY: the same admitted region is writable by this task, and the
+        // computed address remains inside the page selected by the loop.
+        unsafe {
+            (initial.base as *mut u64)
+                .add(page * 512)
+                .write_volatile(if page == 0 { PATTERN } else { page as u64 })
         }
     }
 
     // The pattern survived every growth, so the base did not move and no
     // existing page was re-backed.
     //
-    // SAFETY: as above; this is the same address the pattern was written to.
+    // SAFETY: page zero remains mapped at the stable base after the complete
+    // growth; this reads the same u64 written above.
     let survived = unsafe { (initial.base as *const u64).read_volatile() };
     if survived != PATTERN {
         report(b"FAIL pattern did not survive growth", pages);
@@ -178,11 +146,8 @@ fn denied(initial: PrivateMemory) {
     slime_rt::exit(0)
 }
 
-/// Growths a granted instance will attempt before concluding the ceiling does
-/// not bind. Above any quota this plane declares and far below the per-task
-/// reservation, so it bounds a runaway loop without being reachable by a
-/// correct one.
-const MAX_PROBE_PAGES: usize = 64;
+/// The exact public reservation and one 2 MiB frame on both supported ISAs.
+const MAX_PROBE_PAGES: usize = 512;
 
 fn report(reason: &[u8], pages: usize) {
     slime_rt::debug_write(b"[private-memory-probe] ");

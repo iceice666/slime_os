@@ -805,6 +805,7 @@ pub(crate) fn private_memory_cause(error: &private_memory::GrowError) -> &'stati
         private_memory::GrowError::ReservationExceeded { .. } => "reservation",
         private_memory::GrowError::QuotaExceeded { .. } => "quota",
         private_memory::GrowError::TotalExceeded { .. } => "root-ceiling",
+        private_memory::GrowError::LargeFrameUnavailable { .. } => "large-frame-unavailable",
         private_memory::GrowError::Frames { .. } => "frames",
     }
 }

@@ -987,12 +987,15 @@ pub(super) fn serve_instance_graph(
                             .map(|task| task.private_memory)
                             .unwrap_or(private_memory::Region::DENIED);
                         sel4::debug_println!(
-                            "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={}",
+                            "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
                             id.0,
                             region.pages(),
                             region.base(),
                             region.quota(),
                             tasks.private_memory().total_pages(),
+                            region.large_frames(),
+                            region.base_frames(),
+                            region.leaf_tables(),
                         );
                         // Primary is the previous page count; auxiliary is the
                         // window base. The base is answered rather than left

@@ -151,7 +151,7 @@
     };
     {
       holder = "private-memory-granted";
-      pageQuota = 3;
+      pageQuota = 512;
     };
   ];
   sharedBufferBudget = [
