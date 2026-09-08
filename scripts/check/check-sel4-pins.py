@@ -572,6 +572,27 @@ def check_profile(pins: dict[str, object]) -> None:
             "microsecond for servo timing"
         )
 
+    # What the PWM probe observed on the board. The channel and pad are what a
+    # later bring-up routes; the two pinmux words are what it must not assume
+    # were set for it; the GPIO fact closes the idea of the board sampling its
+    # own output.
+    pwm_channel = integer(h1v1, "pwm_channel", "ns02201_h1v1")
+    if not 0 <= pwm_channel <= 5:
+        fail("ns02201-h1v1 pwm_channel must be 0..5: 16-bit, unclaimed, and off channel 12's divider")
+    if text(h1v1, "pwm_pad", "ns02201_h1v1") != f"P_GPIO{pwm_channel}":
+        fail("ns02201-h1v1 pwm_pad must be the P_GPIO the channel's `_1` pad function reaches")
+    if not text(h1v1, "pwm_pad_header", "ns02201_h1v1"):
+        fail("ns02201-h1v1 pwm_pad_header must name where the pad was found on the board")
+    for key in ("pwm_pinmux_at_prompt", "pgpio_function_at_prompt"):
+        int(text(h1v1, key, "ns02201_h1v1"), 16)
+    if boolean(h1v1, "gpio_data_reflects_function_pad", "ns02201_h1v1"):
+        fail(
+            "ns02201-h1v1 gpio_data_reflects_function_pad contradicts the 2026-09-08 "
+            "probe, which read the same GPIO data word in every sample while PWM0 ran"
+        )
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text(h1v1, "pwm_probe_observed", "ns02201_h1v1")):
+        fail("ns02201-h1v1 pwm_probe_observed must be the date the probe ran on the board")
+
     expected_h1v1_boot_files = [
         "slime-nt98690-probe.bin",
         "slime-sel4-sample-ns02201-h1v1.bin",

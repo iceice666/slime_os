@@ -320,7 +320,12 @@ PWM_SURVEY_REGISTERS: tuple[tuple[str, int, int], ...] = (
 PWM_PROBE_PULSES = (1000, 1500, 2000)
 PWM_PROBE_PERIOD_US = 20000
 PWM_PROBE_HOLD_SECONDS = 8
-PWM_PROBE_SAMPLES = 64
+#: GPIO data samples per pulse width. Zero, because the board answered: on
+#: 2026-09-08 every sample read the same word while PWM0 ran on its pad, so the
+#: GPIO block does not report a pad held by another function -- and each sample
+#: is a serial round trip, which made the run long enough to be abandoned.
+#: Kept as an option for a different pad group, never as a default.
+PWM_PROBE_SAMPLES = 0
 GPIO_PROBE_CYCLES = 6
 GPIO_PROBE_HOLD_SECONDS = 2
 
@@ -637,7 +642,9 @@ def reset_probe(console: Console, prompt: str, timeout: float) -> tuple[str, int
     return transcript, None
 
 
-def pwm_probe_plan(channel: int, period_us: int, pulses: tuple[int, ...]) -> list[str]:
+def pwm_probe_plan(
+    channel: int, period_us: int, pulses: tuple[int, ...], samples: int = PWM_PROBE_SAMPLES
+) -> list[str]:
     """The write sequence `--pwm-probe` performs, without a board.
 
     A bench mode that drives registers shared with the CPU's power supply should
@@ -669,7 +676,8 @@ def pwm_probe_plan(channel: int, period_us: int, pulses: tuple[int, ...]) -> lis
             f"      mw.l {PWM_BASE + pwm_period_offset(channel):#x} {low:#010x}   # {pulse} us",
             f"      mw.l {PWM_BASE + pwm_ext_period_offset(channel):#x} {high:#010x}",
             f"      mw.l {PWM_BASE + PWM_LOAD:#x} {bit:#x}        # latch while running",
-            f"      sleep, then sample {GPIO_BASE + GPIO_P_DATA:#x} bit {channel}",
+            "      sleep"
+            + (f", then sample {GPIO_BASE + GPIO_P_DATA:#x} bit {channel} {samples}x" if samples else ""),
         ]
     lines += [
         f"      mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}        # disable",
@@ -917,14 +925,14 @@ def pwm_probe(
                 f"observe the servo or ESC now, holding {hold:g}s"
             )
             transcript += send_command(console, f"sleep {hold:g}", prompt, hold + 10.0, fail)
-            # Sample the pad through the GPIO block. Whether it reports a pad
-            # held by another function is exactly what this probe is finding
-            # out, so the count is reported and never asserted.
-            high = 0
-            for _ in range(samples):
-                if read_one(console, prompt, GPIO_BASE + GPIO_P_DATA) & bit:
-                    high += 1
-            print(f"[pwm]    gpio_data samples={samples} high={high} (expected ~{duty:.0f}% if the pad reads back)")
+            # Optionally sample the pad through the GPIO block, reporting and
+            # never asserting: the P_GPIO bank answered "no" on 2026-09-08.
+            if samples:
+                high = 0
+                for _ in range(samples):
+                    if read_one(console, prompt, GPIO_BASE + GPIO_P_DATA) & bit:
+                        high += 1
+                print(f"[pwm]    gpio_data samples={samples} high={high} (expected ~{duty:.0f}% if the pad reads back)")
 
         transcript += send_command(
             console, f"mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}", prompt, 10.0, fail
@@ -1065,7 +1073,9 @@ def main() -> None:
             pulses = tuple(int(part) for part in str(arguments.pwm_pulse_us).split(","))
         except ValueError:
             fail(f"--pwm-pulse-us must be comma-separated integers: {arguments.pwm_pulse_us!r}")
-        for line in pwm_probe_plan(arguments.pwm_channel, arguments.pwm_period_us, pulses):
+        for line in pwm_probe_plan(
+            arguments.pwm_channel, arguments.pwm_period_us, pulses, arguments.pwm_samples
+        ):
             print(line)
         return
 

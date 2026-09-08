@@ -376,6 +376,19 @@ pad_base = "0x2f0030000"
 pwm_clock_source_hz = 120000000
 pwm_clock_divider = 119
 pwm_clock_hz = 1000000
+# Observed by the PWM probe on 2026-09-08 (`devlog/2026-09-08-h1v1-pwm-probe/`).
+# PWM0 reaches P_GPIO[0] on the board's 40-pin header, and a drone ESC on it armed
+# and changed speed. At the U-Boot prompt the PWM pinmux word held no routing at
+# all and every P_GPIO was in GPIO mode, so the root must program both words
+# itself; and the GPIO data register does not report a pad held by another
+# function, so the board cannot sample its own PWM output.
+pwm_channel = 0
+pwm_pad = "P_GPIO0"
+pwm_pad_header = "40-pin GPIO header"
+pwm_pinmux_at_prompt = "0x00000000"
+pgpio_function_at_prompt = "0xffffffff"
+gpio_data_reflects_function_pad = false
+pwm_probe_observed = "2026-09-08"
 boot_files = [
     "slime-nt98690-probe.bin",
     "slime-sel4-sample-ns02201-h1v1.bin",

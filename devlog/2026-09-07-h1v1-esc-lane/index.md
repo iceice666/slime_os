@@ -94,3 +94,12 @@ introduce one.
   the development host.
 - The bench modes' write sequence is reproducible with no board:
   `python3 scripts/check/check-nt98690-boot.py --dry-run`.
+
+## Corrections
+
+- **2026-09-08** — The pad is settled: PWM0 on P_GPIO[0], reached on the board's 40-pin GPIO
+  header, and a drone ESC on it responded. The lane's "one go/no-go" above is answered. The
+  pinmux words at handoff read exactly as A2 predicted (no routing; every P_GPIO in GPIO mode),
+  and the GPIO block does not report a FUNCTION-muxed pad, so the "board samples its own output"
+  follow-up is closed rather than deferred. Evidence and the seven pinned facts:
+  [the probe's audit entry](../2026-09-08-h1v1-pwm-probe/index.md).
