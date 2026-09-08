@@ -1303,6 +1303,10 @@ pub struct Admission {
     pub slime_component_images: usize,
     pub unrecognized_images: usize,
     pub wrong_target_images: usize,
+    /// Root CSlots required by the admitted product graph before future private
+    /// capacity holders are added. Filled from the actual BootInfo span in
+    /// `main` after aggregate slot admission succeeds.
+    pub required_root_slots: usize,
     pub fabric_graph_admitted: bool,
     pub fabric_schemas: usize,
     pub fabric_routes: usize,
@@ -1494,6 +1498,7 @@ impl Admission {
             slime_component_images,
             unrecognized_images,
             wrong_target_images,
+            required_root_slots: 0,
             clock_holders,
             fabric_graph_admitted: fabric.is_some(),
             fabric_schemas: fabric.map_or(0, |shape| shape.schemas),

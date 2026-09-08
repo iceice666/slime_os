@@ -1024,7 +1024,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(profile) => profile,
         Err(error) => fatal!("target profile {TARGET_PROFILE} unavailable: {error:?}"),
     };
-    let admission = match Admission::admit(&generation, profile) {
+    let mut admission = match Admission::admit(&generation, profile) {
         Ok(admission) => admission,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
@@ -1044,6 +1044,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(required) => required,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
+    admission.required_root_slots = planned_slots;
     sel4::debug_println!(
         "SLIME_ROOT plan slots required={planned_slots} available={}",
         allocator.free_slots(),
@@ -1513,12 +1514,12 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         tasks.len()
     );
     sel4::debug_println!(
-        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} arena_reuses={}",
+        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} extent_reuses={}",
         allocator.live_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
         allocator.slots_reused(),
-        allocator.arena_reuses(),
+        allocator.extents_reused(),
     );
 
     let granted: usize = fixtures

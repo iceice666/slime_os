@@ -524,6 +524,9 @@ impl Task {
 /// object recorded here.
 pub struct TaskTable<const CAPACITY: usize = MAX_TASKS> {
     tasks: [Option<Task>; CAPACITY],
+    /// Arena ownership from a construction that failed before publication.
+    /// No later construction starts until this record's retry succeeds.
+    construction_cleanup: Option<CleanupRecord>,
     len: usize,
     next_id: u32,
     activated: usize,
@@ -541,6 +544,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     pub const fn new() -> Self {
         Self {
             tasks: [const { None }; CAPACITY],
+            construction_cleanup: None,
             len: 0,
             next_id: 0,
             activated: 0,
@@ -567,6 +571,23 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
 
     pub const fn reclaimed_slots(&self) -> usize {
         self.reclaimed_slots
+    }
+    pub const fn has_failed_construction(&self) -> bool {
+        self.construction_cleanup.is_some()
+    }
+
+    /// Finish a pre-publication cleanup before any later task can allocate.
+    pub fn retry_failed_construction(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+    ) -> Result<(), TaskError> {
+        let Some(cleanup) = self.construction_cleanup else {
+            return Ok(());
+        };
+        let reclaimed = cleanup.revoke(allocator)?;
+        self.construction_cleanup = None;
+        self.reclaimed_slots += reclaimed;
+        Ok(())
     }
 
     /// How many live tasks `spawner` created and has not yet lost.
@@ -675,11 +696,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // (C10.1). Zero for every task the generation declares no quota for,
         // and for the fixture paths, which is deny-by-default: a task with no
         // quota grows nothing. The frames are charged to the arena here even
-        // though they are handed out on demand, because an arena is fixed at
-        // `begin_task_arena` and a quota whose frames it cannot hold would be a
-        // ceiling the task could never reach.
+        // though they are handed out on demand, because construction reserves
+        // the task's complete segmented backing before publication and a quota
+        // whose extents it cannot hold would be one the task could never reach.
         private_memory_pages: usize,
     ) -> Result<TaskId, TaskError> {
+        self.retry_failed_construction(allocator)?;
         admit_priority(priority)?;
         admit_thread_count(threads)?;
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
@@ -704,15 +726,6 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     remaining: 0,
                 }))?;
         }
-        // Every leaf frame the private-memory quota authorizes (C10.1). The
-        // window's translation tables are already in `vspace_arena_plan`, which
-        // spans it; these are the pages a growth hands out.
-        crate::private_memory::arena_reservation(&mut plan, private_memory_pages).ok_or(
-            TaskError::Alloc(AllocError::UntypedExhausted {
-                size_bits: usize::BITS as usize,
-                remaining: 0,
-            }),
-        )?;
         let arena_bits =
             plan.required_size_bits()
                 .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
@@ -720,13 +733,36 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     remaining: 0,
                 }))?;
         let arena = allocator.begin_task_arena(arena_bits)?;
-        // Reserve the maximum simultaneous backing population this task's own
-        // quota permits. A full 512-page holder must still admit the legal
-        // incremental construction (512 granules plus one leaf table); smaller
-        // holders pay only for their own ceiling.
+        // Reserve physical extents, allocation descriptors, and CSlots as one
+        // construction boundary. `plan` counts the VSpace, tables, image and
+        // thread objects that construction allocates after the private pool;
+        // reserving both populations prevents an admitted quota from consuming
+        // the global descriptor table before its task is published.
         let private_slots = crate::private_memory::backing_slot_reservation(private_memory_pages);
-        if private_slots != 0 {
-            allocator.provision_private_slots(arena, private_slots)?;
+        if private_slots
+            .checked_add(plan.allocation_count())
+            .is_none_or(|required| required > allocator.allocation_descriptors_free())
+        {
+            let cleanup =
+                construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
+            if let Err(cleanup_error) = cleanup.revoke(allocator) {
+                self.construction_cleanup = Some(cleanup);
+                return Err(cleanup_error);
+            }
+            return Err(TaskError::Alloc(AllocError::ArenaSlotTableFull {
+                limit: allocator.allocation_descriptors_free(),
+            }));
+        }
+        if let Err(error) =
+            allocator.provision_private_backing(arena, private_memory_pages, private_slots)
+        {
+            let cleanup =
+                construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
+            if let Err(cleanup_error) = cleanup.revoke(allocator) {
+                self.construction_cleanup = Some(cleanup);
+                return Err(cleanup_error);
+            }
+            return Err(TaskError::Alloc(error));
         }
 
         let construction = (|| {
@@ -980,7 +1016,13 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             Err(error) => {
                 let cleanup =
                     construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
-                cleanup.revoke(allocator)?;
+                match cleanup.revoke(allocator) {
+                    Ok(reclaimed) => self.reclaimed_slots += reclaimed,
+                    Err(cleanup_error) => {
+                        self.construction_cleanup = Some(cleanup);
+                        return Err(cleanup_error);
+                    }
+                }
                 return Err(error);
             }
         };

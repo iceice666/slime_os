@@ -211,10 +211,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # required but its position is not causally ordered against either probe's chain
 # — asserting one would again pin which probe the scheduler ran first (B63's
 # mechanism for exactly this).
+CAPACITY_MARKER = (
+    r"SLIME_MEM capacity holders=4 pages=65536 reserved=\d+ payload=\d+ tables=\d+ "
+    r"alignment=\d+ mapped=0 reusable=0 allocation_descriptors=\d+ "
+    r"allocation_descriptors_available=\d+ extent_descriptors=\d+ "
+    r"extent_descriptors_available=\d+ holder_cslots=\d+ graph_cslots=\d+ "
+    r"cslots_available=\d+ root_image=\d+ root_metadata=\d+ root_stack=1048576 "
+    r"root_heap=524288 ordinary_available=\d+ fit=1"
+)
 EXPECTED_UNORDERED: tuple[str, ...] = (
     r"\[private-memory-probe\] query pages=0 base=0x[0-9a-f]+",
+    CAPACITY_MARKER,
 )
-
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_MEM FAIL",
@@ -279,6 +287,7 @@ def declared_quotas() -> dict[str, int]:
         fail("the fixture declares no private-memory quota, so the plane asserts nothing")
     return declared
 
+
 def image_path(platform: str) -> Path | None:
     if platform == CLOSURE_PLATFORM:
         return IMAGE
@@ -317,6 +326,7 @@ def build_image(platform: str) -> None:
         fail(f"cannot build the RV64 private-memory image: {error}")
     if process.returncode != 0:
         fail(f"RV64 private-memory image build failed with exit status {process.returncode}")
+
 
 def boot(
     profile: dict[str, object],
@@ -474,10 +484,7 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
     )
     if installed is None or installed.group(1) != measured.group(2):
         reported = installed.group(1) if installed else "<none>"
-        fail(
-            f"the root installed a window at {reported} but the probe used "
-            f"{measured.group(2)}"
-        )
+        fail(f"the root installed a window at {reported} but the probe used {measured.group(2)}")
 
 
 def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, int]) -> None:
@@ -524,10 +531,7 @@ def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, 
         # Each record must be internally consistent, which is what makes the sum
         # above meaningful rather than an accumulation of unrelated numbers.
         if int(previous) + int(delta) != int(pages):
-            fail(
-                f"{instance}: a growth of {delta} took {previous} page(s) to "
-                f"{pages}"
-            )
+            fail(f"{instance}: a growth of {delta} took {previous} page(s) to {pages}")
     for instance, pages in sorted(charged.items()):
         expected = declared.get(instance, 0)
         if pages > expected:
@@ -729,6 +733,50 @@ def check_the_two_planes_are_independent(transcript: str, declared: dict[str, in
         )
 
 
+def check_segmented_capacity_report(
+    transcript: str, profile: dict[str, object], section: str
+) -> None:
+    report = re.search(
+        r"SLIME_MEM capacity holders=(?P<holders>\d+) pages=(?P<pages>\d+) "
+        r"reserved=(?P<reserved>\d+) payload=(?P<payload>\d+) tables=(?P<tables>\d+) "
+        r"alignment=(?P<alignment>\d+) mapped=(?P<mapped>\d+) reusable=(?P<reusable>\d+) "
+        r"allocation_descriptors=(?P<allocations>\d+) "
+        r"allocation_descriptors_available=(?P<allocations_available>\d+) "
+        r"extent_descriptors=(?P<extents>\d+) "
+        r"extent_descriptors_available=(?P<extents_available>\d+) "
+        r"holder_cslots=(?P<holder_cslots>\d+) graph_cslots=(?P<graph_cslots>\d+) "
+        r"cslots_available=(?P<cslots_available>\d+) root_image=(?P<image>\d+) "
+        r"root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
+        r"root_heap=(?P<heap>\d+) ordinary_available=(?P<ordinary_available>\d+) fit=1",
+        transcript,
+    )
+    if report is None:
+        fail("segmented 256 MiB capacity report is missing")
+    values = {name: int(value) for name, value in report.groupdict().items()}
+    if values["holders"] != 4 or values["pages"] != 65536:
+        fail(f"unexpected four-holder capacity report: {report.group(0)}")
+    if values["payload"] != 1024 * 1024 * 1024:
+        fail("capacity report does not carry four 256 MiB payloads")
+    if values["reserved"] != values["payload"] + values["tables"] + values["alignment"]:
+        fail("reserved RAM does not equal payload plus page tables and alignment waste")
+    if values["mapped"] != 0 or values["reusable"] != 0:
+        fail("host capacity plan reports runtime mapped or reusable RAM")
+    if values["allocations"] > values["allocations_available"]:
+        fail("capacity plan exceeds the compiled allocation descriptor table")
+    if values["extents"] > values["extents_available"]:
+        fail("capacity plan exceeds the compiled extent descriptor table")
+    if values["holder_cslots"] + values["graph_cslots"] > values["cslots_available"]:
+        fail("capacity plan exceeds the actual free root CSlots")
+    if values["reserved"] > values["ordinary_available"]:
+        fail("capacity plan exceeds the root's actual ordinary-memory inventory")
+    platform_bytes = profile_integer(profile, "memory_mib", fail, section) * 1024 * 1024
+    reported_root = values["image"] + values["stack"] + values["heap"]
+    if values["reserved"] + reported_root >= platform_bytes:
+        fail("four 256 MiB holders plus reported root image exceed the platform envelope")
+    if values["metadata"] < values["allocations"] * 8:
+        fail("root metadata report hides the capacity-scaled descriptor storage")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
     parser.add_argument(
@@ -757,6 +805,7 @@ def main() -> None:
     check_only_declared_pages_were_charged(transcript, declared)
     check_growth_was_batched_and_reused(transcript, declared)
     check_the_two_planes_are_independent(transcript, declared)
+    check_segmented_capacity_report(transcript, profile, section)
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "

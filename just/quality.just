@@ -275,6 +275,8 @@ test_sel4_root:
     # IO11 adds the clock rate read's authority test beside the monotonic read's.
     # MEM-LARGE adds explicit root-ceiling ordering and quota-scaled private
     # backing CSlot coverage.
+    # MEM-ARENAS adds a four-holder capacity rejection case over the real
+    # CSlot, allocation-descriptor, extent-descriptor, and RAM bounds.
     expected=216
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"

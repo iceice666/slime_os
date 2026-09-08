@@ -71,6 +71,66 @@ pub(super) fn launch_instance_graph(
             .map_or(0, PrivateMemoryBudget::holder_count),
         private_budget.is_some() as u8,
     );
+    if private_budget.is_some() {
+        const PAGES_256_MIB: usize = 256 * 1024 * 1024 / child_vspace::GRANULE_SIZE;
+        const HOLDERS: usize = 4;
+        const ROOT_STACK_BYTES: usize = 1024 * 1024;
+        const ROOT_HEAP_BYTES: usize = 512 * 1024;
+        let Some(plan) = object_allocator::plan_task_backing(PAGES_256_MIB) else {
+            fatal!("SLIME_MEM FAIL 256 MiB backing plan is not representable")
+        };
+        let root_image_bytes = bootinfo.user_image_frames().len() * child_vspace::GRANULE_SIZE;
+        let capacity = object_allocator::TaskBackingCapacity {
+            plan,
+            holders: HOLDERS,
+            graph_cslots: admission.required_root_slots,
+            cslots_available: allocator.free_slots(),
+            allocation_descriptors_available: allocator.allocation_descriptors_free(),
+            extent_descriptors_available: allocator.extent_descriptors_free(),
+            ordinary_bytes_available: allocator.untyped_bytes_remaining(),
+            root_image_bytes,
+            root_stack_bytes: ROOT_STACK_BYTES,
+            root_heap_bytes: ROOT_HEAP_BYTES,
+        };
+        if !capacity.fits() {
+            fatal!(
+                "SLIME_MEM FAIL capacity shortfall holders={} holder_cslots={} graph_cslots={} cslots_available={} holder_allocations={} allocations_available={} holder_extents={} extents_available={} reserved={} ordinary_available={}",
+                capacity.holders,
+                plan.required_cslots * capacity.holders,
+                capacity.graph_cslots,
+                capacity.cslots_available,
+                plan.allocation_descriptors * capacity.holders,
+                capacity.allocation_descriptors_available,
+                plan.extent_descriptors * capacity.holders,
+                capacity.extent_descriptors_available,
+                plan.reserved_bytes * capacity.holders,
+                capacity.ordinary_bytes_available,
+            )
+        }
+        sel4::debug_println!(
+            "SLIME_MEM capacity holders={} pages={} reserved={} payload={} tables={} alignment={} mapped={} reusable={} allocation_descriptors={} allocation_descriptors_available={} extent_descriptors={} extent_descriptors_available={} holder_cslots={} graph_cslots={} cslots_available={} root_image={} root_metadata={} root_stack={} root_heap={} ordinary_available={} fit=1",
+            capacity.holders,
+            plan.private_pages,
+            plan.reserved_bytes * capacity.holders,
+            plan.payload_bytes * capacity.holders,
+            plan.page_table_bytes * capacity.holders,
+            plan.alignment_waste * capacity.holders,
+            0,
+            0,
+            plan.allocation_descriptors * capacity.holders,
+            capacity.allocation_descriptors_available,
+            plan.extent_descriptors * capacity.holders,
+            capacity.extent_descriptors_available,
+            plan.required_cslots * capacity.holders,
+            capacity.graph_cslots,
+            capacity.cslots_available,
+            capacity.root_image_bytes,
+            core::mem::size_of::<ObjectAllocator>() + core::mem::size_of::<TaskTable<MAX_TASKS>>(),
+            capacity.root_stack_bytes,
+            capacity.root_heap_bytes,
+            capacity.ordinary_bytes_available,
+        );
+    }
     let clock_authority = match generation::clock_authority_object(generation) {
         Some(Ok(authority)) => Some(authority),
         Some(Err(error)) => {

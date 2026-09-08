@@ -8,7 +8,7 @@ devices:
 - end: 0x60000000
   start: 0x8031000
 - end: 0x10000000000
-  start: 0x80000000
+  start: 0xc0000000
 memory:
-- end: 0x80000000
+- end: 0xc0000000
   start: 0x60000000

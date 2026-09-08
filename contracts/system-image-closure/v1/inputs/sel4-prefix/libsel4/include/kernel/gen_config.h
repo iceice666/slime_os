@@ -42,6 +42,7 @@
 /* disabled: CONFIG_PLAT_IMX8MP_EVK */
 /* disabled: CONFIG_PLAT_IMX93 */
 /* disabled: CONFIG_PLAT_MAAXBOARD */
+/* disabled: CONFIG_PLAT_NS02201_H1V1 */
 /* disabled: CONFIG_PLAT_ODROIDC2 */
 /* disabled: CONFIG_PLAT_ODROIDC4 */
 /* disabled: CONFIG_PLAT_OMAP3 */
@@ -73,6 +74,7 @@
 /* disabled: CONFIG_ARM_CORTEX_A55 */
 /* disabled: CONFIG_ARM_CORTEX_A57 */
 /* disabled: CONFIG_ARM_CORTEX_A72 */
+/* disabled: CONFIG_ARM_CORTEX_A73 */
 /* disabled: CONFIG_ARM_CORTEX_A76 */
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
@@ -110,7 +112,7 @@
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
 #define CONFIG_HAVE_FPU  1
 #define CONFIG_PADDR_USER_DEVICE_TOP  1099511627776
-#define CONFIG_ROOT_CNODE_SIZE_BITS  12
+#define CONFIG_ROOT_CNODE_SIZE_BITS  19
 #define CONFIG_TIMER_TICK_MS  2
 #define CONFIG_TIME_SLICE  5
 #define CONFIG_RETYPE_FAN_OUT_LIMIT  256

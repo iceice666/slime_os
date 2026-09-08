@@ -631,7 +631,7 @@ QEMU_DTB_PARAMETERS = {
         "qemu-system-aarch64",
         "virt,secure=off,virtualization=on,gic-version=2,dtb-randomness=off",
         "cortex-a53",
-        "1024",
+        "2048",
     ),
     "qemu-riscv-virt": ("qemu-system-riscv64", "virt", "rv64", "3072"),
 }
@@ -646,10 +646,10 @@ def dump_device_tree(platform: Platform) -> Path:
     board's own memory map, interrupt controller, and console with a machine
     that is not the target.
 
-    Memory size is the kernel's own `QEMU_MEMORY` default for this platform,
-    not the 2048 MiB the product boots with: the kernel derives its physical
-    memory window from this description, and the pinned prefix was produced
-    with the default. Widening it is a platform change, not a harness knob.
+    Memory size is the profile's pinned product envelope. The installed DTB is
+    the kernel's physical-memory authority, so it must match the RAM size the
+    corresponding product and capacity gates boot; changing either is a pinned
+    platform change, never a harness-only knob.
     """
     dtb = platform.build_dir / f"slime-{platform.name}.dtb"
     dtb.parent.mkdir(parents=True, exist_ok=True)

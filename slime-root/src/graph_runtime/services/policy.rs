@@ -783,12 +783,12 @@ pub(super) fn reclaim_task_objects(
     // starting value; `live_objects` is what must return to *its* starting
     // value even though the arena is reused rather than freed.
     sel4::debug_println!(
-        "SLIME_ROOT reclaim census task={} slots={} bytes={} live_objects={} arena_reuses={}",
+        "SLIME_ROOT reclaim census task={} slots={} bytes={} live_objects={} extent_reuses={}",
         id.0,
         allocator.slots_remaining(),
         allocator.untyped_bytes_remaining(),
         allocator.live_objects(),
-        allocator.arena_reuses(),
+        allocator.extents_reused(),
     );
 }
 
@@ -805,7 +805,6 @@ pub(crate) fn private_memory_cause(error: &private_memory::GrowError) -> &'stati
         private_memory::GrowError::ReservationExceeded { .. } => "reservation",
         private_memory::GrowError::QuotaExceeded { .. } => "quota",
         private_memory::GrowError::TotalExceeded { .. } => "root-ceiling",
-        private_memory::GrowError::LargeFrameUnavailable { .. } => "large-frame-unavailable",
         private_memory::GrowError::Frames { .. } => "frames",
     }
 }

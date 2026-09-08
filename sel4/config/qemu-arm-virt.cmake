@@ -1,6 +1,11 @@
 set(KernelPlatform "qemu-arm-virt" CACHE STRING "")
 set(KernelSel4Arch "aarch64" CACHE STRING "")
 set(KernelArmHypervisorSupport ON CACHE BOOL "")
+# MEM-ARENAS: four adversarial 256 MiB private holders plus the product graph
+# need 19 address bits in the root CSpace. This CNode costs 16 MiB of kernel
+# memory at 32 bytes per slot; the 2 GiB QEMU profile's capacity report includes
+# that cost and actual free slots. Physical targets keep their existing values.
+set(KernelRootCNodeSizeBits 19 CACHE STRING "" FORCE)
 # B48's MCS half, deferred with the reason recorded rather than left blank.
 #
 # MCS replaces seL4's priority-only scheduler with scheduling contexts,
