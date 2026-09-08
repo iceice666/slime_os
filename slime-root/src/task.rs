@@ -293,8 +293,6 @@ pub enum TaskError {
     WriteRegisters(sel4::Error),
     /// Resuming the thread failed.
     Resume(sel4::Error),
-    /// Suspending a task thread before an address-space transaction failed.
-    Suspend(sel4::Error),
     /// The task's entry point does not fit a machine word.
     EntryOutOfRange {
         entry: u64,
@@ -489,28 +487,6 @@ impl Task {
             .installs_peak()
             .saturating_add(self.capabilities.peak() as u32);
         (live, peak)
-    }
-
-    /// Stop sibling workers before mutating this task's address space. The main
-    /// thread is already blocked in the grow IPC call; suspending and resuming
-    /// it before the root replies would restart that call on seL4.
-    fn suspend_workers(&self) -> Result<(), TaskError> {
-        for (suspended_workers, worker) in self.workers.iter().flatten().enumerate() {
-            if let Err(error) = worker.tcb_suspend() {
-                for suspended in self.workers.iter().flatten().take(suspended_workers) {
-                    let _ = suspended.tcb_resume();
-                }
-                return Err(TaskError::Suspend(error));
-            }
-        }
-        Ok(())
-    }
-
-    fn resume_workers(&self) -> Result<(), TaskError> {
-        for worker in self.workers.iter().flatten() {
-            worker.tcb_resume().map_err(TaskError::Resume)?;
-        }
-        Ok(())
     }
 
     /// Stop the main thread during teardown. Idempotent from the root task's
@@ -1161,11 +1137,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     /// Grow one task's private memory by `delta` pages, answering the page
     /// count before the growth (C10.1).
     ///
-    /// The task is named by the caller's own badge, never by an argument, which
-    /// is what makes the operation self-scoped: there is no task parameter a
-    /// component could forge. The region and the VSpace it maps into both come
-    /// from the task record, so a growth cannot land in another task's window
-    /// even if the accounting were wrong.
+    /// The caller is identified by its task badge; every thread in the process
+    /// shares that badge and may use this operation. No sibling is suspended:
+    /// seL4 suspension cancels an outstanding IPC and resume restarts it, which
+    /// would make an unrelated worker's `Call` execute more than once. Tail-only
+    /// mappings are published by the kernel one operation at a time, while the
+    /// region count remains unchanged until the whole transaction commits.
     pub fn grow_private_memory(
         &mut self,
         allocator: &mut ObjectAllocator,
@@ -1182,27 +1159,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let Some(task) = self.tasks[index].as_mut() else {
             return Err(TaskError::UnknownTask(id));
         };
-        let suspended = task.activated && delta != 0;
-        if suspended {
-            // The caller is already blocked in the IPC call. Stop only sibling
-            // workers so none can observe or write uncommitted mappings.
-            task.suspend_workers()?;
-        }
         let arena = task.cleanup.arena;
         let vspace = task.vspace.vspace;
-        let result = self
-            .private
+        self.private
             .grow(allocator, arena, vspace, &mut task.private_memory, delta)
-            .map_err(TaskError::PrivateMemory);
-        if suspended && let Err(error) = task.resume_workers() {
-            // Growth is already committed, so keep its answer authoritative;
-            // make the degraded worker state visible to supervision evidence.
-            sel4::debug_println!(
-                "SLIME_MEM worker resume failed task={} error={error:?}",
-                id.0,
-            );
-        }
-        result
+            .map_err(TaskError::PrivateMemory)
     }
 
     /// This table's private-memory accounting, for the root's own markers

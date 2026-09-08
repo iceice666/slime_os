@@ -42,11 +42,17 @@
     {
       name = "private-memory-denied";
       executable = "private-memory-probe";
+      priority = 149;
+      extraThreads = 1;
+      workerPriority = 150;
     };
     {
       name = "private-memory-granted";
       executable = "private-memory-probe";
+      priority = 149;
       privatePageQuota = 512;
+      extraThreads = 1;
+      workerPriority = 150;
     };
   ];
   grants = [
@@ -60,6 +66,17 @@
       ];
       transferable = false;
     };
+    {
+      name = "private-memory-worker-rpc";
+      capabilityKind = "endpoint";
+      source = "private-memory-granted";
+      target = "private-memory-denied";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
   ];
   slotPins = [
     {
@@ -67,6 +84,12 @@
       grant = "both-planes-shared-buffer-factory";
       slot = 1;
       reason = "encodedLayout";
+    };
+    {
+      holder = "private-memory-granted";
+      grant = "private-memory-worker-rpc";
+      slot = 0;
+      reason = "componentAbi";
     };
   ];
   extraBindings = [];
@@ -78,8 +101,44 @@
   bootLayoutObject = true;
   interfaceSchemas = [];
   state = [];
-  notifications = [];
-  notificationBindings = [];
+  notifications = [
+    {
+      name = "private-memory-side-effect-ready";
+      source = "private-memory-denied";
+      target = "private-memory-granted";
+    };
+    {
+      name = "private-memory-growth-done";
+      source = "private-memory-granted";
+      target = "private-memory-denied";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "private-memory-side-effect-ready";
+      holder = "private-memory-denied";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "private-memory-side-effect-ready";
+      holder = "private-memory-granted";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "private-memory-growth-done";
+      holder = "private-memory-granted";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "private-memory-growth-done";
+      holder = "private-memory-denied";
+      role = "wait";
+      slot = 1;
+    };
+  ];
   bootProfiles = [];
   clockAuthority = [];
   clockAuthorityObject = false;

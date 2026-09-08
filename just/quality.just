@@ -276,8 +276,9 @@ test_sel4_root:
     # MEM-LARGE adds explicit root-ceiling ordering and quota-scaled private
     # backing CSlot coverage.
     # MEM-ARENAS adds a four-holder capacity rejection case over the real
-    # CSlot, allocation-descriptor, extent-descriptor, and RAM bounds.
-    expected=216
+    # CSlot, allocation-descriptor, extent-descriptor, and RAM bounds, and the
+    # private-growth rollback boundary adds three record-level ownership cases.
+    expected=219
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

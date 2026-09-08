@@ -203,19 +203,21 @@ def check_unknown_profile_refused() -> None:
 
 
 def check_root_roles() -> int:
-    """Root roles are closed, platform-qualified, and change the root ELF.
+    """Root roles are closed, platform-qualified, and change root-side bytes.
 
-    A root role is a distinct root *build* over the same composition: the
-    selector carries no embedded generation, the fixture root reports its
-    capability layout, the unwind root forces B38's construction unwind. Each
-    was a `build-sel4.py` variant branch, so each could change root bytes with
-    nothing in any build key to say which. This asserts the vocabulary is
-    closed, an unadmitted role or parameter is refused, a parameter on the
-    wrong platform is refused before Cargo runs, and — the arm that matters —
-    a role-only closure builds a different, reproducible root while leaving the
-    generation alone.
+    A root role is a distinct build over the same composition: the selector
+    carries no embedded generation, fixture and unwind roles change root
+    behavior, and private-memory roles compile bounded failure probes into the
+    root and its embedded fixture. Each role has its own closure identity.
     """
-    expected = ("embedded-generation", "boot-selector", "root-fixture", "reclamation-unwind")
+    expected = (
+        "embedded-generation",
+        "boot-selector",
+        "root-fixture",
+        "reclamation-unwind",
+        "private-memory-fail-second-allocation",
+        "private-memory-fail-large-map",
+    )
     if tuple(CONTRACT.ROOT_ROLES) != expected:
         fail(f"the contract admits root roles {tuple(CONTRACT.ROOT_ROLES)}; expected {expected}")
     if tuple(CONTRACT.ROOT_PARAMETERS) != ("qemuKeyboard", "duoTestTerminator"):

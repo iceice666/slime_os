@@ -11,6 +11,12 @@
 use core::ops::Range;
 #[cfg(slime_b38_force_unwind)]
 use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg(slime_private_fail_large_map)]
+use core::sync::atomic::{AtomicBool as PrivateMapAtomicBool, Ordering as PrivateMapOrdering};
+#[cfg(slime_private_fail_second_allocation)]
+use core::sync::atomic::{
+    AtomicBool as PrivateAllocationAtomicBool, Ordering as PrivateAllocationOrdering,
+};
 
 #[cfg(slime_b38_force_unwind)]
 static FORCE_UNWIND_ONCE: AtomicBool = AtomicBool::new(true);
@@ -18,6 +24,39 @@ static FORCE_UNWIND_ONCE: AtomicBool = AtomicBool::new(true);
 #[cfg(slime_b38_force_unwind)]
 pub(crate) fn take_forced_unwind() -> bool {
     FORCE_UNWIND_ONCE.swap(false, Ordering::Relaxed)
+}
+
+#[cfg(slime_private_fail_second_allocation)]
+static FORCE_PRIVATE_SECOND_ALLOCATION_FAILURE: PrivateAllocationAtomicBool =
+    PrivateAllocationAtomicBool::new(false);
+
+#[cfg(slime_private_fail_large_map)]
+static FORCE_PRIVATE_LARGE_MAP_FAILURE: PrivateMapAtomicBool = PrivateMapAtomicBool::new(true);
+
+/// Arm the one injected private-growth retype failure for the next transaction
+/// that already holds a committed granule. Set by the fixture service loop so
+/// the fault lands on a specific request rather than on whichever growth in the
+/// boot happens to be first.
+#[cfg(slime_private_fail_second_allocation)]
+pub fn arm_private_second_allocation_failure() {
+    FORCE_PRIVATE_SECOND_ALLOCATION_FAILURE.store(true, PrivateAllocationOrdering::Relaxed);
+}
+
+#[cfg(slime_private_fail_second_allocation)]
+fn fail_private_allocation(
+    kind: PrivateObjectKind,
+    in_flight_granules: usize,
+    committed_granules: usize,
+) -> bool {
+    kind == PrivateObjectKind::Granule
+        && in_flight_granules == 1
+        && committed_granules != 0
+        && FORCE_PRIVATE_SECOND_ALLOCATION_FAILURE.swap(false, PrivateAllocationOrdering::Relaxed)
+}
+
+#[cfg(slime_private_fail_large_map)]
+pub(crate) fn take_forced_private_large_map_failure() -> bool {
+    FORCE_PRIVATE_LARGE_MAP_FAILURE.swap(false, PrivateMapOrdering::Relaxed)
 }
 
 pub const MAX_KERNEL_UNTYPEDS: usize = 64;
@@ -1552,6 +1591,32 @@ impl ObjectAllocator {
         blueprint: sel4::ObjectBlueprint,
     ) -> Result<(sel4::cap::Unspecified, bool, bool), AllocError> {
         debug_assert!(kind != PrivateObjectKind::Empty);
+        #[cfg(slime_private_fail_second_allocation)]
+        if fail_private_allocation(
+            kind,
+            self.allocations
+                .iter()
+                .filter(|record| {
+                    record.belongs_to(id)
+                        && record.allocation.is_in_flight()
+                        && record.allocation.private_kind() == PrivateObjectKind::Granule
+                })
+                .count(),
+            self.allocations
+                .iter()
+                .filter(|record| {
+                    record.belongs_to(id)
+                        && !record.allocation.is_in_flight()
+                        && !record.allocation.is_reusable()
+                        && record.allocation.private_kind() == PrivateObjectKind::Granule
+                })
+                .count(),
+        ) {
+            return Err(AllocError::Retype {
+                size_bits: blueprint.physical_size_bits(),
+                error: sel4::Error::NotEnoughMemory,
+            });
+        }
         let size_bits = blueprint.physical_size_bits();
         let (position, extent_index, reused, mapped) =
             self.take_private_slot(id, kind, size_bits)?;
@@ -1605,6 +1670,7 @@ impl ObjectAllocator {
         &mut self,
         id: TaskArenaId,
         cap: sel4::cap::Unspecified,
+        mapped: bool,
     ) -> Result<(), AllocError> {
         let slot = cap.bits() as usize;
         let record = self
@@ -1614,6 +1680,11 @@ impl ObjectAllocator {
             .ok_or(AllocError::ArenaSlotTableFull {
                 limit: MAX_TASK_ALLOCATIONS,
             })?;
+        let kind = record.allocation.private_kind();
+        let size_bits = record.allocation.size_bits();
+        record
+            .allocation
+            .set_private_state(kind, size_bits, false, mapped);
         record.allocation.set_in_flight(true);
         Ok(())
     }
@@ -1628,50 +1699,41 @@ impl ObjectAllocator {
         Ok(())
     }
 
-    /// Revoke every extent touched by a failed growth transaction.
+    /// Unmap and retain only the objects created by the failed transaction.
     ///
-    /// Private objects are provisioned into independent parents, so revoking
-    /// each touched parent destroys the failed attempt before its slots return
-    /// to the task's pre-provisioned pool. A retry therefore uses the original
-    /// reservation; it never needs a second payload-sized set of extents.
+    /// Private extents are bump-allocated and may contain committed objects from
+    /// earlier growths. Revoking the parent would destroy those objects too. An
+    /// in-flight frame is unmapped and retained behind its existing capability;
+    /// a leaf table stays mapped because the retry targets the same fixed region.
     pub fn unwind_private_transaction(&mut self, id: TaskArenaId) -> Result<(), AllocError> {
         self.arena(id)?;
-        let root = sel4::init_thread::slot::CNODE.cap();
-        for index in 0..self.extents.len() {
-            let touched = self.allocations.iter().any(|record| {
-                record.belongs_to(id)
-                    && record.allocation.is_in_flight()
-                    && record.extent as usize == index
-            });
-            if !touched {
+        for record in &mut self.allocations {
+            if !record.belongs_to(id) || !record.allocation.is_in_flight() {
                 continue;
             }
-            let extent = self.extents[index].expect("in-flight extent exists");
-            let parent_slot = extent.parent.bits() as usize;
-            root.absolute_cptr(sel4::CPtr::from_bits(parent_slot as _))
-                .revoke()
-                .map_err(|error| AllocError::ArenaCleanup {
-                    slot: parent_slot,
-                    error,
-                })?;
-            self.live_objects = self.live_objects.saturating_sub(extent.objects);
-            self.live_bytes = self.live_bytes.saturating_sub(extent.bytes);
-            let extent = self.extents[index].as_mut().expect("extent exists");
-            extent.watermark = 0;
-            extent.objects = 0;
-            extent.bytes = 0;
-            for record in &mut self.allocations {
-                if record.belongs_to(id) && record.extent as usize == index {
-                    record.extent = u32::MAX;
-                    record
-                        .allocation
-                        .set_private_state(PrivateObjectKind::Empty, 0, true, false);
-                }
-            }
+            let slot = record.allocation.slot();
+            let kind = record.allocation.private_kind();
+            let size_bits = record.allocation.size_bits();
+            let mapped = if kind == PrivateObjectKind::LeafTable {
+                true
+            } else {
+                sel4::cap::UnspecifiedPage::from_bits(slot as _)
+                    .frame_unmap()
+                    .map_err(|error| AllocError::ArenaCleanup { slot, error })?;
+                false
+            };
+            record
+                .allocation
+                .set_private_state(kind, size_bits, true, mapped);
         }
         Ok(())
     }
 
+    /// Return an acquired private object after its mapping failed.
+    ///
+    /// The capability still occupies its CSlot and the untyped watermark cannot
+    /// move backwards. Keep both ownership records intact and make the existing
+    /// unmapped object available to the next attempt.
     pub fn reset_private_in(
         &mut self,
         id: TaskArenaId,
@@ -1693,21 +1755,9 @@ impl ObjectAllocator {
             .ok_or(AllocError::ArenaSlotTableFull {
                 limit: MAX_TASK_ALLOCATIONS,
             })?;
-        let extent_index = self.allocations[position].extent as usize;
-        self.allocations[position].extent = u32::MAX;
-        self.allocations[position].allocation.set_private_state(
-            PrivateObjectKind::Empty,
-            0,
-            true,
-            false,
-        );
-        let bytes = 1usize << size_bits;
-        if let Some(extent) = self.extents.get_mut(extent_index).and_then(Option::as_mut) {
-            extent.objects = extent.objects.saturating_sub(1);
-            extent.bytes = extent.bytes.saturating_sub(bytes);
-        }
-        self.live_objects = self.live_objects.saturating_sub(1);
-        self.live_bytes = self.live_bytes.saturating_sub(bytes);
+        self.allocations[position]
+            .allocation
+            .set_private_state(kind, size_bits, true, false);
         Ok(())
     }
 
@@ -2193,5 +2243,72 @@ mod tests {
         assert_eq!(allocation.private_kind(), PrivateObjectKind::LargeFrame);
         assert!(allocation.is_reusable());
         assert!(allocation.is_mapped());
+    }
+
+    /// A failed transaction must be distinguishable from a committed one at the
+    /// record level, because that distinction is the whole rollback boundary: a
+    /// private extent is bump-allocated and holds earlier growths' objects, so
+    /// an unwind that could not tell them apart would have to revoke the parent
+    /// and destroy pages the caller still holds.
+    #[test]
+    fn only_in_flight_records_are_the_failed_transactions_own_objects() {
+        let mut committed = ArenaAllocation::new(40, 12, true, false);
+        committed.set_private_state(PrivateObjectKind::Granule, 12, false, true);
+        let mut in_flight = ArenaAllocation::new(41, 12, true, false);
+        in_flight.set_private_state(PrivateObjectKind::Granule, 12, false, true);
+        in_flight.set_in_flight(true);
+
+        assert!(!committed.is_in_flight());
+        assert!(in_flight.is_in_flight());
+
+        // Commit clears the marker without touching ownership: the object stays
+        // held, mapped, and outside any later transaction's reach.
+        in_flight.set_in_flight(false);
+        assert!(!in_flight.is_in_flight());
+        assert!(!in_flight.is_reusable());
+        assert!(in_flight.is_mapped());
+        assert_eq!(in_flight.private_kind(), PrivateObjectKind::Granule);
+    }
+
+    /// An unwound frame keeps its capability and its type, and becomes
+    /// available to the retry as an *unmapped* object of that type. Marking it
+    /// `Empty` instead would tell the allocator the CSlot is free to retype
+    /// into while the kernel still holds a capability there, and the pinned
+    /// seL4 requires an empty destination slot — so the retry would be refused
+    /// rather than served.
+    #[test]
+    fn an_unwound_frame_stays_owned_and_typed_for_the_retry() {
+        let mut frame = ArenaAllocation::new(42, 12, true, false);
+        frame.set_private_state(PrivateObjectKind::Granule, 12, false, true);
+        frame.set_in_flight(true);
+
+        // What `unwind_private_transaction` records after the kernel unmap.
+        frame.set_private_state(PrivateObjectKind::Granule, 12, true, false);
+
+        assert!(frame.is_reusable());
+        assert!(!frame.is_mapped());
+        assert!(!frame.is_in_flight());
+        assert!(frame.is_private());
+        assert_eq!(frame.slot(), 42);
+        assert_eq!(frame.size_bits(), 12);
+        assert_ne!(frame.private_kind(), PrivateObjectKind::Empty);
+    }
+
+    /// A leaf table is retained mapped rather than unmapped: the region's base
+    /// is fixed, so the retry maps its pages through the same table, and
+    /// unmapping it would discard translation structure the committed pages
+    /// below it are still reached through.
+    #[test]
+    fn an_unwound_leaf_table_is_retained_mapped() {
+        let mut table = ArenaAllocation::new(43, 12, true, false);
+        table.set_private_state(PrivateObjectKind::LeafTable, 12, false, true);
+        table.set_in_flight(true);
+
+        table.set_private_state(PrivateObjectKind::LeafTable, 12, true, true);
+
+        assert!(table.is_reusable());
+        assert!(table.is_mapped());
+        assert!(!table.is_in_flight());
+        assert_eq!(table.private_kind(), PrivateObjectKind::LeafTable);
     }
 }

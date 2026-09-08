@@ -55,11 +55,15 @@ render :: Text = t.join "" {
     schema.rootRoleBootSelector;
     schema.rootRoleFixture;
     schema.rootRoleReclamationUnwind;
+    schema.rootRolePrivateMemoryFailSecondAllocation;
+    schema.rootRolePrivateMemoryFailLargeMap;
   };
   text "ROOT_ROLE_EMBEDDED_GENERATION" schema.rootRoleEmbeddedGeneration;
   text "ROOT_ROLE_BOOT_SELECTOR" schema.rootRoleBootSelector;
   text "ROOT_ROLE_FIXTURE" schema.rootRoleFixture;
   text "ROOT_ROLE_RECLAMATION_UNWIND" schema.rootRoleReclamationUnwind;
+  text "ROOT_ROLE_PRIVATE_MEMORY_FAIL_SECOND_ALLOCATION" schema.rootRolePrivateMemoryFailSecondAllocation;
+  text "ROOT_ROLE_PRIVATE_MEMORY_FAIL_LARGE_MAP" schema.rootRolePrivateMemoryFailLargeMap;
   tuple "ROOT_PARAMETERS" {
     schema.rootParameterQemuKeyboard;
     schema.rootParameterDuoTestTerminator;

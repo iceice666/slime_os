@@ -234,11 +234,14 @@ providerExternal :: Text = "external";
 -- `embedded-generation` and differs in exactly one compile-time property: the
 -- fixture root reports its capability layout for the byte-frozen boot-layout
 -- fixtures, and the unwind root is compiled to force B38's supervised
--- construction unwind. Both are test-only.
+-- construction unwind, private growth rollback, and large-map retry. All are
+-- test-only.
 rootRoleEmbeddedGeneration :: Text = "embedded-generation";
 rootRoleBootSelector :: Text = "boot-selector";
 rootRoleFixture :: Text = "root-fixture";
 rootRoleReclamationUnwind :: Text = "reclamation-unwind";
+rootRolePrivateMemoryFailSecondAllocation :: Text = "private-memory-fail-second-allocation";
+rootRolePrivateMemoryFailLargeMap :: Text = "private-memory-fail-large-map";
 loaderRoleKernelLoader :: Text = "kernel-loader";
 
 -- One closed root-role parameter. `BuildRole.parameters` was declared by CP11
@@ -316,6 +319,8 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   rootRoleBootSelector =;
   rootRoleFixture =;
   rootRoleReclamationUnwind =;
+  rootRolePrivateMemoryFailSecondAllocation =;
+  rootRolePrivateMemoryFailLargeMap =;
   loaderRoleKernelLoader =;
   rootParameterQemuKeyboard =;
   rootParameterDuoTestTerminator =;

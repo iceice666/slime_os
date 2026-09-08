@@ -74,6 +74,8 @@ IMAGE: Path | None = None
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory.zti"
 TIMEOUT = 240
+ROLLBACK_CLOSURE = "sel4-private-memory-fail-second-allocation"
+LARGE_MAP_CLOSURE = "sel4-private-memory-fail-large-map"
 CLOSURE_PLATFORM = "qemu-arm-virt"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
@@ -134,7 +136,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"SLIME_MEM refused task=\d+ delta=1 cause=reservation "
             r"detail=ReservationExceeded \{ pages: (\d+), delta: 1, reservation: (\d+) \}",
             r"\[private-memory-probe\] granted pages=(\d+) base=0x[0-9a-f]+ "
-            r"zeroed=1 survived=1 refused=1",
+            r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=0",
         ),
     ),
     (
@@ -294,12 +296,12 @@ def image_path(platform: str) -> Path | None:
     return RV64_IMAGE
 
 
-def build_image(platform: str) -> None:
+def build_image(platform: str, *, reuse: bool = True) -> None:
     """Build this plane through its closure or declared cross-target legacy arm."""
     global IMAGE
     if platform == CLOSURE_PLATFORM:
         try:
-            built = build_closure_image(CLOSURE)
+            built = build_closure_image(CLOSURE, reuse=reuse)
         except ClosureImageError as error:
             fail(str(error))
         IMAGE = built.image
@@ -369,8 +371,11 @@ def boot(
     watchdog = threading.Timer(TIMEOUT, process.kill)
     watchdog.start()
     lines: list[str] = []
+    # `SLIME_ROOT READY` as well as the graph's terminal: the rollback case
+    # boots the fixture root, whose embedded child runs the injected-failure arm
+    # of the private-memory phase and which never launches a component graph.
     terminal = re.compile(
-        r"SLIME_GRAPH HEALTHY|SLIME_ROOT FATAL|private memory plane fail"
+        r"SLIME_GRAPH HEALTHY|SLIME_ROOT READY|SLIME_ROOT FATAL|private memory plane fail"
         r"|\[private-memory-probe\] FAIL|\[private-heap-probe:(?:granted|denied|both)\] FAIL"
     )
     try:
@@ -391,6 +396,50 @@ def boot(
     if timed_out:
         fail("QEMU timed out")
     return "\n".join(lines)
+
+def build_named_image(name: str) -> Path:
+    try:
+        built = build_closure_image(name)
+    except ClosureImageError as error:
+        fail(str(error))
+    actual = sha256_file(built.image, fail)
+    if actual != built.digest():
+        fail(f"{name}: image changed after its build result was written")
+    return built.image
+
+
+def check_large_map_retry(transcript: str) -> None:
+    refused = re.findall(
+        r"SLIME_MEM refused task=\d+ delta=512 cause=frames detail=Frames \{ allocated: 0,",
+        transcript,
+    )
+    if len(refused) != 1:
+        fail(f"large-map case recorded {len(refused)} injected refusal(s), expected one")
+    report = re.search(
+        r"\[private-memory-probe\] granted pages=512 base=0x[0-9a-f]+ "
+        r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
+        transcript,
+    )
+    if report is None:
+        fail("large-map failure did not retry successfully with one coherent backing object")
+
+
+def check_incremental_rollback(transcript: str) -> None:
+    if re.search(r"SLIME_CHILD mem rollback failed", transcript):
+        fail("incremental rollback probe reported loss of its committed page")
+    preserved = re.search(
+        r"SLIME_CHILD mem rollback preserved pages=1 base=0x[0-9a-f]+ "
+        r"survived=0x4d454d5f42415345",
+        transcript,
+    )
+    if preserved is None:
+        fail("incremental rollback did not preserve and read back the committed sentinel page")
+    refused = re.findall(
+        r"SLIME_MEM refused task=0 delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        transcript,
+    )
+    if len(refused) != 1:
+        fail(f"incremental rollback recorded {len(refused)} injected refusal(s), expected one")
 
 
 def check_markers(transcript: str) -> None:
@@ -806,12 +855,30 @@ def main() -> None:
     check_growth_was_batched_and_reused(transcript, declared)
     check_the_two_planes_are_independent(transcript, declared)
     check_segmented_capacity_report(transcript, profile, section)
+    if arguments.platform == CLOSURE_PLATFORM:
+        large_map = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=build_named_image(LARGE_MAP_CLOSURE),
+        )
+        check_large_map_retry(large_map)
+        rollback = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=build_named_image(ROLLBACK_CLOSURE),
+        )
+        check_incremental_rollback(rollback)
+    cases = 3 if arguments.platform == CLOSURE_PLATFORM else 1
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "
-        f"{len(CHAINS)} causal chains on {arguments.platform}; the declared quota "
-        f"({declared['private-memory-granted']} page(s)) is the measured ceiling "
-        "and exactly one 2 MiB frame backs the aligned window"
+        f"{len(CHAINS)} causal chains and {cases} image case(s) on {arguments.platform}; "
+        f"the declared quota ({declared['private-memory-granted']} page(s)) is the "
+        "measured ceiling, worker RPC remained exactly-once, a worker's own growth "
+        "was adjudicated against its task's region, failed large-map backing "
+        "retried, and incremental rollback preserved committed bytes"
     )
 
 

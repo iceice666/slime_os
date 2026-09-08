@@ -667,12 +667,27 @@ const SHARED_QUOTA: HolderQuota = HolderQuota {
 /// one.
 const PRIVATE_QUOTA_PAGES: usize = 4;
 
+/// Pages the phase must still hold when it reports.
+///
+/// The injected-failure build grows one page, then has its second growth
+/// refused mid-transaction, so its arm ends with exactly the committed page
+/// whose survival is the whole assertion.
+#[cfg(not(slime_private_fail_second_allocation))]
+const MEM_EXPECTED_PAGES: usize = PRIVATE_QUOTA_PAGES;
+#[cfg(slime_private_fail_second_allocation)]
+const MEM_EXPECTED_PAGES: usize = 1;
+
 /// Growth operations the private-memory phase must actually charge a page to.
 ///
 /// The phase issues five: two size queries, two growths, one refused. Only the
 /// two growths are grants, which is the distinction a page total cannot make on
 /// its own.
+#[cfg(not(slime_private_fail_second_allocation))]
 const MEM_EXPECTED_GRANTS: usize = 2;
+/// The injected arm's one successful growth; the refused second transaction
+/// must charge nothing.
+#[cfg(slime_private_fail_second_allocation)]
+const MEM_EXPECTED_GRANTS: usize = 1;
 
 /// The value the clean-exit fixture writes into its first private page and
 /// re-reads after a further growth. `slime-root/child/src/main.rs::MEM_PATTERN`.

@@ -173,6 +173,10 @@ fn serve_request(
         // what differs is only which loop received the request.
         lifecycle_labels::PRIVATE_MEMORY_GROW => {
             let delta = words[0] as usize;
+            #[cfg(slime_private_fail_second_allocation)]
+            if delta == 2 {
+                crate::object_allocator::arm_private_second_allocation_failure();
+            }
             let response = match tasks.grow_private_memory(allocator, id, delta) {
                 Ok(previous) => {
                     let region = tasks
@@ -621,20 +625,21 @@ pub(super) fn report_memory_phase(phase: &MemoryPhase, tasks: &TaskTable<MAX_TAS
             phase.flags
         )
     }
-    // The root's own half: the clean-exit fixture grew to exactly its declared
-    // ceiling and nothing else grew at all. The child can attest that its
-    // pattern survived; only the root can say how many pages it handed out.
+    // The root's own half: the phase's own arm grew to exactly the pages it is
+    // supposed to still hold, and nothing else grew at all. The child can
+    // attest that its pattern survived; only the root can say how many pages it
+    // handed out.
     let table = tasks.private_memory();
-    if table.total_pages() != PRIVATE_QUOTA_PAGES {
+    if table.total_pages() != MEM_EXPECTED_PAGES {
         fatal!(
-            "SLIME_MEM FAIL {} live page(s), expected exactly {PRIVATE_QUOTA_PAGES}",
+            "SLIME_MEM FAIL {} live page(s), expected exactly {MEM_EXPECTED_PAGES}",
             table.total_pages()
         )
     }
-    // Exactly two grants, which is the property a total alone cannot state: the
-    // two size queries and the refusal must each take no page, so a mechanism
-    // that charged a query, or charged twice per growth, would reach the same
-    // four-page total by a different and wrong route.
+    // The grants the arm's growths must charge, which is the property a total
+    // alone cannot state: a size query and a refusal must each take no page, so
+    // a mechanism that charged a query, or charged twice per growth, would
+    // reach the same total by a different and wrong route.
     if table.grants() != MEM_EXPECTED_GRANTS {
         fatal!(
             "SLIME_MEM FAIL {} growth grant(s), expected exactly {MEM_EXPECTED_GRANTS}",

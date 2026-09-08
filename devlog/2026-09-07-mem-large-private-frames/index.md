@@ -67,3 +67,17 @@ Private growth can now back an empty, aligned 512-page request with one architec
 - [Child VSpace construction](../../slime-root/src/child_vspace.rs)
 - [Component probe](../../components/testkit/private-memory-probe/src/main.rs)
 - [Owning QEMU checker](../../scripts/check/check-sel4-private-memory-plane.py)
+
+## Corrections
+
+- 2026-09-08: this entry's *Changes* rows describe suspending sibling workers
+  around the address-space transaction. That mechanism was removed: in the
+  pinned seL4, `suspend` begins with `cancelIPC` and `restart` resumes from the
+  restart PC, so it cancels and re-runs a worker's outstanding `Call` rather
+  than pausing it transparently. The transaction's own claim — that no worker
+  observes a partially committed address-space change — is instead carried by
+  the region's page count being published only on commit. See
+  [private growth: the rollback boundary, failed-map ownership, and worker IPC](../2026-09-08-private-growth-rollback-and-worker-ipc/index.md).
+- 2026-09-08: the *Verification* row recording 216 host unit tests remains the
+  observed result of that run. The asserted count is now 219, after three
+  record-level ownership cases were added by the entry linked above.

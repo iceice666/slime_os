@@ -323,6 +323,7 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
 /// No `.bss` array stands in for the region: every access below is through the
 /// base the root reports, so a mapping the root did not install would fault
 /// rather than silently read this image's own memory.
+#[cfg(not(slime_private_fail_second_allocation))]
 fn private_memory_phase(service: sel4::cap::Endpoint) {
     let mut flags: sel4::Word = 0;
 
@@ -430,6 +431,48 @@ fn private_memory_phase(service: sel4::cap::Endpoint) {
     // Hand every observation to the root in one bounded message. The root
     // decides whether the phase passed, from these flags and its own page
     // accounting.
+    let reply = service.call_with_mrs(
+        sel4::MessageInfoBuilder::default()
+            .label(OP_SHARED_BUFFER_REPORT)
+            .length(4)
+            .build(),
+        [REQUEST_TAG, MEM_REPORT_TAG, flags, 0],
+    );
+    sel4::debug_println!(
+        "SLIME_CHILD mem report flags={flags:#x} result={}",
+        reply.msg[0] as i64
+    );
+}
+
+#[cfg(slime_private_fail_second_allocation)]
+fn private_memory_phase(service: sel4::cap::Endpoint) {
+    let (initial, base) = grow(service, 0);
+    let (first, first_base) = grow(service, 1);
+    let mut flags = 0;
+    if initial == 0 && base != 0 {
+        flags |= REPORT_MEM_QUERY_OK;
+    }
+    if first == 0 && first_base == base {
+        flags |= REPORT_MEM_FIRST_GROWTH_OK | REPORT_MEM_ZEROED;
+    }
+    let base = base as usize;
+    unsafe { (base as *mut u64).write_volatile(MEM_PATTERN) };
+    let (failed, _) = call_grow(service, 2);
+    let (after, after_base) = grow(service, 0);
+    let survived = unsafe { (base as *const u64).read_volatile() };
+    if failed < 0 && after == 1 && after_base as usize == base && survived == MEM_PATTERN {
+        flags |= REPORT_MEM_SECOND_GROWTH_OK
+            | REPORT_MEM_BASE_STABLE
+            | REPORT_MEM_QUOTA_REFUSED
+            | REPORT_MEM_REFUSAL_HAD_NO_EFFECT;
+        sel4::debug_println!(
+            "SLIME_CHILD mem rollback preserved pages={after} base={base:#x} survived={survived:#x}"
+        );
+    } else {
+        sel4::debug_println!(
+            "SLIME_CHILD mem rollback failed result={failed} pages={after} base={after_base:#x} survived={survived:#x}"
+        );
+    }
     let reply = service.call_with_mrs(
         sel4::MessageInfoBuilder::default()
             .label(OP_SHARED_BUFFER_REPORT)

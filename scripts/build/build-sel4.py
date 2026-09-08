@@ -854,11 +854,18 @@ def build_application(
     child_target = child_target or RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
-
     child_target_dir = CARGO_BUILD / platform.name / "child"
     child_environment = environment.copy()
     child_remap = f"--remap-path-prefix={child_target_dir}=./target/sel4/{platform.name}/child"
-    child_environment["RUSTFLAGS"] = f"{child_environment.get('RUSTFLAGS', '')} {child_remap}".strip()
+    child_environment["RUSTFLAGS"] = (
+        f"{child_environment.get('RUSTFLAGS', '')} {child_remap}".strip()
+    )
+    if closure_root_role == "private-memory-fail-second-allocation":
+        child_rustflags = child_environment.get("RUSTFLAGS", "")
+        child_environment["RUSTFLAGS"] = (
+            f"{child_rustflags} --cfg slime_private_fail_second_allocation".strip()
+        )
+
     cargo_build(
         manifest=CHILD_MANIFEST,
         package="slime-root-child",
@@ -895,12 +902,29 @@ def build_application(
                 fail(f"root role {closure_root_role!r} requires a resolved generation")
             generation = resolved_generation.resolve()
             root_environment["SLIME_GENERATION"] = str(generation)
-            if closure_root_role == "root-fixture":
+            # The rollback case's probe is the root's own embedded child, whose
+            # private-memory phase carries the injected-failure arm. Building it
+            # as a graph root would compile that arm out of the boot and leave
+            # the injection to land on whichever component grew first.
+            if closure_root_role in (
+                "root-fixture",
+                "private-memory-fail-second-allocation",
+            ):
                 root_environment["SLIME_ROOT_FIXTURE"] = "1"
         if closure_root_role == "reclamation-unwind":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (
                 f"{rustflags} --cfg slime_b38_force_unwind".strip()
+            )
+        if closure_root_role == "private-memory-fail-second-allocation":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_fail_second_allocation".strip()
+            )
+        if closure_root_role == "private-memory-fail-large-map":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_fail_large_map".strip()
             )
     elif platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011

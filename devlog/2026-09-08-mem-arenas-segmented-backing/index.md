@@ -72,3 +72,17 @@ Task ownership now uses one static extent plus bounded, independently reclaimabl
 - [Planning decision](../2026-09-07-memory-capacity-milestones/index.md)
 - Implementation: [`slime-root/src/object_allocator.rs`](../../slime-root/src/object_allocator.rs), [`slime-root/src/task.rs`](../../slime-root/src/task.rs), and [`slime-root/src/private_memory.rs`](../../slime-root/src/private_memory.rs)
 - Gates: [`scripts/check/check-sel4-private-memory-plane.py`](../../scripts/check/check-sel4-private-memory-plane.py) and [`scripts/check/check-sel4-reclamation-plane.py`](../../scripts/check/check-sel4-reclamation-plane.py)
+
+## Corrections
+
+- 2026-09-08: the *Changes* row stating that transactional growth "revokes
+  touched extents on failure" describes the mechanism as it landed here, and
+  that mechanism was wrong: private data extents are bump-allocated and shared
+  across growths, so revoking a touched extent also destroyed committed pages
+  the caller still held. Rollback now releases only the transaction's own
+  in-flight allocations. Two related failure-path defects — a failed mapping
+  publishing its still-occupied CSlot as empty, and growth suspending sibling
+  worker threads — were fixed in the same pass. See
+  [private growth: the rollback boundary, failed-map ownership, and worker IPC](../2026-09-08-private-growth-rollback-and-worker-ipc/index.md).
+- 2026-09-08: the `just test_sel4_root` row records 216/216 as observed here.
+  The asserted count is now 219.

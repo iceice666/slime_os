@@ -409,7 +409,9 @@ impl Table {
                 if !leaf_available {
                     match back_leaf_table(allocator, arena, vspace, region.base) {
                         Ok(table) => {
-                            if let Err(error) = allocator.mark_private_in_flight(arena, table.cap) {
+                            if let Err(error) =
+                                allocator.mark_private_in_flight(arena, table.cap, true)
+                            {
                                 let _ = allocator.unwind_private_transaction(arena);
                                 return Err(GrowError::Frames {
                                     allocated: pages_backed,
@@ -420,10 +422,12 @@ impl Table {
                             leaf_available = true;
                         }
                         Err(error) => {
-                            let _ = allocator.unwind_private_transaction(arena);
                             return Err(GrowError::Frames {
                                 allocated: pages_backed,
-                                error,
+                                error: match allocator.unwind_private_transaction(arena) {
+                                    Ok(()) => error,
+                                    Err(cleanup) => cleanup,
+                                },
                             });
                         }
                     }
@@ -435,7 +439,7 @@ impl Table {
             };
             match result {
                 Ok(backing) => {
-                    if let Err(error) = allocator.mark_private_in_flight(arena, backing.cap) {
+                    if let Err(error) = allocator.mark_private_in_flight(arena, backing.cap, true) {
                         let _ = allocator.unwind_private_transaction(arena);
                         return Err(GrowError::Frames {
                             allocated: pages_backed,
@@ -450,10 +454,12 @@ impl Table {
                     }
                 }
                 Err(error) => {
-                    let _ = allocator.unwind_private_transaction(arena);
                     return Err(GrowError::Frames {
                         allocated: pages_backed,
-                        error,
+                        error: match allocator.unwind_private_transaction(arena) {
+                            Ok(()) => error,
+                            Err(cleanup) => cleanup,
+                        },
                     });
                 }
             }
@@ -522,12 +528,7 @@ fn back_leaf_table(
             sel4::VmAttributes::default(),
         )
     {
-        let _ = allocator.reset_private_in(
-            arena,
-            table.cast(),
-            PrivateObjectKind::LeafTable,
-            size_bits,
-        );
+        allocator.reset_private_in(arena, table.cast(), PrivateObjectKind::LeafTable, size_bits)?;
         return Err(AllocError::Retype { size_bits, error });
     }
     Ok(Backing {
@@ -550,16 +551,16 @@ fn back_page(
         PrivateObjectKind::Granule,
         sel4::cap_type::Granule::object_blueprint(),
     )?;
-    debug_assert!(!mapped);
     let frame = frame.cast::<sel4::cap_type::Granule>();
-    if let Err(error) = frame.frame_map(
-        vspace,
-        vaddr,
-        sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
-    ) {
-        let _ =
-            allocator.reset_private_in(arena, frame.cast(), PrivateObjectKind::Granule, size_bits);
+    if !mapped
+        && let Err(error) = frame.frame_map(
+            vspace,
+            vaddr,
+            sel4::CapRights::read_write(),
+            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        )
+    {
+        allocator.reset_private_in(arena, frame.cast(), PrivateObjectKind::Granule, size_bits)?;
         return Err(AllocError::Retype { size_bits, error });
     }
     Ok(frame)
@@ -577,20 +578,34 @@ fn back_large(
         PrivateObjectKind::LargeFrame,
         LARGE_FRAME_TYPE.blueprint(),
     )?;
-    debug_assert!(!mapped);
     let frame = frame.cast::<sel4::cap_type::UnspecifiedPage>();
-    if let Err(error) = frame.frame_map(
-        vspace,
-        vaddr,
-        sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
-    ) {
-        let _ = allocator.reset_private_in(
+    #[cfg(slime_private_fail_large_map)]
+    if !mapped && crate::object_allocator::take_forced_private_large_map_failure() {
+        allocator.reset_private_in(
             arena,
             frame.cast(),
             PrivateObjectKind::LargeFrame,
             size_bits,
-        );
+        )?;
+        return Err(AllocError::Retype {
+            size_bits,
+            error: sel4::Error::NotEnoughMemory,
+        });
+    }
+    if !mapped
+        && let Err(error) = frame.frame_map(
+            vspace,
+            vaddr,
+            sel4::CapRights::read_write(),
+            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        )
+    {
+        allocator.reset_private_in(
+            arena,
+            frame.cast(),
+            PrivateObjectKind::LargeFrame,
+            size_bits,
+        )?;
         return Err(AllocError::Retype { size_bits, error });
     }
     Ok(frame.cast())

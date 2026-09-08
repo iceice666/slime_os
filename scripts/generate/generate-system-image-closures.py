@@ -158,14 +158,25 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
 # CP14 root roles. A root role is a distinct root *build* over the same
 # composition: the selector carries no embedded generation and reads one from
 # disk, the fixture root reports its capability layout, the unwind root forces
-# B38's construction unwind. Each was a `build-sel4.py` variant branch; each is
-# now its own closure with its own identity.
+# B38's construction unwind, and the private-memory roles inject one allocator
+# failure each. Every role is its own closure identity.
 #
 # `(base composition, root role, root parameters)`. The base is the graph the
-# role's own gate boots, and the role changes only the root.
+# role's own gate boots, and the role changes only the root or embedded fixture.
 ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
     "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
+    # The two private-memory roles compile bounded, one-shot allocator failures.
+    "sel4-private-memory-fail-second-allocation": (
+        "sel4-private-memory",
+        "private-memory-fail-second-allocation",
+        (),
+    ),
+    "sel4-private-memory-fail-large-map": (
+        "sel4-private-memory",
+        "private-memory-fail-large-map",
+        (),
+    ),
     # CP14 declared the `boot-selector` role but no closure carried it. A
     # selector root embeds no generation and reads one from disk, so its base
     # composition supplies only the build inputs, never an embedded payload —
