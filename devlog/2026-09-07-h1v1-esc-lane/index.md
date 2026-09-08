@@ -103,3 +103,6 @@ introduce one.
   and the GPIO block does not report a FUNCTION-muxed pad, so the "board samples its own output"
   follow-up is closed rather than deferred. Evidence and the seven pinned facts:
   [the probe's audit entry](../2026-09-08-h1v1-pwm-probe/index.md).
+- **2026-09-08, later** — The bench milestone closed on a second, complete probe run: disable,
+  restore of every shared word to its surveyed value, `reset`, and the firmware banner were all
+  observed. Session 2 is unblocked.

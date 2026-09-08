@@ -21,16 +21,18 @@ value it was given; a drone ESC on the pad armed at 1000 us and ran faster at 16
 (operator observation); and all four core-rail readings held before the first write. Two
 predictions were confirmed against the board rather than the BSP: no firmware in the boot path
 routes these channels, and the GPIO block does not report a pad held by another function. The
-ESC run was interrupted by the operator before its closing disable and reset, so that tail is
-unobserved; the reason — a slow sampling loop whose reading the board had already answered —
-is fixed here.
+first ESC run was interrupted by the operator before its closing disable and reset; the reason —
+a slow sampling loop whose reading the board had already answered — is fixed here, and a second
+run with the fix then completed end to end: six pulse widths, the disable, every shared word
+restored to its surveyed value, `reset`, and the vendor banner.
 
 ## Observable symptom
 
 - Command: `python3 scripts/check/check-nt98690-boot.py --pwm-probe --pwm-channel 0 --pwm-pulse-us 1000,1600,1200,1000 --pwm-hold-seconds 10 --serial /dev/ttyUSB0 --transcript esc.log`, from the standalone bench bundle, ESC on P_GPIO[0] with common ground and its own battery, propellers off
 - Expected: the survey reads, the core-rail invariants hold, channel 0 takes every programmed value and reads it back, the ESC follows the pulse widths, the channel is disabled and every shared word restored, and the vendor banner returns after `reset`
-- Observed: everything through the third pulse width; the transcript ends during that width's GPIO sampling, with no disable, no restore, no `reset`, and no closing banner
-- Exit/fault/serial evidence: [`esc-run.log`](esc-run.log) — the raw wire bytes, 20,465 bytes; the probe's own `check … = ok` lines went to the operator's terminal and are not in the capture, so the register facts below are read from the `md.l` echoes in the transcript itself
+- Observed, first run: everything through the third pulse width; the transcript ends during that width's GPIO sampling, with no disable, no restore, no `reset`, and no closing banner
+- Observed, second run (`--pwm-pulse-us 1000,1000,1000,1600,1200,1000 --pwm-hold-seconds 1`, sampling off): the whole sequence, ending in the vendor banner
+- Exit/fault/serial evidence: [`esc-run.log`](esc-run.log) and [`esc-clean-run.log`](esc-clean-run.log) — the raw wire bytes; the probe's own `check … = ok` lines went to the operator's terminal and are not in the captures, so the register facts below are read from the `md.l` echoes in the transcripts themselves
 
 ## Investigation log
 
@@ -43,6 +45,7 @@ is fixed here.
 | 5 | Relatched 1000 (`0x0020e800`/`0x004e0300`), 1600 (`0x00204000`/`0x004e0600`), 1200 (`0x0020b000`/`0x004e0400`) with the load bit after each; ESC armed, ran fast, then slower (operator observation) | The encoding at 1 MHz and the free-running update path are what the driver will use; a standard drone ESC accepts 3.3 V logic on this pad without translation |
 | 6 | GPIO DATA read `0xfffff000` in every sample across the 1000 and 1600 holds and the start of the 1200 hold — bit 0 never set | The GPIO block does not report a FUNCTION-muxed pad. The idea of the board sampling its own PWM output is closed |
 | 7 | The transcript ends mid-sampling in the 1200 hold: one disable write in the whole run (the initial quiesce), no restore, no `reset`, no closing banner | The operator abandoned a run that each sample's serial round trip had stretched to minutes. The channel and routing were left live until the next power cycle. Fixed below |
+| 8 | Second run, sampling off: identical survey and core-rail readings; the same enable sequence; six widths latched (1000 ×3, 1600, 1200, 1000); PWM+0x104 = 1 then PWM+0x100 read `0x00001000`; TOP+0xA8 → `0xffffffff`, TOP+0x18 → `0x0`, CG+0x30 → `0x01df01df`, CG+0x84 → `0x06000000`; core-rail readings re-checked; `reset`; `U-Boot 2021.10` banner. ESC armed during the idle widths, ran fast, then slower (operator observation) | The disable and restore paths work and put every shared word back exactly as found; the board returns to its own firmware afterwards. One second per width is enough for the speed steps once the ESC has had three at idle to arm |
 
 ## Changes
 
@@ -59,7 +62,8 @@ is fixed here.
 | `--pwm-probe` on the named board, steps 2–5 above | Direct; `esc-run.log` |
 | ESC armed at 1000 us, ran faster at 1600 than 1200 | **Operator observation** — not carried by the transcript |
 | P_GPIO[0] reaches the 40-pin GPIO header | **Operator observation** from `--gpio-probe 0`; that transcript was not returned |
-| Channel disabled, shared words restored, banner after `reset` | **Not observed** — the run was interrupted first. The board was power-cycled by the operator afterwards; that it came back is an operator observation |
+| Channel disabled, shared words restored, banner after `reset` | Direct, second run; `esc-clean-run.log` lines 791–1030 in its CR-normalised form |
+| ESC armed at idle, ran faster at 1600 than 1200, second run | **Operator observation** |
 | `python3 scripts/check/check-nt98690-boot.py --dry-run` after the sampling change | Exit 0; the rendered sequence is unchanged |
 | `just sel4_pin_check` with the seven observed keys | Exit 0 |
 | `just sel4_gate_control_check` | Exit 0; `nt98690_boot` still pinned at 25 |
@@ -67,9 +71,6 @@ is fixed here.
 
 ## Open risks and follow-ups
 
-- **One clean run to the banner is still owed.** The restore-and-reset tail was never observed
-  on this board. With sampling off the run is short, and one more `--pwm-probe` that ends in the
-  firmware banner is what closes the bench milestone. Until then the milestone stays active.
 - **The header pin position is unrecorded.** The operator reports the standard 40-pin GPIO
   header; which of its forty positions carries P_GPIO[0] was not written down. Harmless for the
   driver, which routes a pad, not a pin; worth adding to `pwm_pad_header` when known.
@@ -85,6 +86,9 @@ is fixed here.
   bundle (`h1v1-pwm-probe.tar.gz`, built from commit `f9f4be9` of this branch). Unedited; the
   vendor loader and U-Boot banners at its head are the board's own power-on. SHA-256
   `8824bdc78acc9a1a777bf25c0b08aad17a1929866c653e872c6d3cca6b70797e`.
-- The write list the run was held to: `python3 scripts/check/check-nt98690-boot.py --dry-run`.
+- [`esc-clean-run.log`](esc-clean-run.log) — raw wire capture of the second, complete run, from
+  bundle v2 (built from commit `bfc2b7d`). Unedited; 13,432 bytes; SHA-256
+  `00862eadd221a74af1d65bb723bc302e74b8bac1553b6a10471ecef46481909a`.
+- The write list both runs were held to: `python3 scripts/check/check-nt98690-boot.py --dry-run`.
 - The lane's plan of record and the vendor sources for every register:
   [`../2026-09-07-h1v1-esc-lane/plan.md`](../2026-09-07-h1v1-esc-lane/plan.md).
