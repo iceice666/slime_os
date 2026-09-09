@@ -63,7 +63,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "3f1d9fec6a1e97cc3d92810683605605243ddac0affa0f5fd7586bb4b453b2c2";
+      identity = "15f66234263982f6eca16f404fef45e843cb8ca917330bc8d627c98942c1205f";
     };
     parameters = [];
   };
@@ -154,7 +154,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "f93d9df05d9ee30cf6015923f523ee81e8eab8773828c681af2316d327476d19";
+        identity = "e4ea61a72372d7f5a2c2b7666400cc58c2b3475326eb4f575b383c47facaad47";
       };
     };
     {
@@ -170,7 +170,7 @@
       artifact = {
         path = "slime-root/child";
         kind = "tree";
-        identity = "22704008ada7281a790debeb595e6c06c27939c69801a5ffeae0267b8c606250";
+        identity = "1495f174a337b83e1efa3ea83ea90615e8cfc4958dea5c385441e141fc3874a7";
       };
     };
     {

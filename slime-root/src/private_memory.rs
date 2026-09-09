@@ -371,10 +371,9 @@ impl Table {
     }
 
     /// Grow `region` by `delta` pages, answering the page count *before* the
-    /// On any failure `region` and the root-wide total are exactly as they were.
-    /// Every extent touched by the transaction is revoked before the error is
-    /// returned, so a later bulk or incremental retry reuses the same reserved
-    /// backing and cannot require a second payload-sized reservation.
+    /// growth. A failed transaction does not change logical page charges or
+    /// existing committed mappings and data. Translation structure mapped by
+    /// the failed attempt may remain for a retry of the same fixed region.
     pub fn grow(
         &mut self,
         allocator: &mut ObjectAllocator,
@@ -391,8 +390,7 @@ impl Table {
         let mut pages_backed = 0;
         let mut large_frames = 0;
         let mut base_frames = 0;
-        let mut leaf_tables = 0;
-        let mut leaf_available = previous != 0;
+        let mut leaf_available = region.leaf_tables != 0;
         while pages_backed < delta {
             let page = previous + pages_backed;
             let vaddr = region.base + page * GRANULE_SIZE;
@@ -409,6 +407,7 @@ impl Table {
                 if !leaf_available {
                     match back_leaf_table(allocator, arena, vspace, region.base) {
                         Ok(table) => {
+                            region.leaf_tables = 1;
                             if let Err(error) =
                                 allocator.mark_private_in_flight(arena, table.cap, true)
                             {
@@ -418,7 +417,6 @@ impl Table {
                                     error,
                                 });
                             }
-                            leaf_tables += 1;
                             leaf_available = true;
                         }
                         Err(error) => {
@@ -473,7 +471,6 @@ impl Table {
         region.pages = previous + delta;
         region.large_frames += large_frames;
         region.base_frames += base_frames;
-        region.leaf_tables += leaf_tables;
         self.total_pages += delta;
         self.grown_pages += delta;
         self.grants += 1;
@@ -790,6 +787,16 @@ mod tests {
         assert_eq!(table.total_pages(), 0);
         assert_eq!(table.reclaimed_pages(), 5);
         assert_eq!(region.pages(), 0);
+        // A failed initial growth may retain its mapped leaf without charging a
+        // page. Teardown must clear that translation state without inventing a
+        // grant or reclamation.
+        region.leaf_tables = 1;
+        assert_eq!(table.reclaim(&mut region), 0);
+        assert_eq!(region.leaf_tables(), 0);
+        assert_eq!(table.total_pages(), 0);
+        assert_eq!(table.grown_pages(), 5);
+        assert_eq!(table.reclaimed_pages(), 5);
+        assert_eq!(table.grants(), 0);
         // A retried teardown must not drive the total negative.
         assert_eq!(table.reclaim(&mut region), 0);
         assert_eq!(table.total_pages(), 0);

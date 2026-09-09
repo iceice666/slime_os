@@ -17,6 +17,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_b38_force_unwind)");
     println!("cargo::rustc-check-cfg=cfg(slime_private_fail_second_allocation)");
     println!("cargo::rustc-check-cfg=cfg(slime_private_fail_large_map)");
+    println!("cargo::rustc-check-cfg=cfg(slime_private_small_tables)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_missing)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_extra)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_aliased)");

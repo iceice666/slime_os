@@ -209,21 +209,8 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
-# A size query allocates nothing and both probes issue one, so this marker is
-# required but its position is not causally ordered against either probe's chain
-# — asserting one would again pin which probe the scheduler ran first (B63's
-# mechanism for exactly this).
-CAPACITY_MARKER = (
-    r"SLIME_MEM capacity holders=4 pages=65536 reserved=\d+ payload=\d+ tables=\d+ "
-    r"alignment=\d+ mapped=0 reusable=0 allocation_descriptors=\d+ "
-    r"allocation_descriptors_available=\d+ extent_descriptors=\d+ "
-    r"extent_descriptors_available=\d+ holder_cslots=\d+ graph_cslots=\d+ "
-    r"cslots_available=\d+ root_image=\d+ root_metadata=\d+ root_stack=1048576 "
-    r"root_heap=524288 ordinary_available=\d+ fit=1"
-)
 EXPECTED_UNORDERED: tuple[str, ...] = (
     r"\[private-memory-probe\] query pages=0 base=0x[0-9a-f]+",
-    CAPACITY_MARKER,
 )
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
@@ -425,22 +412,51 @@ def check_large_map_retry(transcript: str) -> None:
 
 
 def check_incremental_rollback(transcript: str) -> None:
-    if re.search(r"SLIME_CHILD mem rollback failed", transcript):
-        fail("incremental rollback probe reported loss of its committed page")
-    preserved = re.search(
-        r"SLIME_CHILD mem rollback preserved pages=1 base=0x[0-9a-f]+ "
-        r"survived=0x4d454d5f42415345",
-        transcript,
+    prefix = "private rollback: "
+    failures = (
+        "SLIME_CHILD mem rollback failed",
+        "SLIME_CHILD mem zero retry failed",
+        "SLIME_MEM FAIL",
+        "SLIME_ROOT FATAL",
     )
-    if preserved is None:
-        fail("incremental rollback did not preserve and read back the committed sentinel page")
-    refused = re.findall(
-        r"SLIME_MEM refused task=0 delta=2 cause=frames detail=Frames \{ allocated: 1,",
-        transcript,
-    )
-    if len(refused) != 1:
-        fail(f"incremental rollback recorded {len(refused)} injected refusal(s), expected one")
+    for marker in failures:
+        if marker in transcript:
+            fail(prefix + f"explicit failure marker present: {marker}")
 
+    patterns = (
+        r"SLIME_MEM refused task=0 delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        r"SLIME_CHILD mem rollback preserved pages=1 base=0x(?P<task0>[0-9a-f]+) survived=0x4d454d5f42415345",
+        r"SLIME_MEM refused task=1 delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        r"SLIME_CHILD mem zero rollback result=-\d+ pages=0 base=0x(?P<zero>[0-9a-f]+)",
+        r"SLIME_MEM grown task=1 delta=512 previous=0 pages=512 base=0x(?P<root>[0-9a-f]+) quota=512 total=513 large_frames=0 base_frames=512 leaf_tables=1",
+        r"SLIME_CHILD mem whole retry pages=512 base=0x(?P<whole>[0-9a-f]+) zeroed=1 preserved=1 survived=0x4d454d5f42415345",
+        r"SLIME_CHILD fault requested addr=0x0",
+        r"SLIME_ROOT child fault observed task=1 role=deliberate-fault kind=VirtualMemory \{ access: Write",
+        r"SLIME_MEM enforced clean_quota=4 retry_quota=512 pages=513 grants=2 grown=513 reclaimed=0 flags=0x7f",
+        r"SLIME_MEM teardown grown=513 reclaimed=513 pages=0",
+        r"SLIME_ROOT READY tasks=2 grants=\d+ declared_grants=\d+ reclaimed_slots=\d+",
+    )
+    position = 0
+    matches: list[re.Match[str]] = []
+    for pattern in patterns:
+        match = re.search(pattern, transcript[position:])
+        if match is None:
+            fail(prefix + f"missing or out-of-order evidence: {pattern}")
+        position += match.end()
+        matches.append(match)
+    refusals = re.findall(
+        r"SLIME_MEM refused task=[01] delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        transcript,
+    )
+    if len(refusals) != 2:
+        fail(prefix + f"recorded {len(refusals)} injected refusals, expected two")
+    bases = {
+        int(matches[3].group("zero"), 16),
+        int(matches[4].group("root"), 16),
+        int(matches[5].group("whole"), 16),
+    }
+    if len(bases) != 1 or 0 in bases:
+        fail(prefix + "task1 retry bases differ or are zero")
 
 def check_markers(transcript: str) -> None:
     # The shared helper rather than a local loop, on B63's rule: every other
@@ -453,6 +469,8 @@ def check_markers(transcript: str) -> None:
         FAILURE_MARKERS,
         fail,
     )
+    if re.search(r"SLIME_MEM (?:capacity|qualification)", transcript):
+        fail("normal private-memory transcript contains workload qualification")
 
 
 def check_declared_is_installed(transcript: str, declared: dict[str, int]) -> None:
@@ -785,46 +803,93 @@ def check_the_two_planes_are_independent(transcript: str, declared: dict[str, in
 def check_segmented_capacity_report(
     transcript: str, profile: dict[str, object], section: str
 ) -> None:
-    report = re.search(
-        r"SLIME_MEM capacity holders=(?P<holders>\d+) pages=(?P<pages>\d+) "
-        r"reserved=(?P<reserved>\d+) payload=(?P<payload>\d+) tables=(?P<tables>\d+) "
-        r"alignment=(?P<alignment>\d+) mapped=(?P<mapped>\d+) reusable=(?P<reusable>\d+) "
-        r"allocation_descriptors=(?P<allocations>\d+) "
-        r"allocation_descriptors_available=(?P<allocations_available>\d+) "
-        r"extent_descriptors=(?P<extents>\d+) "
-        r"extent_descriptors_available=(?P<extents_available>\d+) "
-        r"holder_cslots=(?P<holder_cslots>\d+) graph_cslots=(?P<graph_cslots>\d+) "
-        r"cslots_available=(?P<cslots_available>\d+) root_image=(?P<image>\d+) "
-        r"root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
-        r"root_heap=(?P<heap>\d+) ordinary_available=(?P<ordinary_available>\d+) fit=1",
-        transcript,
+    prefix = "capacity qualification: "
+    pattern = re.compile(
+        r"^SLIME_MEM qualification scope=(?P<scope>\S+) holders=(?P<holders>\d+) "
+        r"pages=(?P<pages>\d+) private_allocations=(?P<private_allocations>\d+) "
+        r"private_extents=(?P<private_extents>\d+) private_cslots=(?P<private_cslots>\d+) "
+        r"private_reserved=(?P<private_reserved>\d+) payload=(?P<payload>\d+) "
+        r"tables=(?P<tables>\d+) alignment=(?P<alignment>\d+) "
+        r"static_allocations=(?P<static_allocations>\d+) static_reserved=(?P<static_reserved>\d+) "
+        r"required_allocations=(?P<required_allocations>\d+) required_extents=(?P<required_extents>\d+) "
+        r"required_cslots=(?P<required_cslots>\d+) required_reserved=(?P<required_reserved>\d+) "
+        r"allocation_capacity=(?P<allocation_capacity>\d+) allocations_available=(?P<allocations_available>\d+) "
+        r"extent_capacity=(?P<extent_capacity>\d+) extents_available=(?P<extents_available>\d+) "
+        r"cslots_available=(?P<cslots_available>\d+) ordinary_available=(?P<ordinary_available>\d+) "
+        r"root_image=(?P<image>\d+) root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
+        r"root_heap=(?P<heap>\d+) fit=(?P<fit>\d+)$",
+        re.MULTILINE,
     )
-    if report is None:
-        fail("segmented 256 MiB capacity report is missing")
-    values = {name: int(value) for name, value in report.groupdict().items()}
-    if values["holders"] != 4 or values["pages"] != 65536:
-        fail(f"unexpected four-holder capacity report: {report.group(0)}")
-    if values["payload"] != 1024 * 1024 * 1024:
-        fail("capacity report does not carry four 256 MiB payloads")
-    if values["reserved"] != values["payload"] + values["tables"] + values["alignment"]:
-        fail("reserved RAM does not equal payload plus page tables and alignment waste")
-    if values["mapped"] != 0 or values["reusable"] != 0:
-        fail("host capacity plan reports runtime mapped or reusable RAM")
-    if values["allocations"] > values["allocations_available"]:
-        fail("capacity plan exceeds the compiled allocation descriptor table")
-    if values["extents"] > values["extents_available"]:
-        fail("capacity plan exceeds the compiled extent descriptor table")
-    if values["holder_cslots"] + values["graph_cslots"] > values["cslots_available"]:
-        fail("capacity plan exceeds the actual free root CSlots")
-    if values["reserved"] > values["ordinary_available"]:
-        fail("capacity plan exceeds the root's actual ordinary-memory inventory")
+    reports = list(pattern.finditer(transcript))
+    qualification_lines = re.findall(r"^SLIME_MEM qualification\b.*$", transcript, re.MULTILINE)
+    if len(reports) != 1 or len(qualification_lines) != 1:
+        fail(prefix + f"expected exactly one complete report, found {len(qualification_lines)}")
+    report = reports[0]
+    values: dict[str, int] = {}
+    for name, token in report.groupdict().items():
+        if name == "scope":
+            continue
+        value = int(token)
+        if value > 2**64 - 1:
+            fail(prefix + f"{name} exceeds u64")
+        values[name] = value
+    if report.group("scope") != "staged-graph-plus-four-probe-clones":
+        fail(prefix + "scope mismatch")
+    expected_private = {
+        "holders": 4,
+        "pages": 65_536,
+        "private_allocations": 262_656,
+        "private_extents": 1_028,
+        "private_cslots": 263_684,
+        "private_reserved": 1_075_838_976,
+        "payload": 1_073_741_824,
+        "tables": 2_097_152,
+        "alignment": 0,
+    }
+    for name, expected in expected_private.items():
+        if values[name] != expected:
+            fail(prefix + f"{name}={values[name]}, expected {expected}")
+    if values["static_allocations"] < 8:
+        fail(prefix + "static_allocations is below the exemplar minimum")
+    if values["static_reserved"] == 0:
+        fail(prefix + "static_reserved is zero")
+    expected_required = {
+        "required_allocations": values["private_allocations"]
+        + values["static_allocations"] * values["holders"],
+        "required_extents": values["private_extents"],
+        "required_cslots": values["private_cslots"]
+        + values["static_allocations"] * values["holders"],
+        "required_reserved": values["private_reserved"]
+        + values["static_reserved"] * values["holders"],
+    }
+    for name, expected in expected_required.items():
+        if values[name] != expected:
+            fail(prefix + f"{name}={values[name]}, expected {expected}")
+    if values["allocation_capacity"] != 4096 or values["extent_capacity"] != 144:
+        fail(prefix + "dedicated table capacities are not 4096/144")
+    if not 0 <= values["allocations_available"] < values["allocation_capacity"]:
+        fail(prefix + "allocations_available does not reflect staged graph use")
+    if not 0 <= values["extents_available"] < values["extent_capacity"]:
+        fail(prefix + "extents_available does not reflect staged graph use")
+    comparisons = (
+        values["required_allocations"] <= values["allocations_available"],
+        values["required_extents"] <= values["extents_available"],
+        values["required_cslots"] <= values["cslots_available"],
+        values["required_reserved"] <= values["ordinary_available"],
+    )
+    if values["fit"] not in (0, 1):
+        fail(prefix + "fit is not 0 or 1")
+    if values["fit"] != int(all(comparisons)):
+        fail(prefix + "fit disagrees with required-versus-available resources")
+    if values["fit"] != 0:
+        fail(prefix + "the restricted qualification fixture unexpectedly fits")
     platform_bytes = profile_integer(profile, "memory_mib", fail, section) * 1024 * 1024
-    reported_root = values["image"] + values["stack"] + values["heap"]
-    if values["reserved"] + reported_root >= platform_bytes:
-        fail("four 256 MiB holders plus reported root image exceed the platform envelope")
-    if values["metadata"] < values["allocations"] * 8:
-        fail("root metadata report hides the capacity-scaled descriptor storage")
-
+    if values["image"] == 0 or values["image"] > platform_bytes:
+        fail(prefix + "root_image is outside the platform envelope")
+    if values["metadata"] == 0:
+        fail(prefix + "root_metadata is zero")
+    if values["stack"] != 1_048_576 or values["heap"] != 524_288:
+        fail(prefix + "root stack or heap diagnostic changed")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
@@ -854,7 +919,6 @@ def main() -> None:
     check_only_declared_pages_were_charged(transcript, declared)
     check_growth_was_batched_and_reused(transcript, declared)
     check_the_two_planes_are_independent(transcript, declared)
-    check_segmented_capacity_report(transcript, profile, section)
     if arguments.platform == CLOSURE_PLATFORM:
         large_map = boot(
             profile,
@@ -863,6 +927,14 @@ def main() -> None:
             image=build_named_image(LARGE_MAP_CLOSURE),
         )
         check_large_map_retry(large_map)
+        check_declared_is_installed(large_map, declared)
+        check_measured_ceiling(large_map, declared)
+        check_only_declared_pages_were_charged(large_map, declared)
+        check_segmented_capacity_report(large_map, profile, section)
+        if any(re.search(pattern, large_map) for pattern in FAILURE_MARKERS):
+            fail("large-map qualification contains an explicit failure marker")
+        if re.search(r"SLIME_GRAPH HEALTHY generation=\d+ required=\d+ live=\d+ completed=\d+ failed=0", large_map) is None:
+            fail("large-map qualification did not reach a healthy graph terminal")
         rollback = boot(
             profile,
             section=section,

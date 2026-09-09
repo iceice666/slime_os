@@ -667,27 +667,20 @@ const SHARED_QUOTA: HolderQuota = HolderQuota {
 /// one.
 const PRIVATE_QUOTA_PAGES: usize = 4;
 
-/// Pages the phase must still hold when it reports.
-///
-/// The injected-failure build grows one page, then has its second growth
-/// refused mid-transaction, so its arm ends with exactly the committed page
-/// whose survival is the whole assertion.
+#[cfg(slime_private_fail_second_allocation)]
+const PRIVATE_RETRY_QUOTA_PAGES: usize = private_memory::MAX_REGION_PAGES;
+
+/// Pages the phases must still hold when the clean-exit fixture reports.
 #[cfg(not(slime_private_fail_second_allocation))]
 const MEM_EXPECTED_PAGES: usize = PRIVATE_QUOTA_PAGES;
 #[cfg(slime_private_fail_second_allocation)]
-const MEM_EXPECTED_PAGES: usize = 1;
+const MEM_EXPECTED_PAGES: usize = 1 + PRIVATE_RETRY_QUOTA_PAGES;
 
-/// Growth operations the private-memory phase must actually charge a page to.
-///
-/// The phase issues five: two size queries, two growths, one refused. Only the
-/// two growths are grants, which is the distinction a page total cannot make on
-/// its own.
+/// Growth operations that must actually charge pages.
 #[cfg(not(slime_private_fail_second_allocation))]
 const MEM_EXPECTED_GRANTS: usize = 2;
-/// The injected arm's one successful growth; the refused second transaction
-/// must charge nothing.
 #[cfg(slime_private_fail_second_allocation)]
-const MEM_EXPECTED_GRANTS: usize = 1;
+const MEM_EXPECTED_GRANTS: usize = 2;
 
 /// The value the clean-exit fixture writes into its first private page and
 /// re-reads after a further growth. `slime-root/child/src/main.rs::MEM_PATTERN`.
@@ -1234,20 +1227,22 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             1,
             // No workers, so no worker priorities.
             [task::CHILD_PRIORITY; child_vspace::MAX_CHILD_THREADS],
-            // The C10.1 private-memory quota, granted only to the clean-exit
-            // fixture, which is the one that runs the growth phase.
-            //
-            // A compiled-in ceiling *for this phase alone*, on exactly the
-            // grounds `SHARED_QUOTA` above records: the fixture is an ELF this
-            // root embeds at compile time, not a declared component, so no
-            // generation resource names it and there is no budget to read. Every
-            // declared instance sits at zero until C10.2 supplies that
-            // resource. The deliberate-fault fixture gets nothing, which is what
-            // makes the deny-by-default arm observable on the same boot.
+            // The C10.1 private-memory quota. The clean-exit fixture always
+            // exercises the four-page phase. The injected rollback image also
+            // gives the deliberate-fault fixture one full window so it can
+            // prove a failed initial small-page transaction retries against the
+            // retained leaf mapping.
             if role == Role::CleanExit {
                 PRIVATE_QUOTA_PAGES
             } else {
-                0
+                #[cfg(slime_private_fail_second_allocation)]
+                {
+                    PRIVATE_RETRY_QUOTA_PAGES
+                }
+                #[cfg(not(slime_private_fail_second_allocation))]
+                {
+                    0
+                }
             },
         ) {
             Ok(id) => id,

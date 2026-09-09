@@ -646,8 +646,18 @@ pub(super) fn report_memory_phase(phase: &MemoryPhase, tasks: &TaskTable<MAX_TAS
             table.grants()
         )
     }
+    #[cfg(not(slime_private_fail_second_allocation))]
     sel4::debug_println!(
         "SLIME_MEM enforced quota={PRIVATE_QUOTA_PAGES} pages={} grants={} grown={} reclaimed={} flags={:#x}",
+        table.total_pages(),
+        table.grants(),
+        table.grown_pages(),
+        table.reclaimed_pages(),
+        phase.flags,
+    );
+    #[cfg(slime_private_fail_second_allocation)]
+    sel4::debug_println!(
+        "SLIME_MEM enforced clean_quota={PRIVATE_QUOTA_PAGES} retry_quota={PRIVATE_RETRY_QUOTA_PAGES} pages={} grants={} grown={} reclaimed={} flags={:#x}",
         table.total_pages(),
         table.grants(),
         table.grown_pages(),

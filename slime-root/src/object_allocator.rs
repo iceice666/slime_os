@@ -33,24 +33,18 @@ static FORCE_PRIVATE_SECOND_ALLOCATION_FAILURE: PrivateAllocationAtomicBool =
 #[cfg(slime_private_fail_large_map)]
 static FORCE_PRIVATE_LARGE_MAP_FAILURE: PrivateMapAtomicBool = PrivateMapAtomicBool::new(true);
 
-/// Arm the one injected private-growth retype failure for the next transaction
-/// that already holds a committed granule. Set by the fixture service loop so
-/// the fault lands on a specific request rather than on whichever growth in the
-/// boot happens to be first.
+/// Arm the one injected private-growth retype failure for the next transaction.
+/// Set by the fixture service loop so the fault lands on a specific request
+/// rather than on whichever growth in the boot happens to be first.
 #[cfg(slime_private_fail_second_allocation)]
 pub fn arm_private_second_allocation_failure() {
     FORCE_PRIVATE_SECOND_ALLOCATION_FAILURE.store(true, PrivateAllocationOrdering::Relaxed);
 }
 
 #[cfg(slime_private_fail_second_allocation)]
-fn fail_private_allocation(
-    kind: PrivateObjectKind,
-    in_flight_granules: usize,
-    committed_granules: usize,
-) -> bool {
+fn fail_private_allocation(kind: PrivateObjectKind, in_flight_granules: usize) -> bool {
     kind == PrivateObjectKind::Granule
         && in_flight_granules == 1
-        && committed_granules != 0
         && FORCE_PRIVATE_SECOND_ALLOCATION_FAILURE.swap(false, PrivateAllocationOrdering::Relaxed)
 }
 
@@ -73,17 +67,18 @@ pub const MAX_TASK_ARENAS: usize = 48;
 /// Root-owned task allocation descriptors.
 ///
 /// One-page-at-a-time growth needs one frame descriptor per page, plus one leaf
-/// table per 2 MiB span. QEMU profiles reserve enough for four 256 MiB holders;
-/// the Duo keeps the previous 4096-record envelope.
-#[cfg(not(slime_cv1800b_duo))]
+/// table per 2 MiB span. Production profiles reserve enough for four 256 MiB
+/// holders; the Duo and the dedicated qualification image keep the 4096-record
+/// envelope.
+#[cfg(not(any(slime_cv1800b_duo, slime_private_small_tables)))]
 pub const MAX_TASK_ALLOCATIONS: usize = 4 * (MAX_PLANNED_PRIVATE_PAGES + 128) + 1;
-#[cfg(slime_cv1800b_duo)]
+#[cfg(any(slime_cv1800b_duo, slime_private_small_tables))]
 pub const MAX_TASK_ALLOCATIONS: usize = 4096;
 /// Every task consumes one static extent. A quota-bearing task additionally
 /// consumes independently reclaimable data and page-table extents.
-#[cfg(not(slime_cv1800b_duo))]
+#[cfg(not(any(slime_cv1800b_duo, slime_private_small_tables)))]
 pub const MAX_TASK_EXTENTS: usize = MAX_TASK_ARENAS + 4 * (1 + 128 + 128);
-#[cfg(slime_cv1800b_duo)]
+#[cfg(any(slime_cv1800b_duo, slime_private_small_tables))]
 pub const MAX_TASK_EXTENTS: usize = 3 * MAX_TASK_ARENAS;
 
 const SLOT_WORD_BITS: usize = usize::BITS as usize;
@@ -337,12 +332,27 @@ pub struct TaskBackingPlan {
     pub alignment_waste: usize,
 }
 
-/// Four-holder capacity against the QEMU root's actual live resource state.
+/// Static arena cost already materialized for one exemplar task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskStaticBacking {
+    pub allocation_descriptors: usize,
+    pub reserved_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskBackingRequirements {
+    pub cslots: usize,
+    pub allocation_descriptors: usize,
+    pub extent_descriptors: usize,
+    pub reserved_bytes: usize,
+}
+
+/// Hypothetical holder capacity against the root's current live resource state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TaskBackingCapacity {
     pub plan: TaskBackingPlan,
+    pub static_backing: TaskStaticBacking,
     pub holders: usize,
-    pub graph_cslots: usize,
     pub cslots_available: usize,
     pub allocation_descriptors_available: usize,
     pub extent_descriptors_available: usize,
@@ -353,18 +363,42 @@ pub struct TaskBackingCapacity {
 }
 
 impl TaskBackingCapacity {
+    pub fn requirements(self) -> Option<TaskBackingRequirements> {
+        if self.holders == 0 {
+            return Some(TaskBackingRequirements {
+                cslots: 0,
+                allocation_descriptors: 0,
+                extent_descriptors: 0,
+                reserved_bytes: 0,
+            });
+        }
+        Some(TaskBackingRequirements {
+            cslots: self
+                .plan
+                .required_cslots
+                .checked_add(self.static_backing.allocation_descriptors)?
+                .checked_mul(self.holders)?,
+            allocation_descriptors: self
+                .plan
+                .allocation_descriptors
+                .checked_add(self.static_backing.allocation_descriptors)?
+                .checked_mul(self.holders)?,
+            extent_descriptors: self.plan.extent_descriptors.checked_mul(self.holders)?,
+            reserved_bytes: self
+                .plan
+                .reserved_bytes
+                .checked_add(self.static_backing.reserved_bytes)?
+                .checked_mul(self.holders)?,
+        })
+    }
+
     pub fn fits(self) -> bool {
-        let holder_cslots = self.plan.required_cslots.saturating_mul(self.holders);
-        let holder_allocations = self
-            .plan
-            .allocation_descriptors
-            .saturating_mul(self.holders);
-        let holder_extents = self.plan.extent_descriptors.saturating_mul(self.holders);
-        let holder_bytes = self.plan.reserved_bytes.saturating_mul(self.holders);
-        holder_cslots.saturating_add(self.graph_cslots) <= self.cslots_available
-            && holder_allocations <= self.allocation_descriptors_available
-            && holder_extents <= self.extent_descriptors_available
-            && holder_bytes <= self.ordinary_bytes_available
+        self.requirements().is_some_and(|required| {
+            required.cslots <= self.cslots_available
+                && required.allocation_descriptors <= self.allocation_descriptors_available
+                && required.extent_descriptors <= self.extent_descriptors_available
+                && required.reserved_bytes <= self.ordinary_bytes_available
+        })
     }
 }
 
@@ -872,6 +906,28 @@ impl AllocationRecord {
     }
 }
 
+fn task_static_backing_from_records(
+    id: TaskArenaId,
+    allocations: &[AllocationRecord],
+    extents: &[Option<ExtentRecord>],
+) -> Option<TaskStaticBacking> {
+    let allocation_descriptors = allocations
+        .iter()
+        .filter(|record| record.belongs_to(id) && !record.allocation.is_private())
+        .count();
+    let mut matching = extents.iter().flatten().filter(|extent| {
+        extent.belongs_to(id) && extent.kind == ExtentKind::Static && !extent.revoked
+    });
+    let extent = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    Some(TaskStaticBacking {
+        allocation_descriptors,
+        reserved_bytes: 1usize.checked_shl(u32::try_from(extent.size_bits).ok()?)?,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ArenaRecord {
     serial: u32,
@@ -1283,6 +1339,11 @@ impl ObjectAllocator {
             .ok_or(AllocError::UnknownArena(id))
     }
 
+    pub fn task_static_backing(&self, id: TaskArenaId) -> Option<TaskStaticBacking> {
+        self.arena(id).ok()?;
+        task_static_backing_from_records(id, &self.allocations, &self.extents)
+    }
+
     fn arena_mut(&mut self, id: TaskArenaId) -> Result<&mut ArenaRecord, AllocError> {
         self.arenas
             .get_mut(id.index())
@@ -1599,15 +1660,6 @@ impl ObjectAllocator {
                 .filter(|record| {
                     record.belongs_to(id)
                         && record.allocation.is_in_flight()
-                        && record.allocation.private_kind() == PrivateObjectKind::Granule
-                })
-                .count(),
-            self.allocations
-                .iter()
-                .filter(|record| {
-                    record.belongs_to(id)
-                        && !record.allocation.is_in_flight()
-                        && !record.allocation.is_reusable()
                         && record.allocation.private_kind() == PrivateObjectKind::Granule
                 })
                 .count(),
@@ -1959,11 +2011,11 @@ impl ObjectAllocator {
 #[cfg(test)]
 mod tests {
     use super::{
-        AllocError, AllocationRecord, ArenaAllocation, ArenaPlan, ArenaRecord,
-        MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PRIVATE_EXTENT_BYTES,
+        AllocError, AllocationRecord, ArenaAllocation, ArenaPlan, ArenaRecord, ExtentKind,
+        ExtentRecord, MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PRIVATE_EXTENT_BYTES,
         MAX_PRIVATE_EXTENT_PAGES, MAX_TASK_ALLOCATIONS, PROVENANCE_SLOTS, PrivateObjectKind,
-        ProvenanceTable, SlotPool, TaskBackingCapacity, device_retype_plan, plan_allocation,
-        plan_task_backing,
+        ProvenanceTable, SlotPool, TaskArenaId, TaskBackingCapacity, TaskStaticBacking,
+        device_retype_plan, plan_allocation, plan_task_backing, task_static_backing_from_records,
     };
     /// Physical provenance is retained for a live frame, dropped when the frame
     /// is released, and refused rather than lost when the table is full.
@@ -2177,47 +2229,206 @@ mod tests {
     fn four_holder_capacity_refuses_every_real_resource_shortfall() {
         const PAGES_256_MIB: usize = 256 * 1024 * 1024 / 4096;
         let plan = plan_task_backing(PAGES_256_MIB).unwrap();
-        let capacity = TaskBackingCapacity {
+        let static_backing = TaskStaticBacking {
+            allocation_descriptors: 8,
+            reserved_bytes: 16_384,
+        };
+        let mut capacity = TaskBackingCapacity {
             plan,
+            static_backing,
             holders: 4,
-            graph_cslots: 1,
-            cslots_available: plan.required_cslots * 4 + 1,
-            allocation_descriptors_available: plan.allocation_descriptors * 4,
-            extent_descriptors_available: plan.extent_descriptors * 4,
-            ordinary_bytes_available: 2 * 1024 * 1024 * 1024usize,
+            cslots_available: usize::MAX,
+            allocation_descriptors_available: usize::MAX,
+            extent_descriptors_available: usize::MAX,
+            ordinary_bytes_available: usize::MAX,
             root_image_bytes: 0,
             root_stack_bytes: 1024 * 1024,
             root_heap_bytes: 512 * 1024,
         };
+        let required = capacity.requirements().unwrap();
+        assert_eq!(required.extent_descriptors, 257 * 4);
+        capacity.cslots_available = required.cslots;
+        capacity.allocation_descriptors_available = required.allocation_descriptors;
+        capacity.extent_descriptors_available = required.extent_descriptors;
+        capacity.ordinary_bytes_available = required.reserved_bytes;
         assert!(capacity.fits());
         assert!(
             !TaskBackingCapacity {
-                cslots_available: capacity.cslots_available - 1,
+                cslots_available: required.cslots - 1,
                 ..capacity
             }
             .fits()
         );
         assert!(
             !TaskBackingCapacity {
-                allocation_descriptors_available: capacity.allocation_descriptors_available - 1,
+                allocation_descriptors_available: required.allocation_descriptors - 1,
                 ..capacity
             }
             .fits()
         );
         assert!(
             !TaskBackingCapacity {
-                extent_descriptors_available: capacity.extent_descriptors_available - 1,
+                extent_descriptors_available: required.extent_descriptors - 1,
                 ..capacity
             }
             .fits()
         );
         assert!(
             !TaskBackingCapacity {
-                ordinary_bytes_available: plan.reserved_bytes * 4 - 1,
+                ordinary_bytes_available: required.reserved_bytes - 1,
                 ..capacity
             }
             .fits()
         );
+    }
+
+    #[test]
+    fn static_backing_counts_aliases_and_excludes_private_records() {
+        let id = TaskArenaId::from_raw(2, 7);
+        let other = TaskArenaId::from_raw(3, 7);
+        let stale = TaskArenaId::from_raw(2, 8);
+        let record =
+            |owner: TaskArenaId, extent: u32, allocation: ArenaAllocation| AllocationRecord {
+                owner: owner.index as u16,
+                serial: owner.serial,
+                extent,
+                allocation,
+            };
+        let mut private_empty = ArenaAllocation::new(12, 0, true, true);
+        private_empty.set_private_state(PrivateObjectKind::Empty, 0, true, false);
+        let mut private_frame = ArenaAllocation::new(13, 12, true, true);
+        private_frame.set_private_state(PrivateObjectKind::Granule, 12, true, false);
+        let mut private_leaf = ArenaAllocation::new(14, 12, true, true);
+        private_leaf.set_private_state(PrivateObjectKind::LeafTable, 12, true, true);
+        let allocations = [
+            record(id, 0, ArenaAllocation::new(10, 12, false, false)),
+            record(id, u32::MAX, ArenaAllocation::new(11, 0, false, false)),
+            record(id, u32::MAX, private_empty),
+            record(id, 1, private_frame),
+            record(id, 2, private_leaf),
+            record(other, 0, ArenaAllocation::new(15, 12, false, false)),
+            record(stale, 0, ArenaAllocation::new(16, 12, false, false)),
+        ];
+        let static_extent = |owner: TaskArenaId, revoked: bool| ExtentRecord {
+            parent: sel4::cap::Untyped::from_bits(1),
+            size_bits: 16,
+            owner: owner.index as u16,
+            serial: owner.serial,
+            kind: ExtentKind::Static,
+            active: true,
+            revoked,
+            watermark: 4096,
+            objects: 1,
+            bytes: 4096,
+        };
+        assert_eq!(
+            task_static_backing_from_records(id, &allocations, &[Some(static_extent(id, false))]),
+            Some(TaskStaticBacking {
+                allocation_descriptors: 2,
+                reserved_bytes: 65_536,
+            })
+        );
+        assert!(task_static_backing_from_records(id, &allocations, &[]).is_none());
+        assert!(
+            task_static_backing_from_records(id, &allocations, &[Some(static_extent(id, true))])
+                .is_none()
+        );
+        assert!(
+            task_static_backing_from_records(
+                id,
+                &allocations,
+                &[
+                    Some(static_extent(id, false)),
+                    Some(static_extent(id, false))
+                ]
+            )
+            .is_none()
+        );
+        let mut overflow = static_extent(id, false);
+        overflow.size_bits = usize::BITS as usize;
+        assert!(task_static_backing_from_records(id, &allocations, &[Some(overflow)]).is_none());
+        let mut private_extent = static_extent(id, false);
+        private_extent.kind = ExtentKind::PrivateData;
+        assert!(
+            task_static_backing_from_records(id, &allocations, &[Some(private_extent)]).is_none()
+        );
+    }
+
+    #[test]
+    fn four_holders_include_static_descriptors_at_default_pool_boundary() {
+        let plan = plan_task_backing(65_536).unwrap();
+        let capacity = TaskBackingCapacity {
+            plan,
+            static_backing: TaskStaticBacking {
+                allocation_descriptors: 1,
+                reserved_bytes: 4096,
+            },
+            holders: 4,
+            cslots_available: usize::MAX,
+            allocation_descriptors_available: 262_657,
+            extent_descriptors_available: plan.extent_descriptors * 4,
+            ordinary_bytes_available: usize::MAX,
+            root_image_bytes: 0,
+            root_stack_bytes: 0,
+            root_heap_bytes: 0,
+        };
+        let required = capacity.requirements().unwrap();
+        assert_eq!(required.allocation_descriptors, 262_660);
+        assert_eq!(
+            required.allocation_descriptors - capacity.allocation_descriptors_available,
+            3
+        );
+        assert!(!capacity.fits());
+    }
+
+    #[test]
+    fn capacity_overflow_is_refused_and_zero_holders_are_empty() {
+        let plan = plan_task_backing(1).unwrap();
+        let capacity = TaskBackingCapacity {
+            plan,
+            static_backing: TaskStaticBacking {
+                allocation_descriptors: usize::MAX,
+                reserved_bytes: usize::MAX,
+            },
+            holders: 1,
+            cslots_available: usize::MAX,
+            allocation_descriptors_available: usize::MAX,
+            extent_descriptors_available: usize::MAX,
+            ordinary_bytes_available: usize::MAX,
+            root_image_bytes: 0,
+            root_stack_bytes: 0,
+            root_heap_bytes: 0,
+        };
+        assert_eq!(capacity.requirements(), None);
+        assert!(!capacity.fits());
+        let multiplied = TaskBackingCapacity {
+            static_backing: TaskStaticBacking {
+                allocation_descriptors: 0,
+                reserved_bytes: 0,
+            },
+            holders: usize::MAX,
+            ..capacity
+        };
+        assert_eq!(multiplied.requirements(), None);
+        assert!(!multiplied.fits());
+        let zero = TaskBackingCapacity {
+            holders: 0,
+            cslots_available: 0,
+            allocation_descriptors_available: 0,
+            extent_descriptors_available: 0,
+            ordinary_bytes_available: 0,
+            ..capacity
+        };
+        assert_eq!(
+            zero.requirements(),
+            Some(super::TaskBackingRequirements {
+                cslots: 0,
+                allocation_descriptors: 0,
+                extent_descriptors: 0,
+                reserved_bytes: 0,
+            })
+        );
+        assert!(zero.fits());
     }
 
     #[test]
