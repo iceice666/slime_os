@@ -563,13 +563,22 @@ def check_profile(pins: dict[str, object]) -> None:
     divider = integer(h1v1, "pwm_clock_divider", "ns02201_h1v1")
     if source_hz != 120_000_000:
         fail("ns02201-h1v1 PWM clock source must be the 120 MHz fix120m the clock tree names")
-    if not 3 <= divider <= 16383:
-        fail("ns02201-h1v1 PWM clock divider field must be in the encodable 3..16383 range")
     if integer(h1v1, "pwm_clock_hz", "ns02201_h1v1") != source_hz // (divider + 1):
         fail(
             "ns02201-h1v1 PWM clock must equal source / (divider + 1); the divider "
-            "field encodes divisor - 1, and this ratio is what makes one count one "
-            "microsecond for servo timing"
+            "field encodes divisor - 1"
+        )
+    # One microsecond per count is not a preference: the bench probe programs
+    # this exact divider and then writes `--pwm-period-us` and `--pwm-pulse-us`
+    # straight into the counter, and every later consumer of these keys inherits
+    # that scale. A self-consistent but different pair (divider 239 with 500 kHz,
+    # say) would halve every pulse width silently, so only the microsecond pair
+    # passes.
+    if divider != 119 or integer(h1v1, "pwm_clock_hz", "ns02201_h1v1") != 1_000_000:
+        fail(
+            "ns02201-h1v1 PWM clock must be divider 119 over the 120 MHz source, "
+            "giving exactly 1000000 Hz: one count is one microsecond, which is what "
+            "makes a period or pulse expressed in microseconds a counter value"
         )
 
     # What the PWM probe observed on the board. The channel and pad are what a

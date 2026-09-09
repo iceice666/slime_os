@@ -7,7 +7,7 @@
 | Status | Verified |
 | Scope | `scripts/check/check-nt98690-boot.py`, `scripts/check/check-sel4-pins.py`, `sel4/pins.toml` |
 | Work items | 01a07bac-a899-7eac-9575-62cb1ff23285, 01a07bac-83ad-7cfe-be0e-b589e74af74f |
-| Gates | `just sel4_pin_check`, `just sel4_gate_control_check` |
+| Gates | `just sel4_pin_check`, `just sel4_gate_control_check`, `just nt98690_bench_probe_check` |
 | Trigger | [The lane decision](../2026-09-07-h1v1-esc-lane/index.md) and its bench probe, run by the operator on the named board |
 | Baseline | Every PWM, pinmux, clock, and pad fact in the lane's plan was read from the vendor BSP; none had been observed on the board, and no source on the development host said which pad reaches a connector |
 
@@ -115,3 +115,36 @@ response, or physical stop. The 2026-09-09 evidence is the host-only production-
 `just nt98690_bench_probe_check`; no revised `--pwm-probe` or `--gpio-probe` board run was performed.
 The original UART logs remain byte-for-byte unchanged. IO8 and P6.D remain outside this correction
 and are not completed by host tests.
+
+**2026-09-09 — three review findings on the bench probe and its pins, fixed here.** All three are
+host-observable; none changes what either board run established.
+
+- *The GPIO probe returned a pad driven low, not as found.* Every `--gpio-probe` cycle ends on
+  `GPIO_P_CLR`, and cleanup restored only direction and the pad function, so a pad that arrived as
+  a GPIO output driven high left the probe driven low — a different electrical state than the
+  survey, under a function that documents verified restoration. `gpio_probe` now snapshots
+  `GPIO_P_DATA` beside direction and function, and restores the latch *before* direction, verifying
+  the pad reads the restored level while the pin is still an output. A pad found as an input has no
+  observable latch in this register and is never driven. Neither board run is believed to have taken
+  the affected path: the PWM run's survey read `GPIO DIR = 0` after the earlier `--gpio-probe 0`
+  had restored it, which under the old cleanup's `dir_before & bit` restore implies the pad was an
+  input before that probe too — an inference, since the GPIO-probe transcript was not returned.
+- *`sel4_pin_check` accepted any self-consistent divider.* The ratio check passed divider 239 with
+  500 kHz, while `pwm_probe` hardcoded divider 119 and wrote `--pwm-period-us` and `--pwm-pulse-us`
+  into the counter unconverted — so such a pins edit would have halved every pulse width silently
+  for later consumers. The checker now requires divider 119 and exactly 1 MHz, and the probe's
+  divider is the named `PWM_CLOCK_DIVIDER` that `check_pwm_pins` asserts against the pins along with
+  the source and count clock, so the two sides can no longer drift.
+- *Two CLI rejection cases proved nothing.* `channel_allowlist` built each invalid argument tuple
+  but never installed it in `sys.argv`, so `main()` exited on the missing serial endpoint and that
+  unrelated `SystemExit` was accepted as channel rejection. The cases now install the argv, supply
+  `--serial`, require the failure text to name the channel bound, and raise a dedicated
+  `BoardOpened` — not `SystemExit` — if the CLI opens a port before validating.
+
+Evidence: `just nt98690_bench_probe_check` (14 scenarios, exit 0), whose three new cases
+(`gpio_output_latch_restored`, `gpio_input_latch_untouched`, `pins_bind_the_count_scale`) were each
+confirmed to fail against a reverted fix; `just sel4_pin_check` exit 0; and
+`python3 scripts/check/check-nt98690-boot.py --dry-run` exit 0, its rendered write list unchanged
+apart from now naming the divider from the constant. No board run was performed for this
+correction, so nothing here is board evidence, and the exit conditions the bench milestone records
+remain what the immutable logs and the labelled operator observations establish.

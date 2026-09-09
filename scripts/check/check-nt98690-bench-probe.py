@@ -18,6 +18,10 @@ PROBE_PATH = ROOT / "scripts" / "check" / "check-nt98690-boot.py"
 PROMPT = "nvt: "
 
 
+class BoardOpened(Exception):
+    """Raised in place of opening a serial port, so no case can mistake it for a rejection."""
+
+
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"nt98690 bench probe regression: {message}")
 
@@ -298,6 +302,65 @@ def gpio_ack_loss_restored() -> None:
         fail("GPIO function was not restored after acknowledgement loss")
 
 
+def gpio_output_latch_restored() -> None:
+    """A pad that arrives as a GPIO output driven high must leave driven high.
+
+    Every probe cycle ends on CLR, so restoring direction and function alone
+    would hand the pad back driven low -- a different electrical state than the
+    one surveyed, under a function that documents verified restoration.
+    """
+    data = PROBE.GPIO_BASE + PROBE.GPIO_P_DATA
+    direction = PROBE.GPIO_BASE + PROBE.GPIO_P_DIR
+    console = ModelConsole()
+    console.registers[direction] = 1
+    console.registers[data] = 1
+    PROBE.gpio_probe(console, PROMPT, 0, 2, 0, 30)
+    if not console.registers[data] & 1:
+        fail("GPIO probe left a pad driven low that it found driven high")
+    if console.registers[direction] != 1:
+        fail("GPIO probe did not restore the output direction it found")
+    # The restoring write must be the last one to reach the latch, and it must
+    # arrive while the pin is still an output: SET/CLR do not reach the latch
+    # once direction is back to input. Two cycles issue two SETs, so the third
+    # is the restoration.
+    set_command = f"mw.l {PROBE.GPIO_BASE + PROBE.GPIO_P_SET:#x} 0x1"
+    clr_command = f"mw.l {PROBE.GPIO_BASE + PROBE.GPIO_P_CLR:#x} 0x1"
+    latch = [
+        index
+        for index, command in enumerate(console.commands)
+        if command in (set_command, clr_command)
+    ]
+    if [console.commands[index] for index in latch].count(set_command) != 3:
+        fail(f"the probe did not rewrite the output latch once after two cycles: {latch}")
+    if console.commands[latch[-1]] != set_command:
+        fail("the probe's last latch write was not the restoring SET")
+    directions = [
+        index
+        for index, command in enumerate(console.commands)
+        if command.startswith(f"mw.l {direction:#x} ")
+    ]
+    if directions and directions[-1] < latch[-1]:
+        fail("GPIO probe restored direction before the output latch")
+
+
+def gpio_input_latch_untouched() -> None:
+    """A pad found as an input is never driven: there is no latch to put back."""
+    console = ModelConsole()
+    PROBE.gpio_probe(console, PROMPT, 0, 1, 0, 30)
+    for offset in (PROBE.GPIO_P_SET, PROBE.GPIO_P_CLR):
+        target = f"mw.l {PROBE.GPIO_BASE + offset:#x} "
+        toggles = [command for command in console.commands if command.startswith(target)]
+        if len(toggles) != 1:
+            fail(f"expected exactly one probe cycle write to {target.strip()}: {toggles}")
+    expected = initial_registers()
+    for address in (
+        PROBE.GPIO_BASE + PROBE.GPIO_P_DIR,
+        PROBE.TOP_BASE + PROBE.TOP_PGPIO_FUNC,
+    ):
+        if console.registers[address] != expected[address]:
+            fail(f"register {address:#x} was not restored after the GPIO probe")
+
+
 def snapshot_failure_writes_nothing() -> None:
     console = ModelConsole()
     original = PROBE.read_one
@@ -345,6 +408,11 @@ def channel_allowlist() -> None:
         if console.commands:
             fail(f"PWM channel {channel} touched the board before rejection")
 
+        # The CLI cases have to reject *for the channel*. Two accidents would
+        # otherwise pass them: forgetting to install `sys.argv`, and the
+        # missing-`--serial` exit. So the argv is installed, `--serial` is
+        # supplied, and the failure text must name the channel bound -- while
+        # opening the board raises something `expect_failure` cannot accept.
         for arguments in (
             ("--dry-run", "--pwm-channel", str(channel)),
             ("--gpio-probe", str(channel)),
@@ -356,19 +424,22 @@ def channel_allowlist() -> None:
                 *args: object, rejected_channel: int = channel, **kwargs: object
             ) -> None:
                 del args, kwargs
-                fail(f"CLI channel {rejected_channel} opened the board before rejection")
+                raise BoardOpened(
+                    f"CLI channel {rejected_channel} opened the board before rejection"
+                )
 
             PROBE.Console = forbidden_console
+            sys.argv = [str(PROBE_PATH), "--serial", "model", *arguments]
+            error = None
             try:
                 try:
                     PROBE.main()
-                except SystemExit:
-                    pass
-                else:
-                    fail(f"CLI channel {channel} unexpectedly passed: {arguments}")
+                except BaseException as caught:
+                    error = caught
             finally:
                 PROBE.Console = original_console
                 sys.argv = original_argv
+            expect_failure(error, "outside 0..5")
     for channel in (0, 5):
         PROBE.validate_probe_channel(channel)
 
@@ -417,6 +488,29 @@ def failed_run_preserves_raw_transcript() -> None:
             fail("failed PWM CLI run did not preserve its raw transcript")
 
 
+def pins_bind_the_count_scale() -> None:
+    """`--pwm-period-us` is a counter value only at the pinned divider.
+
+    `check_pwm_pins` is what refuses a pins edit that keeps the ratio but moves
+    the scale, so a later consumer cannot inherit a halved pulse silently.
+    """
+    profile = PROBE.load_profile()
+    PROBE.check_pwm_pins(profile)
+    for key, value in (
+        ("pwm_clock_divider", 239),
+        ("pwm_clock_hz", 500_000),
+        ("pwm_clock_source_hz", 240_000_000),
+    ):
+        edited = dict(profile)
+        edited[key] = value
+        try:
+            PROBE.check_pwm_pins(edited)
+        except SystemExit:
+            continue
+        fail(f"a pins edit of {key} to {value} did not stop the probe")
+
+
+
 def main() -> None:
     cases = (
         normal_pwm,
@@ -426,10 +520,13 @@ def main() -> None:
         dropped_divider_detected,
         dropped_restore_detected,
         gpio_ack_loss_restored,
+        gpio_output_latch_restored,
+        gpio_input_latch_untouched,
         snapshot_failure_writes_nothing,
         channel_allowlist,
         cleanup_unknown_is_explicit,
         failed_run_preserves_raw_transcript,
+        pins_bind_the_count_scale,
     )
     failures = 0
     for case in cases:

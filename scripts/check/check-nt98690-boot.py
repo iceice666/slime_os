@@ -271,6 +271,15 @@ PWM_LOAD = 0x108  # latch a new period while the channel free-runs
 PWM_MAX_PROBE_CHANNEL = 5  # 0-7 are 16-bit; 0-5 are the pads nothing else claims
 CG_BASE = RESET_CG_BASE
 CG_PWM_CLK_DIV0 = 0x30  # bits[13:0] channels 0-3, bits[29:16] channels 4-7
+#: The divider field this probe programs and the count clock it produces. The
+#: field encodes `divisor - 1` over the 120 MHz `fix120m` source, so 119 yields
+#: exactly 1 MHz and one count is one microsecond -- which is the whole reason
+#: `--pwm-period-us` and `--pwm-pulse-us` are written into the counter
+#: unconverted. `check_pwm_pins` asserts both against `sel4/pins.toml`, so this
+#: scale cannot be changed on one side alone.
+PWM_CLOCK_SOURCE_HZ = 120_000_000
+PWM_CLOCK_DIVIDER = 119
+PWM_COUNT_HZ = PWM_CLOCK_SOURCE_HZ // (PWM_CLOCK_DIVIDER + 1)
 CG_PWM_CLK_EN = 0x84  # bit per channel, 1 = clock on
 CG_PWM_RESET = 0xA4  # bit 0, shared by every PWM channel
 CG_PWM12_CLK_EN = 0x8C  # bit 22 is channel 12's gate
@@ -771,10 +780,12 @@ def pwm_probe_plan(
     period_word, ext_word = pwm_period_words(0, pulses[0], period_us)
     lines = [
         f"# channel {channel} -> P_GPIO{channel}, {period_us} us frame, "
-        f"pulses {', '.join(str(pulse) for pulse in pulses)} us at 1 MHz",
+        f"pulses {', '.join(str(pulse) for pulse in pulses)} us at "
+        f"{PWM_COUNT_HZ / 1e6:g} MHz",
         f"read-only survey of {len(PWM_SURVEY_REGISTERS)} registers, then the core-rail invariants",
         f"[RMW+verify] {CG_BASE + CG_PWM_CLK_EN:#x} set {bit:#x}            # channel clock on",
-        f"[RMW+verify] {CG_BASE + CG_PWM_CLK_DIV0:#x} field[{shift + 13}:{shift}] = 119   # 1 MHz count clock",
+        f"[RMW+verify] {CG_BASE + CG_PWM_CLK_DIV0:#x} field[{shift + 13}:{shift}] = "
+        f"{PWM_CLOCK_DIVIDER}   # {PWM_COUNT_HZ / 1e6:g} MHz count clock",
         f"      mw.l {PWM_BASE + PWM_DISABLE:#x} {bit:#x}; read ENABLE and require channel off",
         f"      mw.l {PWM_BASE + pwm_control_offset(channel):#x} 0; read back and compare",
         f"      mw.l {PWM_BASE + pwm_period_offset(channel):#x} {period_word:#010x}; read back and compare",
@@ -815,7 +826,7 @@ def pwm_probe_plan(
 
 
 def check_pwm_pins(profile: dict[str, object]) -> None:
-    """The addresses this file drives must be the ones the pins declare."""
+    """The addresses and the count scale this file drives must be the pinned ones."""
     for key, constant in (
         ("pwm_base", PWM_BASE),
         ("pinmux_top_base", TOP_BASE),
@@ -828,6 +839,22 @@ def check_pwm_pins(profile: dict[str, object]) -> None:
             fail(f"sel4/pins.toml [{PINS_SECTION}] must pin {key} before a PWM probe")
         if int(str(pinned), 16) != constant:
             fail(f"this probe drives {constant:#x} but the pins declare {key} = {pinned}")
+    # `--pwm-period-us` and `--pwm-pulse-us` are counter values, which is only
+    # true at the pinned divider. Refusing to run on a mismatch is what keeps a
+    # pins edit from rescaling a servo pulse instead of failing a check.
+    for key, constant in (
+        ("pwm_clock_source_hz", PWM_CLOCK_SOURCE_HZ),
+        ("pwm_clock_divider", PWM_CLOCK_DIVIDER),
+        ("pwm_clock_hz", PWM_COUNT_HZ),
+    ):
+        pinned = profile.get(key)
+        if pinned is None:
+            fail(f"sel4/pins.toml [{PINS_SECTION}] must pin {key} before a PWM probe")
+        if pinned != constant:
+            fail(
+                f"this probe programs {key} = {constant} and treats microseconds as "
+                f"counts, but the pins declare {pinned}"
+            )
 
 
 def read_one(console: Console, prompt: str, address: int) -> int:
@@ -896,6 +923,21 @@ def pwm_survey(console: Console, prompt: str) -> dict[str, int]:
     return readings
 
 
+def restore_gpio_latch(console: Console, prompt: str, bit: int, level: int) -> None:
+    """Drive one P_GPIO output back to `level`, then verify the pad reads it.
+
+    SET and CLR are write-1-to-set registers with no readback of their own, so
+    the DATA register is the only confirmation, and it is only meaningful while
+    the pin is still an output -- which is why this runs before direction is
+    restored. Only the target bit is ever written.
+    """
+    offset = GPIO_P_SET if level else GPIO_P_CLR
+    send_command(
+        console, f"mw.l {GPIO_BASE + offset:#x} {bit:#x}", prompt, REGISTER_COMMAND_SECONDS, fail
+    )
+    verify_register(console, prompt, GPIO_BASE + GPIO_P_DATA, level, bit)
+
+
 def gpio_probe(
     console: Console, prompt: str, channel: int, cycles: int, hold: float, timeout: float
 ) -> str:
@@ -910,6 +952,14 @@ def gpio_probe(
     # value when a read failed.
     func_before = read_one(console, prompt, TOP_BASE + TOP_PGPIO_FUNC)
     dir_before = read_one(console, prompt, GPIO_BASE + GPIO_P_DIR)
+    data_before = read_one(console, prompt, GPIO_BASE + GPIO_P_DATA)
+    # Every cycle ends by driving the pad low, so a pad that arrived as a GPIO
+    # output must have its latch put back before direction is restored --
+    # otherwise "restored" leaves it driven low rather than as it was found. A
+    # pad that arrived as an input has no observable latch (this register reads
+    # the pad, not the latch, in that direction), so there is nothing to restore
+    # and nothing here drives it to a level it was only sensing.
+    latch_observable = bool(dir_before & bit)
     modified = False
     primary_error: BaseException | None = None
     cleanup_errors: list[str] = []
@@ -934,7 +984,13 @@ def gpio_probe(
         primary_error = error
     finally:
         if modified:
-            for name, action in (
+            latch_step = (
+                (
+                    "restore GPIO output latch",
+                    lambda: restore_gpio_latch(console, prompt, bit, data_before & bit),
+                ),
+            )
+            for name, action in (latch_step if latch_observable else ()) + (
                 (
                     "restore GPIO direction",
                     lambda: read_modify_write(
@@ -1009,7 +1065,7 @@ def pwm_probe(
     before = pwm_survey(console, prompt)
     check_core_rail(console, prompt, "before the PWM probe")
 
-    divider = 119
+    divider = PWM_CLOCK_DIVIDER
     period_address = PWM_BASE + pwm_period_offset(channel)
     ext_address = PWM_BASE + pwm_ext_period_offset(channel)
     control_address = PWM_BASE + pwm_control_offset(channel)
