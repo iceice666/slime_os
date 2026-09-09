@@ -923,19 +923,22 @@ def pwm_survey(console: Console, prompt: str) -> dict[str, int]:
     return readings
 
 
-def restore_gpio_latch(console: Console, prompt: str, bit: int, level: int) -> None:
-    """Drive one P_GPIO output back to `level`, then verify the pad reads it.
+def drive_gpio_level(console: Console, prompt: str, bit: int, level: int) -> str:
+    """Drive one P_GPIO output to `level`, then require the pad to read it back.
 
     SET and CLR are write-1-to-set registers with no readback of their own, so
-    the DATA register is the only confirmation, and it is only meaningful while
-    the pin is still an output -- which is why this runs before direction is
-    restored. Only the target bit is ever written.
+    `GPIO_P_DATA` is the only confirmation that the pad moved, and it is only
+    meaningful while the pin is an output. Without this the prompt returning is
+    the whole evidence, and a pad that never moved reports a successful toggle --
+    which would have the operator rule out a header pin the probe never drove.
+    Only the target bit is ever written.
     """
     offset = GPIO_P_SET if level else GPIO_P_CLR
-    send_command(
+    transcript = send_command(
         console, f"mw.l {GPIO_BASE + offset:#x} {bit:#x}", prompt, REGISTER_COMMAND_SECONDS, fail
     )
     verify_register(console, prompt, GPIO_BASE + GPIO_P_DATA, level, bit)
+    return transcript
 
 
 def gpio_probe(
@@ -970,15 +973,9 @@ def gpio_probe(
         read_modify_write(console, prompt, TOP_BASE + TOP_PGPIO_FUNC, 0, bit)
         read_modify_write(console, prompt, GPIO_BASE + GPIO_P_DIR, 0, bit)
         for cycle in range(cycles):
-            for level, offset in (("high", GPIO_P_SET), ("low", GPIO_P_CLR)):
-                transcript += send_command(
-                    console,
-                    f"mw.l {GPIO_BASE + offset:#x} {bit:#x}",
-                    prompt,
-                    REGISTER_COMMAND_SECONDS,
-                    fail,
-                )
-                print(f"[gpio]   cycle {cycle + 1}/{cycles}: P_GPIO{channel} {level}")
+            for name, level in (("high", bit), ("low", 0)):
+                transcript += drive_gpio_level(console, prompt, bit, level)
+                print(f"[gpio]   cycle {cycle + 1}/{cycles}: P_GPIO{channel} {name}, pad reads it")
                 time.sleep(hold)
     except BaseException as error:
         primary_error = error
@@ -987,7 +984,7 @@ def gpio_probe(
             latch_step = (
                 (
                     "restore GPIO output latch",
-                    lambda: restore_gpio_latch(console, prompt, bit, data_before & bit),
+                    lambda: drive_gpio_level(console, prompt, bit, data_before & bit),
                 ),
             )
             for name, action in (latch_step if latch_observable else ()) + (

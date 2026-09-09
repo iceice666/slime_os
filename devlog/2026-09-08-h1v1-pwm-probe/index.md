@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-08 |
 | Kind | Audit |
-| Status | Verified |
+| Status | Monitoring |
 | Scope | `scripts/check/check-nt98690-boot.py`, `scripts/check/check-sel4-pins.py`, `sel4/pins.toml` |
 | Work items | 01a07bac-a899-7eac-9575-62cb1ff23285, 01a07bac-83ad-7cfe-be0e-b589e74af74f |
 | Gates | `just sel4_pin_check`, `just sel4_gate_control_check`, `just nt98690_bench_probe_check` |
@@ -148,3 +148,45 @@ confirmed to fail against a reverted fix; `just sel4_pin_check` exit 0; and
 apart from now naming the divider from the constant. No board run was performed for this
 correction, so nothing here is board evidence, and the exit conditions the bench milestone records
 remain what the immutable logs and the labelled operator observations establish.
+
+**2026-09-09 — the bench milestone is reopened, and three follow-up findings are fixed.**
+
+`01a07bac-a899-7eac-9575-62cb1ff23285` (`P6.PWM.A`) is back to `open`. Its exit conditions require
+that the probe "restores every register it changed", and the correction above already established
+that `esc-clean-run.log` carries the four shared restoration *write commands* but no post-write
+readback for any of them. The item was therefore closed on a condition nobody observed. The
+2026-09-09 remediation makes the probe verify each restoration independently, so a future
+transcript will carry that evidence — but a host model proves what the code does, not what the
+board did, and cannot substitute. Closing it needs one further `--pwm-probe` run on the named board
+whose transcript shows a readback for every shared restoration; the rest of the exit conditions are
+already observed and that run does not re-litigate them. The item's own body now says this.
+
+Three further findings, all host-observable:
+
+- *A GPIO toggle was reported without confirming the pad moved.* `send_command` only established
+  that U-Boot returned to its prompt, so an ignored SET or CLR — or a pad that cannot attain the
+  level — still printed a successful cycle. That is the one failure mode `--gpio-probe` exists to
+  rule out: a false toggle would have the operator strike a reachable header pin off the list. Each
+  cycle now goes through `drive_gpio_level`, which reads back the target bit in `GPIO_P_DATA` after
+  every SET and CLR, and the latch restoration shares that one verified path. Note the earlier
+  finding's asymmetry is unchanged and deliberate: a pad found as an *input* is still never driven,
+  since there is no latch to restore there.
+- *`sel4_pin_check` accepted an unobserved PWM route.* The channel was validated as a `0..5` range
+  with `pwm_pad` merely required to agree, so an edit to channel 1 and `P_GPIO1` passed while
+  `pwm_pad_header` and `pwm_probe_observed` still described the channel-0 experiment — an
+  unqualified route a later bring-up would then consume as observed fact. The checker now holds a
+  table of routes some run actually qualified (channel 0 → `P_GPIO0`, 40-pin GPIO header,
+  2026-09-08) and validates the pad, header, and date together against the entry. Channels 1-5
+  remain safe for the bench probe to *drive* — that is the probe's own `PWM_MAX_PROBE_CHANNEL`, a
+  different claim — but adding one here means adding its run's evidence, not widening a range.
+- *A test comment narrated its own history.* The `channel_allowlist` comment recorded the two prior
+  implementation mistakes, which belongs in this file and not in verification code. It now states
+  only the invariant: the rejection must name the channel bound and must happen before `Console` is
+  constructed.
+
+Evidence: `just nt98690_bench_probe_check` (15 scenarios, exit 0), with the new
+`gpio_dead_pad_detected` case — a model that drops the first SET must fail, stop driving further
+levels, and still restore direction and pad function. Removing the per-level readback fails it;
+repinning `sel4/pins.toml` to channel 1 with a matching `P_GPIO1` now fails `just sel4_pin_check`
+with the unobserved-route message. Also `just tasks_check`, `just ruff`, `just typos`, and
+`--dry-run`, all exit 0. Again no board run, so nothing here is board evidence.

@@ -343,6 +343,33 @@ def gpio_output_latch_restored() -> None:
         fail("GPIO probe restored direction before the output latch")
 
 
+def gpio_dead_pad_detected() -> None:
+    """A pad that does not follow SET must fail, not report a toggle.
+
+    SET and CLR have no readback of their own, so without a `GPIO_P_DATA` check
+    the prompt returning is the whole evidence -- and a reported toggle that
+    never happened would have the operator rule out a reachable header pin.
+    """
+    set_register = PROBE.GPIO_BASE + PROBE.GPIO_P_SET
+    console = ModelConsole(drop_writes={(set_register, 1)})
+    error = None
+    try:
+        PROBE.gpio_probe(console, PROMPT, 0, 3, 0, 30)
+    except BaseException as caught:
+        error = caught
+    expect_failure(error, "register verification failed")
+    clr_register = PROBE.GPIO_BASE + PROBE.GPIO_P_CLR
+    if console.write_counts.get(clr_register, 0):
+        fail("GPIO probe drove further levels after a pad failed to follow SET")
+    expected = initial_registers()
+    for address in (
+        PROBE.GPIO_BASE + PROBE.GPIO_P_DIR,
+        PROBE.TOP_BASE + PROBE.TOP_PGPIO_FUNC,
+    ):
+        if console.registers[address] != expected[address]:
+            fail(f"register {address:#x} was not restored after the dead-pad failure")
+
+
 def gpio_input_latch_untouched() -> None:
     """A pad found as an input is never driven: there is no latch to put back."""
     console = ModelConsole()
@@ -408,11 +435,10 @@ def channel_allowlist() -> None:
         if console.commands:
             fail(f"PWM channel {channel} touched the board before rejection")
 
-        # The CLI cases have to reject *for the channel*. Two accidents would
-        # otherwise pass them: forgetting to install `sys.argv`, and the
-        # missing-`--serial` exit. So the argv is installed, `--serial` is
-        # supplied, and the failure text must name the channel bound -- while
-        # opening the board raises something `expect_failure` cannot accept.
+        # The rejection must name the channel bound and must happen before
+        # `Console` is constructed, so `--serial` is supplied (an absent
+        # endpoint exits for its own reason) and opening a port raises
+        # `BoardOpened`, which is not a rejection.
         for arguments in (
             ("--dry-run", "--pwm-channel", str(channel)),
             ("--gpio-probe", str(channel)),
@@ -510,7 +536,6 @@ def pins_bind_the_count_scale() -> None:
         fail(f"a pins edit of {key} to {value} did not stop the probe")
 
 
-
 def main() -> None:
     cases = (
         normal_pwm,
@@ -521,6 +546,7 @@ def main() -> None:
         dropped_restore_detected,
         gpio_ack_loss_restored,
         gpio_output_latch_restored,
+        gpio_dead_pad_detected,
         gpio_input_latch_untouched,
         snapshot_failure_writes_nothing,
         channel_allowlist,

@@ -585,13 +585,42 @@ def check_profile(pins: dict[str, object]) -> None:
     # later bring-up routes; the two pinmux words are what it must not assume
     # were set for it; the GPIO fact closes the idea of the board sampling its
     # own output.
+    #
+    # Each entry is a route some board run actually qualified: the pad the
+    # channel's `_1` function reached, where the operator found it, and the date
+    # of the run. Only channel 0 has ever been driven, so only channel 0 is
+    # here. Channels 1-5 are safe for the *bench probe* to drive -- that is the
+    # probe's own `PWM_MAX_PROBE_CHANNEL` -- but safe to poke and qualified to
+    # consume are different claims, and a bring-up reads these pins for the
+    # second one. Adding a channel means adding its run's evidence here, not
+    # widening a range.
+    observed_pwm_routes = {
+        0: ("P_GPIO0", "40-pin GPIO header", "2026-09-08"),
+    }
     pwm_channel = integer(h1v1, "pwm_channel", "ns02201_h1v1")
-    if not 0 <= pwm_channel <= 5:
-        fail("ns02201-h1v1 pwm_channel must be 0..5: 16-bit, unclaimed, and off channel 12's divider")
-    if text(h1v1, "pwm_pad", "ns02201_h1v1") != f"P_GPIO{pwm_channel}":
-        fail("ns02201-h1v1 pwm_pad must be the P_GPIO the channel's `_1` pad function reaches")
-    if not text(h1v1, "pwm_pad_header", "ns02201_h1v1"):
-        fail("ns02201-h1v1 pwm_pad_header must name where the pad was found on the board")
+    if pwm_channel not in observed_pwm_routes:
+        fail(
+            f"ns02201-h1v1 pwm_channel {pwm_channel} has no observed board route: only "
+            f"{sorted(observed_pwm_routes)} have been driven to a pad and found on a "
+            "connector. Repin this checker with that run's evidence rather than "
+            "accepting an unqualified channel a bring-up would then consume"
+        )
+    expected_pad, expected_header, expected_date = observed_pwm_routes[pwm_channel]
+    if text(h1v1, "pwm_pad", "ns02201_h1v1") != expected_pad:
+        fail(
+            f"ns02201-h1v1 pwm_pad must be {expected_pad}: the pad channel "
+            f"{pwm_channel}'s `_1` function was observed reaching"
+        )
+    if text(h1v1, "pwm_pad_header", "ns02201_h1v1") != expected_header:
+        fail(
+            f"ns02201-h1v1 pwm_pad_header must be {expected_header!r}, where "
+            f"{expected_pad} was found on the board"
+        )
+    if text(h1v1, "pwm_probe_observed", "ns02201_h1v1") != expected_date:
+        fail(
+            f"ns02201-h1v1 pwm_probe_observed must be {expected_date}, the date channel "
+            f"{pwm_channel}'s route was observed; a new date needs a new route entry"
+        )
     for key in ("pwm_pinmux_at_prompt", "pgpio_function_at_prompt"):
         int(text(h1v1, key, "ns02201_h1v1"), 16)
     if boolean(h1v1, "gpio_data_reflects_function_pad", "ns02201_h1v1"):
@@ -599,8 +628,6 @@ def check_profile(pins: dict[str, object]) -> None:
             "ns02201-h1v1 gpio_data_reflects_function_pad contradicts the 2026-09-08 "
             "probe, which read the same GPIO data word in every sample while PWM0 ran"
         )
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text(h1v1, "pwm_probe_observed", "ns02201_h1v1")):
-        fail("ns02201-h1v1 pwm_probe_observed must be the date the probe ran on the board")
 
     expected_h1v1_boot_files = [
         "slime-nt98690-probe.bin",
