@@ -1609,9 +1609,10 @@ pub fn admit_total_slots(
             let quota = budget
                 .holder(index)
                 .ok_or(GenerationError::UnsatisfiablePrivateMemoryBudget)?;
-            required = required.saturating_add(crate::private_memory::backing_slot_reservation(
-                quota.page_quota as usize,
-            ));
+            required = required.saturating_add(
+                crate::object_allocator::PrivateBackingLayout::for_quota(quota.page_quota as usize)
+                    .allocation_descriptors,
+            );
         }
     }
     if required > available {

@@ -714,8 +714,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // thread objects that construction allocates after the private pool;
         // reserving both populations prevents an admitted quota from consuming
         // the global descriptor table before its task is published.
-        let private_slots = crate::private_memory::backing_slot_reservation(private_memory_pages);
-        if private_slots
+        let private_allocations =
+            crate::object_allocator::PrivateBackingLayout::for_quota(private_memory_pages)
+                .allocation_descriptors;
+        if private_allocations
             .checked_add(plan.allocation_count())
             .is_none_or(|required| required > allocator.allocation_descriptors_free())
         {
@@ -729,9 +731,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 limit: allocator.allocation_descriptors_free(),
             }));
         }
-        if let Err(error) =
-            allocator.provision_private_backing(arena, private_memory_pages, private_slots)
-        {
+        if let Err(error) = allocator.provision_private_backing(arena, private_memory_pages) {
             let cleanup =
                 construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
             if let Err(cleanup_error) = cleanup.revoke(allocator) {

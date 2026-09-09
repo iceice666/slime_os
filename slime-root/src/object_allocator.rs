@@ -402,6 +402,81 @@ impl TaskBackingCapacity {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PrivateExtentSpec {
+    kind: ExtentKind,
+    size_bits: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PrivateBackingLayout {
+    private_pages: usize,
+    pub(crate) allocation_descriptors: usize,
+    extents: [Option<PrivateExtentSpec>; 3],
+}
+
+impl PrivateBackingLayout {
+    pub(crate) fn for_quota(quota: usize) -> Self {
+        let private_pages = quota.min(crate::private_memory::MAX_REGION_PAGES);
+        if private_pages == 0 {
+            return Self {
+                private_pages,
+                allocation_descriptors: 0,
+                extents: [None; 3],
+            };
+        }
+        let data_bytes = private_pages * GRANULE_BYTES;
+        let data_bits =
+            usize::BITS as usize - data_bytes.saturating_sub(1).leading_zeros() as usize;
+        let data = Some(PrivateExtentSpec {
+            kind: ExtentKind::PrivateData,
+            size_bits: data_bits,
+        });
+        Self {
+            private_pages,
+            allocation_descriptors: if private_pages == MAX_PRIVATE_EXTENT_PAGES {
+                private_pages + 2
+            } else {
+                private_pages + 1
+            },
+            extents: [
+                Some(PrivateExtentSpec {
+                    kind: ExtentKind::PrivateTables,
+                    size_bits: GRANULE_BYTES.trailing_zeros() as usize,
+                }),
+                data,
+                if private_pages == MAX_PRIVATE_EXTENT_PAGES {
+                    data
+                } else {
+                    None
+                },
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateBackingRequest {
+    Extent { kind: ExtentKind, size_bits: usize },
+    Slots { count: usize },
+}
+
+fn provision_private_backing_with(
+    quota: usize,
+    mut apply: impl FnMut(PrivateBackingRequest) -> Result<(), AllocError>,
+) -> Result<(), AllocError> {
+    let layout = PrivateBackingLayout::for_quota(quota);
+    for extent in layout.extents.into_iter().flatten() {
+        apply(PrivateBackingRequest::Extent {
+            kind: extent.kind,
+            size_bits: extent.size_bits,
+        })?;
+    }
+    apply(PrivateBackingRequest::Slots {
+        count: layout.allocation_descriptors,
+    })
+}
+
 /// Plan segmented private backing for host admission and capacity reports.
 ///
 /// This deliberately accepts quotas above the current public runtime ceiling:
@@ -413,18 +488,46 @@ pub fn plan_task_backing(private_pages: usize) -> Option<TaskBackingPlan> {
     if private_pages > MAX_PLANNED_PRIVATE_PAGES {
         return None;
     }
+    if private_pages <= crate::private_memory::MAX_REGION_PAGES {
+        let layout = PrivateBackingLayout::for_quota(private_pages);
+        let mut data_extents = 0;
+        let mut reserved_data = 0usize;
+        let mut page_table_bytes = 0usize;
+        let mut private_extents = 0;
+        for extent in layout.extents.into_iter().flatten() {
+            private_extents += 1;
+            let bytes = 1usize.checked_shl(u32::try_from(extent.size_bits).ok()?)?;
+            match extent.kind {
+                ExtentKind::PrivateData => {
+                    data_extents += 1;
+                    reserved_data = reserved_data.checked_add(bytes)?;
+                }
+                ExtentKind::PrivateTables => {
+                    page_table_bytes = page_table_bytes.checked_add(bytes)?;
+                }
+                ExtentKind::Static => unreachable!(),
+            }
+        }
+        let payload_bytes = layout.private_pages.checked_mul(GRANULE_BYTES)?;
+        let extent_descriptors = 1 + private_extents;
+        return Some(TaskBackingPlan {
+            private_pages,
+            data_extents,
+            extent_descriptors,
+            allocation_descriptors: layout.allocation_descriptors,
+            required_cslots: layout
+                .allocation_descriptors
+                .checked_add(extent_descriptors)?,
+            reserved_bytes: reserved_data.checked_add(page_table_bytes)?,
+            payload_bytes,
+            page_table_bytes,
+            alignment_waste: reserved_data.checked_sub(payload_bytes)?,
+        });
+    }
     let data_extents = private_pages.div_ceil(MAX_PRIVATE_EXTENT_PAGES);
     let leaf_tables = data_extents;
-    let allocation_descriptors = if private_pages == 0 {
-        0
-    } else {
-        private_pages + leaf_tables
-    };
-    let extent_descriptors = if private_pages == 0 {
-        1
-    } else {
-        1 + data_extents + leaf_tables
-    };
+    let allocation_descriptors = private_pages + leaf_tables;
+    let extent_descriptors = 1 + data_extents + leaf_tables;
     let payload_bytes = private_pages.checked_mul(GRANULE_BYTES)?;
     let page_table_bytes = leaf_tables.checked_mul(GRANULE_BYTES)?;
     let reserved_data = data_extents.checked_mul(MAX_PRIVATE_EXTENT_BYTES)?;
@@ -434,7 +537,7 @@ pub fn plan_task_backing(private_pages: usize) -> Option<TaskBackingPlan> {
         data_extents,
         extent_descriptors,
         allocation_descriptors,
-        required_cslots: allocation_descriptors + extent_descriptors,
+        required_cslots: allocation_descriptors.checked_add(extent_descriptors)?,
         reserved_bytes,
         payload_bytes,
         page_table_bytes,
@@ -744,6 +847,26 @@ pub enum PrivateObjectKind {
     LeafTable = 3,
 }
 
+const PRIVATE_STATE_NONE: u32 = u32::MAX;
+const PRIVATE_EXTENT_NONE: u16 = u16::MAX;
+
+pub(crate) struct PrivateAllocation {
+    arena: TaskArenaId,
+    position: u32,
+    cap: sel4::cap::Unspecified,
+    mapped: bool,
+}
+
+impl PrivateAllocation {
+    pub(crate) const fn cap(&self) -> sel4::cap::Unspecified {
+        self.cap
+    }
+
+    pub(crate) const fn mapped(&self) -> bool {
+        self.mapped
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ArenaAllocation(u32);
 
@@ -888,17 +1011,19 @@ impl ExtentRecord {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AllocationRecord {
     owner: u16,
+    extent: u16,
     serial: u32,
-    extent: u32,
     allocation: ArenaAllocation,
+    next_state: u32,
 }
 
 impl AllocationRecord {
     const EMPTY: Self = Self {
         owner: u16::MAX,
+        extent: PRIVATE_EXTENT_NONE,
         serial: 0,
-        extent: u32::MAX,
         allocation: ArenaAllocation::EMPTY,
+        next_state: PRIVATE_STATE_NONE,
     };
 
     const fn belongs_to(&self, id: TaskArenaId) -> bool {
@@ -933,6 +1058,10 @@ struct ArenaRecord {
     serial: u32,
     active: bool,
     slot_len: usize,
+    reusable_heads: [u32; 4],
+    in_flight_head: u32,
+    in_flight_granules: usize,
+    releasing: bool,
 }
 
 impl ArenaRecord {
@@ -941,6 +1070,10 @@ impl ArenaRecord {
             serial: 0,
             active: false,
             slot_len: 0,
+            reusable_heads: [PRIVATE_STATE_NONE; 4],
+            in_flight_head: PRIVATE_STATE_NONE,
+            in_flight_granules: 0,
+            releasing: false,
         }
     }
 
@@ -955,9 +1088,19 @@ impl ArenaRecord {
 const _: () = assert!(
     MAX_ROOT_CSLOTS.is_power_of_two()
         && ArenaAllocation::SLOT_BITS + 6 <= 25
-        && MAX_TASK_ALLOCATIONS <= u32::MAX as usize
-        && MAX_TASK_EXTENTS <= u32::MAX as usize
+        && MAX_TASK_ALLOCATIONS < u32::MAX as usize
+        && MAX_TASK_EXTENTS < u16::MAX as usize
 );
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PrivateRecordVisits {
+    reusable: usize,
+    mark: usize,
+    reset: usize,
+    commit: usize,
+    unwind: usize,
+}
+
 pub struct ObjectAllocator {
     slots: SlotPool,
     untypeds: [Option<UntypedRegion>; MAX_KERNEL_UNTYPEDS],
@@ -977,6 +1120,8 @@ pub struct ObjectAllocator {
     extents_reused: usize,
     last_paddr: usize,
     physical: ProvenanceTable,
+    #[cfg(test)]
+    private_visits: PrivateRecordVisits,
 }
 
 impl ObjectAllocator {
@@ -1000,6 +1145,14 @@ impl ObjectAllocator {
             extents_reused: 0,
             last_paddr: 0,
             physical: ProvenanceTable::new(),
+            #[cfg(test)]
+            private_visits: PrivateRecordVisits {
+                reusable: 0,
+                mark: 0,
+                reset: 0,
+                commit: 0,
+                unwind: 0,
+            },
         }
     }
 
@@ -1252,11 +1405,6 @@ impl ObjectAllocator {
             .slots
             .allocate_contiguous(count, self.slots_allocated)?;
         let paddr = region.paddr.saturating_add(start);
-        // Every page's provenance, recorded before the retype for the reason
-        // `allocate_from_global` states, and unwound as a unit. A queue whose
-        // pages are only partly recoverable is not a usable queue: the caller
-        // maps all `count` of them into one contiguous device area, so a hole
-        // would surface later as a mapping at the wrong address.
         for index in 0..count {
             if let Err(error) = self
                 .physical
@@ -1339,6 +1487,15 @@ impl ObjectAllocator {
             .ok_or(AllocError::UnknownArena(id))
     }
 
+    fn private_arena(&self, id: TaskArenaId) -> Result<&ArenaRecord, AllocError> {
+        let arena = self.arena(id)?;
+        if arena.releasing {
+            Err(AllocError::UnknownArena(id))
+        } else {
+            Ok(arena)
+        }
+    }
+
     pub fn task_static_backing(&self, id: TaskArenaId) -> Option<TaskStaticBacking> {
         self.arena(id).ok()?;
         task_static_backing_from_records(id, &self.allocations, &self.extents)
@@ -1349,6 +1506,110 @@ impl ObjectAllocator {
             .get_mut(id.index())
             .filter(|arena| arena.serial == id.serial && arena.active)
             .ok_or(AllocError::UnknownArena(id))
+    }
+
+    fn private_record_error() -> AllocError {
+        AllocError::ArenaSlotTableFull {
+            limit: MAX_TASK_ALLOCATIONS,
+        }
+    }
+
+    #[cfg(test)]
+    fn reset_private_record_visits(&mut self) {
+        self.private_visits = PrivateRecordVisits::default();
+    }
+
+    #[cfg(test)]
+    fn private_record_visits(&self) -> PrivateRecordVisits {
+        self.private_visits
+    }
+
+    fn push_reusable(&mut self, id: TaskArenaId, position: usize) -> Result<(), AllocError> {
+        let kind = self
+            .allocations
+            .get(position)
+            .filter(|record| {
+                record.belongs_to(id)
+                    && record.allocation.is_private()
+                    && record.allocation.is_reusable()
+                    && !record.allocation.is_in_flight()
+                    && record.next_state == PRIVATE_STATE_NONE
+            })
+            .ok_or_else(Self::private_record_error)?
+            .allocation
+            .private_kind();
+        let head = self.private_arena(id)?.reusable_heads[kind as usize];
+        self.allocations[position].next_state = head;
+        self.arena_mut(id)?.reusable_heads[kind as usize] = position as u32;
+        Ok(())
+    }
+
+    fn pop_reusable(
+        &mut self,
+        id: TaskArenaId,
+        kind: PrivateObjectKind,
+        size_bits: Option<usize>,
+    ) -> Result<Option<usize>, AllocError> {
+        let mut previous = PRIVATE_STATE_NONE;
+        let mut current = self.private_arena(id)?.reusable_heads[kind as usize];
+        let limit = self.private_arena(id)?.slot_len;
+        for _ in 0..limit {
+            if current == PRIVATE_STATE_NONE {
+                return Ok(None);
+            }
+            let position = current as usize;
+            #[cfg(test)]
+            {
+                self.private_visits.reusable += 1;
+            }
+            let record = self
+                .allocations
+                .get(position)
+                .filter(|record| {
+                    record.belongs_to(id)
+                        && record.allocation.is_private()
+                        && record.allocation.is_reusable()
+                        && !record.allocation.is_in_flight()
+                        && record.allocation.private_kind() == kind
+                })
+                .ok_or_else(Self::private_record_error)?;
+            let next = record.next_state;
+            if size_bits.is_none_or(|expected| record.allocation.size_bits() == expected) {
+                if previous == PRIVATE_STATE_NONE {
+                    self.arena_mut(id)?.reusable_heads[kind as usize] = next;
+                } else {
+                    self.allocations[previous as usize].next_state = next;
+                }
+                self.allocations[position].next_state = PRIVATE_STATE_NONE;
+                return Ok(Some(position));
+            }
+            previous = current;
+            current = next;
+        }
+        Err(Self::private_record_error())
+    }
+
+    fn private_record_mut(
+        &mut self,
+        id: TaskArenaId,
+        allocation: &PrivateAllocation,
+    ) -> Result<&mut AllocationRecord, AllocError> {
+        self.private_arena(id)?;
+        if allocation.arena != id {
+            return Err(Self::private_record_error());
+        }
+        self.allocations
+            .get_mut(allocation.position as usize)
+            .filter(|record| {
+                record.belongs_to(id)
+                    && record.allocation.is_private()
+                    && !record.allocation.is_reusable()
+                    && !record.allocation.is_in_flight()
+                    && record.allocation.private_kind() != PrivateObjectKind::Empty
+                    && record.allocation.slot() == allocation.cap.bits() as usize
+                    && record.next_state == PRIVATE_STATE_NONE
+            })
+            .ok_or_else(Self::private_record_error)
     }
 
     fn provision_extent(
@@ -1406,9 +1667,10 @@ impl ObjectAllocator {
         let position = self.allocation_position()?;
         self.allocations[position] = AllocationRecord {
             owner: id.index() as u16,
+            extent: extent.map_or(PRIVATE_EXTENT_NONE, |index| index as u16),
             serial: id.serial,
-            extent: extent.map_or(u32::MAX, |index| index as u32),
             allocation,
+            next_state: PRIVATE_STATE_NONE,
         };
         self.arena_mut(id)?.slot_len += 1;
         Ok(position)
@@ -1517,7 +1779,6 @@ impl ObjectAllocator {
         Ok(sel4::init_thread::Slot::from_index(slot))
     }
 
-    /// Root CSlots still available to issue.
     pub fn free_slots(&self) -> usize {
         self.slots.free()
     }
@@ -1535,7 +1796,6 @@ impl ObjectAllocator {
         self.extents.iter().filter(|entry| entry.is_none()).count()
     }
 
-    /// Return one root CSlot to the free bitmap after its capability is gone.
     pub fn release_slot(&mut self, slot: usize) -> bool {
         self.physical.remove(slot);
         self.slots.release(slot)
@@ -1545,34 +1805,18 @@ impl ObjectAllocator {
         Ok(self.arena(id)?.slot_len)
     }
 
-    /// Provision every private backing extent and CSlot before task publication.
     pub fn provision_private_backing(
         &mut self,
         id: TaskArenaId,
         quota: usize,
-        slot_count: usize,
     ) -> Result<(), AllocError> {
-        let quota = quota.min(crate::private_memory::MAX_REGION_PAGES);
-        if quota != 0 {
-            self.provision_extent(
-                id,
-                GRANULE_BYTES.trailing_zeros() as usize,
-                ExtentKind::PrivateTables,
-            )?;
-            let data_bytes = quota
-                .checked_mul(GRANULE_BYTES)
-                .ok_or(AllocError::ArenaTooSmall {
-                    size_bits: usize::BITS as usize,
-                    required: usize::MAX,
-                })?;
-            let data_bits =
-                usize::BITS as usize - data_bytes.max(1).saturating_sub(1).leading_zeros() as usize;
-            self.provision_extent(id, data_bits, ExtentKind::PrivateData)?;
-            if quota == MAX_PRIVATE_EXTENT_PAGES {
-                self.provision_extent(id, data_bits, ExtentKind::PrivateData)?;
+        self.private_arena(id)?;
+        provision_private_backing_with(quota, |request| match request {
+            PrivateBackingRequest::Extent { kind, size_bits } => {
+                self.provision_extent(id, size_bits, kind).map(|_| ())
             }
-        }
-        self.provision_private_slots(id, slot_count)
+            PrivateBackingRequest::Slots { count } => self.provision_private_slots(id, count),
+        })
     }
 
     pub fn provision_private_slots(
@@ -1580,20 +1824,21 @@ impl ObjectAllocator {
         id: TaskArenaId,
         count: usize,
     ) -> Result<(), AllocError> {
-        self.arena(id)?;
+        self.private_arena(id)?;
         if count > self.allocation_descriptors_free() || count > self.free_slots() {
-            return Err(AllocError::ArenaSlotTableFull {
-                limit: MAX_TASK_ALLOCATIONS,
-            });
+            return Err(Self::private_record_error());
         }
         for _ in 0..count {
             let slot = self.take_slot()?;
-            if let Err(error) =
-                self.push_allocation(id, None, ArenaAllocation::new(slot, 0, true, true))
-            {
-                self.slots.release(slot);
-                return Err(error);
-            }
+            let position =
+                match self.push_allocation(id, None, ArenaAllocation::new(slot, 0, true, true)) {
+                    Ok(position) => position,
+                    Err(error) => {
+                        self.slots.release(slot);
+                        return Err(error);
+                    }
+                };
+            self.push_reusable(id, position)?;
         }
         Ok(())
     }
@@ -1603,104 +1848,66 @@ impl ObjectAllocator {
         id: TaskArenaId,
         kind: PrivateObjectKind,
         size_bits: usize,
-    ) -> Result<(usize, usize, bool, bool), AllocError> {
-        if let Some((position, record)) =
-            self.allocations.iter_mut().enumerate().find(|(_, record)| {
-                record.belongs_to(id)
-                    && record.allocation.is_private()
-                    && record.allocation.is_reusable()
-                    && record.allocation.private_kind() == kind
-                    && record.allocation.size_bits() == size_bits
-            })
-        {
+    ) -> Result<(usize, usize, usize, bool, bool), AllocError> {
+        if let Some(position) = self.pop_reusable(id, kind, Some(size_bits))? {
+            let record = &mut self.allocations[position];
             let mapped = record.allocation.is_mapped();
+            let extent = record.extent as usize;
             record
                 .allocation
                 .set_private_state(kind, size_bits, false, mapped);
-            return Ok((position, record.extent as usize, true, mapped));
+            return Ok((position, extent, 0, true, mapped));
         }
-        let position = self
-            .allocations
-            .iter()
-            .position(|record| {
-                record.belongs_to(id)
-                    && record.allocation.is_private()
-                    && record.allocation.is_reusable()
-                    && record.allocation.private_kind() == PrivateObjectKind::Empty
-            })
-            .ok_or(AllocError::ArenaSlotTableFull {
-                limit: MAX_TASK_ALLOCATIONS,
-            })?;
         let extent_kind = if kind == PrivateObjectKind::LeafTable {
             ExtentKind::PrivateTables
         } else {
             ExtentKind::PrivateData
         };
-        let (extent, _) = self.extent_for_allocation(id, extent_kind, size_bits)?;
+        let (extent, watermark) = self.extent_for_allocation(id, extent_kind, size_bits)?;
+        let position = self
+            .pop_reusable(id, PrivateObjectKind::Empty, None)?
+            .ok_or_else(Self::private_record_error)?;
         let record = &mut self.allocations[position];
-        record.extent = extent as u32;
+        record.extent = extent as u16;
         record
             .allocation
             .set_private_state(kind, size_bits, false, false);
-        Ok((position, extent, false, false))
+        Ok((position, extent, watermark, false, false))
     }
 
-    pub fn acquire_private_in(
+    pub(crate) fn acquire_private_in<K: crate::private_memory::PrivateMemoryKernel>(
         &mut self,
         id: TaskArenaId,
         kind: PrivateObjectKind,
         blueprint: sel4::ObjectBlueprint,
-    ) -> Result<(sel4::cap::Unspecified, bool, bool), AllocError> {
+        kernel: &mut K,
+    ) -> Result<PrivateAllocation, AllocError> {
         debug_assert!(kind != PrivateObjectKind::Empty);
+        self.private_arena(id)?;
         #[cfg(slime_private_fail_second_allocation)]
-        if fail_private_allocation(
-            kind,
-            self.allocations
-                .iter()
-                .filter(|record| {
-                    record.belongs_to(id)
-                        && record.allocation.is_in_flight()
-                        && record.allocation.private_kind() == PrivateObjectKind::Granule
-                })
-                .count(),
-        ) {
+        if fail_private_allocation(kind, self.private_arena(id)?.in_flight_granules) {
             return Err(AllocError::Retype {
                 size_bits: blueprint.physical_size_bits(),
                 error: sel4::Error::NotEnoughMemory,
             });
         }
         let size_bits = blueprint.physical_size_bits();
-        let (position, extent_index, reused, mapped) =
+        let (position, extent_index, watermark, reused, mapped) =
             self.take_private_slot(id, kind, size_bits)?;
         let slot = self.allocations[position].allocation.slot();
         if !reused {
-            let (_, watermark) = self.extent_for_allocation(
-                id,
-                if kind == PrivateObjectKind::LeafTable {
-                    ExtentKind::PrivateTables
-                } else {
-                    ExtentKind::PrivateData
-                },
-                size_bits,
-            )?;
             let parent = self.extents[extent_index]
                 .expect("private extent exists")
                 .parent;
-            if let Err(error) = parent.untyped_retype(
-                &blueprint,
-                &sel4::init_thread::slot::CNODE
-                    .cap()
-                    .absolute_cptr_for_self(),
-                slot,
-                1,
-            ) {
-                self.allocations[position].extent = u32::MAX;
+            if let Err(error) = kernel.retype(parent, &blueprint, slot) {
+                self.allocations[position].extent = PRIVATE_EXTENT_NONE;
                 self.allocations[position].allocation.set_private_state(
                     PrivateObjectKind::Empty,
                     0,
                     true,
                     false,
                 );
+                self.push_reusable(id, position)?;
                 return Err(AllocError::Retype { size_bits, error });
             }
             let bytes = 1usize << size_bits;
@@ -1715,108 +1922,153 @@ impl ObjectAllocator {
             self.bytes_allocated += bytes;
             self.live_bytes += bytes;
         }
-        Ok((sel4::cap::Unspecified::from_bits(slot as _), reused, mapped))
+        Ok(PrivateAllocation {
+            arena: id,
+            position: position as u32,
+            cap: sel4::cap::Unspecified::from_bits(slot as _),
+            mapped,
+        })
     }
 
-    pub fn mark_private_in_flight(
+    pub(crate) fn mark_private_in_flight(
         &mut self,
         id: TaskArenaId,
-        cap: sel4::cap::Unspecified,
+        allocation: PrivateAllocation,
         mapped: bool,
     ) -> Result<(), AllocError> {
-        let slot = cap.bits() as usize;
-        let record = self
-            .allocations
-            .iter_mut()
-            .find(|record| record.belongs_to(id) && record.allocation.slot() == slot)
-            .ok_or(AllocError::ArenaSlotTableFull {
-                limit: MAX_TASK_ALLOCATIONS,
-            })?;
-        let kind = record.allocation.private_kind();
-        let size_bits = record.allocation.size_bits();
+        #[cfg(test)]
+        {
+            self.private_visits.mark += 1;
+        }
+        let position = allocation.position as usize;
+        let kind = self
+            .private_record_mut(id, &allocation)?
+            .allocation
+            .private_kind();
+        let size_bits = self.allocations[position].allocation.size_bits();
+        let head = self.private_arena(id)?.in_flight_head;
+        let record = &mut self.allocations[position];
         record
             .allocation
             .set_private_state(kind, size_bits, false, mapped);
         record.allocation.set_in_flight(true);
-        Ok(())
-    }
-
-    pub fn commit_private_transaction(&mut self, id: TaskArenaId) -> Result<(), AllocError> {
-        self.arena(id)?;
-        for record in &mut self.allocations {
-            if record.belongs_to(id) && record.allocation.is_in_flight() {
-                record.allocation.set_in_flight(false);
-            }
+        record.next_state = head;
+        let arena = self.arena_mut(id)?;
+        arena.in_flight_head = position as u32;
+        if kind == PrivateObjectKind::Granule {
+            arena.in_flight_granules += 1;
         }
         Ok(())
     }
 
-    /// Unmap and retain only the objects created by the failed transaction.
-    ///
-    /// Private extents are bump-allocated and may contain committed objects from
-    /// earlier growths. Revoking the parent would destroy those objects too. An
-    /// in-flight frame is unmapped and retained behind its existing capability;
-    /// a leaf table stays mapped because the retry targets the same fixed region.
-    pub fn unwind_private_transaction(&mut self, id: TaskArenaId) -> Result<(), AllocError> {
-        self.arena(id)?;
-        for record in &mut self.allocations {
-            if !record.belongs_to(id) || !record.allocation.is_in_flight() {
-                continue;
+    pub fn commit_private_transaction(&mut self, id: TaskArenaId) -> Result<(), AllocError> {
+        self.private_arena(id)?;
+        loop {
+            let head = self.private_arena(id)?.in_flight_head;
+            if head == PRIVATE_STATE_NONE {
+                return Ok(());
             }
+            let position = head as usize;
+            #[cfg(test)]
+            {
+                self.private_visits.commit += 1;
+            }
+            let record = self
+                .allocations
+                .get(position)
+                .filter(|record| {
+                    record.belongs_to(id)
+                        && record.allocation.is_private()
+                        && record.allocation.is_in_flight()
+                        && !record.allocation.is_reusable()
+                })
+                .ok_or_else(Self::private_record_error)?;
+            let next = record.next_state;
+            let kind = record.allocation.private_kind();
+            self.arenas[id.index()].in_flight_head = next;
+            self.allocations[position].next_state = PRIVATE_STATE_NONE;
+            self.allocations[position].allocation.set_in_flight(false);
+            if kind == PrivateObjectKind::Granule {
+                self.arenas[id.index()].in_flight_granules -= 1;
+            }
+        }
+    }
+
+    pub(crate) fn unwind_private_transaction<K: crate::private_memory::PrivateMemoryKernel>(
+        &mut self,
+        id: TaskArenaId,
+        kernel: &mut K,
+    ) -> Result<(), AllocError> {
+        self.private_arena(id)?;
+        loop {
+            let head = self.private_arena(id)?.in_flight_head;
+            if head == PRIVATE_STATE_NONE {
+                return Ok(());
+            }
+            let position = head as usize;
+            #[cfg(test)]
+            {
+                self.private_visits.unwind += 1;
+            }
+            let record = self
+                .allocations
+                .get(position)
+                .filter(|record| {
+                    record.belongs_to(id)
+                        && record.allocation.is_private()
+                        && record.allocation.is_in_flight()
+                        && !record.allocation.is_reusable()
+                })
+                .ok_or_else(Self::private_record_error)?;
+            let next = record.next_state;
             let slot = record.allocation.slot();
             let kind = record.allocation.private_kind();
             let size_bits = record.allocation.size_bits();
             let mapped = if kind == PrivateObjectKind::LeafTable {
                 true
             } else {
-                sel4::cap::UnspecifiedPage::from_bits(slot as _)
-                    .frame_unmap()
+                kernel
+                    .unmap_frame(sel4::cap::UnspecifiedPage::from_bits(slot as _))
                     .map_err(|error| AllocError::ArenaCleanup { slot, error })?;
                 false
             };
+            self.arenas[id.index()].in_flight_head = next;
+            if kind == PrivateObjectKind::Granule {
+                self.arenas[id.index()].in_flight_granules -= 1;
+            }
+            let record = &mut self.allocations[position];
+            record.next_state = PRIVATE_STATE_NONE;
             record
                 .allocation
                 .set_private_state(kind, size_bits, true, mapped);
+            self.push_reusable(id, position)?;
         }
-        Ok(())
     }
 
-    /// Return an acquired private object after its mapping failed.
-    ///
-    /// The capability still occupies its CSlot and the untyped watermark cannot
-    /// move backwards. Keep both ownership records intact and make the existing
-    /// unmapped object available to the next attempt.
-    pub fn reset_private_in(
+    pub(crate) fn reset_private_in(
         &mut self,
         id: TaskArenaId,
-        cap: sel4::cap::Unspecified,
-        kind: PrivateObjectKind,
-        size_bits: usize,
+        allocation: PrivateAllocation,
     ) -> Result<(), AllocError> {
-        let slot = cap.bits() as usize;
-        let position = self
-            .allocations
-            .iter()
-            .position(|record| {
-                record.belongs_to(id)
-                    && !record.allocation.is_reusable()
-                    && record.allocation.slot() == slot
-                    && record.allocation.private_kind() == kind
-                    && record.allocation.size_bits() == size_bits
-            })
-            .ok_or(AllocError::ArenaSlotTableFull {
-                limit: MAX_TASK_ALLOCATIONS,
-            })?;
-        self.allocations[position]
+        #[cfg(test)]
+        {
+            self.private_visits.reset += 1;
+        }
+        let position = allocation.position as usize;
+        let record = self.private_record_mut(id, &allocation)?;
+        let kind = record.allocation.private_kind();
+        let size_bits = record.allocation.size_bits();
+        record
             .allocation
             .set_private_state(kind, size_bits, true, false);
-        Ok(())
+        self.push_reusable(id, position)
     }
 
     /// Revoke every backing extent before returning any task-owned CSlot.
     /// Completed revokes are recorded so a later failure is retryable exactly once.
     pub fn release_task_arena(&mut self, id: TaskArenaId) -> Result<usize, AllocError> {
         let released = self.arena(id)?.slot_len;
+        self.arenas[id.index()].releasing = true;
         let root = sel4::init_thread::slot::CNODE.cap();
         for index in 0..self.extents.len() {
             let Some(extent) = self.extents[index] else {
@@ -1839,6 +2091,9 @@ impl ObjectAllocator {
             record.objects = 0;
             record.bytes = 0;
         }
+        self.arenas[id.index()].reusable_heads = [PRIVATE_STATE_NONE; 4];
+        self.arenas[id.index()].in_flight_head = PRIVATE_STATE_NONE;
+        self.arenas[id.index()].in_flight_granules = 0;
         for index in 0..self.allocations.len() {
             let record = self.allocations[index];
             if !record.belongs_to(id) {
@@ -1962,13 +2217,10 @@ impl ObjectAllocator {
                     self.slots.release(slot);
                 }
                 return Err(AllocError::Retype {
-                    size_bits: 12,
+                    size_bits: sel4::FrameObjectType::GRANULE.bits(),
                     error,
                 });
             }
-
-            completed += chunk_len;
-            self.devices[region_index].as_mut().unwrap().retyped += chunk_len;
             self.slots_allocated += chunk_len;
             self.slots_reused += reused;
             self.objects_allocated += chunk_len;
@@ -1997,6 +2249,10 @@ impl ObjectAllocator {
                 self.live_bytes -= GRANULE_BYTES;
             }
             anchor = Some(last);
+            completed += chunk_len;
+        }
+        if let Some(region) = self.devices[region_index].as_mut() {
+            region.retyped += count;
         }
 
         self.last_paddr = paddr;
@@ -2013,10 +2269,130 @@ mod tests {
     use super::{
         AllocError, AllocationRecord, ArenaAllocation, ArenaPlan, ArenaRecord, ExtentKind,
         ExtentRecord, MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PRIVATE_EXTENT_BYTES,
-        MAX_PRIVATE_EXTENT_PAGES, MAX_TASK_ALLOCATIONS, PROVENANCE_SLOTS, PrivateObjectKind,
-        ProvenanceTable, SlotPool, TaskArenaId, TaskBackingCapacity, TaskStaticBacking,
-        device_retype_plan, plan_allocation, plan_task_backing, task_static_backing_from_records,
+        MAX_PRIVATE_EXTENT_PAGES, MAX_ROOT_CSLOTS, MAX_TASK_ALLOCATIONS, ObjectAllocator,
+        PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE, PROVENANCE_SLOTS, PrivateBackingLayout,
+        PrivateBackingRequest, PrivateObjectKind, PrivateRecordVisits, ProvenanceTable, SlotPool,
+        TaskArenaId, TaskBackingCapacity, TaskStaticBacking, device_retype_plan, plan_allocation,
+        plan_task_backing, provision_private_backing_with, task_static_backing_from_records,
     };
+    use crate::private_memory::{PrivateMemoryKernel, Region, Table};
+    use sel4::CapTypeForObjectOfFixedSize;
+    extern crate std;
+    use std::vec::Vec;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum KernelRequest {
+        Retype { slot: usize, size_bits: usize },
+        MapFrame { slot: usize, vaddr: usize },
+        MapLeaf { slot: usize, vaddr: usize },
+        UnmapFrame { slot: usize },
+    }
+
+    #[derive(Default)]
+    struct RecordingPrivateKernel {
+        requests: Vec<KernelRequest>,
+        fail_retype_at: Option<usize>,
+        fail_map_frame_at: Option<usize>,
+        fail_unmap_at: Option<usize>,
+        retypes: usize,
+        frame_maps: usize,
+        unmaps: usize,
+    }
+
+    impl PrivateMemoryKernel for RecordingPrivateKernel {
+        fn retype(
+            &mut self,
+            _parent: sel4::cap::Untyped,
+            blueprint: &sel4::ObjectBlueprint,
+            slot: usize,
+        ) -> Result<(), sel4::Error> {
+            self.retypes += 1;
+            self.requests.push(KernelRequest::Retype {
+                slot,
+                size_bits: blueprint.physical_size_bits(),
+            });
+            if self.fail_retype_at == Some(self.retypes) {
+                Err(sel4::Error::NotEnoughMemory)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn map_frame(
+            &mut self,
+            frame: sel4::cap::UnspecifiedPage,
+            _vspace: sel4::cap::VSpace,
+            vaddr: usize,
+            _rights: sel4::CapRights,
+            _attrs: sel4::VmAttributes,
+        ) -> Result<(), sel4::Error> {
+            self.frame_maps += 1;
+            self.requests.push(KernelRequest::MapFrame {
+                slot: frame.bits() as usize,
+                vaddr,
+            });
+            if self.fail_map_frame_at == Some(self.frame_maps) {
+                Err(sel4::Error::NotEnoughMemory)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn map_leaf(
+            &mut self,
+            table: sel4::cap::UnspecifiedIntermediateTranslationTable,
+            _ty: sel4::TranslationTableObjectType,
+            _vspace: sel4::cap::VSpace,
+            vaddr: usize,
+            _attrs: sel4::VmAttributes,
+        ) -> Result<(), sel4::Error> {
+            self.requests.push(KernelRequest::MapLeaf {
+                slot: table.bits() as usize,
+                vaddr,
+            });
+            Ok(())
+        }
+
+        fn unmap_frame(&mut self, frame: sel4::cap::UnspecifiedPage) -> Result<(), sel4::Error> {
+            self.unmaps += 1;
+            self.requests.push(KernelRequest::UnmapFrame {
+                slot: frame.bits() as usize,
+            });
+            if self.fail_unmap_at == Some(self.unmaps) {
+                Err(sel4::Error::NotEnoughMemory)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn setup_private_growth_fixture() -> (ObjectAllocator, TaskArenaId) {
+        let mut allocator = ObjectAllocator::empty();
+        allocator.slots = SlotPool::new(1024..MAX_ROOT_CSLOTS).unwrap();
+        allocator.arenas[0] = ArenaRecord {
+            serial: 1,
+            active: true,
+            ..ArenaRecord::empty()
+        };
+        let id = allocator.arenas[0].id(0);
+        let mut extent_position = 0;
+        provision_private_backing_with(512, |request| match request {
+            PrivateBackingRequest::Extent { kind, size_bits } => {
+                let slot = allocator.take_slot()?;
+                let mut extent =
+                    ExtentRecord::new(sel4::cap::Untyped::from_bits(slot as _), size_bits);
+                extent.assign(id.index(), id.serial, kind);
+                allocator.extents[extent_position] = Some(extent);
+                extent_position += 1;
+                Ok(())
+            }
+            PrivateBackingRequest::Slots { count } => allocator.provision_private_slots(id, count),
+        })
+        .unwrap();
+        allocator.reset_private_record_visits();
+        (allocator, id)
+    }
+
     /// Physical provenance is retained for a live frame, dropped when the frame
     /// is released, and refused rather than lost when the table is full.
     ///
@@ -2155,6 +2531,213 @@ mod tests {
     }
 
     #[test]
+    fn runtime_plan_matches_provisioning_trace() {
+        for quota in 0..=crate::private_memory::MAX_REGION_PAGES {
+            let mut trace = [None; 4];
+            let mut len = 0;
+            provision_private_backing_with(quota, |request| {
+                trace[len] = Some(request);
+                len += 1;
+                Ok(())
+            })
+            .unwrap();
+            let plan = plan_task_backing(quota).unwrap();
+            let mut reserved = 0;
+            let mut table = 0;
+            let mut data = 0;
+            let mut allocations = 0;
+            let mut extents = 1;
+            for request in trace.into_iter().take(len).flatten() {
+                match request {
+                    PrivateBackingRequest::Extent { kind, size_bits } => {
+                        let bytes = 1usize << size_bits;
+                        reserved += bytes;
+                        extents += 1;
+                        if kind == ExtentKind::PrivateTables {
+                            table += bytes;
+                        } else {
+                            data += 1;
+                        }
+                    }
+                    PrivateBackingRequest::Slots { count } => allocations = count,
+                }
+            }
+            assert_eq!(plan.data_extents, data);
+            assert_eq!(plan.extent_descriptors, extents);
+            assert_eq!(plan.allocation_descriptors, allocations);
+            assert_eq!(plan.required_cslots, allocations + extents);
+            assert_eq!(plan.reserved_bytes, reserved);
+            assert_eq!(plan.page_table_bytes, table);
+        }
+        let requests = |quota| {
+            let mut trace = [None; 4];
+            let mut len = 0;
+            provision_private_backing_with(quota, |request| {
+                trace[len] = Some(request);
+                len += 1;
+                Ok(())
+            })
+            .unwrap();
+            (trace, len)
+        };
+        let (zero, zero_len) = requests(0);
+        assert_eq!(zero_len, 1);
+        assert_eq!(zero[0], Some(PrivateBackingRequest::Slots { count: 0 }));
+        let (full, full_len) = requests(512);
+        assert_eq!(full_len, 4);
+        assert_eq!(
+            full,
+            [
+                Some(PrivateBackingRequest::Extent {
+                    kind: ExtentKind::PrivateTables,
+                    size_bits: 12,
+                }),
+                Some(PrivateBackingRequest::Extent {
+                    kind: ExtentKind::PrivateData,
+                    size_bits: 21,
+                }),
+                Some(PrivateBackingRequest::Extent {
+                    kind: ExtentKind::PrivateData,
+                    size_bits: 21,
+                }),
+                Some(PrivateBackingRequest::Slots { count: 514 }),
+            ]
+        );
+        assert_eq!(
+            PrivateBackingLayout::for_quota(513),
+            PrivateBackingLayout::for_quota(512)
+        );
+        assert_eq!(
+            PrivateBackingLayout::for_quota(usize::MAX),
+            PrivateBackingLayout::for_quota(512)
+        );
+        assert_ne!(
+            plan_task_backing(513).unwrap(),
+            plan_task_backing(512).unwrap()
+        );
+        assert_eq!(
+            plan_task_backing(512),
+            Some(super::TaskBackingPlan {
+                private_pages: 512,
+                data_extents: 2,
+                extent_descriptors: 4,
+                allocation_descriptors: 514,
+                required_cslots: 518,
+                reserved_bytes: 4_198_400,
+                payload_bytes: 2_097_152,
+                page_table_bytes: 4096,
+                alignment_waste: 2_097_152,
+            })
+        );
+    }
+
+    #[test]
+    fn private_provisioning_stops_at_first_failure() {
+        for quota in [0, 3, 512] {
+            let mut expected = [None; 4];
+            let mut request_count = 0;
+            provision_private_backing_with(quota, |request| {
+                expected[request_count] = Some(request);
+                request_count += 1;
+                Ok(())
+            })
+            .unwrap();
+            for failing in 0..request_count {
+                let mut actual = [None; 4];
+                let mut called = 0;
+                let error = provision_private_backing_with(quota, |request| {
+                    actual[called] = Some(request);
+                    let current = called;
+                    called += 1;
+                    if current == failing {
+                        Err(AllocError::NoKernelUntyped)
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+                assert_eq!(error, AllocError::NoKernelUntyped);
+                assert_eq!(called, failing + 1);
+                assert_eq!(actual[..called], expected[..called]);
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_capacity_rejects_old_reservation_limits() {
+        let plan = plan_task_backing(512).unwrap();
+        let exact = TaskBackingCapacity {
+            plan,
+            static_backing: TaskStaticBacking {
+                allocation_descriptors: 8,
+                reserved_bytes: 16_384,
+            },
+            holders: 1,
+            cslots_available: 526,
+            allocation_descriptors_available: 522,
+            extent_descriptors_available: 4,
+            ordinary_bytes_available: 4_214_784,
+            root_image_bytes: 0,
+            root_stack_bytes: 0,
+            root_heap_bytes: 0,
+        };
+        assert_eq!(exact.requirements().unwrap().cslots, 526);
+        assert!(exact.fits());
+        assert!(
+            !TaskBackingCapacity {
+                cslots_available: 525,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
+                allocation_descriptors_available: 521,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
+                extent_descriptors_available: 3,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
+                ordinary_bytes_available: 4_214_783,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
+                cslots_available: 524,
+                allocation_descriptors_available: 521,
+                extent_descriptors_available: 3,
+                ordinary_bytes_available: 2_117_632,
+                ..exact
+            }
+            .fits()
+        );
+    }
+
+    #[test]
+    fn backing_slots_scale_with_quota_and_cover_both_full_window_shapes() {
+        assert_eq!(PrivateBackingLayout::for_quota(0).allocation_descriptors, 0);
+        assert_eq!(PrivateBackingLayout::for_quota(8).allocation_descriptors, 9);
+        assert_eq!(
+            PrivateBackingLayout::for_quota(512).allocation_descriptors,
+            514
+        );
+        assert_eq!(
+            PrivateBackingLayout::for_quota(2048).allocation_descriptors,
+            514
+        );
+    }
+
+    #[test]
     fn freed_root_slot_is_the_next_slot_reused() {
         let mut slots = SlotPool::new(100..104).unwrap();
         assert_eq!(slots.allocate(0), Ok((100, false)));
@@ -2220,8 +2803,8 @@ mod tests {
         assert!(four_reserved < 2 * 1024 * 1024 * 1024usize);
 
         let current = plan_task_backing(MAX_PRIVATE_EXTENT_PAGES).unwrap();
-        assert_eq!(current.data_extents, 1);
-        assert_eq!(current.reserved_bytes, MAX_PRIVATE_EXTENT_BYTES + 4096);
+        assert_eq!(current.data_extents, 2);
+        assert_eq!(current.reserved_bytes, 2 * MAX_PRIVATE_EXTENT_BYTES + 4096);
         assert!(plan_task_backing(MAX_PLANNED_PRIVATE_PAGES + 1).is_none());
     }
 
@@ -2288,11 +2871,12 @@ mod tests {
         let other = TaskArenaId::from_raw(3, 7);
         let stale = TaskArenaId::from_raw(2, 8);
         let record =
-            |owner: TaskArenaId, extent: u32, allocation: ArenaAllocation| AllocationRecord {
+            |owner: TaskArenaId, extent: u16, allocation: ArenaAllocation| AllocationRecord {
                 owner: owner.index as u16,
-                serial: owner.serial,
                 extent,
+                serial: owner.serial,
                 allocation,
+                next_state: PRIVATE_STATE_NONE,
             };
         let mut private_empty = ArenaAllocation::new(12, 0, true, true);
         private_empty.set_private_state(PrivateObjectKind::Empty, 0, true, false);
@@ -2302,8 +2886,12 @@ mod tests {
         private_leaf.set_private_state(PrivateObjectKind::LeafTable, 12, true, true);
         let allocations = [
             record(id, 0, ArenaAllocation::new(10, 12, false, false)),
-            record(id, u32::MAX, ArenaAllocation::new(11, 0, false, false)),
-            record(id, u32::MAX, private_empty),
+            record(
+                id,
+                PRIVATE_EXTENT_NONE,
+                ArenaAllocation::new(11, 0, false, false),
+            ),
+            record(id, PRIVATE_EXTENT_NONE, private_empty),
             record(id, 1, private_frame),
             record(id, 2, private_leaf),
             record(other, 0, ArenaAllocation::new(15, 12, false, false)),
@@ -2432,6 +3020,155 @@ mod tests {
     }
 
     #[test]
+    fn single_page_growth_visits_only_selected_records() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture();
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 512);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel::default();
+                for page in 0..512 {
+                    assert_eq!(
+                        table.grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            1,
+                            &mut kernel,
+                        ),
+                        Ok(page)
+                    );
+                }
+                assert_eq!(region.base(), 0x1000_0000);
+                assert_eq!(region.pages(), 512);
+                assert_eq!(region.base_frames(), 512);
+                assert_eq!(region.large_frames(), 0);
+                assert_eq!(region.leaf_tables(), 1);
+                assert_eq!(table.total_pages(), 512);
+                assert_eq!(table.grants(), 512);
+                assert_eq!(table.grown_pages(), 512);
+                assert_eq!(
+                    allocator.private_record_visits(),
+                    PrivateRecordVisits {
+                        reusable: 513,
+                        mark: 513,
+                        reset: 0,
+                        commit: 513,
+                        unwind: 0,
+                    }
+                );
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::Retype { .. }))
+                        .count(),
+                    513
+                );
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::MapFrame { .. }))
+                        .count(),
+                    512
+                );
+                assert!(
+                    !kernel
+                        .requests
+                        .iter()
+                        .any(|request| matches!(request, KernelRequest::UnmapFrame { .. }))
+                );
+                let records: Vec<_> = allocator
+                    .allocations
+                    .iter()
+                    .filter(|record| record.belongs_to(arena) && record.allocation.is_private())
+                    .collect();
+                assert_eq!(records.len(), 514);
+                assert_eq!(
+                    records
+                        .iter()
+                        .filter(
+                            |record| record.allocation.private_kind() == PrivateObjectKind::Empty
+                        )
+                        .count(),
+                    1
+                );
+                assert!(
+                    records
+                        .iter()
+                        .filter(|record| {
+                            record.allocation.private_kind() != PrivateObjectKind::Empty
+                        })
+                        .all(|record| record.allocation.is_mapped()
+                            && !record.allocation.is_reusable())
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn private_state_indices_reject_wrong_ownership() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture();
+                let valid = allocator.arenas[arena.index()].reusable_heads
+                    [PrivateObjectKind::Empty as usize];
+                let snapshot = allocator.allocations[valid as usize];
+                allocator.allocations[valid as usize].owner = 1;
+                let mut kernel = RecordingPrivateKernel::default();
+                assert!(matches!(
+                    allocator.acquire_private_in(
+                        arena,
+                        PrivateObjectKind::Granule,
+                        sel4::cap_type::Granule::object_blueprint(),
+                        &mut kernel,
+                    ),
+                    Err(AllocError::ArenaSlotTableFull {
+                        limit: MAX_TASK_ALLOCATIONS,
+                    })
+                ));
+                allocator.allocations[valid as usize] = snapshot;
+                assert_eq!(
+                    allocator.arenas[arena.index()].reusable_heads
+                        [PrivateObjectKind::Empty as usize],
+                    valid
+                );
+                allocator.arenas[arena.index()].releasing = true;
+                assert_eq!(
+                    allocator.provision_private_backing(arena, 1),
+                    Err(AllocError::UnknownArena(arena))
+                );
+                assert_eq!(
+                    allocator.commit_private_transaction(arena),
+                    Err(AllocError::UnknownArena(arena))
+                );
+                assert_eq!(
+                    allocator.unwind_private_transaction(arena, &mut kernel),
+                    Err(AllocError::UnknownArena(arena))
+                );
+                assert!(kernel.requests.is_empty());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn one_page_growth_cost_is_not_hidden_by_large_frames() {
         const PAGES_256_MIB: usize = 256 * 1024 * 1024 / 4096;
         let holder = plan_task_backing(PAGES_256_MIB).unwrap();
@@ -2456,70 +3193,164 @@ mod tests {
         assert!(allocation.is_mapped());
     }
 
-    /// A failed transaction must be distinguishable from a committed one at the
-    /// record level, because that distinction is the whole rollback boundary: a
-    /// private extent is bump-allocated and holds earlier growths' objects, so
-    /// an unwind that could not tell them apart would have to revoke the parent
-    /// and destroy pages the caller still holds.
     #[test]
     fn only_in_flight_records_are_the_failed_transactions_own_objects() {
-        let mut committed = ArenaAllocation::new(40, 12, true, false);
-        committed.set_private_state(PrivateObjectKind::Granule, 12, false, true);
-        let mut in_flight = ArenaAllocation::new(41, 12, true, false);
-        in_flight.set_private_state(PrivateObjectKind::Granule, 12, false, true);
-        in_flight.set_in_flight(true);
-
-        assert!(!committed.is_in_flight());
-        assert!(in_flight.is_in_flight());
-
-        // Commit clears the marker without touching ownership: the object stays
-        // held, mapped, and outside any later transaction's reach.
-        in_flight.set_in_flight(false);
-        assert!(!in_flight.is_in_flight());
-        assert!(!in_flight.is_reusable());
-        assert!(in_flight.is_mapped());
-        assert_eq!(in_flight.private_kind(), PrivateObjectKind::Granule);
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture();
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 512);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel::default();
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        1,
+                        &mut kernel,
+                    ),
+                    Ok(0)
+                );
+                kernel.fail_retype_at = Some(kernel.retypes + 2);
+                let error = table
+                    .grow_with_kernel(&mut allocator, arena, vspace, &mut region, 2, &mut kernel)
+                    .unwrap_err();
+                assert!(matches!(
+                    error,
+                    crate::private_memory::GrowError::Frames { allocated: 1, .. }
+                ));
+                assert_eq!(region.pages(), 1);
+                assert_eq!(region.base_frames(), 1);
+                assert_eq!(region.leaf_tables(), 1);
+                assert_eq!(table.total_pages(), 1);
+                assert_eq!(table.grants(), 1);
+                assert_eq!(
+                    allocator.arenas[arena.index()].in_flight_head,
+                    PRIVATE_STATE_NONE
+                );
+                assert_eq!(allocator.arenas[arena.index()].in_flight_granules, 0);
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::UnmapFrame { .. }))
+                        .count(),
+                    1
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
-    /// An unwound frame keeps its capability and its type, and becomes
-    /// available to the retry as an *unmapped* object of that type. Marking it
-    /// `Empty` instead would tell the allocator the CSlot is free to retype
-    /// into while the kernel still holds a capability there, and the pinned
-    /// seL4 requires an empty destination slot — so the retry would be refused
-    /// rather than served.
     #[test]
     fn an_unwound_frame_stays_owned_and_typed_for_the_retry() {
-        let mut frame = ArenaAllocation::new(42, 12, true, false);
-        frame.set_private_state(PrivateObjectKind::Granule, 12, false, true);
-        frame.set_in_flight(true);
-
-        // What `unwind_private_transaction` records after the kernel unmap.
-        frame.set_private_state(PrivateObjectKind::Granule, 12, true, false);
-
-        assert!(frame.is_reusable());
-        assert!(!frame.is_mapped());
-        assert!(!frame.is_in_flight());
-        assert!(frame.is_private());
-        assert_eq!(frame.slot(), 42);
-        assert_eq!(frame.size_bits(), 12);
-        assert_ne!(frame.private_kind(), PrivateObjectKind::Empty);
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture();
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 512);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel {
+                    fail_retype_at: Some(3),
+                    ..RecordingPrivateKernel::default()
+                };
+                assert!(
+                    table
+                        .grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            2,
+                            &mut kernel,
+                        )
+                        .is_err()
+                );
+                let retypes_after_failure = kernel.retypes;
+                kernel.fail_retype_at = None;
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        2,
+                        &mut kernel,
+                    ),
+                    Ok(0)
+                );
+                assert_eq!(kernel.retypes, retypes_after_failure + 1);
+                assert_eq!(region.pages(), 2);
+                assert_eq!(region.leaf_tables(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
-    /// A leaf table is retained mapped rather than unmapped: the region's base
-    /// is fixed, so the retry maps its pages through the same table, and
-    /// unmapping it would discard translation structure the committed pages
-    /// below it are still reached through.
     #[test]
     fn an_unwound_leaf_table_is_retained_mapped() {
-        let mut table = ArenaAllocation::new(43, 12, true, false);
-        table.set_private_state(PrivateObjectKind::LeafTable, 12, false, true);
-        table.set_in_flight(true);
-
-        table.set_private_state(PrivateObjectKind::LeafTable, 12, true, true);
-
-        assert!(table.is_reusable());
-        assert!(table.is_mapped());
-        assert!(!table.is_in_flight());
-        assert_eq!(table.private_kind(), PrivateObjectKind::LeafTable);
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture();
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 512);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel {
+                    fail_retype_at: Some(3),
+                    ..RecordingPrivateKernel::default()
+                };
+                assert!(
+                    table
+                        .grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            2,
+                            &mut kernel,
+                        )
+                        .is_err()
+                );
+                assert_eq!(region.pages(), 0);
+                assert_eq!(region.leaf_tables(), 1);
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
+                        .count(),
+                    1
+                );
+                kernel.fail_retype_at = None;
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        2,
+                        &mut kernel,
+                    ),
+                    Ok(0)
+                );
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
+                        .count(),
+                    1
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
