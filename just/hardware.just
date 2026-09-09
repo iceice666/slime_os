@@ -130,6 +130,12 @@ nt98690_payload_check:
 nt98690_boot_check serial="": nt98690_payload_check
     python3 scripts/check/check-nt98690-boot.py {{ if serial == "" { "" } else { "--serial " + serial } }}
 
+# Host-only model of the production bench functions. It opens no serial port
+# and verifies bounded failure cleanup, readback checks, and channel rejection.
+[group('hardware')]
+nt98690_bench_probe_check:
+    python3 scripts/check/check-nt98690-bench-probe.py
+
 # Bring-up aid, not a gate: print whatever the H1V1's UART0 emits and assert
 # nothing. It answers the one question `nt98690_boot_check` cannot when the wire
 # is silent — whether any byte reaches this host — and it is how the vendor

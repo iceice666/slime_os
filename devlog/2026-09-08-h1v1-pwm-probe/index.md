@@ -92,3 +92,26 @@ restored to its surveyed value, `reset`, and the vendor banner.
 - The write list both runs were held to: `python3 scripts/check/check-nt98690-boot.py --dry-run`.
 - The lane's plan of record and the vendor sources for every register:
   [`../2026-09-07-h1v1-esc-lane/plan.md`](../2026-09-07-h1v1-esc-lane/plan.md).
+
+## Corrections
+
+**2026-09-09 — the clean-run readback claim above is too broad.** The immutable
+[`esc-clean-run.log`](esc-clean-run.log) directly records the initial PERIOD and EXT_PERIOD
+readbacks, the later pulse-update write commands, the final DISABLE followed by an ENABLE-state
+readback showing channel 0 off, the shared-setting restoration write commands, and the returning
+U-Boot banner. It does **not** contain a post-write readback for every pulse update or for every
+shared clock/pinmux restoration. Therefore the Summary's “every register read back the value it
+was given”, Investigation step 8's “put every shared word back exactly as found”, and Verification's
+“shared words restored” are not all established by those raw bytes. The historical board run still
+establishes only what the log records plus the separately labelled operator observations.
+
+The bench probe now verifies each stable R/W clock, divider, pinmux, control, PERIOD, and EXT_PERIOD
+setting after writing; verifies target disable through the live ENABLE register; verifies each
+applicable shared-field restoration independently; preserves a primary failure alongside cleanup
+failures; and reports an unconfirmed disable as a possible live output requiring manual actuator
+power removal or board handling. `PWM_LOAD` is self-clearing, so the checker does not fabricate a
+LOAD readback claim: register readback still does not prove latch acceptance, waveform, actuator
+response, or physical stop. The 2026-09-09 evidence is the host-only production-function regression
+`just nt98690_bench_probe_check`; no revised `--pwm-probe` or `--gpio-probe` board run was performed.
+The original UART logs remain byte-for-byte unchanged. IO8 and P6.D remain outside this correction
+and are not completed by host tests.
