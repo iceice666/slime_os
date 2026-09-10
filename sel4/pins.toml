@@ -406,9 +406,11 @@ pwm_probe_observed = "2026-09-08"
 # Nothing in this board's boot path configures the port: U-Boot compiles no
 # driver past its console and never calls its own `serial_preinit`, and Linux's
 # `uartII{pinmux = <0x0>}` routes no UART6-9 pad. What the words hold at the
-# prompt are bench facts -- absent until the UART probe has observed them,
-# exactly as the PWM route was. The pad's position is the diagram's fact and the
-# probe's confirmation.
+# prompt are bench facts, observed by the UART probe on 2026-09-10
+# (`devlog/2026-09-10-h1v1-uart-probe/`): the ground radio decoded ten
+# heartbeats through a wire on header pin 13, which is what places P_GPIO[8]
+# there. No meter reading was taken on that pin; the pad-level toggles are in
+# the same entry's GPIO transcript.
 uart7_base = "0x2f0136000"
 uart7_reg_shift = 2
 uart7_reg_io_width = 4
@@ -417,6 +419,14 @@ uart7_clock_divider = 9
 uart7_clock_hz = 48000000
 uart7_baud = 57600
 uart7_divisor = 52
+uart7_pad = "P_GPIO8"
+uart7_pad_header = "40-pin GPIO header pin 13"
+# The words the probe surveyed before writing anything: every UART divider
+# field already 9, the UART7 gate clear and its reset released, no UART mux
+# routed, every P_GPIO in GPIO mode.
+uart7_clock_at_prompt = { divider = "0x09090909", gate = "0x00007060", reset = "0xffffffb7" }
+uart7_mux_at_prompt = { top13 = "0x00000001", top14 = "0x00000000", pgpio_function = "0xffffffff" }
+uart7_probe_observed = "2026-09-10"
 boot_files = [
     "slime-nt98690-probe.bin",
     "slime-sel4-sample-ns02201-h1v1.bin",

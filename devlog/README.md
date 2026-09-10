@@ -415,3 +415,4 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-07 | [Driving a motor ESC from the H1V1: opening the lane and its bench probe](2026-09-07-h1v1-esc-lane/index.md) | Decision | Proposed | P6.PWM, P6.PWM.A, IO8, P6.D |
 | 2026-09-08 | [The H1V1 PWM probe: an ESC driven from the vendor prompt, and the pad found](2026-09-08-h1v1-pwm-probe/index.md) | Audit | Monitoring | P6.PWM.A, P6.PWM |
 | 2026-09-10 | [A MAVLink heartbeat from the H1V1: opening the lane and its bench probe](2026-09-10-h1v1-mavlink-lane/index.md) | Decision | Proposed | P6.MAV, P6.MAV.A, IO9, P6.E |
+| 2026-09-10 | [The H1V1 UART7 probe: heartbeats decoded on the ground radio, and the pad placed](2026-09-10-h1v1-uart-probe/index.md) | Audit | Verified | P6.MAV.A, P6.MAV |

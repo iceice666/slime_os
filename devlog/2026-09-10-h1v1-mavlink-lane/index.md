@@ -134,3 +134,16 @@ marker contract, so it will be its own checker.
   `python3 scripts/check/check-nt98690-boot.py --dry-run --uart-probe`.
 - Every scenario added to `just nt98690_bench_probe_check` was confirmed to fail against a
   reverted fix; two were rewritten when that check showed they did not cover what they claimed.
+
+## Corrections
+
+- **2026-09-10** — The bench milestone closed the same day. Ten heartbeats transmitted from the
+  vendor prompt were decoded on the ground radio, byte-identical to the encoder's output, and
+  every shared word was restored with readback. Two of this entry's expectations were wrong and
+  one was over-strict: the probe required the datasheet's `0xC1` from the interrupt-identity
+  register after enabling the FIFOs, and this UART answers `0x81`; the GPIO probe refused
+  P_GPIO[8] because it had borrowed the PWM probe's channel list; and the pad's connector
+  position was settled by the decoded run's wiring rather than by the meter reading the bench
+  sheet asked for, which was not taken. Evidence and the pinned facts:
+  [the audit entry](../2026-09-10-h1v1-uart-probe/index.md).
+

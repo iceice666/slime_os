@@ -695,7 +695,11 @@ def check_profile(pins: dict[str, object]) -> None:
     # prompt that a later bring-up must program for itself rather than inherit.
     # Empty until that run happens, and every observed key must then be present:
     # the same rule `observed_pwm_routes` enforces, for the same reason.
-    observed_uart_routes: dict[int, tuple[str, str, str]] = {}
+    observed_uart_routes: dict[int, tuple[str, str, str]] = {
+        # Placed by the run whose decoded heartbeats came through a wire on
+        # pin 13, not by a meter: none was used that day.
+        7: ("P_GPIO8", "40-pin GPIO header pin 13", "2026-09-10"),
+    }
     uart7_observed_keys = (
         "uart7_pad",
         "uart7_pad_header",
@@ -725,6 +729,13 @@ def check_profile(pins: dict[str, object]) -> None:
             fail(
                 f"ns02201-h1v1 uart7_probe_observed must be {expected_date}; a new date "
                 "needs a new route entry"
+            )
+        if expected_pad not in header_pins or (
+            f"40-pin GPIO header pin {header_pins[expected_pad]}" != expected_header
+        ):
+            fail(
+                f"ns02201-h1v1 header_pins and the observed UART route disagree about "
+                f"where {expected_pad} sits"
             )
         for key, fields in (
             ("uart7_clock_at_prompt", ("divider", "gate", "reset")),
