@@ -182,7 +182,8 @@ class Uart16550Model:
     """A 16550 far enough to hold the probe honest about its own sequence.
 
     Three behaviours are what the scenarios turn on: FCR does not read back and
-    IIR reports the FIFO state instead, a read of index 0 pops the receive FIFO
+    IIR reports the FIFO state instead (as bit 7 alone, which is what this board
+    answered), a read of index 0 pops the receive FIFO
     rather than returning what was transmitted, and the block answers nothing at
     all while its clock is gated or its reset is asserted. Each of those is a way
     a plausible-looking probe would be wrong on hardware.
@@ -222,7 +223,8 @@ class Uart16550Model:
         if index == PROBE.UART_IER:
             return self.dlm if self.dlab else self.ier
         if index == PROBE.UART_IIR:
-            return PROBE.UART_IIR_FIFO_ENABLED if self.fifo_enabled else 0x01
+            # 0x81 is what the board reported after FCR=0x07, not the datasheet's 0xC1.
+            return (PROBE.UART_IIR_FIFO_BIT | 0x01) if self.fifo_enabled else 0x01
         if index == PROBE.UART_LCR:
             return self.lcr
         if index == PROBE.UART_MCR:
@@ -924,6 +926,9 @@ def line_configuration_follows_uboot() -> None:
             (PROBE.UART_LCR, PROBE.UART_LCR_DLAB_8N1),
         )
     ]
+    # The board's own IIR encoding must satisfy the check; the datasheet's must not be required.
+    if not console.uart.fifo_enabled:
+        fail("the line configuration did not enable the FIFOs")
     if any(step is None for step in order) or order != sorted(order):
         fail(f"the line was not configured in U-Boot's order: {order}")
     if console.uart.dll != 52 or console.uart.dlm != 0:

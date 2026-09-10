@@ -362,7 +362,12 @@ UART_LSR = 5
 UART_LCR_DLAB_8N1 = 0x83
 UART_LCR_8N1 = 0x03
 UART_FCR_ENABLE_RESET = 0x07  # UART_FCR_DEFVAL: enable both FIFOs and reset them
-UART_IIR_FIFO_ENABLED = 0xC1
+#: What IIR reports once FCR bit 0 is set. The generic 16550A answers 0xC1;
+#: this UART answered 0x81 on the board (2026-09-10) -- bit 7 alone, the
+#: encoding Linux's port classifier files under `16550` rather than `16550A`.
+#: Only bit 7 is required: FCR does not read back, this is the one sign the
+#: write landed, and nothing here depends on the FIFO being usable.
+UART_IIR_FIFO_BIT = 0x80
 UART_LSR_THRE = 1 << 5
 UART_LSR_TEMT = 1 << 6
 #: The only LSR bits this probe compares. P_GPIO[9] stays in GPIO mode because
@@ -1100,7 +1105,7 @@ def uart_probe_plan(
         f"      mw.l {uart7_register(UART_IER):#x} 0x0; read back and compare",
         f"      mw.l {uart7_register(UART_MCR):#x} 0x0; read back and compare",
         f"      mw.l {uart7_register(UART_IIR):#x} {UART_FCR_ENABLE_RESET:#x}"
-        f"       # FCR is write-only; IIR must then read {UART_IIR_FIFO_ENABLED:#04x}",
+        f"       # FCR is write-only; IIR bit 7 ({UART_IIR_FIFO_BIT:#04x}) must then read set",
         f"      mw.l {uart7_register(UART_LCR):#x} {UART_LCR_8N1:#x}; read back and compare",
         f"      mw.l {uart7_register(UART_LCR):#x} {UART_LCR_DLAB_8N1:#x}   # DLAB",
         f"      mw.l {uart7_register(UART_THR):#x} {divisor & 0xFF:#x}; read back and compare",
@@ -1590,8 +1595,8 @@ def program_uart7_line(console: Console, prompt: str, divisor: int) -> None:
 
     `ns16550_init` drains the shifter first, then quiesces interrupts and modem
     control before touching the line: a divisor loaded while a byte is in flight
-    corrupts it. FCR does not read back, so IIR's FIFO-enabled encoding is what
-    confirms it.
+    corrupts it. FCR does not read back, so IIR's FIFO bit is what
+    confirms the write landed.
     """
     poll_lsr(console, prompt, UART_LSR_TEMT, "before configuring the line")
     write_and_verify(console, prompt, uart7_register(UART_IER), 0, 0xFF)
@@ -1603,9 +1608,7 @@ def program_uart7_line(console: Console, prompt: str, divisor: int) -> None:
         REGISTER_COMMAND_SECONDS,
         fail,
     )
-    verify_register(
-        console, prompt, uart7_register(UART_IIR), UART_IIR_FIFO_ENABLED, UART_IIR_FIFO_ENABLED
-    )
+    verify_register(console, prompt, uart7_register(UART_IIR), UART_IIR_FIFO_BIT, UART_IIR_FIFO_BIT)
     write_and_verify(console, prompt, uart7_register(UART_LCR), UART_LCR_8N1, 0xFF)
     write_and_verify(console, prompt, uart7_register(UART_LCR), UART_LCR_DLAB_8N1, 0xFF)
     write_and_verify(console, prompt, uart7_register(UART_THR), divisor & 0xFF, 0xFF)
@@ -1632,10 +1635,11 @@ def poll_lsr(console: Console, prompt: str, bit: int, when: str) -> int:
 def transmit_frame(console: Console, prompt: str, frame: bytes) -> str:
     """Write one frame a byte at a time, then require the shifter to empty.
 
-    THRE reports the transmit FIFO empty, so once it is seen sixteen bytes fit;
-    it is polled before each such burst rather than before every byte. Each poll
-    is a console round trip, and one per byte doubled the cost of a frame for a
-    FIFO that, at one command every few hundred milliseconds, is never busy.
+    THRE is polled once per sixteen-byte burst rather than before every byte.
+    Each poll is a console round trip of a few hundred milliseconds, and a byte
+    is on the wire for 174 us, so every byte has left the holding register long
+    before the next command arrives whether or not this UART's FIFO is usable.
+    A poll per byte proved nothing and doubled the cost of a frame.
     """
     transcript = ""
     for index, byte in enumerate(frame):
