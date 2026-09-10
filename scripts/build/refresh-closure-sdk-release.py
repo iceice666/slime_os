@@ -23,8 +23,12 @@ normally, so it stays derived from the tree rather than hand-edited.
 before packaging it, so a profile whose prefix has not been rebuilt for the
 current pins is refused rather than recorded.
 
-`--check` refuses a stale committed record without writing, which is what the
-closure gates need; the bare invocation rewrites it.
+The two modes deliberately need different inputs. Rewriting repackages both
+prefixes, so it needs them installed. `--check` answers only whether the
+committed record still names this commit's pinned prefix identities, which the
+record and `sel4/pins.toml` decide between them -- so the closure gates that
+resolve against this file stay host-side rather than requiring two complete
+seL4 platform builds to compare a checked-in record.
 """
 
 from __future__ import annotations
@@ -101,16 +105,60 @@ def render() -> str:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def drifted_profiles(committed: str, rendered: str) -> list[str]:
-    """Which profiles' prefix identities moved, for a precise refusal."""
+def pinned_prefix_facts(profile: str) -> dict[str, str]:
+    """The prefix identities `sel4/pins.toml` states for one profile.
+
+    These are the five artifact hashes `export_prefix_asset` copies out of the
+    pin table, so a committed record naming a different value for any of them
+    describes a kernel this commit does not build against. The archive and tree
+    digests are deliberately absent: they are packaging outputs of an installed
+    prefix, and requiring one to answer whether a checked-in record is current
+    is what made this a build-dependent gate.
+    """
+    binding = component_sdk.PROFILE_PLATFORMS[profile]
+    observed = component_sdk.pins(ROOT)[binding["pins"]]
+    return {
+        "kernelHash": observed["kernel_sha256"],
+        "kernelConfigHash": observed["kernel_config_sha256"],
+        "libsel4ConfigHash": observed["libsel4_config_sha256"],
+        "dtbHash": observed["dtb_sha256"],
+        "platformInfoHash": observed["platform_info_sha256"],
+    }
+
+
+def check_committed() -> None:
+    """Refuse a committed record whose pinned prefix facts have moved.
+
+    Host-only by construction. The rewriting path below repackages both
+    prefixes and therefore needs them installed; deciding whether the checked-in
+    record still names this commit's pinned kernels needs only the record and
+    `sel4/pins.toml`, so the closure gates do not inherit two seL4 platform
+    builds to compare a file.
+    """
+    relative = OUTPUT.relative_to(ROOT)
+    script = Path(__file__).relative_to(ROOT)
+    if not OUTPUT.is_file():
+        fail(f"{relative} does not exist; run python3 {script}")
     try:
-        before = {
-            entry["profile"]: entry["prefix"] for entry in json.loads(committed)["profiles"]
-        }
-        after = {entry["profile"]: entry["prefix"] for entry in json.loads(rendered)["profiles"]}
-    except (KeyError, TypeError, json.JSONDecodeError):
-        return []
-    return sorted(name for name, prefix in after.items() if before.get(name) != prefix)
+        committed = json.loads(OUTPUT.read_text(encoding="utf-8"))
+        recorded = {entry["profile"]: entry["prefix"] for entry in committed["profiles"]}
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        fail(f"{relative} is not a decodable release record: {error}")
+    if sorted(recorded) != sorted(PROFILES):
+        fail(
+            f"{relative} advertises {sorted(recorded)}, but this script exports "
+            f"{sorted(PROFILES)}; run python3 {script}"
+        )
+    for profile in sorted(PROFILES):
+        pinned = pinned_prefix_facts(profile)
+        for field, expected in pinned.items():
+            actual = recorded[profile].get(field)
+            if actual != expected:
+                fail(
+                    f"{relative}: {profile} {field} is {actual}, but sel4/pins.toml "
+                    f"pins {expected}; rebuild that prefix and run python3 {script}"
+                )
+    print(f"{relative} names this commit's pinned prefixes for {', '.join(sorted(PROFILES))}")
 
 
 def main() -> None:
@@ -122,21 +170,12 @@ def main() -> None:
     )
     arguments = parser.parse_args()
 
-    rendered = render()
-    relative = OUTPUT.relative_to(ROOT)
-    script = Path(__file__).relative_to(ROOT)
     if arguments.check:
-        if not OUTPUT.is_file():
-            fail(f"{relative} does not exist; run python3 {script}")
-        committed = OUTPUT.read_text(encoding="utf-8")
-        if committed != rendered:
-            drifted = drifted_profiles(committed, rendered)
-            detail = f" (prefix drift: {', '.join(drifted)})" if drifted else ""
-            fail(f"{relative} is stale{detail}; run python3 {script}")
-        print(f"{relative} is current")
+        check_committed()
         return
 
-    OUTPUT.write_text(rendered, encoding="utf-8")
+    relative = OUTPUT.relative_to(ROOT)
+    OUTPUT.write_text(render(), encoding="utf-8")
     print(f"wrote {relative}")
 
 

@@ -425,6 +425,7 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-10 | [Admission extent CSlots and the stale RV64 SDK prefix](2026-09-10-admission-extent-slots-and-rv64-sdk-prefix/index.md) | Defect | Fixed | none |
 | 2026-09-10 | [Second review round: refusal scoping, notification scope, and two coverage gaps](2026-09-10-second-review-round-checker-coverage/index.md) | Defect | Fixed | none |
 | 2026-09-10 | [Descriptor tables sized against the linked kernel's root CSpace](2026-09-10-descriptor-tables-versus-kernel-cspace/index.md) | Defect | Fixed | none |
+| 2026-09-10 | [A host-side closure gate and the extent bound's unasserted contract coupling](2026-09-10-host-side-closure-gate-and-extent-bound/index.md) | Defect | Fixed | none |
 | 2026-09-11 | [The zutai gate passes: memoized by content, prefetched in parallel](2026-09-11-zutai-gate-cache/index.md) | Change | Verified | none |
 | 2026-09-11 | [B93: the block driver's shutdown drain raced the root's reclamation of its client](2026-09-11-b93-rollback-driver-fault/index.md) | Defect | Verified | B93 |
 | 2026-09-11 | [TCP over the IO substrate: opening the lane](2026-09-11-io-tcp-lane/index.md) | Decision | Proposed | IO10, IO11, P6.F |

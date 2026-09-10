@@ -65,7 +65,9 @@ system_composition_closure_check: system_spec_check
 # profile. Checked here rather than at publication because the closures below
 # resolve against it: a profile whose prefix lags `sel4/pins.toml` hands a
 # consumer a kernel this commit does not build against, and only the profiles
-# an AArch64 closure names would otherwise ever be looked at.
+# an AArch64 closure names would otherwise ever be looked at. `--check`
+# compares the committed record against the pin table, so this gate stays
+# host-side; refreshing the record repackages the prefixes and needs them built.
 [group('contracts')]
 system_image_builder_check: system_composition_closure_check
     python3 scripts/build/refresh-closure-sdk-release.py --check

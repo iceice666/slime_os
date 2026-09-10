@@ -96,6 +96,40 @@ pub const MAX_TASK_ALLOCATIONS: usize = if LARGE_DESCRIPTOR_TABLES {
 } else {
     4096
 };
+/// Widest private-extent population any budget this root admits can demand.
+///
+/// A record's `size_bits` is fixed at creation and an inactive record is reused
+/// only for its own size, so a position is never re-sized: the table must hold
+/// every extent that is live at once, and a generation's holder set is fixed at
+/// admission. Derived from the ceilings that decide admissibility rather than
+/// stated, because this bound is *not* checked during admission — a budget
+/// exceeding it would pass `admit_total_slots` and then fail partway through
+/// [`ObjectAllocator::provision_extent`] with `ArenaTableFull`.
+const fn max_admissible_private_extents() -> usize {
+    let holders = boot_contracts::private_memory_budget::MAX_HOLDERS;
+    let total = crate::private_memory::MAX_TOTAL_PAGES;
+    // `PrivateBackingLayout::for_quota` retains three extents for a quota of
+    // exactly one full data extent and two for any other nonzero quota, so the
+    // worst distribution trades full-size holders against one-page holders.
+    let mut full = 0;
+    let mut worst = 0;
+    while full <= holders {
+        let charged = full * MAX_PRIVATE_EXTENT_PAGES;
+        if charged > total {
+            break;
+        }
+        let rest = holders - full;
+        let spare = total - charged;
+        let single = if rest < spare { rest } else { spare };
+        let extents = full * 3 + single * 2;
+        if extents > worst {
+            worst = extents;
+        }
+        full += 1;
+    }
+    worst
+}
+
 /// Every task consumes one static extent. A quota-bearing task additionally
 /// consumes independently reclaimable data and page-table extents.
 pub const MAX_TASK_EXTENTS: usize = if LARGE_DESCRIPTOR_TABLES {
@@ -103,6 +137,11 @@ pub const MAX_TASK_EXTENTS: usize = if LARGE_DESCRIPTOR_TABLES {
 } else {
     3 * MAX_TASK_ARENAS
 };
+const _: () = assert!(
+    MAX_TASK_EXTENTS >= MAX_TASK_ARENAS + max_admissible_private_extents(),
+    "extent table cannot hold one static extent per task plus the widest \
+     private-extent population contracts/private-memory-budget/v1 admits"
+);
 
 const SLOT_WORD_BITS: usize = usize::BITS as usize;
 const SLOT_WORDS: usize = MAX_ROOT_CSLOTS.div_ceil(SLOT_WORD_BITS);
