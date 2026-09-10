@@ -598,8 +598,29 @@ def validate_pwm_probe_inputs(
         fail("--pwm-samples must be non-negative")
 
 
+def validate_gpio_pad(channel: int) -> None:
+    """A pad the GPIO probe may drive: on the header, and in the first bank word.
+
+    The PWM probe's channel list is not the right bound here -- it is about
+    which channels sit off channel 12's divider, and it stopped a probe of
+    P_GPIO[8] on 2026-09-10. What makes a pad safe to drive as a plain output
+    is that it is one of the bank-1 pads the connector breaks out: the
+    core-rail pad, P_GPIO[42], is in the second word and on no header pin, and
+    a pad that reaches no connector has nothing for a meter to find.
+    """
+    if not 0 <= channel <= 31:
+        fail(f"P_GPIO[{channel}] is outside the first GPIO bank word (0..31)")
+    header = load_profile().get("header_pins")
+    if not isinstance(header, dict) or f"P_GPIO{channel}" not in header:
+        fail(
+            f"P_GPIO[{channel}] is not on the 40-pin header according to sel4/pins.toml "
+            "header_pins, so a meter could not find it; the pads that are: "
+            + ", ".join(sorted(k for k in (header or {}) if k.startswith("P_GPIO")))
+        )
+
+
 def validate_gpio_probe_inputs(channel: int, cycles: int, hold: float) -> None:
-    validate_probe_channel(channel)
+    validate_gpio_pad(channel)
     if cycles <= 0:
         fail("--gpio-cycles must be positive")
     if hold < 0:

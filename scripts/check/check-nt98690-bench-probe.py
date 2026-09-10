@@ -693,7 +693,10 @@ def snapshot_failure_writes_nothing() -> None:
 
 
 def channel_allowlist() -> None:
-    for channel in (-1, 6, 12, 31, 32, 42):
+    # The GPIO probe's bound is the header map, not the PWM channel list: pads the
+    # connector breaks out are allowed (8, 13, 28 are), pads it does not are not
+    # (4, 5, 31), and nothing outside the first bank word ever is (32, 42).
+    for channel in (-1, 4, 5, 31, 32, 42):
         console = ModelConsole()
         try:
             PROBE.gpio_probe(console, PROMPT, channel, 1, 0, 30)
@@ -703,6 +706,22 @@ def channel_allowlist() -> None:
             fail(f"GPIO channel {channel} unexpectedly passed")
         if console.commands:
             fail(f"GPIO channel {channel} touched the board before rejection")
+    for channel in (0, 8, 13, 28):
+        PROBE.validate_gpio_pad(channel)
+    # The bank-word bound stands on its own: a header map that wrongly listed
+    # the core-rail pad must not make it drivable.
+    original_profile = PROBE.load_profile
+    PROBE.load_profile = lambda: {"header_pins": {"P_GPIO42": 1, "P_GPIO8": 13}}
+    try:
+        try:
+            PROBE.validate_gpio_pad(42)
+        except SystemExit:
+            pass
+        else:
+            fail("a header map listing P_GPIO42 made the core-rail pad drivable")
+    finally:
+        PROBE.load_profile = original_profile
+    for channel in (-1, 6, 12, 31, 32, 42):
         console = ModelConsole()
         error = None
         try:
@@ -717,10 +736,7 @@ def channel_allowlist() -> None:
         # `Console` is constructed, so `--serial` is supplied (an absent
         # endpoint exits for its own reason) and opening a port raises
         # `BoardOpened`, which is not a rejection.
-        for arguments in (
-            ("--dry-run", "--pwm-channel", str(channel)),
-            ("--gpio-probe", str(channel)),
-        ):
+        for arguments in (("--dry-run", "--pwm-channel", str(channel)),):
             original_argv = sys.argv
             original_console = PROBE.Console
 
