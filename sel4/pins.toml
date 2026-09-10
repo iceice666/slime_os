@@ -352,6 +352,43 @@ sel4_memory_size = "0x2ff00000"
 # from the non-secure world; absent until it has run.
 reset_cg_base = "0x2f0020000"
 reset_wdt_base = "0x2f0060000"
+# The SoC blocks a servo-PWM output needs, from the vendor BSP: the PWM block
+# itself (`nvt-peri.dtsi` `pwm@2,f0120000`, driver `drivers/pwm/pwm-nvtivot.c`),
+# the pinmux/TOP block that routes a channel to a pad (`plat-ns02201_a64/
+# top_reg.h`, `TOP_REG6_OFS 0x18` and `TOP_REGPGPIO0_OFS 0xA8`), the GPIO block
+# that can drive or sample the same pad (`plat-ns02201_a64/nvt-gpio.h`), and the
+# pad block that selects the P1 rail (`plat-ns02201_a64/pad.h`). The clock
+# generator is `reset_cg_base` above -- the same page that arms the watchdog, so
+# nothing outside the root ever holds it.
+#
+# The divider field is `divisor - 1` over the 120 MHz `fix120m` source
+# (`nvt-clk-provider.c:906-913`), so 119 yields a 1 MHz PWM count clock and one
+# count is one microsecond: a 20000-count frame is 50 Hz and a 1500-count pulse
+# is servo centre, both inside the 16-bit range channels 0-7 carry.
+#
+# Which channel and pad are used, and whether that pad reaches a connector, are
+# bench facts. They are absent until the PWM probe has observed them, exactly as
+# `reset_write_width` is.
+pwm_base = "0x2f0120000"
+pinmux_top_base = "0x2f0010000"
+gpio_base = "0x2f0040000"
+pad_base = "0x2f0030000"
+pwm_clock_source_hz = 120000000
+pwm_clock_divider = 119
+pwm_clock_hz = 1000000
+# Observed by the PWM probe on 2026-09-08 (`devlog/2026-09-08-h1v1-pwm-probe/`).
+# PWM0 reaches P_GPIO[0] on the board's 40-pin header, and a drone ESC on it armed
+# and changed speed. At the U-Boot prompt the PWM pinmux word held no routing at
+# all and every P_GPIO was in GPIO mode, so the root must program both words
+# itself; and the GPIO data register does not report a pad held by another
+# function, so the board cannot sample its own PWM output.
+pwm_channel = 0
+pwm_pad = "P_GPIO0"
+pwm_pad_header = "40-pin GPIO header pin 26"
+pwm_pinmux_at_prompt = "0x00000000"
+pgpio_function_at_prompt = "0xffffffff"
+gpio_data_reflects_function_pad = false
+pwm_probe_observed = "2026-09-08"
 boot_files = [
     "slime-nt98690-probe.bin",
     "slime-sel4-sample-ns02201-h1v1.bin",
@@ -359,6 +396,39 @@ boot_files = [
     # gate-only 0x1d terminator compiled in, distinct from every plane image.
     "slime-sel4-ns02201-h1v1-test-terminator.bin",
 ]
+
+# The board's 40-pin GPIO header, pad by pin, from the vendor pinout diagram the
+# operator supplied (`devlog/2026-09-08-h1v1-pwm-probe/header-pinout.png`). Only
+# pads are listed: the power, ground, UART0 console, ADC, and reserved positions
+# route nothing a lane would claim. Every pad here is on the 3.3 V P1 rail
+# except D_GPIO0 and L_GPIO20, which belong to other banks. A pad absent from
+# this table is not on the connector -- P_GPIO[4] and P_GPIO[5], UART8's data
+# pins, are the case that matters: only that port's flow-control pins reach it.
+[ns02201_h1v1.header_pins]
+P_GPIO0 = 26
+P_GPIO1 = 29
+P_GPIO2 = 31
+P_GPIO3 = 22
+P_GPIO6 = 18
+P_GPIO7 = 16
+P_GPIO8 = 13
+P_GPIO9 = 15
+P_GPIO10 = 3
+P_GPIO11 = 5
+P_GPIO12 = 40
+P_GPIO13 = 36
+P_GPIO14 = 38
+P_GPIO15 = 37
+P_GPIO16 = 23
+P_GPIO17 = 24
+P_GPIO18 = 19
+P_GPIO19 = 21
+P_GPIO24 = 7
+P_GPIO25 = 11
+P_GPIO28 = 32
+P_GPIO34 = 12
+D_GPIO0 = 33
+L_GPIO20 = 35
 
 [observed_prefix_ns02201_h1v1]
 # Recorded from the exact fork commits, toolchain, and NS02201 config above,

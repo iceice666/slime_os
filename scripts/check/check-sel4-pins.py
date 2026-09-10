@@ -547,6 +547,110 @@ def check_profile(pins: dict[str, object]) -> None:
         fail("ns02201-h1v1 memory base must be 2 MiB-aligned")
     if memory_base + memory_size > 0x3FF0_0000:
         fail("ns02201-h1v1 memory window must end below U-Boot's observed DTB relocation")
+    # The SoC blocks a servo-PWM output reaches, and the clock arithmetic that
+    # makes one PWM count one microsecond. Pinned here so a later bring-up reads
+    # them rather than restating an address, and so a divider edit that silently
+    # changes the pulse scale fails a check instead of a servo.
+    for key, expected in (
+        ("pwm_base", 0x2_F012_0000),
+        ("pinmux_top_base", 0x2_F001_0000),
+        ("gpio_base", 0x2_F004_0000),
+        ("pad_base", 0x2_F003_0000),
+    ):
+        if int(text(h1v1, key, "ns02201_h1v1"), 16) != expected:
+            fail(f"ns02201-h1v1 {key} must be the vendor BSP's {expected:#x}")
+    source_hz = integer(h1v1, "pwm_clock_source_hz", "ns02201_h1v1")
+    divider = integer(h1v1, "pwm_clock_divider", "ns02201_h1v1")
+    if source_hz != 120_000_000:
+        fail("ns02201-h1v1 PWM clock source must be the 120 MHz fix120m the clock tree names")
+    if integer(h1v1, "pwm_clock_hz", "ns02201_h1v1") != source_hz // (divider + 1):
+        fail(
+            "ns02201-h1v1 PWM clock must equal source / (divider + 1); the divider "
+            "field encodes divisor - 1"
+        )
+    # One microsecond per count is not a preference: the bench probe programs
+    # this exact divider and then writes `--pwm-period-us` and `--pwm-pulse-us`
+    # straight into the counter, and every later consumer of these keys inherits
+    # that scale. A self-consistent but different pair (divider 239 with 500 kHz,
+    # say) would halve every pulse width silently, so only the microsecond pair
+    # passes.
+    if divider != 119 or integer(h1v1, "pwm_clock_hz", "ns02201_h1v1") != 1_000_000:
+        fail(
+            "ns02201-h1v1 PWM clock must be divider 119 over the 120 MHz source, "
+            "giving exactly 1000000 Hz: one count is one microsecond, which is what "
+            "makes a period or pulse expressed in microseconds a counter value"
+        )
+
+    # What the PWM probe observed on the board. The channel and pad are what a
+    # later bring-up routes; the two pinmux words are what it must not assume
+    # were set for it; the GPIO fact closes the idea of the board sampling its
+    # own output.
+    #
+    # Each entry is a route some board run actually qualified: the pad the
+    # channel's `_1` function reached, where the operator found it, and the date
+    # of the run. Only channel 0 has ever been driven, so only channel 0 is
+    # here. Channels 1-5 are safe for the *bench probe* to drive -- that is the
+    # probe's own `PWM_MAX_PROBE_CHANNEL` -- but safe to poke and qualified to
+    # consume are different claims, and a bring-up reads these pins for the
+    # second one. Adding a channel means adding its run's evidence here, not
+    # widening a range.
+    observed_pwm_routes = {
+        0: ("P_GPIO0", "40-pin GPIO header pin 26", "2026-09-08"),
+    }
+    pwm_channel = integer(h1v1, "pwm_channel", "ns02201_h1v1")
+    if pwm_channel not in observed_pwm_routes:
+        fail(
+            f"ns02201-h1v1 pwm_channel {pwm_channel} has no observed board route: only "
+            f"{sorted(observed_pwm_routes)} have been driven to a pad and found on a "
+            "connector. Repin this checker with that run's evidence rather than "
+            "accepting an unqualified channel a bring-up would then consume"
+        )
+    expected_pad, expected_header, expected_date = observed_pwm_routes[pwm_channel]
+    if text(h1v1, "pwm_pad", "ns02201_h1v1") != expected_pad:
+        fail(
+            f"ns02201-h1v1 pwm_pad must be {expected_pad}: the pad channel "
+            f"{pwm_channel}'s `_1` function was observed reaching"
+        )
+    if text(h1v1, "pwm_pad_header", "ns02201_h1v1") != expected_header:
+        fail(
+            f"ns02201-h1v1 pwm_pad_header must be {expected_header!r}, where "
+            f"{expected_pad} was found on the board"
+        )
+    if text(h1v1, "pwm_probe_observed", "ns02201_h1v1") != expected_date:
+        fail(
+            f"ns02201-h1v1 pwm_probe_observed must be {expected_date}, the date channel "
+            f"{pwm_channel}'s route was observed; a new date needs a new route entry"
+        )
+    for key in ("pwm_pinmux_at_prompt", "pgpio_function_at_prompt"):
+        int(text(h1v1, key, "ns02201_h1v1"), 16)
+    # The header map is what makes a pad's position a fact a later lane reads
+    # instead of measures. Every pin is one of the 40, no pin carries two pads,
+    # and the PWM route's header string is composed from it rather than typed
+    # beside it, so the two cannot disagree.
+    header_pins = h1v1.get("header_pins")
+    if not isinstance(header_pins, dict) or not header_pins:
+        fail("ns02201-h1v1 must carry a header_pins table: the 40-pin header's pad-to-pin map")
+    seen_pins: dict[int, str] = {}
+    for pad, pin in header_pins.items():
+        if not isinstance(pin, int) or isinstance(pin, bool) or not 1 <= pin <= 40:
+            fail(f"ns02201-h1v1 header_pins.{pad} must be a pin number 1..40, not {pin!r}")
+        if pin in seen_pins:
+            fail(f"ns02201-h1v1 header_pins puts {pad} and {seen_pins[pin]} both on pin {pin}")
+        seen_pins[pin] = pad
+    if expected_pad not in header_pins:
+        fail(f"ns02201-h1v1 header_pins does not place {expected_pad}, the observed PWM pad")
+    composed = f"40-pin GPIO header pin {header_pins[expected_pad]}"
+    if composed != expected_header:
+        fail(
+            f"ns02201-h1v1 header_pins puts {expected_pad} on pin {header_pins[expected_pad]}, "
+            f"but the observed PWM route says {expected_header!r}"
+        )
+    if boolean(h1v1, "gpio_data_reflects_function_pad", "ns02201_h1v1"):
+        fail(
+            "ns02201-h1v1 gpio_data_reflects_function_pad contradicts the 2026-09-08 "
+            "probe, which read the same GPIO data word in every sample while PWM0 ran"
+        )
+
     expected_h1v1_boot_files = [
         "slime-nt98690-probe.bin",
         "slime-sel4-sample-ns02201-h1v1.bin",
