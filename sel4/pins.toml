@@ -384,7 +384,7 @@ pwm_clock_hz = 1000000
 # function, so the board cannot sample its own PWM output.
 pwm_channel = 0
 pwm_pad = "P_GPIO0"
-pwm_pad_header = "40-pin GPIO header pin 26"
+pwm_pad_header = "40-pin GPIO header"
 pwm_pinmux_at_prompt = "0x00000000"
 pgpio_function_at_prompt = "0xffffffff"
 gpio_data_reflects_function_pad = false
