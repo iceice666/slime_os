@@ -595,7 +595,7 @@ def check_profile(pins: dict[str, object]) -> None:
     # second one. Adding a channel means adding its run's evidence here, not
     # widening a range.
     observed_pwm_routes = {
-        0: ("P_GPIO0", "40-pin GPIO header", "2026-09-08"),
+        0: ("P_GPIO0", "40-pin GPIO header pin 26", "2026-09-08"),
     }
     pwm_channel = integer(h1v1, "pwm_channel", "ns02201_h1v1")
     if pwm_channel not in observed_pwm_routes:
@@ -623,6 +623,28 @@ def check_profile(pins: dict[str, object]) -> None:
         )
     for key in ("pwm_pinmux_at_prompt", "pgpio_function_at_prompt"):
         int(text(h1v1, key, "ns02201_h1v1"), 16)
+    # The header map is what makes a pad's position a fact a later lane reads
+    # instead of measures. Every pin is one of the 40, no pin carries two pads,
+    # and the PWM route's header string is composed from it rather than typed
+    # beside it, so the two cannot disagree.
+    header_pins = h1v1.get("header_pins")
+    if not isinstance(header_pins, dict) or not header_pins:
+        fail("ns02201-h1v1 must carry a header_pins table: the 40-pin header's pad-to-pin map")
+    seen_pins: dict[int, str] = {}
+    for pad, pin in header_pins.items():
+        if not isinstance(pin, int) or isinstance(pin, bool) or not 1 <= pin <= 40:
+            fail(f"ns02201-h1v1 header_pins.{pad} must be a pin number 1..40, not {pin!r}")
+        if pin in seen_pins:
+            fail(f"ns02201-h1v1 header_pins puts {pad} and {seen_pins[pin]} both on pin {pin}")
+        seen_pins[pin] = pad
+    if expected_pad not in header_pins:
+        fail(f"ns02201-h1v1 header_pins does not place {expected_pad}, the observed PWM pad")
+    composed = f"40-pin GPIO header pin {header_pins[expected_pad]}"
+    if composed != expected_header:
+        fail(
+            f"ns02201-h1v1 header_pins puts {expected_pad} on pin {header_pins[expected_pad]}, "
+            f"but the observed PWM route says {expected_header!r}"
+        )
     if boolean(h1v1, "gpio_data_reflects_function_pad", "ns02201_h1v1"):
         fail(
             "ns02201-h1v1 gpio_data_reflects_function_pad contradicts the 2026-09-08 "

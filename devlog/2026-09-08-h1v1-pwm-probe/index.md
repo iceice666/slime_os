@@ -190,3 +190,19 @@ levels, and still restore direction and pad function. Removing the per-level rea
 repinning `sel4/pins.toml` to channel 1 with a matching `P_GPIO1` now fails `just sel4_pin_check`
 with the unobserved-route message. Also `just tasks_check`, `just ruff`, `just typos`, and
 `--dry-run`, all exit 0. Again no board run, so nothing here is board evidence.
+
+**2026-09-10 — the header pin position, from the board's pinout diagram.** The run above left
+P_GPIO[0]'s position on the connector unwritten, and no schematic, pinout table, or header note
+existed anywhere on the development host. The operator has since supplied the board's 40-pin
+header diagram, kept beside this entry as [`header-pinout.png`](header-pinout.png). It places
+**P_GPIO[0] at pin 26**, and its alternate-function labels agree with the vendor pinmux table on
+every pad that could be checked (the SPI2_2 and SPI_1 groups; P_GPIO[0] carrying PWM0), which is
+what makes it this board's document rather than a look-alike. `pwm_pad_header` now says pin 26,
+and the whole pad-to-pin map is pinned as `header_pins` so no later lane re-measures it.
+
+The position was first recorded from memory earlier the same day, withdrawn when that memory was
+doubted, and is now recorded from the document; the two earlier commits stand in the history as
+the reason this one cites a source. The diagram settles one more thing the plan for a second lane
+had assumed: P_GPIO[4] and P_GPIO[5] are **not** on this header, so UART8's data pins reach no
+connector, and only its flow-control pins do. That lane's own entry records the consequence.
+

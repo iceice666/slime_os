@@ -384,7 +384,7 @@ pwm_clock_hz = 1000000
 # function, so the board cannot sample its own PWM output.
 pwm_channel = 0
 pwm_pad = "P_GPIO0"
-pwm_pad_header = "40-pin GPIO header"
+pwm_pad_header = "40-pin GPIO header pin 26"
 pwm_pinmux_at_prompt = "0x00000000"
 pgpio_function_at_prompt = "0xffffffff"
 gpio_data_reflects_function_pad = false
@@ -396,6 +396,39 @@ boot_files = [
     # gate-only 0x1d terminator compiled in, distinct from every plane image.
     "slime-sel4-ns02201-h1v1-test-terminator.bin",
 ]
+
+# The board's 40-pin GPIO header, pad by pin, from the vendor pinout diagram the
+# operator supplied (`devlog/2026-09-08-h1v1-pwm-probe/header-pinout.png`). Only
+# pads are listed: the power, ground, UART0 console, ADC, and reserved positions
+# route nothing a lane would claim. Every pad here is on the 3.3 V P1 rail
+# except D_GPIO0 and L_GPIO20, which belong to other banks. A pad absent from
+# this table is not on the connector -- P_GPIO[4] and P_GPIO[5], UART8's data
+# pins, are the case that matters: only that port's flow-control pins reach it.
+[ns02201_h1v1.header_pins]
+P_GPIO0 = 26
+P_GPIO1 = 29
+P_GPIO2 = 31
+P_GPIO3 = 22
+P_GPIO6 = 18
+P_GPIO7 = 16
+P_GPIO8 = 13
+P_GPIO9 = 15
+P_GPIO10 = 3
+P_GPIO11 = 5
+P_GPIO12 = 40
+P_GPIO13 = 36
+P_GPIO14 = 38
+P_GPIO15 = 37
+P_GPIO16 = 23
+P_GPIO17 = 24
+P_GPIO18 = 19
+P_GPIO19 = 21
+P_GPIO24 = 7
+P_GPIO25 = 11
+P_GPIO28 = 32
+P_GPIO34 = 12
+D_GPIO0 = 33
+L_GPIO20 = 35
 
 [observed_prefix_ns02201_h1v1]
 # Recorded from the exact fork commits, toolchain, and NS02201 config above,
