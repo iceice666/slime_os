@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 from pathlib import Path
 
@@ -34,7 +33,13 @@ COPY_ROOTS = (
 )
 
 
-def export_asset(destination: Path, source: Path, *, sdk_module) -> dict:
+def export_asset(
+    destination: Path,
+    source: Path,
+    *,
+    sdk_module,
+    profile_records: list[dict],
+) -> dict:
     """Write one deterministic system corpus and return its release-record row."""
     staging = destination.parent / f".{destination.name}-system"
     if staging.exists():
@@ -91,25 +96,21 @@ def export_asset(destination: Path, source: Path, *, sdk_module) -> dict:
         for release_input in closure_value["releaseInputs"]:
             rebind(release_input["artifact"])
 
-        # The published SDK release asset is copied verbatim, so its own
-        # identity never moves; what must hold is that it still names the
-        # exact canonicalized prefix this export just produced, for the same
-        # profile. `canonicalize_prefix` rewrites the checkout-relative prefix
-        # into the tree the release asset pins, so a mismatch here means the
-        # published prefix and this corpus's prefix have diverged.
-        sdk_release = staging / closure_value["target"]["sdkRelease"]["path"]
-        released = json.loads(sdk_release.read_text(encoding="utf-8"))
+        # The outer SDK release record is the sole authority for exported
+        # profile provenance. Its selected prefix must be the exact
+        # canonicalized prefix this corpus closure now pins.
         selected = [
             entry
-            for entry in released["profiles"]
+            for entry in profile_records
             if entry["profile"] == closure_value["target"]["profile"]
         ]
         if (
             len(selected) != 1
-            or selected[0]["prefix"]["treeHash"] != closure_value["target"]["prefix"]["identity"]
+            or selected[0]["prefix"]["treeHash"]
+            != closure_value["target"]["prefix"]["identity"]
         ):
             raise sdk_module.ComponentSdkError(
-                "canonicalized prefix does not match the corpus SDK release asset"
+                "canonicalized prefix does not match the selected exported profile"
             )
         closure_path.write_text(sdk_module.zti(closure_value) + "\n", encoding="utf-8")
         closure = compile_closure(closure_path)

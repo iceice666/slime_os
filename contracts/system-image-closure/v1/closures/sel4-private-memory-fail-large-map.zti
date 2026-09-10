@@ -45,11 +45,6 @@
   target = {
     profile = "aarch64-sel4-qemu-virt";
     platform = "qemu-arm-virt";
-    sdkRelease = {
-      path = "contracts/system-image-closure/v1/inputs/sdk-release.json";
-      kind = "file";
-      identity = "c5bc812cc0e29417af9f27e1bad66bfa079d4ffb368d825ea8b0c5d2ef65d6c5";
-    };
     prefix = {
       path = "contracts/system-image-closure/v1/inputs/sel4-prefix";
       kind = "tree";
@@ -154,7 +149,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "6b32026565ceb88340cd834b9b3d8743c2550928257ea4c62e1cd4c74b6bfb74";
+        identity = "c14c0d3b5bc163ef7143022a3c0b79db1c8107c003609e44ee5d2212046a0db6";
       };
     };
     {

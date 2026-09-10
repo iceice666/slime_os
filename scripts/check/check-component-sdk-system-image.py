@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/lib"))
 
 import component_sdk  # noqa: E402
+import component_sdk_system  # noqa: E402
 
 PROFILE = "aarch64-sel4-qemu-virt"
 SDK_REPOSITORY = "https://github.com/iceice666/slime_os-component_sdk"
@@ -110,11 +111,45 @@ def main() -> None:
         if current_result["closureIdentity"] != system["closureIdentity"]:
             fail("built result does not name the release's declared closure")
 
+        profile_records = current_record["profiles"]
+        mismatched_records = [
+            (
+                {
+                    **entry,
+                    "prefix": {**entry["prefix"], "treeHash": "0" * 64},
+                }
+                if entry["profile"] == PROFILE
+                else entry
+            )
+            for entry in profile_records
+        ]
+        refusal_cases = (
+            (
+                "missing selected profile",
+                [entry for entry in profile_records if entry["profile"] != PROFILE],
+            ),
+            ("mismatched selected prefix", mismatched_records),
+        )
+        for label, records in refusal_cases:
+            try:
+                component_sdk_system.export_asset(
+                    root / f"refusal-{label.replace(' ', '-')}",
+                    ROOT,
+                    sdk_module=component_sdk,
+                    profile_records=records,
+                )
+            except component_sdk.ComponentSdkError as error:
+                if "selected exported profile" not in str(error):
+                    fail(f"{label} failed for the wrong reason: {error}")
+            else:
+                fail(f"system corpus export accepted a {label}")
+
     print(
         "component SDK system image: two immutable SDK releases built the declared "
         "sel4-channel closure without a slime_os checkout, the current release booted "
-        "through its declared QEMU test run, and rollback reproduced every previous "
-        "build-result artifact identity before booting it again"
+        "through its declared QEMU test run, rollback reproduced every previous "
+        "build-result artifact identity before booting it again, and corpus export "
+        "refused missing or mismatched outer profile provenance"
     )
 
 

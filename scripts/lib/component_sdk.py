@@ -1501,7 +1501,12 @@ def export(
             }
         )
     system_records = [
-        component_sdk_system.export_asset(destination, source, sdk_module=sys.modules[__name__])
+        component_sdk_system.export_asset(
+            destination,
+            source,
+            sdk_module=sys.modules[__name__],
+            profile_records=profile_records,
+        )
     ]
 
     crates = []

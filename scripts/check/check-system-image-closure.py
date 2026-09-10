@@ -11,6 +11,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 import copy
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -80,6 +81,15 @@ def check_refusals(temporary: Path) -> None:
         ("changed-system", lambda value: value["systemSpec"].update(identity="0" * 64), "identity mismatch"),
         ("wrong-target", lambda value: value["target"].update(profile="riscv64-sel4-milkv-duo"), "target requirement"),
         ("wrong-profile", lambda value: value["target"].update(platform="milkv-duo"), "profile and platform"),
+        ("wrong-toolchain", lambda value: value["target"].update(toolchain="nightly-2099-01-01"), "toolchain"),
+        ("wrong-rust-sel4", lambda value: value["target"].update(rustSel4Commit="0" * 40), "rust-sel4"),
+        (
+            "wrong-target-spec",
+            lambda value: next(entry for entry in value["releaseInputs"] if entry["name"] == "target-spec").update(
+                artifact=copy.deepcopy(next(entry for entry in value["releaseInputs"] if entry["name"] == "root-target")["artifact"])
+            ),
+            "target-spec",
+        ),
         ("unrecorded-component", lambda value: value["implementations"].pop(), "exactly cover"),
         ("missing-release", lambda value: value["releaseInputs"].pop(), "exactly cover"),
         ("ambient-parameter", lambda value: value["buildParameters"].append({"name": "ambient", "value": "1"}), "does not admit"),
@@ -92,6 +102,50 @@ def check_refusals(temporary: Path) -> None:
         path = case_root / "sel4-channel.zti"
         write_closure(path, value)
         expect_rejected(path, refusal)
+
+
+def check_target_spec_path() -> None:
+    base = resolve_closure(CLOSURE)
+    with tempfile.TemporaryDirectory(prefix=".closure-target-control-", dir=ROOT) as directory:
+        temporary = Path(directory)
+        original = base.artifacts["release:target-spec"]
+        copied = temporary / original.name
+        shutil.copyfile(original, copied)
+        value = copy.deepcopy(base.compiled.value)
+        target_spec = next(entry for entry in value["releaseInputs"] if entry["name"] == "target-spec")
+        target_spec["artifact"]["path"] = str(copied.relative_to(ROOT))
+        path = temporary / CLOSURE.name
+        write_closure(path, value)
+        expect_rejected(path, "target-spec")
+
+
+def check_prefix_pins() -> None:
+    base = resolve_closure(CLOSURE)
+    files = (
+        "bin/kernel.elf",
+        "libsel4/include/kernel/gen_config.json",
+        "libsel4/include/sel4/gen_config.json",
+        "support/kernel.dtb",
+        "support/platform_gen.yaml",
+    )
+    with tempfile.TemporaryDirectory(prefix=".closure-prefix-control-", dir=ROOT) as directory:
+        temporary = Path(directory)
+        prefix = temporary / "prefix"
+        shutil.copytree(base.artifacts["prefix"], prefix)
+        path = temporary / CLOSURE.name
+        for relative in files:
+            artifact = prefix / relative
+            original = artifact.read_bytes()
+            try:
+                artifact.write_bytes(original + b"\n")
+                value = copy.deepcopy(base.compiled.value)
+                value["target"]["prefix"].update(
+                    path=str(prefix.relative_to(ROOT)), identity=tree_identity(prefix)
+                )
+                write_closure(path, value)
+                expect_rejected(path, relative)
+            finally:
+                artifact.write_bytes(original)
 
 
 def check_identity_boundaries(temporary: Path) -> None:
@@ -196,6 +250,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="slime-system-image-closure-check-") as directory:
         temporary = Path(directory)
         check_refusals(temporary)
+        check_prefix_pins()
+        check_target_spec_path()
         check_identity_boundaries(temporary)
         check_bounds(temporary)
         check_builds(temporary)

@@ -66,7 +66,6 @@ buildProfileRecoveryImage :: Text = "recoveryImage";
 TargetSelection :: type {
   profile : Text;
   platform : Text;
-  sdkRelease : ArtifactReference;
   prefix : ArtifactReference;
   toolchain : Text;
   rustSel4Commit : Text;

@@ -32,7 +32,7 @@ import tempfile
 from pathlib import Path
 
 import system_image_closure_contract as CONTRACT
-from component_sdk import tree_digest
+from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
 from system_image_closure import artifact_identity
@@ -45,13 +45,11 @@ from system_spec import (
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
 INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "inputs"
-SDK_RELEASE = INPUT_ROOT / "sdk-release.json"
 PREFIX = INPUT_ROOT / "sel4-prefix"
 
-# The fifteen shared workspace inputs `resolve_closure` requires of every
-# closure, as `(name, repository-relative path, kind)`. Declared here in one
-# place because the resolver checks the set exactly; a build input added there
-# must be added here or every closure stops resolving.
+# The shared workspace inputs `resolve_closure` requires of every closure, as
+# `(name, repository-relative path, kind)`. The target specification is added
+# from `component_sdk.PROFILE_PLATFORMS` below because it varies by profile.
 RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("boot-contracts", "boot-contracts", "tree"),
     ("cargo-lock", "Cargo.lock", "file"),
@@ -70,16 +68,15 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
         "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json",
         "file",
     ),
-    ("target-spec", "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json", "file"),
     ("workspace-manifest", "Cargo.toml", "file"),
 )
 
 ROOT_IMPLEMENTATION = ("slime-root", "tree")
 # Which `deps/rust-sel4*` submodule a closure's loader role names, keyed by
-# `sdk-release.json`'s `platform` field. A platform with no loader patch
-# shares the base checkout; a patched platform names its own independent
-# submodule (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables), so an
-# NDA'd board's fork never appears in another platform's closure identity.
+# the platform bound by `component_sdk.PROFILE_PLATFORMS`. A platform with no
+# loader patch shares the base checkout; a patched platform names its own
+# independent submodule (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables),
+# so an NDA'd board's fork never appears in another platform's closure identity.
 LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
     "qemu-arm-virt": ("deps/rust-sel4", "tree"),
     "qemu-riscv-virt": ("deps/rust-sel4", "tree"),
@@ -262,12 +259,6 @@ def render(value: object, indent: int = 0) -> str:
     raise TypeError(type(value))
 
 
-def sdk_profile(profile_name: str) -> dict:
-    record = json.loads(SDK_RELEASE.read_text(encoding="utf-8"))
-    matches = [entry for entry in record.get("profiles", []) if entry.get("profile") == profile_name]
-    if len(matches) != 1:
-        fail(f"SDK release declares {len(matches)} profiles named {profile_name!r}")
-    return {"record": record, "profile": matches[0]}
 
 
 def closure_for(
@@ -320,11 +311,18 @@ def closure_for(
         )
     implementations.sort(key=lambda entry: entry["component"])
 
-    sdk = sdk_profile(profile_name)
-    record, profile = sdk["record"], sdk["profile"]
-    loader_implementation = LOADER_IMPLEMENTATIONS.get(profile["platform"])
+    binding = PROFILE_PLATFORMS.get(profile_name)
+    if binding is None:
+        fail(f"no component SDK binding for target profile {profile_name!r}")
+    platform = str(binding["platform"])
+    loader_implementation = LOADER_IMPLEMENTATIONS.get(platform)
     if loader_implementation is None:
-        fail(f"no loader submodule declared for platform {profile['platform']!r}")
+        fail(f"no loader submodule declared for platform {platform!r}")
+    pin_table = pins(ROOT)
+    rust_sel4 = pin_table["rust_sel4"]
+    target_spec = (
+        Path("deps") / "rust-sel4" / "support" / "targets" / Path(str(binding["cargo_target"])).name
+    ).as_posix()
     return {
         "formatVersion": CONTRACT.FORMAT_VERSION,
         "name": name,
@@ -335,11 +333,10 @@ def closure_for(
         "implementations": implementations,
         "target": {
             "profile": profile_name,
-            "platform": profile["platform"],
-            "sdkRelease": artifact(str(SDK_RELEASE.relative_to(ROOT)), "file"),
+            "platform": platform,
             "prefix": artifact(str(PREFIX.relative_to(ROOT)), "tree"),
-            "toolchain": record["toolchain"],
-            "rustSel4Commit": record["rustSel4"]["commit"],
+            "toolchain": rust_sel4["toolchain"],
+            "rustSel4Commit": rust_sel4["commit"],
         },
         "root": {
             "role": root_role or CONTRACT.ROOT_ROLE_EMBEDDED_GENERATION,
@@ -351,10 +348,14 @@ def closure_for(
             "implementation": artifact(*loader_implementation),
             "parameters": [],
         },
-        "releaseInputs": [
-            {"name": input_name, "artifact": artifact(relative, kind)}
-            for input_name, relative, kind in RELEASE_INPUTS
-        ],
+        "releaseInputs": sorted(
+            [
+                {"name": input_name, "artifact": artifact(relative, kind)}
+                for input_name, relative, kind in RELEASE_INPUTS
+            ]
+            + [{"name": "target-spec", "artifact": artifact(target_spec, "file")}],
+            key=lambda entry: entry["name"],
+        ),
         "buildParameters": [
             {"name": key, "value": parameters[key]} for key in sorted(parameters or {})
         ],

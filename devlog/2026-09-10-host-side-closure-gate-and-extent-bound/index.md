@@ -5,11 +5,11 @@
 | Date | 2026-09-10 |
 | Kind | Defect |
 | Status | Fixed |
-| Scope | `scripts/build/refresh-closure-sdk-release.py`'s check mode, `just/contracts.just`'s `system_image_builder_check` comment, `slime-root/src/object_allocator.rs`'s extent bound, and the 52 regenerated system-image closures with their 48 re-blessed test-run records |
+| Scope | Host-only closure prefix validation, SDK corpus export provenance, the removed synthetic SDK release fixture and refresh script, `slime-root/src/object_allocator.rs`'s extent bound, and the 52 regenerated system-image closures with their 48 re-blessed test-run records |
 | Work items | none |
-| Gates | `just system_image_builder_check`, `just test_sel4_root`, `just private_memory_check`, `just contracts_check`, `just system_test_run_check` |
+| Gates | `just system_image_builder_check`, `just system_image_closure_check`, `just component_sdk_system_image_check`, `just test_sel4_root`, `just private_memory_check`, `just contracts_check`, `just system_test_run_check` |
 | Trigger | PR #25 review against `b3b83fcb` reported two P1 and two P2 findings |
-| Baseline | `b3b83fcb`'s kernel-derived table sizing; this round covers two of that review's four findings |
+| Baseline | `b3b83fcb`'s kernel-derived table sizing; initial fixes in `484aaa80`, followed by the source-provenance cutover within the same unmerged review round |
 
 ## Summary
 
@@ -23,11 +23,13 @@ record. The second is narrower than reported: the small-kernel extent table is
 48 quota-bearing holders while `contracts/private-memory-budget/v1` admits 32,
 but the bound's sufficiency rested entirely on that contract constant with
 nothing asserting the relationship, and this bound is not checked during
-admission. Both are closed: the check mode now compares the committed record
-against `sel4/pins.toml` without repackaging anything, and the extent bound
-carries a compile-time assertion derived from the ceilings that decide
-admissibility. The review's other two findings are handled elsewhere — one was
-refused on convention grounds, one remains open.
+admission. The initial fix split check and refresh modes and asserted the
+extent bound. The subsequent source-provenance investigation removes the
+release-shaped closure input altogether: closures bind their own build inputs,
+while the outer SDK release alone records publication provenance. Prefix
+validation remains host-only and now hashes the five committed prefix files
+against the pins rather than comparing two metadata declarations. Three
+findings are addressed; the worker-sentinel finding remains declined.
 
 ## Observable symptom
 
@@ -102,6 +104,25 @@ mid-provisioning error rather than a refusal.
 | `just private_memory_check` | AArch64: 23 markers across 7 causal chains and 3 image cases. RV64: 23 markers across 7 causal chains and 1 image case | Direct |
 | `just fmt_check_all`, `just lint_all`, `ruff check scripts/build/refresh-closure-sdk-release.py` | passed | Direct |
 
+The following evidence covers the subsequent source-provenance cutover, not a
+re-run of the allocator changes above:
+
+| Command/scenario | Result | Evidence class |
+|---|---|---|
+| Pre-cutover scratch mutations through `check_committed()` | Invented source SHA, version `999.0.0`, and empty `systems` all accepted; the check established pin agreement, not release provenance | Direct |
+| Post-cutover owning closure checker functions `check_refusals`, `check_prefix_pins`, `check_target_spec_path` | Ten malformed closures refused; changing each of five prefix files and re-identifying the tree still refused; a same-name target spec copied outside its canonical path refused | Direct |
+| Owning closure checker functions `check_identity_boundaries`, `check_bounds` | Executable identity changes, marker-oracle isolation, and closure/test-run bounds passed | Direct |
+| `python3 scripts/check/check-component-sdk-system-image.py` | Two real SDK exports built the declared closure; current and rollback images booted through the declared QEMU run; rollback reproduced every build-result artifact identity; missing selected profile and mismatched exported prefix refused | Direct |
+| `just system_test_run_check` | 48 records, 46 closure associations, five negative controls passed | Direct |
+| `just system_image_closure_aggregate_check` | All 52 closures covered by an owning gate; six drift controls refused | Direct |
+| `just contracts_check` | Passed, including 310 host tests | Direct |
+| `just ruff`, `just fmt_check_all` | Passed; no Rust implementation changed in this cutover | Direct |
+| Full-corpus resolver invocation through eval | Interrupted at the 600-second eval deadline; not accepted as verification evidence | Direct |
+| `just generation_check` | Passed: two isolated generation builds produced byte-identical generation and boot-store artifacts; four resealed CPU-budget mutations refused | Direct |
+| Legacy `target.sdkRelease` field presented to the new resolver | Refused by exact target-field validation; no compatibility shim remains | Direct |
+| Fresh read-only review of the settled closure/resolver/generator/SDK exporter cutover | No findings; independently checked retained target/prefix authority, selected-profile refusal, lazy import direction, and complete removal of the old field | Direct |
+| `just system_image_builder_check` | Passed: 52 current closures resolve with distinct identities and matching system manifests; the selected closure built twice byte-identically through the canonical builder | Direct |
+
 ## Decisions
 
 - Decision: split the script by mode rather than making the check tolerate a missing prefix.
@@ -110,10 +131,15 @@ mid-provisioning error rather than a refusal.
 - Decision: assert the extent bound against contract-derived worst case rather than raise `MAX_TASK_EXTENTS`.
 - Rationale: the bound is sufficient for every admissible budget with 29 records spare, so raising it would spend `.bss` — which is root CSpace in this image, per the previous entry — against a distribution no generation can present. The defect was the missing assertion, not the number.
 - Rejected alternative: check the extent bound during admission. That would make admission depend on a table whose occupancy is a runtime property, where a compile-time assertion over fixed ceilings answers the same question before an image ships.
+- Decision: remove `TargetSelection.sdkRelease`, its synthetic JSON fixture, and the refresh script rather than restamp a current export with another commit or local version.
+- Rationale: the closure already binds profile, platform, toolchain, rust-sel4 commit, prefix tree, and target-spec artifact. Publication inventory is not needed to build the image. An enclosing release cannot be embedded in its own system archive without a digest cycle; the all-zero system placeholder was bypassing that cycle, not representing an asset.
+- The generator and resolver reuse the existing profile mapping and source pin table. Resolution additionally checks the actual five prefix artifacts and the canonical target-spec path; content-addressed prefix and target-spec references remain load-bearing.
+- `component_sdk.export` passes its computed profile records into `component_sdk_system.export_asset`. The corpus exporter compares its canonicalized prefix against that actual selected exported profile before emitting the system asset. The outer release then binds the resulting archive, closure, and test-run identities without an embedded release record.
+- No new local-release format, optional provenance shim, or publication version is introduced. The current closure contract is cut over in place and all generated consumers are migrated together.
 
 ## Open risks and follow-ups
 
-- [ ] The review's `sourceCommit` finding is unaddressed by decision: the record stamps `c42ae22`, whose `sel4/pins.toml` carries the pre-19-bit RV64 kernel, and `52570122` additionally reduced the advertised profiles from four to two and introduced a placeholder `systems` row while still claiming version `3.1.0`. Whether this input describes a published release or local build inputs is unresolved; either answer moves the 52 closure identities again, so it is deliberately not bundled here.
+- [x] The `sourceCommit` finding is closed by removing the release-shaped local input, not by claiming a new published SDK. Investigation found canonical SDK tags only through `sdk-v3.0.0`; the old `3.1.0/c42ae22` fixture was a local candidate export, not evidence of hosted publication. Earlier descriptions of that fixture as a published release were inaccurate. No SDK was published during this change.
 - [ ] `plan_task_backing`'s `>512`-page branch still omits the per-span fallback extent and large-frame descriptors, unchanged across three rounds; the ceiling-raising milestone owns it with the frozen capacity markers.
 - [ ] The probe worker RPC's sentinel payloads remain uncontracted. Refused as a finding: they carry no fields and are compared for equality only, and the standing testkit convention sends such sentinels as literals (`crossing-peer/src/main.rs:27,34,39`, `echo-agent/src/main.rs:33`). Making every testkit sentinel a contract would be a repository-wide convention change, not a single probe's fix.
 
@@ -123,3 +149,5 @@ mid-provisioning error rather than a refusal.
 - Raw transcript: none.
 - Serial/debugger/model output: command output from this session, quoted in Verification.
 - Related work item: none.
+- Provenance references: [canonical SDK tags](https://github.com/iceice666/slime_os-component_sdk/tags), `contracts/component-sdk-release/v1/schema.zt`, and the reverse-drift reconstruction in `scripts/check/check-component-sdk-release.py`.
+- The cutover SDK check creates local immutable test repositories, not hosted releases. Its build/boot evidence does not claim a new public version or a reverse-drift run from a committed cutover revision.
