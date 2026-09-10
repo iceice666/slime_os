@@ -48,7 +48,7 @@
     sdkRelease = {
       path = "contracts/system-image-closure/v1/inputs/sdk-release.json";
       kind = "file";
-      identity = "ca831610bc64004c91b06ce71374fd28c6291cb6124308881a6fc7a2a8b09b54";
+      identity = "c5bc812cc0e29417af9f27e1bad66bfa079d4ffb368d825ea8b0c5d2ef65d6c5";
     };
     prefix = {
       path = "contracts/system-image-closure/v1/inputs/sel4-prefix";
@@ -63,7 +63,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "8d0f0c1d7e65f5a3e6a10a8f3c194e620609e474236d6745ba09e2de40e8a355";
+      identity = "e49b72210b5a8a7f7c0e5a76ccbffd87e6a22894d26c7a2283d07e895b08939b";
     };
     parameters = [];
   };
@@ -154,7 +154,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "a838709f3cc489bb8ed2e3732a1e0646a6677245bd99c7c755175eed79b3aa35";
+        identity = "f46e3c04f494ccb11decd406703ae8dfc26bb54a9356d1be363f0dcdca40287d";
       };
     };
     {

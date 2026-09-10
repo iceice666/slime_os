@@ -416,6 +416,16 @@ pub(crate) struct PrivateBackingLayout {
 }
 
 impl PrivateBackingLayout {
+    /// Root CSlots this layout consumes beyond its allocation descriptors.
+    ///
+    /// Each extent retains its parent untyped in a root CSlot
+    /// ([`ObjectAllocator::provision_extent`]), so admission that counted only
+    /// descriptors would pass a plan that later fails staging with
+    /// `SlotsExhausted` by exactly this margin.
+    pub(crate) fn extent_parent_slots(&self) -> usize {
+        self.extents.iter().flatten().count()
+    }
+
     pub(crate) fn for_quota(quota: usize) -> Self {
         let private_pages = quota.min(crate::private_memory::MAX_REGION_PAGES);
         if private_pages == 0 {
@@ -2735,6 +2745,89 @@ mod tests {
             PrivateBackingLayout::for_quota(2048).allocation_descriptors,
             514
         );
+    }
+
+    /// A quota's root-CSlot cost is its descriptors *plus* one slot per
+    /// extent, measured against what provisioning actually takes from the
+    /// pool rather than restated from the layout.
+    ///
+    /// The two must agree because generation admission adds this cost before
+    /// any child starts. When it counted only descriptors, a plan landing in
+    /// the two-or-three-slot-per-holder margin was admitted and then died in
+    /// task staging with `SlotsExhausted`, children already running — the
+    /// exact mid-construction failure the total-slot check exists to refuse.
+    #[test]
+    fn quota_root_slot_cost_counts_every_extent_parent() {
+        // On its own large stack, as every allocator-holding test here is:
+        // the record tables are megabytes and a default test stack holds no
+        // `ObjectAllocator` at all.
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                // One allocator across every quota, each with its own arena,
+                // measured as a delta -- which is what the per-holder
+                // admission term is anyway.
+                let mut allocator = ObjectAllocator::empty();
+                allocator.slots = SlotPool::new(1024..MAX_ROOT_CSLOTS).unwrap();
+                let mut extent_position = 0;
+                for (index, quota) in [0, 1, 8, 511, 512, 513, usize::MAX].into_iter().enumerate() {
+                    let layout = PrivateBackingLayout::for_quota(quota);
+                    allocator.arenas[index] = ArenaRecord {
+                        serial: index as u32 + 1,
+                        active: true,
+                        ..ArenaRecord::empty()
+                    };
+                    let id = allocator.arenas[index].id(index);
+                    let before = allocator.free_slots();
+                    let extents_before = extent_position;
+                    // `provision_extent`'s retype needs a live kernel, so the
+                    // extent arm takes its slot directly and records the
+                    // extent; the slot accounting under test is unchanged.
+                    provision_private_backing_with(quota, |request| match request {
+                        PrivateBackingRequest::Extent { kind, size_bits } => {
+                            let slot = allocator.take_slot()?;
+                            let mut extent = ExtentRecord::new(
+                                sel4::cap::Untyped::from_bits(slot as _),
+                                size_bits,
+                            );
+                            extent.assign(id.index(), id.serial, kind);
+                            allocator.extents[extent_position] = Some(extent);
+                            extent_position += 1;
+                            Ok(())
+                        }
+                        PrivateBackingRequest::Slots { count } => {
+                            allocator.provision_private_slots(id, count)
+                        }
+                    })
+                    .unwrap();
+                    let consumed = before - allocator.free_slots();
+                    assert_eq!(
+                        consumed,
+                        layout.allocation_descriptors + layout.extent_parent_slots(),
+                        "quota {quota} consumed {consumed} root CSlots"
+                    );
+                    assert_eq!(
+                        extent_position - extents_before,
+                        layout.extent_parent_slots()
+                    );
+                }
+                // The margin admission previously omitted: a nonzero quota
+                // always costs more than its descriptors, and the 512-page
+                // ceiling retains three extents rather than two.
+                assert_eq!(PrivateBackingLayout::for_quota(0).extent_parent_slots(), 0);
+                assert_eq!(PrivateBackingLayout::for_quota(1).extent_parent_slots(), 2);
+                assert_eq!(
+                    PrivateBackingLayout::for_quota(511).extent_parent_slots(),
+                    2
+                );
+                assert_eq!(
+                    PrivateBackingLayout::for_quota(512).extent_parent_slots(),
+                    3
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

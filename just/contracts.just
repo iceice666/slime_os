@@ -61,8 +61,14 @@ system_composition_closure_check: system_spec_check
     python3 scripts/generate/generate-composition-inventory-bindings.py --check
     python3 scripts/check/check-composition-inventory.py
 
+# The closure corpus's SDK release record advertises one seL4 prefix per
+# profile. Checked here rather than at publication because the closures below
+# resolve against it: a profile whose prefix lags `sel4/pins.toml` hands a
+# consumer a kernel this commit does not build against, and only the profiles
+# an AArch64 closure names would otherwise ever be looked at.
 [group('contracts')]
 system_image_builder_check: system_composition_closure_check
+    python3 scripts/build/refresh-closure-sdk-release.py --check
     python3 scripts/generate/generate-system-image-closures.py --check
     python3 scripts/check/check-system-image-builder.py
 

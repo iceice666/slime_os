@@ -1603,16 +1603,24 @@ pub fn admit_total_slots(
     // budget's quota-scaled reservation rather than hiding it inside the
     // measured factor, so a graph cannot admit and then exhaust root CSpace
     // partway through construction.
+    //
+    // A holder costs one CSlot per allocation descriptor *and* one per extent,
+    // because each extent retains its parent untyped in a root CSlot. Counting
+    // only descriptors leaves a two-or-three-slot-per-holder margin in which
+    // admission succeeds and task staging then fails with `SlotsExhausted`,
+    // which is precisely the mid-construction death this check exists to
+    // prevent.
     if let Some(budget) = private_memory_budget_object(generation) {
         let budget = budget.map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
         for index in 0..budget.holder_count() {
             let quota = budget
                 .holder(index)
                 .ok_or(GenerationError::UnsatisfiablePrivateMemoryBudget)?;
-            required = required.saturating_add(
-                crate::object_allocator::PrivateBackingLayout::for_quota(quota.page_quota as usize)
-                    .allocation_descriptors,
-            );
+            let layout =
+                crate::object_allocator::PrivateBackingLayout::for_quota(quota.page_quota as usize);
+            required = required
+                .saturating_add(layout.allocation_descriptors)
+                .saturating_add(layout.extent_parent_slots());
         }
     }
     if required > available {
