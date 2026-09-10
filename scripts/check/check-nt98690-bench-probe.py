@@ -137,9 +137,7 @@ class ModelConsole:
         self.write_counts[address] = count
         if (address, count) not in self.drop_writes:
             if self._is_uart(address):
-                self.uart.write(
-                    self._uart_index(address), value, self._uart_clock_running()
-                )
+                self.uart.write(self._uart_index(address), value, self._uart_clock_running())
             elif address == PROBE.PWM_BASE + PROBE.PWM_ENABLE:
                 self.registers[address] |= value
             elif address == PROBE.PWM_BASE + PROBE.PWM_DISABLE:
@@ -159,17 +157,17 @@ class ModelConsole:
 
     @staticmethod
     def _is_uart(address: int) -> bool:
-        return PROBE.UART8_BASE <= address < PROBE.UART8_BASE + 0x1000
+        return PROBE.UART7_BASE <= address < PROBE.UART7_BASE + 0x1000
 
     @staticmethod
     def _uart_index(address: int) -> int:
-        return (address - PROBE.UART8_BASE) >> PROBE.UART8_REG_SHIFT
+        return (address - PROBE.UART7_BASE) >> PROBE.UART7_REG_SHIFT
 
     def _uart_clock_running(self) -> bool:
-        gate = self.registers.get(PROBE.CG_BASE + PROBE.CG_UART8_CLK_EN, 0)
-        reset = self.registers.get(PROBE.CG_BASE + PROBE.CG_UART8_RESET, 0)
-        return bool(gate & (1 << PROBE.CG_UART8_CLK_EN_BIT)) and bool(
-            reset & (1 << PROBE.CG_UART8_RESET_BIT)
+        gate = self.registers.get(PROBE.CG_BASE + PROBE.CG_UART7_CLK_EN, 0)
+        reset = self.registers.get(PROBE.CG_BASE + PROBE.CG_UART7_RESET, 0)
+        return bool(gate & (1 << PROBE.CG_UART7_CLK_EN_BIT)) and bool(
+            reset & (1 << PROBE.CG_UART7_RESET_BIT)
         )
 
 
@@ -208,7 +206,7 @@ class Uart16550Model:
     def _require_clock(self, running: bool) -> None:
         if not running:
             raise AssertionError(
-                "the probe touched UART8 while its clock was gated or its reset held; "
+                "the probe touched UART7 while its clock was gated or its reset held; "
                 "this block does not answer there"
             )
 
@@ -237,7 +235,7 @@ class Uart16550Model:
             if self.temt_stuck and self.configured:
                 return floating | PROBE.UART_LSR_THRE
             return floating | PROBE.UART_LSR_TX_MASK
-        raise AssertionError(f"unexpected UART8 register index {index}")
+        raise AssertionError(f"unexpected UART7 register index {index}")
 
     def write(self, index: int, value: int, clock_running: bool) -> None:
         self._require_clock(clock_running)
@@ -266,7 +264,7 @@ class Uart16550Model:
         if index == PROBE.UART_MCR:
             self.mcr = value & 0x1F
             return
-        raise AssertionError(f"unexpected UART8 register index {index}")
+        raise AssertionError(f"unexpected UART7 register index {index}")
 
 
 class ModelReceiver:
@@ -353,15 +351,15 @@ def initial_registers() -> dict[int, int]:
         PROBE.GPIO_BASE + PROBE.GPIO_P_DATA: 0,
         PROBE.GPIO_BASE + PROBE.GPIO_P_DIR: 0,
         PROBE.PAD_BASE + PROBE.PAD_P1_STATUS: 0x24,
-        # UART8 at the prompt: clock gated, reset held, no pad routed, and a
+        # UART7 at the prompt: clock gated, reset held, no pad routed, and a
         # divider field left at something other than the 48 MHz encoding -- the
         # probe must write its own and put this back.
-        PROBE.CG_BASE + PROBE.CG_UART8_CLK_DIV: 0x0013_0000,
-        PROBE.CG_BASE + PROBE.CG_UART8_CLK_EN: 0x0000_0000,
-        PROBE.CG_BASE + PROBE.CG_UART8_RESET: 0x0000_0010,
-        PROBE.TOP_BASE + PROBE.TOP_UART8_MUX: 0x0000_0000,
-        PROBE.TOP_BASE + PROBE.TOP_UART8_RTSCTS_MUX: 0x0000_0000,
-        PROBE.PAD_BASE + PROBE.PAD_PGPIO4_PULL: 0x0000_0100,
+        PROBE.CG_BASE + PROBE.CG_UART7_CLK_DIV: 0x0013_0000,
+        PROBE.CG_BASE + PROBE.CG_UART7_CLK_EN: 0x0000_0000,
+        PROBE.CG_BASE + PROBE.CG_UART7_RESET: 0x0000_0010,
+        PROBE.TOP_BASE + PROBE.TOP_UART7_MUX: 0x0000_0000,
+        PROBE.TOP_BASE + PROBE.TOP_UART7_RTSCTS_MUX: 0x0000_0000,
+        PROBE.PAD_BASE + PROBE.PAD_PGPIO8_PULL: 0x0001_0000,
     }
 
 
@@ -386,7 +384,6 @@ def run_pwm(
         return None
     finally:
         PROBE.time.sleep = original_sleep
-
 
 
 def run_uart(
@@ -418,10 +415,10 @@ def run_uart(
 
 UART_SHARED_WORDS = (
     ("TOP pad function", PROBE.TOP_BASE, "TOP_PGPIO_FUNC"),
-    ("TOP UART8 mux", PROBE.TOP_BASE, "TOP_UART8_MUX"),
-    ("UART8 clock gate", PROBE.CG_BASE, "CG_UART8_CLK_EN"),
-    ("UART8 clock divider", PROBE.CG_BASE, "CG_UART8_CLK_DIV"),
-    ("UART8 reset", PROBE.CG_BASE, "CG_UART8_RESET"),
+    ("TOP UART7 mux", PROBE.TOP_BASE, "TOP_UART7_MUX"),
+    ("UART7 clock gate", PROBE.CG_BASE, "CG_UART7_CLK_EN"),
+    ("UART7 clock divider", PROBE.CG_BASE, "CG_UART7_CLK_DIV"),
+    ("UART7 reset", PROBE.CG_BASE, "CG_UART7_RESET"),
 )
 
 
@@ -443,11 +440,11 @@ def uart_writes(console: ModelConsole, address: int) -> list[int]:
     ]
 
 
-def touches_uart8(command: str) -> bool:
+def touches_uart7(command: str) -> bool:
     parts = command.split()
     if len(parts) < 2 or parts[0] not in ("md.l", "mw.l"):
         return False
-    return PROBE.UART8_BASE <= int(parts[1], 0) < PROBE.UART8_BASE + 0x1000
+    return PROBE.UART7_BASE <= int(parts[1], 0) < PROBE.UART7_BASE + 0x1000
 
 
 def command_index(console: ModelConsole, predicate) -> int | None:
@@ -815,7 +812,6 @@ def pins_bind_the_count_scale() -> None:
         fail(f"a pins edit of {key} to {value} did not stop the probe")
 
 
-
 def pinned_vectors_reproduced() -> None:
     """The bytes this lane puts on the air are fixed, and the decoder reads them.
 
@@ -895,12 +891,12 @@ def normal_uart() -> None:
     if "reset" not in console.commands:
         fail("normal UART run did not reset after verified cleanup")
     # The RX pad and the flow-control mux belong to nothing this lane drives.
-    if uart_writes(console, PROBE.TOP_BASE + PROBE.TOP_UART8_RTSCTS_MUX):
+    if uart_writes(console, PROBE.TOP_BASE + PROBE.TOP_UART7_RTSCTS_MUX):
         fail("the probe wrote the RTS/CTS mux, which this lane never routes")
     function = console.registers[PROBE.TOP_BASE + PROBE.TOP_PGPIO_FUNC]
-    if not function & (1 << (PROBE.UART8_PAD_BIT + 1)):
+    if not function & (1 << (PROBE.UART7_PAD_BIT + 1)):
         fail("the probe took the receive pad out of GPIO mode")
-    if uart_writes(console, PROBE.PAD_BASE + PROBE.PAD_PGPIO4_PULL):
+    if uart_writes(console, PROBE.PAD_BASE + PROBE.PAD_PGPIO8_PULL):
         fail("the probe wrote the pad's pull configuration")
 
 
@@ -914,8 +910,9 @@ def line_configuration_follows_uboot() -> None:
     """
     console = ModelConsole()
     run_uart(console, ModelReceiver(console.uart), frames=1)
+
     def step_index(index: int, value: int) -> int | None:
-        prefix = f"mw.l {PROBE.uart8_register(index):#x} {value:#x}"
+        prefix = f"mw.l {PROBE.uart7_register(index):#x} {value:#x}"
         return command_index(console, lambda command: command.startswith(prefix))
 
     order = [
@@ -946,12 +943,12 @@ def divider_restored_to_surveyed_value() -> None:
     was there.
     """
     console = ModelConsole()
-    address = PROBE.CG_BASE + PROBE.CG_UART8_CLK_DIV
+    address = PROBE.CG_BASE + PROBE.CG_UART7_CLK_DIV
     surveyed = initial_registers()[address]
     run_uart(console, ModelReceiver(console.uart), frames=1)
     values = uart_writes(console, address)
-    field = PROBE.CG_UART8_CLK_DIVIDER << PROBE.CG_UART8_CLK_DIV_SHIFT
-    if not values or (values[0] & PROBE.CG_UART8_CLK_DIV_MASK) != field:
+    field = PROBE.CG_UART7_CLK_DIVIDER << PROBE.CG_UART7_CLK_DIV_SHIFT
+    if not values or (values[0] & PROBE.CG_UART7_CLK_DIV_MASK) != field:
         fail(f"the probe did not program the 48 MHz divider field: {[hex(v) for v in values]}")
     if console.registers[address] != surveyed:
         fail("the probe did not restore the divider field it found")
@@ -960,13 +957,13 @@ def divider_restored_to_surveyed_value() -> None:
 def reset_set_once_never_pulsed() -> None:
     """This reset is active-low: releasing it is a set, and a pulse is a reset.
 
-    The vendor clock driver only ever sets this bit for UART8, and a bench probe
+    The vendor clock driver only ever sets this bit for UART7, and a bench probe
     that helpfully toggled it would be resetting a block mid-run for no reason.
     """
     console = ModelConsole()
     run_uart(console, ModelReceiver(console.uart), frames=1)
-    address = PROBE.CG_BASE + PROBE.CG_UART8_RESET
-    bit = 1 << PROBE.CG_UART8_RESET_BIT
+    address = PROBE.CG_BASE + PROBE.CG_UART7_RESET
+    bit = 1 << PROBE.CG_UART7_RESET_BIT
     values = uart_writes(console, address)
     if len(values) != 2:
         fail(f"expected one release and one restore of the reset bit, got {len(values)}")
@@ -978,8 +975,8 @@ def reset_set_once_never_pulsed() -> None:
 
 def reset_already_released_untouched() -> None:
     console = ModelConsole()
-    address = PROBE.CG_BASE + PROBE.CG_UART8_RESET
-    console.registers[address] |= 1 << PROBE.CG_UART8_RESET_BIT
+    address = PROBE.CG_BASE + PROBE.CG_UART7_RESET
+    console.registers[address] |= 1 << PROBE.CG_UART7_RESET_BIT
     run_uart(console, ModelReceiver(console.uart), frames=1)
     if uart_writes(console, address):
         fail("the probe wrote a reset bit that was already released")
@@ -993,20 +990,20 @@ def gated_port_not_read_before_ungate() -> None:
         fail(f"the ordered run failed: {PROBE.exception_text(error)}")
     gate = command_index(
         console,
-        lambda c: c.startswith(f"mw.l {PROBE.CG_BASE + PROBE.CG_UART8_CLK_EN:#x} "),
+        lambda c: c.startswith(f"mw.l {PROBE.CG_BASE + PROBE.CG_UART7_CLK_EN:#x} "),
     )
-    port = command_index(console, touches_uart8)
+    port = command_index(console, touches_uart7)
     if gate is None or port is None or port < gate:
-        fail(f"the probe touched UART8 (command {port}) before ungating it (command {gate})")
+        fail(f"the probe touched UART7 (command {port}) before ungating it (command {gate})")
 
 
 def reset_release_dropped_refuses() -> None:
     """A release that did not take must stop the run before it drives a pad."""
-    address = PROBE.CG_BASE + PROBE.CG_UART8_RESET
+    address = PROBE.CG_BASE + PROBE.CG_UART7_RESET
     console = ModelConsole(drop_writes={(address, 1)})
     error = run_uart(console, ModelReceiver(console.uart), frames=1)
     expect_failure(error, "register verification failed")
-    for later in (PROBE.CG_BASE + PROBE.CG_UART8_CLK_DIV, PROBE.CG_BASE + PROBE.CG_UART8_CLK_EN):
+    for later in (PROBE.CG_BASE + PROBE.CG_UART7_CLK_DIV, PROBE.CG_BASE + PROBE.CG_UART7_CLK_EN):
         if uart_writes(console, later):
             fail(f"the probe continued to {later:#x} after the reset release failed")
     if console.uart.tx:
@@ -1088,7 +1085,6 @@ def dropped_frame_detected() -> None:
     assert_uart_restored(console)
 
 
-
 def decoder_resyncs_past_a_bad_length() -> None:
     """A corrupt length must not swallow the frame behind it.
 
@@ -1138,12 +1134,12 @@ def uart_pins_bind_the_divisor() -> None:
     profile = PROBE.load_profile()
     PROBE.check_uart_pins(profile)
     for key, value in (
-        ("uart8_divisor", 26),
-        ("uart8_clock_hz", 24_000_000),
-        ("uart8_clock_divider", 19),
-        ("uart8_baud", 115_200),
-        ("uart8_clock_source_hz", 240_000_000),
-        ("uart8_reg_shift", 0),
+        ("uart7_divisor", 26),
+        ("uart7_clock_hz", 24_000_000),
+        ("uart7_clock_divider", 19),
+        ("uart7_baud", 115_200),
+        ("uart7_clock_source_hz", 240_000_000),
+        ("uart7_reg_shift", 0),
     ):
         edited = dict(profile)
         edited[key] = value

@@ -14,14 +14,15 @@
 ## Summary
 
 This opens a lane to transmit a MAVLink v2 HEARTBEAT once per second from the resident Slime
-graph on the named Novatek NT98690 H1V1, through the SoC's UART8 into an RFD900x telemetry
+graph on the named Novatek NT98690 H1V1, through the SoC's UART7 into an RFD900x telemetry
 radio, and lands the first session's half of it: the bench mode that answers, from the vendor
 U-Boot prompt, the hardware questions Slime's own bring-up would otherwise assume. No Slime code
 transmits yet, and no board run has happened, so this entry is `Proposed`; the probe's own
 result will be its own `Audit` entry.
 
-"Radio on GPIO" is the ask, and the answer is a hardware UART whose transmit pad happens to be
-on the GPIO bank the PWM lane already found on the 40-pin header. Nothing is bit-banged.
+"Radio on GPIO" is the ask, and the answer is a hardware UART whose transmit pad is on the
+40-pin GPIO header: P_GPIO[8] at pin 13. Nothing is bit-banged. The port was UART7 for most of
+the day this entry was written; see the second decision below for why it is not.
 
 The lane is cut into three sessions on the P6.PWM pattern: a board-specific bench probe, a
 board-neutral mechanism and protocol observed only under QEMU, then the board-specific bring-up
@@ -33,30 +34,42 @@ and gate. The middle session names no SoC.
 |---|---|---|
 | `scripts/lib/mavlink.py` | HEARTBEAT framing, the X.25 checksum, and a resynchronising v2 frame decoder, in the standard library | The instrument that says a board transmitted is in the repository, and adds no dependency to any gate that reads it |
 | `scripts/lib/uboot_console.py` | `Console.read_bytes_for`, factored out of `read_for`, which now decodes its result | A framed binary protocol is read as bytes; `read_for`'s `errors="replace"` rewrites most of a checksum |
-| `scripts/check/check-nt98690-boot.py` | `--uart-probe` transmits pinned heartbeats out of UART8 and decodes them on a paired radio; `--uart-listen-seconds` reads that radio alone; `--dry-run --uart-probe` renders the write sequence with no board | A hardware fact a later gate depends on is observed before it is depended on, and an unlinked radio is separated from a silent board before one is powered |
+| `scripts/check/check-nt98690-boot.py` | `--uart-probe` transmits pinned heartbeats out of UART7 and decodes them on a paired radio; `--uart-listen-seconds` reads that radio alone; `--dry-run --uart-probe` renders the write sequence with no board | A hardware fact a later gate depends on is observed before it is depended on, and an unlinked radio is separated from a silent board before one is powered |
 | `scripts/check/check-nt98690-boot.py` | Every clock-generator and pinmux write is read-modify-write on one field, every restoration is verified by readback, and the core-rail invariants are asserted before the first write and after the last | The CPU's core-voltage regulator keeps running, and what the board did with a restoring write is observed rather than assumed |
-| `sel4/pins.toml`, `scripts/check/check-sel4-pins.py` | UART8's base, register layout, clock source, divider, rate, baud, and divisor pinned and checked; `observed_uart_routes` empty, so every observed key must be absent until a board run fills it | A pins edit that keeps the arithmetic self-consistent but moves the rate fails a check rather than transmitting where nothing listens |
+| `sel4/pins.toml`, `scripts/check/check-sel4-pins.py` | UART7's base, register layout, clock source, divider, rate, baud, and divisor pinned and checked; `observed_uart_routes` empty, so every observed key must be absent until a board run fills it | A pins edit that keeps the arithmetic self-consistent but moves the rate fails a check rather than transmitting where nothing listens |
 | `scripts/check/check-nt98690-bench-probe.py` | A 16550 model, a ground-radio model with three ways to spoil a frame, and 21 further scenarios | The probe's control flow, its register ordering, and its cleanup are regressions rather than claims |
 | `.tasks/items/` | The lane epic, the bench milestone, an IO-track milestone for the mechanism, and P6.E for the board evidence, with the dependency edges between them | — |
 
 ## Decisions
 
-**The port is UART8, and only its transmit pad is routed.** UART0 is the kernel's debug console
-and the resident shell's input; a radio sharing it would interleave with the shell. UART8's
-`_1` function reaches P_GPIO[4] and [5] on the same 3.3 V bank the ESC probe found on the
-header, and nothing in the boot path claims it: U-Boot compiles no driver past its console port
-and never calls its own `serial_preinit`, and Linux's device tree routes no UART6-9 pad. Since
-this lane never receives, `P_GPIO[5]` stays in GPIO mode and the flow-control mux is never
-written. A consequence worth stating: with the receive input unrouted, the line-status
+**The port is UART7, and only its transmit pad is routed.** UART0 is the kernel's debug console
+and the resident shell's input; a radio sharing it would interleave with the shell. UART7's
+`_1` function reaches P_GPIO[8] and [9], header pins 13 and 15, on the same 3.3 V bank as the
+ESC lane's pad, and nothing in the boot path claims it: U-Boot compiles no driver past its
+console port and never calls its own `serial_preinit`, and Linux's device tree routes no UART6-9
+pad. Since this lane never receives, `P_GPIO[9]` stays in GPIO mode and the flow-control mux is
+never written. A consequence worth stating: with the receive input unrouted, the line-status
 register's receive bits float, so every comparison here masks to the two transmitter bits.
 
-**The divider is written, not read.** The device tree declares UART8 at 48 MHz, which is what
+**UART7 was the first choice, and the board's pinout diagram withdrew it.** UART7's data pads
+are P_GPIO[4] and [5], and the plan chose them on the strength of the pinmux table alone, with
+their connector position listed as the lane's one open question. When the operator supplied the
+40-pin header diagram -- the first pad-to-pin document to exist on the development host -- those
+two pads were not on it; only UART7's flow-control pins are. Five complete UART pairs are. UART7
+is the pick because its two pads carry nothing this board claims and its clock, reset, and mux
+live in the same three registers UART7's did, one bit position over, so every write in the
+probe changed only in its constants. UART9 was the other candidate with a clean pair and was
+rejected because its transmit pad is P_GPIO[0], the ESC lane's PWM pad: two lanes on one pin.
+The diagram is kept beside the PWM audit entry, whose correction records the map, and its
+alternate-function labels were checked against the pinmux table before anything relied on it.
+
+**The divider is written, not read.** The device tree declares UART7 at 48 MHz, which is what
 Linux programs; no source on this host says what the vendor loader leaves in that field at the
 prompt. The probe surveys it, reports the rate it encodes, programs its own, and restores what
 it found. Deriving a baud rate from an unobserved field would make the one number the radio
 depends on an assumption.
 
-**The reset bit is set, never pulsed.** `CG+0x9C` bit 23 is an active-low RSTN: 1 is released.
+**The reset bit is set, never pulsed.** `CG+0x9C` bit 22 is an active-low RSTN: 1 is released.
 The vendor clock driver only ever sets it for this block, and a bench probe that helpfully
 toggled it would be resetting a UART mid-run for no reason.
 
@@ -86,11 +99,11 @@ marker contract, so it will be its own checker.
 
 ## Open risks and follow-ups
 
-- **Whether P_GPIO[4] reaches a connector is unresolved and is this lane's one go/no-go.** The
-  ESC run found P_GPIO[0] on the 40-pin header but its position was never written down, and no
-  schematic, pinout table, or header note exists anywhere on this host. `--gpio-probe 4` answers
-  it. If it is not broken out, the fallback is UART8's second route on C_GPIO[17..18], and only
-  if those reach a connector.
+- **Pin 13 is a diagram's claim until a probe confirms it.** The header map is a document the
+  operator supplied, checked against the pinmux table but not yet against the board. `--gpio-probe
+  8` is the lane's first bench step for that reason; if the pad does not follow pin 13, every
+  position in the map is suspect. The fallback is UART6 on P_GPIO[12..13], pins 40 and 36, after
+  its own probe.
 - **The 480 MHz source is a device-tree declaration.** Every other number here was cross-checked
   against two vendor sources; this one has one. A first run that transmits nothing decodable
   tests it directly.
