@@ -278,9 +278,10 @@ test_sel4_root:
     # MEM-ARENAS covers four-holder capacity against static and private costs,
 # static-record ownership, arithmetic overflow, retained-leaf reclaim,
     # three record-level ownership cases on the private-growth rollback boundary,
-    # bounded private-backing scans plus four record-state coverage cases, and
-    # the per-extent root-CSlot cost generation admission reserves.
-    expected=228
+    # bounded private-backing scans plus four record-state coverage cases,
+    # the per-extent root-CSlot cost generation admission reserves, and that
+    # the allocator's own tables fit the linked kernel's root CSpace.
+    expected=229
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

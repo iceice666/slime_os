@@ -57,40 +57,52 @@ pub const MAX_KERNEL_UNTYPEDS: usize = 64;
 pub const MAX_DEVICE_UNTYPEDS: usize = 64;
 /// Maximum root CSpace width admitted by the software slot bitmap.
 ///
-/// The bitmap can describe the 19-bit QEMU CNodes MEM-ARENAS sizes below, but
+/// This is the widest CNode the bitmap and [`ArenaAllocation`]'s packed slot
+/// field can describe, not the width any platform provides:
 /// `SlotPool::initialize` still accepts only the BootInfo span the selected
-/// platform actually exposes. The Duo kernel keeps its 12-bit CNode and its
-/// three-extents-per-task descriptor table.
+/// kernel actually exposes.
 pub const MAX_ROOT_CSLOTS: usize = 524_288;
 /// Maximum simultaneously owned task-backing records.
 pub const MAX_TASK_ARENAS: usize = 48;
+/// Root CSlots the kernel this root links against actually provides.
+///
+/// Read from the installed kernel configuration rather than declared here, so
+/// a platform whose CNode width changes cannot leave a hand-written constant
+/// describing the previous kernel.
+const KERNEL_ROOT_CNODE_SLOTS: usize = 1 << sel4::sel4_cfg_usize!(ROOT_CNODE_SIZE_BITS);
+/// Whether this image can afford descriptor tables sized for
+/// [`MAX_PLANNED_PRIVATE_PAGES`] holders.
+///
+/// The tables are `.bss`, and in this root `.bss` is capacity, not just
+/// memory: the seL4 loader creates one root CSlot per page of the root image
+/// before the root runs, so the ~4 MiB `AllocationRecord` array alone spends
+/// ~1026 root CSlots. A kernel narrower than [`MAX_ROOT_CSLOTS`] — every
+/// physical board's 12-bit default — has 4096 slots in total, so those tables
+/// would consume the CSpace before `admit_total_slots` ever evaluates the
+/// product graph. Such an image keeps the 4096-record envelope, which bounds
+/// private backing well above the 512-page runtime ceiling
+/// [`crate::private_memory::MAX_REGION_PAGES`] enforces.
+const LARGE_DESCRIPTOR_TABLES: bool =
+    KERNEL_ROOT_CNODE_SLOTS >= MAX_ROOT_CSLOTS && !cfg!(slime_private_small_tables);
 /// Root-owned task allocation descriptors.
 ///
-/// One-page-at-a-time growth needs one frame descriptor per page, plus one leaf
-/// table per 2 MiB span, so this reserves four 256 MiB holders' worth of
-/// *private growth* descriptors -- the MEM-ARENAS representability case
-/// [`plan_task_backing`] proves, not a runtime scenario:
-/// [`crate::private_memory::MAX_REGION_PAGES`] clamps every real holder to 512
-/// pages, orders of magnitude below what this pool holds. It reserves no
-/// headroom for those same four holders' own *static* task construction
-/// (VSpace, image, thread, and table records), which a real deployment of
-/// that hypothetical ceiling would also need;
-/// `four_holders_include_static_descriptors_at_default_pool_boundary` pins the
-/// exact shortfall. Closing it is the ceiling-raising milestone's job, done
-/// together with the matching per-span fallback extent [`plan_task_backing`]
-/// also does not yet reserve above 512 pages -- both describe the same
-/// not-yet-supported quota. The Duo and the dedicated qualification image keep
-/// the 4096-record envelope.
-#[cfg(not(any(slime_cv1800b_duo, slime_private_small_tables)))]
-pub const MAX_TASK_ALLOCATIONS: usize = 4 * (MAX_PLANNED_PRIVATE_PAGES + 128) + 1;
-#[cfg(any(slime_cv1800b_duo, slime_private_small_tables))]
-pub const MAX_TASK_ALLOCATIONS: usize = 4096;
+/// One descriptor per retyped object the root owns for a task: one per private
+/// page plus one leaf table per 2 MiB span, plus that task's own static
+/// construction records (VSpace, image, thread, and tables). A plan's fit
+/// against this pool is decided by [`TaskBackingCapacity::fits`], which counts
+/// both costs; no caller may infer admissibility from this bound alone.
+pub const MAX_TASK_ALLOCATIONS: usize = if LARGE_DESCRIPTOR_TABLES {
+    4 * (MAX_PLANNED_PRIVATE_PAGES + 128) + 1
+} else {
+    4096
+};
 /// Every task consumes one static extent. A quota-bearing task additionally
 /// consumes independently reclaimable data and page-table extents.
-#[cfg(not(any(slime_cv1800b_duo, slime_private_small_tables)))]
-pub const MAX_TASK_EXTENTS: usize = MAX_TASK_ARENAS + 4 * (1 + 128 + 128);
-#[cfg(any(slime_cv1800b_duo, slime_private_small_tables))]
-pub const MAX_TASK_EXTENTS: usize = 3 * MAX_TASK_ARENAS;
+pub const MAX_TASK_EXTENTS: usize = if LARGE_DESCRIPTOR_TABLES {
+    MAX_TASK_ARENAS + 4 * (1 + 128 + 128)
+} else {
+    3 * MAX_TASK_ARENAS
+};
 
 const SLOT_WORD_BITS: usize = usize::BITS as usize;
 const SLOT_WORDS: usize = MAX_ROOT_CSLOTS.div_ceil(SLOT_WORD_BITS);
@@ -2312,12 +2324,14 @@ impl ObjectAllocator {
 mod tests {
     use super::{
         AllocError, AllocationRecord, ArenaAllocation, ArenaPlan, ArenaRecord, ExtentKind,
-        ExtentRecord, MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PRIVATE_EXTENT_BYTES,
-        MAX_PRIVATE_EXTENT_PAGES, MAX_ROOT_CSLOTS, MAX_TASK_ALLOCATIONS, ObjectAllocator,
-        PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE, PROVENANCE_SLOTS, PrivateBackingLayout,
-        PrivateBackingRequest, PrivateObjectKind, PrivateRecordVisits, ProvenanceTable, SlotPool,
-        TaskArenaId, TaskBackingCapacity, TaskStaticBacking, device_retype_plan, plan_allocation,
-        plan_task_backing, provision_private_backing_with, task_static_backing_from_records,
+        ExtentRecord, GRANULE_BYTES, KERNEL_ROOT_CNODE_SLOTS, LARGE_DESCRIPTOR_TABLES,
+        MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PRIVATE_EXTENT_BYTES,
+        MAX_PRIVATE_EXTENT_PAGES, MAX_ROOT_CSLOTS, MAX_TASK_ALLOCATIONS, MAX_TASK_ARENAS,
+        MAX_TASK_EXTENTS, ObjectAllocator, PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE,
+        PROVENANCE_SLOTS, PrivateBackingLayout, PrivateBackingRequest, PrivateObjectKind,
+        PrivateRecordVisits, ProvenanceTable, SlotPool, TaskArenaId, TaskBackingCapacity,
+        TaskStaticBacking, device_retype_plan, plan_allocation, plan_task_backing,
+        provision_private_backing_with, task_static_backing_from_records,
     };
     use crate::private_memory::{PrivateMemoryKernel, Region, Table};
     use sel4::CapTypeForObjectOfFixedSize;
@@ -3318,6 +3332,31 @@ mod tests {
         assert_eq!(allocation.private_kind(), PrivateObjectKind::LargeFrame);
         assert!(allocation.is_reusable());
         assert!(allocation.is_mapped());
+    }
+
+    /// The allocator's tables are `.bss`, and the seL4 loader spends one root
+    /// CSlot per page of the root image before the root runs. Tables the
+    /// booting kernel's own CNode cannot pay for make the image unbootable
+    /// before admission is ever evaluated, so they must be sized against the
+    /// kernel actually linked, not against the widest one supported. A
+    /// quarter of the CSpace is the budget: the rest carries the product
+    /// graph's own objects, which `admit_total_slots` then counts.
+    #[test]
+    fn allocator_state_fits_the_linked_kernels_root_cspace() {
+        let image_slots = core::mem::size_of::<ObjectAllocator>().div_ceil(GRANULE_BYTES);
+        assert!(
+            image_slots * 4 <= KERNEL_ROOT_CNODE_SLOTS,
+            "allocator state spends {image_slots} of {KERNEL_ROOT_CNODE_SLOTS} root CSlots"
+        );
+        assert_eq!(
+            LARGE_DESCRIPTOR_TABLES,
+            MAX_TASK_ALLOCATIONS > 4096,
+            "table size must follow the kernel width, not a hand-set flag"
+        );
+        assert_eq!(
+            MAX_TASK_EXTENTS > 3 * MAX_TASK_ARENAS,
+            LARGE_DESCRIPTOR_TABLES
+        );
     }
 
     #[test]
