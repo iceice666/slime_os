@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-08 |
 | Kind | Audit |
-| Status | Monitoring |
+| Status | Verified |
 | Scope | `scripts/check/check-nt98690-boot.py`, `scripts/check/check-sel4-pins.py`, `sel4/pins.toml` |
 | Work items | 01a07bac-a899-7eac-9575-62cb1ff23285, 01a07bac-83ad-7cfe-be0e-b589e74af74f |
 | Gates | `just sel4_pin_check`, `just sel4_gate_control_check`, `just nt98690_bench_probe_check` |
@@ -205,4 +205,27 @@ doubted, and is now recorded from the document; the two earlier commits stand in
 the reason this one cites a source. The diagram settles one more thing the plan for a second lane
 had assumed: P_GPIO[4] and P_GPIO[5] are **not** on this header, so UART8's data pins reach no
 connector, and only its flow-control pins do. That lane's own entry records the consequence.
+
+**2026-09-10 — the restoration readbacks, observed; the milestone closes.** The operator ran the
+remediated probe on the named board, from the bundle built at `3148e1c3` (main's probe plus the
+UART lane's additions, none of which touch this mode):
+`--pwm-probe --pwm-channel 0 --pwm-pulse-us 1000,1000,1000,1600,1200,1000 --pwm-hold-seconds 1`,
+nothing attached to the pad. The raw UART0 bytes are [`pwm-readback-run.log`](pwm-readback-run.log)
+(sha256 `82c4775b530cd8d1ffe6199f59bac58f1a54b957858300824ef697914d9b43a0`), 97 commands and zero framing markers. The survey read the same eleven words as
+the 8 September runs. Each of the four shared words was written and then read back, in both
+directions: TOP+0x18 `0x1` → `0x0`, TOP+0xA8 `0xfffffffe` → `0xffffffff`, CG+0x30 `0x01df0077` →
+`0x01df01df`, CG+0x84 `0x06000001` → `0x06000000`, every readback equal to the value written and
+every restoration equal to the surveyed value. Six widths latched; the closing disable was followed
+by an ENABLE readback of `0x00001000`, channel 0 off and channel 12 untouched; all four core-rail
+readings were re-read after the last restore; `reset`; `U-Boot 2021.10`.
+
+That is the condition the 2026-09-09 correction found unobserved, now observed. Nothing else in
+the exit conditions is re-litigated by this run, and it re-established nothing about the
+actuator: no ESC was attached, and none was needed.
+
+A first attempt the same day was made by mistake from the 8 September bench bundle, whose probe
+predates the readbacks; its transcript has the shape of `esc-clean-run.log` to within a line and
+was discarded rather than kept beside this one. The bundle's own sheet says to run from its
+directory; the instruction for this rerun was given without one, which is how the old copy was
+reached.
 
