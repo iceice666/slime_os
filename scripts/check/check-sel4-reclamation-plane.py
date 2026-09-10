@@ -123,8 +123,9 @@ def main() -> None:
         r"\[init\] reclamation plane complete",
         r"SLIME_ROOT allocator quiescent live_slots=(\d+) live_objects=(\d+) live_bytes=(\d+)",
         r"SLIME_ROOT allocator live_slots=(\d+) free_slots=(\d+) live_objects=(\d+) live_bytes=(\d+) "
-        r"mapped_ram=(\d+) reusable_ram=([1-9]\d*) allocation_descriptors_free=(\d+) "
-        r"extent_descriptors_free=(\d+) slot_reuses=([1-9]\d*) extent_reuses=([1-9]\d*)",
+        r"mapped_ram=(\d+) reusable_ram=([1-9]\d*) reusable_private_ram=([1-9]\d*) "
+        r"allocation_descriptors_free=(\d+) extent_descriptors_free=(\d+) "
+        r"slot_reuses=([1-9]\d*) extent_reuses=([1-9]\d*)",
     )
     cursor = 0
     for marker in required:
@@ -148,6 +149,13 @@ def main() -> None:
         fail(f"private mapped RAM survived reclamation: {terminal.group(5)}")
     if int(terminal.group(6)) == 0:
         fail("no reclaimable backing extent was retained for reuse")
+    # Unrestricted `reusable_ram` is satisfied by any inactive extent,
+    # including the one every task carries for its static construction --
+    # `reclamation-fault`'s own declared quota is what makes this composition
+    # exercise a private extent at all, and this is the kind-scoped assertion
+    # that it specifically was reclaimed rather than leaked.
+    if int(terminal.group(7)) == 0:
+        fail("no private-backing extent was retained for reuse")
     if re.search(r"SLIME_ROOT FATAL|reclamation plane fail|spawn unwound", transcript):
         fail("failure marker present")
     print(

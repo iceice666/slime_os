@@ -72,15 +72,12 @@ SORTED_SECTIONS = {
     "mintedBindings": lambda entry: entry["name"],
 }
 
-# Sections the frozen baseline predates.
-#
-# The baseline is the pre-CP1 hand-authored `valid.zti`, and it is never
-# regenerated and never edited — that is what makes it evidence rather than the
-# generator's own output. So a section the repository adds *after* it was frozen
-# cannot appear there, and the derivation legitimately produces one the baseline
-# has no opinion about. C10.4's `privateMemoryBudget`, and the
-# `private-memory-budget` resource object that carries it, are the first such
-# section.
+# Sections no system's frozen baseline could ever have, because the baseline is
+# the pre-CP1 hand-authored `valid.zti` and the feature postdates every system
+# it covers. Excused globally is safe here specifically because there is no
+# pre-existing populated content in any baseline for it to hide: C10.4's
+# `privateMemoryBudget`, and the `private-memory-budget` resource object that
+# carries it, are the first section of this shape.
 #
 # Excused for the baseline comparison, never unchecked. `check_post_baseline`
 # below asserts the derived content equals what the component specs declare,
@@ -88,12 +85,23 @@ SORTED_SECTIONS = {
 # this" rather than "this is unverified". A blanket ignore here would let any
 # future divergence hide inside these names, which is exactly the failure
 # `KNOWN_DEAD_BINDINGS` is written to avoid on its own axis.
-POST_BASELINE_SECTIONS = (
-    "privateMemoryBudget",
-    "notificationGrants",
-    "notificationBindings",
-)
+POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
 POST_BASELINE_OBJECTS = ("private-memory-budget",)
+
+# Sections one *specific* system's frozen baseline predates, unlike the ones
+# above: `sel4-matrix` and other systems already carried real
+# `notificationGrants`/`notificationBindings` content before C10.4 added
+# `sel4-private-memory`'s `private-memory-side-effect-ready` notification, so
+# excusing these two sections for every system — as a flat
+# `POST_BASELINE_SECTIONS` entry once did — silently stopped comparing
+# baselines that had real notification content to compare. Keyed per system,
+# on the same terms as `POST_BASELINE_INSTANCE_FIELDS`/`POST_BASELINE_GRANTS`
+# below: an equivalent fact in another system remains baseline-visible.
+# `check_post_baseline` independently compares exactly the sections named here
+# against the system spec's own declared notifications.
+POST_BASELINE_SYSTEM_SECTIONS: dict[str, frozenset[str]] = {
+    "sel4-private-memory": frozenset({"notificationGrants", "notificationBindings"}),
+}
 
 # Instance fields and capability edges added after a system's frozen pre-CP1
 # baseline. Keep these system-scoped: equivalent facts in another system remain
@@ -323,6 +331,9 @@ def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
     """
     value = copy.deepcopy(manifest)
     added = {section: value.pop(section) for section in POST_BASELINE_SECTIONS if section in value}
+    for section in POST_BASELINE_SYSTEM_SECTIONS.get(name, frozenset()):
+        if section in value:
+            added[section] = value.pop(section)
     if "objects" in value:
         kept, removed = [], []
         for entry in value["objects"]:
@@ -420,6 +431,30 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
             f"{name}: derived post-baseline grants do not match the live system "
             f"declarations: {first_difference(derived_post_grants, declared_post_grants, 'grants')}"
         )
+    # The notification sections split off by `POST_BASELINE_SYSTEM_SECTIONS`
+    # get the same independent treatment as the post-baseline grants above:
+    # `derive_manifest` assigns these directly from the system spec, so a
+    # divergence here means the derivation or normalization mutated them, not
+    # a fact the baseline itself could have disagreed with.
+    post_notification_sections = POST_BASELINE_SYSTEM_SECTIONS.get(name, frozenset())
+    if "notificationGrants" in post_notification_sections:
+        declared_notifications = system.spec["notifications"]
+        derived_notifications = derived.get("notificationGrants", [])
+        if derived_notifications != declared_notifications:
+            fail(
+                f"{name}: derived notificationGrants do not match the live system "
+                "declarations: "
+                f"{first_difference(derived_notifications, declared_notifications, 'notificationGrants')}"
+            )
+    if "notificationBindings" in post_notification_sections:
+        declared_bindings = system.spec["notificationBindings"]
+        derived_bindings = derived.get("notificationBindings", [])
+        if derived_bindings != declared_bindings:
+            fail(
+                f"{name}: derived notificationBindings do not match the live system "
+                "declarations: "
+                f"{first_difference(derived_bindings, declared_bindings, 'notificationBindings')}"
+            )
     # B91: every pin the derivation emits carries the reason its system spec
     # declared, and that reason is what the derived manifest itself implies. The
     # builder's own predicate is reused rather than restated, so this gate cannot

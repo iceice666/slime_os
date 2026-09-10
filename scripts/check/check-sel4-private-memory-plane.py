@@ -529,13 +529,30 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
             f"the granted probe grew to {measured.group(1)} page(s) against a "
             f"declared quota of {expected}"
         )
+    # The denied probe emits the same `ReservationExceeded` shape with
+    # pages=0, and B68 already found this plane's two probes running in an
+    # unconstrained order — so the refusal must be scoped to the granted
+    # task's own id, not taken as the transcript's first match. Captured here
+    # in the same search as the installed base, which the refusal must also
+    # agree with below.
+    granted = re.search(
+        r"SLIME_MEM quota task=(\d+) instance=private-memory-granted "
+        r"declared=\d+ installed=\d+ base=(0x[0-9a-f]+)",
+        transcript,
+    )
+    if granted is None:
+        fail("the root reported no installed ceiling for private-memory-granted")
     refusal = re.search(
+        rf"SLIME_MEM refused task={granted.group(1)} delta=1 "
         r"cause=reservation detail=ReservationExceeded \{ pages: (\d+), delta: 1, "
         r"reservation: (\d+) \}",
         transcript,
     )
     if refusal is None:
-        fail("no full-window reservation refusal was recorded")
+        fail(
+            f"private-memory-granted (task {granted.group(1)}) recorded no "
+            "full-window reservation refusal"
+        )
     if int(refusal.group(1)) != expected or int(refusal.group(2)) != expected:
         fail(
             f"the refusal names pages={refusal.group(1)} reservation={refusal.group(2)}, "
@@ -544,14 +561,11 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
     # The base the root reported installing and the base the probe dereferenced
     # must be the same address. Without this the two halves could each be
     # self-consistent about a different window.
-    installed = re.search(
-        r"SLIME_MEM quota task=\d+ instance=private-memory-granted "
-        r"declared=\d+ installed=\d+ base=(0x[0-9a-f]+)",
-        transcript,
-    )
-    if installed is None or installed.group(1) != measured.group(2):
-        reported = installed.group(1) if installed else "<none>"
-        fail(f"the root installed a window at {reported} but the probe used {measured.group(2)}")
+    if granted.group(2) != measured.group(2):
+        fail(
+            f"the root installed a window at {granted.group(2)} but the probe "
+            f"used {measured.group(2)}"
+        )
 
 
 def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, int]) -> None:

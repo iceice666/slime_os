@@ -1572,13 +1572,14 @@ pub(super) fn serve_instance_graph(
         terminations.recorded(),
     );
     sel4::debug_println!(
-        "SLIME_ROOT allocator live_slots={} free_slots={} live_objects={} live_bytes={} mapped_ram={} reusable_ram={} allocation_descriptors_free={} extent_descriptors_free={} slot_reuses={} extent_reuses={}",
+        "SLIME_ROOT allocator live_slots={} free_slots={} live_objects={} live_bytes={} mapped_ram={} reusable_ram={} reusable_private_ram={} allocation_descriptors_free={} extent_descriptors_free={} slot_reuses={} extent_reuses={}",
         allocator.live_slots(),
         allocator.free_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
         tasks.private_memory().total_pages() * child_vspace::GRANULE_SIZE,
         allocator.reusable_extent_bytes(),
+        allocator.reusable_private_extent_bytes(),
         allocator.allocation_descriptors_free(),
         allocator.extent_descriptors_free(),
         allocator.slots_reused(),

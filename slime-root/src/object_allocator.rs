@@ -67,9 +67,20 @@ pub const MAX_TASK_ARENAS: usize = 48;
 /// Root-owned task allocation descriptors.
 ///
 /// One-page-at-a-time growth needs one frame descriptor per page, plus one leaf
-/// table per 2 MiB span. Production profiles reserve enough for four 256 MiB
-/// holders; the Duo and the dedicated qualification image keep the 4096-record
-/// envelope.
+/// table per 2 MiB span, so this reserves four 256 MiB holders' worth of
+/// *private growth* descriptors -- the MEM-ARENAS representability case
+/// [`plan_task_backing`] proves, not a runtime scenario:
+/// [`crate::private_memory::MAX_REGION_PAGES`] clamps every real holder to 512
+/// pages, orders of magnitude below what this pool holds. It reserves no
+/// headroom for those same four holders' own *static* task construction
+/// (VSpace, image, thread, and table records), which a real deployment of
+/// that hypothetical ceiling would also need;
+/// `four_holders_include_static_descriptors_at_default_pool_boundary` pins the
+/// exact shortfall. Closing it is the ceiling-raising milestone's job, done
+/// together with the matching per-span fallback extent [`plan_task_backing`]
+/// also does not yet reserve above 512 pages -- both describe the same
+/// not-yet-supported quota. The Duo and the dedicated qualification image keep
+/// the 4096-record envelope.
 #[cfg(not(any(slime_cv1800b_duo, slime_private_small_tables)))]
 pub const MAX_TASK_ALLOCATIONS: usize = 4 * (MAX_PLANNED_PRIVATE_PAGES + 128) + 1;
 #[cfg(any(slime_cv1800b_duo, slime_private_small_tables))]
@@ -1252,6 +1263,29 @@ impl ObjectAllocator {
             .iter()
             .flatten()
             .filter(|extent| !extent.active)
+            .map(|extent| 1usize << extent.size_bits)
+            .sum()
+    }
+
+    /// [`Self::reusable_extent_bytes`], restricted to private-backing extents.
+    ///
+    /// The unrestricted total is satisfied by any inactive extent, including
+    /// the one every task carries for its static construction; a private
+    /// holder whose data or table extents never returned to the free list
+    /// would still read as nonzero reclamation. This is the kind-scoped
+    /// evidence that a private extent specifically was reclaimed rather than
+    /// leaked.
+    pub fn reusable_private_extent_bytes(&self) -> usize {
+        self.extents
+            .iter()
+            .flatten()
+            .filter(|extent| {
+                !extent.active
+                    && matches!(
+                        extent.kind,
+                        ExtentKind::PrivateData | ExtentKind::PrivateTables
+                    )
+            })
             .map(|extent| 1usize << extent.size_bits)
             .sum()
     }

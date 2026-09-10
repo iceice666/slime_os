@@ -20,6 +20,10 @@
       component = "supervision-child";
       health = "optional";
     };
+    {
+      component = "reclamation-fault";
+      privatePageQuota = 1;
+    };
   ];
   instances = [];
   grants = [

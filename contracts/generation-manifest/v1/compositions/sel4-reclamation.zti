@@ -109,6 +109,11 @@
       size = 4096;
     };
     {
+      id = "private-memory-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
       id = "sha256:init";
       kind = "bootstrap";
       size = 65536;
@@ -124,7 +129,12 @@
       size = 65536;
     };
   ];
-  privateMemoryBudget = [];
+  privateMemoryBudget = [
+    {
+      holder = "reclamation-fault";
+      pageQuota = 1;
+    };
+  ];
   sharedBufferBudget = [];
   state = [];
   target = "aarch64-sel4-qemu-virt";
