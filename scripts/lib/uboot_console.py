@@ -197,6 +197,21 @@ class Console:
             view = view[written:]
 
     def read_for(self, seconds: float) -> str:
+        return self.read_bytes_for(seconds).decode("utf-8", "replace")
+
+    def read_bytes_for(self, seconds: float) -> bytes:
+        """Received bytes with PARMRK markers removed, undecoded.
+
+        A caller reading a framed binary protocol needs the bytes rather than
+        `read_for`'s lossy text: `errors="replace"` rewrites every byte above
+        0x7f, which is most of a checksum. Doubling and marker removal happen
+        here, so both readers count framing errors the same way.
+
+        One trailing `\377` is held back for the next call, since only the next
+        byte says whether it was a doubled literal or a marker. A framed reader
+        must therefore keep reading its window rather than treat one call's
+        result as a complete message.
+        """
         collected = b""
         deadline = time.monotonic() + seconds
         while True:
@@ -223,7 +238,7 @@ class Console:
             if chunk:
                 self.received_bytes.extend(chunk)
                 collected += self._strip_markers(chunk)
-        return collected.decode("utf-8", "replace")
+        return collected
 
     def flush_input(self) -> None:
         """Drain pending input into the append-only capture before the next command."""
