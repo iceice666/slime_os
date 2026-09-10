@@ -1,0 +1,44 @@
+# The probe's own lines from the passing run, as pasted by the operator on
+# 2026-09-10; the raw UART0 bytes are in uart-probe.log beside this file.
+[console] no output yet — power-cycle the board now (waiting up to 150s)
+[console] at the 'nvt: ' prompt
+[uart]   surveying before writing anything
+[uart]   cg_uart7_divider (0x2f0020060) = 0x09090909
+[uart]   cg_uart7_clock_enable (0x2f002007c) = 0x00007060
+[uart]   cg_uart7_reset (0x2f002009c) = 0xffffffb7
+[uart]   top_uart7_mux (0x2f0010034) = 0x00000001
+[uart]   top_uart7_rtscts_mux (0x2f0010038) = 0x00000000
+[uart]   top_pgpio_func (0x2f00100a8) = 0xffffffff
+[uart]   pad_pgpio8_pull (0x2f0030008) = 0xaa555555
+[uart]   pad_p1_status (0x2f0030210) = 0x00000024
+[uart]   divider field 0x09 means 48000000 Hz at the prompt; clock gated, reset released, mux field 0
+[uart]   P_GPIO[0..19] pad rail reads 3.3V
+[pwm]    core-rail invariants hold before the UART probe
+[uart]   lcr (0x2f013600c) = 0x00000000
+[uart]   lsr (0x2f0136014) = 0x00000060
+[uart]   ier (0x2f0136004) = 0x00000000
+[uart]   mcr (0x2f0136010) = 0x00000000
+[uart]   iir (0x2f0136008) = 0x00000001
+[uart]   line configured: 8N1, divisor 52, FIFOs enabled
+[uart]   frame seq=0 sent decoded=yes rssi=-
+[uart]   frame seq=1 sent decoded=yes rssi=-
+[uart]   frame seq=2 sent decoded=yes rssi=-
+[uart]   frame seq=3 sent decoded=yes rssi=-
+[uart]   frame seq=4 sent decoded=yes rssi=-
+[uart]   frame seq=5 sent decoded=yes rssi=-
+[uart]   frame seq=6 sent decoded=yes rssi=-
+[uart]   frame seq=7 sent decoded=yes rssi=-
+[uart]   frame seq=8 sent decoded=yes rssi=-
+[uart]   frame seq=9 sent decoded=yes rssi=-
+[cleanup] restore TOP pad function: verified
+[cleanup] restore TOP UART7 mux: verified
+[cleanup] restore UART7 clock gate: verified
+[cleanup] restore UART7 clock divider: verified
+[cleanup] restore UART7 reset: verified
+[pwm]    core-rail invariants hold after UART cleanup
+[cleanup] core-rail invariant check: verified
+[uart]   the vendor firmware returned
+[uart]   result: frames_sent=10 frames_decoded=10 crc_failures=0 other_msgids=0 settings_restored=True firmware_banner=True
+[uart]   radio capture written to radio-capture.bin
+nt98690 uart probe: PASS, UART7 took every programmed value, 10 heartbeats were decoded on the paired radio, shared settings were confirmed restored, and firmware returned on the named novatek-h1v1
+[gate]   transcript written to uart-probe.log

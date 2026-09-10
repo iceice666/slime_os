@@ -651,6 +651,102 @@ def check_profile(pins: dict[str, object]) -> None:
             "probe, which read the same GPIO data word in every sample while PWM0 ran"
         )
 
+    # The SoC's UART7 (the device tree's `uart6`), whose transmit pad carries a
+    # MAVLink heartbeat to a telemetry radio. The divisor is what turns the
+    # clock into a baud rate, and every later consumer -- bench probe, root
+    # bring-up, driver -- inherits all three numbers, so a self-consistent but
+    # different set would transmit at a rate the ground radio does not listen
+    # at. Only the exact set the arithmetic below describes passes.
+    if int(text(h1v1, "uart7_base", "ns02201_h1v1"), 16) != 0x2_F013_6000:
+        fail("ns02201-h1v1 uart7_base must be the vendor device tree's 0x2f0136000")
+    for key, expected_layout in (("uart7_reg_shift", 2), ("uart7_reg_io_width", 4)):
+        if integer(h1v1, key, "ns02201_h1v1") != expected_layout:
+            fail(
+                f"ns02201-h1v1 {key} must be {expected_layout}, the 16550 layout UART0 "
+                "already pins on this SoC"
+            )
+    uart7_source_hz = integer(h1v1, "uart7_clock_source_hz", "ns02201_h1v1")
+    uart7_divider = integer(h1v1, "uart7_clock_divider", "ns02201_h1v1")
+    uart7_clock_hz = integer(h1v1, "uart7_clock_hz", "ns02201_h1v1")
+    uart7_baud = integer(h1v1, "uart7_baud", "ns02201_h1v1")
+    if uart7_source_hz != 480_000_000:
+        fail("ns02201-h1v1 UART7 clock source must be the 480 MHz fix480m the clock tree names")
+    if uart7_clock_hz != uart7_source_hz // (uart7_divider + 1):
+        fail(
+            "ns02201-h1v1 UART7 clock must equal source / (divider + 1); the divider "
+            "field encodes divisor - 1"
+        )
+    if uart7_divider != 9 or uart7_clock_hz != 48_000_000:
+        fail(
+            "ns02201-h1v1 UART7 clock must be divider 9 over the 480 MHz source, giving "
+            "exactly 48000000 Hz: the rate the device tree declares and the one the "
+            "pinned baud divisor is computed from"
+        )
+    if uart7_baud != 57_600:
+        fail("ns02201-h1v1 uart7_baud must be 57600, the telemetry radio's default rate")
+    if integer(h1v1, "uart7_divisor", "ns02201_h1v1") != round(uart7_clock_hz / (16 * uart7_baud)):
+        fail(
+            "ns02201-h1v1 uart7_divisor must be DIV_ROUND_CLOSEST(clock, 16 * baud), "
+            "the formula this board's own U-Boot uses for the same 16550"
+        )
+
+    # What a UART probe observed on the board: which pad the `_1` function
+    # reached, where the operator found it, and the clock and mux words at the
+    # prompt that a later bring-up must program for itself rather than inherit.
+    # Empty until that run happens, and every observed key must then be present:
+    # the same rule `observed_pwm_routes` enforces, for the same reason.
+    observed_uart_routes: dict[int, tuple[str, str, str]] = {
+        # Placed by the run whose decoded heartbeats came through a wire on
+        # pin 13, not by a meter: none was used that day.
+        7: ("P_GPIO8", "40-pin GPIO header pin 13", "2026-09-10"),
+    }
+    uart7_observed_keys = (
+        "uart7_pad",
+        "uart7_pad_header",
+        "uart7_clock_at_prompt",
+        "uart7_mux_at_prompt",
+        "uart7_probe_observed",
+    )
+    if not observed_uart_routes:
+        present = [key for key in uart7_observed_keys if key in h1v1]
+        if present:
+            fail(
+                f"ns02201-h1v1 declares {present} but no UART route has been observed on "
+                "the board. Record the run's evidence in observed_uart_routes rather "
+                "than pinning a pad no probe has driven"
+            )
+    else:
+        route = observed_uart_routes[7]
+        expected_pad, expected_header, expected_date = route
+        if text(h1v1, "uart7_pad", "ns02201_h1v1") != expected_pad:
+            fail(f"ns02201-h1v1 uart7_pad must be {expected_pad}, the pad UART7_1 reaches")
+        if text(h1v1, "uart7_pad_header", "ns02201_h1v1") != expected_header:
+            fail(
+                f"ns02201-h1v1 uart7_pad_header must be {expected_header!r}, where "
+                f"{expected_pad} was found on the board"
+            )
+        if text(h1v1, "uart7_probe_observed", "ns02201_h1v1") != expected_date:
+            fail(
+                f"ns02201-h1v1 uart7_probe_observed must be {expected_date}; a new date "
+                "needs a new route entry"
+            )
+        if expected_pad not in header_pins or (
+            f"40-pin GPIO header pin {header_pins[expected_pad]}" != expected_header
+        ):
+            fail(
+                f"ns02201-h1v1 header_pins and the observed UART route disagree about "
+                f"where {expected_pad} sits"
+            )
+        for key, fields in (
+            ("uart7_clock_at_prompt", ("divider", "gate", "reset")),
+            ("uart7_mux_at_prompt", ("top13", "top14", "pgpio_function")),
+        ):
+            survey = h1v1.get(key)
+            if not isinstance(survey, dict):
+                fail(f"ns02201-h1v1 {key} must be a table of the words the probe read")
+            for field in fields:
+                int(text(survey, field, f"ns02201_h1v1.{key}"), 16)
+
     expected_h1v1_boot_files = [
         "slime-nt98690-probe.bin",
         "slime-sel4-sample-ns02201-h1v1.bin",

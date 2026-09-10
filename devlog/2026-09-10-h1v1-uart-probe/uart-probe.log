@@ -1,0 +1,756 @@
+NE188>TLZMA
+
+UNZOK!ini ver[0x240903, 0x240903]
+zq_trim[11, 13]
+ddr_speed [4266 4266]
+CPU1400 DONE
+>S
+-+
+-+
+-+
+-+
+tRFC 190ns
+ddr0 4096MB
+nw2k
+S
+-+
+-+-8
+-+
+-+
+tRFC 190ns
+ddr1 4096MB
+nw2k
+RPA
+ddr init done
+
+UNZOK!
+Loader Start ...
+LD_VER 01.09.04
+
+690_LPDDR4X_MIN2_2133MHz 01/28/2026 16:29:40
+
+[8bit]
+SD identify fail
+card open fail
+eMMC 1.8V setting
+EMMC: 8 bits
+FW config 0x0
+BOOT USER 0x0
+BOOT WP 0x0
+Erase Grp Size 1
+WP Grp Size 16
+EMMC
+RRtmp_addr 0x08000000
+LdCtrl2 0x00000008
+l_bl31
+RRbl31_addr 0x01F00000
+bl31_size 0x0000C088
+l_uboot
+Ruboot_addr 0x7E000000
+Ruboot_size 0x0006CE78
+core_cnt= 0x00000004
+smp(bl31)
+fdt 0x00100000
+shm 0x00A00000
+        core2_jump 0xF1210FBC
+  code2JumpCodelen 0x00000010
+      core2_entry2 0x00010000
+       core2_entry 0xF1210FCC
+ code2EntryCodelen 0x00000188
+      core2_entry2 0x00010000
+bl_core2_reset
+64core2_jump_program 0x0100596E
+64code2JumpCodelen 0x00000228
+warm reset core0
+jump_entry 0x01F00000
+ARC64**2*341###NOTICE:  BL31: v2.2(release)
+NOTICE:  BL31: Built : 17:40:39, Jul  7 2026
+NOTICE:  BL31: Found DTB
+NOTICE:  TZASC config:
+NOTICE:  	0x00100000@0x01f00000 	(RW/N)	Ree
+NOTICE:  arb_enable_wp level 0
+NOTICE:  arb_enable_wp level 2
+INFO:    ARM GICv2 driver initialized
+INFO:    BL31: Platform setup done
+INFO:    BL31: Initializing runtime services
+INFO:    BL31: Preparing for EL3 exit to normal world
+INFO:    Entry point address = 0x7e000000
+INFO:    SPSR = 0x3c9
+
+
+U-Boot 2021.10 (Jul 15 2026 - 11:20:07 +0800)
+
+CPU:   Novatek NT @ 1399 MHz
+DRAM:  nvt_print_dram_setting: dram[0x0 - 0x80000000]
+nvt_print_dram_setting: core2entry1[0x0 - 0x10000]
+nvt_print_dram_setting: core2entry2[0x10000 - 0x10000]
+nvt_print_dram_setting: fdt[0x100000 - 0x100000]
+nvt_print_dram_setting: shmem[0xa00000 - 0x100000]
+nvt_print_dram_setting: loader[0x1000000 - 0x100000]
+nvt_print_dram_setting: shmem_amp[0x0 - 0x0]
+nvt_print_dram_setting: atf[0x1f00000 - 0x100000]
+nvt_print_dram_setting: teeos[0x0 - 0x0]
+nvt_print_dram_setting: nsmem[0x0 - 0x0]
+nvt_print_dram_setting: linuxtmp[0x2000000 - 0x72f00000]
+nvt_print_dram_setting: uboot[0x7e000000 - 0x2000000]
+nvt_print_dram_setting: rtos[0x0 - 0x0]
+nvt_print_dram_setting: bridge[0x0 - 0x0]
+nvt_print_dram_setting: memory[0x0 - 0x40000000]
+nvt_print_dram_setting: all_in_one[0x74f00000 - 0x7800000]
+nvt_print_dram_setting: kernel_img[0x7c700000 - 0x1900000]
+nvt_print_dram_setting: dsp[0x0 - 0x0]
+nvt_print_dram_setting: rtos_s0[0x0 - 0x0]
+nvt_print_dram_setting: rtos_s1[0x0 - 0x0]
+nvt_print_dram_setting: rtos_s2[0x0 - 0x0]
+nvt_print_dram_setting: logo-fb[0x0 - 0x0]
+nvt_print_dram_setting: logo2-fb[0x0 - 0x0]
+2 GiB
+Relocation to 0x7ff75000, Offset is 0x01f75000 sp at 7f9c5e90
+nvt_shminfo_init: [33m The fdt buffer addr: 0x7fc741c0[0m
+otp_init[1.00.003]
+otp_timing_reg= 0x8f2620
+remap_data 31
+get_pwr_id: get null pwr id
+use default pwm
+pwr idx: 12
+pwmII_pinmux = 0x1000000
+pwm_id(12) pwm_pinmux(0x1000000)
+pclk_freq(30000000) div(3)
+MMC:   SDIO0: mmc_nvt_parse_driving: Not Existed mmc card_power_gpio fdt, skip
+SDIO0: mmc_nvt_parse_driving: Not Existed mmc force_power_cycle fdt, skip
+SDIO0: sdio pinmux(0x711)
+GPIO version: 1.0.02
+SDIO1: mmc_nvt_parse_driving: Not Existed mmc card_power_gpio fdt, skip
+SDIO1: mmc_nvt_parse_driving: Not Existed mmc force_power_cycle fdt, skip
+SDIO1: sdio pinmux(0x711)
+SDIO2: mmc_nvt_parse_driving: Not Existed mmc card_power_gpio fdt, skip
+SDIO2: mmc_nvt_parse_driving: Not Existed mmc force_power_cycle fdt, skip
+SDIO2: sdio pinmux(0x711)
+V0.02.007_NVT_MMC0: 0, V0.02.007_NVT_MMC1: 1, V0.02.007_NVT_MMC2: 2
+Loading Environment from nowhere... OK
+pcie_nvt_of_to_plat: ver 1.01.03
+pcie_nvt_of_to_plat: max link gen 3
+nvt_pcie_phy_probe: ver 1.00.01
+[690] PCIe Trim data raw(0x30) = NULL
+is found [0][PCIe RINT] = 0x00000000
+[690] PCIe Trim data raw(0x31) = NULL
+is found [0][PCIe lane0 ODT] = 0x00000000
+[690] PCIe Trim data raw(0x32) = NULL
+is found [0][PCIe lane1 ODT] = 0x00000000
+PCIE-0: Link down
+pcie_nvt_of_to_plat: ver 1.01.03
+pcie_nvt_of_to_plat: max link gen 3
+PCIE-1: Link down
+[33m misc_init_r: [0m[33mFirmware name: FW98690A.bin FW98690T.bin FW98690A.fdt.bin [0m 
+[33m misc_init_r: [0mboot time: 5361404(us) 
+switch to partitions #0, OK
+mmc2(part 0) is current device
+nvt_emmc_set_bootbus: Set EMMC boot bus to 8-bit mode
+Set to BOOT_BUS_WIDTH = 0x2, RESET = 0x0, BOOT_MODE = 0x0
+nvt_detect_fw_tbin: Boot from flash or emmc
+[33mNo need to update (FW98690A.bin) [0m
+[31m nvt_getfdt_emb_part_info: [0mSkip this partition node: partition_fdt.restore 
+
+MMC read: dev # 2, block # 512, count 1 ... 1 blocks read: OK
+nvt_fdt_init: nvt_fdt_init: cmd:mmc read 0x7fcb1080 0x200 0x1
+
+MMC read: dev # 2, block # 512, count 464 ... 464 blocks read: OK
+[31m nvt_getfdt_emb_part_info: [0mSkip this partition node: partition_fdt.restore 
+[33m misc_init_r: [0mboot time: 5458076(us) 
+DTS find cpu freq clock 1400MHz
+Set CPU clk 1400MHz
+DTS find apb freq clock 120MHz
+[33m misc_init_r: [0mboot time: 5469958(us) 
+Net:   eqos_probe 1.0.0.8
+DTS eth0@2,f04a0000 found
+eqos_initialize 0x2f04a0000
+eth_parse_phy_intf: get IO MEM 0x2f04a0000
+eth_parse_phy_intf: ref-clk-out 0
+eth_parse_phy_intf: pinmux detect RGMII 0x101102
+eth0: eth0@2,f04a0000eqos_probe 1.0.0.8
+DTS eth1@2,f04b0000 found
+eqos_initialize 0x2f04b0000
+eth_parse_phy_intf: get IO MEM 0x2f04b0000
+eth_parse_phy_intf: ref-clk-out 0
+eth_parse_phy_intf: pinmux detect RGMII 0x101102
+, eth1: eth1@2,f04b0000
+Hit any key to stop autoboot:  0  0
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: 
+nvt: md.l 0x2f0020060 1
+2f0020060: 09090909                             ....
+nvt: md.l 0x2f002007c 1
+2f002007c: 00007060                             `p..
+nvt: md.l 0x2f002009c 1
+2f002009c: ffffffb7                             ....
+nvt: md.l 0x2f0010034 1
+2f0010034: 00000001                             ....
+nvt: md.l 0x2f0010038 1
+2f0010038: 00000000                             ....
+nvt: md.l 0x2f00100a8 1
+2f00100a8: ffffffff                             ....
+nvt: md.l 0x2f0030008 1
+2f0030008: aa555555                             UUU.
+nvt: md.l 0x2f0030210 1
+2f0030210: 00000024                             $...
+nvt: md.l 0x2f00200a4 1
+2f00200a4: ffffffff                             ....
+nvt: md.l 0x2f002008c 1
+2f002008c: 10400000                             ..@.
+nvt: md.l 0x2f001001c 1
+2f001001c: 00010000                             ....
+nvt: md.l 0x2f0120100 1
+2f0120100: 00001000                             ....
+nvt: md.l 0x2f002009c 1
+2f002009c: ffffffb7                             ....
+nvt: md.l 0x2f002009c 1
+2f002009c: ffffffb7                             ....
+nvt: md.l 0x2f0020060 1
+2f0020060: 09090909                             ....
+nvt: md.l 0x2f0020060 1
+2f0020060: 09090909                             ....
+nvt: md.l 0x2f002007c 1
+2f002007c: 00007060                             `p..
+nvt: mw.l 0x2f002007c 0x407060
+nvt: md.l 0x2f002007c 1
+2f002007c: 00407060                             `p@.
+nvt: md.l 0x2f013600c 1
+2f013600c: 00000000                             ....
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136004 1
+2f0136004: 00000000                             ....
+nvt: md.l 0x2f0136010 1
+2f0136010: 00000000                             ....
+nvt: md.l 0x2f0136008 1
+2f0136008: 00000001                             ....
+nvt: md.l 0x2f0010034 1
+2f0010034: 00000001                             ....
+nvt: mw.l 0x2f0010034 0x1000001
+nvt: md.l 0x2f0010034 1
+2f0010034: 01000001                             ....
+nvt: md.l 0x2f00100a8 1
+2f00100a8: ffffffff                             ....
+nvt: mw.l 0x2f00100a8 0xfffffeff
+nvt: md.l 0x2f00100a8 1
+2f00100a8: fffffeff                             ....
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000079                             y...
+nvt: mw.l 0x2f0136004 0x0
+nvt: md.l 0x2f0136004 1
+2f0136004: 00000000                             ....
+nvt: mw.l 0x2f0136010 0x0
+nvt: md.l 0x2f0136010 1
+2f0136010: 00000000                             ....
+nvt: mw.l 0x2f0136008 0x7
+nvt: md.l 0x2f0136008 1
+2f0136008: 00000081                             ....
+nvt: mw.l 0x2f013600c 0x3
+nvt: md.l 0x2f013600c 1
+2f013600c: 00000003                             ....
+nvt: mw.l 0x2f013600c 0x83
+nvt: md.l 0x2f013600c 1
+2f013600c: 00000083                             ....
+nvt: mw.l 0x2f0136000 0x34
+nvt: md.l 0x2f0136000 1
+2f0136000: 00000034                             4...
+nvt: mw.l 0x2f0136004 0x0
+nvt: md.l 0x2f0136004 1
+2f0136004: 00000000                             ....
+nvt: mw.l 0x2f013600c 0x3
+nvt: md.l 0x2f013600c 1
+2f013600c: 00000003                             ....
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0xae
+nvt: mw.l 0x2f0136000 0xc6
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0xbe
+nvt: mw.l 0x2f0136000 0x48
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x2
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0x9f
+nvt: mw.l 0x2f0136000 0xd2
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0x8f
+nvt: mw.l 0x2f0136000 0x5c
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0xcc
+nvt: mw.l 0x2f0136000 0xee
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x5
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0xdc
+nvt: mw.l 0x2f0136000 0x60
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x6
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0xfa
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x7
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0xed
+nvt: mw.l 0x2f0136000 0x74
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x8
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0x6a
+nvt: mw.l 0x2f0136000 0x96
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0xfd
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x9
+nvt: mw.l 0x2f0136000 0x1
+nvt: mw.l 0x2f0136000 0xbf
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x12
+nvt: mw.l 0x2f0136000 0x8
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: mw.l 0x2f0136000 0x0
+nvt: mw.l 0x2f0136000 0x4
+nvt: mw.l 0x2f0136000 0x3
+nvt: mw.l 0x2f0136000 0x7a
+nvt: mw.l 0x2f0136000 0x18
+nvt: md.l 0x2f0136014 1
+2f0136014: 00000060                             `...
+nvt: md.l 0x2f00100a8 1
+2f00100a8: fffffeff                             ....
+nvt: mw.l 0x2f00100a8 0xffffffff
+nvt: md.l 0x2f00100a8 1
+2f00100a8: ffffffff                             ....
+nvt: md.l 0x2f0010034 1
+2f0010034: 01000001                             ....
+nvt: mw.l 0x2f0010034 0x1
+nvt: md.l 0x2f0010034 1
+2f0010034: 00000001                             ....
+nvt: md.l 0x2f002007c 1
+2f002007c: 00407060                             `p@.
+nvt: mw.l 0x2f002007c 0x7060
+nvt: md.l 0x2f002007c 1
+2f002007c: 00007060                             `p..
+nvt: md.l 0x2f0020060 1
+2f0020060: 09090909                             ....
+nvt: md.l 0x2f0020060 1
+2f0020060: 09090909                             ....
+nvt: md.l 0x2f002009c 1
+2f002009c: ffffffb7                             ....
+nvt: md.l 0x2f002009c 1
+2f002009c: ffffffb7                             ....
+nvt: md.l 0x2f00200a4 1
+2f00200a4: ffffffff                             ....
+nvt: md.l 0x2f002008c 1
+2f002008c: 10400000                             ..@.
+nvt: md.l 0x2f001001c 1
+2f001001c: 00010000                             ....
+nvt: md.l 0x2f0120100 1
+2f0120100: 00001000                             ....
+nvt: reset
+resetting ...
+NE188>TLZMA
+
+UNZOK!ini ver[0x240903, 0x240903]
+zq_trim[11, 13]
+ddr_speed [4266 4266]
+CPU1400 DONE
+>S
+-+
+-+
+-+
+-+
+tRFC 190ns
+ddr0 4096MB
+nw2k
+S
+-+
+-+-8
+-+
+-+
+tRFC 190ns
+ddr1 4096MB
+nw2k
+RPA
+ddr init done
+
+UNZOK!
+Loader Start ...
+LD_VER 01.09.04
+
+690_LPDDR4X_MIN2_2133MHz 01/28/2026 16:29:40
+
+[8bit]
+SD identify fail
+card open fail
+eMMC 1.8V setting
+EMMC: 8 bits
+FW config 0x0
+BOOT USER 0x0
+BOOT WP 0x0
+Erase Grp Size 1
+WP Grp Size 16
+EMMC
+RRtmp_addr 0x08000000
+LdCtrl2 0x00000008
+l_bl31
+RRbl31_addr 0x01F00000
+bl31_size 0x0000C088
+l_uboot
+Ruboot_addr 0x7E000000
+Ruboot_size 0x0006CE78
+core_cnt= 0x00000004
+smp(bl31)
+fdt 0x00100000
+shm 0x00A00000
+        core2_jump 0xF1210FBC
+  code2JumpCodelen 0x00000010
+      core2_entry2 0x00010000
+       core2_entry 0xF1210FCC
+ code2EntryCodelen 0x00000188
+      core2_entry2 0x00010000
+bl_core2_reset
+64core2_jump_program 0x0100596E
+64code2JumpCodelen 0x00000228
+warm reset core0
+jump_entry 0x01F00000
+ARC64**2*341###NOTICE:  BL31: v2.2(release)
+NOTICE:  BL31: Built : 17:40:39, Jul  7 2026
+NOTICE:  BL31: Found DTB
+NOTICE:  TZASC config:
+NOTICE:  	0x00100000@0x01f00000 	(RW/N)	Ree
+NOTICE:  arb_enable_wp level 0
+NOTICE:  arb_enable_wp level 2
+INFO:    ARM GICv2 driver initialized
+INFO:    BL31: Platform setup done
+INFO:    BL31: Initializing runtime services
+INFO:    BL31: Preparing for EL3 exit to normal world
+INFO:    Entry point address = 0x7e000000
+INFO:    SPSR = 0x3c9
+
+
+U-Boot 2021.10 (Jul 15 2026 - 11:20:07 +0800)
+
+CPU:   Novatek NT @ 1399 MHz
+DRAM:  nvt_print_dram_setting: dram[0x0 - 0x80000000]
+nvt_print_dram_setting: core2entry1[0x0 - 0x10000]
+nvt_print_dram_setting: core2entry2[0x10000 - 0x10000]
+nvt_print_dram_setting: fdt[0x100000 - 0x100000]
+nvt_print_dram_setting: shmem[0xa00000 - 0x100000]
+nvt_print_dram_setting: loader[0x1000000 - 0x100000]
+nvt_print_dram_setting: shmem_amp[0x0 - 0x0]
+nvt_print_dram_setting: atf[0x1f00000 - 0x100000]
+nvt_print_dram_setting: teeos[0x0 - 0x0]
+nvt_print_dram_setting: nsmem[0x0 - 0x0]
+nvt_print_dram_setting: linuxtmp[0x2000000 - 0x72f00000]
+nvt_print_dram_setting: uboot[0x7e000000 - 0x2000000]
+nvt_print_dram_setting: rtos[0x0 - 0x0]
+nvt_print_dram_setting: bridge[0x0 - 0x0]
+nvt_print_dram_setting: memory[0x0 - 0x40000000]
+nvt_print_dram_setting: all_in_one[0x74f00000 - 0x7800000]
+nvt_print_dram_setting: kernel_img[0x7c700000 - 0x1900000]
+nvt_print_dram_setting: dsp[0x0 - 0x0]
+nvt_print_dram_setting: rtos_s0[0x0 - 0x0]
+nvt_print_dram_setting: rtos_s1[0x0 - 0x0]
+nvt_print_dram_setting: rtos_s2[0x0 - 0x0]
+nvt_print_dram_setting: logo-fb[0x0 - 0x0]
+nvt_print_dram_setting: logo2-fb[0x0 - 0x0]
+2 GiB
+Relocation to 0x7ff75000, Offset is 0x01f75000 sp at 7f9c5e90
+nvt_shminfo_init: [33m The fdt buffer addr: 0x7fc741c0[0m
+otp_init[1.00.003]
+otp_timing_reg= 0x8f2620
+remap_data 31
+get_pwr_id: get null pwr id
+use default pwm
+pwr idx: 12
+pwmII_pinmux = 0x1000000
+pwm_id(12) pwm_pinmux(0x1000000)
+pclk_freq(30000000) div(3)
+MMC:   SDIO0: mmc_nvt_parse_driving: Not Existed mmc card_power_gpio fdt, skip
+SDIO0: mmc_nvt_parse_driving: Not Existed mmc force_power_cycle fdt, skip
+SDIO0: sdio pinmux(0x711)
+GPIO version: 1.0.02
+SDIO1: mmc_nvt_parse_driving: Not Existed mmc card_power_gpio fdt, skip
+SDIO1: mmc_nvt_parse_driving: Not Existed mmc force_power_cycle fdt, skip
+SDIO1: sdio pinmux(0x711)
+SDIO2: mmc_nvt_parse_driving: Not Existed mmc card_power_gpio fdt, skip
+SDIO2: mmc_nvt_parse_driving: Not Existed mmc force_power_cycle fdt, skip
+SDIO2: sdio pinmux(0x711)
+V0.02.007_NVT_MM

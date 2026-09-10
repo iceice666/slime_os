@@ -31,8 +31,11 @@ otherwise assume: `--survey` reads the boot environment, `--reset-probe`
 performs TF-A's watchdog sequence from the non-secure world, and `--gpio-probe`
 and `--pwm-probe` drive one pad -- the first as a plain output slow enough to
 find with a meter, the second as servo PWM held long enough to watch a servo or
-ESC respond. The PWM modes never write a whole clock-generator or pinmux word:
-both blocks are shared with PWM channel 12, which drives this SoC's CPU core
+ESC respond. `--uart-probe` transmits MAVLink heartbeats out of UART7 into a
+telemetry radio and decodes them on its pair, and `--uart-listen-seconds` reads
+that pair alone, so an unlinked radio is separated from a silent board before
+one is powered. No bench mode writes a whole clock-generator or pinmux word:
+those blocks are shared with PWM channel 12, which drives this SoC's CPU core
 voltage, so every such write is read-modify-write and four core-rail readings
 are asserted before the first one and after the last.
 """
@@ -53,6 +56,7 @@ from typing import Callable, NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from arm64_image import parse_header  # noqa: E402
+from mavlink import Frame, FrameDecoder, encode_heartbeat, radio_status_rssi  # noqa: E402
 from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E402
 from uboot_console import (  # noqa: E402
     Console,
@@ -341,6 +345,103 @@ PWM_PROBE_SAMPLES = 0
 GPIO_PROBE_CYCLES = 6
 GPIO_PROBE_HOLD_SECONDS = 2
 
+#: The SoC's UART7 -- the vendor device tree's `uart6`, a naming collision worth
+#: stating once: DT `uart6` at 0x2f0136000 is what the pinmux table, the package
+#: pins, and U-Boot all call UART7, while DT `uart7` is SoC UART8. Everything
+#: here uses the SoC's name. A plain 16550 at 4-byte register stride
+#: (`include/configs/novatek/ns02201_a64.h` `CONFIG_SYS_NS16550_MEM32`), which
+#: is the same layout UART0 carries and `sel4/pins.toml` already pins for it.
+UART7_BASE = 0x2_F013_6000
+UART7_REG_SHIFT = 2
+UART_THR = 0  # write: transmit holding; DLL when DLAB is set
+UART_IER = 1  # DLM when DLAB is set
+UART_IIR = 2  # read: interrupt identity; write: FCR, which does not read back
+UART_LCR = 3
+UART_MCR = 4
+UART_LSR = 5
+UART_LCR_DLAB_8N1 = 0x83
+UART_LCR_8N1 = 0x03
+UART_FCR_ENABLE_RESET = 0x07  # UART_FCR_DEFVAL: enable both FIFOs and reset them
+#: What IIR reports once FCR bit 0 is set. The generic 16550A answers 0xC1;
+#: this UART answered 0x81 on the board (2026-09-10) -- bit 7 alone, the
+#: encoding Linux's port classifier files under `16550` rather than `16550A`.
+#: Only bit 7 is required: FCR does not read back, this is the one sign the
+#: write landed, and nothing here depends on the FIFO being usable.
+UART_IIR_FIFO_BIT = 0x80
+UART_LSR_THRE = 1 << 5
+UART_LSR_TEMT = 1 << 6
+#: The only LSR bits this probe compares. P_GPIO[9] stays in GPIO mode because
+#: nothing here receives, so the receiver's input floats and the data-ready,
+#: break, and framing bits may read as anything; a whole-register comparison
+#: would fail on a working transmitter.
+UART_LSR_TX_MASK = UART_LSR_THRE | UART_LSR_TEMT
+UART_TEMT_POLLS = 5
+UART_FIFO_DEPTH = 16
+
+#: UART7's clock, gate, and reset in the clock generator, and the pad routing in
+#: TOP. Sources: `include/dt-bindings/clock/nvt-ns02201.h` for the register
+#: offsets, the board's `nvt-clock.dtsi` `clk_uart6` node for the bit positions,
+#: `drivers/clk/novatek/nvt-clk-provider.c` for the two encodings below, and
+#: `plat-ns02201_a64/top_reg.h` plus the pinmux driver's UART7 case for the mux.
+#: The divider field holds `divisor - 1` over a fixed 480 MHz source, so 9 is
+#: 48 MHz. The reset bit is an active-low RSTN: 1 is released, and the vendor
+#: clock driver only ever sets it, so this probe sets it and never pulses it.
+CG_UART7_CLK_DIV = 0x60
+CG_UART7_CLK_DIV_SHIFT = 8
+CG_UART7_CLK_DIV_MASK = 0xFF << CG_UART7_CLK_DIV_SHIFT
+CG_UART7_CLK_DIVIDER = 9
+CG_UART7_CLK_EN = 0x7C
+CG_UART7_CLK_EN_BIT = 22
+CG_UART7_RESET = 0x9C
+CG_UART7_RESET_BIT = 22
+UART7_CLOCK_SOURCE_HZ = 480_000_000
+UART7_CLOCK_HZ = UART7_CLOCK_SOURCE_HZ // (CG_UART7_CLK_DIVIDER + 1)
+TOP_UART7_MUX = 0x34  # TOP_REG13_OFS; UART7's field is bits[27:24]
+TOP_UART7_MUX_SHIFT = 24
+TOP_UART7_MUX_MASK = 0xF << TOP_UART7_MUX_SHIFT
+TOP_UART7_MUX_1 = 1  # routes UART7_1: P_GPIO[8] TX, P_GPIO[9] RX
+TOP_UART7_RTSCTS_MUX = 0x38  # TOP_REG14_OFS, field bits[17:16]; surveyed, never written
+UART7_PAD_BIT = 8  # P_GPIO[8] in TOP_PGPIO_FUNC; bit 9 stays GPIO
+PAD_PGPIO8_PULL = 0x08  # bits[17:16]; surveyed, never written
+
+#: The radio this lane transmits into, and what one heartbeat costs on the wire.
+#: 480 MHz / 10 / (16 * 57600) rounds to 52, which is 57692 baud: 0.16% fast,
+#: well inside a 16550's tolerance.
+UART7_BAUD = 57_600
+# `UART7_DIVISOR` is derived below from `uart7_divisor`, so the tolerance it
+# checks applies to the pinned rate rather than to a literal typed beside it.
+UART_PROBE_FRAMES = 10
+UART_PROBE_INTERVAL_SECONDS = 1.0
+UART_PROBE_RECEIVE_WINDOW_SECONDS = 2.0
+UART_RECEIVE_SLICE_SECONDS = 0.2
+
+#: Read-only readings `--uart-probe` reports before it writes anything, and
+#: restores against afterwards. Nothing in this board's boot path configures
+#: UART7 -- U-Boot compiles no driver past its console port and never calls the
+#: vendor's own `serial_preinit`, and Linux's device tree routes no UART6-9 pad
+#: -- so what these words hold at the prompt is measured rather than assumed.
+UART_SURVEY_REGISTERS: tuple[tuple[str, int, int], ...] = (
+    ("cg_uart7_divider", CG_BASE, CG_UART7_CLK_DIV),
+    ("cg_uart7_clock_enable", CG_BASE, CG_UART7_CLK_EN),
+    ("cg_uart7_reset", CG_BASE, CG_UART7_RESET),
+    ("top_uart7_mux", TOP_BASE, TOP_UART7_MUX),
+    ("top_uart7_rtscts_mux", TOP_BASE, TOP_UART7_RTSCTS_MUX),
+    ("top_pgpio_func", TOP_BASE, TOP_PGPIO_FUNC),
+    ("pad_pgpio8_pull", PAD_BASE, PAD_PGPIO8_PULL),
+    ("pad_p1_status", PAD_BASE, PAD_P1_STATUS),
+)
+
+#: The port's own registers, read only once its clock is running: a read of a
+#: gated block aborts on this SoC. Index 0 is never read -- it is the receive
+#: buffer, and reading it pops the FIFO.
+UART_PORT_REGISTERS: tuple[tuple[str, int], ...] = (
+    ("lcr", UART_LCR),
+    ("lsr", UART_LSR),
+    ("ier", UART_IER),
+    ("mcr", UART_MCR),
+    ("iir", UART_IIR),
+)
+
 
 def pwm_control_offset(channel: int) -> int:
     """The channel's cycle-count register: 0 means free run."""
@@ -403,6 +504,63 @@ def pinmux_words(top_mux: int, top_func: int, channel: int) -> tuple[int, int]:
     return ((top_mux & ~(0xF << shift)) | (0x1 << shift), top_func & ~(1 << channel))
 
 
+def uart7_register(index: int) -> int:
+    """The address of one 16550 register at this SoC's 4-byte stride."""
+    return UART7_BASE + (index << UART7_REG_SHIFT)
+
+
+def uart7_clock_hz_from_field(field: int) -> int:
+    """The rate a divider field encodes, for reporting what the prompt left.
+
+    The field is `divisor - 1`, so this is only ever printed beside the surveyed
+    word: the probe programs the divider itself rather than deriving a baud rate
+    from whatever it found.
+    """
+    if not 0 <= field <= 0xFF:
+        raise ValueError(f"divider field {field} does not fit the 8-bit field")
+    return UART7_CLOCK_SOURCE_HZ // (field + 1)
+
+
+def uart7_divisor(clock_hz: int, baud: int) -> int:
+    """The 16550 divisor for `baud`, refusing a rate the port cannot hold.
+
+    `DIV_ROUND_CLOSEST(clock, 16 * baud)` is U-Boot's own formula for this port.
+    A divisor is an integer, so most clock and baud pairs land off the requested
+    rate; beyond about 2% a UART stops framing reliably, and a probe that
+    reported a transmission failure there would be blaming the wrong thing.
+    """
+    if clock_hz <= 0 or baud <= 0:
+        raise ValueError(f"clock {clock_hz} Hz and baud {baud} must both be positive")
+    divisor = round(clock_hz / (16 * baud))
+    if not 1 <= divisor <= 0xFFFF:
+        raise ValueError(f"{baud} baud off {clock_hz} Hz needs divisor {divisor}")
+    error = abs(clock_hz / (16 * divisor) / baud - 1)
+    if error > 0.02:
+        raise ValueError(
+            f"divisor {divisor} gives {clock_hz / (16 * divisor):.0f} baud for a "
+            f"requested {baud}: {error * 100:.1f}% off"
+        )
+    return divisor
+
+
+UART7_DIVISOR = uart7_divisor(UART7_CLOCK_HZ, UART7_BAUD)
+
+
+def cg_uart7_divider_word(current: int) -> int:
+    """`current` with UART7's divider field set to the 48 MHz encoding.
+
+    The field is written rather than read, in the probe and later in the root:
+    nothing on the development host records what the vendor loader leaves here,
+    so the surveyed value is evidence to report and restore, never an input.
+    """
+    return (current & ~CG_UART7_CLK_DIV_MASK) | (CG_UART7_CLK_DIVIDER << CG_UART7_CLK_DIV_SHIFT)
+
+
+def top_uart7_mux_word(current: int) -> int:
+    """`current` with UART7's mux field selecting the P_GPIO[8..9] route."""
+    return (current & ~TOP_UART7_MUX_MASK) | (TOP_UART7_MUX_1 << TOP_UART7_MUX_SHIFT)
+
+
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"nt98690 boot check: {message}")
 
@@ -440,12 +598,52 @@ def validate_pwm_probe_inputs(
         fail("--pwm-samples must be non-negative")
 
 
+def validate_gpio_pad(channel: int) -> None:
+    """A pad the GPIO probe may drive: on the header, and in the first bank word.
+
+    The PWM probe's channel list is not the right bound here -- it is about
+    which channels sit off channel 12's divider, and it stopped a probe of
+    P_GPIO[8] on 2026-09-10. What makes a pad safe to drive as a plain output
+    is that it is one of the bank-1 pads the connector breaks out: the
+    core-rail pad, P_GPIO[42], is in the second word and on no header pin, and
+    a pad that reaches no connector has nothing for a meter to find.
+    """
+    if not 0 <= channel <= 31:
+        fail(f"P_GPIO[{channel}] is outside the first GPIO bank word (0..31)")
+    header = load_profile().get("header_pins")
+    if not isinstance(header, dict) or f"P_GPIO{channel}" not in header:
+        fail(
+            f"P_GPIO[{channel}] is not on the 40-pin header according to sel4/pins.toml "
+            "header_pins, so a meter could not find it; the pads that are: "
+            + ", ".join(sorted(k for k in (header or {}) if k.startswith("P_GPIO")))
+        )
+
+
 def validate_gpio_probe_inputs(channel: int, cycles: int, hold: float) -> None:
-    validate_probe_channel(channel)
+    validate_gpio_pad(channel)
     if cycles <= 0:
         fail("--gpio-cycles must be positive")
     if hold < 0:
         fail("--gpio-hold-seconds must be non-negative")
+
+
+def validate_uart_probe_inputs(
+    frames: int, interval: float, window: float, divisor: int, receiver: str | None = None
+) -> None:
+    """Reject a UART probe's arguments before anything opens a port."""
+    if not 1 <= frames <= 256:
+        fail("--uart-frames must be 1..256: a sequence byte wraps after 256 frames")
+    if interval < 0:
+        fail("--uart-interval-seconds must be non-negative")
+    if window < 0:
+        fail("--uart-receive-window-seconds must be non-negative")
+    if receiver is not None and window <= 0:
+        fail(
+            "--uart-receive-window-seconds must be positive when a receiver is given: "
+            "a zero window never reads the radio and would blame the pad for it"
+        )
+    if not 1 <= divisor <= 0xFFFF:
+        fail(f"--uart-divisor {divisor} is outside the 16550's 1..65535 divisor")
 
 
 def exception_text(error: BaseException) -> str:
@@ -857,6 +1055,115 @@ def check_pwm_pins(profile: dict[str, object]) -> None:
             )
 
 
+def check_uart_pins(profile: dict[str, object]) -> None:
+    """The UART7 addresses and the baud arithmetic here must be the pinned ones."""
+    for key, constant in (
+        ("uart7_base", UART7_BASE),
+        ("pinmux_top_base", TOP_BASE),
+        ("pad_base", PAD_BASE),
+        ("reset_cg_base", CG_BASE),
+    ):
+        pinned = profile.get(key)
+        if pinned is None:
+            fail(f"sel4/pins.toml [{PINS_SECTION}] must pin {key} before a UART probe")
+        if int(str(pinned), 16) != constant:
+            fail(f"this probe drives {constant:#x} but the pins declare {key} = {pinned}")
+    # The divisor is what turns a clock into a baud rate, and a later consumer
+    # inherits all three. Refusing a mismatch is what keeps a pins edit from
+    # silently transmitting at half the rate the ground radio listens at.
+    for key, constant in (
+        ("uart7_reg_shift", UART7_REG_SHIFT),
+        ("uart7_reg_io_width", 4),
+        ("uart7_clock_source_hz", UART7_CLOCK_SOURCE_HZ),
+        ("uart7_clock_divider", CG_UART7_CLK_DIVIDER),
+        ("uart7_clock_hz", UART7_CLOCK_HZ),
+        ("uart7_baud", UART7_BAUD),
+        ("uart7_divisor", UART7_DIVISOR),
+    ):
+        pinned = profile.get(key)
+        if pinned is None:
+            fail(f"sel4/pins.toml [{PINS_SECTION}] must pin {key} before a UART probe")
+        if pinned != constant:
+            fail(f"this probe programs {key} = {constant} but the pins declare {pinned}")
+
+
+def uart_probe_plan(
+    frames: int,
+    interval: float,
+    receiver: str | None,
+    window: float,
+    divisor: int,
+) -> list[str]:
+    """The normal write sequence and conditional recovery `--uart-probe` performs."""
+    validate_uart_probe_inputs(
+        frames, interval, window, divisor, None if receiver is None else receiver.endpoint
+    )
+    reset_bit = 1 << CG_UART7_RESET_BIT
+    gate_bit = 1 << CG_UART7_CLK_EN_BIT
+    pad_bit = 1 << UART7_PAD_BIT
+    lines = [
+        f"# UART7 at {UART7_BASE:#x} -> P_GPIO{UART7_PAD_BIT} (TX only), "
+        f"{UART7_BAUD} baud 8N1 from a {UART7_CLOCK_HZ / 1e6:g} MHz clock, divisor {divisor}",
+        f"# {frames} MAVLink v2 HEARTBEAT frames, {interval:g}s apart",
+        (
+            f"# receiver: {receiver} at {UART7_BAUD}, {window:g}s window per frame"
+            if receiver
+            else "# receiver: none -- frames_decoded will be unobserved"
+        ),
+        f"read-only survey of {len(UART_SURVEY_REGISTERS)} registers, then the core-rail invariants",
+        f"[RMW+verify] {CG_BASE + CG_UART7_RESET:#x} set {reset_bit:#x}        "
+        "# active-low RSTN: release, never pulse",
+        f"[RMW+verify] {CG_BASE + CG_UART7_CLK_DIV:#x} field[{CG_UART7_CLK_DIV_SHIFT + 7}:"
+        f"{CG_UART7_CLK_DIV_SHIFT}] = {CG_UART7_CLK_DIVIDER}   "
+        f"# {UART7_CLOCK_HZ / 1e6:g} MHz",
+        f"[RMW+verify] {CG_BASE + CG_UART7_CLK_EN:#x} set {gate_bit:#x}        # clock on",
+        f"read-only survey of {len(UART_PORT_REGISTERS)} port registers (never index 0: it pops RX)",
+        f"[RMW+verify] {TOP_BASE + TOP_UART7_MUX:#x} field[{TOP_UART7_MUX_SHIFT + 3}:"
+        f"{TOP_UART7_MUX_SHIFT}] = {TOP_UART7_MUX_1}   # UART7_1 route",
+        f"[RMW+verify] {TOP_BASE + TOP_PGPIO_FUNC:#x} clear {pad_bit:#x}          "
+        f"# P_GPIO{UART7_PAD_BIT} to FUNCTION; bit {UART7_PAD_BIT + 1} left in GPIO mode",
+        f"      poll {uart7_register(UART_LSR):#x} for TEMT, then, in U-Boot's own order:",
+        f"      mw.l {uart7_register(UART_IER):#x} 0x0; read back and compare",
+        f"      mw.l {uart7_register(UART_MCR):#x} 0x0; read back and compare",
+        f"      mw.l {uart7_register(UART_IIR):#x} {UART_FCR_ENABLE_RESET:#x}"
+        f"       # FCR is write-only; IIR bit 7 ({UART_IIR_FIFO_BIT:#04x}) must then read set",
+        f"      mw.l {uart7_register(UART_LCR):#x} {UART_LCR_8N1:#x}; read back and compare",
+        f"      mw.l {uart7_register(UART_LCR):#x} {UART_LCR_DLAB_8N1:#x}   # DLAB",
+        f"      mw.l {uart7_register(UART_THR):#x} {divisor & 0xFF:#x}; read back and compare",
+        f"      mw.l {uart7_register(UART_IER):#x} {divisor >> 8:#x}; read back and compare",
+        f"      mw.l {uart7_register(UART_LCR):#x} {UART_LCR_8N1:#x}; read back and compare",
+    ]
+    for index in range(min(frames, 2)):
+        lines += [
+            f"      poll {uart7_register(UART_LSR):#x} for THRE, 16x mw.l "
+            f"{uart7_register(UART_THR):#x} <byte>, poll THRE, 5x mw.l   # HEARTBEAT seq={index}",
+            f"      poll {uart7_register(UART_LSR):#x} for TEMT under mask "
+            f"{UART_LSR_TX_MASK:#x}"
+            + (f", then decode seq={index} on the receiver" if receiver else ""),
+            f"      sleep to {interval:g}s",
+        ]
+    if frames > 2:
+        lines.append(f"      ... {frames - 2} further frames, seq up to {(frames - 1) & 0xFF}")
+    lines += [
+        "# Conditional cleanup after any write may have been sent, including timeout or Ctrl-C:",
+        "[RMW+verify] restore TOP pad function, TOP UART7 mux, CG clock gate, CG divider, "
+        "CG reset independently",
+        "      re-check core-rail invariants",
+        "      only after verified cleanup: `reset`, then require the vendor banner",
+        "      if prompt state cannot be recovered, stop issuing commands and report cleanup unknown",
+        "",
+        "Readback proves register state only; a decoded frame on the receiver is what proves",
+        "the pad transmitted, and without a receiver this probe claims no transmission at all.",
+        "Never written: "
+        f"{TOP_BASE + TOP_UART7_RTSCTS_MUX:#x} (RTS/CTS mux), "
+        f"{PAD_BASE + PAD_PGPIO8_PULL:#x} (pad pull), "
+        f"{TOP_BASE + TOP_PGPIO_FUNC:#x} bit {UART7_PAD_BIT + 1} (the RX pad), "
+        f"and every core-rail register the PWM plan lists.",
+        f"Never read: {uart7_register(UART_THR):#x} as a source -- it pops the receive FIFO.",
+    ]
+    return lines
+
+
 def read_one(console: Console, prompt: str, address: int) -> int:
     output = send_command(console, f"md.l {address:#x} 1", prompt, REGISTER_COMMAND_SECONDS, fail)
     value = read_register(output, address)
@@ -1265,6 +1572,371 @@ def pwm_probe(
     return transcript
 
 
+def uart_survey(console: Console, prompt: str) -> dict[str, int]:
+    """Report UART7's clock, mux, and pad state before writing anything."""
+    readings: dict[str, int] = {}
+    for name, base, offset in UART_SURVEY_REGISTERS:
+        value = read_one(console, prompt, base + offset)
+        readings[name] = value
+        print(f"[uart]   {name} ({base + offset:#x}) = {value:#010x}")
+    field = (readings["cg_uart7_divider"] & CG_UART7_CLK_DIV_MASK) >> CG_UART7_CLK_DIV_SHIFT
+    gated = not readings["cg_uart7_clock_enable"] & (1 << CG_UART7_CLK_EN_BIT)
+    held = not readings["cg_uart7_reset"] & (1 << CG_UART7_RESET_BIT)
+    routed = (readings["top_uart7_mux"] & TOP_UART7_MUX_MASK) >> TOP_UART7_MUX_SHIFT
+    print(
+        f"[uart]   divider field {field:#04x} means {uart7_clock_hz_from_field(field)} Hz at "
+        f"the prompt; clock {'gated' if gated else 'running'}, "
+        f"reset {'held' if held else 'released'}, mux field {routed}"
+    )
+    if readings["pad_p1_status"] & (1 << 4):
+        fail(
+            "the P1 pad rail reads 1.8V, but this lane's wiring claim is that "
+            f"P_GPIO{UART7_PAD_BIT} is a 3.3V output into the radio's receive pin. "
+            "Nothing is written"
+        )
+    print("[uart]   P_GPIO[0..19] pad rail reads 3.3V")
+    return readings
+
+
+def uart_survey_port(console: Console, prompt: str) -> dict[str, int]:
+    """Report UART7's own registers, once its clock is running.
+
+    Never index 0: that is the receive buffer, and reading it pops the FIFO.
+    """
+    readings: dict[str, int] = {}
+    for name, index in UART_PORT_REGISTERS:
+        value = read_one(console, prompt, uart7_register(index))
+        readings[name] = value
+        print(f"[uart]   {name} ({uart7_register(index):#x}) = {value:#010x}")
+    return readings
+
+
+def program_uart7_line(console: Console, prompt: str, divisor: int) -> None:
+    """Configure 8N1 at `divisor`, in U-Boot's own order for this port.
+
+    `ns16550_init` drains the shifter first, then quiesces interrupts and modem
+    control before touching the line: a divisor loaded while a byte is in flight
+    corrupts it. FCR does not read back, so IIR's FIFO bit is what
+    confirms the write landed.
+    """
+    poll_lsr(console, prompt, UART_LSR_TEMT, "before configuring the line")
+    write_and_verify(console, prompt, uart7_register(UART_IER), 0, 0xFF)
+    write_and_verify(console, prompt, uart7_register(UART_MCR), 0, 0x1F)
+    send_command(
+        console,
+        f"mw.l {uart7_register(UART_IIR):#x} {UART_FCR_ENABLE_RESET:#x}",
+        prompt,
+        REGISTER_COMMAND_SECONDS,
+        fail,
+    )
+    verify_register(console, prompt, uart7_register(UART_IIR), UART_IIR_FIFO_BIT, UART_IIR_FIFO_BIT)
+    write_and_verify(console, prompt, uart7_register(UART_LCR), UART_LCR_8N1, 0xFF)
+    write_and_verify(console, prompt, uart7_register(UART_LCR), UART_LCR_DLAB_8N1, 0xFF)
+    write_and_verify(console, prompt, uart7_register(UART_THR), divisor & 0xFF, 0xFF)
+    write_and_verify(console, prompt, uart7_register(UART_IER), divisor >> 8, 0xFF)
+    write_and_verify(console, prompt, uart7_register(UART_LCR), UART_LCR_8N1, 0xFF)
+    print(f"[uart]   line configured: 8N1, divisor {divisor}, FIFOs enabled")
+
+
+def poll_lsr(console: Console, prompt: str, bit: int, when: str) -> int:
+    """Wait for one LSR bit, comparing only the two transmitter bits."""
+    value = 0
+    for _ in range(UART_TEMT_POLLS):
+        value = read_one(console, prompt, uart7_register(UART_LSR))
+        if value & bit:
+            return value
+    fail(
+        f"UART7's transmitter did not report {bit:#04x} {when} after "
+        f"{UART_TEMT_POLLS} reads: lsr={value & UART_LSR_TX_MASK:#04x}. The clock, "
+        "the reset, or the divider is not what this probe programmed"
+    )
+    raise AssertionError("unreachable")
+
+
+def transmit_frame(console: Console, prompt: str, frame: bytes) -> str:
+    """Write one frame a byte at a time, then require the shifter to empty.
+
+    THRE is polled once per sixteen-byte burst rather than before every byte.
+    Each poll is a console round trip of a few hundred milliseconds, and a byte
+    is on the wire for 174 us, so every byte has left the holding register long
+    before the next command arrives whether or not this UART's FIFO is usable.
+    A poll per byte proved nothing and doubled the cost of a frame.
+    """
+    transcript = ""
+    for index, byte in enumerate(frame):
+        if index % UART_FIFO_DEPTH == 0:
+            poll_lsr(console, prompt, UART_LSR_THRE, "with a burst to send")
+        transcript += send_command(
+            console,
+            f"mw.l {uart7_register(UART_THR):#x} {byte:#x}",
+            prompt,
+            REGISTER_COMMAND_SECONDS,
+            fail,
+        )
+    poll_lsr(console, prompt, UART_LSR_TEMT, "after the last byte of a frame")
+    return transcript
+
+
+def receive_frame(
+    receiver: Console, decoder: FrameDecoder, seq: int, window: float
+) -> tuple[Frame | None, list[Frame]]:
+    """Read the ground radio until this frame's heartbeat arrives or time runs out.
+
+    Everything else decoded on the way is returned too: the radio's own status
+    frames carry the link's signal strength, and a bad-checksum heartbeat is
+    evidence rather than noise.
+    """
+    seen: list[Frame] = []
+    match: Frame | None = None
+    deadline = time.monotonic() + window
+    while time.monotonic() < deadline:
+        for frame in decoder.feed(receiver.read_bytes_for(UART_RECEIVE_SLICE_SECONDS)):
+            seen.append(frame)
+            if frame.msgid == 0 and frame.crc_ok and frame.seq == seq and match is None:
+                match = frame
+        if match is not None:
+            break
+    return match, seen
+
+
+def uart_listen(receiver: Console, seconds: float) -> None:
+    """Print what the ground radio decodes, asserting nothing.
+
+    Separating an unpaired radio from a silent board is the first thing this
+    bench session needs, and it is answerable before the board is touched: a
+    linked SiK-family radio emits its own status frames into this stream.
+    """
+    print(f"[listen] reading {receiver.describe()} for {seconds:.0f}s; Ctrl-C to stop")
+    decoder = FrameDecoder()
+    frames = 0
+    heartbeats = 0
+    interrupted = False
+    deadline = time.monotonic() + seconds
+    try:
+        while time.monotonic() < deadline:
+            for frame in decoder.feed(receiver.read_bytes_for(UART_RECEIVE_SLICE_SECONDS)):
+                frames += 1
+                heartbeats += bool(frame.msgid == 0 and frame.crc_ok)
+                rssi = radio_status_rssi(frame)
+                print(
+                    f"[listen] msgid={frame.msgid} seq={frame.seq} crc_ok={frame.crc_ok} "
+                    f"rssi={f'{rssi[0]}/{rssi[1]}' if rssi else '-'}"
+                )
+    except KeyboardInterrupt:
+        # Stopping a listen early is how it normally ends; the totals are the
+        # point of the mode and are printed either way.
+        interrupted = True
+    errors = receiver.framing_errors
+    print(
+        f"[listen] {'interrupted; ' if interrupted else ''}"
+        f"bytes={len(receiver.received_bytes)} frames={frames} "
+        f"heartbeats={heartbeats} framing_errors="
+        f"{'unobservable over a TCP bridge' if errors is None else errors}"
+    )
+
+
+def uart_probe(
+    console: Console,
+    prompt: str,
+    frames: int,
+    interval: float,
+    receiver: Console | None,
+    window: float,
+    divisor: int,
+    timeout: float,
+) -> str:
+    """Transmit heartbeats out of UART7; verify registers, cleanup, and recovery separately."""
+    validate_uart_probe_inputs(frames, interval, window, divisor)
+    reach_uboot(console, prompt, min(timeout, PROMPT_WINDOW_SECONDS), fail)
+    transcript = ""
+    reset_bit = 1 << CG_UART7_RESET_BIT
+    gate_bit = 1 << CG_UART7_CLK_EN_BIT
+    pad_bit = 1 << UART7_PAD_BIT
+    print("[uart]   surveying before writing anything")
+    before = uart_survey(console, prompt)
+    check_core_rail(console, prompt, "before the UART probe")
+
+    decoder = FrameDecoder()
+    modified = False
+    primary_error: BaseException | None = None
+    cleanup_errors: list[str] = []
+    cleanup_safe = True
+    restored_verified = False
+    banner_verified = False
+    sent = 0
+    decoded = 0
+    crc_failures = 0
+    other_msgids = 0
+
+    try:
+        # Mark possible modification before the first command is sent: a lost
+        # acknowledgement does not prove that the target rejected the write.
+        modified = True
+        read_modify_write(console, prompt, CG_BASE + CG_UART7_RESET, 0, reset_bit)
+        read_modify_write(
+            console,
+            prompt,
+            CG_BASE + CG_UART7_CLK_DIV,
+            CG_UART7_CLK_DIV_MASK,
+            cg_uart7_divider_word(0) & CG_UART7_CLK_DIV_MASK,
+        )
+        read_modify_write(console, prompt, CG_BASE + CG_UART7_CLK_EN, 0, gate_bit)
+        uart_survey_port(console, prompt)
+        read_modify_write(
+            console,
+            prompt,
+            TOP_BASE + TOP_UART7_MUX,
+            TOP_UART7_MUX_MASK,
+            top_uart7_mux_word(0) & TOP_UART7_MUX_MASK,
+        )
+        read_modify_write(console, prompt, TOP_BASE + TOP_PGPIO_FUNC, pad_bit, 0)
+        program_uart7_line(console, prompt, divisor)
+        if receiver is not None:
+            receiver.read_bytes_for(0.5)
+
+        for index in range(frames):
+            seq = index & 0xFF
+            started = time.monotonic()
+            transcript += transmit_frame(console, prompt, encode_heartbeat(seq))
+            sent += 1
+            rssi = None
+            match = None
+            if receiver is not None:
+                match, seen = receive_frame(receiver, decoder, seq, window)
+                for frame in seen:
+                    if frame.msgid == 0:
+                        crc_failures += not frame.crc_ok
+                    else:
+                        other_msgids += 1
+                        rssi = radio_status_rssi(frame) or rssi
+                decoded += match is not None
+            print(
+                f"[uart]   frame seq={seq} sent decoded="
+                f"{'unobserved' if receiver is None else 'yes' if match else 'no'} "
+                f"rssi={f'{rssi[0]}/{rssi[1]}' if rssi else '-'}"
+            )
+            time.sleep(max(0.0, interval - (time.monotonic() - started)))
+    except BaseException as error:
+        primary_error = error
+    finally:
+        if modified:
+            cleanup_steps: tuple[tuple[str, Callable[[], None]], ...] = (
+                (
+                    "restore TOP pad function",
+                    lambda: read_modify_write(
+                        console,
+                        prompt,
+                        TOP_BASE + TOP_PGPIO_FUNC,
+                        pad_bit,
+                        before["top_pgpio_func"] & pad_bit,
+                    ),
+                ),
+                (
+                    "restore TOP UART7 mux",
+                    lambda: read_modify_write(
+                        console,
+                        prompt,
+                        TOP_BASE + TOP_UART7_MUX,
+                        TOP_UART7_MUX_MASK,
+                        before["top_uart7_mux"] & TOP_UART7_MUX_MASK,
+                    ),
+                ),
+                (
+                    "restore UART7 clock gate",
+                    lambda: read_modify_write(
+                        console,
+                        prompt,
+                        CG_BASE + CG_UART7_CLK_EN,
+                        gate_bit,
+                        before["cg_uart7_clock_enable"] & gate_bit,
+                    ),
+                ),
+                (
+                    "restore UART7 clock divider",
+                    lambda: read_modify_write(
+                        console,
+                        prompt,
+                        CG_BASE + CG_UART7_CLK_DIV,
+                        CG_UART7_CLK_DIV_MASK,
+                        before["cg_uart7_divider"] & CG_UART7_CLK_DIV_MASK,
+                    ),
+                ),
+                (
+                    "restore UART7 reset",
+                    lambda: read_modify_write(
+                        console,
+                        prompt,
+                        CG_BASE + CG_UART7_RESET,
+                        reset_bit,
+                        before["cg_uart7_reset"] & reset_bit,
+                    ),
+                ),
+            )
+            for step, (name, action) in enumerate(cleanup_steps):
+                try:
+                    run_cleanup_step(name, action, console, prompt, cleanup_errors)
+                except RuntimeError:
+                    cleanup_safe = False
+                    for remaining_name, _ in cleanup_steps[step + 1 :]:
+                        cleanup_errors.append(
+                            f"{remaining_name}: not attempted because prompt state is unknown"
+                        )
+                    break
+
+            if cleanup_safe:
+                try:
+                    run_cleanup_step(
+                        "core-rail invariant check",
+                        lambda: check_core_rail(console, prompt, "after UART cleanup"),
+                        console,
+                        prompt,
+                        cleanup_errors,
+                    )
+                except RuntimeError:
+                    cleanup_safe = False
+            restored_verified = cleanup_safe and not cleanup_errors
+
+            if cleanup_safe:
+                try:
+                    console.flush_input()
+                    console.write(b"reset\r")
+                    recovery = wait_for_banner(console, RECOVERY_SECONDS)
+                    transcript += recovery
+                    if not re.search(BANNER_PATTERN, recovery):
+                        raise RuntimeError(
+                            f"no firmware banner within {RECOVERY_SECONDS:.0f}s of `reset`"
+                        )
+                    banner_verified = True
+                    print("[uart]   the vendor firmware returned")
+                except BaseException as error:
+                    cleanup_errors.append(f"firmware return: {exception_text(error)}")
+
+    print(
+        f"[uart]   result: frames_sent={sent} "
+        f"frames_decoded={'unobserved' if receiver is None else decoded} "
+        f"crc_failures={crc_failures} other_msgids={other_msgids} "
+        f"settings_restored={restored_verified} firmware_banner={banner_verified}"
+    )
+    if cleanup_errors:
+        print("[uart]   cleanup errors: " + "; ".join(cleanup_errors), file=sys.stderr)
+    if primary_error is not None:
+        if cleanup_errors:
+            fail(
+                f"original UART probe failure: {exception_text(primary_error)}; "
+                f"cleanup failures: {'; '.join(cleanup_errors)}"
+            )
+        raise primary_error
+    if cleanup_errors or not (restored_verified and banner_verified):
+        fail("UART probe cleanup or recovery was not fully verified: " + "; ".join(cleanup_errors))
+    if receiver is not None and decoded != sent:
+        fail(
+            f"the ground radio decoded {decoded} of {sent} transmitted heartbeats "
+            f"({crc_failures} with a bad checksum). The registers took every value, so "
+            "the pad, the wiring, or the radio pair is what did not carry them"
+        )
+    return transcript
+
+
 def monitor(console: Console, timeout: float) -> None:
     """Print whatever the board says, asserting nothing.
 
@@ -1339,9 +2011,53 @@ def main() -> None:
     parser.add_argument("--pwm-hold-seconds", type=float, default=PWM_PROBE_HOLD_SECONDS)
     parser.add_argument("--pwm-samples", type=int, default=PWM_PROBE_SAMPLES)
     parser.add_argument(
+        "--uart-probe",
+        action="store_true",
+        help=(
+            "transmit MAVLink heartbeats out of UART7 from the U-Boot prompt, "
+            "decoding them on a paired radio at --uart-receiver"
+        ),
+    )
+    parser.add_argument("--uart-frames", type=int, default=UART_PROBE_FRAMES)
+    parser.add_argument("--uart-interval-seconds", type=float, default=UART_PROBE_INTERVAL_SECONDS)
+    parser.add_argument(
+        "--uart-receiver",
+        help=(
+            "the ground radio's port: a tty path or tcp:HOST:PORT. Without it "
+            "the probe transmits but observes nothing, and claims nothing"
+        ),
+    )
+    parser.add_argument(
+        "--uart-receive-window-seconds",
+        type=float,
+        default=UART_PROBE_RECEIVE_WINDOW_SECONDS,
+    )
+    parser.add_argument(
+        "--uart-receiver-capture",
+        type=Path,
+        help="write the ground radio's raw bytes here",
+    )
+    parser.add_argument(
+        "--uart-divisor",
+        type=int,
+        default=UART7_DIVISOR,
+        help=(
+            "override the pinned baud divisor. A run that does is diagnostic: it "
+            "reports what it saw and closes nothing"
+        ),
+    )
+    parser.add_argument(
+        "--uart-listen-seconds",
+        type=float,
+        help=(
+            "decode whatever --uart-receiver hears and assert nothing, with no "
+            "board attached; how a radio pair is checked before a probe"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the PWM probe's write sequence and exit; needs no board",
+        help="print a probe's write sequence and exit; needs no board",
     )
     parser.add_argument("--gpio-cycles", type=int, default=GPIO_PROBE_CYCLES)
     parser.add_argument("--gpio-hold-seconds", type=float, default=GPIO_PROBE_HOLD_SECONDS)
@@ -1364,13 +2080,54 @@ def main() -> None:
         validate_gpio_probe_inputs(
             arguments.gpio_probe, arguments.gpio_cycles, arguments.gpio_hold_seconds
         )
+    if arguments.dry_run or arguments.uart_probe:
+        validate_uart_probe_inputs(
+            arguments.uart_frames,
+            arguments.uart_interval_seconds,
+            arguments.uart_receive_window_seconds,
+            arguments.uart_divisor,
+            arguments.uart_receiver,
+        )
 
     if arguments.dry_run:
+        if arguments.uart_probe:
+            check_uart_pins(profile)
+            for line in uart_probe_plan(
+                arguments.uart_frames,
+                arguments.uart_interval_seconds,
+                arguments.uart_receiver,
+                arguments.uart_receive_window_seconds,
+                arguments.uart_divisor,
+            ):
+                print(line)
+            return
         check_pwm_pins(profile)
         for line in pwm_probe_plan(
             arguments.pwm_channel, arguments.pwm_period_us, pulses, arguments.pwm_samples
         ):
             print(line)
+        return
+
+    # Listening needs only the ground radio, and answers whether the pair is
+    # linked before a board is powered. Refusing --serial here keeps a listen
+    # from being mistaken for evidence about the board.
+    if arguments.uart_listen_seconds is not None:
+        if arguments.uart_receiver is None:
+            fail("--uart-listen-seconds needs --uart-receiver: there is nothing to listen to")
+        if arguments.serial is not None:
+            fail("--uart-listen-seconds observes only the radio; it takes no --serial")
+        if arguments.uart_listen_seconds <= 0:
+            fail("--uart-listen-seconds must be positive")
+        receiver = Console(arguments.uart_receiver, UART7_BAUD, fail)
+        try:
+            uart_listen(receiver, arguments.uart_listen_seconds)
+        finally:
+            raw = bytes(receiver.received_bytes)
+            receiver.close()
+            if arguments.uart_receiver_capture and raw:
+                arguments.uart_receiver_capture.parent.mkdir(parents=True, exist_ok=True)
+                arguments.uart_receiver_capture.write_bytes(raw)
+                print(f"[listen] capture written to {arguments.uart_receiver_capture}")
         return
 
     if arguments.serial is None:
@@ -1420,6 +2177,68 @@ def main() -> None:
             print(
                 f"nt98690 gpio probe: P_GPIO{arguments.gpio_probe} toggled on the named "
                 f"{profile['board']}; which header pin followed it is the operator's reading"
+            )
+            return
+
+        if arguments.uart_probe:
+            check_uart_pins(profile)
+            receiver = (
+                Console(arguments.uart_receiver, UART7_BAUD, fail)
+                if arguments.uart_receiver
+                else None
+            )
+            if receiver is None:
+                print(
+                    "[uart]   no --uart-receiver: this run transmits but observes "
+                    "nothing on the air, and claims no transmission",
+                    file=sys.stderr,
+                )
+            try:
+                transcript += uart_probe(
+                    console,
+                    str(profile["uboot_prompt"]),
+                    arguments.uart_frames,
+                    arguments.uart_interval_seconds,
+                    receiver,
+                    arguments.uart_receive_window_seconds,
+                    arguments.uart_divisor,
+                    arguments.timeout,
+                )
+            finally:
+                if receiver is not None:
+                    captured = bytes(receiver.received_bytes)
+                    receiver.close()
+                    if arguments.uart_receiver_capture and captured:
+                        arguments.uart_receiver_capture.parent.mkdir(parents=True, exist_ok=True)
+                        arguments.uart_receiver_capture.write_bytes(captured)
+                        print(
+                            f"[uart]   radio capture written to {arguments.uart_receiver_capture}"
+                        )
+            # The verdict word is what a grep or a devlog cites, so it says PASS
+            # only when the transmission was observed at the pinned rate.
+            if arguments.uart_divisor != UART7_DIVISOR:
+                verdict, because = (
+                    "DIAGNOSTIC",
+                    f". --uart-divisor {arguments.uart_divisor} is not the pinned "
+                    f"{UART7_DIVISOR}, so this run is a measurement and closes nothing",
+                )
+            elif arguments.uart_receiver is None:
+                verdict, because = (
+                    "UNOBSERVED",
+                    ". No receiver was given, so nothing saw the air and this run closes nothing",
+                )
+            else:
+                verdict, because = "PASS", ""
+            print(
+                f"nt98690 uart probe: {verdict}, UART7 took every programmed value, "
+                f"{arguments.uart_frames} heartbeats were "
+                + (
+                    "decoded on the paired radio"
+                    if arguments.uart_receiver
+                    else "transmitted with nothing observing them"
+                )
+                + f", shared settings were confirmed restored, and firmware returned on the "
+                f"named {profile['board']}{because}"
             )
             return
 
