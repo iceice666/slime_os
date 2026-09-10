@@ -595,7 +595,7 @@ def check_profile(pins: dict[str, object]) -> None:
     # second one. Adding a channel means adding its run's evidence here, not
     # widening a range.
     observed_pwm_routes = {
-        0: ("P_GPIO0", "40-pin GPIO header", "2026-09-08"),
+        0: ("P_GPIO0", "40-pin GPIO header pin 26", "2026-09-08"),
     }
     pwm_channel = integer(h1v1, "pwm_channel", "ns02201_h1v1")
     if pwm_channel not in observed_pwm_routes:

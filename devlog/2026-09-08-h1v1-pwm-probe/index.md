@@ -190,3 +190,17 @@ levels, and still restore direction and pad function. Removing the per-level rea
 repinning `sel4/pins.toml` to channel 1 with a matching `P_GPIO1` now fails `just sel4_pin_check`
 with the unobserved-route message. Also `just tasks_check`, `just ruff`, `just typos`, and
 `--dry-run`, all exit 0. Again no board run, so nothing here is board evidence.
+
+**2026-09-10 — the header pin position, recorded late.** The run above left P_GPIO[0]'s position
+on the connector unwritten: the Verification table records only that the operator found it on the
+40-pin GPIO header, and the `--gpio-probe 0` transcript was never returned. The operator reports
+it as **pin 26**, and `sel4/pins.toml`'s `pwm_pad_header` and the checker's `observed_pwm_routes`
+now carry that rather than the bare connector name.
+
+Its evidence class is unchanged and unimproved: this is the same operator observation the original
+entry recorded, written down more precisely, and no transcript establishes it. What it removes is
+a re-measurement — a later session that needs a neighbouring pad on this bank can start the meter
+at a known position instead of sweeping the header again. It settles nothing about any other pad:
+nothing on the development host maps pads to connector pins in either direction, so which pin a
+different P_GPIO reaches is still a probe's question.
+
