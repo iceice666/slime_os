@@ -371,6 +371,7 @@ UART_LSR_TEMT = 1 << 6
 #: would fail on a working transmitter.
 UART_LSR_TX_MASK = UART_LSR_THRE | UART_LSR_TEMT
 UART_TEMT_POLLS = 5
+UART_FIFO_DEPTH = 16
 
 #: UART7's clock, gate, and reset in the clock generator, and the pad routing in
 #: TOP. Sources: `include/dt-bindings/clock/nvt-ns02201.h` for the register
@@ -402,7 +403,8 @@ PAD_PGPIO8_PULL = 0x08  # bits[17:16]; surveyed, never written
 #: 480 MHz / 10 / (16 * 57600) rounds to 52, which is 57692 baud: 0.16% fast,
 #: well inside a 16550's tolerance.
 UART7_BAUD = 57_600
-UART7_DIVISOR = 52
+# `UART7_DIVISOR` is derived below from `uart7_divisor`, so the tolerance it
+# checks applies to the pinned rate rather than to a literal typed beside it.
 UART_PROBE_FRAMES = 10
 UART_PROBE_INTERVAL_SECONDS = 1.0
 UART_PROBE_RECEIVE_WINDOW_SECONDS = 2.0
@@ -420,7 +422,7 @@ UART_SURVEY_REGISTERS: tuple[tuple[str, int, int], ...] = (
     ("top_uart7_mux", TOP_BASE, TOP_UART7_MUX),
     ("top_uart7_rtscts_mux", TOP_BASE, TOP_UART7_RTSCTS_MUX),
     ("top_pgpio_func", TOP_BASE, TOP_PGPIO_FUNC),
-    ("pad_pgpio4_pull", PAD_BASE, PAD_PGPIO8_PULL),
+    ("pad_pgpio8_pull", PAD_BASE, PAD_PGPIO8_PULL),
     ("pad_p1_status", PAD_BASE, PAD_P1_STATUS),
 )
 
@@ -536,6 +538,9 @@ def uart7_divisor(clock_hz: int, baud: int) -> int:
     return divisor
 
 
+UART7_DIVISOR = uart7_divisor(UART7_CLOCK_HZ, UART7_BAUD)
+
+
 def cg_uart7_divider_word(current: int) -> int:
     """`current` with UART7's divider field set to the 48 MHz encoding.
 
@@ -596,7 +601,9 @@ def validate_gpio_probe_inputs(channel: int, cycles: int, hold: float) -> None:
         fail("--gpio-hold-seconds must be non-negative")
 
 
-def validate_uart_probe_inputs(frames: int, interval: float, window: float, divisor: int) -> None:
+def validate_uart_probe_inputs(
+    frames: int, interval: float, window: float, divisor: int, receiver: str | None = None
+) -> None:
     """Reject a UART probe's arguments before anything opens a port."""
     if not 1 <= frames <= 256:
         fail("--uart-frames must be 1..256: a sequence byte wraps after 256 frames")
@@ -604,6 +611,11 @@ def validate_uart_probe_inputs(frames: int, interval: float, window: float, divi
         fail("--uart-interval-seconds must be non-negative")
     if window < 0:
         fail("--uart-receive-window-seconds must be non-negative")
+    if receiver is not None and window <= 0:
+        fail(
+            "--uart-receive-window-seconds must be positive when a receiver is given: "
+            "a zero window never reads the radio and would blame the pad for it"
+        )
     if not 1 <= divisor <= 0xFFFF:
         fail(f"--uart-divisor {divisor} is outside the 16550's 1..65535 divisor")
 
@@ -1057,7 +1069,9 @@ def uart_probe_plan(
     divisor: int,
 ) -> list[str]:
     """The normal write sequence and conditional recovery `--uart-probe` performs."""
-    validate_uart_probe_inputs(frames, interval, window, divisor)
+    validate_uart_probe_inputs(
+        frames, interval, window, divisor, None if receiver is None else receiver.endpoint
+    )
     reset_bit = 1 << CG_UART7_RESET_BIT
     gate_bit = 1 << CG_UART7_CLK_EN_BIT
     pad_bit = 1 << UART7_PAD_BIT
@@ -1095,7 +1109,8 @@ def uart_probe_plan(
     ]
     for index in range(min(frames, 2)):
         lines += [
-            f"      21x mw.l {uart7_register(UART_THR):#x} <byte>   # HEARTBEAT seq={index}",
+            f"      poll {uart7_register(UART_LSR):#x} for THRE, 16x mw.l "
+            f"{uart7_register(UART_THR):#x} <byte>, poll THRE, 5x mw.l   # HEARTBEAT seq={index}",
             f"      poll {uart7_register(UART_LSR):#x} for TEMT under mask "
             f"{UART_LSR_TX_MASK:#x}"
             + (f", then decode seq={index} on the receiver" if receiver else ""),
@@ -1615,10 +1630,17 @@ def poll_lsr(console: Console, prompt: str, bit: int, when: str) -> int:
 
 
 def transmit_frame(console: Console, prompt: str, frame: bytes) -> str:
-    """Write one frame a byte at a time, then require the shifter to empty."""
+    """Write one frame a byte at a time, then require the shifter to empty.
+
+    THRE reports the transmit FIFO empty, so once it is seen sixteen bytes fit;
+    it is polled before each such burst rather than before every byte. Each poll
+    is a console round trip, and one per byte doubled the cost of a frame for a
+    FIFO that, at one command every few hundred milliseconds, is never busy.
+    """
     transcript = ""
-    for byte in frame:
-        poll_lsr(console, prompt, UART_LSR_THRE, "with a byte to send")
+    for index, byte in enumerate(frame):
+        if index % UART_FIFO_DEPTH == 0:
+            poll_lsr(console, prompt, UART_LSR_THRE, "with a burst to send")
         transcript += send_command(
             console,
             f"mw.l {uart7_register(UART_THR):#x} {byte:#x}",
@@ -1663,19 +1685,26 @@ def uart_listen(receiver: Console, seconds: float) -> None:
     decoder = FrameDecoder()
     frames = 0
     heartbeats = 0
+    interrupted = False
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        for frame in decoder.feed(receiver.read_bytes_for(UART_RECEIVE_SLICE_SECONDS)):
-            frames += 1
-            heartbeats += bool(frame.msgid == 0 and frame.crc_ok)
-            rssi = radio_status_rssi(frame)
-            print(
-                f"[listen] msgid={frame.msgid} seq={frame.seq} crc_ok={frame.crc_ok} "
-                f"rssi={f'{rssi[0]}/{rssi[1]}' if rssi else '-'}"
-            )
+    try:
+        while time.monotonic() < deadline:
+            for frame in decoder.feed(receiver.read_bytes_for(UART_RECEIVE_SLICE_SECONDS)):
+                frames += 1
+                heartbeats += bool(frame.msgid == 0 and frame.crc_ok)
+                rssi = radio_status_rssi(frame)
+                print(
+                    f"[listen] msgid={frame.msgid} seq={frame.seq} crc_ok={frame.crc_ok} "
+                    f"rssi={f'{rssi[0]}/{rssi[1]}' if rssi else '-'}"
+                )
+    except KeyboardInterrupt:
+        # Stopping a listen early is how it normally ends; the totals are the
+        # point of the mode and are printed either way.
+        interrupted = True
     errors = receiver.framing_errors
     print(
-        f"[listen] bytes={len(receiver.received_bytes)} frames={frames} "
+        f"[listen] {'interrupted; ' if interrupted else ''}"
+        f"bytes={len(receiver.received_bytes)} frames={frames} "
         f"heartbeats={heartbeats} framing_errors="
         f"{'unobservable over a TCP bridge' if errors is None else errors}"
     )
@@ -2032,6 +2061,7 @@ def main() -> None:
             arguments.uart_interval_seconds,
             arguments.uart_receive_window_seconds,
             arguments.uart_divisor,
+            arguments.uart_receiver,
         )
 
     if arguments.dry_run:
@@ -2159,7 +2189,21 @@ def main() -> None:
                         print(
                             f"[uart]   radio capture written to {arguments.uart_receiver_capture}"
                         )
-            verdict = "DIAGNOSTIC" if arguments.uart_divisor != UART7_DIVISOR else "PASS"
+            # The verdict word is what a grep or a devlog cites, so it says PASS
+            # only when the transmission was observed at the pinned rate.
+            if arguments.uart_divisor != UART7_DIVISOR:
+                verdict, because = (
+                    "DIAGNOSTIC",
+                    f". --uart-divisor {arguments.uart_divisor} is not the pinned "
+                    f"{UART7_DIVISOR}, so this run is a measurement and closes nothing",
+                )
+            elif arguments.uart_receiver is None:
+                verdict, because = (
+                    "UNOBSERVED",
+                    ". No receiver was given, so nothing saw the air and this run closes nothing",
+                )
+            else:
+                verdict, because = "PASS", ""
             print(
                 f"nt98690 uart probe: {verdict}, UART7 took every programmed value, "
                 f"{arguments.uart_frames} heartbeats were "
@@ -2169,13 +2213,7 @@ def main() -> None:
                     else "transmitted with nothing observing them"
                 )
                 + f", shared settings were confirmed restored, and firmware returned on the "
-                f"named {profile['board']}"
-                + (
-                    ""
-                    if verdict == "PASS"
-                    else f". --uart-divisor {arguments.uart_divisor} is not the pinned "
-                    f"{UART7_DIVISOR}, so this run is a measurement and closes nothing"
-                )
+                f"named {profile['board']}{because}"
             )
             return
 

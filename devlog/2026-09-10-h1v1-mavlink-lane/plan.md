@@ -16,7 +16,7 @@ the radio's default 57600 baud. Receiving commands back is a separate later lane
 plans it.
 
 "Radio on GPIO" means the SoC's UART7, whose transmit pad is P_GPIO[8] at pin 13 of the 40-pin
-header, on the same 3.3 V bank as the ESC lane's pad. Nothing is bit-banged. UART7 was the first
+header, on the same 3.3 V bank as the ESC lane's pad. Nothing is bit-banged. UART8 was the first
 choice and was withdrawn on 2026-09-10 when the board's pinout diagram showed its data pads,
 P_GPIO[4..5], reach no connector; only that port's flow-control pins do. Every UART7 fact below
 was re-derived from the same sources the UART7 facts came from.
@@ -124,7 +124,7 @@ This table adds only what UART7 needs.
 
 | Decision | Choice | Rejected |
 |---|---|---|
-| The port | UART7 at `0x2f0136000`, TX on P_GPIO[8] (header pin 13), **TX pad only routed** (P_GPIO[9] stays GPIO, RTS/CTS untouched) | UART7 (first choice): its data pads are not on the header. UART9: its TX pad is P_GPIO[0], the ESC lane's PWM pad, so the two lanes would collide on pin 26. UART0: the kernel debug console and the Slisp input path. Bit-banging a GPIO at 57600 from seL4 userspace: no timing guarantee |
+| The port | UART7 at `0x2f0136000`, TX on P_GPIO[8] (header pin 13), **TX pad only routed** (P_GPIO[9] stays GPIO, RTS/CTS untouched) | UART8 (first choice): its data pads are not on the header. UART9: its TX pad is P_GPIO[0], the ESC lane's PWM pad, so the two lanes would collide on pin 26. UART0: the kernel debug console and the Slisp input path. Bit-banging a GPIO at 57600 from seL4 userspace: no timing guarantee |
 | Line config ownership (S2/S3) | The **driver** programs LCR/DLL/DLM/FCR/MCR on its own mapped page; the **root** programs the SoC-wide words once at carve time (`CG+0x9C` release, `CG+0x60` field = 9, `CG+0x7C` gate, `TOP+0x34` mux, `TOP+0xA8` bit 8) and prints `SLIME_NT98690 uart7 bringup pad=P_GPIO8 clk_hz=48000000` — the PWM lane's split, for the same reason (SoC-wide pages never reach a component) | Mediated driver writes to CG/TOP |
 | Divider policy | Write the divider field to 9 (48 MHz) unconditionally, in the probe and in the root, and read it back; never derive the baud from whatever the field held. The prompt-time value is pinned as an observation, not consumed | Trusting the DT's 48 MHz as the live state (nothing on disk shows what the loader leaves in `CG+0x60`) |
 | Framing owner | The **heartbeat component** builds the frame (contract `mavlink-heartbeat/v1`, Rust encoder generated from the schema, `seq` state in the component); the **driver** is a byte-transparent bounded TX (`serial-device/v1`). Two contracts, two components | One "radio" component that both frames and drives the UART: couples a protocol to a 16550 |

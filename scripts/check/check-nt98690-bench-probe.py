@@ -325,7 +325,7 @@ class ModelReceiver:
         pass
 
 
-def radio_status_frame(rssi: int, remrssi: int) -> bytes:
+def radio_status_frame(rssi: int, remrssi: int, seq: int = 9) -> bytes:
     """A RADIO_STATUS the radio injects into the ground-side stream.
 
     Built here rather than imported: `scripts/lib/mavlink.py` decodes this
@@ -333,7 +333,7 @@ def radio_status_frame(rssi: int, remrssi: int) -> bytes:
     library's own encoder for both sides would prove less.
     """
     payload = bytes([0, 0, 0, 0, rssi, remrssi, 0, 0, 0])
-    header = bytes([len(payload), 0, 0, 9, 51, 68, RADIO_STATUS_MSGID, 0, 0])
+    header = bytes([len(payload), 0, 0, seq, 51, 68, RADIO_STATUS_MSGID, 0, 0])
     crc = x25_crc(bytes([RADIO_STATUS_CRC_EXTRA]), x25_crc(header + payload))
     return bytes([0xFD]) + header + payload + bytes([crc & 0xFF, crc >> 8])
 
@@ -1190,6 +1190,7 @@ def uart_cli_rejects_before_opening() -> None:
         ("--uart-frames", "257"),
         ("--uart-divisor", "0"),
         ("--uart-divisor", "65536"),
+        ("--uart-receiver", "model-radio", "--uart-receive-window-seconds", "0"),
     ):
         original_argv = sys.argv
         original_console = PROBE.Console
@@ -1226,6 +1227,95 @@ def listen_reports_without_board() -> None:
     printed = stdout.getvalue()
     if "heartbeats=1" not in printed or f"msgid={RADIO_STATUS_MSGID}" not in printed:
         fail(f"listening did not report what the radio delivered: {printed}")
+
+
+def decoder_consumes_unverified_frames_whole() -> None:
+    """A frame this decoder cannot verify is still a whole frame.
+
+    The radio's own status frames are not checksum-verified here, and a decoder
+    that resynchronised through them byte by byte would find a 0xFD in an
+    ordinary sequence or signal byte and open a bogus frame there -- one whose
+    unchecked length swallows the heartbeat behind it. On a live link the
+    sequence byte passes 0xFD every 256 frames.
+    """
+    for label, injected in (
+        ("seq 0xFD", radio_status_frame(200, 190, seq=0xFD)),
+        ("rssi 0xFD", radio_status_frame(0xFD, 190)),
+    ):
+        frames = FrameDecoder().feed(injected + encode_heartbeat(7))
+        kinds = [(frame.msgid, frame.crc_ok) for frame in frames]
+        if kinds != [(RADIO_STATUS_MSGID, None), (0, True)]:
+            fail(f"a status frame carrying {label} hid the heartbeat behind it: {kinds}")
+        if frames[1].seq != 7:
+            fail(f"the heartbeat after a status frame with {label} decoded as seq {frames[1].seq}")
+
+
+def no_receiver_verdict_is_unobserved() -> None:
+    """The verdict word is what gets cited; it must not say PASS for a run nothing observed."""
+    console = ModelConsole()
+    original_argv = sys.argv
+    original_console = PROBE.Console
+    stdout = io.StringIO()
+    sys.argv = [str(PROBE_PATH), "--uart-probe", "--serial", "model", "--uart-frames", "1"]
+    sys.argv += ["--uart-interval-seconds", "0"]
+    PROBE.Console = lambda *args, **kwargs: console
+    try:
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            PROBE.main()
+    except SystemExit as error:
+        fail(f"the receiverless run exited: {error}")
+    finally:
+        PROBE.Console = original_console
+        sys.argv = original_argv
+    verdict = [
+        line for line in stdout.getvalue().splitlines() if line.startswith("nt98690 uart probe:")
+    ]
+    if not verdict or "UNOBSERVED" not in verdict[-1] or "PASS" in verdict[-1]:
+        fail(f"a run with no receiver produced a verdict that reads as a pass: {verdict}")
+
+
+def listen_summary_survives_interrupt() -> None:
+    """Ctrl-C is how a listen normally ends, and the totals are its whole point."""
+
+    class InterruptingReceiver(ModelReceiver):
+        reads = 0
+
+        def read_bytes_for(self, seconds: float) -> bytes:
+            self.reads += 1
+            if self.reads == 2:
+                raise KeyboardInterrupt
+            return super().read_bytes_for(seconds)
+
+    uart = Uart16550Model()
+    uart.tx.extend(encode_heartbeat(0))
+    receiver = InterruptingReceiver(uart)
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        PROBE.uart_listen(receiver, 60.0)
+    printed = stdout.getvalue()
+    if "interrupted" not in printed or "heartbeats=1" not in printed:
+        fail(f"an interrupted listen did not print its totals: {printed}")
+
+
+def thre_polled_per_burst() -> None:
+    """One THRE poll per FIFO-depth burst, not one per byte.
+
+    Each poll is a console round trip. With sixteen bytes of FIFO and one
+    command every few hundred milliseconds, a poll per byte doubles the cost of
+    a frame and can never observe a busy FIFO.
+    """
+    console = ModelConsole()
+    run_uart(console, ModelReceiver(console.uart), frames=1)
+    lsr = f"md.l {PROBE.uart7_register(PROBE.UART_LSR):#x} 1"
+    thr = f"mw.l {PROBE.uart7_register(PROBE.UART_THR):#x} "
+    thr_indices = [i for i, c in enumerate(console.commands) if c.startswith(thr)]
+    # The divisor-latch write also targets index 0; the frame's 21 writes are the last 21.
+    frame_first, frame_last = thr_indices[-21], thr_indices[-1]
+    polls_during_frame = sum(
+        1 for c in console.commands[frame_first - 1 : frame_last + 2] if c == lsr
+    )
+    if polls_during_frame > 4:
+        fail(f"the probe polled LSR {polls_during_frame} times inside one frame; a burst needs one")
 
 
 def main() -> None:
@@ -1266,6 +1356,10 @@ def main() -> None:
         diagnostic_divisor_never_passes,
         uart_cli_rejects_before_opening,
         listen_reports_without_board,
+        decoder_consumes_unverified_frames_whole,
+        no_receiver_verdict_is_unobserved,
+        listen_summary_survives_interrupt,
+        thre_polled_per_burst,
     )
     failures = 0
     for case in cases:

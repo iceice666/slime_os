@@ -143,7 +143,13 @@ class FrameDecoder:
     read returned. A frame whose checksum fails is still emitted, with
     `crc_ok=False`, and scanning resumes one byte after its start marker rather
     than past its claimed end: a corrupt length would otherwise skip whatever
-    real frame follows.
+    real frame follows. A frame this module cannot verify (`crc_ok=None`) is
+    consumed whole: its length is as trustworthy as any other radio frame's,
+    and rescanning its body would turn a 0xFD in a sequence or signal byte into
+    a bogus frame that swallows the heartbeat behind it. A frame this module cannot verify (`crc_ok=None`) is
+    consumed whole: its length is as trustworthy as any other radio frame's,
+    and rescanning its body would turn a 0xFD in a sequence or signal byte into
+    a bogus frame that swallows the heartbeat behind it.
     """
 
     def __init__(self) -> None:
@@ -172,9 +178,9 @@ class FrameDecoder:
             raw = bytes(self._buffer[:total])
             frame = self._decode(raw, payload_len)
             frames.append(frame)
-            # Resync past the start byte, not past the frame: the length that
-            # sized this frame is only trustworthy if its checksum verified.
-            del self._buffer[: total if frame.crc_ok else 1]
+            # Resync past the start byte only on a checksum that failed; a
+            # frame this module does not verify is still a whole frame.
+            del self._buffer[: 1 if frame.crc_ok is False else total]
         return frames
 
     @staticmethod

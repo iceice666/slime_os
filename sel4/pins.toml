@@ -392,7 +392,7 @@ pwm_probe_observed = "2026-09-08"
 # The SoC's UART7 -- the vendor device tree's `uart6@2f0136000`, which the
 # pinmux table, the package pins, and U-Boot all call UART7 (DT `uart7` is SoC
 # UART8). A plain 16550 at the same 4-byte stride UART0 uses, whose transmit pad
-# is P_GPIO[8] on the 3.3 V bank, header pin 13 (`header_pins` below). UART7 was
+# is P_GPIO[8] on the 3.3 V bank, header pin 13 (`header_pins` below). UART8 was
 # the first choice and is not usable: its data pads P_GPIO[4..5] reach no
 # connector on this board. This lane transmits into a telemetry radio and never
 # receives, so only the TX pad is ever routed.

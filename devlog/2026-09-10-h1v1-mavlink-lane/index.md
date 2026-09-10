@@ -51,7 +51,7 @@ pad. Since this lane never receives, `P_GPIO[9]` stays in GPIO mode and the flow
 never written. A consequence worth stating: with the receive input unrouted, the line-status
 register's receive bits float, so every comparison here masks to the two transmitter bits.
 
-**UART7 was the first choice, and the board's pinout diagram withdrew it.** UART7's data pads
+**UART8 was the first choice, and the board's pinout diagram withdrew it.** UART8's data pads
 are P_GPIO[4] and [5], and the plan chose them on the strength of the pinmux table alone, with
 their connector position listed as the lane's one open question. When the operator supplied the
 40-pin header diagram -- the first pad-to-pin document to exist on the development host -- those
