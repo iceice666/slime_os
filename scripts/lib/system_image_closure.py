@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -17,7 +15,7 @@ from component_spec import admit_specs, interface_catalogue
 from component_sdk import tree_digest
 from harness import ROOT
 from system_spec import CompiledSystem, compile_system, derive_manifest
-from zutai_cli import STDLIB, binary
+from zutai_cli import ZutaiError, evaluate
 
 IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1"
 TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v1"
@@ -197,39 +195,23 @@ def _list(value: object, bound: int, label: str) -> list:
     return value
 
 
-def _run_zutai(path: Path, checker: Path, variable: str, source_bound: int) -> dict:
+def _run_zutai(path: Path, checker: Path, env_var: str, source_bound: int) -> dict:
     if not path.is_file():
         _fail(f"record not found: {path}")
     if path.stat().st_size > source_bound:
         _fail(f"{path}: source exceeds bound")
-    environment = os.environ.copy()
-    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
-    environment[variable] = str(path)
-    process = subprocess.run(
-        [str(binary()), "run", str(checker)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0 or not process.stdout.startswith("#valid"):
-        detail = (process.stderr or process.stdout).strip()
-        _fail(f"{path}: malformed Zutai input: {detail}")
-    process = subprocess.run(
-        [str(binary()), "json", str(path)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0:
-        _fail(f"{path}: invalid Zutai JSON projection: {(process.stderr or process.stdout).strip()}")
     try:
-        value = json.loads(process.stdout)
+        decoded = evaluate("run", checker, input_path=path, env_var=env_var)
+    except ZutaiError as error:
+        _fail(f"{path}: malformed Zutai input: {error}")
+    if not decoded.startswith("#valid"):
+        _fail(f"{path}: malformed Zutai input: {decoded.strip()}")
+    try:
+        raw = evaluate("json", path, input_path=path, env_var=env_var)
+    except ZutaiError as error:
+        _fail(f"{path}: invalid Zutai JSON projection: {error}")
+    try:
+        value = json.loads(raw)
     except json.JSONDecodeError as error:
         _fail(f"{path}: invalid Zutai JSON projection: {error}")
     return value
@@ -396,7 +378,8 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
     base = source_root.resolve()
     _, system_path = _artifact(value["systemSpec"], "systemSpec", base=base)
     assert system_path is not None
-    components = {entry.name: entry.spec for entry in admit_specs(catalogue=interface_catalogue())}
+    specs = {entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())}
+    components = {name: entry.spec for name, entry in specs.items()}
     system = compile_system(system_path, components=components)
     if system.identity.hex() != value["systemIdentity"]:
         _fail("systemIdentity does not match the compiled system")
@@ -423,7 +406,6 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         _fail("closure rust-sel4 commit does not match the SDK release")
     if profile.get("prefix", {}).get("treeHash") != value["target"]["prefix"]["identity"]:
         _fail("closure prefix identity does not match the selected SDK asset")
-    specs = {entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())}
     selections = {entry["component"]: entry for entry in value["implementations"]}
     if set(selections) != set(system.spec["components"]):
         _fail("implementation selections do not exactly cover the system components")

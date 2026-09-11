@@ -33,9 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -43,7 +41,7 @@ from types import ModuleType
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
-from zutai_cli import STDLIB, binary
+from zutai_cli import ZutaiError, evaluate, prefetch
 
 CONTRACT_ROOT = ROOT / "contracts" / "system-spec" / "v1"
 CHECKER = CONTRACT_ROOT / "check.zt"
@@ -203,21 +201,15 @@ def _run_zutai(path: Path, command: str, *, contract: ModuleType) -> str:
         _fail(f"system spec not found: {path}")
     if path.stat().st_size > contract.MAX_SOURCE_BYTES:
         _fail(f"{path}: source exceeds bound")
-    environment = os.environ.copy()
-    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
-    environment["SLIME_SYSTEM_SPEC_PATH"] = str(path)
-    process = subprocess.run(
-        [str(binary()), command, str(CHECKER if command == "run" else path)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0:
-        _fail(f"{path}: malformed Zutai input: {(process.stderr or process.stdout).strip()}")
-    return process.stdout
+    try:
+        return evaluate(
+            command,
+            CHECKER if command == "run" else path,
+            input_path=path,
+            env_var="SLIME_SYSTEM_SPEC_PATH",
+        )
+    except ZutaiError as error:
+        _fail(f"{path}: malformed Zutai input: {error}")
 
 
 def _load(path: Path, contract: ModuleType) -> dict:
@@ -1273,6 +1265,15 @@ def compile_system(
 
 def system_paths(root: Path = SYSTEM_ROOT) -> list[Path]:
     return sorted(root.glob("*.zti"))
+
+
+def prefetch_systems(paths: list[Path], *, contract: ModuleType = default_contract) -> None:
+    """Warm the evaluation cache for `paths` in parallel; `compile_system` then hits it."""
+    prefetch(
+        ("run", CHECKER, path.resolve(), "SLIME_SYSTEM_SPEC_PATH")
+        for path in paths
+        if path.is_file() and path.stat().st_size <= contract.MAX_SOURCE_BYTES
+    )
 
 
 def compiled_specs() -> dict[str, CompiledSpec]:
