@@ -136,7 +136,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "03b371007d5ea5e69050cc76e55b4be966e0b198fea6695a9dc61387e84c0347";
+        identity = "474f7a5f94f618cc0e943e92a394aafd71d6e05c8add6d3d0f506de331e76547";
       };
     };
     {
