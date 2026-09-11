@@ -86,3 +86,13 @@ Task ownership now uses one static extent plus bounded, independently reclaimabl
   [private growth: the rollback boundary, failed-map ownership, and worker IPC](../2026-09-08-private-growth-rollback-and-worker-ipc/index.md).
 - 2026-09-08: the `just test_sel4_root` row records 216/216 as observed here.
   The asserted count is now 219.
+- 2026-09-11: the four-holder 256 MiB capacity result in the summary,
+  capacity-reporting row, and work item's observed exit is invalid. The earlier
+  check compared aggregate ordinary bytes, but private data extents require
+  aligned placement within individual untyped regions. Replaying the actual
+  extent sequence against live region watermarks reports `ordinary_layout=0`
+  and `fit=0` on the restricted AArch64 qualification. MEM-ARENAS is reopened
+  because its 2 GiB four-holder exit condition is no longer observed. The
+  512-page runtime, reclamation, bounded-traversal, and small-target evidence is
+  unaffected. See [PR review comment ownership, ABI pinning, and capacity
+  integration](../2026-09-11-smp-comment-and-capacity-merge/index.md).

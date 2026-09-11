@@ -33,9 +33,9 @@
 //!   tables stay absent until a 4 KiB mapping needs them, so an aligned 2 MiB
 //!   run can occupy the same slot directly. The task arena reserves the larger
 //!   of the all-base-page and mixed-allocation constructions.
-//! * **Growth is all-or-nothing.** A failure part way through revokes every
-//!   backing extent the attempt touched while leaving the page count and every
-//!   existing mapping exactly as they were.
+//! * **Growth is all-or-nothing.** A failure unwinds only this attempt's
+//!   in-flight allocations: frames are unmapped, typed records become reusable,
+//!   and backing extents, committed mappings, and reusable leaf mappings remain owned.
 //! * **Pages are user/read-write/execute-never, always.** No growth path can
 //!   derive an executable mapping, so W^X holds by construction.
 //! * **Allocation policy is userspace's.** The root tracks a page count and
