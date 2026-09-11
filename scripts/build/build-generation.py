@@ -325,6 +325,7 @@ SEL4_MANIFESTS = {
     "sel4-io-queue": GENERATION_COMPOSITIONS / "sel4-io-queue.zti",
     "sel4-io-driver-authority": GENERATION_COMPOSITIONS / "sel4-io-driver-authority.zti",
     "sel4-io-network": GENERATION_COMPOSITIONS / "sel4-io-network.zti",
+    "sel4-io-tcp": GENERATION_COMPOSITIONS / "sel4-io-tcp.zti",
     "sel4-io-block": GENERATION_COMPOSITIONS / "sel4-io-block.zti",
     "sel4-io-link": GENERATION_COMPOSITIONS / "sel4-io-link.zti",
     "sel4-spawn": GENERATION_COMPOSITIONS / "sel4-spawn.zti",

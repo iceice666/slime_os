@@ -11,6 +11,10 @@ io_network_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-network-plane.py
 
 [group('planes / mechanism')]
+io_tcp_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm tcp
+
+[group('planes / mechanism')]
 io_queue_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-queue-plane.py
 

@@ -328,6 +328,11 @@ test_sel4_root:
     fi
     echo "slime-root host tests: $actual/$expected across 19 modules"
 
+# The frame-level peer the network planes talk to, exercised without QEMU.
+[group('quality')]
+link_peer_check:
+    python3 scripts/check/check-link-peer.py
+
 [group('quality')]
 ruff:
     ruff check scripts/
