@@ -190,7 +190,7 @@
         {
           grant = "network-service-link-peer";
           slot = 0;
-          slotReason = "componentAbi";
+          slotReason = "allocatorOrder";
         };
         {
           grant = "network-tcp-probe-service";

@@ -4,9 +4,9 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-io-tcp.zti";
     kind = "file";
-    identity = "ea246bd1d61c33c22500ba048fafc3a62a44dd73ce1038566f58c4fde089b11b";
+    identity = "b9bfdb49c7ef1a9e1934fda9cef3d67db6d89d74353703e7da6f405e80923f29";
   };
-  systemIdentity = "a3fce46d9b2c426436afc4e387d58cd2c120cb47000050fe67462d1c1a67b6ed";
+  systemIdentity = "763ee776b6958fa38d89b2e4da0e990e475043bc3839e0efcce1e255415c5ba2";
   implementations = [
     {
       component = "init";

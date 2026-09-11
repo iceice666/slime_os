@@ -54,7 +54,14 @@ undeclared MAC, no undeclared host addressed.
 | `just io_tcp_check` (twice) | Passed both times. First run: `link frames total=12 tx=6 rx=6 arp=2 icmp=10 tcp=0 other=0`, peer `received 6 (arp-reply=1, icmp-echo-reply=5); sent 8`. Second run, kept as [`io-tcp-plane.log`](io-tcp-plane.log): `link frames total=14 tx=7 rx=7 arp=4 icmp=10 tcp=0 other=0`, `link statistics tx=7 rx=7`, `fresh epoch old=1 new=2`, `SLIME_GRAPH HEALTHY generation=54`; peer `received 7 (arp-reply=2, icmp-echo-reply=5); sent 9`, its first ARP request having gone out before the guest's receive buffers were lent | Direct |
 | First two boots of the plane | Refused before any frame: a loan naming the link peer at relative number 2, which the first buffer also took (fixed by pinning the peer at 0 and the factory at 1); then the driver's `request begin` on a duplicate request id across the two queues (fixed by id parity) | Direct |
 | `just link_peer_check` | Passed | Direct |
-| VERIFY_ROWS | | |
+| `just io_network_check` (authority arm) | Passed: generation 53's 16 markers unchanged with the modified service | Direct |
+| `just io_link_check` | Passed: generation 52's 28 markers unchanged | Direct |
+| `just sel4_root_boot_check`, `just sel4_component_graph_check`, `just sel4_boot_layout_check` | Passed with the two new syscalls in the root | Direct |
+| `just test_sel4_root` | Passed: 215 of 215 | Direct |
+| `just test_host` | Passed, including the interface decoder's five tests and the slot tracker's and tick clock's six | Direct |
+| `just contracts_check`, `just component_spec_check`, `just component_crate_split_check`, `just system_spec_check`, `just system_test_run_check`, `just system_image_closure_check`, `just system_image_closure_aggregate_check` | Passed; both service pins labelled `allocatorOrder` after the builder classified them so | Direct |
+| `just sel4_gate_control_check` | Passed: 48 gates, 1909 mutated transcripts rejected, the network plane pinned at 39 markers | Direct |
+| `just deny`, `just machete`, `just fmt_check_all`, `just lint_all`, `just ruff`, `just typos`, `just devlog_check`, `just tasks_check` | Passed | Direct |
 
 ## Decisions
 

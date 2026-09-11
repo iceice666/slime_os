@@ -134,7 +134,7 @@
       holder = "network-service";
       grant = "network-service-link-peer";
       slot = 0;
-      reason = "componentAbi";
+      reason = "allocatorOrder";
     };
     {
       holder = "network-service";
