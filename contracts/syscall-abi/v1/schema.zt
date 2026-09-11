@@ -367,6 +367,11 @@ operations :: List Operation = {
   -- may read the table and bounds the bytes. Deciding that a write on a
   -- read-only ring is refused is the driver's, because that is device policy.
   operation "capabilityTable" "BLOCK_RING_AUTHORITY_READ" 69;
+  -- IO11's interface table, on `NETWORK_DESTINATIONS_READ`'s exact shape and
+  -- identity gate: the root copies the authenticated `network-interface/v1`
+  -- rows to the declared network service, which configures its own stack
+  -- from its own row. The root learns no address.
+  operation "capabilityTable" "NETWORK_INTERFACE_READ" 71;
   -- IO1's root-brokered hardware-resource mechanism. Every object operand is a
   -- logical capability slot from the authenticated caller's own authority
   -- table; no task, driver, device, physical address, or interrupt number is

@@ -264,6 +264,18 @@ NetworkDestinationEntry :: type {
   dnsRecordLimit : Int;
 };
 
+-- IO11 static interface declaration: the IPv4 address and prefix a holder's
+-- stack configures on its link, the gateway it routes off-link traffic to
+-- (`0.0.0.0` for none), and the MAC it presents. No lease, discovery, or
+-- negotiation field exists; the declared network service reads its own row.
+NetworkInterfaceEntry :: type {
+  holder : Text;
+  address : Text;
+  prefixLen : Int;
+  gateway : Text;
+  mac : Text;
+};
+
 -- One instance's C9.1 root-brokered clock service authority. The four
 -- booleans are independent: a timer-only holder need not read either clock,
 -- and simulated time has separate read and advance authority so a consumer
@@ -611,6 +623,9 @@ GenerationManifest :: type {
   -- network destination. The authenticated resource object is readable only
   -- by the declared network service; clients receive typed service authority.
   networkDestinations? : List NetworkDestinationEntry;
+  -- Optional IO11 interface table. Absent and empty both declare no interface,
+  -- so a network service with a link and no row configures nothing.
+  networkInterfaces? : List NetworkInterfaceEntry;
   -- Optional B83 exact per-ring block authority table. Absent and empty both
   -- grant no ring any block right, so a userspace block driver refuses every
   -- submission rather than defaulting open. Readable only by the declared
@@ -672,6 +687,7 @@ FromData @HealthPolicy :: derive
 FromData @SharedBufferBudgetEntry :: derive
 FromData @PrivateMemoryBudgetEntry :: derive
 FromData @NetworkDestinationEntry :: derive
+FromData @NetworkInterfaceEntry :: derive
 FromData @BlockRingAuthorityEntry :: derive
 FromData @FabricProfileInterposition :: derive
 FromData @FabricProfile :: derive
@@ -706,6 +722,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   SharedBufferBudgetEntry =;
   PrivateMemoryBudgetEntry =;
   NetworkDestinationEntry =;
+  NetworkInterfaceEntry =;
   BlockRingAuthorityEntry =;
   ClockAuthorityEntry =;
   SchedulingClassBand =;

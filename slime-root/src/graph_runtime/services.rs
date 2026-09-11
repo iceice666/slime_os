@@ -703,6 +703,31 @@ pub(super) fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            capability_table_labels::NETWORK_INTERFACE_READ => {
+                let cursor = words.first().copied().unwrap_or(0) as usize;
+                let response = match words.get(2).copied() {
+                    Some(transfer) => {
+                        let mut rows = [0u8; ipc::NETWORK_INTERFACE_ROWS_PER_CALL
+                            * ipc::NETWORK_INTERFACE_ROW_BYTES];
+                        match ipc::read_network_interface(generation, instance, cursor, &mut rows) {
+                            Some(count) => {
+                                let bytes = &rows[..count * ipc::NETWORK_INTERFACE_ROW_BYTES];
+                                match transfer_window::write_staged_region(
+                                    windows.bound(id, descriptor_thread(transfer)),
+                                    bytes,
+                                    scratch,
+                                ) {
+                                    Ok(descriptor) => Response::success(count as i64, descriptor),
+                                    Err(error) => Response::error(error),
+                                }
+                            }
+                            None => Response::error(IpcError::InvalidOperation),
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
             // B83's per-ring block authority, answered only to the declared
             // block driver.
             //

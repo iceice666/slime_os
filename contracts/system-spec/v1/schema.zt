@@ -252,6 +252,16 @@ SystemNetworkDestination :: type {
   dnsRecordLimit : Int;
 };
 
+-- IO11 static interface declaration, as `NetworkInterfaceEntry`. Optional at
+-- the spec level so the specs that predate it need no row.
+SystemNetworkInterface :: type {
+  holder : Text;
+  address : Text;
+  prefixLen : Int;
+  gateway : Text;
+  mac : Text;
+};
+
 -- B83 exact per-ring block authority, as `BlockRingAuthorityEntry`.
 SystemBlockRingAuthority :: type {
   holder : Text;
@@ -578,6 +588,8 @@ SystemSpec :: type {
   ioResourceBudgetObject : Bool;
   networkDestinations : List SystemNetworkDestination;
   networkDestinationsObject : Bool;
+  networkInterfaces? : List SystemNetworkInterface;
+  networkInterfacesObject? : Bool;
   blockRingAuthority : List SystemBlockRingAuthority;
   blockRingAuthorityObject : Bool;
   waitSet : List SystemWaitSetSource;
@@ -593,6 +605,7 @@ SystemSpec :: type {
 FromData @SystemClockAuthority :: derive
 FromData @SystemIoResourceBudget :: derive
 FromData @SystemNetworkDestination :: derive
+FromData @SystemNetworkInterface :: derive
 FromData @SystemBlockRingAuthority :: derive
 FromData @SystemWaitSetSource :: derive
 FromData @SystemSchedulingClassBand :: derive
@@ -654,6 +667,7 @@ maxImageSizes :: Int = 48;
 maxClockAuthority :: Int = 64;
 maxIoResourceBudget :: Int = 48;
 maxNetworkDestinations :: Int = 128;
+maxNetworkInterfaces :: Int = 8;
 maxBlockRingAuthority :: Int = 128;
 maxWaitSetSources :: Int = 128;
 maxSchedulingClassBands :: Int = 8;
@@ -690,6 +704,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   SystemClockAuthority =;
   SystemIoResourceBudget =;
   SystemNetworkDestination =;
+  SystemNetworkInterface =;
   SystemBlockRingAuthority =;
   SystemWaitSetSource =;
   SystemSchedulingClassBand =;
@@ -728,6 +743,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   maxClockAuthority =;
   maxIoResourceBudget =;
   maxNetworkDestinations =;
+  maxNetworkInterfaces =;
   maxBlockRingAuthority =;
   maxWaitSetSources =;
   maxSchedulingClassBands =;

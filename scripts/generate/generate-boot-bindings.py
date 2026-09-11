@@ -106,6 +106,11 @@ GENERATORS = (
         "block_authority.py",
         "block_authority.rs",
     ),
+    (
+        ROOT / "contracts" / "network-interface" / "v1" / "schema.zt",
+        "network_interface.py",
+        "network_interface.rs",
+    ),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.

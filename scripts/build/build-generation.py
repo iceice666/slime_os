@@ -124,6 +124,7 @@ from generation_resources import (
     build_clock_authority,
     build_io_resource_budget,
     build_network_destinations,
+    build_network_interfaces,
     build_lifecycle_policy,
     build_private_memory_budget,
     build_recording_policy,
@@ -3010,6 +3011,11 @@ def build_sel4_generation(
         payloads["network-destinations"] = build_network_destinations(declared_network_destinations)
     elif declared_network_destinations:
         fail("networkDestinations declared without a network-destinations resource object")
+    declared_network_interfaces = manifest.get("networkInterfaces") or []
+    if "network-interface" in object_ids:
+        payloads["network-interface"] = build_network_interfaces(declared_network_interfaces)
+    elif declared_network_interfaces:
+        fail("networkInterfaces declared without a network-interface resource object")
     declared_block_rings = manifest.get("blockRingAuthority") or []
     if "block-ring-authority" in object_ids:
         payloads["block-ring-authority"] = build_block_ring_authority(declared_block_rings)

@@ -168,6 +168,8 @@ _SPEC_FIELDS = {
     "ioResourceBudgetObject",
     "networkDestinations",
     "networkDestinationsObject",
+    "networkInterfaces",
+    "networkInterfacesObject",
     "blockRingAuthority",
     "blockRingAuthorityObject",
     "waitSet",
@@ -234,10 +236,15 @@ def _load(path: Path, contract: ModuleType) -> dict:
     # `fabricGraph`, `schedulingClass`, and `lifecyclePolicy` are optional
     # records; their absence is a legitimate shape.
     _OPTIONAL_FIELDS = {"fabricGraph", "schedulingClass", "lifecyclePolicy"}
+    # The IO11 interface table postdates every earlier spec; an absent field is
+    # the same declaration as an empty one without an object.
+    _DEFAULTED_FIELDS = {"networkInterfaces": [], "networkInterfacesObject": False}
     unexpected = set(value) - _SPEC_FIELDS
-    missing = _SPEC_FIELDS - set(value) - _OPTIONAL_FIELDS
+    missing = _SPEC_FIELDS - set(value) - _OPTIONAL_FIELDS - set(_DEFAULTED_FIELDS)
     if unexpected or missing:
         _fail(f"{path}: unexpected {sorted(unexpected)}, missing {sorted(missing)}")
+    for field, default in _DEFAULTED_FIELDS.items():
+        value.setdefault(field, default)
     return value
 
 
@@ -601,6 +608,7 @@ def _validate_bounds(spec: dict, contract: ModuleType) -> None:
         ("clockAuthority", contract.MAX_CLOCK_AUTHORITY),
         ("ioResourceBudget", contract.MAX_IO_RESOURCE_BUDGET),
         ("networkDestinations", contract.MAX_NETWORK_DESTINATIONS),
+        ("networkInterfaces", contract.MAX_NETWORK_INTERFACES),
         ("blockRingAuthority", contract.MAX_BLOCK_RING_AUTHORITY),
         ("waitSet", contract.MAX_WAIT_SET_SOURCES),
         ("recording", contract.MAX_RECORDING_ENTRIES),
@@ -860,6 +868,9 @@ def _validate_authority_sections(spec: dict, admitted: set[str]) -> None:
     for entry in spec["networkDestinations"]:
         if entry["holder"] not in admitted:
             _fail(f"networkDestinations: holder {entry['holder']!r} is not admitted")
+    for entry in spec["networkInterfaces"]:
+        if entry["holder"] not in admitted:
+            _fail(f"networkInterfaces: holder {entry['holder']!r} is not admitted")
     for entry in spec["blockRingAuthority"]:
         if entry["holder"] not in admitted:
             _fail(f"blockRingAuthority: holder {entry['holder']!r} is not admitted")
@@ -1149,6 +1160,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
         ("clockAuthorityObject", "clock-authority"),
         ("ioResourceBudgetObject", "io-resource-budget"),
         ("networkDestinationsObject", "network-destinations"),
+        ("networkInterfacesObject", "network-interface"),
         ("blockRingAuthorityObject", "block-ring-authority"),
         ("waitSetObject", "wait-set"),
         ("recordingObject", "recording-policy"),
@@ -1229,6 +1241,8 @@ def derive_manifest(system: CompiledSystem) -> dict:
         manifest["ioResourceBudget"] = spec["ioResourceBudget"]
     if spec["networkDestinationsObject"]:
         manifest["networkDestinations"] = spec["networkDestinations"]
+    if spec["networkInterfacesObject"]:
+        manifest["networkInterfaces"] = spec["networkInterfaces"]
     if spec["blockRingAuthorityObject"]:
         manifest["blockRingAuthority"] = spec["blockRingAuthority"]
     if spec["waitSetObject"]:

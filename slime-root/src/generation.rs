@@ -16,6 +16,7 @@ use boot_contracts::generation::{
 use boot_contracts::io_resource::{self, IoResourceBudget};
 use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
 use boot_contracts::network_destination::{self, NetworkDestinations};
+use boot_contracts::network_interface::{self, NetworkInterfaces};
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
 use boot_contracts::recording_policy::{self, RecordingPolicy};
 use boot_contracts::scheduling_class::{self, SchedulingClass};
@@ -609,6 +610,22 @@ pub(crate) fn network_destinations_object<'a>(
             && object.bytes[..network_destination::MAGIC.len()] == network_destination::MAGIC
         {
             return Some(NetworkDestinations::decode(object.bytes));
+        }
+    }
+    None
+}
+/// Locate the authenticated IO11 interface table. Decoded only to bound and
+/// page authenticated bytes; the root learns no address from it.
+pub(crate) fn network_interface_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<NetworkInterfaces<'a>, network_interface::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= network_interface::MAGIC.len()
+            && object.bytes[..network_interface::MAGIC.len()] == network_interface::MAGIC
+        {
+            return Some(NetworkInterfaces::decode(object.bytes));
         }
     }
     None

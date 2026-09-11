@@ -1230,6 +1230,28 @@ pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> i64 {
     }
 }
 
+/// Read authenticated IO11 interface rows into the transfer window.
+pub fn network_interface_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::NETWORK_INTERFACE_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
 /// Read authenticated B83 per-ring block authority entries into the transfer
 /// window. `network_destinations_read`'s exact shape, on this table's label.
 pub fn block_ring_authority_read(cursor: usize, out: &mut [u8]) -> i64 {

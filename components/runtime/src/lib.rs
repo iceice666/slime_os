@@ -48,14 +48,14 @@ pub use syscall::{
     io_irq_ack, io_mmio_map, io_mmio_read32, io_mmio_write32, io_queue_map, io_request_begin,
     io_request_settle, lifecycle_parameter_read, lifecycle_parameter_write,
     lifecycle_restart_admit, lifecycle_state_advance, lifecycle_state_read, monotonic_frequency,
-    monotonic_read, network_destinations_read, notification_poll, notification_signal,
-    notification_wait, private_memory_grow, recording_participation, recv, recv_blocking, reply,
-    resolve_binding, scheduling_class_promote, scheduling_class_read, send, shared_buffer_create,
-    shared_buffer_loan, shared_buffer_loan_map, shared_buffer_map, shared_buffer_occupancy,
-    shared_buffer_release, shared_buffer_return, shared_buffer_revoke, shared_buffer_seal,
-    shared_buffer_unmap, simulated_time_advance, simulated_time_read, spawn, spawn_budget,
-    supervision_derive, supervision_status, timer_arm, timer_cancel, try_send, unhealthy,
-    wait_sources, yield_now,
+    monotonic_read, network_destinations_read, network_interface_read, notification_poll,
+    notification_signal, notification_wait, private_memory_grow, recording_participation, recv,
+    recv_blocking, reply, resolve_binding, scheduling_class_promote, scheduling_class_read, send,
+    shared_buffer_create, shared_buffer_loan, shared_buffer_loan_map, shared_buffer_map,
+    shared_buffer_occupancy, shared_buffer_release, shared_buffer_return, shared_buffer_revoke,
+    shared_buffer_seal, shared_buffer_unmap, simulated_time_advance, simulated_time_read, spawn,
+    spawn_budget, supervision_derive, supervision_status, timer_arm, timer_cancel, try_send,
+    unhealthy, wait_sources, yield_now,
 };
 
 /// C9.2's wait set, re-exported for the common case: a component builds one over

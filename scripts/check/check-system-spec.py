@@ -223,6 +223,7 @@ def normalized(manifest: dict) -> dict:
         "clockAuthority",
         "ioResourceBudget",
         "networkDestinations",
+        "networkInterfaces",
         "blockRingAuthority",
         "waitSet",
         "recording",

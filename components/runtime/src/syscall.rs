@@ -702,6 +702,19 @@ pub fn network_destinations_read(cursor: usize, out: &mut [u8]) -> Result<usize,
     }
 }
 
+/// Read the authenticated IO11 interface rows served to this generation's
+/// network service. The request is self-scoped and names no holder or
+/// interface; the service picks its own row by its holder identity and
+/// configures its stack from it.
+pub fn network_interface_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::network_interface_read(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// Read the authenticated B83 per-ring block authority entries served to this
 /// generation's block driver. The request is self-scoped and names no holder,
 /// device, or ring; the root reads no block right, so refusing a write on a
