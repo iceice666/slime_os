@@ -830,7 +830,8 @@ def check_segmented_capacity_report(
         r"allocation_capacity=(?P<allocation_capacity>\d+) allocations_available=(?P<allocations_available>\d+) "
         r"extent_capacity=(?P<extent_capacity>\d+) extents_available=(?P<extents_available>\d+) "
         r"cslots_available=(?P<cslots_available>\d+) ordinary_available=(?P<ordinary_available>\d+) "
-        r"root_image=(?P<image>\d+) root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
+        r"ordinary_layout=(?P<ordinary_layout>\d+) root_image=(?P<image>\d+) "
+        r"root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
         r"root_heap=(?P<heap>\d+) fit=(?P<fit>\d+)$",
         re.MULTILINE,
     )
@@ -890,7 +891,10 @@ def check_segmented_capacity_report(
         values["required_extents"] <= values["extents_available"],
         values["required_cslots"] <= values["cslots_available"],
         values["required_reserved"] <= values["ordinary_available"],
+        values["ordinary_layout"] == 1,
     )
+    if values["ordinary_layout"] not in (0, 1):
+        fail(prefix + "ordinary_layout is not 0 or 1")
     if values["fit"] not in (0, 1):
         fail(prefix + "fit is not 0 or 1")
     if values["fit"] != int(all(comparisons)):

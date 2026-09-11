@@ -792,6 +792,7 @@ pub(super) fn launch_instance_graph(
             allocation_descriptors_available: allocator.allocation_descriptors_free(),
             extent_descriptors_available: allocator.extent_descriptors_free(),
             ordinary_bytes_available: allocator.untyped_bytes_remaining(),
+            ordinary_layout_fits: allocator.task_backing_extents_fit(plan, static_backing, HOLDERS),
             root_image_bytes: bootinfo.user_image_frames().len() * child_vspace::GRANULE_SIZE,
             root_stack_bytes: ROOT_STACK_BYTES,
             root_heap_bytes: ROOT_HEAP_BYTES,
@@ -804,7 +805,7 @@ pub(super) fn launch_instance_graph(
         let private_cslots = plan.required_cslots * HOLDERS;
         let private_reserved = plan.reserved_bytes * HOLDERS;
         sel4::debug_println!(
-            "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
+            "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
             capacity.holders,
             plan.private_pages,
             private_allocations,
@@ -826,6 +827,7 @@ pub(super) fn launch_instance_graph(
             capacity.extent_descriptors_available,
             capacity.cslots_available,
             capacity.ordinary_bytes_available,
+            capacity.ordinary_layout_fits as u8,
             capacity.root_image_bytes,
             core::mem::size_of::<ObjectAllocator>() + core::mem::size_of::<TaskTable<MAX_TASKS>>(),
             capacity.root_stack_bytes,

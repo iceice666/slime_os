@@ -682,7 +682,8 @@ def check_private_memory_capacity_controls() -> int:
         "required_extents=1540 required_cslots=264740 required_reserved=2149646336 "
         "allocation_capacity=4096 allocations_available=3000 extent_capacity=144 "
         "extents_available=120 cslots_available=500000 ordinary_available=2147483648 "
-        "root_image=8388608 root_metadata=1048576 root_stack=1048576 root_heap=524288 fit=0"
+        "ordinary_layout=1 root_image=8388608 root_metadata=1048576 root_stack=1048576 "
+        "root_heap=524288 fit=0"
     )
     gate.check_segmented_capacity_report(qualification, profile, section)
     capacity_mutations = (
@@ -694,6 +695,10 @@ def check_private_memory_capacity_controls() -> int:
         (
             "capacity missing static RAM",
             qualification.replace("required_reserved=2149646336", "required_reserved=2149580800"),
+        ),
+        (
+            "capacity ignores impossible ordinary layout",
+            qualification.replace("ordinary_layout=1", "ordinary_layout=0")[:-1] + "1",
         ),
         ("capacity duplicate report", qualification + "\n" + qualification),
         (

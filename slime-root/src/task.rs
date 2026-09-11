@@ -1122,16 +1122,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             self.activated -= 1;
         }
         self.reclaimed_slots += reclaimed;
-        // The count the arena actually returned, not the construction-time
-        // snapshot in `cleanup.slots`.
-        //
-        // The two agreed for as long as a task allocated nothing after it was
-        // built. C10.1 broke that: a private-memory growth charges root CSlots
-        // to the arena while the task runs, so the snapshot is short by however
-        // many pages the task grew, and the per-task and aggregate markers
-        // stopped stating the same fact — `just sel4_root_boot_check`'s
-        // conservation arm is what caught it. Reporting the revoke's own answer
-        // makes the record what was reclaimed rather than what was predicted.
+        // Use the revoke's actual slot count: runtime allocations can make the
+        // construction-time snapshot in `cleanup.slots` stale.
         Ok(CleanupRecord {
             slots: reclaimed,
             ..task.cleanup

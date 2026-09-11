@@ -335,6 +335,82 @@ pub(crate) fn plan_allocation(
     (end <= capacity).then_some((start, end))
 }
 
+fn plan_extent_in_regions(regions: &mut [Option<UntypedRegion>], size_bits: usize) -> bool {
+    let Some((index, watermark)) = regions.iter().enumerate().find_map(|(index, region)| {
+        let region = region.as_ref()?;
+        plan_allocation(region.watermark, region.capacity(), size_bits).map(|(_, end)| (index, end))
+    }) else {
+        return false;
+    };
+    regions[index]
+        .as_mut()
+        .expect("selected untyped region exists")
+        .watermark = watermark;
+    true
+}
+
+fn task_backing_extents_fit_in(
+    regions: &mut [Option<UntypedRegion>],
+    plan: TaskBackingPlan,
+    static_backing: TaskStaticBacking,
+    holders: usize,
+) -> bool {
+    let Some(static_size_bits) = static_backing
+        .reserved_bytes
+        .is_power_of_two()
+        .then(|| static_backing.reserved_bytes.trailing_zeros() as usize)
+    else {
+        return holders == 0;
+    };
+    let Some(data_bytes) = plan.reserved_bytes.checked_sub(plan.page_table_bytes) else {
+        return false;
+    };
+    if !plan.page_table_bytes.is_multiple_of(GRANULE_BYTES) {
+        return false;
+    }
+    let table_extents = plan.page_table_bytes / GRANULE_BYTES;
+    let data_size_bits = if plan.data_extents == 0 {
+        if data_bytes != 0 {
+            return false;
+        }
+        None
+    } else {
+        if !data_bytes.is_multiple_of(plan.data_extents) {
+            return false;
+        }
+        let bytes = data_bytes / plan.data_extents;
+        if !bytes.is_power_of_two() {
+            return false;
+        }
+        Some(bytes.trailing_zeros() as usize)
+    };
+    if 1usize
+        .checked_add(table_extents)
+        .and_then(|count| count.checked_add(plan.data_extents))
+        != Some(plan.extent_descriptors)
+    {
+        return false;
+    }
+    for _ in 0..holders {
+        if !plan_extent_in_regions(regions, static_size_bits) {
+            return false;
+        }
+        for _ in 0..table_extents {
+            if !plan_extent_in_regions(regions, GRANULE_BYTES.trailing_zeros() as usize) {
+                return false;
+            }
+        }
+        if let Some(size_bits) = data_size_bits {
+            for _ in 0..plan.data_extents {
+                if !plan_extent_in_regions(regions, size_bits) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Pure task-arena sizing model, shared by admission and host tests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArenaPlan {
@@ -421,6 +497,7 @@ pub struct TaskBackingCapacity {
     pub allocation_descriptors_available: usize,
     pub extent_descriptors_available: usize,
     pub ordinary_bytes_available: usize,
+    pub ordinary_layout_fits: bool,
     pub root_image_bytes: usize,
     pub root_stack_bytes: usize,
     pub root_heap_bytes: usize,
@@ -462,6 +539,7 @@ impl TaskBackingCapacity {
                 && required.allocation_descriptors <= self.allocation_descriptors_available
                 && required.extent_descriptors <= self.extent_descriptors_available
                 && required.reserved_bytes <= self.ordinary_bytes_available
+                && self.ordinary_layout_fits
         })
     }
 }
@@ -551,13 +629,12 @@ fn provision_private_backing_with(
     })
 }
 
-/// Plan segmented private backing for host admission and capacity reports.
+/// Plan segmented private backing through [`MAX_PLANNED_PRIVATE_PAGES`],
+/// independently of the lower public runtime quota ceiling.
 ///
-/// This deliberately accepts quotas above the current public runtime ceiling:
-/// MEM-ARENAS must prove that 64 MiB and 256 MiB plans are representable before
-/// a later milestone changes the authenticated ceiling. Data is split into
-/// independently reclaimable 2 MiB extents; the adversarial one-page path owns
-/// one CSlot/allocation descriptor per page plus one leaf table per 2 MiB span.
+/// Data is split into independently reclaimable 2 MiB extents; the one-page
+/// allocation shape owns one CSlot/allocation descriptor per page plus one leaf
+/// table per 2 MiB span.
 pub fn plan_task_backing(private_pages: usize) -> Option<TaskBackingPlan> {
     if private_pages > MAX_PLANNED_PRIVATE_PAGES {
         return None;
@@ -1378,6 +1455,23 @@ impl ObjectAllocator {
             .flatten()
             .map(UntypedRegion::remaining)
             .sum()
+    }
+
+    /// Whether the current ordinary untyped regions can place every planned
+    /// extent in provisioning order under seL4's object-size alignment rule.
+    pub fn task_backing_extents_fit(
+        &self,
+        plan: TaskBackingPlan,
+        static_backing: TaskStaticBacking,
+        holders: usize,
+    ) -> bool {
+        let mut regions = self.untypeds;
+        task_backing_extents_fit_in(
+            &mut regions[..self.untyped_len],
+            plan,
+            static_backing,
+            holders,
+        )
     }
 
     fn take_slot(&mut self) -> Result<usize, AllocError> {
@@ -2380,8 +2474,9 @@ mod tests {
         MAX_TASK_EXTENTS, ObjectAllocator, PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE,
         PROVENANCE_SLOTS, PrivateBackingLayout, PrivateBackingRequest, PrivateObjectKind,
         PrivateRecordVisits, ProvenanceTable, SlotPool, TaskArenaId, TaskBackingCapacity,
-        TaskStaticBacking, device_retype_plan, plan_allocation, plan_task_backing,
-        provision_private_backing_with, task_static_backing_from_records,
+        TaskStaticBacking, UntypedRegion, device_retype_plan, plan_allocation, plan_task_backing,
+        provision_private_backing_with, task_backing_extents_fit_in,
+        task_static_backing_from_records,
     };
     use crate::private_memory::{PrivateMemoryKernel, Region, Table};
     use sel4::CapTypeForObjectOfFixedSize;
@@ -2785,6 +2880,7 @@ mod tests {
             allocation_descriptors_available: 522,
             extent_descriptors_available: 4,
             ordinary_bytes_available: 4_214_784,
+            ordinary_layout_fits: true,
             root_image_bytes: 0,
             root_stack_bytes: 0,
             root_heap_bytes: 0,
@@ -3014,6 +3110,7 @@ mod tests {
             allocation_descriptors_available: usize::MAX,
             extent_descriptors_available: usize::MAX,
             ordinary_bytes_available: usize::MAX,
+            ordinary_layout_fits: true,
             root_image_bytes: 0,
             root_stack_bytes: 1024 * 1024,
             root_heap_bytes: 512 * 1024,
@@ -3053,8 +3150,52 @@ mod tests {
             }
             .fits()
         );
+        capacity.ordinary_layout_fits = false;
+        capacity.ordinary_bytes_available = required.reserved_bytes;
+        assert!(!capacity.fits());
     }
 
+    #[test]
+    fn capacity_rejects_fragmented_untyped_alignment_false_positive() {
+        let plan = plan_task_backing(512).unwrap();
+        let static_backing = TaskStaticBacking {
+            allocation_descriptors: 8,
+            reserved_bytes: 16_384,
+        };
+        let region = |slot: usize, size_bits: usize, watermark: usize| {
+            Some(UntypedRegion {
+                cap: sel4::cap::Untyped::from_bits(slot as _),
+                paddr: (slot - 1) << 21,
+                size_bits,
+                watermark,
+            })
+        };
+        let mut fragmented = [
+            region(1, 21, GRANULE_BYTES),
+            region(2, 21, GRANULE_BYTES),
+            region(3, 21, GRANULE_BYTES),
+        ];
+        let ordinary_bytes_available: usize = fragmented
+            .iter()
+            .flatten()
+            .map(UntypedRegion::remaining)
+            .sum();
+        assert!(ordinary_bytes_available >= plan.reserved_bytes + static_backing.reserved_bytes);
+        assert!(!task_backing_extents_fit_in(
+            &mut fragmented,
+            plan,
+            static_backing,
+            1,
+        ));
+
+        let mut contiguous = [region(1, 23, 0)];
+        assert!(task_backing_extents_fit_in(
+            &mut contiguous,
+            plan,
+            static_backing,
+            1,
+        ));
+    }
     #[test]
     fn static_backing_counts_aliases_and_excludes_private_records() {
         let id = TaskArenaId::from_raw(2, 7);
@@ -3146,6 +3287,7 @@ mod tests {
             allocation_descriptors_available: 262_657,
             extent_descriptors_available: plan.extent_descriptors * 4,
             ordinary_bytes_available: usize::MAX,
+            ordinary_layout_fits: true,
             root_image_bytes: 0,
             root_stack_bytes: 0,
             root_heap_bytes: 0,
@@ -3173,6 +3315,7 @@ mod tests {
             allocation_descriptors_available: usize::MAX,
             extent_descriptors_available: usize::MAX,
             ordinary_bytes_available: usize::MAX,
+            ordinary_layout_fits: true,
             root_image_bytes: 0,
             root_stack_bytes: 0,
             root_heap_bytes: 0,
