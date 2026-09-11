@@ -82,8 +82,7 @@ const KERNEL_ROOT_CNODE_SLOTS: usize = 1 << sel4::sel4_cfg_usize!(ROOT_CNODE_SIZ
 /// product graph. Such an image keeps the 4096-record envelope, which bounds
 /// private backing well above the 512-page runtime ceiling
 /// [`crate::private_memory::MAX_REGION_PAGES`] enforces.
-const LARGE_DESCRIPTOR_TABLES: bool =
-    KERNEL_ROOT_CNODE_SLOTS >= MAX_ROOT_CSLOTS && !cfg!(slime_private_small_tables);
+const LARGE_DESCRIPTOR_TABLES: bool = KERNEL_ROOT_CNODE_SLOTS >= MAX_ROOT_CSLOTS;
 /// Root-owned task allocation descriptors.
 ///
 /// One descriptor per object or retained capability the root owns for a task.
@@ -115,36 +114,18 @@ pub const MAX_TASK_ALLOCATIONS: usize = if LARGE_DESCRIPTOR_TABLES {
 /// stated, because this bound is *not* checked during admission — a budget
 /// exceeding it would pass `admit_total_slots` and then fail partway through
 /// [`ObjectAllocator::provision_extent`] with `ArenaTableFull`.
+/// Each nonzero runtime quota uses both entries of `PrivateBackingLayout::extents`:
+/// one data extent and one table extent, independent of its growth shape.
 const fn max_admissible_private_extents() -> usize {
     let holders = boot_contracts::private_memory_budget::MAX_HOLDERS;
     let total = crate::private_memory::MAX_TOTAL_PAGES;
-    // `PrivateBackingLayout::for_quota` retains three extents for a quota of
-    // exactly one full data extent and two for any other nonzero quota, so the
-    // worst distribution trades full-size holders against one-page holders.
-    let mut full = 0;
-    let mut worst = 0;
-    while full <= holders {
-        let charged = full * MAX_PRIVATE_EXTENT_PAGES;
-        if charged > total {
-            break;
-        }
-        let rest = holders - full;
-        let spare = total - charged;
-        let single = if rest < spare { rest } else { spare };
-        let extents = full * 3 + single * 2;
-        if extents > worst {
-            worst = extents;
-        }
-        full += 1;
-    }
-    worst
+    2 * if holders < total { holders } else { total }
 }
 
 /// Every task consumes one static extent. A planned private holder additionally
-/// consumes two data extents and one page-table extent per 2 MiB span so a
-/// retained large frame cannot strand the exact 4 KiB retry path.
+/// consumes one data extent and one page-table extent per 2 MiB span.
 pub const MAX_TASK_EXTENTS: usize = if LARGE_DESCRIPTOR_TABLES {
-    MAX_TASK_ARENAS + 4 * (3 * MAX_PLANNED_PRIVATE_SPANS)
+    MAX_TASK_ARENAS + 4 * (2 * MAX_PLANNED_PRIVATE_SPANS)
 } else {
     3 * MAX_TASK_ARENAS
 };
@@ -554,7 +535,7 @@ struct PrivateExtentSpec {
 pub(crate) struct PrivateBackingLayout {
     private_pages: usize,
     pub(crate) allocation_descriptors: usize,
-    extents: [Option<PrivateExtentSpec>; 3],
+    extents: [Option<PrivateExtentSpec>; 2],
 }
 
 impl PrivateBackingLayout {
@@ -574,7 +555,7 @@ impl PrivateBackingLayout {
             return Self {
                 private_pages,
                 allocation_descriptors: 0,
-                extents: [None; 3],
+                extents: [None; 2],
             };
         }
         let data_bytes = private_pages * GRANULE_BYTES;
@@ -597,11 +578,6 @@ impl PrivateBackingLayout {
                     size_bits: GRANULE_BYTES.trailing_zeros() as usize,
                 }),
                 data,
-                if private_pages == MAX_PRIVATE_EXTENT_PAGES {
-                    data
-                } else {
-                    None
-                },
             ],
         }
     }
@@ -676,11 +652,9 @@ pub fn plan_task_backing(private_pages: usize) -> Option<TaskBackingPlan> {
         });
     }
     let payload_extents = private_pages.div_ceil(MAX_PRIVATE_EXTENT_PAGES);
-    // Every span may retain one typed large frame after a failed bulk map. A
-    // second data extent keeps the exact 4 KiB retry path provisionable without
-    // pretending the retained frame's untyped parent can be retyped again.
-    let fallback_extents = payload_extents;
-    let data_extents = payload_extents.checked_add(fallback_extents)?;
+    // An unmapped, reusable large frame is revoked before its dedicated extent
+    // is reused for base pages; both shapes consume the same reserved RAM.
+    let data_extents = payload_extents;
     let leaf_tables = payload_extents;
     let large_frames = payload_extents;
     let allocation_descriptors = private_pages
@@ -2074,6 +2048,60 @@ impl ObjectAllocator {
         Ok((position, extent, watermark, false, false))
     }
 
+    /// A large frame occupies its entire data extent. Only a reusable, unmapped
+    /// frame can be revoked here: committed and in-flight mappings remain owned.
+    fn recycle_private_large_frame<K: crate::private_memory::PrivateMemoryKernel>(
+        &mut self,
+        id: TaskArenaId,
+        kernel: &mut K,
+    ) -> Result<(), AllocError> {
+        let Some(position) = self.pop_reusable(id, PrivateObjectKind::LargeFrame, None)? else {
+            return Ok(());
+        };
+        let record = self.allocations[position];
+        let extent_index = record.extent as usize;
+        let result = (|| {
+            let extent = self
+                .extents
+                .get(extent_index)
+                .and_then(Option::as_ref)
+                .filter(|extent| {
+                    extent.belongs_to(id)
+                        && !extent.revoked
+                        && extent.kind == ExtentKind::PrivateData
+                        && extent.size_bits == record.allocation.size_bits()
+                        && extent.objects == 1
+                        && extent.bytes == 1usize << extent.size_bits
+                        && !record.allocation.is_mapped()
+                })
+                .ok_or_else(Self::private_record_error)?;
+            kernel
+                .revoke(extent.parent)
+                .map_err(|error| AllocError::ArenaCleanup {
+                    slot: extent.parent.bits() as usize,
+                    error,
+                })
+        })();
+        if let Err(error) = result {
+            self.push_reusable(id, position)?;
+            return Err(error);
+        }
+        let extent = self.extents[extent_index]
+            .as_mut()
+            .expect("validated private extent");
+        self.live_objects -= extent.objects;
+        self.live_bytes -= extent.bytes;
+        extent.watermark = 0;
+        extent.objects = 0;
+        extent.bytes = 0;
+        let record = &mut self.allocations[position];
+        record.extent = PRIVATE_EXTENT_NONE;
+        record
+            .allocation
+            .set_private_state(PrivateObjectKind::Empty, 0, true, false);
+        self.push_reusable(id, position)
+    }
+
     pub(crate) fn acquire_private_in<K: crate::private_memory::PrivateMemoryKernel>(
         &mut self,
         id: TaskArenaId,
@@ -2083,6 +2111,9 @@ impl ObjectAllocator {
     ) -> Result<PrivateAllocation, AllocError> {
         debug_assert!(kind != PrivateObjectKind::Empty);
         self.private_arena(id)?;
+        if kind == PrivateObjectKind::Granule {
+            self.recycle_private_large_frame(id, kernel)?;
+        }
         #[cfg(slime_private_fail_second_allocation)]
         if fail_private_allocation(kind, self.private_arena(id)?.in_flight_granules) {
             return Err(AllocError::Retype {
@@ -2489,6 +2520,7 @@ mod tests {
         MapFrame { slot: usize, vaddr: usize },
         MapLeaf { slot: usize, vaddr: usize },
         UnmapFrame { slot: usize },
+        Revoke { slot: usize },
     }
 
     #[derive(Default)]
@@ -2497,12 +2529,24 @@ mod tests {
         fail_retype_at: Option<usize>,
         fail_map_frame_at: Option<usize>,
         fail_unmap_at: Option<usize>,
+        fail_revoke: bool,
         retypes: usize,
         frame_maps: usize,
         unmaps: usize,
     }
 
     impl PrivateMemoryKernel for RecordingPrivateKernel {
+        fn revoke(&mut self, parent: sel4::cap::Untyped) -> Result<(), sel4::Error> {
+            self.requests.push(KernelRequest::Revoke {
+                slot: parent.bits() as usize,
+            });
+            if self.fail_revoke {
+                Err(sel4::Error::NotEnoughMemory)
+            } else {
+                Ok(())
+            }
+        }
+
         fn retype(
             &mut self,
             _parent: sel4::cap::Untyped,
@@ -2787,7 +2831,7 @@ mod tests {
         assert_eq!(zero_len, 1);
         assert_eq!(zero[0], Some(PrivateBackingRequest::Slots { count: 0 }));
         let (full, full_len) = requests(512);
-        assert_eq!(full_len, 4);
+        assert_eq!(full_len, 3);
         assert_eq!(
             full,
             [
@@ -2799,11 +2843,8 @@ mod tests {
                     kind: ExtentKind::PrivateData,
                     size_bits: 21,
                 }),
-                Some(PrivateBackingRequest::Extent {
-                    kind: ExtentKind::PrivateData,
-                    size_bits: 21,
-                }),
                 Some(PrivateBackingRequest::Slots { count: 514 }),
+                None,
             ]
         );
         assert_eq!(
@@ -2822,14 +2863,14 @@ mod tests {
             plan_task_backing(512),
             Some(super::TaskBackingPlan {
                 private_pages: 512,
-                data_extents: 2,
-                extent_descriptors: 4,
+                data_extents: 1,
+                extent_descriptors: 3,
                 allocation_descriptors: 514,
-                required_cslots: 518,
-                reserved_bytes: 4_198_400,
+                required_cslots: 517,
+                reserved_bytes: 2_101_248,
                 payload_bytes: 2_097_152,
                 page_table_bytes: 4096,
-                alignment_waste: 2_097_152,
+                alignment_waste: 0,
             })
         );
     }
@@ -2867,7 +2908,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_capacity_rejects_old_reservation_limits() {
+    fn runtime_capacity_rejects_each_reservation_shortfall() {
         let plan = plan_task_backing(512).unwrap();
         let exact = TaskBackingCapacity {
             plan,
@@ -2876,51 +2917,41 @@ mod tests {
                 reserved_bytes: 16_384,
             },
             holders: 1,
-            cslots_available: 526,
+            cslots_available: 525,
             allocation_descriptors_available: 522,
-            extent_descriptors_available: 4,
-            ordinary_bytes_available: 4_214_784,
+            extent_descriptors_available: 3,
+            ordinary_bytes_available: 2_117_632,
             ordinary_layout_fits: true,
             root_image_bytes: 0,
             root_stack_bytes: 0,
             root_heap_bytes: 0,
         };
-        assert_eq!(exact.requirements().unwrap().cslots, 526);
+        assert_eq!(exact.requirements().unwrap().cslots, 525);
         assert!(exact.fits());
         assert!(
             !TaskBackingCapacity {
-                cslots_available: 525,
-                ..exact
-            }
-            .fits()
-        );
-        assert!(
-            !TaskBackingCapacity {
-                allocation_descriptors_available: 521,
-                ..exact
-            }
-            .fits()
-        );
-        assert!(
-            !TaskBackingCapacity {
-                extent_descriptors_available: 3,
-                ..exact
-            }
-            .fits()
-        );
-        assert!(
-            !TaskBackingCapacity {
-                ordinary_bytes_available: 4_214_783,
-                ..exact
-            }
-            .fits()
-        );
-        assert!(
-            !TaskBackingCapacity {
                 cslots_available: 524,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
                 allocation_descriptors_available: 521,
-                extent_descriptors_available: 3,
-                ordinary_bytes_available: 2_117_632,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
+                extent_descriptors_available: 2,
+                ..exact
+            }
+            .fits()
+        );
+        assert!(
+            !TaskBackingCapacity {
+                ordinary_bytes_available: 2_117_631,
                 ..exact
             }
             .fits()
@@ -3005,9 +3036,7 @@ mod tests {
                         layout.extent_parent_slots()
                     );
                 }
-                // The margin admission previously omitted: a nonzero quota
-                // always costs more than its descriptors, and the 512-page
-                // ceiling retains three extents rather than two.
+                // Nonzero quotas retain one data extent and one table extent.
                 assert_eq!(PrivateBackingLayout::for_quota(0).extent_parent_slots(), 0);
                 assert_eq!(PrivateBackingLayout::for_quota(1).extent_parent_slots(), 2);
                 assert_eq!(
@@ -3016,7 +3045,7 @@ mod tests {
                 );
                 assert_eq!(
                     PrivateBackingLayout::for_quota(512).extent_parent_slots(),
-                    3
+                    2
                 );
             })
             .unwrap()
@@ -3077,21 +3106,36 @@ mod tests {
         const PAGES_64_MIB: usize = 64 * 1024 * 1024 / 4096;
         const PAGES_256_MIB: usize = 256 * 1024 * 1024 / 4096;
         let sixty_four = plan_task_backing(PAGES_64_MIB).unwrap();
-        assert_eq!(sixty_four.data_extents, 64);
+        assert_eq!(sixty_four.data_extents, 32);
         assert_eq!(sixty_four.payload_bytes, 64 * 1024 * 1024);
-        assert_eq!(sixty_four.alignment_waste, 64 * 1024 * 1024);
+        assert_eq!(sixty_four.alignment_waste, 0);
         assert_eq!(sixty_four.page_table_bytes, 32 * 4096);
 
         let holder = plan_task_backing(PAGES_256_MIB).unwrap();
-        assert_eq!(holder.data_extents, 256);
-        assert_eq!(holder.reserved_bytes, 2 * 256 * 1024 * 1024 + 128 * 4096);
+        assert_eq!(holder.data_extents, 128);
+        assert_eq!(holder.reserved_bytes, 256 * 1024 * 1024 + 128 * 4096);
         let four_reserved = holder.reserved_bytes * 4;
-        assert_eq!(four_reserved, 2_149_580_800);
+        assert_eq!(four_reserved, 1_075_838_976);
 
         let current = plan_task_backing(MAX_PRIVATE_EXTENT_PAGES).unwrap();
-        assert_eq!(current.data_extents, 2);
-        assert_eq!(current.reserved_bytes, 2 * MAX_PRIVATE_EXTENT_BYTES + 4096);
+        assert_eq!(current.data_extents, 1);
+        assert_eq!(current.reserved_bytes, MAX_PRIVATE_EXTENT_BYTES + 4096);
         assert!(plan_task_backing(MAX_PLANNED_PRIVATE_PAGES + 1).is_none());
+        let mut regions = [Some(UntypedRegion {
+            cap: sel4::cap::Untyped::from_bits(1),
+            paddr: 0x8000_0000,
+            size_bits: 31,
+            watermark: 128 * 1024 * 1024,
+        })];
+        assert!(task_backing_extents_fit_in(
+            &mut regions,
+            holder,
+            TaskStaticBacking {
+                allocation_descriptors: 520,
+                reserved_bytes: 4 * 1024 * 1024,
+            },
+            4
+        ));
     }
 
     #[test]
@@ -3116,7 +3160,7 @@ mod tests {
             root_heap_bytes: 512 * 1024,
         };
         let required = capacity.requirements().unwrap();
-        assert_eq!(required.extent_descriptors, 385 * 4);
+        assert_eq!(required.extent_descriptors, 257 * 4);
         capacity.cslots_available = required.cslots;
         capacity.allocation_descriptors_available = required.allocation_descriptors;
         capacity.extent_descriptors_available = required.extent_descriptors;
@@ -3511,8 +3555,114 @@ mod tests {
                 MAX_TASK_ALLOCATIONS,
                 4 * (MAX_PLANNED_PRIVATE_ALLOCATIONS + MAX_PLANNED_STATIC_ALLOCATIONS)
             );
-            assert_eq!(MAX_TASK_EXTENTS, MAX_TASK_ARENAS + 4 * 3 * 128);
+            assert_eq!(MAX_TASK_EXTENTS, MAX_TASK_ARENAS + 4 * 2 * 128);
         }
+    }
+
+    #[test]
+    fn failed_large_extent_revoke_retains_ownership_then_reaches_base_page_quota() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture();
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 512);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel {
+                    fail_map_frame_at: Some(1),
+                    ..Default::default()
+                };
+                assert!(
+                    table
+                        .grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            512,
+                            &mut kernel
+                        )
+                        .is_err()
+                );
+                let position = allocator.arenas[arena.index()].reusable_heads
+                    [PrivateObjectKind::LargeFrame as usize]
+                    as usize;
+                let extent_index = allocator.allocations[position].extent as usize;
+                let parent = allocator.extents[extent_index].unwrap().parent;
+                kernel.fail_map_frame_at = None;
+                kernel.fail_revoke = true;
+                for _ in 0..2 {
+                    assert!(
+                        table
+                            .grow_with_kernel(
+                                &mut allocator,
+                                arena,
+                                vspace,
+                                &mut region,
+                                1,
+                                &mut kernel
+                            )
+                            .is_err()
+                    );
+                    assert_eq!(region.pages(), 0);
+                    assert_eq!(table.total_pages(), 0);
+                    assert_eq!(
+                        allocator.allocations[position].allocation.private_kind(),
+                        PrivateObjectKind::LargeFrame
+                    );
+                    assert!(allocator.allocations[position].allocation.is_reusable());
+                    let extent = allocator.extents[extent_index].unwrap();
+                    assert!(extent.belongs_to(arena));
+                    assert_eq!(extent.objects, 1);
+                    assert_eq!(extent.bytes, MAX_PRIVATE_EXTENT_BYTES);
+                    assert_eq!(extent.watermark, MAX_PRIVATE_EXTENT_BYTES);
+                    assert_eq!(extent.parent, parent);
+                }
+                kernel.fail_revoke = false;
+                for page in 0..512 {
+                    assert_eq!(
+                        table.grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            1,
+                            &mut kernel
+                        ),
+                        Ok(page)
+                    );
+                }
+                assert_eq!(region.base_frames(), 512);
+                assert_eq!(region.large_frames(), 0);
+                assert_eq!(allocator.live_objects(), 513);
+                assert_eq!(
+                    allocator.live_bytes(),
+                    MAX_PRIVATE_EXTENT_BYTES + GRANULE_BYTES
+                );
+                assert_eq!(allocator.extents[extent_index].unwrap().objects, 512);
+                assert_eq!(allocator.extents[extent_index].unwrap().parent, parent);
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::Revoke { .. }))
+                        .count(),
+                    3
+                );
+                assert!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter_map(|request| match request {
+                            KernelRequest::Revoke { slot } => Some(*slot),
+                            _ => None,
+                        })
+                        .all(|slot| slot == parent.bits() as usize)
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]
@@ -3520,7 +3670,7 @@ mod tests {
         const PAGES_256_MIB: usize = 256 * 1024 * 1024 / 4096;
         let holder = plan_task_backing(PAGES_256_MIB).unwrap();
         assert_eq!(holder.allocation_descriptors, PAGES_256_MIB + 256);
-        assert_eq!(holder.required_cslots, holder.allocation_descriptors + 385);
+        assert_eq!(holder.required_cslots, holder.allocation_descriptors + 257);
         assert!(holder.required_cslots > 4096);
     }
 

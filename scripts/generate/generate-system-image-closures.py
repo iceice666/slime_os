@@ -35,7 +35,7 @@ import system_image_closure_contract as CONTRACT
 from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
-from system_image_closure import artifact_identity
+from system_image_closure import artifact_identity, compile_closure
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
@@ -44,6 +44,7 @@ from system_spec import (
 )
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+NEGATIVE_ROOT = CLOSURE_ROOT.parent / "negative"
 INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "inputs"
 PREFIX = INPUT_ROOT / "sel4-prefix"
 
@@ -409,6 +410,22 @@ def outputs() -> dict[Path, str]:
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
     if not emitted:
         fail("no composition produced a closure")
+    # Negative cases refer to the canonical base closure identity, which changes
+    # with its implementation inputs just as ordinary test-run identities do.
+    with tempfile.TemporaryDirectory(prefix="slime-closure-base-") as directory:
+        base = Path(directory) / "sel4-boot.zti"
+        base.write_text(emitted[CLOSURE_ROOT / "sel4-boot.zti"], encoding="utf-8")
+        identity = compile_closure(base).identity.hex()
+    for mutation in CONTRACT.MUTATIONS:
+        name = f"sel4-b40-{mutation.replace('_', '-')}"
+        case = {
+            "formatVersion": CONTRACT.FORMAT_VERSION,
+            "name": name,
+            "baseClosureIdentity": identity,
+            "mutation": mutation,
+            "expectedRefusal": "CSpaceMismatch",
+        }
+        emitted[NEGATIVE_ROOT / f"{name}.zti"] = render(case) + "\n"
     return emitted
 
 
@@ -424,7 +441,9 @@ def main() -> None:
             if not path.is_file() or path.read_text(encoding="utf-8") != contents
         ]
         orphaned = sorted(
-            path.name for path in CLOSURE_ROOT.glob("*.zti") if path not in emitted
+            str(path.relative_to(ROOT))
+            for directory in (CLOSURE_ROOT, NEGATIVE_ROOT)
+            for path in directory.glob("*.zti") if path not in emitted
         )
         if stale or orphaned:
             raise SystemExit(
@@ -435,11 +454,12 @@ def main() -> None:
             )
         print(f"{len(emitted)} system-image closures are current")
         return
-    CLOSURE_ROOT.mkdir(parents=True, exist_ok=True)
-    for path in CLOSURE_ROOT.glob("*.zti"):
-        if path not in emitted:
-            path.unlink()
-            print(f"Removed {path.relative_to(ROOT)}")
+    for directory in (CLOSURE_ROOT, NEGATIVE_ROOT):
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in directory.glob("*.zti"):
+            if path not in emitted:
+                path.unlink()
+                print(f"Removed {path.relative_to(ROOT)}")
     for path, contents in emitted.items():
         handle = tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"

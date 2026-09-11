@@ -1524,6 +1524,12 @@ the root image and consumes boot capacity before any component starts.
 | [MEM-PLATFORM](../.tasks/items/01a07a2d-0081-7df4-b7fe-38b933057b4a.md) | Consistent kernel DTB, prefix, closure, and launcher memory configuration | Prove usable ordinary memory beyond the old ARM kernel window, not just a larger QEMU argument |
 | [MEM-1G](../.tasks/items/01a07a2d-00a1-727c-a548-130a4475f5bb.md) | Simultaneous multi-holder capacity with isolation and repeated reclamation | Combine the two branches and distinguish resident working sets from sequential allocation totals |
 
+MEM-ARENAS reserves one data extent per private span. A failed large mapping
+can be converted to base pages by revoking only its unmapped, reusable,
+whole-extent frame; no duplicate quota backing is needed. The
+[recycled-backing evidence](../devlog/2026-09-11-mem-arenas-recycled-backing/index.md)
+records the four-holder sizing and unchanged public-quota execution boundary.
+
 Large-frame support precedes scalable accounting; those mechanisms precede
 the first raised budget. The platform branch can proceed independently and
 joins the mechanism branch for aggregate qualification. The epic's dependency

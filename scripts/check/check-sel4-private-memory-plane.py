@@ -402,6 +402,17 @@ def check_large_map_retry(transcript: str) -> None:
     )
     if len(refused) != 1:
         fail(f"large-map case recorded {len(refused)} injected refusal(s), expected one")
+    conversion = re.search(
+        r"SLIME_MEM grown task=(?P<task>\d+) delta=1 previous=0 pages=1 "
+        r"base=(?P<base>0x[0-9a-f]+) quota=512 total=\d+ large_frames=0 base_frames=1 leaf_tables=1",
+        transcript,
+    )
+    if conversion is None or re.search(
+        rf"SLIME_MEM grown task={conversion.group('task')} delta=511 previous=1 pages=512 "
+        rf"base={conversion.group('base')} quota=512 total=\d+ large_frames=0 base_frames=512 leaf_tables=1",
+        transcript[conversion.end():],
+    ) is None:
+        fail("large-map failure did not convert its reserved backing to base pages")
     report = re.search(
         r"\[private-memory-probe\] granted pages=512 base=0x[0-9a-f]+ "
         r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
@@ -854,12 +865,12 @@ def check_segmented_capacity_report(
         "holders": 4,
         "pages": 65_536,
         "private_allocations": 263_168,
-        "private_extents": 1_540,
-        "private_cslots": 264_708,
-        "private_reserved": 2_149_580_800,
+        "private_extents": 1_028,
+        "private_cslots": 264_196,
+        "private_reserved": 1_075_838_976,
         "payload": 1_073_741_824,
         "tables": 2_097_152,
-        "alignment": 1_073_741_824,
+        "alignment": 0,
     }
     for name, expected in expected_private.items():
         if values[name] != expected:
@@ -880,8 +891,8 @@ def check_segmented_capacity_report(
     for name, expected in expected_required.items():
         if values[name] != expected:
             fail(prefix + f"{name}={values[name]}, expected {expected}")
-    if values["allocation_capacity"] != 4096 or values["extent_capacity"] != 144:
-        fail(prefix + "dedicated table capacities are not 4096/144")
+    if values["allocation_capacity"] < values["required_allocations"] or values["extent_capacity"] < values["required_extents"]:
+        fail(prefix + "platform descriptor tables cannot represent the four holders")
     if not 0 <= values["allocations_available"] < values["allocation_capacity"]:
         fail(prefix + "allocations_available does not reflect staged graph use")
     if not 0 <= values["extents_available"] < values["extent_capacity"]:
@@ -899,9 +910,14 @@ def check_segmented_capacity_report(
         fail(prefix + "fit is not 0 or 1")
     if values["fit"] != int(all(comparisons)):
         fail(prefix + "fit disagrees with required-versus-available resources")
-    if values["fit"] != 0:
-        fail(prefix + "the restricted qualification fixture unexpectedly fits")
+    if values["fit"] != 1:
+        fail(prefix + "four holders do not fit the live platform resources")
     platform_bytes = profile_integer(profile, "memory_mib", fail, section) * 1024 * 1024
+    # This milestone qualifies the fixed 2 GiB platform, not a larger profile.
+    # Live ordinary availability already excludes the root image (including its
+    # metadata, stack and heap), kernel objects and staged graph reservations.
+    if platform_bytes != 2 * 1024**3:
+        fail(prefix + "qualification must boot the 2 GiB platform")
     if values["image"] == 0 or values["image"] > platform_bytes:
         fail(prefix + "root_image is outside the platform envelope")
     if values["metadata"] == 0:

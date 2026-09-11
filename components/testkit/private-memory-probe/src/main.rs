@@ -90,13 +90,15 @@ fn main(_startup_arg: u32) {
     match growth {
         Err(ERR_OUT_OF_MEMORY) => {
             growth_retries = 1;
-            match slime_rt::private_memory_grow(MAX_PROBE_PAGES) {
-                Ok(previous) => {
-                    complete_worker_rpc(done);
-                    finish_granted(initial, previous, growth_retries)
-                }
-                Err(error) => fail(b"full-window retry refused", error),
+            let previous = slime_rt::private_memory_grow(1)
+                .unwrap_or_else(|error| fail(b"base-page retry refused", error));
+            let rest = slime_rt::private_memory_grow(MAX_PROBE_PAGES - 1)
+                .unwrap_or_else(|error| fail(b"remaining retry refused", error));
+            if rest.pages != 1 || rest.base != initial.base {
+                fail(b"retry base changed", 0)
             }
+            complete_worker_rpc(done);
+            finish_granted(initial, previous, growth_retries)
         }
         Err(error) => fail(b"full-window growth refused unexpectedly", error),
         Ok(previous) => {

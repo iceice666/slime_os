@@ -676,30 +676,35 @@ def check_private_memory_capacity_controls() -> int:
     section = "control"
     qualification = (
         "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders=4 "
-        "pages=65536 private_allocations=263168 private_extents=1540 private_cslots=264708 "
-        "private_reserved=2149580800 payload=1073741824 tables=2097152 alignment=1073741824 "
+        "pages=65536 private_allocations=263168 private_extents=1028 private_cslots=264196 "
+        "private_reserved=1075838976 payload=1073741824 tables=2097152 alignment=0 "
         "static_allocations=8 static_reserved=16384 required_allocations=263200 "
-        "required_extents=1540 required_cslots=264740 required_reserved=2149646336 "
-        "allocation_capacity=4096 allocations_available=3000 extent_capacity=144 "
-        "extents_available=120 cslots_available=500000 ordinary_available=2147483648 "
+        "required_extents=1028 required_cslots=264228 required_reserved=1075904512 "
+        "allocation_capacity=266000 allocations_available=265000 extent_capacity=1072 "
+        "extents_available=1050 cslots_available=500000 ordinary_available=2013265920 "
         "ordinary_layout=1 root_image=8388608 root_metadata=1048576 root_stack=1048576 "
-        "root_heap=524288 fit=0"
+        "root_heap=524288 fit=1"
     )
     gate.check_segmented_capacity_report(qualification, profile, section)
     capacity_mutations = (
-        ("capacity false fit", qualification[:-1] + "1"),
+        ("capacity false refusal", qualification[:-1] + "0"),
         (
             "capacity missing static descriptors",
             qualification.replace("required_allocations=263200", "required_allocations=263168"),
         ),
         (
             "capacity missing static RAM",
-            qualification.replace("required_reserved=2149646336", "required_reserved=2149580800"),
+            qualification.replace("required_reserved=1075904512", "required_reserved=1075838976"),
         ),
         (
             "capacity ignores impossible ordinary layout",
             qualification.replace("ordinary_layout=1", "ordinary_layout=0")[:-1] + "1",
         ),
+        ("capacity allocation exhaustion", qualification.replace("allocations_available=265000", "allocations_available=263199")),
+        ("capacity extent exhaustion", qualification.replace("extents_available=1050", "extents_available=1027")),
+        ("capacity slot exhaustion", qualification.replace("cslots_available=500000", "cslots_available=264227")),
+        ("capacity ordinary exhaustion", qualification.replace("ordinary_available=2013265920", "ordinary_available=1075904511")),
+        ("capacity small tables", qualification.replace("allocation_capacity=266000 allocations_available=265000", "allocation_capacity=4096 allocations_available=3000")),
         ("capacity duplicate report", qualification + "\n" + qualification),
         (
             "capacity missing static field",
@@ -714,6 +719,24 @@ def check_private_memory_capacity_controls() -> int:
                 transcript, profile, section
             ),
         )
+    conversion_lines = [
+        "SLIME_MEM refused task=5 delta=512 cause=frames detail=Frames { allocated: 0, error: Retype }",
+        "SLIME_MEM grown task=5 delta=1 previous=0 pages=1 base=0x400000 quota=512 total=1 large_frames=0 base_frames=1 leaf_tables=1",
+        "SLIME_MEM grown task=5 delta=511 previous=1 pages=512 base=0x400000 quota=512 total=512 large_frames=0 base_frames=512 leaf_tables=1",
+        "[private-memory-probe] granted pages=512 base=0x400000 zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
+    ]
+    conversion = "\n".join(conversion_lines)
+    gate.check_large_map_retry(conversion)
+    conversion_mutations = (
+        ("conversion missing first page", "\n".join(conversion_lines[:1] + conversion_lines[2:])),
+        ("conversion used large frame", conversion.replace("base_frames=512", "base_frames=0")),
+        ("conversion changed task", conversion.replace("task=5 delta=511", "task=6 delta=511")),
+        ("conversion changed base", conversion.replace("previous=1 pages=512 base=0x400000", "previous=1 pages=512 base=0x600000")),
+        ("conversion wrong order", "\n".join([conversion_lines[0], conversion_lines[2], conversion_lines[1], conversion_lines[3]])),
+    )
+    for description, transcript in conversion_mutations:
+        require_rejection(description, "large-map failure", lambda transcript=transcript: gate.check_large_map_retry(transcript))
+
 
     rollback_lines = [
         "SLIME_MEM refused task=0 delta=2 cause=frames detail=Frames { allocated: 1, error: Retype }",
@@ -745,7 +768,7 @@ def check_private_memory_capacity_controls() -> int:
             "private rollback:",
             lambda transcript=transcript: gate.check_incremental_rollback(transcript),
         )
-    return len(capacity_mutations) + len(rollback_mutations)
+    return len(capacity_mutations) + len(rollback_mutations) + len(conversion_mutations)
 
 
 

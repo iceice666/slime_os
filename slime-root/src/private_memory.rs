@@ -303,6 +303,7 @@ impl Region {
 }
 
 pub(crate) trait PrivateMemoryKernel {
+    fn revoke(&mut self, parent: sel4::cap::Untyped) -> Result<(), sel4::Error>;
     fn retype(
         &mut self,
         parent: sel4::cap::Untyped,
@@ -331,6 +332,13 @@ pub(crate) trait PrivateMemoryKernel {
 struct NativePrivateMemoryKernel;
 
 impl PrivateMemoryKernel for NativePrivateMemoryKernel {
+    fn revoke(&mut self, parent: sel4::cap::Untyped) -> Result<(), sel4::Error> {
+        sel4::init_thread::slot::CNODE
+            .cap()
+            .absolute_cptr(sel4::CPtr::from_bits(parent.bits()))
+            .revoke()
+    }
+
     fn retype(
         &mut self,
         parent: sel4::cap::Untyped,

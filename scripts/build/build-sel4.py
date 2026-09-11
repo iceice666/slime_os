@@ -924,7 +924,7 @@ def build_application(
         if closure_root_role == "private-memory-fail-large-map":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (
-                f"{rustflags} --cfg slime_private_fail_large_map --cfg slime_private_small_tables".strip()
+                f"{rustflags} --cfg slime_private_fail_large_map".strip()
             )
     elif platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011

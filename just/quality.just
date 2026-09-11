@@ -283,7 +283,7 @@ test_sel4_root:
     # construction's per-thread transfer aliases, aligned placement across live
     # ordinary untyped regions, and that the allocator's own tables fit the
     # linked kernel's root CSpace.
-    expected=232
+    expected=233
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"
