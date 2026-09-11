@@ -2,11 +2,11 @@
 
 | | |
 | --- | --- |
-| Status | parked |
+| Status | promoted → [IO4](../../roadmap/11-io-substrate.md#io4--network-service-and-exact-destination-authority) (the authority boundary, 2026-08-28) and [IO11](../../roadmap/11-io-substrate.md#io11--qemu-tcp-client-byte-stream-over-virtio-net) (the first data plane behind it, 2026-09-11) |
 | Route | hardware |
-| Depends on | [Hardware H6 networking](../../roadmap/04-platform-hardware.md) (not implemented); the capability-matrix horizon tracks the NetworkDestination object shape |
+| Depends on | [IO3](../../roadmap/11-io-substrate.md#io3--userspace-virtio-net-and-linkdevice-validation) for the QEMU link; a physical link is P6.F's (H1V1 Ethernet) and [Hardware H6](../../roadmap/04-platform-hardware.md)'s |
 | Enables | manifest-auditable exfiltration surface — particularly for agent components |
-| Now | Paper: the NetworkDestination object shape and rights strings are a matrix amendment exercise legal today. |
+| Now | Landed: `contracts/network-destination/v1` declares per-holder rows with CONNECT/SEND/RECV/LISTEN rights, `network-service` enforces them, and `sel4-io-tcp` carries a TCP client byte stream to one declared destination behind that boundary. |
 
 ## Motivation
 

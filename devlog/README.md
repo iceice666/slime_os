@@ -433,6 +433,7 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-11 | [SMP rationale ownership and capacity-branch integration](2026-09-11-smp-comment-and-capacity-merge/index.md) | Change | Verified | none |
 | 2026-09-11 | [MEM-ARENAS recycled private backing](2026-09-11-mem-arenas-recycled-backing/index.md) | Defect | Verified | MEM-ARENAS |
 | 2026-09-11 | [IO11: the network service attaches to virtio-net, and answers ARP and ICMP under QEMU](2026-09-11-io11-link-attach/index.md) | Change | Verified | IO11 |
+| 2026-09-11 | [IO11: a TCP client byte stream over virtio-net, echoed byte for byte under QEMU](2026-09-11-io11-tcp-client/index.md) | Change | Verified | IO11 |
 | 2026-09-12 | [Pre-publication construction unwinds dropped the slots they reclaimed](2026-09-12-construction-unwind-slot-accounting/index.md) | Defect | Verified | MEM-ARENAS |
 | 2026-09-12 | [Closure contract v2, descriptor conservation, and two derived report facts](2026-09-12-closure-contract-v2-and-descriptor-conservation/index.md) | Change | Verified | MEM-ARENAS |
 | 2026-09-12 | [Comment ownership across four files, and closure decoding through the shared evaluator](2026-09-12-comment-ownership-and-closure-evaluator-cache/index.md) | Change | Verified | MEM-ARENAS |
