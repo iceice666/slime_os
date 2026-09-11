@@ -140,7 +140,7 @@
       holder = "network-service";
       grant = "network-service-buffer-factory";
       slot = 1;
-      reason = "componentAbi";
+      reason = "allocatorOrder";
     };
     {
       holder = "io-tcp-probe";

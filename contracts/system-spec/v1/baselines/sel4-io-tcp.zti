@@ -185,7 +185,7 @@
         {
           grant = "network-service-buffer-factory";
           slot = 1;
-          slotReason = "componentAbi";
+          slotReason = "allocatorOrder";
         };
         {
           grant = "network-service-link-peer";
