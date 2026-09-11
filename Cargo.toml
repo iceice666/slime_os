@@ -413,7 +413,19 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+# The network service's protocol engine, built with the same size profile as
+# the components that carry it.
+[profile.release.package.smoltcp]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-io-network-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-tcp-probe]
 opt-level = "s"
 codegen-units = 1
 debug = false

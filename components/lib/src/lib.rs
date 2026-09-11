@@ -12,6 +12,8 @@ pub mod fabric_self_view;
 pub mod fabric_visibility;
 #[cfg(feature = "component-runtime")]
 pub mod generation_composition;
+pub mod link_frames;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
+pub mod tick_clock;
 pub mod virtio_mmio;

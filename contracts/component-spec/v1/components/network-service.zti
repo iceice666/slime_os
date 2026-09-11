@@ -4,7 +4,7 @@
   componentType = "service";
   version = "1.0.0";
   owner = "root";
-  purpose = "Enforces exact generation-declared NetworkDestination authority at its protocol boundary; packet framing and LinkDevice transport are not implemented.";
+  purpose = "Enforces exact generation-declared NetworkDestination authority; with a bound LinkDevice and a declared interface, runs the bounded IPv4 stack behind it.";
   implementation =  {
     provider = "workspace";
     binary = "network-service";

@@ -7,18 +7,44 @@ use boot_contracts::network_destination::{
     OFF_HEADER_HEADER_SIZE, OFF_HEADER_MAGIC, OFF_HEADER_REQUIRED_FLAGS, OFF_HEADER_TOTAL_LEN,
     RIGHT_CONNECT, RIGHT_LISTEN, RIGHT_RECV, RIGHT_SEND, Right, Transport,
 };
+use boot_contracts::network_interface::{self, Interface as DeclaredInterface, NetworkInterfaces};
+use slime_components::tick_clock::TickClock;
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_request;
 use slime_rt::{
-    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit,
-    network_destinations_read, resolve_binding, yield_now,
+    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, monotonic_frequency,
+    monotonic_read, network_destinations_read, network_interface_read, resolve_binding, yield_now,
 };
+use smoltcp::iface::{Config, Interface, PollResult, SocketSet, SocketStorage};
+use smoltcp::time::Instant;
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
+
+mod link;
+use link::Link;
 
 slime_rt::entry!(main);
 
 const MAX_ROWS: usize = MAX_DESTINATIONS;
 const PAGE_ROWS: usize = 6;
+const INTERFACE_PAGE_ROWS: usize = 4;
+/// The link peer endpoint and the buffer factory sit at fixed slots, as the
+/// IO3 probe's do: a loan names its receiver by endpoint slot, and the root
+/// reads that number as an endpoint only while no shared-buffer capability
+/// occupies it, so both must sit below the first buffer this service creates.
+const LINK_PEER_SLOT: u32 = 0;
+const FACTORY_SLOT: u32 = 1;
 const MAX_CAPABILITIES: usize = 8;
+/// TCP sockets the stack can hold at once. The contract's `maxSockets` is a
+/// ceiling on declarations; this is the storage one service instance carries.
+const TCP_SOCKETS: usize = 4;
+/// The clients a generation may bind to this service, by the grant name each
+/// resolves and the instance name its holder identity derives from. A grant
+/// the generation does not declare simply resolves to no client.
+const CLIENTS: [(&[u8], &str); 3] = [
+    (b"network-probe-service", "io-network-probe"),
+    (b"network-intruder-service", "io-network-intruder"),
+    (b"network-tcp-probe-service", "io-tcp-probe"),
+];
 const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
 const STATUS_DENIED: i32 = -1;
 const STATUS_MALFORMED: i32 = -2;
@@ -39,6 +65,21 @@ struct Capability {
     rights: u16,
     kind: u8,
     epoch: u64,
+}
+
+/// Everything that exists only when the generation binds this service to a
+/// link and declares its interface.
+struct Stack {
+    link: Link,
+    iface: Interface,
+    clock: TickClock,
+}
+
+impl Stack {
+    fn now(&self) -> Instant {
+        let ticks = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
+        Instant::from_millis(self.clock.millis(ticks))
+    }
 }
 
 #[derive(Default)]
@@ -89,18 +130,19 @@ fn main(_: u32) {
         .unwrap_or_else(|_| fail(b"destination resource decode"));
     report_authority(&destinations);
 
-    let mut clients = [
-        Client {
-            slot: binding(b"network-probe-service"),
-            holder: boot_contracts::network_destination::holder_identity("io-network-probe"),
-            closed: false,
-        },
-        Client {
-            slot: binding(b"network-intruder-service"),
-            holder: boot_contracts::network_destination::holder_identity("io-network-intruder"),
-            closed: false,
-        },
-    ];
+    let mut clients: [Option<Client>; CLIENTS.len()] = [None; CLIENTS.len()];
+    for (entry, (grant, name)) in clients.iter_mut().zip(CLIENTS) {
+        if let Ok(slot) = resolve_binding(grant) {
+            *entry = Some(Client {
+                slot,
+                holder: boot_contracts::network_destination::holder_identity(name),
+                closed: false,
+            });
+        }
+    }
+    if clients.iter().all(|client| client.is_none()) {
+        fail(b"no client binding");
+    }
     let mut capabilities: [Option<Capability>; MAX_CAPABILITIES] = [None; MAX_CAPABILITIES];
     let mut next_capability = 1u64;
     // This is the service/link generation. It changes only when that generation
@@ -108,9 +150,13 @@ fn main(_: u32) {
     let epoch = 1u64;
     let mut observed = Observed::default();
 
-    while clients.iter().any(|client| !client.closed) {
+    let mut stack = attach_stack();
+    let mut socket_storage: [SocketStorage; TCP_SOCKETS] = [SocketStorage::EMPTY; TCP_SOCKETS];
+    let mut sockets = SocketSet::new(&mut socket_storage[..]);
+
+    while clients.iter().flatten().any(|client| !client.closed) {
         let mut progress = false;
-        for client in &mut clients {
+        for client in clients.iter_mut().flatten() {
             if client.closed {
                 continue;
             }
@@ -157,12 +203,173 @@ fn main(_: u32) {
                 }
             }
         }
+        if let Some(stack) = stack.as_mut() {
+            progress |= stack.link.drain();
+            let now = stack.now();
+            progress |= stack.iface.poll(now, &mut stack.link, &mut sockets)
+                == PollResult::SocketStateChanged;
+            progress |= stack.link.replenish();
+        }
         if !progress {
             yield_now();
         }
     }
+    if let Some(mut stack) = stack {
+        release_stack(&mut stack);
+    }
     report_observed(&observed);
     exit(0)
+}
+
+/// Bind to the link and configure the stack when the generation declares an
+/// interface for this service; a generation that declares none runs the
+/// authority service alone, and binds no link.
+fn attach_stack() -> Option<Stack> {
+    let declared = read_interface()?;
+    let rate = monotonic_frequency().unwrap_or_else(|_| fail(b"clock rate"));
+    let base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
+    let clock = TickClock::new(rate, base).unwrap_or_else(|_| fail(b"clock rate too slow"));
+    write_number(b"[network-service] clock rate=", rate);
+    debug_write(b"\n");
+    report_interface(&declared);
+
+    let mut link = Link::attach(FACTORY_SLOT, LINK_PEER_SLOT);
+    if !link.link_up() {
+        fail(b"link down");
+    }
+    link.replenish();
+    write_number(
+        b"[network-service] link query state=up rx provisioned=",
+        link.rx_provisioned() as u64,
+    );
+    debug_write(b"\n");
+
+    let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress(declared.mac)));
+    config.random_seed = base;
+    let now = Instant::from_millis(clock.millis(base));
+    let mut iface = Interface::new(config, &mut link, now);
+    iface.update_ip_addrs(|addrs| {
+        addrs
+            .push(IpCidr::new(
+                IpAddress::Ipv4(Ipv4Address::from(declared.address)),
+                declared.prefix_len,
+            ))
+            .unwrap_or_else(|_| fail(b"interface address"));
+    });
+    if let Some(gateway) = declared.gateway {
+        iface
+            .routes_mut()
+            .add_default_ipv4_route(Ipv4Address::from(gateway))
+            .unwrap_or_else(|_| fail(b"default route"));
+    }
+    Some(Stack { link, iface, clock })
+}
+
+/// Hand the link back: reset the driver, acknowledge its settled completions,
+/// and wait for its fresh epoch before this task can exit and have its loans
+/// reclaimed from under the driver.
+fn release_stack(stack: &mut Stack) {
+    let counts = link::FrameCounts {
+        frames: stack.link.tx.counts.frames + stack.link.rx.counts.frames,
+        arp: stack.link.tx.counts.arp + stack.link.rx.counts.arp,
+        icmp: stack.link.tx.counts.icmp + stack.link.rx.counts.icmp,
+        tcp: stack.link.tx.counts.tcp + stack.link.rx.counts.tcp,
+        other: stack.link.tx.counts.other + stack.link.rx.counts.other,
+    };
+    write_number(
+        b"[network-service] link frames total=",
+        u64::from(counts.frames),
+    );
+    write_number(b" tx=", u64::from(stack.link.tx.counts.frames));
+    write_number(b" rx=", u64::from(stack.link.rx.counts.frames));
+    write_number(b" arp=", u64::from(counts.arp));
+    write_number(b" icmp=", u64::from(counts.icmp));
+    write_number(b" tcp=", u64::from(counts.tcp));
+    write_number(b" other=", u64::from(counts.other));
+    debug_write(b"\n");
+    let (tx_frames, rx_frames) = stack.link.statistics();
+    write_number(
+        b"[network-service] link statistics tx=",
+        u64::from(tx_frames),
+    );
+    write_number(b" rx=", u64::from(rx_frames));
+    debug_write(b"\n");
+    stack.link.release();
+    debug_write(b"[network-service] link released\n");
+}
+
+fn read_interface() -> Option<DeclaredInterface> {
+    let mut object = [0u8; network_interface::MAX_BYTES];
+    object[network_interface::OFF_HEADER_MAGIC..network_interface::OFF_HEADER_MAGIC_END]
+        .copy_from_slice(&network_interface::MAGIC);
+    object[network_interface::OFF_HEADER_FORMAT_VERSION
+        ..network_interface::OFF_HEADER_FORMAT_VERSION_END]
+        .copy_from_slice(&network_interface::FORMAT_VERSION.to_le_bytes());
+    object
+        [network_interface::OFF_HEADER_HEADER_SIZE..network_interface::OFF_HEADER_HEADER_SIZE_END]
+        .copy_from_slice(&(network_interface::HEADER_BYTES as u32).to_le_bytes());
+    let mut rows = 0usize;
+    loop {
+        if rows == network_interface::MAX_INTERFACES {
+            break;
+        }
+        let mut page = [0u8; INTERFACE_PAGE_ROWS * network_interface::ENTRY_BYTES];
+        // No interface object at all is a legitimate generation: the service
+        // then serves authority alone.
+        let read = network_interface_read(rows, &mut page).ok()?;
+        if read == 0 {
+            break;
+        }
+        if read > INTERFACE_PAGE_ROWS || rows + read > network_interface::MAX_INTERFACES {
+            fail(b"interface resource page");
+        }
+        let bytes = read * network_interface::ENTRY_BYTES;
+        let start = network_interface::HEADER_BYTES + rows * network_interface::ENTRY_BYTES;
+        object[start..start + bytes].copy_from_slice(&page[..bytes]);
+        rows += read;
+    }
+    object[network_interface::OFF_HEADER_INTERFACE_COUNT
+        ..network_interface::OFF_HEADER_INTERFACE_COUNT_END]
+        .copy_from_slice(&(rows as u32).to_le_bytes());
+    let total = network_interface::HEADER_BYTES + rows * network_interface::ENTRY_BYTES;
+    object[network_interface::OFF_HEADER_TOTAL_LEN..network_interface::OFF_HEADER_TOTAL_LEN_END]
+        .copy_from_slice(&(total as u32).to_le_bytes());
+    let interfaces = NetworkInterfaces::decode(&object[..total])
+        .unwrap_or_else(|_| fail(b"interface resource decode"));
+    interfaces.for_holder(&network_interface::holder_identity("network-service"))
+}
+
+fn report_interface(declared: &DeclaredInterface) {
+    debug_write(b"[network-service] interface addr=");
+    write_ipv4(declared.address);
+    debug_write(b"/");
+    write_number(b"", u64::from(declared.prefix_len));
+    debug_write(b" gateway=");
+    match declared.gateway {
+        Some(gateway) => write_ipv4(gateway),
+        None => {
+            debug_write(b"none");
+        }
+    }
+    debug_write(b" mac=");
+    write_mac(declared.mac);
+    debug_write(b"\n");
+}
+
+fn write_ipv4(address: [u8; 4]) {
+    for (index, octet) in address.iter().enumerate() {
+        write_number(if index == 0 { b"" } else { b"." }, u64::from(*octet));
+    }
+}
+
+fn write_mac(mac: [u8; 6]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (index, byte) in mac.iter().enumerate() {
+        if index != 0 {
+            debug_write(b":");
+        }
+        debug_write(&[HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0xf)]]);
+    }
 }
 
 fn dispatch(
@@ -450,10 +657,6 @@ fn report_observed(observed: &Observed) {
         u64::from(observed.cross_holder_refusals),
     );
     debug_write(b"\n");
-}
-
-fn binding(name: &[u8]) -> u32 {
-    resolve_binding(name).unwrap_or_else(|_| fail(b"binding"))
 }
 
 fn send(slot: u32, bytes: &[u8]) {
