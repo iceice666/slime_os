@@ -36,7 +36,7 @@
       artifact = {
         path = "components/services/virtio-blk-driver";
         kind = "tree";
-        identity = "e3fc05ef80b332802471d9e286e5427f59755f0eed82f7387df9d462f0b08ede";
+        identity = "743b8cf8145687f9b070dd961ad147b0cb6719b727a1b12beff308912488fe12";
       };
       identity = "0d22d3966ba1c64332c10c9dd8d39b4e08945c8aad1b85f473b771ff0886a7e8";
       buildProfile = "default";
@@ -114,7 +114,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "03b371007d5ea5e69050cc76e55b4be966e0b198fea6695a9dc61387e84c0347";
+        identity = "474f7a5f94f618cc0e943e92a394aafd71d6e05c8add6d3d0f506de331e76547";
       };
     };
     {

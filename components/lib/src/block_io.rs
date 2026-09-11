@@ -210,14 +210,23 @@ impl<'a> BlockIo<'a> {
         self.transact(block_v2::OP_GEOMETRY, 0, 0, io_queue::DIRECTION_NONE, 0)
     }
 
-    /// Tell the driver this client is finished.
+    /// Tell the driver this client is finished, and return only once the
+    /// driver has stopped using this client's ring.
     ///
-    /// A blocking send against a driver that polls its endpoint: the driver's
-    /// non-blocking receive completes against a sender already parked here, so
+    /// A call against a driver that polls its endpoint: the driver's
+    /// non-blocking receive completes against a caller already parked here, so
     /// exactly one side blocks and the rendezvous always happens. Both sides
     /// polling would let each observe the other as absent forever.
+    ///
+    /// A call rather than a send because the driver answers the command by
+    /// draining the ring one last time. A send completes the moment the driver
+    /// receives it, so this client could return, exit, and have its loans
+    /// reclaimed while that drain is still running, and the root would unmap
+    /// the ring from under the driver. The driver replies after the drain, so
+    /// returning from here means the ring is no longer in use.
     pub fn shutdown(&mut self) -> Result<(), BlockError> {
-        if slime_rt::send(self.peer, &[1], &[]) == ERR_SUCCESS {
+        let mut answer = [0u8; MAX_MSG];
+        if slime_rt::call(self.peer, &[1], &mut answer) >= 0 {
             Ok(())
         } else {
             Err(BlockError::Lost)

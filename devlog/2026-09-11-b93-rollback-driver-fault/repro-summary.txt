@@ -1,0 +1,44 @@
+
+
+
+
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpav1oj_yh/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 1 pass 0.5s fatal_marker=False started=2026-09-11T06:48:59Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmp2wsfaanj/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 2 pass 0.5s fatal_marker=False started=2026-09-11T06:49:00Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpgs02s9f1/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 3 pass 0.4s fatal_marker=False started=2026-09-11T06:49:00Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpt8tfl33k/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 4 pass 0.4s fatal_marker=False started=2026-09-11T06:49:01Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmp51b4rk0z/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 5 pass 0.4s fatal_marker=False started=2026-09-11T06:49:01Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpxiuq06i1/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 6 pass 0.4s fatal_marker=False started=2026-09-11T06:49:02Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmproyqztng/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 7 pass 0.4s fatal_marker=False started=2026-09-11T06:49:02Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpllkndhy9/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 8 pass 0.4s fatal_marker=False started=2026-09-11T06:49:03Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpbf67t5sk/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 9 pass 0.5s fatal_marker=False started=2026-09-11T06:49:03Z
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.bIhGay/tmpea8nkqwr/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+run 10 pass 0.5s fatal_marker=False started=2026-09-11T06:49:04Z
