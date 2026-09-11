@@ -227,7 +227,7 @@ def run_authority_arm(image: Path) -> None:
     match_marker_contract(transcript, AUTHORITY_CHAINS, FAILURE_MARKERS, fail)
 
 
-def run_tcp_arm(image: Path, mac: str) -> None:
+def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
     receiver, backend_port = reserve_udp_port()
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     probe.bind(("127.0.0.1", 0))
@@ -256,6 +256,10 @@ def run_tcp_arm(image: Path, mac: str) -> None:
         stop.set()
         thread.join(timeout=2)
         receiver.close()
+    if transcript_path is not None:
+        # The serial capture and the peer's summary, kept as evidence: a devlog
+        # entry cites what was observed, not the gate's one-line verdict.
+        transcript_path.write_text(transcript + f"\n[peer] {peer.ledger.summary()}\n", encoding="utf-8")
     try:
         match_marker_contract(transcript, TCP_CHAINS, FAILURE_MARKERS, fail)
     except SystemExit:
@@ -283,6 +287,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--arm", choices=("authority", "tcp", "all"), default="all")
+    parser.add_argument(
+        "--transcript",
+        type=Path,
+        help="write the tcp arm's serial transcript and peer summary to this file",
+    )
     arguments = parser.parse_args()
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
@@ -299,7 +308,7 @@ def main() -> None:
     if arguments.arm in ("tcp", "all"):
         mac = check_tcp_fixture()
         image = build_image(TCP_CLOSURE)
-        run_tcp_arm(image, mac)
+        run_tcp_arm(image, mac, arguments.transcript)
         print(
             "seL4 I/O tcp plane check: the network service attached to virtio-net, "
             "answered the peer's ARP and ICMP echo on its declared interface, "

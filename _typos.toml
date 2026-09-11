@@ -17,6 +17,10 @@ extend-exclude = [
 ]
 
 [default.extend-words]
+# QEMU's `passt` network backend and the Synopsys IP vendor, named as written.
+passt = "passt"
+synopsys = "synopsys"
+Synopsys = "Synopsys"
 # x86 Interrupt Stack Table
 ist = "ist"
 # ELF relocation-with-addend sections (.rela.dyn, SHT_RELA)
