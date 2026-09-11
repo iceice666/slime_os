@@ -1,0 +1,34 @@
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+python3 scripts/check/check-sel4-pins.py
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+python3 scripts/check/check-sel4-rollback-plane.py
+[closure build] sel4-rollback c9c53fccc768
+[boot] /nix/store/lw1bynxwxwf5adckbgaz1b5y1lqyz5d5-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /space/slime_os/build/closure/sel4-rollback/image.elf -drive if=none,id=slimedisk,format=raw,file=/tmp/nix-shell.RnyQf5/tmp1a5im4jv/rollback-plane.img -device virtio-blk-device,drive=slimedisk
+transcript: 19 markers observed; 7 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 6, 8], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+seL4 rollback plane check: a component walked the BootState transition model on two durable slots through a userspace virtio-blk driver over IO0 rings — staged a pending generation, consumed both attempts, rolled back to known-good when they were exhausted, found rollback idempotent, refused unauthorized promotion, and promoted the running generation — with M5.6 policy entirely in userspace and every commit written older-slot-first on qemu-arm-virt

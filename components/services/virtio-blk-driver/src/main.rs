@@ -139,9 +139,11 @@ fn main(_startup_arg: u32) {
     // request's signal latched with nobody to observe it. Polling both and
     // yielding is what lets one thread serve two sources.
     //
-    // The shutdown send may block: a non-blocking receive still completes
-    // against a sender already parked on the endpoint, so the client blocks and
-    // this side polls.
+    // The shutdown is a call: a non-blocking receive still completes against a
+    // caller already parked on the endpoint, so the client blocks and this side
+    // polls. The reply goes out only after the final drain below, because the
+    // client exits as soon as the call returns and the root then reclaims the
+    // ring this driver is draining.
     //
     // The virtqueue used-ring cursor, owned across every drain: the index is
     // absolute and monotonic, so it cannot be re-derived per pass.
@@ -198,6 +200,14 @@ fn main(_startup_arg: u32) {
                     &mut used,
                     &mut unanswerable_requests,
                 );
+                // The marker precedes the reply so that it also precedes
+                // everything the client prints after its call returns: the
+                // plane checkers pin that order, and a reply first would leave
+                // it to the scheduler.
+                debug_write(b"[virtio-blk-driver] peer complete, exiting\n");
+                // Only now may the client go: it is parked in its call until
+                // this reply, so its loans outlive every access above.
+                let _ = slime_rt::reply(&[1]);
                 break;
             }
             // Peer gone is NOT shutdown, and draining here would be a
@@ -215,7 +225,6 @@ fn main(_startup_arg: u32) {
         }
         yield_now();
     }
-    debug_write(b"[virtio-blk-driver] peer complete, exiting\n");
     exit(0);
 }
 
