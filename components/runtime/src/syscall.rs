@@ -849,6 +849,21 @@ pub fn monotonic_read() -> Result<u64, i64> {
     }
 }
 
+/// Read the hardware monotonic counter's rate in ticks per second.
+///
+/// The same `monotonicRead` authority as [`monotonic_read`] admits it, and the
+/// value is the root's own boot-time reading of the platform counter, constant
+/// for the life of the boot. It is what turns a tick count into a duration and
+/// a duration into a [`timer_arm`] delay.
+pub fn monotonic_frequency() -> Result<u64, i64> {
+    let result = transport::monotonic_frequency();
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u64)
+    }
+}
+
 /// Arm one relative hardware timer and receive its opaque identifier.
 ///
 /// Expiry signals the Notification and badge declared for this instance in the

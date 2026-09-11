@@ -255,6 +255,12 @@ operations :: List Operation = {
   operation "clock" "TIMER_CANCEL" 46;
   operation "clock" "SIMULATED_READ" 47;
   operation "clock" "SIMULATED_ADVANCE" 48;
+  -- The hardware counter's rate, so a holder can turn `MONOTONIC_READ` ticks
+  -- and `TIMER_ARM` delays into durations. Gated on the same `monotonicRead`
+  -- bit: a holder that may read the counter may know what its ticks mean, and
+  -- one that may not learns nothing here either. The value is the root's own
+  -- reading of the platform counter frequency, never a component-side table.
+  operation "clock" "RATE_READ" 70;
   -- C9.2's declared wake sources. Self-scoped by badge exactly as
   -- `RESOLVE_BINDING` is: the request carries a cursor and a transfer
   -- descriptor, never a waiter, so a component reads its own source table and

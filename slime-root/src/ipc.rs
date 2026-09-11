@@ -126,7 +126,8 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | clock_labels::TIMER_ARM
         | clock_labels::TIMER_CANCEL
         | clock_labels::SIMULATED_READ
-        | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
+        | clock_labels::SIMULATED_ADVANCE
+        | clock_labels::RATE_READ => Some(SERVICE_CLOCK),
         io_resource_labels::BIND
         | io_resource_labels::MAP_MMIO
         | io_resource_labels::DMA_MAP
@@ -174,7 +175,9 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
 pub const fn clock_request_len(label: sel4::Word) -> Option<usize> {
     use slime_proto::syscall_abi::clock_labels;
     match label {
-        clock_labels::MONOTONIC_READ | clock_labels::SIMULATED_READ => Some(0),
+        clock_labels::MONOTONIC_READ | clock_labels::SIMULATED_READ | clock_labels::RATE_READ => {
+            Some(0)
+        }
         clock_labels::TIMER_ARM | clock_labels::TIMER_CANCEL | clock_labels::SIMULATED_ADVANCE => {
             Some(1)
         }
@@ -1554,6 +1557,7 @@ mod tests {
             (clock_labels::TIMER_CANCEL, SERVICE_CLOCK),
             (clock_labels::SIMULATED_READ, SERVICE_CLOCK),
             (clock_labels::SIMULATED_ADVANCE, SERVICE_CLOCK),
+            (clock_labels::RATE_READ, SERVICE_CLOCK),
             // C9.5's recording participation, gated on lifecycle for
             // `WAIT_SOURCES`' reason: whether the generation claims this instance
             // deterministic is a property of being that instance, not of a grant.
@@ -1620,6 +1624,7 @@ mod tests {
     fn clock_request_shapes_are_exact() {
         assert_eq!(clock_request_len(clock_labels::MONOTONIC_READ), Some(0));
         assert_eq!(clock_request_len(clock_labels::SIMULATED_READ), Some(0));
+        assert_eq!(clock_request_len(clock_labels::RATE_READ), Some(0));
         assert_eq!(clock_request_len(clock_labels::TIMER_ARM), Some(1));
         assert_eq!(clock_request_len(clock_labels::TIMER_CANCEL), Some(1));
         assert_eq!(clock_request_len(clock_labels::SIMULATED_ADVANCE), Some(1));

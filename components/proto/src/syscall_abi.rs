@@ -78,6 +78,7 @@ pub mod clock_labels {
     pub const TIMER_CANCEL: u64 = 46;
     pub const SIMULATED_READ: u64 = 47;
     pub const SIMULATED_ADVANCE: u64 = 48;
+    pub const RATE_READ: u64 = 70;
 }
 
 pub mod scheduling_labels {

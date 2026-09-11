@@ -1286,7 +1286,8 @@ pub(super) fn serve_instance_graph(
             | clock_labels::TIMER_ARM
             | clock_labels::TIMER_CANCEL
             | clock_labels::SIMULATED_READ
-            | clock_labels::SIMULATED_ADVANCE => {
+            | clock_labels::SIMULATED_ADVANCE
+            | clock_labels::RATE_READ => {
                 let response =
                     serve_clock_request(clock_service, timer_adapter, id, label, words[0]);
                 ipc::reply(response);

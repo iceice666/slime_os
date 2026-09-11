@@ -104,6 +104,10 @@ pub(super) fn serve_clock_request(
         clock_labels::SIMULATED_ADVANCE => service
             .advance_simulated(authority, operand)
             .map(|previous| (previous as i64, 0)),
+        clock_labels::RATE_READ => {
+            clock::ClockService::read_rate(authority, timer_adapter.frequency_hz())
+                .map(|rate| (rate as i64, 0))
+        }
         _ => return Response::error(IpcError::UnsupportedOperation),
     };
     match outcome {

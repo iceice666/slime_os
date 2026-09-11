@@ -186,6 +186,17 @@ impl ClockService {
         }
     }
 
+    /// The counter's rate, behind the same bit as the counter itself: knowing
+    /// what a tick means is part of being allowed to read ticks, and nothing
+    /// more.
+    pub fn read_rate(authority: TaskClockAuthority, frequency_hz: u64) -> Result<u64, ClockError> {
+        if authority.allows(RIGHT_CLOCK_MONOTONIC_READ) {
+            Ok(frequency_hz)
+        } else {
+            Err(ClockError::Undeclared)
+        }
+    }
+
     pub fn arm(
         &mut self,
         authority: TaskClockAuthority,
@@ -432,6 +443,17 @@ mod tests {
         timer_signal: None,
         timer_badge: 0,
     };
+
+    #[test]
+    fn rate_follows_the_monotonic_bit() {
+        assert_eq!(ClockService::read_rate(MONO, 62_500_000), Ok(62_500_000));
+        for denied in [TIMER, SIM_READ, SIM_ADVANCE] {
+            assert_eq!(
+                ClockService::read_rate(denied, 62_500_000),
+                Err(ClockError::Undeclared)
+            );
+        }
+    }
 
     #[test]
     fn authorities_are_independent() {

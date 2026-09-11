@@ -1334,6 +1334,10 @@ pub fn monotonic_read() -> i64 {
     result_of(clock_labels::MONOTONIC_READ, &[])
 }
 
+pub fn monotonic_frequency() -> i64 {
+    result_of(clock_labels::RATE_READ, &[])
+}
+
 pub fn timer_arm(delay: u64) -> i64 {
     result_of(clock_labels::TIMER_ARM, &[delay as Word])
 }
