@@ -193,6 +193,7 @@ class Peer:
         self.ip = ip
         self.guest_ip = guest_ip
         self.ledger = Ledger()
+        self.tcp = TcpServer(self)
 
     def handle(self, raw: bytes) -> list[bytes]:
         frame = decode(raw)
@@ -207,6 +208,8 @@ class Peer:
         if frame.kind == "icmp-echo-request" and frame.ip_destination == self.ip and frame.ip_source and frame.icmp_identifier is not None and frame.icmp_sequence is not None:
             reply = icmp_echo(ICMP_ECHO_REPLY, frame.icmp_identifier, frame.icmp_sequence, frame.icmp_payload)
             replies.append(self.emit(ethernet(frame.source, self.mac, ETHERTYPE_IPV4, ipv4(self.ip, frame.ip_source, IP_PROTOCOL_ICMP, reply))))
+        if frame.kind == "tcp":
+            replies.extend(self.tcp.handle(frame))
         return replies
 
     def arp_request_for_guest(self) -> bytes:
@@ -262,3 +265,144 @@ def serve(receiver: socket.socket, qemu_port: int, stop: threading.Event, peer: 
                         sender.sendto(request, ("127.0.0.1", qemu_port))
     finally:
         sender.close()
+
+
+# ---- TCP: the peer as a server the guest's stack talks to ----
+
+TCP_FIN = 0x01
+TCP_SYN = 0x02
+TCP_RST = 0x04
+TCP_PSH = 0x08
+TCP_ACK = 0x10
+ECHO_PORT = 4242
+REFUSED_PORT = 4243
+PEER_ISN = 0x1000_0000
+SEGMENT_BYTES = 1400
+
+
+def tcp_checksum(source: bytes, destination: bytes, segment: bytes) -> int:
+    pseudo = source + destination + struct.pack("!BBH", 0, IP_PROTOCOL_TCP, len(segment))
+    return checksum(pseudo + segment)
+
+
+def tcp_segment(source_ip: bytes, destination_ip: bytes, source_port: int, destination_port: int, seq: int, ack: int, flags: int, payload: bytes = b"", window: int = 8192) -> bytes:
+    header = struct.pack("!HHIIBBHHH", source_port, destination_port, seq & 0xFFFFFFFF, ack & 0xFFFFFFFF, 5 << 4, flags, window, 0, 0)
+    segment = header + payload
+    return segment[:16] + struct.pack("!H", tcp_checksum(source_ip, destination_ip, segment)) + segment[18:]
+
+
+@dataclasses.dataclass(frozen=True)
+class TcpSegment:
+    source_port: int
+    destination_port: int
+    seq: int
+    ack: int
+    flags: int
+    payload: bytes
+
+
+def decode_tcp(frame: Frame) -> TcpSegment | None:
+    if frame.kind != "tcp" or frame.ip_source is None or frame.ip_destination is None:
+        return None
+    body = frame.ip_payload
+    if len(body) < 20:
+        return None
+    source_port, destination_port, seq, ack, offset_flags, flags, _window, _sum, _urgent = struct.unpack("!HHIIBBHHH", body[:20])
+    header_len = (offset_flags >> 4) * 4
+    if header_len < 20 or len(body) < header_len:
+        return None
+    if tcp_checksum(frame.ip_source, frame.ip_destination, body) != 0:
+        return None
+    return TcpSegment(source_port, destination_port, seq, ack, flags, body[header_len:])
+
+
+@dataclasses.dataclass
+class Flow:
+    """One connection from the guest, keyed by its port, seen from this server."""
+
+    client_port: int
+    client_mac: bytes
+    client_ip: bytes
+    state: str = "syn-received"
+    rcv_next: int = 0
+    snd_next: int = PEER_ISN
+    echoed: int = 0
+    received: int = 0
+    fin_sent: bool = False
+
+
+class TcpServer:
+    """Echo on `ECHO_PORT`, refuse `REFUSED_PORT`, ignore everything else.
+
+    A minimal, single-segment-at-a-time server: it acknowledges every in-order
+    byte and echoes it back in segments of at most `SEGMENT_BYTES`, re-acks a
+    retransmission, answers the guest's FIN with its own, and never retransmits
+    its own data; the plane's guest window is large enough that it never has to.
+    """
+
+    def __init__(self, peer: Peer) -> None:
+        self.peer = peer
+        self.flows: dict[int, Flow] = {}
+        self.refused: list[int] = []
+
+    def handle(self, frame: Frame) -> list[bytes]:
+        segment = decode_tcp(frame)
+        if segment is None or frame.ip_destination != self.peer.ip or frame.ip_source is None:
+            return []
+        if segment.destination_port == REFUSED_PORT:
+            self.refused.append(segment.source_port)
+            return [self.emit(frame, segment.destination_port, segment.source_port, 0, segment.seq + 1, TCP_RST | TCP_ACK)]
+        if segment.destination_port != ECHO_PORT:
+            return []
+        flow = self.flows.get(segment.source_port)
+        if flow is None:
+            if segment.flags & TCP_SYN and not segment.flags & TCP_ACK:
+                flow = Flow(segment.source_port, frame.source, frame.ip_source, rcv_next=segment.seq + 1)
+                self.flows[segment.source_port] = flow
+                reply = self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_SYN | TCP_ACK)
+                flow.snd_next += 1
+                return [reply]
+            return []
+        out: list[bytes] = []
+        if segment.flags & TCP_RST:
+            flow.state = "reset"
+            return []
+        if flow.state == "syn-received" and segment.flags & TCP_ACK and segment.ack == flow.snd_next:
+            flow.state = "established"
+        if segment.seq < flow.rcv_next:
+            # A retransmission of what was already acknowledged: acknowledge
+            # again and take nothing.
+            out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
+            return out
+        if segment.seq != flow.rcv_next:
+            return out
+        data = segment.payload
+        if data:
+            flow.rcv_next += len(data)
+            flow.received += len(data)
+            out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
+            for start in range(0, len(data), SEGMENT_BYTES):
+                chunk = data[start : start + SEGMENT_BYTES]
+                out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK | TCP_PSH, chunk))
+                flow.snd_next += len(chunk)
+                flow.echoed += len(chunk)
+        if segment.flags & TCP_FIN:
+            flow.rcv_next += 1
+            flow.state = "fin-received"
+            out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
+            if not flow.fin_sent:
+                out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_FIN | TCP_ACK))
+                flow.snd_next += 1
+                flow.fin_sent = True
+        elif flow.fin_sent and segment.flags & TCP_ACK and segment.ack == flow.snd_next:
+            flow.state = "closed"
+        return out
+
+    def emit(self, frame: Frame, source_port: int, destination_port: int, seq: int, ack: int, flags: int, payload: bytes = b"") -> bytes:
+        assert frame.ip_source is not None
+        segment = tcp_segment(self.peer.ip, frame.ip_source, source_port, destination_port, seq, ack, flags, payload)
+        return self.peer.emit(ethernet(frame.source, self.peer.mac, ETHERTYPE_IPV4, ipv4(self.peer.ip, frame.ip_source, IP_PROTOCOL_TCP, segment, identification=seq & 0xFFFF)))
+
+    def summary(self) -> str:
+        flows = ", ".join(f"{port}:{flow.state}/rx{flow.received}/echo{flow.echoed}" for port, flow in sorted(self.flows.items())) or "none"
+        return f"flows [{flows}]; refused {len(self.refused)}"

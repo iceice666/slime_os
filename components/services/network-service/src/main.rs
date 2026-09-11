@@ -1,6 +1,11 @@
 #![no_std]
 #![no_main]
 
+//! IO4's exact-destination authority, and behind it, IO11's bounded IPv4
+//! stack. The authority decides which holder may reach which exact tuple;
+//! the stack moves bytes for the capabilities the authority minted, over the
+//! `LinkDevice` the generation bound this service to, and nowhere else.
+
 use boot_contracts::network_destination::{
     Address, Destination, ENTRY_BYTES, FORMAT_VERSION, HEADER_BYTES, MAGIC, MAX_DESTINATIONS,
     NetworkDestinations, OFF_HEADER_DESTINATION_COUNT, OFF_HEADER_FORMAT_VERSION,
@@ -9,15 +14,21 @@ use boot_contracts::network_destination::{
 };
 use boot_contracts::network_interface::{self, Interface as DeclaredInterface, NetworkInterfaces};
 use slime_components::tick_clock::TickClock;
+use slime_proto::io_queue::{
+    self, DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE, REQUEST_PAYLOAD_BYTES, WireBufferSlice,
+};
+use slime_proto::io_queue_ring::{Queue, QueueError};
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_request;
 use slime_rt::{
-    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, monotonic_frequency,
-    monotonic_read, network_destinations_read, network_interface_read, resolve_binding, yield_now,
+    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, capability_import, debug_write, exit,
+    monotonic_frequency, monotonic_read, network_destinations_read, network_interface_read,
+    resolve_binding, shared_buffer_loan_map, yield_now,
 };
-use smoltcp::iface::{Config, Interface, PollResult, SocketSet, SocketStorage};
-use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
+use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet, SocketStorage};
+use smoltcp::socket::tcp;
+use smoltcp::time::{Duration, Instant};
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 
 mod link;
 use link::Link;
@@ -37,6 +48,25 @@ const MAX_CAPABILITIES: usize = 8;
 /// TCP sockets the stack can hold at once. The contract's `maxSockets` is a
 /// ceiling on declarations; this is the storage one service instance carries.
 const TCP_SOCKETS: usize = 4;
+const SOCKET_BUFFER_BYTES: usize = 4096;
+/// A connect that the peer neither answers nor refuses is failed after this.
+const CONNECT_TIMEOUT_MS: i64 = 5000;
+const FIRST_LOCAL_PORT: u16 = 49152;
+/// One IO0 queue of this depth per data client, and at most as many requests
+/// held pending while their socket cannot yet take or give the bytes.
+const DATA_SLOTS: usize = 8;
+const DATA_PAGES: usize = 2;
+const PAGE: u64 = 4096;
+/// Where a client's lent pages are mapped: above the link's own pages.
+const DATA_BASE: u64 = 0x0000_0019_0000_0000 + 16 * PAGE;
+const DESCRIPTOR_QUEUE: u8 = 1;
+const DESCRIPTOR_DATA: u8 = 2;
+const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
+const STATUS_DENIED: i32 = -1;
+const STATUS_MALFORMED: i32 = -2;
+const STATUS_UNSUPPORTED: i32 = -3;
+const STATUS_RESET_BY_PEER: i32 = -4;
+const STATUS_UNREACHABLE: i32 = -5;
 /// The clients a generation may bind to this service, by the grant name each
 /// resolves and the instance name its holder identity derives from. A grant
 /// the generation does not declare simply resolves to no client.
@@ -45,16 +75,72 @@ const CLIENTS: [(&[u8], &str); 3] = [
     (b"network-intruder-service", "io-network-intruder"),
     (b"network-tcp-probe-service", "io-tcp-probe"),
 ];
-const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
-const STATUS_DENIED: i32 = -1;
-const STATUS_MALFORMED: i32 = -2;
-const STATUS_UNSUPPORTED: i32 = -3;
+
+// Socket buffers live in the image's writable data rather than on the stack:
+// four sockets' worth is twice the declared stack.
+static mut RX_BUFFERS: [[u8; SOCKET_BUFFER_BYTES]; TCP_SOCKETS] =
+    [[0; SOCKET_BUFFER_BYTES]; TCP_SOCKETS];
+static mut TX_BUFFERS: [[u8; SOCKET_BUFFER_BYTES]; TCP_SOCKETS] =
+    [[0; SOCKET_BUFFER_BYTES]; TCP_SOCKETS];
+static mut SOCKET_STORAGE: [SocketStorage<'static>; TCP_SOCKETS] =
+    [SocketStorage::EMPTY; TCP_SOCKETS];
+
+/// Which socket buffer pair each live handle occupies; a handle's own index
+/// is smoltcp's private business.
+type SocketSlots = [Option<SocketHandle>; TCP_SOCKETS];
+
+fn free_socket(slots: &mut SocketSlots, sockets: &mut SocketSet<'static>, handle: SocketHandle) {
+    if let Some(slot) = slots.iter_mut().find(|slot| **slot == Some(handle)) {
+        *slot = None;
+    }
+    sockets.remove(handle);
+}
 
 #[derive(Clone, Copy)]
+struct DataPage {
+    buffer: u64,
+    lease: u64,
+    base: u64,
+}
+
+impl DataPage {
+    fn bytes(self) -> &'static mut [u8] {
+        // Mapped at `base` for the life of this task from a loan the client
+        // delegated; the pending table decides which bytes a request may use.
+        unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, PAGE as usize) }
+    }
+}
+
+/// One data request the socket could not finish at once.
+#[derive(Clone, Copy)]
+struct Pending {
+    request_id: u64,
+    op: u8,
+    capability: u64,
+    page: usize,
+    offset: usize,
+    length: usize,
+    progress: usize,
+    nonblocking: bool,
+}
+
+/// A client's IO0 data queue and the pages it lent, once delegated.
+struct DataQueue {
+    queue: Queue<'static>,
+    pages: [Option<DataPage>; DATA_PAGES],
+    pending: [Option<Pending>; DATA_SLOTS],
+}
+
 struct Client {
     slot: u32,
     holder: [u8; 32],
     closed: bool,
+    /// The next mapping base for a page this client lends.
+    next_base: u64,
+    queue_slot: Option<u32>,
+    data: Option<DataQueue>,
+    /// A connect whose reply waits for the handshake.
+    pending_connect: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -65,21 +151,10 @@ struct Capability {
     rights: u16,
     kind: u8,
     epoch: u64,
-}
-
-/// Everything that exists only when the generation binds this service to a
-/// link and declares its interface.
-struct Stack {
-    link: Link,
-    iface: Interface,
-    clock: TickClock,
-}
-
-impl Stack {
-    fn now(&self) -> Instant {
-        let ticks = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
-        Instant::from_millis(self.clock.millis(ticks))
-    }
+    socket: Option<SocketHandle>,
+    /// Closed by its holder; the socket finishes its own close before the
+    /// slot is reused.
+    closing: bool,
 }
 
 #[derive(Default)]
@@ -90,6 +165,27 @@ struct Observed {
     listener_refusals: u32,
     dns_refusals: u32,
     cross_holder_refusals: u32,
+    tcp_opened: u32,
+    tcp_established: u32,
+    tcp_reset: u32,
+    bytes_sent: u64,
+    bytes_received: u64,
+}
+
+/// Everything that exists only when the generation binds this service to a
+/// link and declares its interface.
+struct Stack {
+    link: Link,
+    iface: Interface,
+    clock: TickClock,
+    next_port: u16,
+}
+
+impl Stack {
+    fn now(&self) -> Instant {
+        let ticks = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
+        Instant::from_millis(self.clock.millis(ticks))
+    }
 }
 
 fn main(_: u32) {
@@ -130,13 +226,17 @@ fn main(_: u32) {
         .unwrap_or_else(|_| fail(b"destination resource decode"));
     report_authority(&destinations);
 
-    let mut clients: [Option<Client>; CLIENTS.len()] = [None; CLIENTS.len()];
-    for (entry, (grant, name)) in clients.iter_mut().zip(CLIENTS) {
+    let mut clients: [Option<Client>; CLIENTS.len()] = [const { None }; CLIENTS.len()];
+    for (index, (entry, (grant, name))) in clients.iter_mut().zip(CLIENTS).enumerate() {
         if let Ok(slot) = resolve_binding(grant) {
             *entry = Some(Client {
                 slot,
                 holder: boot_contracts::network_destination::holder_identity(name),
                 closed: false,
+                next_base: DATA_BASE + (index as u64) * (1 + DATA_PAGES as u64) * PAGE,
+                queue_slot: None,
+                data: None,
+                pending_connect: None,
             });
         }
     }
@@ -151,8 +251,11 @@ fn main(_: u32) {
     let mut observed = Observed::default();
 
     let mut stack = attach_stack();
-    let mut socket_storage: [SocketStorage; TCP_SOCKETS] = [SocketStorage::EMPTY; TCP_SOCKETS];
-    let mut sockets = SocketSet::new(&mut socket_storage[..]);
+    // The storage is static, as the buffers are, so the set may live for the
+    // whole task without borrowing a local.
+    let storage = unsafe { &mut *core::ptr::addr_of_mut!(SOCKET_STORAGE) };
+    let mut sockets = SocketSet::new(&mut storage[..]);
+    let mut socket_slots: SocketSlots = [None; TCP_SOCKETS];
 
     while clients.iter().flatten().any(|client| !client.closed) {
         let mut progress = false;
@@ -167,39 +270,50 @@ fn main(_: u32) {
                 result if result < 0 => fail(b"client receive"),
                 result => {
                     progress = true;
+                    let length = result as usize;
+                    // A delegated loan arrives as a full descriptor carrying no
+                    // protocol magic; everything else is a request.
+                    if length == MAX_MSG && !has_network_magic(&bytes) {
+                        accept_delegation(client, &bytes);
+                        continue;
+                    }
                     observed.requests += 1;
-                    let request = WireNetworkRequest::decode(&bytes[..result as usize]);
+                    let request = WireNetworkRequest::decode(&bytes[..length]);
                     let op = request.map_or(0, |value| value.op);
-                    let (status, kind, capability) = match request {
+                    let outcome = match request {
                         Some(request)
                             if valid_network_request(&request)
                                 && request.op == network_service::OP_CLOSE
                                 && request.capability == SHUTDOWN_CAPABILITY =>
                         {
+                            // The client exits once it has this reply, and the
+                            // root then reclaims every page it lent; nothing
+                            // below may touch that queue again.
                             client.closed = true;
-                            (0, network_service::CAPABILITY_NONE, 0)
+                            client.data = None;
+                            Some((0, network_service::CAPABILITY_NONE, 0))
                         }
                         Some(request) if valid_network_request(&request) => dispatch(
                             &destinations,
-                            client.holder,
+                            client,
                             request,
                             &mut capabilities,
                             &mut next_capability,
                             epoch,
                             &mut observed,
+                            stack.as_mut(),
+                            &mut sockets,
+                            &mut socket_slots,
                         ),
-                        _ => (STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0),
+                        _ => Some((STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0)),
                     };
-                    let reply = WireNetworkCompletion {
-                        magic: network_service::NETWORK_MAGIC,
-                        version: network_service::FORMAT_VERSION,
-                        op,
-                        capability_kind: kind,
-                        status_detail: status,
-                        flags: 0,
-                        capability,
-                    };
-                    send(client.slot, &reply.encode());
+                    // `None` is a connect whose answer waits for the handshake.
+                    if let Some((status, kind, capability)) = outcome {
+                        send(
+                            client.slot,
+                            &completion(op, kind, status, 0, capability).encode(),
+                        );
+                    }
                 }
             }
         }
@@ -209,16 +323,80 @@ fn main(_: u32) {
             progress |= stack.iface.poll(now, &mut stack.link, &mut sockets)
                 == PollResult::SocketStateChanged;
             progress |= stack.link.replenish();
+            for client in clients.iter_mut().flatten().filter(|client| !client.closed) {
+                progress |= settle_connect(
+                    client,
+                    &mut capabilities,
+                    &mut sockets,
+                    &mut socket_slots,
+                    &mut observed,
+                );
+                progress |= serve_data(
+                    client,
+                    &mut capabilities,
+                    &destinations,
+                    &mut sockets,
+                    &mut observed,
+                );
+            }
+            progress |= reap_closed(&mut capabilities, &mut sockets, &mut socket_slots);
         }
         if !progress {
             yield_now();
         }
     }
     if let Some(mut stack) = stack {
-        release_stack(&mut stack);
+        release_stack(&mut stack, &observed);
     }
     report_observed(&observed);
     exit(0)
+}
+
+fn has_network_magic(bytes: &[u8; MAX_MSG]) -> bool {
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == network_service::NETWORK_MAGIC
+}
+
+/// A client lends this service one queue page and then its data pages. The
+/// descriptor names the buffer, the loan, and which of the two it is; the
+/// authority behind it is imported through the runtime, never trusted from
+/// the bytes.
+fn accept_delegation(client: &mut Client, descriptor: &[u8; MAX_MSG]) {
+    let buffer = u64::from_le_bytes(descriptor[..8].try_into().unwrap());
+    let lease = u64::from_le_bytes(descriptor[8..16].try_into().unwrap());
+    let kind = descriptor[16];
+    let slot = capability_import().unwrap_or_else(|_| fail(b"client loan import"));
+    let base = client.next_base;
+    if shared_buffer_loan_map(slot, base, 0, PAGE) != ERR_SUCCESS {
+        fail(b"client loan map");
+    }
+    client.next_base += PAGE;
+    match kind {
+        DESCRIPTOR_QUEUE if client.data.is_none() => {
+            let bytes = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, PAGE as usize) };
+            let queue =
+                Queue::attach(bytes, DATA_SLOTS).unwrap_or_else(|_| fail(b"client queue attach"));
+            client.queue_slot = Some(slot);
+            client.data = Some(DataQueue {
+                queue,
+                pages: [None; DATA_PAGES],
+                pending: [None; DATA_SLOTS],
+            });
+        }
+        DESCRIPTOR_DATA => {
+            let Some(data) = client.data.as_mut() else {
+                fail(b"data page before queue");
+            };
+            let Some(entry) = data.pages.iter_mut().find(|page| page.is_none()) else {
+                fail(b"too many data pages");
+            };
+            *entry = Some(DataPage {
+                buffer,
+                lease,
+                base,
+            });
+        }
+        _ => fail(b"client delegation kind"),
+    }
 }
 
 /// Bind to the link and configure the stack when the generation declares an
@@ -262,30 +440,30 @@ fn attach_stack() -> Option<Stack> {
             .add_default_ipv4_route(Ipv4Address::from(gateway))
             .unwrap_or_else(|_| fail(b"default route"));
     }
-    Some(Stack { link, iface, clock })
+    Some(Stack {
+        link,
+        iface,
+        clock,
+        next_port: FIRST_LOCAL_PORT,
+    })
 }
 
 /// Hand the link back: reset the driver, acknowledge its settled completions,
 /// and wait for its fresh epoch before this task can exit and have its loans
 /// reclaimed from under the driver.
-fn release_stack(stack: &mut Stack) {
-    let counts = link::FrameCounts {
-        frames: stack.link.tx.counts.frames + stack.link.rx.counts.frames,
-        arp: stack.link.tx.counts.arp + stack.link.rx.counts.arp,
-        icmp: stack.link.tx.counts.icmp + stack.link.rx.counts.icmp,
-        tcp: stack.link.tx.counts.tcp + stack.link.rx.counts.tcp,
-        other: stack.link.tx.counts.other + stack.link.rx.counts.other,
-    };
+fn release_stack(stack: &mut Stack, observed: &Observed) {
+    let tx = stack.link.tx.counts;
+    let rx = stack.link.rx.counts;
     write_number(
         b"[network-service] link frames total=",
-        u64::from(counts.frames),
+        u64::from(tx.frames + rx.frames),
     );
-    write_number(b" tx=", u64::from(stack.link.tx.counts.frames));
-    write_number(b" rx=", u64::from(stack.link.rx.counts.frames));
-    write_number(b" arp=", u64::from(counts.arp));
-    write_number(b" icmp=", u64::from(counts.icmp));
-    write_number(b" tcp=", u64::from(counts.tcp));
-    write_number(b" other=", u64::from(counts.other));
+    write_number(b" tx=", u64::from(tx.frames));
+    write_number(b" rx=", u64::from(rx.frames));
+    write_number(b" arp=", u64::from(tx.arp + rx.arp));
+    write_number(b" icmp=", u64::from(tx.icmp + rx.icmp));
+    write_number(b" tcp=", u64::from(tx.tcp + rx.tcp));
+    write_number(b" other=", u64::from(tx.other + rx.other));
     debug_write(b"\n");
     let (tx_frames, rx_frames) = stack.link.statistics();
     write_number(
@@ -293,6 +471,15 @@ fn release_stack(stack: &mut Stack) {
         u64::from(tx_frames),
     );
     write_number(b" rx=", u64::from(rx_frames));
+    debug_write(b"\n");
+    write_number(
+        b"[network-service] tcp sockets opened=",
+        u64::from(observed.tcp_opened),
+    );
+    write_number(b" established=", u64::from(observed.tcp_established));
+    write_number(b" reset=", u64::from(observed.tcp_reset));
+    write_number(b" bytes-tx=", observed.bytes_sent);
+    write_number(b" bytes-rx=", observed.bytes_received);
     debug_write(b"\n");
     stack.link.release();
     debug_write(b"[network-service] link released\n");
@@ -372,24 +559,44 @@ fn write_mac(mac: [u8; 6]) {
     }
 }
 
+fn completion(op: u8, kind: u8, status: i32, flags: u32, capability: u64) -> WireNetworkCompletion {
+    WireNetworkCompletion {
+        magic: network_service::NETWORK_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        op,
+        capability_kind: kind,
+        status_detail: status,
+        flags,
+        capability,
+    }
+}
+
+/// The authority decision for one endpoint request, and for a TCP connect on
+/// a bound link, the socket behind it. `None` defers the reply.
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     destinations: &NetworkDestinations<'_>,
-    holder: [u8; 32],
+    client: &mut Client,
     request: WireNetworkRequest,
     capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
     next: &mut u64,
     epoch: u64,
     observed: &mut Observed,
-) -> (i32, u8, u64) {
+    stack: Option<&mut Stack>,
+    sockets: &mut SocketSet<'static>,
+    socket_slots: &mut SocketSlots,
+) -> Option<(i32, u8, u64)> {
+    let holder = client.holder;
+    let deny = Some((STATUS_DENIED, network_service::CAPABILITY_NONE, 0));
     if request.address_kind == network_service::ADDRESS_IPV6 {
-        return (STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0);
+        return Some((STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0));
     }
     match request.op {
         network_service::OP_RESOLVE => {
             let name = &request.endpoint[..request.name_len as usize];
             let Some((index, destination)) = find_resolve_destination(destinations, &holder, name)
             else {
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             };
             let charged = capabilities
                 .iter()
@@ -402,9 +609,9 @@ fn dispatch(
                 .count() as u32;
             if charged >= destination.dns_record_limit {
                 observed.dns_refusals += 1;
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             }
-            mint(
+            Some(mint(
                 capabilities,
                 next,
                 holder,
@@ -412,7 +619,8 @@ fn dispatch(
                 destination.rights,
                 network_service::CAPABILITY_DNS_RECORD,
                 epoch,
-            )
+                None,
+            ))
         }
         network_service::OP_CONNECT | network_service::OP_LISTEN => {
             let transport = if request.transport == network_service::TRANSPORT_TCP {
@@ -434,9 +642,9 @@ fn dispatch(
                 request.port,
                 right,
             ) else {
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             };
-            let sockets = capabilities
+            let sockets_charged = capabilities
                 .iter()
                 .flatten()
                 .filter(|cap| {
@@ -445,9 +653,9 @@ fn dispatch(
                         && cap.kind != network_service::CAPABILITY_DNS_RECORD
                 })
                 .count() as u32;
-            if sockets >= destination.socket_limit {
+            if sockets_charged >= destination.socket_limit {
                 observed.socket_refusals += 1;
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             }
             let kind = if request.op == network_service::OP_LISTEN {
                 let listeners = capabilities
@@ -461,7 +669,7 @@ fn dispatch(
                     .count() as u32;
                 if listeners >= destination.listener_limit {
                     observed.listener_refusals += 1;
-                    return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                    return deny;
                 }
                 network_service::CAPABILITY_TCP_LISTENER
             } else if request.transport == network_service::TRANSPORT_TCP {
@@ -470,7 +678,56 @@ fn dispatch(
                 network_service::CAPABILITY_UDP_ENDPOINT
             };
             observed.packets += 1;
-            mint(
+            // A TCP connect to an IPv4 destination on a bound link opens a
+            // real socket; the authority answer above is what every other
+            // combination still gets.
+            let real = kind == network_service::CAPABILITY_TCP_CONNECTION
+                && stack.is_some()
+                && matches!(address, Address::Ipv4(_));
+            if !real {
+                return Some(mint(
+                    capabilities,
+                    next,
+                    holder,
+                    index,
+                    destination.rights,
+                    kind,
+                    epoch,
+                    None,
+                ));
+            }
+            let stack = stack.unwrap();
+            let Address::Ipv4(remote) = address else {
+                unreachable!()
+            };
+            let Some(socket_index) = socket_slots.iter().position(|used| used.is_none()) else {
+                observed.socket_refusals += 1;
+                return deny;
+            };
+            let (rx, tx) = unsafe {
+                (
+                    &mut *core::ptr::addr_of_mut!(RX_BUFFERS[socket_index]),
+                    &mut *core::ptr::addr_of_mut!(TX_BUFFERS[socket_index]),
+                )
+            };
+            let mut socket = tcp::Socket::new(
+                tcp::SocketBuffer::new(&mut rx[..]),
+                tcp::SocketBuffer::new(&mut tx[..]),
+            );
+            socket.set_timeout(Some(Duration::from_millis(CONNECT_TIMEOUT_MS as u64)));
+            let local_port = stack.next_port;
+            stack.next_port = stack.next_port.checked_add(1).unwrap_or(FIRST_LOCAL_PORT);
+            let remote = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from(remote)), request.port);
+            if socket
+                .connect(stack.iface.context(), remote, local_port)
+                .is_err()
+            {
+                return Some((STATUS_UNREACHABLE, network_service::CAPABILITY_NONE, 0));
+            }
+            let handle = sockets.add(socket);
+            socket_slots[socket_index] = Some(handle);
+            observed.tcp_opened += 1;
+            let (status, minted_kind, id) = mint(
                 capabilities,
                 next,
                 holder,
@@ -478,22 +735,29 @@ fn dispatch(
                 destination.rights,
                 kind,
                 epoch,
-            )
+                Some(handle),
+            );
+            if status != 0 {
+                free_socket(socket_slots, sockets, handle);
+                return Some((status, minted_kind, id));
+            }
+            client.pending_connect = Some(id);
+            None
         }
         network_service::OP_SEND | network_service::OP_RECV | network_service::OP_CLOSE => {
             let Some(index) = capabilities
                 .iter()
                 .position(|entry| entry.is_some_and(|cap| cap.id == request.capability))
             else {
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             };
             let cap = capabilities[index].unwrap();
             if cap.holder != holder {
                 observed.cross_holder_refusals += 1;
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             }
             if cap.epoch != epoch {
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             }
             if cap.kind == network_service::CAPABILITY_TCP_LISTENER
                 && matches!(
@@ -501,7 +765,7 @@ fn dispatch(
                     network_service::OP_SEND | network_service::OP_RECV
                 )
             {
-                return (STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0);
+                return Some((STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0));
             }
             let required = if request.op == network_service::OP_SEND {
                 RIGHT_SEND
@@ -511,20 +775,405 @@ fn dispatch(
                 0
             };
             if required != 0 && cap.rights & required == 0 {
-                return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
+                return deny;
             }
             if request.op == network_service::OP_CLOSE {
-                capabilities[index] = None;
+                match cap.socket {
+                    Some(handle) => {
+                        // The socket finishes its own close; the slot is
+                        // reused once the stack has let it go.
+                        sockets.get_mut::<tcp::Socket>(handle).close();
+                        capabilities[index] = Some(Capability {
+                            closing: true,
+                            ..cap
+                        });
+                    }
+                    None => capabilities[index] = None,
+                }
+            } else if cap.socket.is_some() {
+                // The bytes travel in the client's data queue; the endpoint
+                // carries no slice.
+                return Some((STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0));
             } else {
                 observed.packets += 1;
             }
-            (0, network_service::CAPABILITY_NONE, 0)
+            Some((0, network_service::CAPABILITY_NONE, 0))
         }
-        network_service::OP_ACCEPT => (STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0),
-        _ => (STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0),
+        network_service::OP_ACCEPT => {
+            Some((STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0))
+        }
+        _ => Some((STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0)),
     }
 }
 
+/// Answer a deferred connect once the handshake finished or failed.
+fn settle_connect(
+    client: &mut Client,
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    sockets: &mut SocketSet<'static>,
+    socket_slots: &mut SocketSlots,
+    observed: &mut Observed,
+) -> bool {
+    let Some(id) = client.pending_connect else {
+        return false;
+    };
+    let Some(index) = capabilities
+        .iter()
+        .position(|entry| entry.is_some_and(|cap| cap.id == id))
+    else {
+        client.pending_connect = None;
+        return false;
+    };
+    let cap = capabilities[index].unwrap();
+    let handle = cap
+        .socket
+        .unwrap_or_else(|| fail(b"pending connect socket"));
+    let socket = sockets.get_mut::<tcp::Socket>(handle);
+    if socket.may_send() {
+        client.pending_connect = None;
+        observed.tcp_established += 1;
+        send(
+            client.slot,
+            &completion(network_service::OP_CONNECT, cap.kind, 0, 0, cap.id).encode(),
+        );
+        return true;
+    }
+    if !socket.is_open() {
+        client.pending_connect = None;
+        observed.tcp_reset += 1;
+        free_socket(socket_slots, sockets, handle);
+        capabilities[index] = None;
+        send(
+            client.slot,
+            &completion(
+                network_service::OP_CONNECT,
+                network_service::CAPABILITY_NONE,
+                STATUS_UNREACHABLE,
+                0,
+                0,
+            )
+            .encode(),
+        );
+        return true;
+    }
+    false
+}
+
+/// Admit and service the client's data requests: each is validated against
+/// the capability's holder and rights and the lent pages before a byte
+/// touches a socket, then held pending until the socket takes or gives it.
+fn serve_data(
+    client: &mut Client,
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    destinations: &NetworkDestinations<'_>,
+    sockets: &mut SocketSet<'static>,
+    observed: &mut Observed,
+) -> bool {
+    let holder = client.holder;
+    let Some(data) = client.data.as_mut() else {
+        return false;
+    };
+    let mut progress = false;
+    let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
+    loop {
+        let submission = match data.queue.take_request(&mut body, PAGE) {
+            Ok(value) => value,
+            Err(error) if error.error == QueueError::Empty => break,
+            Err(error) => {
+                if error.request_id != 0 {
+                    data.queue
+                        .complete(error.request_id, io_queue::STATUS_MALFORMED, 0, &[], false)
+                        .unwrap_or_else(|_| fail(b"malformed completion"));
+                }
+                progress = true;
+                continue;
+            }
+        };
+        progress = true;
+        let request = WireNetworkRequest::decode(&body[..submission.payload_len]);
+        let Some(request) = request.filter(valid_network_request) else {
+            complete_data(
+                data,
+                submission.request_id,
+                0,
+                io_queue::STATUS_MALFORMED,
+                STATUS_MALFORMED,
+                0,
+                0,
+            );
+            continue;
+        };
+        if !matches!(
+            request.op,
+            network_service::OP_SEND | network_service::OP_RECV
+        ) {
+            complete_data(
+                data,
+                submission.request_id,
+                request.op,
+                io_queue::STATUS_UNSUPPORTED,
+                STATUS_UNSUPPORTED,
+                0,
+                0,
+            );
+            continue;
+        }
+        let capability = capabilities
+            .iter()
+            .flatten()
+            .find(|cap| cap.id == request.capability)
+            .copied();
+        let Some(cap) = capability.filter(|cap| cap.holder == holder && !cap.closing) else {
+            observed.cross_holder_refusals += u32::from(capability.is_some());
+            complete_data(
+                data,
+                submission.request_id,
+                request.op,
+                io_queue::STATUS_BAD_RIGHTS,
+                STATUS_DENIED,
+                0,
+                0,
+            );
+            continue;
+        };
+        let (required, direction) = if request.op == network_service::OP_SEND {
+            (RIGHT_SEND, DIRECTION_DEVICE_READ)
+        } else {
+            (RIGHT_RECV, DIRECTION_DEVICE_WRITE)
+        };
+        if cap.rights & required == 0 || cap.socket.is_none() {
+            complete_data(
+                data,
+                submission.request_id,
+                request.op,
+                io_queue::STATUS_BAD_RIGHTS,
+                STATUS_DENIED,
+                0,
+                0,
+            );
+            continue;
+        }
+        let slice: WireBufferSlice = submission.slice;
+        let page = data.pages.iter().position(|page| {
+            page.is_some_and(|page| page.buffer == slice.buffer && page.lease == slice.lease)
+        });
+        let budget = destinations
+            .destination(cap.destination)
+            .map_or(0, |destination| destination.byte_budget as u64);
+        let in_bounds = slice
+            .offset
+            .checked_add(slice.length)
+            .is_some_and(|end| end <= PAGE)
+            && slice.length > 0
+            && slice.length <= budget;
+        let Some(page) = page.filter(|_| in_bounds && slice.direction == direction) else {
+            complete_data(
+                data,
+                submission.request_id,
+                request.op,
+                io_queue::STATUS_BAD_SLICE,
+                STATUS_DENIED,
+                0,
+                0,
+            );
+            continue;
+        };
+        let depth = destinations
+            .destination(cap.destination)
+            .map_or(0, |destination| destination.queue_depth as usize);
+        let held = data
+            .pending
+            .iter()
+            .flatten()
+            .filter(|pending| pending.capability == cap.id)
+            .count();
+        let Some(slot) = data
+            .pending
+            .iter()
+            .position(|pending| pending.is_none())
+            .filter(|_| held < depth)
+        else {
+            complete_data(
+                data,
+                submission.request_id,
+                request.op,
+                io_queue::STATUS_EXHAUSTED,
+                STATUS_DENIED,
+                0,
+                0,
+            );
+            continue;
+        };
+        data.pending[slot] = Some(Pending {
+            request_id: submission.request_id,
+            op: request.op,
+            capability: cap.id,
+            page,
+            offset: slice.offset as usize,
+            length: slice.length as usize,
+            progress: 0,
+            nonblocking: request.flags & network_service::FLAG_NONBLOCKING != 0,
+        });
+    }
+    for slot in 0..DATA_SLOTS {
+        let Some(pending) = data.pending[slot] else {
+            continue;
+        };
+        let Some(cap) = capabilities
+            .iter()
+            .flatten()
+            .find(|cap| cap.id == pending.capability)
+            .copied()
+        else {
+            // The capability went away under the request: settle it as cancelled.
+            complete_data(
+                data,
+                pending.request_id,
+                pending.op,
+                io_queue::STATUS_CANCELLED,
+                STATUS_DENIED,
+                0,
+                pending.progress as u64,
+            );
+            data.pending[slot] = None;
+            progress = true;
+            continue;
+        };
+        let handle = cap.socket.unwrap_or_else(|| fail(b"data socket"));
+        let socket = sockets.get_mut::<tcp::Socket>(handle);
+        let page = data.pages[pending.page]
+            .unwrap_or_else(|| fail(b"data page"))
+            .bytes();
+        let region = &mut page[pending.offset..pending.offset + pending.length];
+        if pending.op == network_service::OP_SEND {
+            if !socket.may_send() {
+                complete_data(
+                    data,
+                    pending.request_id,
+                    pending.op,
+                    io_queue::STATUS_DEVICE_ERROR,
+                    STATUS_RESET_BY_PEER,
+                    0,
+                    pending.progress as u64,
+                );
+                data.pending[slot] = None;
+                progress = true;
+                continue;
+            }
+            let taken = socket.send_slice(&region[pending.progress..]).unwrap_or(0);
+            if taken > 0 {
+                progress = true;
+                observed.bytes_sent += taken as u64;
+                let done = pending.progress + taken;
+                if done == pending.length {
+                    complete_data(
+                        data,
+                        pending.request_id,
+                        pending.op,
+                        io_queue::STATUS_OK,
+                        0,
+                        0,
+                        done as u64,
+                    );
+                    data.pending[slot] = None;
+                } else {
+                    data.pending[slot] = Some(Pending {
+                        progress: done,
+                        ..pending
+                    });
+                }
+            }
+        } else {
+            if socket.can_recv() {
+                let received = socket.recv_slice(region).unwrap_or(0);
+                if received > 0 {
+                    progress = true;
+                    observed.bytes_received += received as u64;
+                    complete_data(
+                        data,
+                        pending.request_id,
+                        pending.op,
+                        io_queue::STATUS_OK,
+                        0,
+                        0,
+                        received as u64,
+                    );
+                    data.pending[slot] = None;
+                    continue;
+                }
+            }
+            if !socket.may_recv() {
+                // The peer closed and everything it sent was delivered.
+                complete_data(
+                    data,
+                    pending.request_id,
+                    pending.op,
+                    io_queue::STATUS_OK,
+                    0,
+                    network_service::FLAG_END_OF_STREAM,
+                    0,
+                );
+                data.pending[slot] = None;
+                progress = true;
+            } else if pending.nonblocking {
+                complete_data(
+                    data,
+                    pending.request_id,
+                    pending.op,
+                    io_queue::STATUS_OK,
+                    0,
+                    0,
+                    0,
+                );
+                data.pending[slot] = None;
+                progress = true;
+            }
+        }
+    }
+    progress
+}
+
+fn complete_data(
+    data: &mut DataQueue,
+    request_id: u64,
+    op: u8,
+    status: u32,
+    detail: i32,
+    flags: u32,
+    transferred: u64,
+) {
+    let payload = completion(op, network_service::CAPABILITY_NONE, detail, flags, 0).encode();
+    data.queue
+        .complete(request_id, status, transferred, &payload, false)
+        .unwrap_or_else(|_| fail(b"data completion"));
+}
+
+/// Sockets whose holders closed them and that the stack has since let go
+/// give their storage back.
+fn reap_closed(
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    sockets: &mut SocketSet<'static>,
+    socket_slots: &mut SocketSlots,
+) -> bool {
+    let mut progress = false;
+    for entry in capabilities.iter_mut() {
+        let Some(cap) = *entry else {
+            continue;
+        };
+        let Some(handle) = cap.socket.filter(|_| cap.closing) else {
+            continue;
+        };
+        let socket = sockets.get_mut::<tcp::Socket>(handle);
+        if socket.state() == tcp::State::Closed {
+            free_socket(socket_slots, sockets, handle);
+            *entry = None;
+            progress = true;
+        }
+    }
+    progress
+}
+
+#[allow(clippy::too_many_arguments)]
 fn mint(
     capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
     next: &mut u64,
@@ -533,6 +1182,7 @@ fn mint(
     rights: u16,
     kind: u8,
     epoch: u64,
+    socket: Option<SocketHandle>,
 ) -> (i32, u8, u64) {
     let Some(slot) = capabilities.iter_mut().find(|entry| entry.is_none()) else {
         return (STATUS_DENIED, network_service::CAPABILITY_NONE, 0);
@@ -546,6 +1196,8 @@ fn mint(
         rights,
         kind,
         epoch,
+        socket,
+        closing: false,
     });
     (0, kind, id)
 }

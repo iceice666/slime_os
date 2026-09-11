@@ -34,6 +34,8 @@ PINS = ROOT / "sel4" / "pins.toml"
 # state before building, so stale input is refused instead of silently changing the image.
 CLOSURE = "sel4-io-network"
 TCP_CLOSURE = "sel4-io-tcp"
+# The probe's one stream: one page, and the destination's whole byte budget.
+STREAM_BYTES = 4096
 IMAGE: Path | None = None
 COMPOSITIONS = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions"
 FIXTURE = COMPOSITIONS / "sel4-io-network.zti"
@@ -92,7 +94,7 @@ AUTHORITY_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "tcp admission",
-        (r"SLIME_ROOT generation admitted number=54 executables=5 instances=5 grants=8 ",),
+        (r"SLIME_ROOT generation admitted number=54 executables=5 instances=5 grants=9 ",),
     ),
     (
         "tcp service",
@@ -102,10 +104,11 @@ TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[network-service\] clock rate=[0-9]+",
             r"\[network-service\] interface addr=10\.0\.0\.1/24 gateway=none mac=52:54:00:53:4c:01",
             r"\[network-service\] link query state=up rx provisioned=4",
-            r"\[network-service\] link frames total=[0-9]+ tx=[0-9]+ rx=[0-9]+ arp=[0-9]+ icmp=[0-9]+ tcp=0 other=0",
+            r"\[network-service\] link frames total=[0-9]+ tx=[0-9]+ rx=[0-9]+ arp=[0-9]+ icmp=[0-9]+ tcp=[0-9]+ other=0",
             r"\[network-service\] link statistics tx=[0-9]+ rx=[0-9]+",
+            r"\[network-service\] tcp sockets opened=2 established=1 reset=1 bytes-tx=4096 bytes-rx=4096",
             r"\[network-service\] link released",
-            r"\[network-service\] observed requests=22 packets=3 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=1",
+            r"\[network-service\] observed requests=24 packets=4 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=1",
         ),
     ),
     (
@@ -121,7 +124,14 @@ TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "tcp client",
         (
             r"\[io-tcp-probe\] clock rate=[0-9]+",
+            r"\[io-tcp-probe\] connect dst=10\.0\.0\.2:4242 status=ok",
             r"\[io-tcp-probe\] tcp capabilities=1 rights=connect,send,recv",
+            r"\[io-tcp-probe\] sent bytes=4096",
+            r"\[io-tcp-probe\] received bytes=4096 completions=[0-9]+",
+            r"\[io-tcp-probe\] stream verified bytes=4096 mismatches=0",
+            r"\[io-tcp-probe\] close status=ok",
+            r"\[io-tcp-probe\] connect dst=10\.0\.0\.2:4243 status=refused",
+            r"\[io-tcp-probe\] undeclared destination refusals=1",
             r"\[io-tcp-probe\] held ms=3000",
             r"\[io-tcp-probe\] closed capabilities=1 shutdown=1",
         ),
@@ -281,6 +291,19 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
     undeclared = {destination for destination in ledger.ip_destinations() if destination != link_peer.PEER_IP}
     if undeclared:
         fail(f"the guest addressed IPv4 hosts the composition does not declare: {sorted(undeclared)}")
+    # The byte stream, as the peer saw it: one connection to the echo port
+    # carrying the probe's 4096 bytes each way and closed by both sides, one
+    # refused attempt on the closed port, and nothing else.
+    flows = peer.tcp.flows
+    if len(flows) != 1:
+        fail(f"expected one TCP connection to the echo port, the peer saw {peer.tcp.summary()}")
+    flow = next(iter(flows.values()))
+    if flow.received != STREAM_BYTES or flow.echoed != STREAM_BYTES:
+        fail(f"the echo flow carried rx={flow.received} echo={flow.echoed}, expected {STREAM_BYTES} each way")
+    if flow.state != "closed":
+        fail(f"the echo flow ended in state {flow.state!r}, expected both FINs acknowledged")
+    if len(peer.tcp.refused) != 1:
+        fail(f"expected exactly one refused connection attempt, the peer saw {len(peer.tcp.refused)}")
 
 
 def main() -> None:
@@ -311,8 +334,9 @@ def main() -> None:
         run_tcp_arm(image, mac, arguments.transcript)
         print(
             "seL4 I/O tcp plane check: the network service attached to virtio-net, "
-            "answered the peer's ARP and ICMP echo on its declared interface, "
-            "held its client's exact destination, and released the link cleanly"
+            "answered the peer's ARP and ICMP echo on its declared interface, carried "
+            "its client's byte stream to its exact destination and back unchanged, "
+            "refused the closed port and the undeclared host, and released the link cleanly"
         )
 
 

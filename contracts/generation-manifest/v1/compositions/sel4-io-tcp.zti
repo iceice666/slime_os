@@ -82,6 +82,16 @@
       ];
       source = "io-tcp-probe";
       target = "network-service";
+      transferable = true;
+    };
+    {
+      name = "tcp-probe-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "io-tcp-probe";
       transferable = false;
     };
     {
@@ -167,6 +177,11 @@
         {
           grant = "network-tcp-probe-service";
           slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "tcp-probe-buffer-factory";
+          slot = 1;
           slotReason = "componentAbi";
         };
       ];
@@ -307,11 +322,18 @@
   privateMemoryBudget = [];
   sharedBufferBudget = [
     {
+      bufferCount = 3;
+      bytePages = 3;
+      holder = "io-tcp-probe";
+      loanCount = 3;
+      mappingCount = 3;
+    };
+    {
       bufferCount = 10;
       bytePages = 10;
       holder = "network-service";
       loanCount = 10;
-      mappingCount = 12;
+      mappingCount = 16;
     };
     {
       bufferCount = 0;

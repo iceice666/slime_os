@@ -25,6 +25,10 @@
     {
       component = "io-tcp-probe";
       dependencies = [];
+      bufferBytePages = 3;
+      bufferCount = 3;
+      mappingCount = 3;
+      loanCount = 3;
     };
     {
       component = "network-service";
@@ -33,7 +37,7 @@
       ];
       bufferBytePages = 10;
       bufferCount = 10;
-      mappingCount = 12;
+      mappingCount = 16;
       loanCount = 10;
     };
     {
@@ -52,6 +56,16 @@
       rights = [
         "send";
         "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "tcp-probe-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "io-tcp-probe";
+      rights = [
+        "bufferCreate";
       ];
       transferable = false;
     };
@@ -146,6 +160,12 @@
       holder = "io-tcp-probe";
       grant = "network-tcp-probe-service";
       slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-tcp-probe";
+      grant = "tcp-probe-buffer-factory";
+      slot = 1;
       reason = "componentAbi";
     };
     {

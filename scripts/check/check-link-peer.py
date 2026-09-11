@@ -88,14 +88,64 @@ def check_peer_learns_the_guest_and_pings_it() -> None:
     expect(peer.ledger.echo_replies_matching(0) == [], "an echo reply matched a foreign identifier")
 
 
+def guest_segment(port: int, seq: int, ack: int, flags: int, payload: bytes = b"", destination_port: int = lp.ECHO_PORT) -> bytes:
+    segment = lp.tcp_segment(lp.GUEST_IP, lp.PEER_IP, port, destination_port, seq, ack, flags, payload)
+    return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment))
+
+
+def tcp_replies(peer: lp.Peer, raw: bytes) -> list[lp.TcpSegment]:
+    out = []
+    for reply in peer.handle(raw):
+        frame = lp.decode(reply)
+        expect(frame is not None and frame.kind == "tcp", "a TCP reply did not decode as TCP")
+        segment = lp.decode_tcp(frame)
+        expect(segment is not None, "a TCP reply failed its checksum")
+        out.append(segment)
+    return out
+
+
+def check_tcp_echo_server() -> None:
+    peer = lp.Peer()
+    isn = 0x2000
+    # Handshake.
+    (synack,) = tcp_replies(peer, guest_segment(50000, isn, 0, lp.TCP_SYN))
+    expect(synack.flags == lp.TCP_SYN | lp.TCP_ACK and synack.ack == isn + 1 and synack.seq == lp.PEER_ISN, "SYN/ACK contents")
+    expect(tcp_replies(peer, guest_segment(50000, isn + 1, lp.PEER_ISN + 1, lp.TCP_ACK)) == [], "the handshake's final ACK was answered")
+    expect(peer.tcp.flows[50000].state == "established", "flow not established after the handshake")
+    # Data, echoed back in order across two segments.
+    payload = bytes(range(256)) * 8  # 2048 bytes
+    replies = tcp_replies(peer, guest_segment(50000, isn + 1, lp.PEER_ISN + 1, lp.TCP_ACK | lp.TCP_PSH, payload))
+    expect(replies[0].flags == lp.TCP_ACK and replies[0].ack == isn + 1 + len(payload) and replies[0].payload == b"", "data was not acknowledged first")
+    echoed = b"".join(reply.payload for reply in replies[1:])
+    expect(echoed == payload, "echoed bytes differ from the sent bytes")
+    expect(all(len(reply.payload) <= lp.SEGMENT_BYTES for reply in replies[1:]), "an echo segment exceeds the segment bound")
+    expect(replies[1].seq == lp.PEER_ISN + 1 and replies[-1].seq + len(replies[-1].payload) == lp.PEER_ISN + 1 + len(payload), "echo sequence numbers")
+    # A retransmission of the same data is acknowledged again and echoed no twice.
+    dup = tcp_replies(peer, guest_segment(50000, isn + 1, lp.PEER_ISN + 1, lp.TCP_ACK | lp.TCP_PSH, payload))
+    expect(len(dup) == 1 and dup[0].flags == lp.TCP_ACK and dup[0].ack == isn + 1 + len(payload) and peer.tcp.flows[50000].echoed == len(payload), "a retransmission was echoed again")
+    # The guest closes: its FIN is acknowledged and answered with the server's FIN.
+    fin_seq = isn + 1 + len(payload)
+    fin_ack = lp.PEER_ISN + 1 + len(payload)
+    replies = tcp_replies(peer, guest_segment(50000, fin_seq, fin_ack, lp.TCP_FIN | lp.TCP_ACK))
+    expect(len(replies) == 2 and replies[0].flags == lp.TCP_ACK and replies[0].ack == fin_seq + 1 and replies[1].flags == lp.TCP_FIN | lp.TCP_ACK, "FIN handling")
+    expect(tcp_replies(peer, guest_segment(50000, fin_seq + 1, fin_ack + 1, lp.TCP_ACK)) == [] and peer.tcp.flows[50000].state == "closed", "the server's FIN was not acknowledged into closed")
+    # The refused port answers every SYN with RST.
+    (rst,) = tcp_replies(peer, guest_segment(50001, 7, 0, lp.TCP_SYN, destination_port=lp.REFUSED_PORT))
+    expect(rst.flags == lp.TCP_RST | lp.TCP_ACK and rst.ack == 8 and peer.tcp.refused == [50001], "refused port")
+    # An unknown port is ignored.
+    expect(peer.handle(guest_segment(50002, 7, 0, lp.TCP_SYN, destination_port=9)) == [], "an undeclared port was answered")
+    expect(peer.ledger.count_received("tcp") == 8 and "50000:closed/rx2048/echo2048" in peer.tcp.summary(), "tcp ledger")
+
+
 def main() -> None:
     check_checksums()
     check_frames_decode_and_pad()
     check_peer_answers_arp_and_echo()
     check_peer_learns_the_guest_and_pings_it()
+    check_tcp_echo_server()
     (kind,) = struct.unpack("!H", struct.pack("!H", lp.ETHERTYPE_ARP))
     expect(kind == lp.ETHERTYPE_ARP, "struct sanity")
-    print("link peer check: ARP and ICMP echo answered exactly for the peer's own address, the guest learned and pinged, and the ledger honest")
+    print("link peer check: ARP and ICMP echo answered exactly for the peer's own address, the guest learned and pinged, TCP echoed in order and refused where declared, and the ledger honest")
 
 
 if __name__ == "__main__":
