@@ -140,7 +140,7 @@ re-run of the allocator changes above:
 ## Open risks and follow-ups
 
 - [x] The `sourceCommit` finding is closed by removing the release-shaped local input, not by claiming a new published SDK. Investigation found canonical SDK tags only through `sdk-v3.0.0`; the old `3.1.0/c42ae22` fixture was a local candidate export, not evidence of hosted publication. Earlier descriptions of that fixture as a published release were inaccurate. No SDK was published during this change.
-- [ ] `plan_task_backing`'s `>512`-page branch still omits the per-span fallback extent and large-frame descriptors, unchanged across three rounds; the ceiling-raising milestone owns it with the frozen capacity markers.
+- [x] Follow-up review fixed `plan_task_backing`'s per-span fallback extent and retained-large-frame descriptor, then re-took the frozen capacity markers.
 - [ ] The probe worker RPC's sentinel payloads remain uncontracted. Refused as a finding: they carry no fields and are compared for equality only, and the standing testkit convention sends such sentinels as literals (`crossing-peer/src/main.rs:27,34,39`, `echo-agent/src/main.rs:33`). Making every testkit sentinel a contract would be a repository-wide convention change, not a single probe's fix.
 
 ## Artifacts and provenance

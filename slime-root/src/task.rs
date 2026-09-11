@@ -710,16 +710,20 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 }))?;
         let arena = allocator.begin_task_arena(arena_bits)?;
         // Reserve physical extents, allocation descriptors, and CSlots as one
-        // construction boundary. `plan` counts the VSpace, tables, image and
-        // thread objects that construction allocates after the private pool;
-        // reserving both populations prevents an admitted quota from consuming
-        // the global descriptor table before its task is published.
+        // construction boundary. `plan` counts retyped VSpace, image, and
+        // thread objects. Each thread also keeps one copied transfer-window
+        // capability in a descriptor-only slot; count those aliases before
+        // private provisioning so construction cannot exhaust the global table
+        // after passing this preflight.
         let private_allocations =
             crate::object_allocator::PrivateBackingLayout::for_quota(private_memory_pages)
                 .allocation_descriptors;
-        if private_allocations
-            .checked_add(plan.allocation_count())
-            .is_none_or(|required| required > allocator.allocation_descriptors_free())
+        if construction_allocation_descriptors(
+            private_allocations,
+            plan.allocation_count(),
+            threads,
+        )
+        .is_none_or(|required| required > allocator.allocation_descriptors_free())
         {
             let cleanup =
                 construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
@@ -1186,6 +1190,16 @@ fn child_service_rights(_authority: Authority) -> sel4::CapRights {
         .build()
 }
 
+fn construction_allocation_descriptors(
+    private_allocations: usize,
+    planned_allocations: usize,
+    threads: usize,
+) -> Option<usize> {
+    private_allocations
+        .checked_add(planned_allocations)?
+        .checked_add(threads)
+}
+
 fn construction_record(task: TaskId, arena: TaskArenaId, slots: usize) -> CleanupRecord {
     CleanupRecord { task, arena, slots }
 }
@@ -1426,10 +1440,18 @@ mod tests {
     use super::{
         Arrival, CHILD_CNODE_SIZE_BITS, CHILD_PRIORITY, CHILD_SLOT_CONSOLE, CHILD_SLOT_FAULT,
         CHILD_SLOT_SERVICE, ChildSlots, ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS,
-        TaskError, TaskId, admit_priority, child_service_rights, construction_record,
+        TaskError, TaskId, admit_priority, child_service_rights,
+        construction_allocation_descriptors, construction_record,
     };
     use crate::generation::Authority;
     use crate::object_allocator::TaskArenaId;
+
+    #[test]
+    fn construction_descriptor_preflight_counts_one_transfer_alias_per_thread() {
+        assert_eq!(construction_allocation_descriptors(512, 19, 2), Some(533));
+        assert_eq!(construction_allocation_descriptors(0, 19, 1), Some(20));
+        assert_eq!(construction_allocation_descriptors(usize::MAX, 0, 1), None);
+    }
 
     /// B48: a declared priority at or above the root's is refused, not clamped.
     ///

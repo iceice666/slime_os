@@ -58,10 +58,7 @@ use crate::object_allocator::{
 /// can exceed it and a growth past it fails rather than relocating the base.
 ///
 /// 512 pages is 2 MiB, exactly one large-frame span on both supported
-/// architectures. The public ceiling stays here until MEM-64M moves the
-/// authenticated target-bound budget, while MEM-ARENAS separately proves that
-/// its segmented planner can represent larger future quotas without expanding
-/// every live task's metadata.
+/// architectures, so a full aligned reservation has one block-mapping shape.
 pub const MAX_REGION_PAGES: usize = 512;
 
 /// Pages every live private region may hold together.

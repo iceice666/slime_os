@@ -99,7 +99,7 @@ about image size, nothing reported the divergence.
 ## Open risks and follow-ups
 
 - [ ] Neither AArch64 board was booted for this change, so the fix is verified by measurement against their pinned kernel configurations and installed prefixes, not by board evidence. `just rpi5_boot_check` still fails closed on the missing serial adapter; the NT98690 path is manual.
-- [ ] `plan_task_backing`'s `>512`-page branch still omits the per-span fallback extent and large-frame descriptors, unchanged from the previous round; the ceiling-raising milestone owns it together with re-taking the frozen capacity markers.
+- [x] Follow-up review fixed the above-512-page plan and resized the large descriptor tables from the same span/static formulas. Physical 12-bit profiles still select the unchanged small envelope.
 
 ## Artifacts and provenance
 

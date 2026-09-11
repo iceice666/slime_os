@@ -86,13 +86,23 @@ const LARGE_DESCRIPTOR_TABLES: bool =
     KERNEL_ROOT_CNODE_SLOTS >= MAX_ROOT_CSLOTS && !cfg!(slime_private_small_tables);
 /// Root-owned task allocation descriptors.
 ///
-/// One descriptor per retyped object the root owns for a task: one per private
-/// page plus one leaf table per 2 MiB span, plus that task's own static
-/// construction records (VSpace, image, thread, and tables). A plan's fit
-/// against this pool is decided by [`TaskBackingCapacity::fits`], which counts
-/// both costs; no caller may infer admissibility from this bound alone.
+/// One descriptor per object or retained capability the root owns for a task.
+/// Private planning counts every 4 KiB fallback frame, every leaf table, and a
+/// retained large frame per 2 MiB span. The static envelope covers the largest
+/// admitted image, translation tables, per-thread pages, TCBs, aliases, VSpace,
+/// and CNode. A plan's fit is still decided by [`TaskBackingCapacity::fits`]
+/// against live availability; this bound only ensures the table can represent
+/// the widest four-holder qualification on kernels that can afford it.
+const MAX_PLANNED_PRIVATE_SPANS: usize =
+    MAX_PLANNED_PRIVATE_PAGES.div_ceil(MAX_PRIVATE_EXTENT_PAGES);
+const MAX_PLANNED_PRIVATE_ALLOCATIONS: usize =
+    MAX_PLANNED_PRIVATE_PAGES + 2 * MAX_PLANNED_PRIVATE_SPANS;
+const MAX_PLANNED_STATIC_ALLOCATIONS: usize = 2
+    + 2 * (sel4::vspace_levels::NUM_LEVELS - 1)
+    + (crate::child_vspace::MAX_CHILD_IMAGE_PAGES - 2 + 2 * crate::child_vspace::MAX_CHILD_THREADS)
+    + 2 * crate::child_vspace::MAX_CHILD_THREADS;
 pub const MAX_TASK_ALLOCATIONS: usize = if LARGE_DESCRIPTOR_TABLES {
-    4 * (MAX_PLANNED_PRIVATE_PAGES + 128) + 1
+    4 * (MAX_PLANNED_PRIVATE_ALLOCATIONS + MAX_PLANNED_STATIC_ALLOCATIONS)
 } else {
     4096
 };
@@ -130,10 +140,11 @@ const fn max_admissible_private_extents() -> usize {
     worst
 }
 
-/// Every task consumes one static extent. A quota-bearing task additionally
-/// consumes independently reclaimable data and page-table extents.
+/// Every task consumes one static extent. A planned private holder additionally
+/// consumes two data extents and one page-table extent per 2 MiB span so a
+/// retained large frame cannot strand the exact 4 KiB retry path.
 pub const MAX_TASK_EXTENTS: usize = if LARGE_DESCRIPTOR_TABLES {
-    MAX_TASK_ARENAS + 4 * (1 + 128 + 128)
+    MAX_TASK_ARENAS + 4 * (3 * MAX_PLANNED_PRIVATE_SPANS)
 } else {
     3 * MAX_TASK_ARENAS
 };
@@ -587,10 +598,18 @@ pub fn plan_task_backing(private_pages: usize) -> Option<TaskBackingPlan> {
             alignment_waste: reserved_data.checked_sub(payload_bytes)?,
         });
     }
-    let data_extents = private_pages.div_ceil(MAX_PRIVATE_EXTENT_PAGES);
-    let leaf_tables = data_extents;
-    let allocation_descriptors = private_pages + leaf_tables;
-    let extent_descriptors = 1 + data_extents + leaf_tables;
+    let payload_extents = private_pages.div_ceil(MAX_PRIVATE_EXTENT_PAGES);
+    // Every span may retain one typed large frame after a failed bulk map. A
+    // second data extent keeps the exact 4 KiB retry path provisionable without
+    // pretending the retained frame's untyped parent can be retyped again.
+    let fallback_extents = payload_extents;
+    let data_extents = payload_extents.checked_add(fallback_extents)?;
+    let leaf_tables = payload_extents;
+    let large_frames = payload_extents;
+    let allocation_descriptors = private_pages
+        .checked_add(leaf_tables)?
+        .checked_add(large_frames)?;
+    let extent_descriptors = 1usize.checked_add(data_extents)?.checked_add(leaf_tables)?;
     let payload_bytes = private_pages.checked_mul(GRANULE_BYTES)?;
     let page_table_bytes = leaf_tables.checked_mul(GRANULE_BYTES)?;
     let reserved_data = data_extents.checked_mul(MAX_PRIVATE_EXTENT_BYTES)?;
@@ -604,7 +623,7 @@ pub fn plan_task_backing(private_pages: usize) -> Option<TaskBackingPlan> {
         reserved_bytes,
         payload_bytes,
         page_table_bytes,
-        alignment_waste: reserved_data - payload_bytes,
+        alignment_waste: reserved_data.checked_sub(payload_bytes)?,
     })
 }
 
@@ -2355,7 +2374,8 @@ mod tests {
     use super::{
         AllocError, AllocationRecord, ArenaAllocation, ArenaPlan, ArenaRecord, ExtentKind,
         ExtentRecord, GRANULE_BYTES, KERNEL_ROOT_CNODE_SLOTS, LARGE_DESCRIPTOR_TABLES,
-        MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PRIVATE_EXTENT_BYTES,
+        MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_ALLOCATIONS, MAX_PLANNED_PRIVATE_PAGES,
+        MAX_PLANNED_PRIVATE_SPANS, MAX_PLANNED_STATIC_ALLOCATIONS, MAX_PRIVATE_EXTENT_BYTES,
         MAX_PRIVATE_EXTENT_PAGES, MAX_ROOT_CSLOTS, MAX_TASK_ALLOCATIONS, MAX_TASK_ARENAS,
         MAX_TASK_EXTENTS, ObjectAllocator, PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE,
         PROVENANCE_SLOTS, PrivateBackingLayout, PrivateBackingRequest, PrivateObjectKind,
@@ -2961,17 +2981,16 @@ mod tests {
         const PAGES_64_MIB: usize = 64 * 1024 * 1024 / 4096;
         const PAGES_256_MIB: usize = 256 * 1024 * 1024 / 4096;
         let sixty_four = plan_task_backing(PAGES_64_MIB).unwrap();
-        assert_eq!(sixty_four.data_extents, 32);
+        assert_eq!(sixty_four.data_extents, 64);
         assert_eq!(sixty_four.payload_bytes, 64 * 1024 * 1024);
-        assert_eq!(sixty_four.alignment_waste, 0);
+        assert_eq!(sixty_four.alignment_waste, 64 * 1024 * 1024);
         assert_eq!(sixty_four.page_table_bytes, 32 * 4096);
 
         let holder = plan_task_backing(PAGES_256_MIB).unwrap();
-        assert_eq!(holder.data_extents, 128);
-        assert_eq!(holder.reserved_bytes, 256 * 1024 * 1024 + 128 * 4096);
-        assert!(holder.reserved_bytes < 512 * 1024 * 1024);
+        assert_eq!(holder.data_extents, 256);
+        assert_eq!(holder.reserved_bytes, 2 * 256 * 1024 * 1024 + 128 * 4096);
         let four_reserved = holder.reserved_bytes * 4;
-        assert!(four_reserved < 2 * 1024 * 1024 * 1024usize);
+        assert_eq!(four_reserved, 2_149_580_800);
 
         let current = plan_task_backing(MAX_PRIVATE_EXTENT_PAGES).unwrap();
         assert_eq!(current.data_extents, 2);
@@ -3000,7 +3019,7 @@ mod tests {
             root_heap_bytes: 512 * 1024,
         };
         let required = capacity.requirements().unwrap();
-        assert_eq!(required.extent_descriptors, 257 * 4);
+        assert_eq!(required.extent_descriptors, 385 * 4);
         capacity.cslots_available = required.cslots;
         capacity.allocation_descriptors_available = required.allocation_descriptors;
         capacity.extent_descriptors_available = required.extent_descriptors;
@@ -3132,10 +3151,10 @@ mod tests {
             root_heap_bytes: 0,
         };
         let required = capacity.requirements().unwrap();
-        assert_eq!(required.allocation_descriptors, 262_660);
+        assert_eq!(required.allocation_descriptors, 263_172);
         assert_eq!(
             required.allocation_descriptors - capacity.allocation_descriptors_available,
-            3
+            515
         );
         assert!(!capacity.fits());
     }
@@ -3340,11 +3359,25 @@ mod tests {
     }
 
     #[test]
-    fn one_page_growth_cost_is_not_hidden_by_large_frames() {
+    fn large_descriptor_tables_cover_retry_safe_plans_and_static_tasks() {
+        if LARGE_DESCRIPTOR_TABLES {
+            assert_eq!(MAX_PLANNED_PRIVATE_SPANS, 128);
+            assert_eq!(MAX_PLANNED_PRIVATE_ALLOCATIONS, 65_792);
+            assert!(MAX_PLANNED_STATIC_ALLOCATIONS >= 520);
+            assert_eq!(
+                MAX_TASK_ALLOCATIONS,
+                4 * (MAX_PLANNED_PRIVATE_ALLOCATIONS + MAX_PLANNED_STATIC_ALLOCATIONS)
+            );
+            assert_eq!(MAX_TASK_EXTENTS, MAX_TASK_ARENAS + 4 * 3 * 128);
+        }
+    }
+
+    #[test]
+    fn one_page_growth_and_failed_large_frames_are_both_counted() {
         const PAGES_256_MIB: usize = 256 * 1024 * 1024 / 4096;
         let holder = plan_task_backing(PAGES_256_MIB).unwrap();
-        assert_eq!(holder.allocation_descriptors, PAGES_256_MIB + 128);
-        assert_eq!(holder.required_cslots, holder.allocation_descriptors + 257);
+        assert_eq!(holder.allocation_descriptors, PAGES_256_MIB + 256);
+        assert_eq!(holder.required_cslots, holder.allocation_descriptors + 385);
         assert!(holder.required_cslots > 4096);
     }
 

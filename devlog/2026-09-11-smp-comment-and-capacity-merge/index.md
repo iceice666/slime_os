@@ -72,7 +72,7 @@ with identical artifact identities.
 
 - No new physical-board run was performed. Main's PWM/UART observations are inherited evidence, not measurements repeated during this integration.
 - No new SDK release was published. The smoke checker creates local immutable export repositories for build and rollback verification.
-- The previously deferred above-512-page capacity planning findings remain outside this comment and integration fix.
+- Follow-up review closed the previously deferred above-512-page capacity planning findings; the current planner and table bounds now include fallback extents, retained large frames, and static task descriptors.
 
 ## Artifacts and provenance
 

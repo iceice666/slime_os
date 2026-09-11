@@ -100,7 +100,7 @@ exported closure names — AArch64 — so the RV64 half had no reader at all.
 
 ## Open risks and follow-ups
 
-- [ ] `plan_task_backing`'s above-512-page branch reserves one data extent per 2 MiB span and no large-frame fallback, so a hypothetical 64/256 MiB plan does not describe a failure-then-small-growth sequence. Reported as P2 in the same review; deliberately not changed here because the runtime ceiling is 512 pages, and widening the planning-only formula would move frozen QEMU capacity markers for a path no runtime can execute.
+- [x] Follow-up review fixed `plan_task_backing`'s above-512-page branch: every 2 MiB span now reserves a second data extent and a retained-large-frame descriptor, so a failed bulk map followed by exact 4 KiB growth is represented honestly. The private-memory capacity marker was re-taken with the wider reservation.
 - [ ] `sdk-release.json` still records version `3.1.0` and source commit `c42ae22f`, the published release it tracks. The build inputs are current; the release identity moves at the next publication.
 
 ## Artifacts and provenance

@@ -676,10 +676,10 @@ def check_private_memory_capacity_controls() -> int:
     section = "control"
     qualification = (
         "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders=4 "
-        "pages=65536 private_allocations=262656 private_extents=1028 private_cslots=263684 "
-        "private_reserved=1075838976 payload=1073741824 tables=2097152 alignment=0 "
-        "static_allocations=8 static_reserved=16384 required_allocations=262688 "
-        "required_extents=1028 required_cslots=263716 required_reserved=1075904512 "
+        "pages=65536 private_allocations=263168 private_extents=1540 private_cslots=264708 "
+        "private_reserved=2149580800 payload=1073741824 tables=2097152 alignment=1073741824 "
+        "static_allocations=8 static_reserved=16384 required_allocations=263200 "
+        "required_extents=1540 required_cslots=264740 required_reserved=2149646336 "
         "allocation_capacity=4096 allocations_available=3000 extent_capacity=144 "
         "extents_available=120 cslots_available=500000 ordinary_available=2147483648 "
         "root_image=8388608 root_metadata=1048576 root_stack=1048576 root_heap=524288 fit=0"
@@ -689,11 +689,11 @@ def check_private_memory_capacity_controls() -> int:
         ("capacity false fit", qualification[:-1] + "1"),
         (
             "capacity missing static descriptors",
-            qualification.replace("required_allocations=262688", "required_allocations=262656"),
+            qualification.replace("required_allocations=263200", "required_allocations=263168"),
         ),
         (
             "capacity missing static RAM",
-            qualification.replace("required_reserved=1075904512", "required_reserved=1075838976"),
+            qualification.replace("required_reserved=2149646336", "required_reserved=2149580800"),
         ),
         ("capacity duplicate report", qualification + "\n" + qualification),
         (

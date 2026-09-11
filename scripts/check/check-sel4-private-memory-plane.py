@@ -852,13 +852,13 @@ def check_segmented_capacity_report(
     expected_private = {
         "holders": 4,
         "pages": 65_536,
-        "private_allocations": 262_656,
-        "private_extents": 1_028,
-        "private_cslots": 263_684,
-        "private_reserved": 1_075_838_976,
+        "private_allocations": 263_168,
+        "private_extents": 1_540,
+        "private_cslots": 264_708,
+        "private_reserved": 2_149_580_800,
         "payload": 1_073_741_824,
         "tables": 2_097_152,
-        "alignment": 0,
+        "alignment": 1_073_741_824,
     }
     for name, expected in expected_private.items():
         if values[name] != expected:

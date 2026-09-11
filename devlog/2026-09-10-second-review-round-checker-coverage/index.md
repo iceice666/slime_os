@@ -93,12 +93,12 @@ real QEMU task-lifetime churn never allocated any.
 - Rejected alternative: reuse `private-memory-probe`. Its granted/denied lifecycles run forever (needed for its own plane's re-query assertions), so it never exits and never exercises task-teardown reclaim.
 - Decision: add a kind-specific `reusable_private_ram` marker field rather than only strengthening the composition.
 - Rationale: a quota-bearing task alone still leaves the assertion checking the unrestricted sum; without the kind split, a private extent that leaked (never returned to the free list) would be indistinguishable from one that reclaimed, since the static loop's own reuse keeps the unrestricted total positive regardless.
-- Decision: leave `MAX_TASK_ALLOCATIONS`'s value unchanged; correct only its comment.
-- Rationale: no real holder can reach 256 MiB today (`MAX_REGION_PAGES` clamps to 512 pages), so the pool has orders of magnitude of headroom for real traffic; sizing it for a hypothetical deployment is the ceiling-raising milestone's job, done together with `plan_task_backing`'s matching `>512`-page fallback-extent gap so QEMU capacity evidence is re-taken once, not twice.
+- Decision: size `MAX_TASK_ALLOCATIONS` from the retry-safe private plan plus the admitted static-task envelope.
+- Rationale: the same change now closes the hypothetical planner's missing fallback extents and descriptors, so the table and plan share one explicit four-holder capacity formula rather than carrying a known gap.
 
 ## Open risks and follow-ups
 
-- [ ] `plan_task_backing`'s `>512`-page branch and `MAX_TASK_ALLOCATIONS`'s static-descriptor headroom both describe the same not-yet-supported four-256-MiB-holder scenario incompletely; the ceiling-raising milestone should close both together and re-take the private-memory-plane's frozen capacity markers once.
+- [x] Follow-up review closed the above-512-page planner and descriptor-headroom gap together and re-took the private-memory capacity markers.
 - [ ] `check_measured_ceiling`'s fix has no standalone mutation proof (unlike the other three): B68's own finding was that the two probes' relative order is not pinned, so a synthetic transcript with the denied probe's refusal first would need hand-authoring outside the real QEMU harness; correctness rests on code-level reasoning shared with the already-verified base-address check in the same function.
 
 ## Artifacts and provenance

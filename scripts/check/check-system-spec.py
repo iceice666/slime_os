@@ -455,6 +455,30 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
                 "declarations: "
                 f"{first_difference(derived_bindings, declared_bindings, 'notificationBindings')}"
             )
+    # Instance fields split off by `POST_BASELINE_INSTANCE_FIELDS` are checked
+    # against the live system declaration by holder. Omitting a field is a
+    # different statement from assigning its default, so compare only the
+    # exempted keys and preserve absence on both sides.
+    post_instance_fields = POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset())
+    if post_instance_fields:
+        declared_instances = {
+            instance["name"]: {
+                field: instance[field] for field in post_instance_fields if field in instance
+            }
+            for instance in resolved_instances(system.spec)
+        }
+        derived_instances = {
+            instance["name"]: {
+                field: instance[field] for field in post_instance_fields if field in instance
+            }
+            for instance in derived.get("instances", [])
+        }
+        if derived_instances != declared_instances:
+            fail(
+                f"{name}: derived post-baseline instance fields do not match the live "
+                "system declarations: "
+                f"{first_difference(derived_instances, declared_instances, 'instances')}"
+            )
     # B91: every pin the derivation emits carries the reason its system spec
     # declared, and that reason is what the derived manifest itself implies. The
     # builder's own predicate is reused rather than restated, so this gate cannot
