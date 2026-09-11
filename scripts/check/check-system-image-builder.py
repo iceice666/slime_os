@@ -55,7 +55,14 @@ from system_image_closure import (
     SystemImageClosureError,
     resolve_closure,
 )
-from system_spec import DERIVED_GENERATION_FIXTURES, SYSTEM_ROOT, compile_system, derive_manifest
+from system_spec import (
+    DERIVED_GENERATION_FIXTURES,
+    SYSTEM_ROOT,
+    compile_system,
+    derive_manifest,
+    prefetch_systems,
+    system_paths,
+)
 from component_spec import admit_specs, interface_catalogue
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
@@ -141,6 +148,7 @@ def check_resolution(
     """Every closure resolves, names a distinct identity, and agrees with its spec."""
     catalogue = interface_catalogue()
     components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
+    prefetch_systems(system_paths())
     identities: dict[str, str] = {}
     for name, path in closures.items():
         try:

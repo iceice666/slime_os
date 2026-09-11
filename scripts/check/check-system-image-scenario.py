@@ -52,6 +52,7 @@ from system_image_closure import (
     negative_case_paths,
     resolve_closure,
 )
+from system_spec import prefetch_systems, system_paths
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
@@ -529,6 +530,7 @@ def check_malformed_refused() -> None:
 def check_every_closure_applies() -> int:
     """Every closure's parameters apply to its own manifest without refusal."""
     count = 0
+    prefetch_systems(system_paths())
     for path in sorted(CLOSURE_ROOT.glob("*.zti")):
         resolved = resolve_closure(path)
         try:

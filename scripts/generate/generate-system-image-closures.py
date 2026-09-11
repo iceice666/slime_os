@@ -40,6 +40,7 @@ from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
     compile_system,
+    prefetch_systems,
 )
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
@@ -355,6 +356,13 @@ def outputs() -> dict[Path, str]:
     compiled = admit_specs(catalogue=catalogue)
     specs = {entry.name: entry for entry in compiled}
     components = {entry.name: entry.spec for entry in compiled}
+    prefetch_systems(
+        [
+            SYSTEM_ROOT / f"{name}.zti"
+            for name in sorted(DERIVED_GENERATION_FIXTURES)
+            if name not in EXCLUDED
+        ]
+    )
     emitted: dict[Path, str] = {}
     for name in sorted(DERIVED_GENERATION_FIXTURES):
         if name in EXCLUDED:
