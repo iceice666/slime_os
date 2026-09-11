@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-11 |
 | Kind | Defect |
-| Status | Monitoring |
+| Status | Verified |
 | Scope | `components/lib/src/block_io.rs`, `components/services/virtio-blk-driver/src/main.rs`, `contracts/system-image-closure/v1/closures/`, `contracts/system-test-run/v1/runs/`, `.tasks/items/` |
 | Work items | 01a08f34-5e0f-7c61-90de-ce3268c872d2 |
 | Gates | `just sel4_rollback_check`, `just io_block_check`, `just bootstate_trace_check` |
@@ -95,6 +95,7 @@ client's loaned pages after the root may have reclaimed them.
 | Widened window, fixed: two checker boots and two 15 s direct boots | All passed, no fault, driver exit first ([`fixed-widened-checker-transcript-1.log`](fixed-widened-checker-transcript-1.log), [`fixed-widened-raw-boot-1.log`](fixed-widened-raw-boot-1.log)) | Direct |
 | `just sel4_rollback_check`, `just io_block_check`, `just sel4_storage_check`, `just sel4_store_check`, `just replay_check`, `just sel4_generation_check`, `just sel4_filesystem_check`, `just sel4_recovery_plane_check`, `just sel4_transfer_check`, `just bootstate_trace_check` | All passed on the final source (closures regenerated, test-run records re-blessed). `replay_check` failed once with `missing marker: \[virtio-blk-driver\] authority rings=1 rights=read,write source=generation`, the first driver marker of its ordered chain, while two zutai-bound gates saturated a core; the checker keeps no transcript. Eight transcripts kept through the checker's own `boot()` all satisfy its matcher and the gate passed on rerun; the one-off is filed as B94 (`01a08fa2-ffe1-7b90-a842-b2b22166b9fa`) | Direct |
 | `just system_spec_check`, `just system_image_builder_check`, `just system_test_run_check`, `just system_image_closure_check`, `just system_image_closure_aggregate_check` | All passed (the two spec-bound gates took 21 and 63 minutes) | Direct |
+| CI on PR #29 (`fix/b93-rollback-driver-fault` at `fad35a4e`): all twelve jobs, including "Rollback, release trust, and BootState trace" | Passed | Inherited: <https://github.com/iceice666/slime_os/actions/runs/34587616969/job/103225338769> |
 | `just fmt_check_all`, `just lint_all`, `just test_host`, `just sel4_gate_control_check`, `just devlog_check`, `just tasks_check` | All passed; `just typos` passed as well; `devlog_check` and `tasks_check` passed after B93 closed and every evidence file was linked | Direct |
 
 ## Decisions
@@ -109,7 +110,7 @@ client's loaned pages after the root may have reclaimed them.
 
 - [ ] The two fault registers CI and the reproduction reported (`instruction` 0x5f7/0x54c, `address` 0x40) lie in page zero and are not explained by a data abort on the unmapped ring; the last instruction the driver executed was not decoded. Nothing in the fix depends on it.
 - [ ] The same shape exists wherever a service drains a client's loaned pages after a command: the TCP lane's network service must answer a client's close only after its last access to that client's queue and data pages.
-- [ ] One CI run of the rollback job on this change is the remaining observation; the item closes on it.
+- [x] One CI run of the rollback job on this change: run 34587616969 passed it (PR #29).
 - [ ] The replay plane's ordered chain expects the root's `SLIME_RECORD entry … instance=replay-unrecorded` line before the driver's startup markers; one gate run under host load matched the chain differently and the checker kept no transcript. Filed as B94 (`01a08fa2-ffe1-7b90-a842-b2b22166b9fa`), deferred; it is a startup ordering, not the shutdown path this entry changes.
 
 ## Artifacts and provenance
