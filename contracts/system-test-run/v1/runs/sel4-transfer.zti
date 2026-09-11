@@ -1,7 +1,11 @@
 {
   formatVersion = 1;
   name = "sel4-transfer";
+<<<<<<< HEAD
   imageClosureIdentity = "6a971388d976a94251d2aedfcfa7bfc6a2762aafc96311b77d156c77cef6fbd0";
+=======
+  imageClosureIdentity = "89d389d3cc4ae622472b5e39404f178c9bba0056e77644e300bb900af7de3dc2";
+>>>>>>> 2aae277c (fix(sel4/memory): address review findings)
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [

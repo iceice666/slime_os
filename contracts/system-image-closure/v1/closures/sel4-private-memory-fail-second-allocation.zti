@@ -4,9 +4,9 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-private-memory.zti";
     kind = "file";
-    identity = "7eaca68e69e94ffa8c8735d52854407445c14157f182118c2939fba5c4598bd6";
+    identity = "f883311ee3c30022ebbfd4307137f75e4167e0a9887f0a2dcf0d23affde544f3";
   };
-  systemIdentity = "7b6d42ffad4089584285111fe551a8110bb58168fc0ec875c870717850aa506a";
+  systemIdentity = "d781f4a4671699d19aadfd87cd29c636eefdc4c6c70026a2942e40191b6c6b23";
   implementations = [
     {
       component = "init";
@@ -58,7 +58,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "e60dd055ae8b4593ce9332f2233c435d4f81183c35a6d598c522f7fc41ceb621";
+      identity = "29249656170ef55ffd3525958e74ac8cfc64927f65aaf98f0a4ea63ea115610f";
     };
     parameters = [];
   };

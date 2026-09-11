@@ -103,6 +103,8 @@
       bindings = [
         {
           grant = "private-memory-worker-rpc";
+          slot = 0;
+          slotReason = "componentAbi";
         };
       ];
       dependencies = [];

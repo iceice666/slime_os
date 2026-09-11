@@ -1,7 +1,11 @@
 {
   formatVersion = 1;
   name = "sel4-io-queue";
+<<<<<<< HEAD
   imageClosureIdentity = "e3b47347ddb941c86572b9c300a6e5bfa019466b8a0e5df07583341cad62fdf9";
+=======
+  imageClosureIdentity = "5636c76eaf661887ea27c2de7f38568604352b8154c8151d530106cbbd0be5d0";
+>>>>>>> 2aae277c (fix(sel4/memory): address review findings)
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

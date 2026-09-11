@@ -1,7 +1,11 @@
 {
   formatVersion = 1;
   name = "sel4-stream";
+<<<<<<< HEAD
   imageClosureIdentity = "6d08ff88e0e50f434e46bc3a49fc77f6b4c168af48c75ae05b52c5b5d80c36ba";
+=======
+  imageClosureIdentity = "fb18ee88007a6c850680d8acab13e20a703f2461fb0a77ed6cac022841df3e5f";
+>>>>>>> 2aae277c (fix(sel4/memory): address review findings)
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

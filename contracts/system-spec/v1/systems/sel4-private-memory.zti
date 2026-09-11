@@ -91,6 +91,12 @@
       slot = 0;
       reason = "componentAbi";
     };
+    {
+      holder = "private-memory-denied";
+      grant = "private-memory-worker-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
   ];
   extraBindings = [];
   mintedBindings = [];

@@ -183,20 +183,11 @@ fn device_retype_plan(
 /// chosen here, so a plane that raises its bound raises this with it instead of
 /// silently overrunning it.
 ///
-/// Sizing this by root CSlot instead cost a boot, and the reason is the same
-/// one recorded at length above `boot_selector::SELECTOR_GENERATION_BYTES`: in
-/// this root a large static is not merely memory, it is *capacity*. The seL4
-/// loader creates one root CSlot per page of the root image's `.bss` before the
-/// root runs, so the `[usize; MAX_ROOT_CSLOTS]` this replaced — 2 MB of `.bss`
-/// for 262_144 conceivable slots — spent 512 root CSlots and made a previously
-/// admissible generation unbootable, refused with
-/// `PlanExceedsRootSlots { required: 2313, available: 2185 }`.
-///
-/// The live bound below is 448 entries, or 452 in the immutable selector image,
+/// The live bound is 448 entries, or 452 in the immutable selector image,
 /// whose two bootstrap DMA pages per admitted boot device are the only terms
 /// this product path no longer contributes. [`PROVENANCE_SLOTS`] rounds either
-/// to a 1024-position open table of two-word records: 16 KiB of `.bss`, four
-/// root CSlots, against the 512 the array spent.
+/// to a 1024-position open table of two-word records: 16 KiB of `.bss`, or four
+/// root-image pages and their corresponding root CSlots.
 #[cfg(slime_boot_selector)]
 const SELECTOR_PHYSICAL_PROVENANCE: usize = 2 * crate::device::MAX_BLOCK_DEVICES;
 #[cfg(not(slime_boot_selector))]

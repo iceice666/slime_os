@@ -96,7 +96,11 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
+<<<<<<< HEAD
       identity = "84f90672cd818d26bb85f35a8b77b9b12598a3269ef8f7d55469e4564a8239b6";
+=======
+      identity = "29249656170ef55ffd3525958e74ac8cfc64927f65aaf98f0a4ea63ea115610f";
+>>>>>>> 2aae277c (fix(sel4/memory): address review findings)
     };
     parameters = [];
   };
