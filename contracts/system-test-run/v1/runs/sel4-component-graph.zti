@@ -1,11 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-component-graph";
-<<<<<<< HEAD
-  imageClosureIdentity = "c496e49b01bd5b050d99667d98af407862b3dc22dc29a4c618bba3a09cd8310c";
-=======
-  imageClosureIdentity = "7554191fcfd13ec9a6d658ebc510e2ade6412cf1359a5c7afa15a357f3dff358";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+  imageClosureIdentity = "59d3821652cefb52a56bfa6215e2edd7def70fffeb47be5bb4a44263b31cf5ce";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

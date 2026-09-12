@@ -1,11 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-private-memory-fail-second-allocation";
-<<<<<<< HEAD
-  imageClosureIdentity = "4decae5960d7c281c31f0d0e8311fdd7000c9ca83c397d4433c63940332d9082";
-=======
-  imageClosureIdentity = "cd9301215724d371257ef1f596e7a7ff1cb5d5437fa2955afd18d3cf06dcf0bc";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+  imageClosureIdentity = "6261ca78648d01ab6a5302447e467e2face87a6611c29afd97e373a24bed7fb0";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

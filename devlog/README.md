@@ -412,6 +412,7 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |
 | 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | MQ1 |
 | 2026-09-06 | [The backlog file becomes an index over the work-item store](2026-09-06-backlog-as-index/index.md) | Change | Verified | MQ2 |
+| 2026-09-07 | [The work-item store hard cutover: deleting the pre-MyQue identifier system](2026-09-07-work-item-store-hard-cutover/index.md) | Change | Verified | MQ3 |
 | 2026-09-07 | [Memory capacity milestones: mechanism before larger working sets](2026-09-07-memory-capacity-milestones/index.md) | Decision | Proposed | MEM-CAPACITY, MEM-LARGE, MEM-ARENAS, MEM-64M, MEM-PLATFORM, MEM-1G |
 | 2026-09-07 | [Mixed-size private frames preserve exact growth semantics](2026-09-07-mem-large-private-frames/index.md) | Change | Verified | MEM-LARGE |
 | 2026-09-07 | [Driving a motor ESC from the H1V1: opening the lane and its bench probe](2026-09-07-h1v1-esc-lane/index.md) | Decision | Proposed | P6.PWM, P6.PWM.A, IO8, P6.D |

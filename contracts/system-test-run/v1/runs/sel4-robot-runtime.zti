@@ -1,11 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-robot-runtime";
-<<<<<<< HEAD
-  imageClosureIdentity = "478fd936955a8c73cc82fc88b38b9a261be19cfd3eb53caa8ba77b93e52d0f8f";
-=======
-  imageClosureIdentity = "5dfdefc9eb71821283e488838946c23c9b8a6e56bfce64d550c4717eec35fdb5";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+  imageClosureIdentity = "b65940af393c6b6bb0a6ab090e0a54ee131217afdea5e4664b94a6816ff7cab1";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

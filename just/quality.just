@@ -270,7 +270,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-# P3.E adds the sparse device-untyped preflight test: the retained virtual
+    # P3.E adds the sparse device-untyped preflight test: the retained virtual
     # anchor must participate in contiguous-slot planning without mutating the pool.
     # IO11 adds the clock rate read's authority test beside the monotonic read's.
     # MEM-LARGE adds explicit root-ceiling ordering and quota-scaled private
@@ -278,7 +278,7 @@ test_sel4_root:
     # MEM-ARENAS covers four-holder retry-safe capacity against static and
     # private costs, static-record ownership, arithmetic overflow, retained-leaf
     # reclaim, the per-extent root-CSlot cost generation admission reserves,
-# three record-level ownership cases on the private-growth rollback boundary,
+    # three record-level ownership cases on the private-growth rollback boundary,
     # bounded private-backing scans plus four record-state coverage cases,
     # construction's per-thread transfer aliases, aligned placement across live
     # ordinary untyped regions, and that the allocator's own tables fit the

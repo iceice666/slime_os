@@ -1,11 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-powerbox";
-<<<<<<< HEAD
-  imageClosureIdentity = "55be1b25587391b6d553eb2972fc2cec39c8ce7c7d1132038428363fc0b6c16d";
-=======
-  imageClosureIdentity = "13739783ba27af0315dce579644f5c8691866a27250ba7a53e673933e3aa6bb2";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+  imageClosureIdentity = "13f490088b56138368576d771d92d7e1a6438a965a46d4ad3ebbedbfe92f13ed";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

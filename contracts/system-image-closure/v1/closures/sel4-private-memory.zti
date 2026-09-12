@@ -4,15 +4,9 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-private-memory.zti";
     kind = "file";
-<<<<<<< HEAD
-    identity = "ac14e458dc2e59759f42fb1ccab2b6ae3e9903c69c20db569d8f0964e1bf1cfa";
-  };
-  systemIdentity = "6f51786c09198b0715ad999bb69d06abb56cb9ee5c0d84a04a290e03952b1eb1";
-=======
     identity = "f883311ee3c30022ebbfd4307137f75e4167e0a9887f0a2dcf0d23affde544f3";
   };
-  systemIdentity = "d781f4a4671699d19aadfd87cd29c636eefdc4c6c70026a2942e40191b6c6b23";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+  systemIdentity = "ac4e7518a7d285d0bdeaae43c27e904b9949f46931842e99c68fd20ae630b176";
   implementations = [
     {
       component = "init";
@@ -42,38 +36,29 @@
       artifact = {
         path = "components/testkit/private-memory-probe";
         kind = "tree";
-        identity = "c3291b1ba170593f86f88e2b1fc5e25e34837fc30020e552318081d18c3b448c";
+        identity = "0c026c9488fd383044801830fbffb5f323a608c6b17d245377f05170493dcffb";
       };
-      identity = "cc6b86c78181c858f03b5e3a611362e89efce150a3f5662535991f794269826a";
+      identity = "bbf1ef895d49ea01fe9a6307710ed11179ac571bd80a95b53c7a5a54911a4e33";
       buildProfile = "default";
     };
   ];
   target = {
     profile = "aarch64-sel4-qemu-virt";
     platform = "qemu-arm-virt";
-    sdkRelease = {
-      path = "contracts/system-image-closure/v1/inputs/sdk-release.json";
-      kind = "file";
-      identity = "72f6402b68f42395c400975f2a92fcd45592235fe57edf1829c93cdab82d9497";
-    };
     prefix = {
       path = "contracts/system-image-closure/v1/inputs/sel4-prefix";
       kind = "tree";
-      identity = "c33e54a3948b2ff75b406a4ab26db38f9223e641f5fa321dff3b4ed5106374e9";
+      identity = "8ec18dc551401eacc51c91be90616b51007a58ce8b9bdefccd4611290dfe5cc1";
     };
     toolchain = "nightly-2026-04-04";
-    rustSel4Commit = "070c6a384a01ce0f6c60e081fddc8c40fb2a6132";
+    rustSel4Commit = "d441a880938209f661201704dfbee7b91c5aa905";
   };
   root = {
     role = "embedded-generation";
     implementation = {
       path = "slime-root";
       kind = "tree";
-<<<<<<< HEAD
-      identity = "84f90672cd818d26bb85f35a8b77b9b12598a3269ef8f7d55469e4564a8239b6";
-=======
-      identity = "29249656170ef55ffd3525958e74ac8cfc64927f65aaf98f0a4ea63ea115610f";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+      identity = "6b3ed7033fba780a1eff02ff8eb7cc423c68fa8fc68de75055dada758389012f";
     };
     parameters = [];
   };
@@ -148,7 +133,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "48b5b3d7d9c194d8406056f14d03356bbfc9cf98cccb1d615c964812faa5d3cf";
+        identity = "516bd6c07cfddaa82e945fa5961627fe23db4922f4e69b8a95ed2bee9cd11f97";
       };
     };
     {
@@ -164,7 +149,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "fd996fce05553486f993d0b71fb58583bbd1ad3ec19477198a754a95e47aea3f";
+        identity = "2e7d66052b177ea966dc74054001604a69d78ef989ee5712038db49b5cacd21e";
       };
     };
     {
@@ -180,7 +165,7 @@
       artifact = {
         path = "slime-root/child";
         kind = "tree";
-        identity = "020bdeb47a534c86a28eb7c736ce7af4f3bb63a48dfb11508a40c3cc56d74794";
+        identity = "1495f174a337b83e1efa3ea83ea90615e8cfc4958dea5c385441e141fc3874a7";
       };
     };
     {

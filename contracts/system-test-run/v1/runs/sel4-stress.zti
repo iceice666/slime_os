@@ -1,11 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-stress";
-<<<<<<< HEAD
-  imageClosureIdentity = "a55e44710d9c42fae1f2acd7e0b02637cb29ec625ec85f7438cb371518fe1ce2";
-=======
-  imageClosureIdentity = "a6ffe3843905e054b170e79e3c8e373263e33a88e85ac35a003041b9dbfd7189";
->>>>>>> 2aae277c (fix(sel4/memory): address review findings)
+  imageClosureIdentity = "eef7de3beda49a8ec303b3f51389821531164a9f80682201b30a775fb123af58";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

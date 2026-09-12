@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -12,10 +14,10 @@ from types import ModuleType
 import system_image_closure_contract as image_contract
 import system_test_run_contract as test_contract
 from component_spec import admit_specs, interface_catalogue
-from component_sdk import tree_digest
+from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
 from harness import ROOT
 from system_spec import CompiledSystem, compile_system, derive_manifest
-from zutai_cli import ZutaiError, evaluate
+from zutai_cli import STDLIB, binary
 
 IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1"
 TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v1"
@@ -57,7 +59,6 @@ _IMPLEMENTATION_FIELDS = {"component", "provider", "artifact", "identity", "buil
 _TARGET_FIELDS = {
     "profile",
     "platform",
-    "sdkRelease",
     "prefix",
     "toolchain",
     "rustSel4Commit",
@@ -195,23 +196,39 @@ def _list(value: object, bound: int, label: str) -> list:
     return value
 
 
-def _run_zutai(path: Path, checker: Path, env_var: str, source_bound: int) -> dict:
+def _run_zutai(path: Path, checker: Path, variable: str, source_bound: int) -> dict:
     if not path.is_file():
         _fail(f"record not found: {path}")
     if path.stat().st_size > source_bound:
         _fail(f"{path}: source exceeds bound")
+    environment = os.environ.copy()
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    environment[variable] = str(path)
+    process = subprocess.run(
+        [str(binary()), "run", str(checker)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0 or not process.stdout.startswith("#valid"):
+        detail = (process.stderr or process.stdout).strip()
+        _fail(f"{path}: malformed Zutai input: {detail}")
+    process = subprocess.run(
+        [str(binary()), "json", str(path)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0:
+        _fail(f"{path}: invalid Zutai JSON projection: {(process.stderr or process.stdout).strip()}")
     try:
-        decoded = evaluate("run", checker, input_path=path, env_var=env_var)
-    except ZutaiError as error:
-        _fail(f"{path}: malformed Zutai input: {error}")
-    if not decoded.startswith("#valid"):
-        _fail(f"{path}: malformed Zutai input: {decoded.strip()}")
-    try:
-        raw = evaluate("json", path, input_path=path, env_var=env_var)
-    except ZutaiError as error:
-        _fail(f"{path}: invalid Zutai JSON projection: {error}")
-    try:
-        value = json.loads(raw)
+        value = json.loads(process.stdout)
     except json.JSONDecodeError as error:
         _fail(f"{path}: invalid Zutai JSON projection: {error}")
     return value
@@ -274,7 +291,6 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
     target = _exact(value["target"], _TARGET_FIELDS, "target")
     _bounded_text(target["profile"], contract.MAX_NAME_BYTES, "target.profile")
     _bounded_text(target["platform"], contract.MAX_NAME_BYTES, "target.platform")
-    _artifact(target["sdkRelease"], "target.sdkRelease")
     _artifact(target["prefix"], "target.prefix")
     _bounded_text(target["toolchain"], contract.MAX_TEXT_BYTES, "target.toolchain")
     _bounded_text(target["rustSel4Commit"], contract.MAX_TEXT_BYTES, "target.rustSel4Commit")
@@ -378,34 +394,43 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
     base = source_root.resolve()
     _, system_path = _artifact(value["systemSpec"], "systemSpec", base=base)
     assert system_path is not None
-    specs = {entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())}
-    components = {name: entry.spec for name, entry in specs.items()}
+    components = {entry.name: entry.spec for entry in admit_specs(catalogue=interface_catalogue())}
     system = compile_system(system_path, components=components)
     if system.identity.hex() != value["systemIdentity"]:
         _fail("systemIdentity does not match the compiled system")
     if system.spec["targetRequirement"] != value["target"]["profile"]:
         _fail("system target requirement does not match the closure target profile")
     artifacts: dict[str, Path] = {"systemSpec": system_path}
-    _, sdk = _artifact(value["target"]["sdkRelease"], "target.sdkRelease", base=base)
     _, prefix = _artifact(value["target"]["prefix"], "target.prefix", base=base)
-    assert sdk is not None and prefix is not None
-    artifacts["sdkRelease"] = sdk
+    assert prefix is not None
     artifacts["prefix"] = prefix
-    sdk_record = json.loads(sdk.read_text(encoding="utf-8"))
-    if normalize(sdk_record) != sdk.read_bytes():
-        _fail("SDK release record is not canonical JSON")
-    profiles = [entry for entry in sdk_record.get("profiles", []) if entry.get("profile") == value["target"]["profile"]]
-    if len(profiles) != 1:
-        _fail("SDK release does not contain exactly one selected target profile")
-    profile = profiles[0]
-    if profile.get("platform") != value["target"]["platform"]:
-        _fail("target profile and platform asset do not pair")
-    if sdk_record.get("toolchain") != value["target"]["toolchain"]:
-        _fail("closure toolchain does not match the SDK release")
-    if sdk_record.get("rustSel4", {}).get("commit") != value["target"]["rustSel4Commit"]:
-        _fail("closure rust-sel4 commit does not match the SDK release")
-    if profile.get("prefix", {}).get("treeHash") != value["target"]["prefix"]["identity"]:
-        _fail("closure prefix identity does not match the selected SDK asset")
+    profile_name = value["target"]["profile"]
+    binding = PROFILE_PLATFORMS.get(profile_name)
+    if binding is None:
+        _fail(f"unknown component SDK target profile {profile_name!r}")
+    if binding["platform"] != value["target"]["platform"]:
+        _fail("target profile and platform binding do not pair")
+    pin_table = pins(base)
+    rust_sel4 = pin_table["rust_sel4"]
+    if rust_sel4["toolchain"] != value["target"]["toolchain"]:
+        _fail("closure toolchain does not match the source pin")
+    if rust_sel4["commit"] != value["target"]["rustSel4Commit"]:
+        _fail("closure rust-sel4 commit does not match the source pin")
+    observed_prefix = pin_table[binding["pins"]]
+    for relative, key in (
+        ("bin/kernel.elf", "kernel_sha256"),
+        ("libsel4/include/kernel/gen_config.json", "kernel_config_sha256"),
+        ("libsel4/include/sel4/gen_config.json", "libsel4_config_sha256"),
+        ("support/kernel.dtb", "dtb_sha256"),
+        ("support/platform_gen.yaml", "platform_info_sha256"),
+    ):
+        artifact = prefix / relative
+        if not artifact.is_file():
+            _fail(f"target.prefix is missing pinned artifact {relative}")
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        if digest != observed_prefix[key]:
+            _fail(f"target.prefix {relative} does not match the source pin")
+    specs = {entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())}
     selections = {entry["component"]: entry for entry in value["implementations"]}
     if set(selections) != set(system.spec["components"]):
         _fail("implementation selections do not exactly cover the system components")
@@ -499,10 +524,14 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         _fail(f"no loader submodule declared for platform {platform_name!r}")
     if artifacts["loader"] != (base / expected_loader_path).resolve():
         _fail(f"kernel-loader implementation must be the declared {expected_loader_path} tree")
-    if artifacts["release:target-spec"].name != Path(profile["cargoTarget"]).name:
-        _fail("target-spec release input does not match the selected SDK profile")
-    if artifact_identity(artifacts["release:target-spec"], "file") != profile["targetSpecHash"]:
-        _fail("selected SDK target specification hash does not match its bytes")
+    cargo_target = str(binding["cargo_target"])
+    if not binding["cargo_target_is_spec"]:
+        _fail("system-image closures require a file-backed target specification")
+    expected_target_spec = (
+        base / "deps" / "rust-sel4" / "support" / "targets" / Path(cargo_target).name
+    ).resolve()
+    if artifacts["release:target-spec"] != expected_target_spec:
+        _fail("target-spec release input does not match the selected target profile")
     expected_root_target = (
         "aarch64-sel4-roottask-minimal.json"
         if value["target"]["profile"].startswith("aarch64-")
