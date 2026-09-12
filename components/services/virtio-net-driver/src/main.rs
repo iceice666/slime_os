@@ -355,7 +355,13 @@ fn drain_requests(
     state_changed: u32,
 ) {
     let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
-    loop {
+    // One ring's worth per pass: the client owns its submit cursor and may
+    // keep it a step ahead of every consumption, so `Empty` is not a bound
+    // on its own. A ring holds at most `IO_SLOTS` entries, and one published
+    // after the pass ends arrives with the client's next signal, so the bound
+    // costs a client that keeps to its ring nothing; completions and the
+    // other queue get their turn regardless.
+    for _ in 0..IO_SLOTS {
         let submission = {
             let link = if transmit {
                 &mut driver.tx

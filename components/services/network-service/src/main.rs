@@ -285,7 +285,13 @@ fn main(_: u32) {
                         .filter(|delegation| delegation.magic == network_service::DELEGATION_MAGIC)
                     {
                         if let Err(reason) = accept_delegation(client, &delegation) {
-                            refuse_client(client, reason);
+                            refuse_client(
+                                client,
+                                reason,
+                                &mut capabilities,
+                                &mut sockets,
+                                &mut draining,
+                            );
                         }
                         continue;
                     }
@@ -300,27 +306,8 @@ fn main(_: u32) {
                         {
                             // The client exits once it has this reply, and the
                             // root then reclaims every page it lent; nothing
-                            // below may touch that queue again. Everything it
-                            // still holds goes with it: an open socket is
-                            // closed as OP_CLOSE would close it, so its slot
-                            // returns once the peer answers or the bound
-                            // expires, and a closed client is never served
-                            // again to settle it.
-                            client.closed = true;
-                            client.data = None;
-                            for index in 0..MAX_CAPABILITIES {
-                                if capabilities[index]
-                                    .is_some_and(|cap| cap.holder == client.holder)
-                                {
-                                    release_capability(
-                                        client,
-                                        &mut capabilities,
-                                        index,
-                                        &mut sockets,
-                                        &mut draining,
-                                    );
-                                }
-                            }
+                            // below may touch that queue again.
+                            close_client(client, &mut capabilities, &mut sockets, &mut draining);
                             Some((0, network_service::CAPABILITY_NONE, 0))
                         }
                         Some(request) if valid_network_request(&request) => dispatch(
@@ -371,7 +358,13 @@ fn main(_: u32) {
                 ) {
                     Ok(served) => progress |= served,
                     Err(reason) => {
-                        refuse_client(client, reason);
+                        refuse_client(
+                            client,
+                            reason,
+                            &mut capabilities,
+                            &mut sockets,
+                            &mut draining,
+                        );
                         progress = true;
                     }
                 }
@@ -462,13 +455,39 @@ fn accept_delegation(
 
 /// Close a client that stepped outside the protocol. Its queue and pages are
 /// forgotten (their loans stay charged to it until the root settles them), its
-/// endpoint is no longer received, and every other client is unaffected.
-fn refuse_client(client: &mut Client, reason: &[u8]) {
+/// endpoint is no longer received, its capabilities are released as its
+/// shutdown would release them, and every other client is unaffected.
+fn refuse_client(
+    client: &mut Client,
+    reason: &[u8],
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    sockets: &mut SocketSet<'static>,
+    draining: &mut Draining,
+) {
     debug_write(b"[network-service] client refused reason=");
     debug_write(reason);
     debug_write(b"\n");
+    close_client(client, capabilities, sockets, draining);
+}
+
+/// End a client, whether it asked to or was refused: it is never received or
+/// served again, its queue is forgotten, and everything it still holds goes
+/// with it through the same path as `OP_CLOSE`, so an open socket's slot
+/// returns once the peer answers or the bound expires rather than staying
+/// with a holder nothing will ever settle.
+fn close_client(
+    client: &mut Client,
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    sockets: &mut SocketSet<'static>,
+    draining: &mut Draining,
+) {
     client.closed = true;
     client.data = None;
+    for index in 0..MAX_CAPABILITIES {
+        if capabilities[index].is_some_and(|cap| cap.holder == client.holder) {
+            release_capability(client, capabilities, index, sockets, draining);
+        }
+    }
     client.pending_connect = None;
 }
 

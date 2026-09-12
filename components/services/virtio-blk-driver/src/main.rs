@@ -300,7 +300,13 @@ fn drain(
         ring_index,
     } = *device;
     let mut payload = [0u8; REQUEST_PAYLOAD_BYTES];
-    loop {
+    // One ring's worth per pass: the client owns its submit cursor and may
+    // keep it a step ahead of every consumption, so `Empty` is not a bound
+    // on its own. A ring holds at most `IO0_SLOTS` entries, and one published
+    // after the pass ends arrives with the client's next signal, so the bound
+    // costs a client that keeps to its ring nothing; the peer command and the
+    // shutdown get their turn regardless.
+    for _ in 0..IO0_SLOTS {
         let submission = match queue.take_request(&mut payload, DATA_BYTES) {
             Ok(value) => {
                 *ring_inconsistent = false;

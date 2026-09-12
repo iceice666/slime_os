@@ -215,6 +215,12 @@ class Peer:
         if frame is None:
             return []
         self.ledger.received.append(frame)
+        # A NIC filters by destination before any header above is read: on
+        # this backend every frame the guest emits arrives, so a frame the
+        # peer's own address does not name is recorded and never answered,
+        # whatever it carries.
+        if frame.destination not in (self.mac, BROADCAST):
+            return []
         replies: list[bytes] = []
         if frame.kind == "arp-request" and frame.arp_target_ip == self.ip and frame.arp_sender_mac and frame.arp_sender_ip:
             replies.append(self.emit(ethernet(frame.source, self.mac, ETHERTYPE_ARP, arp(ARP_REPLY, self.mac, self.ip, frame.arp_sender_mac, frame.arp_sender_ip))))

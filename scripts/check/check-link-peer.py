@@ -102,6 +102,27 @@ def check_peer_learns_the_guest_and_pings_it() -> None:
     expect(peer.ledger.echo_replies_matching(0) == [], "an echo reply matched a foreign identifier")
 
 
+def check_peer_ignores_frames_for_other_macs() -> None:
+    # The socket backend delivers every frame the guest emits, so the peer
+    # itself has to drop what a NIC would: a frame naming the peer's IP behind
+    # another MAC is recorded and answered by nothing, whatever it carries.
+    peer = lp.Peer()
+    other_mac = bytes.fromhex("020000000099")
+    syn = lp.tcp_segment(lp.GUEST_IP, lp.PEER_IP, 50003, lp.ECHO_PORT, 7, 0, lp.TCP_SYN)
+    misaddressed = lp.ethernet(other_mac, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, syn))
+    expect(peer.handle(misaddressed) == [] and peer.tcp.flows == {}, "a SYN addressed to another MAC opened a flow")
+    refused = lp.tcp_segment(lp.GUEST_IP, lp.PEER_IP, 50004, lp.REFUSED_PORT, 7, 0, lp.TCP_SYN)
+    expect(peer.handle(lp.ethernet(other_mac, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, refused))) == [] and peer.tcp.refused == [], "a SYN addressed to another MAC was refused rather than dropped")
+    echo = lp.ethernet(other_mac, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_ICMP, lp.icmp_echo(lp.ICMP_ECHO_REQUEST, 1, 1, b"")))
+    expect(peer.handle(echo) == [], "an echo request addressed to another MAC was answered")
+    arp = lp.ethernet(other_mac, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), lp.PEER_IP))
+    expect(peer.handle(arp) == [], "an ARP request addressed to another MAC was answered")
+    expect(peer.ledger.count_received("tcp") == 2 and peer.ledger.count_received("icmp-echo-request") == 1 and peer.ledger.count_received("arp-request") == 1, "misaddressed frames left the ledger")
+    unicast = lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), lp.PEER_IP))
+    expect(len(peer.handle(unicast)) == 1, "a unicast ARP request for the peer's own MAC went unanswered")
+    expect(len(peer.ledger.sent) == 1, "the peer sent something besides the one ARP reply")
+
+
 def guest_segment(port: int, seq: int, ack: int, flags: int, payload: bytes = b"", destination_port: int = lp.ECHO_PORT) -> bytes:
     segment = lp.tcp_segment(lp.GUEST_IP, lp.PEER_IP, port, destination_port, seq, ack, flags, payload)
     return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment))
@@ -185,11 +206,12 @@ def main() -> None:
     check_frames_decode_and_pad()
     check_peer_answers_arp_and_echo()
     check_peer_learns_the_guest_and_pings_it()
+    check_peer_ignores_frames_for_other_macs()
     check_tcp_echo_server()
     check_tcp_echo_then_close()
     (kind,) = struct.unpack("!H", struct.pack("!H", lp.ETHERTYPE_ARP))
     expect(kind == lp.ETHERTYPE_ARP, "struct sanity")
-    print("link peer check: ARP and ICMP echo answered exactly for the peer's own address, the guest learned and pinged, TCP echoed in order, closed first where declared and refused where declared, and the ledger honest")
+    print("link peer check: ARP and ICMP echo answered exactly for the peer's own address, frames for another MAC recorded and unanswered, the guest learned and pinged, TCP echoed in order, closed first where declared and refused where declared, and the ledger honest")
 
 
 if __name__ == "__main__":
