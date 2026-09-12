@@ -1500,14 +1500,20 @@ def export(
                 ),
             }
         )
-    system_records = [
-        component_sdk_system.export_asset(
-            destination,
-            source,
-            sdk_module=sys.modules[__name__],
-            profile_records=profile_records,
+    # The corpus publishes one closure, and a closure names one target profile.
+    # A release that does not export that profile has no prefix provenance for
+    # the corpus to bind, so it publishes none; `systems` is a list precisely so
+    # a release can carry a different number of them.
+    system_records: list[dict] = []
+    if component_sdk_system.required_profile(source) in profiles:
+        system_records.append(
+            component_sdk_system.export_asset(
+                destination,
+                source,
+                sdk_module=sys.modules[__name__],
+                profile_records=profile_records,
+            )
         )
-    ]
 
     crates = []
     for relative, package in EXPORT_CRATES:

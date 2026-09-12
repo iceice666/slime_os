@@ -1,10 +1,11 @@
 set(KernelPlatform "qemu-arm-virt" CACHE STRING "")
 set(KernelSel4Arch "aarch64" CACHE STRING "")
 set(KernelArmHypervisorSupport ON CACHE BOOL "")
-# MEM-ARENAS: four adversarial 256 MiB private holders plus the product graph
-# need 19 address bits in the root CSpace. This CNode costs 16 MiB of kernel
-# memory at 32 bytes per slot; the 2 GiB QEMU profile's capacity report includes
-# that cost and actual free slots. Physical targets keep their existing values.
+# The root CSpace needs 19 address bits to hold the allocator's descriptor
+# tables alongside the product graph. This CNode costs 16 MiB of kernel memory
+# at 32 bytes per slot. Physical targets keep their existing 12-bit default, so
+# `slime-root` selects its descriptor-table sizes from the linked kernel's own
+# `ROOT_CNODE_SIZE_BITS` rather than from a per-platform allowlist.
 set(KernelRootCNodeSizeBits 19 CACHE STRING "" FORCE)
 # B48's MCS half, deferred with the reason recorded rather than left blank.
 #

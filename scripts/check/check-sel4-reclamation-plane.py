@@ -156,13 +156,11 @@ def main() -> None:
     # that it specifically was reclaimed rather than leaked.
     if int(terminal.group(7)) == 0:
         fail("no private-backing extent was retained for reuse")
-    # An arena release that returned slots, extents, and the page charge but
-    # stranded an `AllocationRecord` leaks descriptor capacity silently: this
-    # plane's 80 iterations stay far below the pool, so every liveness and
-    # reuse assertion above still passes while a longer-running system
-    # eventually fails construction with `ArenaSlotTableFull`. The plane ends
-    # with no live task, so the exact law holds: every allocation descriptor
-    # is back.
+    # The plane ends with no live task, so the exact law holds: every
+    # allocation descriptor the pool declares must be free again. The liveness
+    # and reuse assertions above cannot stand in for it — they are satisfied by
+    # a release that returns slots, extents, and the page charge while
+    # stranding an `AllocationRecord`.
     capacity = re.search(
         r"SLIME_ROOT allocator baseline live_slots=\d+ live_objects=\d+ live_bytes=\d+ "
         r"allocation_descriptor_capacity=(\d+) extent_descriptor_capacity=(\d+)",

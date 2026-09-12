@@ -33,6 +33,18 @@ COPY_ROOTS = (
 )
 
 
+def required_profile(source: Path) -> str:
+    """The target profile this corpus's closure names, read from the closure itself.
+
+    The corpus publishes exactly one closure, and a closure names one target
+    profile. An SDK release that does not export that profile cannot carry a
+    corpus whose prefix provenance resolves, so the caller must not stage one.
+    """
+    from system_image_closure import compile_closure
+
+    return compile_closure(source / CLOSURE_PATH).value["target"]["profile"]
+
+
 def export_asset(
     destination: Path,
     source: Path,

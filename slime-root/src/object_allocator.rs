@@ -141,8 +141,8 @@ const GRANULE_BYTES: usize = 4096;
 /// Largest independently reclaimable private-data extent.
 const MAX_PRIVATE_EXTENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PRIVATE_EXTENT_PAGES: usize = MAX_PRIVATE_EXTENT_BYTES / GRANULE_BYTES;
-/// Largest internal sizing case MEM-ARENAS promises the host planner can
-/// represent without changing the public runtime ceiling.
+/// Largest quota the host planner can represent. Independent of the public
+/// runtime ceiling, which `PrivateBackingLayout::for_quota` clamps separately.
 pub const MAX_PLANNED_PRIVATE_PAGES: usize = 256 * 1024 * 1024 / GRANULE_BYTES;
 /// Maximum queue pages allocated as one physically contiguous run.
 const MAX_CONTIGUOUS_GRANULES: usize = 64;

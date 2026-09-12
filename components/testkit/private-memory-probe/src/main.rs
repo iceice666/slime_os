@@ -167,9 +167,9 @@ fn serve_worker_rpc() -> ! {
         .unwrap_or_else(|error| fail(b"side-effect notification missing", error));
     let growth_done = slime_rt::resolve_binding(GROWTH_DONE_WAIT)
         .unwrap_or_else(|error| fail(b"growth-done notification missing", error));
-    // Exactly one request, then park: the plane's claim is that the growth did
-    // not restart this RPC, so a second delivery must be visible as a parked
-    // worker's unanswered receive rather than absorbed by another iteration.
+    // Serve exactly one request, then park: a second delivery must remain
+    // unanswered on a parked worker rather than be absorbed by another
+    // iteration of this loop.
     let mut request = [0u8; slime_rt::MAX_MSG];
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     let length = slime_rt::recv_blocking(LOOPBACK_SLOT, &mut request, &mut caps);

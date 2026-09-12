@@ -144,12 +144,29 @@ def main() -> None:
             else:
                 fail(f"system corpus export accepted a {label}")
 
+        # The corpus binds one closure, and that closure names one target
+        # profile, so a release exporting a different profile must publish no
+        # corpus rather than fail. The requirement is read from the closure
+        # rather than restated here: a corpus retargeted at another platform
+        # must move this gate's own expectation with it.
+        corpus_profile = component_sdk_system.required_profile(ROOT)
+        if corpus_profile != PROFILE:
+            fail(
+                f"the published corpus requires {corpus_profile!r}, but this gate "
+                f"exports {PROFILE!r}"
+            )
+        if [entry["name"] for entry in current_record["systems"]] != [
+            component_sdk_system.SYSTEM_NAME
+        ]:
+            fail("a release exporting the corpus profile did not publish the corpus")
+
     print(
         "component SDK system image: two immutable SDK releases built the declared "
         "sel4-channel closure without a slime_os checkout, the current release booted "
         "through its declared QEMU test run, rollback reproduced every previous "
-        "build-result artifact identity before booting it again, and corpus export "
-        "refused missing or mismatched outer profile provenance"
+        "build-result artifact identity before booting it again, corpus export "
+        "refused missing or mismatched outer profile provenance, and the published "
+        "corpus resolved its required target profile from its own closure"
     )
 
 

@@ -53,16 +53,12 @@ EXTRA_RUNS = {
     ),
 }
 
-# Additional invocations that ARE closure-reachable, unlike the arms above:
-# `check-sel4-private-memory-plane.py` boots two more AArch64 images, each
-# through its own named closure's fault-injection root role
-# (`build_named_image`), to prove large-map retry and rollback. Each is its own
-# distinct image with its own execution inputs, so each needs its own frozen
-# record on the same terms as the plane's default arm -- omitting them left two
-# of the plane's three image cases with no record `check-system-test-run.py`
-# could freeze or validate. The tuple is `(run name, closure name, execution
-# profile)`; the image resolves through the closure, so there is no literal
-# path to name.
+# Additional invocations that ARE closure-reachable, unlike the arms above.
+# Every separately booted image needs its own frozen record, because
+# `check-system-test-run.py` can only freeze and validate an image's execution
+# inputs through a record naming it. The tuple is `(run name, closure name,
+# execution profile)`; the image resolves through the closure, so there is no
+# literal path to name.
 EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "sel4-private-memory": (
         (
