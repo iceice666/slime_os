@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -17,7 +15,7 @@ from component_spec import admit_specs, interface_catalogue
 from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
 from harness import ROOT
 from system_spec import CompiledSystem, compile_system, derive_manifest
-from zutai_cli import STDLIB, binary
+from zutai_cli import ZutaiError, evaluate
 
 IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2"
 TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v1"
@@ -201,34 +199,18 @@ def _run_zutai(path: Path, checker: Path, variable: str, source_bound: int) -> d
         _fail(f"record not found: {path}")
     if path.stat().st_size > source_bound:
         _fail(f"{path}: source exceeds bound")
-    environment = os.environ.copy()
-    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
-    environment[variable] = str(path)
-    process = subprocess.run(
-        [str(binary()), "run", str(checker)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0 or not process.stdout.startswith("#valid"):
-        detail = (process.stderr or process.stdout).strip()
-        _fail(f"{path}: malformed Zutai input: {detail}")
-    process = subprocess.run(
-        [str(binary()), "json", str(path)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0:
-        _fail(f"{path}: invalid Zutai JSON projection: {(process.stderr or process.stdout).strip()}")
     try:
-        value = json.loads(process.stdout)
+        decoded = evaluate(command="run", target=checker, input_path=path, env_var=variable)
+    except ZutaiError as error:
+        _fail(f"{path}: malformed Zutai input: {error}")
+    if not decoded.startswith("#valid"):
+        _fail(f"{path}: malformed Zutai input: {decoded.strip()}")
+    try:
+        raw = evaluate(command="json", target=path, input_path=path, env_var=variable)
+    except ZutaiError as error:
+        _fail(f"{path}: invalid Zutai JSON projection: {error}")
+    try:
+        value = json.loads(raw)
     except json.JSONDecodeError as error:
         _fail(f"{path}: invalid Zutai JSON projection: {error}")
     return value

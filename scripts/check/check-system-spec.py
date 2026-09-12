@@ -89,16 +89,12 @@ POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
 POST_BASELINE_OBJECTS = ("private-memory-budget",)
 
 # Sections one *specific* system's frozen baseline predates, unlike the ones
-# above: `sel4-matrix` and other systems already carried real
-# `notificationGrants`/`notificationBindings` content before C10.4 added
-# `sel4-private-memory`'s `private-memory-side-effect-ready` notification, so
-# excusing these two sections for every system — as a flat
-# `POST_BASELINE_SECTIONS` entry once did — silently stopped comparing
-# baselines that had real notification content to compare. Keyed per system,
-# on the same terms as `POST_BASELINE_INSTANCE_FIELDS`/`POST_BASELINE_GRANTS`
-# below: an equivalent fact in another system remains baseline-visible.
-# `check_post_baseline` independently compares exactly the sections named here
-# against the system spec's own declared notifications.
+# above. Keyed per system, on the same terms as
+# `POST_BASELINE_INSTANCE_FIELDS`/`POST_BASELINE_GRANTS` below: an equivalent
+# fact in another system stays baseline-visible, because other systems carry
+# real `notificationGrants`/`notificationBindings` content their baselines can
+# still compare. `check_post_baseline` independently compares exactly the
+# sections named here against the system spec's own declared notifications.
 POST_BASELINE_SYSTEM_SECTIONS: dict[str, frozenset[str]] = {
     "sel4-private-memory": frozenset({"notificationGrants", "notificationBindings"}),
 }

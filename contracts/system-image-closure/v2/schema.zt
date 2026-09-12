@@ -1,4 +1,4 @@
--- Slime OS canonical system-image closure contract, version 1 (CP11).
+-- Slime OS canonical system-image closure contract, version 2 (CP11).
 --
 -- A closure names every identity-bearing input to one bootable image build. It
 -- references the logical system and immutable build inputs instead of copying
