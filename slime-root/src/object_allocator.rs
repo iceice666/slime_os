@@ -2977,10 +2977,7 @@ mod tests {
     /// pool rather than restated from the layout.
     ///
     /// The two must agree because generation admission adds this cost before
-    /// any child starts. When it counted only descriptors, a plan landing in
-    /// the two-or-three-slot-per-holder margin was admitted and then died in
-    /// task staging with `SlotsExhausted`, children already running — the
-    /// exact mid-construction failure the total-slot check exists to refuse.
+    /// any child starts.
     #[test]
     fn quota_root_slot_cost_counts_every_extent_parent() {
         // On its own large stack, as every allocator-holding test here is:

@@ -9,7 +9,7 @@
 | Work items | 01a07a2d-003d-77fc-9df8-dda85ed9a083 |
 | Gates | `just system_spec_check`, `just test_sel4_root`, `just private_memory_check`, `just sel4_reclamation_check`, `just tasks_check`, `just fmt_check_all`, `just lint_all`, `just devlog_check` |
 | Trigger | PR #25 reviews requested moving implementation history out of configuration and allocator comments, pinning the denied private-memory probe endpoint to its hard-coded ABI slot, refusing capacity reports whose aggregate ordinary bytes cannot realize the aligned extent sequence, correcting the contradicted MEM-ARENAS exit, and updating stale rollback commentary; the branch also conflicted with main |
-| Baseline | Capacity branch `640a6cba`, review-fix merge `b9d4027f`, main `a1119ca6`, pre-alignment review head `12d73649`, and latest reviewed head `6f97fd3b` |
+| Baseline | Capacity branch `640a6cba`, review-fix merge `b9d4027f`, main `a1119ca6`, pre-alignment review head `12d73649`, and latest reviewed head `510da4c2` |
 
 ## Summary
 
@@ -28,6 +28,11 @@ current retained-allocation rollback and reclamation requirements. Integrated
 main without reverting the branch's closure-provenance cutover or 19-bit QEMU
 root-CNode pins.
 
+A subsequent review round (commit `510da4c283`) found the same
+historical-narrative pattern in the `quota_root_slot_cost_counts_every_extent_parent`
+test's doc comment; it now states only the current descriptor-plus-extent-parent-slot
+cost invariant.
+
 ## Changes
 
 | Area | Change | Preserved invariant |
@@ -37,6 +42,7 @@ root-CNode pins.
 | Allocator provenance comment | Removed the replaced-array narrative, observed boot refusal, and exact historical capacity comparison; retained only the current bounded-table invariant | Implementation comments state current invariants; `devlog/2026-08-28-io1-hardware-resource-authority/` owns the investigation evidence |
 | Capacity placement | Replay one static extent followed by the planned private table and data extents for every holder against copied live untyped watermarks | `ordinary_layout=1` implies `provision_extent` can select a single aligned region for every planned extent; the existing restricted qualification now reports the honest `ordinary_layout=0` alongside `fit=0` |
 | Remaining implementation comments | Reduced reclamation and backing-plan comments to current slot-count, runtime-ceiling, and extent-shape invariants | Investigation evidence and future work remain in devlogs or architecture documentation |
+| Allocator admission-cost test comment | Removed `quota_root_slot_cost_counts_every_extent_parent`'s `SlotsExhausted` historical account; retained only the current descriptor-plus-extent-parent-slot cost invariant | Implementation comments state current invariants; `devlog/2026-09-10-admission-extent-slots-and-rv64-sdk-prefix/` already records the historical defect and fix |
 | MEM-ARENAS state | Reopened the milestone and replaced its contradicted observed exit with the new per-region placement result; appended a correction to the original devlog | A milestone remains done only while every exit condition has observed supporting evidence |
 | Private rollback comment | Replaced extent-revocation wording with the live transaction boundary: unmap in-flight frames, retain typed reusable records and extents, and preserve committed mappings | Documentation matches the non-destructive rollback mechanism |
 | Reclamation probe comment | Removed work-item, gate, and refusal-history narration; retained only the local requirement to allocate private backing before the deliberate fault | Implementation comments state the behavior required by the probe |
@@ -84,6 +90,9 @@ root-CNode pins.
 | `just contracts_check`, `just generation_check` | Contract corpus passed; two isolated generation builds were byte-identical and four CPU-budget mutations were refused | Direct |
 | `just system_test_run_check`, `just system_image_closure_aggregate_check` | 48 run records matched their gates; all 52 regenerated closures remained covered | Direct |
 | Index conflict resolution | Zero unresolved Git index entries after staging the regenerated corpus and combined index | Direct |
+| `just test_sel4_root` after admission-cost comment trim | 233/233 passed across 19 modules | Direct |
+| `just fmt_check_all`, `just lint_all` after admission-cost comment trim | Passed with warnings denied | Direct |
+| `just devlog_check` after updating this entry | Passed | Direct |
 
 ## Decisions
 
@@ -109,6 +118,7 @@ root-CNode pins.
 - Review: [PR #25 contradicted MEM-ARENAS exit](https://github.com/iceice666/slime_os/pull/25#discussion_r3986304556).
 - Review: [PR #25 stale private rollback invariant](https://github.com/iceice666/slime_os/pull/25#discussion_r3986304561).
 - Review: [PR #25 reclamation probe comment ownership](https://github.com/iceice666/slime_os/pull/25#discussion_r3986304566).
+- Review: [PR #25 admission-cost test historical narrative finding](https://github.com/iceice666/slime_os/pull/25#discussion_r3994347420).
 - Existing provenance investigation: [IO1 hardware resource authority](../2026-08-28-io1-hardware-resource-authority/index.md#decisions).
 - Owning rationale: [capacity ceilings](../../docs/directions/34-capacity-ceilings.md#single-core-is-a-config-value-with-an-assurance-price).
 - Raw transcripts: session command outputs; no physical evidence collected or rewritten.
