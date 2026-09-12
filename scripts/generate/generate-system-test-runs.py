@@ -41,15 +41,28 @@ CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 # chains *within* it, and those chains stay in their owning checker.
 MARKER_CONTRACT = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e"
 
-# Multi-platform checker invocations whose non-default arm is not yet closure
-# reachable. The tuple is `(run name, execution profile, image name)`. Keeping
-# it here makes the second execution a frozen test-run input while CP15's
-# closure migration remains an explicit separate milestone.
-EXTRA_RUNS = {
+# Multi-platform checker invocations whose non-default arm is not closure
+# reachable, so the record names a literal image instead of resolving one.
+# `just riscv64_qemu_check` is the recipe that invokes these, and every target
+# it names with `--platform qemu-riscv-virt` and can execute belongs here: a
+# real invocation without a record leaves its execution profile and image
+# provenance unfrozen. The tuple is `(run name, execution profile, image
+# name)`.
+EXTRA_RUNS: dict[str, tuple[str, str, str]] = {
+    "sel4-generation": (
+        "sel4-generation-qemu-riscv-virt",
+        "qemu-riscv-virt",
+        "slime-sel4-generation-qemu-riscv-virt.elf",
+    ),
     "sel4-private-memory": (
         "sel4-private-memory-qemu-riscv-virt",
         "qemu-riscv-virt",
         "slime-sel4-private-memory-qemu-riscv-virt.elf",
+    ),
+    "sel4-rollback": (
+        "sel4-rollback-qemu-riscv-virt",
+        "qemu-riscv-virt",
+        "slime-sel4-rollback-qemu-riscv-virt.elf",
     ),
 }
 

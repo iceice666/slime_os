@@ -454,10 +454,33 @@ fn private_memory_phase(service: sel4::cap::Endpoint) {
     if initial == 0 && base != 0 {
         flags |= REPORT_MEM_QUERY_OK;
     }
-    if first == 0 && first_base == base {
-        flags |= REPORT_MEM_FIRST_GROWTH_OK | REPORT_MEM_ZEROED;
-    }
     let base = base as usize;
+    if first == 0 && first_base as usize == base {
+        flags |= REPORT_MEM_FIRST_GROWTH_OK;
+    }
+    // The grown page must read as zero before anything writes it: a growth
+    // that recycled a frame with contents is otherwise indistinguishable from
+    // a fresh one, since the pattern store below would overwrite the evidence.
+    let mut zeros = true;
+    for offset in [0usize, 8, PAGE_BYTES - 8] {
+        let addr = base + offset;
+        // SAFETY: the root mapped one read-write granule at `base` before
+        // answering the growth above, `addr` is inside it and 8-byte aligned,
+        // and no Rust reference aliases it.
+        let observed = unsafe { (addr as *const u64).read_volatile() };
+        if observed != 0 {
+            zeros = false;
+            sel4::debug_println!("SLIME_CHILD mem nonzero addr={addr:#x} value={observed:#x}");
+        }
+    }
+    if zeros {
+        flags |= REPORT_MEM_ZEROED;
+    }
+    sel4::debug_println!(
+        "SLIME_CHILD mem read base={base:#x} pages=1 bytes={PAGE_BYTES} zeroed={}",
+        u8::from(zeros),
+    );
+    // SAFETY: as above; the mapping is read-write, so this store is permitted.
     unsafe { (base as *mut u64).write_volatile(MEM_PATTERN) };
     let (failed, _) = call_grow(service, 2);
     let (after, after_base) = grow(service, 0);

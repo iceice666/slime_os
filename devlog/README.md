@@ -437,3 +437,4 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-12 | [Closure contract v2, descriptor conservation, and two derived report facts](2026-09-12-closure-contract-v2-and-descriptor-conservation/index.md) | Change | Verified | MEM-ARENAS |
 | 2026-09-12 | [Comment ownership across four files, and closure decoding through the shared evaluator](2026-09-12-comment-ownership-and-closure-evaluator-cache/index.md) | Change | Verified | MEM-ARENAS |
 | 2026-09-12 | [A single-profile SDK export could not publish, and five more comment-ownership fixes](2026-09-12-corpus-profile-and-comment-ownership/index.md) | Defect | Verified | MEM-ARENAS |
+| 2026-09-12 | [The descriptor tables are `.data`, not `.bss`, and three RV64 arms had no record](2026-09-12-descriptor-residency-and-rv64-run-records/index.md) | Defect | Verified | MEM-ARENAS |

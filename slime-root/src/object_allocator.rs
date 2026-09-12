@@ -73,14 +73,16 @@ const KERNEL_ROOT_CNODE_SLOTS: usize = 1 << sel4::sel4_cfg_usize!(ROOT_CNODE_SIZ
 /// Whether this image can afford descriptor tables sized for
 /// [`MAX_PLANNED_PRIVATE_PAGES`] holders.
 ///
-/// The tables are `.bss`, and in this root `.bss` is capacity, not just
-/// memory: the seL4 loader creates one root CSlot per page of the root image
-/// before the root runs, so the ~4 MiB `AllocationRecord` array alone spends
-/// ~1026 root CSlots. A kernel narrower than [`MAX_ROOT_CSLOTS`] — every
-/// physical board's 12-bit default — has 4096 slots in total, so those tables
-/// would consume the CSpace before `admit_total_slots` ever evaluates the
-/// product graph. Such an image keeps the 4096-record envelope, which bounds
-/// private backing well above the 512-page runtime ceiling
+/// The tables are `.data`, not `.bss`: [`AllocationRecord::EMPTY`],
+/// [`ArenaAllocation::EMPTY`], and the list-head sentinels are `MAX`-valued,
+/// so the image carries their bytes. In this root image size is capacity, not
+/// just memory: the seL4 loader creates one root CSlot per page of the root
+/// image, so the ~4 MiB `AllocationRecord` array alone spends ~1026 root
+/// CSlots. A kernel narrower than [`MAX_ROOT_CSLOTS`] — every physical board's
+/// 12-bit default — has 4096 slots in total, so these tables would consume the
+/// CSpace before `admit_total_slots` ever evaluates the product graph. Such an
+/// image keeps the 4096-record envelope, which bounds private backing well
+/// above the 512-page runtime ceiling
 /// [`crate::private_memory::MAX_REGION_PAGES`] enforces.
 const LARGE_DESCRIPTOR_TABLES: bool = KERNEL_ROOT_CNODE_SLOTS >= MAX_ROOT_CSLOTS;
 /// Root-owned task allocation descriptors.
@@ -3712,9 +3714,10 @@ mod tests {
         assert!(allocation.is_mapped());
     }
 
-    /// The allocator's tables are `.bss`, and the seL4 loader spends one root
-    /// CSlot per page of the root image before the root runs. Tables the
-    /// booting kernel's own CNode cannot pay for make the image unbootable
+    /// The seL4 loader spends one root CSlot per page of the root image before
+    /// the root runs, and it maps each segment's `memsz`, so the allocator's
+    /// tables are charged whether they are initialized or zero-backed. Tables
+    /// the booting kernel's own CNode cannot pay for make the image unbootable
     /// before admission is ever evaluated, so they must be sized against the
     /// kernel actually linked, not against the widest one supported. A
     /// quarter of the CSpace is the budget: the rest carries the product

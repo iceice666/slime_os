@@ -1,9 +1,9 @@
 {
   formatVersion = 1;
-  name = "sel4-filesystem";
-  imageClosureIdentity = "063c7a1a6a3127c8724d079de80a1231455c0a433d6af9b5ff5a76b5d9313f01";
+  name = "sel4-rollback-qemu-riscv-virt";
+  imageClosureIdentity = "";
   executionKind = "emulator";
-  executionProfile = "qemu-arm-virt";
+  executionProfile = "qemu-riscv-virt";
   disks = [
     {
       name = "disk-0";
@@ -21,7 +21,13 @@
       writable = false;
     };
   ];
-  faultControls = [];
+  faultControls = [
+    {
+      kind = "corruption";
+      target = "";
+      value = "";
+    };
+  ];
   timeoutSeconds = 240;
   markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
   forbiddenOutcomes = [

@@ -67,7 +67,10 @@ IMAGES_WITHOUT_CLOSURE = {
     "slime-sel4-bcm2712-rpi5.elf": "a physical Raspberry Pi 5 image, outside the QEMU closure corpus",
     "slime-sel4-graph-cv1800b-duo-test-terminator.elf": "a Milk-V Duo board image, outside the QEMU closure corpus",
     "slime-sel4-graph.elf": "check-sel4-component-graph.py's --no-build reads this fixed legacy path only for check-external-component-admission.py's mixed-source generation",
+    "slime-sel4-generation-qemu-riscv-virt.elf": "the RV64 arm of the generation plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-private-memory-qemu-riscv-virt.elf": "MEM-LARGE adds the RV64 execution arm before CP15 migrates its image build to closure identity",
+    "slime-sel4-rollback-qemu-riscv-virt.elf": "the RV64 arm of the rollback plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
+    "slime-sel4-qemu-riscv-virt.elf": "the RV64 arm of the product root-boot aggregate; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
 }
 
 
@@ -86,7 +89,16 @@ GENERATOR_MODULE = load_generator()
 
 
 def booted_images() -> dict[str, set[str]]:
-    """Every `build/slime-*.elf` a check script names, and which scripts do."""
+    """Every `build/slime-*.elf` a check script names, and which scripts do.
+
+    A multi-platform plane composes its non-default image name rather than
+    writing it out — `f"slime-sel4-rollback{suffix}.elf"` with `suffix` taken
+    from the selected platform — so the literal scan alone would report that no
+    checker boots it and reject its exemption. Those names are expanded here
+    from the platform vocabulary the same checker declares, because an image a
+    recipe really boots must be visible to this gate whether or not its name is
+    spelled in one piece.
+    """
     found: dict[str, set[str]] = {}
     for path in sorted(CHECK_ROOT.glob("*.py")):
         text = path.read_text(encoding="utf-8")
@@ -96,6 +108,11 @@ def booted_images() -> dict[str, set[str]]:
         ):
             for match in re.finditer(pattern, text):
                 found.setdefault(match.group(1), set()).add(path.name)
+        for stem in re.findall(r'f"(slime-[a-z0-9-]+)\{suffix\}\.elf"', text):
+            for platform in re.findall(r'^\s+"(qemu-[a-z0-9-]+)":', text, re.MULTILINE):
+                if platform == "qemu-arm-virt":
+                    continue
+                found.setdefault(f"{stem}-{platform}.elf", set()).add(path.name)
     if not found:
         fail("no check script names a plane image, so this gate asserts nothing")
     return found
