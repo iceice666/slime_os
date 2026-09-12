@@ -45,7 +45,7 @@
     implementation = {
       path = "deps/rust-sel4";
       kind = "tree";
-      identity = "5dab11d1b195fa22e4aab846fdccdd1578c0f00089f9a8ce0baba536b09a3629";
+      identity = "d6ac5a3b09a16ed8fd3b0a62701821eed24409f7572076b303554ad48213a635";
     };
     parameters = [];
   };

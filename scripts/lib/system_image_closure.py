@@ -146,10 +146,18 @@ def normalize(value: object) -> bytes:
     )
 
 
+# Repository metadata a tree input may carry without being part of its
+# identity. A submodule checkout holds a `.git` gitlink file whose content
+# names the superproject's object store, so it differs between the primary
+# checkout and every `git worktree` while the tree's own bytes are identical.
+REPOSITORY_METADATA: tuple[str, ...] = (".git",)
+
+
 def tree_identity(path: Path) -> str:
+    """A tree input's identity: the bytes a clone reproduces, never how it was checked out."""
     if not path.is_dir():
         _fail(f"missing tree artifact: {path}")
-    return tree_digest(path)
+    return tree_digest(path, exclude=REPOSITORY_METADATA)
 
 
 def artifact_identity(path: Path, kind: str) -> str:

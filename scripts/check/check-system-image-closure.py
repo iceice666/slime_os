@@ -180,6 +180,25 @@ def check_identity_boundaries(temporary: Path) -> None:
         fail("test-run marker oracle changed image-closure identity")
 
 
+def check_repository_metadata(temporary: Path) -> None:
+    """A tree input's identity is its content, not how the checkout was made."""
+    primary = temporary / "metadata-primary"
+    worktree = temporary / "metadata-worktree"
+    edited = temporary / "metadata-edited"
+    for root in (primary, worktree, edited):
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "lib.rs").write_text("pub fn loader() {}\n", encoding="utf-8")
+    (primary / ".git").write_text("gitdir: ../../.git/modules/deps/rust-sel4\n", encoding="utf-8")
+    (worktree / ".git").write_text(
+        "gitdir: ../../../slime_os/.git/worktrees/lane/modules/deps/rust-sel4\n", encoding="utf-8"
+    )
+    (edited / "src" / "lib.rs").write_text("pub fn loader() { unreachable!() }\n", encoding="utf-8")
+    if tree_identity(primary) != tree_identity(worktree):
+        fail("a tree input's identity depends on its .git gitlink")
+    if tree_identity(primary) == tree_identity(edited):
+        fail("a tree input's identity ignored a content change")
+
+
 def check_bounds(temporary: Path) -> None:
     closure = copy.deepcopy(compile_closure(CLOSURE).value)
     closure["name"] = "x" * 97
@@ -253,6 +272,7 @@ def main() -> None:
         check_prefix_pins()
         check_target_spec_path()
         check_identity_boundaries(temporary)
+        check_repository_metadata(temporary)
         check_bounds(temporary)
         check_builds(temporary)
     print("system image closure check: contracts, resolution, identity, isolation, and bytes verified")

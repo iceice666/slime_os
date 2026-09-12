@@ -32,10 +32,10 @@ import tempfile
 from pathlib import Path
 
 import system_image_closure_contract as CONTRACT
-from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
+from component_sdk import PROFILE_PLATFORMS, pins
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
-from system_image_closure import artifact_identity, compile_closure
+from system_image_closure import artifact_identity, compile_closure, tree_identity
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
@@ -202,7 +202,7 @@ def identity_of(relative: str, kind: str) -> str:
     if kind == "tree":
         if not path.is_dir():
             fail(f"missing tree input: {relative}")
-        return tree_digest(path)
+        return tree_identity(path)
     if not path.is_file():
         fail(f"missing file input: {relative}")
     return artifact_identity(path, "file")
