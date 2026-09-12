@@ -307,9 +307,27 @@ fn main(_: u32) {
                         {
                             // The client exits once it has this reply, and the
                             // root then reclaims every page it lent; nothing
-                            // below may touch that queue again.
+                            // below may touch that queue again. Everything it
+                            // still holds goes with it: an open socket is
+                            // closed as OP_CLOSE would close it, so its slot
+                            // returns once the peer answers or the bound
+                            // expires, and a closed client is never served
+                            // again to settle it.
                             client.closed = true;
                             client.data = None;
+                            for index in 0..MAX_CAPABILITIES {
+                                if capabilities[index]
+                                    .is_some_and(|cap| cap.holder == client.holder)
+                                {
+                                    release_capability(
+                                        client,
+                                        &mut capabilities,
+                                        index,
+                                        &mut sockets,
+                                        &mut draining,
+                                    );
+                                }
+                            }
                             Some((0, network_service::CAPABILITY_NONE, 0))
                         }
                         Some(request) if valid_network_request(&request) => dispatch(
@@ -763,6 +781,13 @@ fn dispatch(
             let Address::Ipv4(remote) = address else {
                 unreachable!()
             };
+            // One connect settles at a time: the reply for a second one would
+            // overwrite the capability the first names, and the first socket
+            // would never be settled or reclaimed. The endpoint's send is not
+            // a call, so a client can reach here before its reply.
+            if client.pending_connect.is_some() {
+                return deny;
+            }
             let Some(socket_index) = socket_slots.iter().position(|used| used.is_none()) else {
                 observed.socket_refusals += 1;
                 return deny;
@@ -841,27 +866,7 @@ fn dispatch(
                 return deny;
             }
             if request.op == network_service::OP_CLOSE {
-                // The capability is gone at once; the socket finishes its own
-                // close in the draining list, charging no ceiling. A connect
-                // still in flight is aborted rather than closed: nothing was
-                // ever established to close.
-                if let Some(handle) = cap.socket {
-                    let socket = sockets.get_mut::<tcp::Socket>(handle);
-                    if client.pending_connect == Some(cap.id) {
-                        client.pending_connect = None;
-                        socket.abort();
-                    } else {
-                        socket.close();
-                    }
-                    let Some(entry) = draining.iter_mut().find(|entry| entry.is_none()) else {
-                        // Every socket slot is already draining; the storage
-                        // is bounded by TCP_SOCKETS, so this cannot happen
-                        // while the handle also holds a slot.
-                        fail(b"draining list")
-                    };
-                    *entry = Some(handle);
-                }
-                capabilities[index] = None;
+                release_capability(client, capabilities, index, sockets, draining);
             } else if cap.socket.is_some() {
                 // The bytes travel in the client's data queue; the endpoint
                 // carries no slice.
@@ -876,6 +881,41 @@ fn dispatch(
         }
         _ => Some((STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0)),
     }
+}
+
+/// Drop one capability at once. Its socket, if any, finishes its own close
+/// in the draining list, charging no ceiling: a connect still in flight is
+/// aborted rather than closed, since nothing was ever established, and an
+/// established socket is closed with the silence bound armed, because a close
+/// owes the peer's answer and an unanswered one must not hold its slot forever.
+fn release_capability(
+    client: &mut Client,
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    index: usize,
+    sockets: &mut SocketSet<'static>,
+    draining: &mut Draining,
+) {
+    let Some(cap) = capabilities[index].take() else {
+        return;
+    };
+    let Some(handle) = cap.socket else {
+        return;
+    };
+    let socket = sockets.get_mut::<tcp::Socket>(handle);
+    if client.pending_connect == Some(cap.id) {
+        client.pending_connect = None;
+        socket.abort();
+    } else {
+        socket.set_timeout(socket_timeout());
+        socket.close();
+    }
+    let Some(entry) = draining.iter_mut().find(|entry| entry.is_none()) else {
+        // Every socket slot is already draining; the storage is bounded by
+        // TCP_SOCKETS, so this cannot happen while the handle also holds a
+        // slot.
+        fail(b"draining list")
+    };
+    *entry = Some(handle);
 }
 
 /// Answer a deferred connect once the handshake finished or failed.
