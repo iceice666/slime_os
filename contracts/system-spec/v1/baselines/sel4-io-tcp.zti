@@ -492,6 +492,26 @@
       dnsRecordLimit = 0;
       holder = "io-tcp-probe";
       listenerLimit = 0;
+      port = 4244;
+      queueDepth = 4;
+      reconnectLimit = 0;
+      retryLimit = 2;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 4;
+      transport = "tcp";
+    };
+    {
+      address = "10.0.0.2";
+      addressKind = "ipv4";
+      byteBudget = 4096;
+      dnsRecordLimit = 0;
+      holder = "io-tcp-probe";
+      listenerLimit = 0;
       port = 4243;
       queueDepth = 4;
       reconnectLimit = 0;

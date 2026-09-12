@@ -300,6 +300,9 @@ TCP_PSH = 0x08
 TCP_ACK = 0x10
 ECHO_PORT = 4242
 REFUSED_PORT = 4243
+# Echoes as ECHO_PORT does, then closes first: the guest's stack sees the
+# peer's FIN and its client reads the end of the stream.
+CLOSING_PORT = 4244
 PEER_ISN = 0x1000_0000
 SEGMENT_BYTES = 1400
 
@@ -347,24 +350,31 @@ class Flow:
     client_port: int
     client_mac: bytes
     client_ip: bytes
+    server_port: int
     state: str = "syn-received"
     rcv_next: int = 0
     snd_next: int = PEER_ISN
     echoed: int = 0
     received: int = 0
     fin_sent: bool = False
+    fin_received: bool = False
+    # Whose FIN came first: "peer" on the closing port, "guest" elsewhere.
+    closed_by: str | None = None
     # Every in-order byte the guest sent, so a gate can compare the stream's
     # content and not only its length.
     payload: bytearray = dataclasses.field(default_factory=bytearray)
 
 
 class TcpServer:
-    """Echo on `ECHO_PORT`, refuse `REFUSED_PORT`, ignore everything else.
+    """Echo on `ECHO_PORT`, echo then close on `CLOSING_PORT`, refuse
+    `REFUSED_PORT`, ignore everything else.
 
     A minimal, single-segment-at-a-time server: it acknowledges every in-order
     byte and echoes it back in segments of at most `SEGMENT_BYTES`, re-acks a
-    retransmission, answers the guest's FIN with its own, and never retransmits
+    retransmission, answers the guest's FIN with its own (or sends its own
+    first, on the closing port, right behind the echo), and never retransmits
     its own data; the plane's guest window is large enough that it never has to.
+    A flow is `closed` once both FINs are sent and acknowledged.
     """
 
     def __init__(self, peer: Peer) -> None:
@@ -379,16 +389,18 @@ class TcpServer:
         if segment.destination_port == REFUSED_PORT:
             self.refused.append(segment.source_port)
             return [self.emit(frame, segment.destination_port, segment.source_port, 0, segment.seq + 1, TCP_RST | TCP_ACK)]
-        if segment.destination_port != ECHO_PORT:
+        if segment.destination_port not in (ECHO_PORT, CLOSING_PORT):
             return []
         flow = self.flows.get(segment.source_port)
         if flow is None:
             if segment.flags & TCP_SYN and not segment.flags & TCP_ACK:
-                flow = Flow(segment.source_port, frame.source, frame.ip_source, rcv_next=segment.seq + 1)
+                flow = Flow(segment.source_port, frame.source, frame.ip_source, segment.destination_port, rcv_next=segment.seq + 1)
                 self.flows[segment.source_port] = flow
-                reply = self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_SYN | TCP_ACK)
+                reply = self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_SYN | TCP_ACK)
                 flow.snd_next += 1
                 return [reply]
+            return []
+        if segment.destination_port != flow.server_port:
             return []
         out: list[bytes] = []
         if segment.flags & TCP_RST:
@@ -399,7 +411,7 @@ class TcpServer:
         if segment.seq < flow.rcv_next:
             # A retransmission of what was already acknowledged: acknowledge
             # again and take nothing.
-            out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
+            out.append(self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
             return out
         if segment.seq != flow.rcv_next:
             return out
@@ -408,21 +420,34 @@ class TcpServer:
             flow.rcv_next += len(data)
             flow.received += len(data)
             flow.payload += data
-            out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
+            out.append(self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
             for start in range(0, len(data), SEGMENT_BYTES):
                 chunk = data[start : start + SEGMENT_BYTES]
-                out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK | TCP_PSH, chunk))
+                out.append(self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK | TCP_PSH, chunk))
                 flow.snd_next += len(chunk)
                 flow.echoed += len(chunk)
-        if segment.flags & TCP_FIN:
-            flow.rcv_next += 1
-            flow.state = "fin-received"
-            out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
-            if not flow.fin_sent:
-                out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_FIN | TCP_ACK))
+            if flow.server_port == CLOSING_PORT and not flow.fin_sent:
+                # The closing port closes first: its FIN follows the echo.
+                out.append(self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_FIN | TCP_ACK))
                 flow.snd_next += 1
                 flow.fin_sent = True
-        elif flow.fin_sent and segment.flags & TCP_ACK and segment.ack == flow.snd_next:
+                flow.closed_by = "peer"
+                flow.state = "fin-sent"
+        if segment.flags & TCP_FIN:
+            flow.rcv_next += 1
+            flow.fin_received = True
+            if flow.closed_by is None:
+                flow.closed_by = "guest"
+            flow.state = "fin-received"
+            out.append(self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
+            if not flow.fin_sent:
+                out.append(self.emit(frame, flow.server_port, segment.source_port, flow.snd_next, flow.rcv_next, TCP_FIN | TCP_ACK))
+                flow.snd_next += 1
+                flow.fin_sent = True
+        # Closed once both FINs are out and the guest has acknowledged this
+        # side's: the guest's own FIN carries that acknowledgement when the
+        # peer closed first, and a later bare ACK does when the guest did.
+        if flow.fin_sent and flow.fin_received and segment.flags & TCP_ACK and segment.ack == flow.snd_next:
             flow.state = "closed"
         return out
 

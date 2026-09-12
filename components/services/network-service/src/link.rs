@@ -387,6 +387,25 @@ impl Link {
         }
     }
 
+    /// Wait until the device has completed every frame this side handed it.
+    /// The driver counts a transmit at its completion and this side at its
+    /// submission, so a statistics query is only comparable to this side's
+    /// count once nothing is retained.
+    pub fn settle_transmits(&mut self) {
+        let mut yields = 0;
+        loop {
+            self.drain();
+            if self.tx.slots.retained_count() == 0 {
+                return;
+            }
+            yields += 1;
+            if yields > CONTROL_YIELDS {
+                fail(b"transmit settlement");
+            }
+            yield_now();
+        }
+    }
+
     /// Lend every free receive page to the device.
     pub fn replenish(&mut self) -> bool {
         let mut provided = false;

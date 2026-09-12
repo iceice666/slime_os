@@ -149,6 +149,34 @@ def check_tcp_echo_server() -> None:
     # An unknown port is ignored.
     expect(peer.handle(guest_segment(50002, 7, 0, lp.TCP_SYN, destination_port=9)) == [], "an undeclared port was answered")
     expect(peer.ledger.count_received("tcp") == 8 and "50000:closed/rx2048/echo2048" in peer.tcp.summary(), "tcp ledger")
+    expect(peer.tcp.flows[50000].closed_by == "guest", "the guest closed first")
+
+
+def check_tcp_echo_then_close() -> None:
+    peer = lp.Peer()
+    isn = 0x3000
+    port = 50010
+    closing = lp.CLOSING_PORT
+    (synack,) = tcp_replies(peer, guest_segment(port, isn, 0, lp.TCP_SYN, destination_port=closing))
+    expect(synack.flags == lp.TCP_SYN | lp.TCP_ACK and synack.source_port == closing and synack.ack == isn + 1, "SYN/ACK from the closing port")
+    expect(tcp_replies(peer, guest_segment(port, isn + 1, lp.PEER_ISN + 1, lp.TCP_ACK, destination_port=closing)) == [], "the handshake's final ACK was answered")
+    flow = peer.tcp.flows[port]
+    expect(flow.state == "established" and flow.server_port == closing, "flow not established on the closing port")
+    # Data is acknowledged and echoed, and the peer's FIN follows the echo.
+    payload = bytes(range(64))
+    replies = tcp_replies(peer, guest_segment(port, isn + 1, lp.PEER_ISN + 1, lp.TCP_ACK | lp.TCP_PSH, payload, destination_port=closing))
+    expect(len(replies) == 3 and replies[0].flags == lp.TCP_ACK and replies[0].ack == isn + 1 + len(payload), "data was not acknowledged first")
+    expect(replies[1].flags == lp.TCP_ACK | lp.TCP_PSH and replies[1].payload == payload and replies[1].seq == lp.PEER_ISN + 1, "echo")
+    expect(replies[2].flags == lp.TCP_FIN | lp.TCP_ACK and replies[2].seq == lp.PEER_ISN + 1 + len(payload) and replies[2].payload == b"", "the peer's FIN did not follow the echo")
+    expect(flow.state == "fin-sent" and flow.closed_by == "peer" and flow.fin_sent and not flow.fin_received, "flow state after the peer's FIN")
+    # The guest acknowledges the peer's FIN: the flow is not closed until the
+    # guest's own FIN.
+    guest_seq = isn + 1 + len(payload)
+    fin_ack = lp.PEER_ISN + 1 + len(payload) + 1
+    expect(tcp_replies(peer, guest_segment(port, guest_seq, fin_ack, lp.TCP_ACK, destination_port=closing)) == [] and flow.state == "fin-sent", "a bare ACK of the peer's FIN closed the flow")
+    (ack,) = tcp_replies(peer, guest_segment(port, guest_seq, fin_ack, lp.TCP_FIN | lp.TCP_ACK, destination_port=closing))
+    expect(ack.flags == lp.TCP_ACK and ack.ack == guest_seq + 1 and flow.state == "closed" and flow.closed_by == "peer", "the guest's FIN was not acknowledged into closed")
+    expect(f"{port}:closed/rx64/echo64" in peer.tcp.summary() and peer.tcp.refused == [], "closing-port ledger")
 
 
 def main() -> None:
@@ -158,9 +186,10 @@ def main() -> None:
     check_peer_answers_arp_and_echo()
     check_peer_learns_the_guest_and_pings_it()
     check_tcp_echo_server()
+    check_tcp_echo_then_close()
     (kind,) = struct.unpack("!H", struct.pack("!H", lp.ETHERTYPE_ARP))
     expect(kind == lp.ETHERTYPE_ARP, "struct sanity")
-    print("link peer check: ARP and ICMP echo answered exactly for the peer's own address, the guest learned and pinged, TCP echoed in order and refused where declared, and the ledger honest")
+    print("link peer check: ARP and ICMP echo answered exactly for the peer's own address, the guest learned and pinged, TCP echoed in order, closed first where declared and refused where declared, and the ledger honest")
 
 
 if __name__ == "__main__":

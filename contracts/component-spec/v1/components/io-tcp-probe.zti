@@ -4,7 +4,7 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Opens its declared TCP destination, echoes one seeded stream through its lent queue, sees the refused and undeclared arms, and closes what it opened.";
+  purpose = "Echoes a seeded stream to its declared TCP destination, reads a peer-first close as end of stream, echoes again after an idle hold, and sees the refused arms.";
   implementation =  {
     provider = "workspace";
     binary = "io-tcp-probe";
@@ -60,7 +60,7 @@
   };
   test =  {
     testCondition = "io_tcp_check boots sel4-io-tcp";
-    expectedResult = "the granted client opens its declared destination, sends 4096 bytes and reads them back unchanged over its lent queue, sees the closed port refused and the undeclared host denied, and closes what it opened";
+    expectedResult = "the client sends 4096 bytes and reads them back unchanged over its lent queue, sees the closed port refused and the undeclared host denied, reads end of stream where the peer closes first, echoes again after a 6 s idle hold, and closes what it opened";
     passFailCriteria = "[io-tcp-probe] stream verified bytes=4096 mismatches=0";
     requiredTestEnvironment = "io_tcp_check";
   };

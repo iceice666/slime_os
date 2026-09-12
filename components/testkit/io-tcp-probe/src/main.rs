@@ -1,11 +1,13 @@
 #![no_std]
 #![no_main]
 
-//! IO11 client: the one component granted a TCP destination on the `sel4-io-tcp`
-//! plane. It lends the network service a data queue, opens its declared
-//! destination, sends one seeded stream and reads the echo back, then observes
-//! the refused and the undeclared destination before closing everything it
-//! opened. Every count in a marker is observed.
+//! IO11 client: the one component granted TCP destinations on the `sel4-io-tcp`
+//! plane. It lends the network service a data queue, opens its declared echo
+//! destination, sends one seeded stream and reads the echo back, observes the
+//! refused and the undeclared destination, reads the end of the stream on the
+//! port whose peer closes first, holds the echo connection idle past the
+//! service's silence bound and echoes again through it, then closes everything
+//! it opened. Every count in a marker is observed.
 
 use boot_contracts::generation::{RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE};
 use slime_components::tick_clock::TickClock;
@@ -35,18 +37,26 @@ const PEER: [u8; 4] = [10, 0, 0, 2];
 const UNDECLARED: [u8; 4] = [10, 0, 0, 3];
 const ECHO_PORT: u16 = 4242;
 const REFUSED_PORT: u16 = 4243;
+/// Echoes like the echo port, then the peer closes first.
+const CLOSING_PORT: u16 = 4244;
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_0019_0000_0000;
 const EPOCH: u64 = 1;
 const OBJECT_KIND_SHARED_BUFFER_LOAN: u32 =
     slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
-/// How long the service stays bound to the link after the client's own arms
-/// are done: the plane's peer needs a resident stack to address its ICMP echo
-/// requests to, and a peer cannot tell a client when it is done.
-const HOLD_MS: u64 = 3000;
+/// How long the echo connection stays open with nothing pending on it before
+/// it is used again: longer than the service's five-second silence bound, so
+/// the round trip after the hold proves an idle connection is never aborted
+/// for being idle. The plane's peer addresses its ICMP echo requests to the
+/// resident stack in the same window.
+const HOLD_MS: u64 = 6000;
 /// The whole stream fits one page and the destination's byte budget, so one
 /// SEND carries it; the echo comes back in whatever pieces the peer chose.
 const STREAM_BYTES: usize = 4096;
+/// The stream to the closing port, echoed and then ended by the peer.
+const CLOSING_BYTES: usize = 256;
+/// The round trip through the echo connection after the idle hold.
+const IDLE_BYTES: usize = 64;
 
 struct DataQueue {
     queue: Queue<'static>,
@@ -83,64 +93,18 @@ fn main(_: u32) {
     debug_write(b"[io-tcp-probe] connect dst=10.0.0.2:4242 status=ok\n");
     debug_write(b"[io-tcp-probe] tcp capabilities=1 rights=connect,send,recv\n");
 
-    let out = pages[0].bytes();
-    for (index, byte) in out.iter_mut().enumerate().take(STREAM_BYTES) {
-        *byte = expected(index);
-    }
-    let sent = transfer(
-        &mut data,
-        network_service::OP_SEND,
-        tcp.capability,
-        pages[0],
-        0,
-        STREAM_BYTES,
+    let stream = echo(&mut data, tcp.capability, pages, STREAM_BYTES);
+    write_number(b"[io-tcp-probe] sent bytes=", STREAM_BYTES as u64);
+    debug_write(b"\n");
+    write_number(b"[io-tcp-probe] received bytes=", stream.received as u64);
+    write_number(b" completions=", stream.completions);
+    debug_write(b"\n");
+    write_number(
+        b"[io-tcp-probe] stream verified bytes=",
+        stream.received as u64,
     );
-    if sent.status != io_queue::STATUS_OK || sent.transferred != STREAM_BYTES as u64 {
-        fail(b"send");
-    }
-    write_number(b"[io-tcp-probe] sent bytes=", sent.transferred);
+    write_number(b" mismatches=", stream.mismatches);
     debug_write(b"\n");
-
-    let mut received = 0usize;
-    let mut mismatches = 0u64;
-    let mut receives = 0u64;
-    while received < STREAM_BYTES {
-        let want = STREAM_BYTES - received;
-        let got = transfer(
-            &mut data,
-            network_service::OP_RECV,
-            tcp.capability,
-            pages[1],
-            0,
-            want,
-        );
-        if got.status != io_queue::STATUS_OK
-            || got.transferred == 0
-            || got.transferred as usize > want
-        {
-            fail(b"recv");
-        }
-        receives += 1;
-        let bytes = pages[1].bytes();
-        for (index, byte) in bytes.iter().enumerate().take(got.transferred as usize) {
-            if *byte != expected(received + index) {
-                mismatches += 1;
-            }
-        }
-        received += got.transferred as usize;
-    }
-    write_number(b"[io-tcp-probe] received bytes=", received as u64);
-    write_number(b" completions=", receives);
-    debug_write(b"\n");
-    write_number(b"[io-tcp-probe] stream verified bytes=", received as u64);
-    write_number(b" mismatches=", mismatches);
-    debug_write(b"\n");
-
-    let closed = call(capability(network_service::OP_CLOSE, tcp.capability));
-    if closed.status_detail != 0 {
-        fail(b"close");
-    }
-    debug_write(b"[io-tcp-probe] close status=ok\n");
 
     let refused = call(destination(network_service::OP_CONNECT, PEER, REFUSED_PORT));
     if refused.status_detail != STATUS_UNREACHABLE || refused.capability != 0 {
@@ -159,8 +123,49 @@ fn main(_: u32) {
     write_number(b"[io-tcp-probe] undeclared destination refusals=", 1);
     debug_write(b"\n");
 
+    // The closing port echoes and then closes first: after the echo, one more
+    // receive answers with nothing and the end-of-stream flag.
+    let closing = call(destination(network_service::OP_CONNECT, PEER, CLOSING_PORT));
+    if closing.status_detail != 0
+        || closing.capability_kind != network_service::CAPABILITY_TCP_CONNECTION
+    {
+        fail(b"closing connect");
+    }
+    debug_write(b"[io-tcp-probe] connect dst=10.0.0.2:4244 status=ok\n");
+    let closing_stream = echo(&mut data, closing.capability, pages, CLOSING_BYTES);
+    write_number(
+        b"[io-tcp-probe] closing stream verified bytes=",
+        closing_stream.received as u64,
+    );
+    write_number(b" mismatches=", closing_stream.mismatches);
+    debug_write(b"\n");
+    let end = transfer(
+        &mut data,
+        network_service::OP_RECV,
+        closing.capability,
+        pages[1],
+        0,
+        IDLE_BYTES,
+    );
+    if end.status != io_queue::STATUS_OK
+        || end.transferred != 0
+        || end.flags & network_service::FLAG_END_OF_STREAM == 0
+    {
+        fail(b"end of stream");
+    }
+    write_number(
+        b"[io-tcp-probe] end of stream dst=10.0.0.2:4244 echoed bytes=",
+        closing_stream.received as u64,
+    );
+    debug_write(b"\n");
+    let closed = call(capability(network_service::OP_CLOSE, closing.capability));
+    if closed.status_detail != 0 {
+        fail(b"closing close");
+    }
+    debug_write(b"[io-tcp-probe] close dst=10.0.0.2:4244 status=ok\n");
+
     // The hold starts now, not at process start: the arms above took their
-    // own time, and the peer's pings need the whole window after them.
+    // own time, and the echo connection must be idle for the whole window.
     let hold_base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
     let hold = TickClock::new(rate, hold_base).unwrap_or_else(|_| fail(b"clock rate too slow"));
     while hold.millis(monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"))) < HOLD_MS as i64
@@ -168,16 +173,93 @@ fn main(_: u32) {
         yield_now();
     }
     write_number(b"[io-tcp-probe] held ms=", HOLD_MS);
+    write_number(b" open sockets=", 1);
     debug_write(b"\n");
+
+    // Bytes still flow after the hold: the connection outlived the bound.
+    let idle = echo(&mut data, tcp.capability, pages, IDLE_BYTES);
+    write_number(
+        b"[io-tcp-probe] idle stream verified bytes=",
+        idle.received as u64,
+    );
+    write_number(b" mismatches=", idle.mismatches);
+    write_number(b" after ms=", HOLD_MS);
+    debug_write(b"\n");
+
+    let closed = call(capability(network_service::OP_CLOSE, tcp.capability));
+    if closed.status_detail != 0 {
+        fail(b"close");
+    }
+    debug_write(b"[io-tcp-probe] close dst=10.0.0.2:4242 status=ok\n");
 
     let shutdown = call(capability(network_service::OP_CLOSE, SHUTDOWN_CAPABILITY));
     if shutdown.status_detail != 0 {
         fail(b"shutdown");
     }
-    write_number(b"[io-tcp-probe] closed capabilities=", 1);
+    write_number(b"[io-tcp-probe] closed capabilities=", 2);
     write_number(b" shutdown=", u64::from(shutdown.status_detail == 0));
     debug_write(b"\n");
     exit(0)
+}
+
+struct Echo {
+    received: usize,
+    completions: u64,
+    mismatches: u64,
+}
+
+/// Send `bytes` of the seeded stream in one request and read the echo back,
+/// in however many completions the peer's segments took. The send is checked
+/// here; the caller reports what came back.
+fn echo(data: &mut DataQueue, capability: u64, pages: [Page; 2], bytes: usize) -> Echo {
+    let out = pages[0].bytes();
+    for (index, byte) in out.iter_mut().enumerate().take(bytes) {
+        *byte = expected(index);
+    }
+    let sent = transfer(
+        data,
+        network_service::OP_SEND,
+        capability,
+        pages[0],
+        0,
+        bytes,
+    );
+    if sent.status != io_queue::STATUS_OK || sent.transferred != bytes as u64 {
+        fail(b"send");
+    }
+    let mut received = 0usize;
+    let mut mismatches = 0u64;
+    let mut completions = 0u64;
+    while received < bytes {
+        let want = bytes - received;
+        let got = transfer(
+            data,
+            network_service::OP_RECV,
+            capability,
+            pages[1],
+            0,
+            want,
+        );
+        if got.status != io_queue::STATUS_OK
+            || got.transferred == 0
+            || got.transferred as usize > want
+        {
+            fail(b"recv");
+        }
+        completions += 1;
+        let echoed = pages[1].bytes();
+        for (index, byte) in echoed.iter().enumerate().take(got.transferred as usize) {
+            if *byte != expected(received + index) {
+                mismatches += 1;
+            }
+        }
+        received += got.transferred as usize;
+    }
+    Echo {
+        received,
+        completions,
+        mismatches,
+    }
 }
 
 /// The stream's byte at `index`: a cheap function of position, so a received
@@ -268,6 +350,8 @@ fn delegate(slot: u32, buffer: u64, lease: u64, kind: u8) {
 struct Transferred {
     status: u32,
     transferred: u64,
+    /// The completion payload's flags: end of stream is reported here.
+    flags: u32,
 }
 
 /// Submit one data request over the ring and wait for its terminal answer.
@@ -318,6 +402,7 @@ fn transfer(
                 return Transferred {
                     status: completion.status,
                     transferred: completion.transferred,
+                    flags: reply.flags,
                 };
             }
             Err(QueueError::Empty) => yield_now(),

@@ -525,6 +525,10 @@ fn attach_stack() -> Option<Stack> {
 /// and wait for its fresh epoch before this task can exit and have its loans
 /// reclaimed from under the driver.
 fn release_stack(stack: &mut Stack, observed: &Observed) {
+    // A frame handed to the driver and not yet completed (the last ACK of a
+    // close the client followed at once with its shutdown) would be counted
+    // here and not yet in the driver's ledger.
+    stack.link.settle_transmits();
     let tx = stack.link.tx.counts;
     let rx = stack.link.rx.counts;
     write_number(
