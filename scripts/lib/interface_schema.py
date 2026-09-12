@@ -12,7 +12,7 @@ from typing import Callable
 
 import interface_schema_contract as default_contract
 from harness import GENERATION_FIXTURES, ROOT
-from zutai_cli import STDLIB, binary
+from zutai_cli import STDLIB, ZutaiError, binary, evaluate
 
 CHECKER = ROOT / "contracts" / "interface-schema" / "v1" / "check.zt"
 GENERATION_SOURCE = GENERATION_FIXTURES / "valid.zti"
@@ -139,21 +139,15 @@ def _run_zutai(path: Path, command: str, *, contract: ModuleType) -> str:
         _fail(f"interface schema not found: {path}")
     if path.stat().st_size > contract.MAX_SOURCE_BYTES:
         _fail(f"{path}: source exceeds bound")
-    environment = os.environ.copy()
-    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
-    environment["SLIME_INTERFACE_SCHEMA_PATH"] = str(path)
-    process = subprocess.run(
-        [str(binary()), command, str(CHECKER if command == "run" else path)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0:
-        _fail(f"{path}: malformed Zutai input: {(process.stderr or process.stdout).strip()}")
-    return process.stdout
+    try:
+        return evaluate(
+            command,
+            CHECKER if command == "run" else path,
+            input_path=path,
+            env_var="SLIME_INTERFACE_SCHEMA_PATH",
+        )
+    except ZutaiError as error:
+        _fail(f"{path}: malformed Zutai input: {error}")
 
 
 def _load(path: Path, contract: ModuleType) -> dict:

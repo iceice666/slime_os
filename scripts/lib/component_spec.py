@@ -21,9 +21,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
-import os
 import re
-import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -33,7 +31,7 @@ import component_spec_contract as default_contract
 from component_paths import COMPONENT_CRATE_ROOTS
 from boot_contracts import COMPONENT_MAX_STACK_BYTES, PRIVATE_MEMORY_ROOT_REGION_PAGES
 from harness import CHECK_SCRIPTS, ROOT, load_script
-from zutai_cli import STDLIB, binary
+from zutai_cli import ZutaiError, evaluate
 from just_metadata import recipes as just_recipes
 from just_metadata import targets as just_targets
 
@@ -156,21 +154,15 @@ def _run_zutai(path: Path, command: str, *, contract: ModuleType) -> str:
         _fail(f"component spec not found: {path}")
     if path.stat().st_size > contract.MAX_SOURCE_BYTES:
         _fail(f"{path}: source exceeds bound")
-    environment = os.environ.copy()
-    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
-    environment["SLIME_COMPONENT_SPEC_PATH"] = str(path)
-    process = subprocess.run(
-        [str(binary()), command, str(CHECKER if command == "run" else path)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.returncode != 0:
-        _fail(f"{path}: malformed Zutai input: {(process.stderr or process.stdout).strip()}")
-    return process.stdout
+    try:
+        return evaluate(
+            command,
+            CHECKER if command == "run" else path,
+            input_path=path,
+            env_var="SLIME_COMPONENT_SPEC_PATH",
+        )
+    except ZutaiError as error:
+        _fail(f"{path}: malformed Zutai input: {error}")
 
 
 def _load(path: Path, contract: ModuleType) -> dict:
