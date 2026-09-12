@@ -4,6 +4,7 @@ import base64
 import hashlib
 import struct
 import subprocess
+import tempfile
 from pathlib import Path
 
 from boot_contracts import (
@@ -97,15 +98,27 @@ def ssh_signed_payload(payload: bytes) -> bytes:
 
 def ssh_signature(path: Path, payload: bytes) -> bytes:
     _require_private_key_mode(path)
-    work = Path("/tmp/slime-release-signing.bin")
-    signature_path = work.with_suffix(".bin.sig")
-    work.write_bytes(payload)
-    signature_path.unlink(missing_ok=True)
-    subprocess.run(
-        ["ssh-keygen", "-Y", "sign", "-q", "-O", "hashalg=sha256", "-f", str(path), "-n", SIGN_NAMESPACE, str(work)],
-        check=True,
-    )
-    lines = signature_path.read_text(encoding="ascii").splitlines()
+    with tempfile.TemporaryDirectory(prefix="slime-release-signing-") as directory:
+        work = Path(directory) / "payload.bin"
+        signature_path = work.with_suffix(".bin.sig")
+        work.write_bytes(payload)
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-q",
+                "-O",
+                "hashalg=sha256",
+                "-f",
+                str(path),
+                "-n",
+                SIGN_NAMESPACE,
+                str(work),
+            ],
+            check=True,
+        )
+        lines = signature_path.read_text(encoding="ascii").splitlines()
     blob = base64.b64decode("".join(lines[1:-1]))
     offset = 6
     version = struct.unpack_from(">I", blob, offset)[0]
@@ -130,7 +143,7 @@ def ssh_signature(path: Path, payload: bytes) -> bytes:
     signature_len = struct.unpack_from(">I", signature_blob, signature_offset)[0]
     signature = signature_blob[signature_offset + 4 : signature_offset + 4 + signature_len]
     if namespace != SIGN_NAMESPACE.encode() or len(signature) != 64:
-        raise ValueError("unexpected SSH signature encoding")
+        raise ValueError("unexpected SSH signature payload")
     return signature
 
 

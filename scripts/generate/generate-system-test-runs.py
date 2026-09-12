@@ -34,12 +34,58 @@ from system_image_closure import compile_closure
 
 CHECK_ROOT = ROOT / "scripts" / "check"
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 
 # The marker contract each plane's expectations are stated against. One
 # identity for the seL4 serial marker vocabulary: the planes assert different
 # chains *within* it, and those chains stay in their owning checker.
 MARKER_CONTRACT = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e"
+
+# Multi-platform checker invocations whose non-default arm is not closure
+# reachable, so the record names a literal image instead of resolving one.
+# `just riscv64_qemu_check` is the recipe that invokes these, and every target
+# it names with `--platform qemu-riscv-virt` and can execute belongs here: a
+# real invocation without a record leaves its execution profile and image
+# provenance unfrozen. The tuple is `(run name, execution profile, image
+# name)`.
+EXTRA_RUNS: dict[str, tuple[str, str, str]] = {
+    "sel4-generation": (
+        "sel4-generation-qemu-riscv-virt",
+        "qemu-riscv-virt",
+        "slime-sel4-generation-qemu-riscv-virt.elf",
+    ),
+    "sel4-private-memory": (
+        "sel4-private-memory-qemu-riscv-virt",
+        "qemu-riscv-virt",
+        "slime-sel4-private-memory-qemu-riscv-virt.elf",
+    ),
+    "sel4-rollback": (
+        "sel4-rollback-qemu-riscv-virt",
+        "qemu-riscv-virt",
+        "slime-sel4-rollback-qemu-riscv-virt.elf",
+    ),
+}
+
+# Additional invocations that ARE closure-reachable, unlike the arms above.
+# Every separately booted image needs its own frozen record, because
+# `check-system-test-run.py` can only freeze and validate an image's execution
+# inputs through a record naming it. The tuple is `(run name, closure name,
+# execution profile)`; the image resolves through the closure, so there is no
+# literal path to name.
+EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "sel4-private-memory": (
+        (
+            "sel4-private-memory-fail-large-map",
+            "sel4-private-memory-fail-large-map",
+            "qemu-arm-virt",
+        ),
+        (
+            "sel4-private-memory-fail-second-allocation",
+            "sel4-private-memory-fail-second-allocation",
+            "qemu-arm-virt",
+        ),
+    ),
+}
 
 # Checkers that boot no seL4 QEMU plane of their own, so they own no test run:
 # board gates, host-only contract gates, aggregate composers that delegate to
@@ -75,6 +121,23 @@ def run_name(path: _Path) -> str:
     if stem.endswith("-plane"):
         stem = stem[: -len("-plane")]
     return stem
+
+def run_variants(path: _Path) -> list[tuple[str, str, str, str]]:
+    """Every independently invoked target for one plane checker."""
+    name = run_name(path)
+    closure = closure_name_for(path, name)
+    # Closure-backed runs resolve their image through the closure identity.
+    # A default arm with no closure must retain the literal artifact extracted
+    # from its checker so the aggregate exemption remains independently checked.
+    closure_exists = (CLOSURE_ROOT / f"{closure}.zti").is_file()
+    variants = [(name, closure, "qemu-arm-virt", "" if closure_exists else booted_image(path))]
+    extra = EXTRA_RUNS.get(name)
+    if extra is not None:
+        run, profile, image = extra
+        variants.append((run, "", profile, image))
+    for run, extra_closure, profile in EXTRA_CLOSURE_RUNS.get(name, ()):
+        variants.append((run, extra_closure, profile, ""))
+    return variants
 
 
 def booted_image(path: _Path) -> str:
@@ -200,8 +263,8 @@ def extract(path: _Path) -> dict:
     }
 
 
-def render(name: str, closure: str, facts: dict) -> str:
-    """Render one record. Zutai's JSON projection sorts keys, so field order is fixed."""
+def render(name: str, closure: str, profile: str, facts: dict) -> str:
+    """Render one target-qualified record in canonical field order."""
 
     def text_list(values: list[str], indent: str = "    ") -> str:
         if not values:
@@ -262,7 +325,7 @@ def render(name: str, closure: str, facts: dict) -> str:
         f'  name = "{name}";\n'
         f'  imageClosureIdentity = "{closure}";\n'
         '  executionKind = "emulator";\n'
-        '  executionProfile = "qemu-arm-virt";\n'
+        f'  executionProfile = "{profile}";\n'
         f"  disks = {disks};\n"
         "  networks = [];\n"
         f"  devices = {devices};\n"
@@ -277,10 +340,13 @@ def render(name: str, closure: str, facts: dict) -> str:
 def outputs() -> dict[_Path, str]:
     emitted: dict[_Path, str] = {}
     for path in plane_checkers():
-        name = run_name(path)
-        emitted[RUN_ROOT / f"{name}.zti"] = render(
-            name, closure_identity_for(closure_name_for(path, name)), extract(path)
-        )
+        for name, closure_name, profile, _image in run_variants(path):
+            emitted[RUN_ROOT / f"{name}.zti"] = render(
+                name,
+                closure_identity_for(closure_name) if closure_name else "",
+                profile,
+                extract(path),
+            )
     return emitted
 
 

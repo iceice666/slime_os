@@ -667,11 +667,19 @@ const SHARED_QUOTA: HolderQuota = HolderQuota {
 /// one.
 const PRIVATE_QUOTA_PAGES: usize = 4;
 
-/// Growth operations the private-memory phase must actually charge a page to.
-///
-/// The phase issues five: two size queries, two growths, one refused. Only the
-/// two growths are grants, which is the distinction a page total cannot make on
-/// its own.
+#[cfg(slime_private_fail_second_allocation)]
+const PRIVATE_RETRY_QUOTA_PAGES: usize = private_memory::MAX_REGION_PAGES;
+
+/// Pages the phases must still hold when the clean-exit fixture reports.
+#[cfg(not(slime_private_fail_second_allocation))]
+const MEM_EXPECTED_PAGES: usize = PRIVATE_QUOTA_PAGES;
+#[cfg(slime_private_fail_second_allocation)]
+const MEM_EXPECTED_PAGES: usize = 1 + PRIVATE_RETRY_QUOTA_PAGES;
+
+/// Growth operations that must actually charge pages.
+#[cfg(not(slime_private_fail_second_allocation))]
+const MEM_EXPECTED_GRANTS: usize = 2;
+#[cfg(slime_private_fail_second_allocation)]
 const MEM_EXPECTED_GRANTS: usize = 2;
 
 /// The value the clean-exit fixture writes into its first private page and
@@ -716,8 +724,16 @@ struct MemoryPhase {
     /// Whether the report arrived at all.
     reported: bool,
 }
-static mut OBJECT_ALLOCATOR: core::mem::MaybeUninit<ObjectAllocator> =
-    core::mem::MaybeUninit::uninit();
+/// The allocator's descriptor tables.
+///
+/// `const`-initialized, so the `MAX`-valued record sentinels place this in
+/// `.data` and the image carries its bytes. It must stay a static initializer:
+/// the value is multi-megabyte, and any form that constructs it before storing
+/// it — `MaybeUninit::new(ObjectAllocator::empty())`, or a local moved into
+/// place — materializes it in a frame and overruns the root's 1 MiB stack.
+/// Reducing the image cost therefore requires zero-valued sentinels, not a
+/// different storage class.
+static mut OBJECT_ALLOCATOR: ObjectAllocator = ObjectAllocator::empty();
 
 /// Supervised protection probes the shared-buffer phase expects. One store to
 /// a read-only mapping, one branch into an execute-never page. A third fault
@@ -760,17 +776,12 @@ struct BufferPhase {
 // The bound is stated here rather than discovered a third time.
 #[root_task(stack_size = 1024 * 1024, heap_size = 1024 * 512)]
 fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
-    let allocator = match ObjectAllocator::new(bootinfo) {
-        Ok(value) => unsafe {
-            // SAFETY: root startup is single-threaded and initializes this storage exactly once.
-            (&raw mut OBJECT_ALLOCATOR).write(core::mem::MaybeUninit::new(value));
-            (&raw mut OBJECT_ALLOCATOR)
-                .cast::<ObjectAllocator>()
-                .as_mut()
-                .unwrap()
-        },
-        Err(error) => fatal!("allocator rejected bootinfo: {error:?}"),
-    };
+    // SAFETY: root startup is single-threaded, this is the sole initialization,
+    // and the returned reference is held for the root task's lifetime.
+    let allocator = unsafe { &mut *core::ptr::addr_of_mut!(OBJECT_ALLOCATOR) };
+    if let Err(error) = allocator.initialize(bootinfo) {
+        fatal!("allocator rejected bootinfo: {error:?}")
+    }
     let initial_slots = allocator.slots_remaining();
     let initial_untypeds = allocator.untyped_count();
     let initial_bytes = allocator.untyped_bytes_remaining();
@@ -1030,7 +1041,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(profile) => profile,
         Err(error) => fatal!("target profile {TARGET_PROFILE} unavailable: {error:?}"),
     };
-    let admission = match Admission::admit(&generation, profile) {
+    let mut admission = match Admission::admit(&generation, profile) {
         Ok(admission) => admission,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
@@ -1050,6 +1061,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(required) => required,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
+    admission.required_root_slots = planned_slots;
     sel4::debug_println!(
         "SLIME_ROOT plan slots required={planned_slots} available={}",
         allocator.free_slots(),
@@ -1224,20 +1236,22 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             1,
             // No workers, so no worker priorities.
             [task::CHILD_PRIORITY; child_vspace::MAX_CHILD_THREADS],
-            // The C10.1 private-memory quota, granted only to the clean-exit
-            // fixture, which is the one that runs the growth phase.
-            //
-            // A compiled-in ceiling *for this phase alone*, on exactly the
-            // grounds `SHARED_QUOTA` above records: the fixture is an ELF this
-            // root embeds at compile time, not a declared component, so no
-            // generation resource names it and there is no budget to read. Every
-            // declared instance sits at zero until C10.2 supplies that
-            // resource. The deliberate-fault fixture gets nothing, which is what
-            // makes the deny-by-default arm observable on the same boot.
+            // The C10.1 private-memory quota. The clean-exit fixture always
+            // exercises the four-page phase. The injected rollback image also
+            // gives the deliberate-fault fixture one full window so it can
+            // prove a failed initial small-page transaction retries against the
+            // retained leaf mapping.
             if role == Role::CleanExit {
                 PRIVATE_QUOTA_PAGES
             } else {
-                0
+                #[cfg(slime_private_fail_second_allocation)]
+                {
+                    PRIVATE_RETRY_QUOTA_PAGES
+                }
+                #[cfg(not(slime_private_fail_second_allocation))]
+                {
+                    0
+                }
             },
         ) {
             Ok(id) => id,
@@ -1519,12 +1533,12 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         tasks.len()
     );
     sel4::debug_println!(
-        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} arena_reuses={}",
+        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} extent_reuses={}",
         allocator.live_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
         allocator.slots_reused(),
-        allocator.arena_reuses(),
+        allocator.extents_reused(),
     );
 
     let granted: usize = fixtures

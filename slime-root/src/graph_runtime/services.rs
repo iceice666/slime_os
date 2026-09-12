@@ -44,10 +44,12 @@ pub(super) fn serve_instance_graph(
     let mut healthy_emitted = false;
 
     sel4::debug_println!(
-        "SLIME_ROOT allocator baseline live_slots={} live_objects={} live_bytes={}",
+        "SLIME_ROOT allocator baseline live_slots={} live_objects={} live_bytes={} allocation_descriptor_capacity={} extent_descriptor_capacity={}",
         allocator.live_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
+        object_allocator::MAX_TASK_ALLOCATIONS,
+        object_allocator::MAX_TASK_EXTENTS,
     );
     let mut live = tasks.len();
     let mut unsupported = 0;
@@ -987,12 +989,15 @@ pub(super) fn serve_instance_graph(
                             .map(|task| task.private_memory)
                             .unwrap_or(private_memory::Region::DENIED);
                         sel4::debug_println!(
-                            "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={}",
+                            "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
                             id.0,
                             region.pages(),
                             region.base(),
                             region.quota(),
                             tasks.private_memory().total_pages(),
+                            region.large_frames(),
+                            region.base_frames(),
+                            region.leaf_tables(),
                         );
                         // Primary is the previous page count; auxiliary is the
                         // window base. The base is answered rather than left
@@ -1569,12 +1574,18 @@ pub(super) fn serve_instance_graph(
         terminations.recorded(),
     );
     sel4::debug_println!(
-        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} arena_reuses={}",
+        "SLIME_ROOT allocator live_slots={} free_slots={} live_objects={} live_bytes={} mapped_ram={} reusable_ram={} reusable_private_ram={} allocation_descriptors_free={} extent_descriptors_free={} slot_reuses={} extent_reuses={}",
         allocator.live_slots(),
+        allocator.free_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
+        tasks.private_memory().total_pages() * child_vspace::GRANULE_SIZE,
+        allocator.reusable_extent_bytes(),
+        allocator.reusable_private_extent_bytes(),
+        allocator.allocation_descriptors_free(),
+        allocator.extent_descriptors_free(),
         allocator.slots_reused(),
-        allocator.arena_reuses(),
+        allocator.extents_reused(),
     );
     let completed = completed_required.iter().filter(|done| **done).count();
     if live == 0 && required != 0 && completed == required {

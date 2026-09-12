@@ -427,7 +427,7 @@ def build_negative(case: Path, output: Path) -> Path:
     compiled = compile_negative_case(case)
     wanted = compiled.value["baseClosureIdentity"]
     for candidate in sorted(
-        (ROOT / "contracts" / "system-image-closure" / "v1" / "closures").glob("*.zti")
+        (ROOT / "contracts" / "system-image-closure" / "v2" / "closures").glob("*.zti")
     ):
         if compile_closure(candidate).identity.hex() == wanted:
             base = candidate

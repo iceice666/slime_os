@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Emit one `contracts/system-image-closure/v1` closure per derived composition.
+"""Emit one `contracts/system-image-closure/v2` closure per derived composition.
 
 CP11 authored one closure by hand to prove the contract. CP13 needs one per
 composition, and hand-authoring 40 records whose every field is a digest of
@@ -32,10 +32,10 @@ import tempfile
 from pathlib import Path
 
 import system_image_closure_contract as CONTRACT
-from component_sdk import tree_digest
+from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
-from system_image_closure import artifact_identity
+from system_image_closure import artifact_identity, compile_closure
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
@@ -43,15 +43,14 @@ from system_spec import (
     prefetch_systems,
 )
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
-INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "inputs"
-SDK_RELEASE = INPUT_ROOT / "sdk-release.json"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+NEGATIVE_ROOT = CLOSURE_ROOT.parent / "negative"
+INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "inputs"
 PREFIX = INPUT_ROOT / "sel4-prefix"
 
-# The fifteen shared workspace inputs `resolve_closure` requires of every
-# closure, as `(name, repository-relative path, kind)`. Declared here in one
-# place because the resolver checks the set exactly; a build input added there
-# must be added here or every closure stops resolving.
+# The shared workspace inputs `resolve_closure` requires of every closure, as
+# `(name, repository-relative path, kind)`. The target specification is added
+# from `component_sdk.PROFILE_PLATFORMS` below because it varies by profile.
 RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("boot-contracts", "boot-contracts", "tree"),
     ("cargo-lock", "Cargo.lock", "file"),
@@ -70,16 +69,15 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
         "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json",
         "file",
     ),
-    ("target-spec", "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json", "file"),
     ("workspace-manifest", "Cargo.toml", "file"),
 )
 
 ROOT_IMPLEMENTATION = ("slime-root", "tree")
 # Which `deps/rust-sel4*` submodule a closure's loader role names, keyed by
-# `sdk-release.json`'s `platform` field. A platform with no loader patch
-# shares the base checkout; a patched platform names its own independent
-# submodule (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables), so an
-# NDA'd board's fork never appears in another platform's closure identity.
+# the platform bound by `component_sdk.PROFILE_PLATFORMS`. A platform with no
+# loader patch shares the base checkout; a patched platform names its own
+# independent submodule (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables),
+# so an NDA'd board's fork never appears in another platform's closure identity.
 LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
     "qemu-arm-virt": ("deps/rust-sel4", "tree"),
     "qemu-riscv-virt": ("deps/rust-sel4", "tree"),
@@ -158,14 +156,25 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
 # CP14 root roles. A root role is a distinct root *build* over the same
 # composition: the selector carries no embedded generation and reads one from
 # disk, the fixture root reports its capability layout, the unwind root forces
-# B38's construction unwind. Each was a `build-sel4.py` variant branch; each is
-# now its own closure with its own identity.
+# B38's construction unwind, and the private-memory roles inject one allocator
+# failure each. Every role is its own closure identity.
 #
 # `(base composition, root role, root parameters)`. The base is the graph the
-# role's own gate boots, and the role changes only the root.
+# role's own gate boots, and the role changes only the root or embedded fixture.
 ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
     "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
+    # The two private-memory roles compile bounded, one-shot allocator failures.
+    "sel4-private-memory-fail-second-allocation": (
+        "sel4-private-memory",
+        "private-memory-fail-second-allocation",
+        (),
+    ),
+    "sel4-private-memory-fail-large-map": (
+        "sel4-private-memory",
+        "private-memory-fail-large-map",
+        (),
+    ),
     # CP14 declared the `boot-selector` role but no closure carried it. A
     # selector root embeds no generation and reads one from disk, so its base
     # composition supplies only the build inputs, never an embedded payload —
@@ -226,7 +235,7 @@ def implementation_path(spec: dict) -> tuple[str, str]:
         name = artifacts.get(binary)
         if name is None:
             raise LookupError(provider)
-        return f"contracts/system-image-closure/v1/inputs/components/{name}", "file"
+        return f"contracts/system-image-closure/v2/inputs/components/{name}", "file"
     raise LookupError(provider)
 
 
@@ -251,12 +260,6 @@ def render(value: object, indent: int = 0) -> str:
     raise TypeError(type(value))
 
 
-def sdk_profile(profile_name: str) -> dict:
-    record = json.loads(SDK_RELEASE.read_text(encoding="utf-8"))
-    matches = [entry for entry in record.get("profiles", []) if entry.get("profile") == profile_name]
-    if len(matches) != 1:
-        fail(f"SDK release declares {len(matches)} profiles named {profile_name!r}")
-    return {"record": record, "profile": matches[0]}
 
 
 def closure_for(
@@ -309,11 +312,18 @@ def closure_for(
         )
     implementations.sort(key=lambda entry: entry["component"])
 
-    sdk = sdk_profile(profile_name)
-    record, profile = sdk["record"], sdk["profile"]
-    loader_implementation = LOADER_IMPLEMENTATIONS.get(profile["platform"])
+    binding = PROFILE_PLATFORMS.get(profile_name)
+    if binding is None:
+        fail(f"no component SDK binding for target profile {profile_name!r}")
+    platform = str(binding["platform"])
+    loader_implementation = LOADER_IMPLEMENTATIONS.get(platform)
     if loader_implementation is None:
-        fail(f"no loader submodule declared for platform {profile['platform']!r}")
+        fail(f"no loader submodule declared for platform {platform!r}")
+    pin_table = pins(ROOT)
+    rust_sel4 = pin_table["rust_sel4"]
+    target_spec = (
+        Path("deps") / "rust-sel4" / "support" / "targets" / Path(str(binding["cargo_target"])).name
+    ).as_posix()
     return {
         "formatVersion": CONTRACT.FORMAT_VERSION,
         "name": name,
@@ -324,11 +334,10 @@ def closure_for(
         "implementations": implementations,
         "target": {
             "profile": profile_name,
-            "platform": profile["platform"],
-            "sdkRelease": artifact(str(SDK_RELEASE.relative_to(ROOT)), "file"),
+            "platform": platform,
             "prefix": artifact(str(PREFIX.relative_to(ROOT)), "tree"),
-            "toolchain": record["toolchain"],
-            "rustSel4Commit": record["rustSel4"]["commit"],
+            "toolchain": rust_sel4["toolchain"],
+            "rustSel4Commit": rust_sel4["commit"],
         },
         "root": {
             "role": root_role or CONTRACT.ROOT_ROLE_EMBEDDED_GENERATION,
@@ -340,10 +349,14 @@ def closure_for(
             "implementation": artifact(*loader_implementation),
             "parameters": [],
         },
-        "releaseInputs": [
-            {"name": input_name, "artifact": artifact(relative, kind)}
-            for input_name, relative, kind in RELEASE_INPUTS
-        ],
+        "releaseInputs": sorted(
+            [
+                {"name": input_name, "artifact": artifact(relative, kind)}
+                for input_name, relative, kind in RELEASE_INPUTS
+            ]
+            + [{"name": "target-spec", "artifact": artifact(target_spec, "file")}],
+            key=lambda entry: entry["name"],
+        ),
         "buildParameters": [
             {"name": key, "value": parameters[key]} for key in sorted(parameters or {})
         ],
@@ -397,6 +410,22 @@ def outputs() -> dict[Path, str]:
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
     if not emitted:
         fail("no composition produced a closure")
+    # Negative cases refer to the canonical base closure identity, which changes
+    # with its implementation inputs just as ordinary test-run identities do.
+    with tempfile.TemporaryDirectory(prefix="slime-closure-base-") as directory:
+        base = Path(directory) / "sel4-boot.zti"
+        base.write_text(emitted[CLOSURE_ROOT / "sel4-boot.zti"], encoding="utf-8")
+        identity = compile_closure(base).identity.hex()
+    for mutation in CONTRACT.MUTATIONS:
+        name = f"sel4-b40-{mutation.replace('_', '-')}"
+        case = {
+            "formatVersion": CONTRACT.NEGATIVE_FORMAT_VERSION,
+            "name": name,
+            "baseClosureIdentity": identity,
+            "mutation": mutation,
+            "expectedRefusal": "CSpaceMismatch",
+        }
+        emitted[NEGATIVE_ROOT / f"{name}.zti"] = render(case) + "\n"
     return emitted
 
 
@@ -412,7 +441,9 @@ def main() -> None:
             if not path.is_file() or path.read_text(encoding="utf-8") != contents
         ]
         orphaned = sorted(
-            path.name for path in CLOSURE_ROOT.glob("*.zti") if path not in emitted
+            str(path.relative_to(ROOT))
+            for directory in (CLOSURE_ROOT, NEGATIVE_ROOT)
+            for path in directory.glob("*.zti") if path not in emitted
         )
         if stale or orphaned:
             raise SystemExit(
@@ -423,11 +454,12 @@ def main() -> None:
             )
         print(f"{len(emitted)} system-image closures are current")
         return
-    CLOSURE_ROOT.mkdir(parents=True, exist_ok=True)
-    for path in CLOSURE_ROOT.glob("*.zti"):
-        if path not in emitted:
-            path.unlink()
-            print(f"Removed {path.relative_to(ROOT)}")
+    for directory in (CLOSURE_ROOT, NEGATIVE_ROOT):
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in directory.glob("*.zti"):
+            if path not in emitted:
+                path.unlink()
+                print(f"Removed {path.relative_to(ROOT)}")
     for path, contents in emitted.items():
         handle = tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"

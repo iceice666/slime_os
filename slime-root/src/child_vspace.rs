@@ -20,6 +20,14 @@ use crate::object_allocator::{AllocError, ArenaPlan, ObjectAllocator, TaskArenaI
 pub const GRANULE_SIZE: usize = sel4::FrameObjectType::GRANULE.bytes();
 const _: () = assert!(GRANULE_SIZE == boot_contracts::component_runtime_abi::GRANULE_BYTES);
 
+/// Architecture-qualified 2 MiB frame type used for private backing.
+#[cfg(target_arch = "aarch64")]
+pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType::LargePage;
+#[cfg(target_arch = "riscv64")]
+pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType::MegaPage;
+pub(crate) const LARGE_FRAME_BYTES: usize = LARGE_FRAME_TYPE.bytes();
+pub(crate) const LARGE_FRAME_PAGES: usize = LARGE_FRAME_BYTES / GRANULE_SIZE;
+
 /// Pages one child image footprint may span, including the IPC buffer and
 /// startup transfer-window pages. A larger payload fails closed rather than
 /// silently truncating.
@@ -179,13 +187,13 @@ impl<'a> ChildImage<'a> {
 
     /// Exact kernel-memory plan for the VSpace portion of this image.
     pub fn vspace_arena_plan(&self, threads: usize) -> Result<ArenaPlan, ImageError> {
-        let mapped = thread_mapped_span(&self.footprint, threads)?;
         let mut plan = ArenaPlan::new();
         plan.add(sel4::cap_type::VSpace::object_blueprint())
             .ok_or(ImageError::FootprintOutOfRange)?;
         for level in 1..sel4::vspace_levels::NUM_LEVELS {
             let span_bytes = 1usize << sel4::vspace_levels::span_bits(level);
-            let coarse = coarsen(&mapped, span_bytes);
+            let planned = statically_mapped_span(&self.footprint, threads, level)?;
+            let coarse = coarsen(&planned, span_bytes);
             let Some(ty) = sel4::TranslationTableObjectType::from_level(level) else {
                 continue;
             };
@@ -299,17 +307,6 @@ impl ChildVSpace {
     }
 }
 
-#[derive(Clone, Copy)]
-struct PageEntry {
-    cap: sel4::cap::Granule,
-    flags: u8,
-}
-
-const EMPTY_PAGE: PageEntry = PageEntry {
-    cap: sel4::cap::Granule::from_bits(0),
-    flags: 0,
-};
-
 /// A root-owned page whose virtual address is reused to load child frames.
 ///
 /// The root task's own image frame for `addr` is unmapped once, so the address
@@ -387,48 +384,33 @@ pub fn create_child_vspace(
         .asid_pool_assign(vspace)
         .map_err(VSpaceError::AsidAssign)?;
 
-    // Each thread owns an IPC buffer/window pair above the image, so the
-    // translation tables must cover every pair rather than only thread 0's.
-    // The arena planner uses this exact helper too: mapping a wider range than
-    // it plans would make construction depend on power-of-two arena slack.
-    let mapped = thread_mapped_span(&footprint, threads).map_err(VSpaceError::Image)?;
-    let tables_mapped = map_intermediate_tables(allocator, arena, vspace, &mapped)?;
+    // Static image and thread mappings receive every required table at spawn.
+    // The private window deliberately receives no leaf table: a later 2 MiB
+    // frame occupies that parent entry directly, while 4 KiB growth creates
+    // and owns the leaf table transactionally.
+    let tables_mapped = map_intermediate_tables(allocator, arena, vspace, &footprint, threads)?;
 
-    let mut pages = [EMPTY_PAGE; MAX_CHILD_IMAGE_PAGES];
     let page_count = image.image_pages();
-    for entry in
-        pages
-            .get_mut(..page_count)
-            .ok_or(VSpaceError::Image(ImageError::FootprintTooLarge {
-                pages: page_count,
-                limit: MAX_CHILD_IMAGE_PAGES,
-            }))?
-    {
-        entry.cap = allocator
+    validate_image_page_rights(image, &footprint)?;
+    for index in 0..page_count {
+        let vaddr = footprint.start + index * GRANULE_SIZE;
+        let page = vaddr..vaddr + GRANULE_SIZE;
+        let flags = image_page_flags(image, &page)?;
+        let frame = allocator
             .allocate_fixed_in::<sel4::cap_type::Granule>(arena)?
             .cap();
-    }
-
-    accumulate_rights(image, &footprint, &mut pages)?;
-    load_segments(image, &footprint, &pages, caller_vspace, scratch)?;
-
-    for (index, entry) in pages.iter().take(page_count).enumerate() {
-        let vaddr = footprint.start + index * GRANULE_SIZE;
-        entry
-            .cap
-            .frame_map(
-                vspace,
-                vaddr,
-                page_rights(entry.flags),
-                page_attributes(entry.flags),
-            )
+        load_image_page(image, &page, frame, caller_vspace, scratch)?;
+        frame
+            .frame_map(vspace, vaddr, page_rights(flags), page_attributes(flags))
             .map_err(|error| VSpaceError::FrameMap { vaddr, error })?;
+        unify_instruction_page(frame, flags)?;
     }
-    // Only now, with each frame mapped into the child VSpace, can the flush
-    // run: `seL4_ARM_Page_Unify_Instruction` resolves the range through the
-    // frame's own mapping and rejects an unmapped frame with
-    // `IllegalOperation`.
-    unify_instruction_cache(&pages, page_count)?;
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        // The root wrote every executable page before this point; order those
+        // stores before instruction fetch on this hart.
+        core::arch::asm!("fence.i", options(nostack));
+    }
 
     let mut thread_pages = [EMPTY_THREAD_PAGES; MAX_CHILD_THREADS];
     for (index, slot) in thread_pages.iter_mut().enumerate().take(threads) {
@@ -439,9 +421,9 @@ pub fn create_child_vspace(
         vspace,
         pages: thread_pages,
         threads,
-        // The window's tables were mapped above, inside `mapped`: the span
-        // `thread_mapped_span` returned already covers it, so a growth
-        // allocates leaf frames only and can never need a table.
+        // Private growth installs its leaf table lazily when the first 4 KiB
+        // mapping needs one; aligned full-window growth can instead map one
+        // 2 MiB frame directly.
         private_base: private_window(&footprint, threads)
             .map_err(VSpaceError::Image)?
             .start,
@@ -539,11 +521,14 @@ fn map_intermediate_tables(
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     footprint: &Range<usize>,
+    threads: usize,
 ) -> Result<usize, VSpaceError> {
     let mut mapped = 0;
     for level in 1..sel4::vspace_levels::NUM_LEVELS {
         let span_bytes = 1usize << sel4::vspace_levels::span_bits(level);
-        let coarse = coarsen(footprint, span_bytes);
+        let planned =
+            statically_mapped_span(footprint, threads, level).map_err(VSpaceError::Image)?;
+        let coarse = coarsen(&planned, span_bytes);
         let Some(ty) = sel4::TranslationTableObjectType::from_level(level) else {
             continue;
         };
@@ -566,99 +551,97 @@ fn map_intermediate_tables(
     Ok(mapped)
 }
 
-/// Union each segment's access rights into every page it spans, so a page
-/// shared by two segments ends up with exactly the rights both need.
-fn accumulate_rights(
-    image: &ChildImage<'_>,
-    footprint: &Range<usize>,
-    pages: &mut [PageEntry],
-) -> Result<(), ImageError> {
+/// Union the flags of every segment intersecting one page.
+fn image_page_flags(image: &ChildImage<'_>, page: &Range<usize>) -> Result<u8, ImageError> {
+    let mut flags = 0;
     for segment in image.file.segments() {
-        let flags = segment_flags(segment.flags())?;
         let start = usize::try_from(segment.address()).map_err(|_| ImageError::MalformedSegment)?;
         let size = usize::try_from(segment.size()).map_err(|_| ImageError::MalformedSegment)?;
         let end = start
             .checked_add(size)
             .ok_or(ImageError::MalformedSegment)?;
-        let span = coarsen(&(start..end), GRANULE_SIZE);
-        let first = span
-            .start
-            .checked_sub(footprint.start)
-            .ok_or(ImageError::MalformedSegment)?
-            / GRANULE_SIZE;
-        let count = span.len() / GRANULE_SIZE;
-        let entries = pages
-            .get_mut(first..first + count)
-            .ok_or(ImageError::MalformedSegment)?;
-        for entry in entries {
-            entry.flags |= flags;
+        if start < page.end && page.start < end {
+            flags |= segment_flags(segment.flags())?;
         }
     }
-    reject_writable_executable(pages.iter().map(|entry| entry.flags))?;
+    Ok(flags)
+}
+
+/// Validate every image page before allocating one frame, preserving the
+/// construction boundary without a maximum-image scratch array.
+fn validate_image_page_rights(
+    image: &ChildImage<'_>,
+    footprint: &Range<usize>,
+) -> Result<(), ImageError> {
+    for index in 0..image.image_pages() {
+        let start = footprint.start + index * GRANULE_SIZE;
+        reject_writable_executable([image_page_flags(image, &(start..start + GRANULE_SIZE))?])?;
+    }
     Ok(())
 }
 
-/// Copy each segment's file data into the frames backing it, one granule at a
-/// time, through the single root-owned scratch mapping. Frames arrive zeroed
-/// from `untyped_retype`, so `.bss` needs no explicit clearing.
-fn load_segments(
+/// Copy every file-backed segment fragment intersecting `page` through the
+/// single root scratch mapping. The freshly retyped frame supplies zero-fill
+/// for `.bss` and every uncovered byte.
+fn load_image_page(
     image: &ChildImage<'_>,
-    footprint: &Range<usize>,
-    pages: &[PageEntry],
+    page: &Range<usize>,
+    frame: sel4::cap::Granule,
     caller_vspace: sel4::cap::VSpace,
     scratch: &ScratchPage,
 ) -> Result<(), VSpaceError> {
-    for segment in image.file.segments() {
-        let mut vaddr =
-            usize::try_from(segment.address()).map_err(|_| ImageError::MalformedSegment)?;
-        let mem_size = usize::try_from(segment.size()).map_err(|_| ImageError::MalformedSegment)?;
-        let mut data = segment.data().map_err(|_| ImageError::MalformedSegment)?;
-        if data.len() > mem_size {
-            return Err(ImageError::MalformedSegment.into());
-        }
-        while !data.is_empty() {
-            let page_base = round_down(vaddr, GRANULE_SIZE);
-            let index = page_base
-                .checked_sub(footprint.start)
-                .ok_or(ImageError::MalformedSegment)?
-                / GRANULE_SIZE;
-            let entry = pages.get(index).ok_or(ImageError::MalformedSegment)?;
-            let offset = vaddr - page_base;
-            let len = (GRANULE_SIZE - offset).min(data.len());
-            entry
-                .cap
-                .frame_map(
-                    caller_vspace,
-                    scratch.addr(),
-                    sel4::CapRights::read_write(),
-                    sel4::VmAttributes::default(),
-                )
-                .map_err(VSpaceError::ScratchMap)?;
-            // SAFETY: `scratch.addr()` names a granule-aligned page that is
-            // mapped read-write into this VSpace for the duration of the copy
-            // and is not aliased by any live Rust reference, and `offset + len`
-            // is bounded by `GRANULE_SIZE`.
-            unsafe {
-                ptr::copy_nonoverlapping(data.as_ptr(), (scratch.addr() + offset) as *mut u8, len);
+    frame
+        .frame_map(
+            caller_vspace,
+            scratch.addr(),
+            sel4::CapRights::read_write(),
+            sel4::VmAttributes::default(),
+        )
+        .map_err(VSpaceError::ScratchMap)?;
+    let copied = (|| {
+        for segment in image.file.segments() {
+            let start =
+                usize::try_from(segment.address()).map_err(|_| ImageError::MalformedSegment)?;
+            let mem_size =
+                usize::try_from(segment.size()).map_err(|_| ImageError::MalformedSegment)?;
+            let data = segment.data().map_err(|_| ImageError::MalformedSegment)?;
+            if data.len() > mem_size {
+                return Err(ImageError::MalformedSegment);
             }
-            entry.cap.frame_unmap().map_err(VSpaceError::ScratchUnmap)?;
-            vaddr += len;
-            data = data.get(len..).ok_or(ImageError::MalformedSegment)?;
+            let data_end = start
+                .checked_add(data.len())
+                .ok_or(ImageError::MalformedSegment)?;
+            let overlap_start = start.max(page.start);
+            let overlap_end = data_end.min(page.end);
+            if overlap_start >= overlap_end {
+                continue;
+            }
+            let src = overlap_start - start;
+            let dst = overlap_start - page.start;
+            let len = overlap_end - overlap_start;
+            // SAFETY: the scratch granule is mapped read-write for this copy;
+            // both offsets and `len` were clipped to the source and page ranges.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    data.as_ptr().add(src),
+                    (scratch.addr() + dst) as *mut u8,
+                    len,
+                );
+            }
         }
-    }
-    Ok(())
+        Ok::<(), ImageError>(())
+    })();
+    let unmapped = frame.frame_unmap().map_err(VSpaceError::ScratchUnmap);
+    copied.map_err(VSpaceError::Image)?;
+    unmapped
 }
 
-/// Make loaded code visible to the child's instruction fetch.
-fn unify_instruction_cache(pages: &[PageEntry], page_count: usize) -> Result<(), VSpaceError> {
+fn unify_instruction_page(frame: sel4::cap::Granule, flags: u8) -> Result<(), VSpaceError> {
     #[cfg(target_arch = "aarch64")]
-    for entry in pages.iter().take(page_count) {
-        if entry.flags & FLAG_EXEC == 0 {
-            continue;
-        }
+    if flags & FLAG_EXEC != 0 {
         let error = sel4::with_ipc_buffer_mut(|ipc_buffer| {
             ipc_buffer.inner_mut().seL4_ARM_Page_Unify_Instruction(
-                entry.cap.cptr().bits(),
+                frame.cptr().bits(),
                 0,
                 GRANULE_SIZE as sel4::Word,
             )
@@ -668,15 +651,7 @@ fn unify_instruction_cache(pages: &[PageEntry], page_count: usize) -> Result<(),
         }
     }
     #[cfg(target_arch = "riscv64")]
-    {
-        let _ = (pages, page_count);
-        // The root wrote the executable bytes itself; order those stores before
-        // instruction fetch on this hart. RISC-V seL4 exposes no page-cache
-        // maintenance invocation because the architecture is coherent here.
-        unsafe {
-            core::arch::asm!("fence.i", options(nostack));
-        }
-    }
+    let _ = (frame, flags);
     Ok(())
 }
 
@@ -731,17 +706,15 @@ pub const PRIVATE_WINDOW_BYTES: usize = crate::private_memory::MAX_REGION_PAGES 
 ///   the window from the last thread page, so a write running off the end of
 ///   either faults rather than landing in the other. Above the window nothing
 ///   is ever mapped, which is the upper guard.
-/// * **Aligned to its own span.** The base is rounded to a whole
-///   [`PRIVATE_WINDOW_BYTES`], which on this profile is exactly one leaf
-///   translation-table span, so the reservation costs one table rather than
-///   straddling two.
+/// * **2 MiB-aligned.** The base is rounded to the reserved span, which is
+///   currently exactly one 2 MiB block on both supported architectures. This
+///   is asserted separately from the window size so a later larger reservation
+///   cannot silently weaken the block-mapping precondition.
 ///
-/// The window is address space only: its tables are mapped when the VSpace is
-/// built (it is inside the range [`thread_mapped_span`] returns, so
-/// [`map_intermediate_tables`] and [`ChildImage::vspace_arena_plan`] both cover
-/// it already), while its leaf frames are allocated on demand by
-/// [`crate::private_memory`]. Planning frames here would charge every component
-/// for memory it may never ask for.
+/// The window is address space only. Upper translation tables are mapped when
+/// the VSpace is built; the leaf table is lazy because installing it would
+/// occupy the parent entry a 2 MiB frame needs. Private growth reserves and
+/// allocates the leaf table only when a 4 KiB mapping is actually selected.
 pub(crate) fn private_window(
     span: &Range<usize>,
     threads: usize,
@@ -750,6 +723,9 @@ pub(crate) fn private_window(
         .checked_add(GRANULE_SIZE)
         .and_then(|addr| addr.checked_next_multiple_of(PRIVATE_WINDOW_BYTES))
         .ok_or(ImageError::FootprintOutOfRange)?;
+    if !base.is_multiple_of(LARGE_FRAME_BYTES) {
+        return Err(ImageError::FootprintOutOfRange);
+    }
     let end = base
         .checked_add(PRIVATE_WINDOW_BYTES)
         .ok_or(ImageError::FootprintOutOfRange)?;
@@ -766,13 +742,35 @@ fn thread_pages_end(span: &Range<usize>, threads: usize) -> Result<usize, ImageE
         .ok_or(ImageError::FootprintOutOfRange)
 }
 
+/// The span whose table at `level` is installed during construction.
+///
+/// The leaf level deliberately stops before the private window. A 2 MiB frame
+/// occupies the parent entry where that leaf table would sit; installing it at
+/// spawn would make a later block mapping impossible. Upper levels still cover
+/// the reservation, while the first 4 KiB growth lazily installs its leaf.
+fn statically_mapped_span(
+    span: &Range<usize>,
+    threads: usize,
+    level: usize,
+) -> Result<Range<usize>, ImageError> {
+    if level + 1 == sel4::vspace_levels::NUM_LEVELS {
+        Ok(span.start..thread_pages_end(span, threads)?)
+    } else {
+        thread_mapped_span(span, threads)
+    }
+}
+
+pub(crate) fn private_leaf_table_type() -> sel4::TranslationTableObjectType {
+    sel4::TranslationTableObjectType::from_level(sel4::vspace_levels::NUM_LEVELS - 1)
+        .expect("supported VSpace has a leaf table")
+}
+
 /// The whole address range this root maps into a child: image, thread pages,
 /// and the private-memory window's reservation.
 ///
-/// One range rather than three, because the arena planner and the table mapper
-/// must agree exactly — planning a narrower span than is mapped makes
-/// construction depend on power-of-two arena slack, and mapping a narrower span
-/// than is planned leaves a growth needing a table nothing allocated.
+/// One range rather than three, because upper-level planning and mapping must
+/// agree exactly. The leaf level uses [`statically_mapped_span`] instead so the
+/// private window stays available for either one block entry or one lazy table.
 fn thread_mapped_span(span: &Range<usize>, threads: usize) -> Result<Range<usize>, ImageError> {
     let mapped_end = private_window(span, threads)?.end;
     if mapped_end > CHILD_ADDRESS_CEILING || span.start == 0 {
@@ -847,8 +845,9 @@ mod tests {
 
     use super::{
         CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError,
-        MAX_CHILD_IMAGE_PAGES, PRIVATE_WINDOW_BYTES, coarsen, private_window,
-        reject_writable_executable, round_down, thread_mapped_span, validate_footprint_span,
+        LARGE_FRAME_BYTES, MAX_CHILD_IMAGE_PAGES, PRIVATE_WINDOW_BYTES, coarsen, private_window,
+        reject_writable_executable, round_down, statically_mapped_span, thread_mapped_span,
+        validate_footprint_span,
     };
 
     #[test]
@@ -922,17 +921,29 @@ mod tests {
                 window.start >= thread_pages_end + GRANULE_SIZE,
                 "threads={threads}: the window must not abut the last thread page"
             );
-            // Span-aligned, so the reservation costs one leaf table rather
-            // than straddling two.
+            // The current reservation and 2 MiB frame alignment coincide, but
+            // both are asserted: a later larger window must still preserve the
+            // block-mapping precondition.
             assert_eq!(window.start % PRIVATE_WINDOW_BYTES, 0);
+            assert_eq!(window.start % LARGE_FRAME_BYTES, 0);
             assert_eq!(window.end - window.start, PRIVATE_WINDOW_BYTES);
-            // And the mapped span covers it, which is what makes a growth
-            // need leaf frames only.
             assert_eq!(
                 thread_mapped_span(&footprint, threads).unwrap().end,
                 window.end
             );
         }
+    }
+
+    #[test]
+    fn the_private_window_leaf_table_is_lazy_but_upper_tables_cover_it() {
+        let footprint = 0x1000..0x1fe000;
+        let window = private_window(&footprint, 1).unwrap();
+        let leaf = sel4::vspace_levels::NUM_LEVELS - 1;
+        let leaf_span = statically_mapped_span(&footprint, 1, leaf).unwrap();
+        assert!(leaf_span.end <= window.start);
+        let upper = statically_mapped_span(&footprint, 1, leaf - 1).unwrap();
+        assert_eq!(upper.end, window.end);
+        assert_eq!(window.start % LARGE_FRAME_BYTES, 0);
     }
 
     #[test]

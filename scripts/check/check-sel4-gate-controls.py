@@ -41,7 +41,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 22),
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 23),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -667,6 +667,110 @@ memory_mib = 64
     return 4
 
 
+def check_private_memory_capacity_controls() -> int:
+    gate = load_script(
+        "sel4_private_memory_semantic_controls", "check/check-sel4-private-memory-plane.py"
+    )
+    gate.fail = reject_control
+    profile = {"memory_mib": 2048}
+    section = "control"
+    qualification = (
+        "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders=4 "
+        "pages=65536 private_allocations=263168 private_extents=1028 private_cslots=264196 "
+        "private_reserved=1075838976 payload=1073741824 tables=2097152 alignment=0 "
+        "static_allocations=8 static_reserved=16384 required_allocations=263200 "
+        "required_extents=1028 required_cslots=264228 required_reserved=1075904512 "
+        "allocation_capacity=266000 allocations_available=265000 extent_capacity=1072 "
+        "extents_available=1050 cslots_available=500000 ordinary_available=2013265920 "
+        "ordinary_layout=1 root_image=8388608 root_metadata=1048576 root_stack=1048576 "
+        "root_heap=524288 fit=1"
+    )
+    gate.check_segmented_capacity_report(qualification, profile, section)
+    capacity_mutations = (
+        ("capacity false refusal", qualification[:-1] + "0"),
+        (
+            "capacity missing static descriptors",
+            qualification.replace("required_allocations=263200", "required_allocations=263168"),
+        ),
+        (
+            "capacity missing static RAM",
+            qualification.replace("required_reserved=1075904512", "required_reserved=1075838976"),
+        ),
+        (
+            "capacity ignores impossible ordinary layout",
+            qualification.replace("ordinary_layout=1", "ordinary_layout=0")[:-1] + "1",
+        ),
+        ("capacity allocation exhaustion", qualification.replace("allocations_available=265000", "allocations_available=263199")),
+        ("capacity extent exhaustion", qualification.replace("extents_available=1050", "extents_available=1027")),
+        ("capacity slot exhaustion", qualification.replace("cslots_available=500000", "cslots_available=264227")),
+        ("capacity ordinary exhaustion", qualification.replace("ordinary_available=2013265920", "ordinary_available=1075904511")),
+        ("capacity small tables", qualification.replace("allocation_capacity=266000 allocations_available=265000", "allocation_capacity=4096 allocations_available=3000")),
+        ("capacity duplicate report", qualification + "\n" + qualification),
+        (
+            "capacity missing static field",
+            qualification.replace(" static_allocations=8", ""),
+        ),
+    )
+    for description, transcript in capacity_mutations:
+        require_rejection(
+            description,
+            "capacity qualification:",
+            lambda transcript=transcript: gate.check_segmented_capacity_report(
+                transcript, profile, section
+            ),
+        )
+    conversion_lines = [
+        "SLIME_MEM refused task=5 delta=512 cause=frames detail=Frames { allocated: 0, error: Retype }",
+        "SLIME_MEM grown task=5 delta=1 previous=0 pages=1 base=0x400000 quota=512 total=1 large_frames=0 base_frames=1 leaf_tables=1",
+        "SLIME_MEM grown task=5 delta=511 previous=1 pages=512 base=0x400000 quota=512 total=512 large_frames=0 base_frames=512 leaf_tables=1",
+        "[private-memory-probe] granted pages=512 base=0x400000 zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
+    ]
+    conversion = "\n".join(conversion_lines)
+    gate.check_large_map_retry(conversion)
+    conversion_mutations = (
+        ("conversion missing first page", "\n".join(conversion_lines[:1] + conversion_lines[2:])),
+        ("conversion used large frame", conversion.replace("base_frames=512", "base_frames=0")),
+        ("conversion changed task", conversion.replace("task=5 delta=511", "task=6 delta=511")),
+        ("conversion changed base", conversion.replace("previous=1 pages=512 base=0x400000", "previous=1 pages=512 base=0x600000")),
+        ("conversion wrong order", "\n".join([conversion_lines[0], conversion_lines[2], conversion_lines[1], conversion_lines[3]])),
+    )
+    for description, transcript in conversion_mutations:
+        require_rejection(description, "large-map failure", lambda transcript=transcript: gate.check_large_map_retry(transcript))
+
+
+    rollback_lines = [
+        "SLIME_MEM refused task=0 delta=2 cause=frames detail=Frames { allocated: 1, error: Retype }",
+        "SLIME_CHILD mem rollback preserved pages=1 base=0x40000000 survived=0x4d454d5f42415345",
+        "SLIME_MEM refused task=1 delta=2 cause=frames detail=Frames { allocated: 1, error: Retype }",
+        "SLIME_CHILD mem zero rollback result=-5 pages=0 base=0x50000000",
+        "SLIME_MEM grown task=1 delta=512 previous=0 pages=512 base=0x50000000 quota=512 total=513 large_frames=0 base_frames=512 leaf_tables=1",
+        "SLIME_CHILD mem whole retry pages=512 base=0x50000000 zeroed=1 preserved=1 survived=0x4d454d5f42415345",
+        "SLIME_CHILD fault requested addr=0x0",
+        "SLIME_ROOT child fault observed task=1 role=deliberate-fault kind=VirtualMemory { access: Write, level: 0 } instruction=Some(0) address=Some(0)",
+        "SLIME_MEM enforced clean_quota=4 retry_quota=512 pages=513 grants=2 grown=513 reclaimed=0 flags=0x7f",
+        "SLIME_MEM teardown grown=513 reclaimed=513 pages=0",
+        "SLIME_ROOT READY tasks=2 grants=2 declared_grants=2 reclaimed_slots=600",
+    ]
+    rollback = "\n".join(rollback_lines)
+    gate.check_incremental_rollback(rollback)
+    reordered = rollback_lines.copy()
+    reordered[3], reordered[4] = reordered[4], reordered[3]
+    rollback_mutations = (
+        ("rollback missing zero marker", "\n".join(line for index, line in enumerate(rollback_lines) if index != 3)),
+        ("rollback reordered zero and bulk", "\n".join(reordered)),
+        ("rollback used large frame", rollback.replace("large_frames=0", "large_frames=1")),
+        ("rollback explicit failure", rollback + "\nSLIME_CHILD mem zero retry failed"),
+        ("rollback missing ready", "\n".join(rollback_lines[:-1])),
+    )
+    for description, transcript in rollback_mutations:
+        require_rejection(
+            description,
+            "private rollback:",
+            lambda transcript=transcript: gate.check_incremental_rollback(transcript),
+        )
+    return len(capacity_mutations) + len(rollback_mutations) + len(conversion_mutations)
+
+
 
 def main() -> None:
     if Path_cwd() != ROOT:
@@ -675,6 +779,7 @@ def main() -> None:
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
     total += check_layout_gate()
+    total += check_private_memory_capacity_controls()
     with tempfile.TemporaryDirectory(prefix="slime-sel4-gate-controls-") as temporary:
         control_root = _Path(temporary)
         identity_controls = check_image_identity_controls(control_root)

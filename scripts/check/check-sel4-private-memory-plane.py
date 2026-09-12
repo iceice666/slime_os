@@ -15,13 +15,13 @@ omitted one — and checks four things no single marker states:
   the budget it admitted and `installed=` read back off the task record, so a
   root that resolved the budget and then constructed the task from something
   else disagrees with itself in one line;
-* **the ceiling binds at exactly the declared number.** The granted probe
-  discovers its own ceiling by growing one page at a time until refused, and the
-  gate requires that measurement to equal the fixture's `pageQuota`. The probe
-  never reads the manifest, so this is a measurement rather than a restatement;
+* **the ceiling binds at exactly the declared number.** The granted probe maps
+  the full declared span, then asks for one more page and is refused by the
+  fixed reservation at exactly that extent. The probe never reads the manifest,
+  so the gate's comparison remains a measurement rather than a restatement;
 * **omission denies.** The instance absent from the budget must be refused its
-  first page with `cause=reservation` — the deny-by-default state carries no
-  window at all, so it is refused by the reservation before quota arithmetic is
+  full-window request with `cause=reservation` — the deny-by-default state
+  carries no window at all, so it is refused before quota arithmetic is
   reached, which is a stronger statement than "was given zero";
 * **a refusal has no effect.** The granted probe re-queries after its refusal
   and must find the region unchanged, and the root's growth grants must total
@@ -37,6 +37,7 @@ entirely.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -44,14 +45,20 @@ import shutil
 import subprocess
 import sys
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
-from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
+from harness import (
+    GENERATION_COMPOSITIONS,
+    load_qemu_profile,
+    profile_integer,
+    profile_text,
+    qemu_kernel_arguments,
+    sha256_file,
+)  # noqa: E402
 from sel4_gate_markers import (  # noqa: E402
     chains_from_gate,
     marker_count,
@@ -67,6 +74,15 @@ IMAGE: Path | None = None
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory.zti"
 TIMEOUT = 240
+ROLLBACK_CLOSURE = "sel4-private-memory-fail-second-allocation"
+LARGE_MAP_CLOSURE = "sel4-private-memory-fail-large-map"
+CLOSURE_PLATFORM = "qemu-arm-virt"
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
+PLATFORMS = {
+    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
+    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
 
 # Causal chains rather than one flat sequence, on B55/B68's rule: a required
 # order must be one the mechanism promises, not one a scheduler happened to
@@ -115,18 +131,20 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # its ceiling, and it reports only after the refusal.
         "the granted holder reached its declared ceiling and was then refused",
         (
-            r"SLIME_MEM refused task=\d+ delta=1 cause=quota "
-            r"detail=QuotaExceeded \{ pages: (\d+), delta: 1, quota: (\d+) \}",
+            r"SLIME_MEM grown task=\d+ delta=512 previous=0 pages=512 "
+            r"base=0x[0-9a-f]+ quota=512 total=\d+ large_frames=1 base_frames=0 leaf_tables=0",
+            r"SLIME_MEM refused task=\d+ delta=1 cause=reservation "
+            r"detail=ReservationExceeded \{ pages: (\d+), delta: 1, reservation: (\d+) \}",
             r"\[private-memory-probe\] granted pages=(\d+) base=0x[0-9a-f]+ "
-            r"zeroed=1 survived=1 refused=1",
+            r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=0",
         ),
     ),
     (
         # The omitted probe's own sequence, independent of the granted one's.
         "the omitted holder was refused its first page by the reservation",
         (
-            r"SLIME_MEM refused task=\d+ delta=1 cause=reservation "
-            r"detail=ReservationExceeded \{ pages: 0, delta: 1, reservation: 0 \}",
+            r"SLIME_MEM refused task=\d+ delta=512 cause=reservation "
+            r"detail=ReservationExceeded \{ pages: 0, delta: 512, reservation: 0 \}",
             r"\[private-memory-probe\] denied pages=0 base=0x0 refused=1",
         ),
     ),
@@ -191,14 +209,9 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
-# A size query allocates nothing and both probes issue one, so this marker is
-# required but its position is not causally ordered against either probe's chain
-# — asserting one would again pin which probe the scheduler ran first (B63's
-# mechanism for exactly this).
 EXPECTED_UNORDERED: tuple[str, ...] = (
     r"\[private-memory-probe\] query pages=0 base=0x[0-9a-f]+",
 )
-
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_MEM FAIL",
@@ -264,52 +277,92 @@ def declared_quotas() -> dict[str, int]:
     return declared
 
 
-def build_image() -> None:
+def image_path(platform: str) -> Path | None:
+    if platform == CLOSURE_PLATFORM:
+        return IMAGE
+    return RV64_IMAGE
+
+
+def build_image(platform: str, *, reuse: bool = True) -> None:
+    """Build this plane through its closure or declared cross-target legacy arm."""
     global IMAGE
+    if platform == CLOSURE_PLATFORM:
+        try:
+            built = build_closure_image(CLOSURE, reuse=reuse)
+        except ClosureImageError as error:
+            fail(str(error))
+        IMAGE = built.image
+        actual = sha256_file(IMAGE, fail)
+        if actual != built.digest():
+            fail(
+                f"{IMAGE} SHA-256 is {actual}, but the build result records "
+                f"{built.digest()}; the image changed after it was built"
+            )
+        return
+
+    command = [
+        sys.executable,
+        str(BUILD_SCRIPT),
+        "--skip-pin-check",
+        "--private-memory-plane",
+        "--platform",
+        platform,
+    ]
+    print(f"[build] {' '.join(command)}", flush=True)
     try:
-        built = build_closure_image(CLOSURE)
-    except ClosureImageError as error:
-        fail(str(error))
-    IMAGE = built.image
-    actual = sha256_file(IMAGE, fail)
-    if actual != built.digest():
-        fail(f"{IMAGE} SHA-256 is {actual}, but the build result records {built.digest()}; the image changed after it was built")
+        process = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        fail(f"cannot build the RV64 private-memory image: {error}")
+    if process.returncode != 0:
+        fail(f"RV64 private-memory image build failed with exit status {process.returncode}")
 
 
-def boot(profile: dict[str, object]) -> str:
-    qemu = shutil.which("qemu-system-aarch64")
+def boot(
+    profile: dict[str, object],
+    *,
+    section: str,
+    qemu_binary: str,
+    image: Path,
+) -> str:
+    qemu = shutil.which(qemu_binary)
     if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
+        fail(f"{qemu_binary} is not on PATH")
     command = [
         qemu,
         "-machine",
-        str(profile["machine"]),
+        profile_text(profile, "machine", fail, section),
         "-cpu",
-        str(profile["cpu"]),
+        profile_text(profile, "cpu", fail, section),
         "-smp",
-        str(profile["cpus"]),
+        str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile['memory_mib']}M",
+        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
-        "-kernel",
-        str(IMAGE),
+        *qemu_kernel_arguments(qemu_binary, image, fail),
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    print(f"[boot] {' '.join(command)}", flush=True)
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as error:
+        fail(f"cannot run QEMU: {error}")
     watchdog = threading.Timer(TIMEOUT, process.kill)
     watchdog.start()
     lines: list[str] = []
+    # `SLIME_ROOT READY` as well as the graph's terminal: the rollback case
+    # boots the fixture root, whose embedded child runs the injected-failure arm
+    # of the private-memory phase and which never launches a component graph.
     terminal = re.compile(
-        r"SLIME_GRAPH HEALTHY|SLIME_ROOT FATAL|private memory plane fail"
+        r"SLIME_GRAPH HEALTHY|SLIME_ROOT READY|SLIME_ROOT FATAL|private memory plane fail"
         r"|\[private-memory-probe\] FAIL|\[private-heap-probe:(?:granted|denied|both)\] FAIL"
     )
     try:
@@ -331,6 +384,90 @@ def boot(profile: dict[str, object]) -> str:
         fail("QEMU timed out")
     return "\n".join(lines)
 
+def build_named_image(name: str) -> Path:
+    try:
+        built = build_closure_image(name)
+    except ClosureImageError as error:
+        fail(str(error))
+    actual = sha256_file(built.image, fail)
+    if actual != built.digest():
+        fail(f"{name}: image changed after its build result was written")
+    return built.image
+
+
+def check_large_map_retry(transcript: str) -> None:
+    refused = re.findall(
+        r"SLIME_MEM refused task=\d+ delta=512 cause=frames detail=Frames \{ allocated: 0,",
+        transcript,
+    )
+    if len(refused) != 1:
+        fail(f"large-map case recorded {len(refused)} injected refusal(s), expected one")
+    conversion = re.search(
+        r"SLIME_MEM grown task=(?P<task>\d+) delta=1 previous=0 pages=1 "
+        r"base=(?P<base>0x[0-9a-f]+) quota=512 total=\d+ large_frames=0 base_frames=1 leaf_tables=1",
+        transcript,
+    )
+    if conversion is None or re.search(
+        rf"SLIME_MEM grown task={conversion.group('task')} delta=511 previous=1 pages=512 "
+        rf"base={conversion.group('base')} quota=512 total=\d+ large_frames=0 base_frames=512 leaf_tables=1",
+        transcript[conversion.end():],
+    ) is None:
+        fail("large-map failure did not convert its reserved backing to base pages")
+    report = re.search(
+        r"\[private-memory-probe\] granted pages=512 base=0x[0-9a-f]+ "
+        r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
+        transcript,
+    )
+    if report is None:
+        fail("large-map failure did not retry successfully with one coherent backing object")
+
+
+def check_incremental_rollback(transcript: str) -> None:
+    prefix = "private rollback: "
+    failures = (
+        "SLIME_CHILD mem rollback failed",
+        "SLIME_CHILD mem zero retry failed",
+        "SLIME_MEM FAIL",
+        "SLIME_ROOT FATAL",
+    )
+    for marker in failures:
+        if marker in transcript:
+            fail(prefix + f"explicit failure marker present: {marker}")
+
+    patterns = (
+        r"SLIME_MEM refused task=0 delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        r"SLIME_CHILD mem rollback preserved pages=1 base=0x(?P<task0>[0-9a-f]+) survived=0x4d454d5f42415345",
+        r"SLIME_MEM refused task=1 delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        r"SLIME_CHILD mem zero rollback result=-\d+ pages=0 base=0x(?P<zero>[0-9a-f]+)",
+        r"SLIME_MEM grown task=1 delta=512 previous=0 pages=512 base=0x(?P<root>[0-9a-f]+) quota=512 total=513 large_frames=0 base_frames=512 leaf_tables=1",
+        r"SLIME_CHILD mem whole retry pages=512 base=0x(?P<whole>[0-9a-f]+) zeroed=1 preserved=1 survived=0x4d454d5f42415345",
+        r"SLIME_CHILD fault requested addr=0x0",
+        r"SLIME_ROOT child fault observed task=1 role=deliberate-fault kind=VirtualMemory \{ access: Write",
+        r"SLIME_MEM enforced clean_quota=4 retry_quota=512 pages=513 grants=2 grown=513 reclaimed=0 flags=0x7f",
+        r"SLIME_MEM teardown grown=513 reclaimed=513 pages=0",
+        r"SLIME_ROOT READY tasks=2 grants=\d+ declared_grants=\d+ reclaimed_slots=\d+",
+    )
+    position = 0
+    matches: list[re.Match[str]] = []
+    for pattern in patterns:
+        match = re.search(pattern, transcript[position:])
+        if match is None:
+            fail(prefix + f"missing or out-of-order evidence: {pattern}")
+        position += match.end()
+        matches.append(match)
+    refusals = re.findall(
+        r"SLIME_MEM refused task=[01] delta=2 cause=frames detail=Frames \{ allocated: 1,",
+        transcript,
+    )
+    if len(refusals) != 2:
+        fail(prefix + f"recorded {len(refusals)} injected refusals, expected two")
+    bases = {
+        int(matches[3].group("zero"), 16),
+        int(matches[4].group("root"), 16),
+        int(matches[5].group("whole"), 16),
+    }
+    if len(bases) != 1 or 0 in bases:
+        fail(prefix + "task1 retry bases differ or are zero")
 
 def check_markers(transcript: str) -> None:
     # The shared helper rather than a local loop, on B63's rule: every other
@@ -343,6 +480,8 @@ def check_markers(transcript: str) -> None:
         FAILURE_MARKERS,
         fail,
     )
+    if re.search(r"SLIME_MEM (?:capacity|qualification)", transcript):
+        fail("normal private-memory transcript contains workload qualification")
 
 
 def check_declared_is_installed(transcript: str, declared: dict[str, int]) -> None:
@@ -383,10 +522,11 @@ def check_declared_is_installed(transcript: str, declared: dict[str, int]) -> No
 def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
     """The probe's *measured* ceiling equals the declared one.
 
-    This is the assertion the milestone turns on. The probe grows one page at a
-    time until it is refused and reports the total it reached; it never reads the
-    manifest, so agreement here means the declared number is what actually bound
-    it — not that two copies of a constant match.
+    The granted instance maps the complete declared span and reports it without
+    reading the manifest. Its next page is refused by the structural
+    reservation, whose precedence over quota is itself part of the public grow
+    contract. Agreement here therefore proves the declared ceiling is both
+    reachable and exactly the fixed window extent.
     """
     expected = declared["private-memory-granted"]
     measured = re.search(
@@ -400,32 +540,41 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
             f"the granted probe grew to {measured.group(1)} page(s) against a "
             f"declared quota of {expected}"
         )
-    # The refusal must name the same number, so the cause the root recorded is
-    # the ceiling the probe hit rather than a coincidence at a different bound.
+    # Both probes run in unconstrained order and the denied one emits the same
+    # `ReservationExceeded` shape with pages=0, so the refusal must be scoped
+    # to the granted task's own id rather than taken as the transcript's first
+    # match. Captured here in the same search as the installed base, which the
+    # refusal must also agree with below.
+    granted = re.search(
+        r"SLIME_MEM quota task=(\d+) instance=private-memory-granted "
+        r"declared=\d+ installed=\d+ base=(0x[0-9a-f]+)",
+        transcript,
+    )
+    if granted is None:
+        fail("the root reported no installed ceiling for private-memory-granted")
     refusal = re.search(
-        r"cause=quota detail=QuotaExceeded \{ pages: (\d+), delta: 1, quota: (\d+) \}",
+        rf"SLIME_MEM refused task={granted.group(1)} delta=1 "
+        r"cause=reservation detail=ReservationExceeded \{ pages: (\d+), delta: 1, "
+        r"reservation: (\d+) \}",
         transcript,
     )
     if refusal is None:
-        fail("no quota refusal was recorded")
+        fail(
+            f"private-memory-granted (task {granted.group(1)}) recorded no "
+            "full-window reservation refusal"
+        )
     if int(refusal.group(1)) != expected or int(refusal.group(2)) != expected:
         fail(
-            f"the refusal names pages={refusal.group(1)} quota={refusal.group(2)}, "
+            f"the refusal names pages={refusal.group(1)} reservation={refusal.group(2)}, "
             f"expected both to be {expected}"
         )
     # The base the root reported installing and the base the probe dereferenced
     # must be the same address. Without this the two halves could each be
     # self-consistent about a different window.
-    installed = re.search(
-        r"SLIME_MEM quota task=\d+ instance=private-memory-granted "
-        r"declared=\d+ installed=\d+ base=(0x[0-9a-f]+)",
-        transcript,
-    )
-    if installed is None or installed.group(1) != measured.group(2):
-        reported = installed.group(1) if installed else "<none>"
+    if granted.group(2) != measured.group(2):
         fail(
-            f"the root installed a window at {reported} but the probe used "
-            f"{measured.group(2)}"
+            f"the root installed a window at {granted.group(2)} but the probe "
+            f"used {measured.group(2)}"
         )
 
 
@@ -473,10 +622,7 @@ def check_only_declared_pages_were_charged(transcript: str, declared: dict[str, 
         # Each record must be internally consistent, which is what makes the sum
         # above meaningful rather than an accumulation of unrelated numbers.
         if int(previous) + int(delta) != int(pages):
-            fail(
-                f"{instance}: a growth of {delta} took {previous} page(s) to "
-                f"{pages}"
-            )
+            fail(f"{instance}: a growth of {delta} took {previous} page(s) to {pages}")
     for instance, pages in sorted(charged.items()):
         expected = declared.get(instance, 0)
         if pages > expected:
@@ -678,27 +824,166 @@ def check_the_two_planes_are_independent(transcript: str, declared: dict[str, in
         )
 
 
+def check_segmented_capacity_report(
+    transcript: str, profile: dict[str, object], section: str
+) -> None:
+    prefix = "capacity qualification: "
+    pattern = re.compile(
+        r"^SLIME_MEM qualification scope=(?P<scope>\S+) holders=(?P<holders>\d+) "
+        r"pages=(?P<pages>\d+) private_allocations=(?P<private_allocations>\d+) "
+        r"private_extents=(?P<private_extents>\d+) private_cslots=(?P<private_cslots>\d+) "
+        r"private_reserved=(?P<private_reserved>\d+) payload=(?P<payload>\d+) "
+        r"tables=(?P<tables>\d+) alignment=(?P<alignment>\d+) "
+        r"static_allocations=(?P<static_allocations>\d+) static_reserved=(?P<static_reserved>\d+) "
+        r"required_allocations=(?P<required_allocations>\d+) required_extents=(?P<required_extents>\d+) "
+        r"required_cslots=(?P<required_cslots>\d+) required_reserved=(?P<required_reserved>\d+) "
+        r"allocation_capacity=(?P<allocation_capacity>\d+) allocations_available=(?P<allocations_available>\d+) "
+        r"extent_capacity=(?P<extent_capacity>\d+) extents_available=(?P<extents_available>\d+) "
+        r"cslots_available=(?P<cslots_available>\d+) ordinary_available=(?P<ordinary_available>\d+) "
+        r"ordinary_layout=(?P<ordinary_layout>\d+) root_image=(?P<image>\d+) "
+        r"root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
+        r"root_heap=(?P<heap>\d+) fit=(?P<fit>\d+)$",
+        re.MULTILINE,
+    )
+    reports = list(pattern.finditer(transcript))
+    qualification_lines = re.findall(r"^SLIME_MEM qualification\b.*$", transcript, re.MULTILINE)
+    if len(reports) != 1 or len(qualification_lines) != 1:
+        fail(prefix + f"expected exactly one complete report, found {len(qualification_lines)}")
+    report = reports[0]
+    values: dict[str, int] = {}
+    for name, token in report.groupdict().items():
+        if name == "scope":
+            continue
+        value = int(token)
+        if value > 2**64 - 1:
+            fail(prefix + f"{name} exceeds u64")
+        values[name] = value
+    if report.group("scope") != "staged-graph-plus-four-probe-clones":
+        fail(prefix + "scope mismatch")
+    expected_private = {
+        "holders": 4,
+        "pages": 65_536,
+        "private_allocations": 263_168,
+        "private_extents": 1_028,
+        "private_cslots": 264_196,
+        "private_reserved": 1_075_838_976,
+        "payload": 1_073_741_824,
+        "tables": 2_097_152,
+        "alignment": 0,
+    }
+    for name, expected in expected_private.items():
+        if values[name] != expected:
+            fail(prefix + f"{name}={values[name]}, expected {expected}")
+    if values["static_allocations"] < 8:
+        fail(prefix + "static_allocations is below the exemplar minimum")
+    if values["static_reserved"] == 0:
+        fail(prefix + "static_reserved is zero")
+    expected_required = {
+        "required_allocations": values["private_allocations"]
+        + values["static_allocations"] * values["holders"],
+        "required_extents": values["private_extents"],
+        "required_cslots": values["private_cslots"]
+        + values["static_allocations"] * values["holders"],
+        "required_reserved": values["private_reserved"]
+        + values["static_reserved"] * values["holders"],
+    }
+    for name, expected in expected_required.items():
+        if values[name] != expected:
+            fail(prefix + f"{name}={values[name]}, expected {expected}")
+    if values["allocation_capacity"] < values["required_allocations"] or values["extent_capacity"] < values["required_extents"]:
+        fail(prefix + "platform descriptor tables cannot represent the four holders")
+    if not 0 <= values["allocations_available"] < values["allocation_capacity"]:
+        fail(prefix + "allocations_available does not reflect staged graph use")
+    if not 0 <= values["extents_available"] < values["extent_capacity"]:
+        fail(prefix + "extents_available does not reflect staged graph use")
+    comparisons = (
+        values["required_allocations"] <= values["allocations_available"],
+        values["required_extents"] <= values["extents_available"],
+        values["required_cslots"] <= values["cslots_available"],
+        values["required_reserved"] <= values["ordinary_available"],
+        values["ordinary_layout"] == 1,
+    )
+    if values["ordinary_layout"] not in (0, 1):
+        fail(prefix + "ordinary_layout is not 0 or 1")
+    if values["fit"] not in (0, 1):
+        fail(prefix + "fit is not 0 or 1")
+    if values["fit"] != int(all(comparisons)):
+        fail(prefix + "fit disagrees with required-versus-available resources")
+    if values["fit"] != 1:
+        fail(prefix + "four holders do not fit the live platform resources")
+    platform_bytes = profile_integer(profile, "memory_mib", fail, section) * 1024 * 1024
+    # This milestone qualifies the fixed 2 GiB platform, not a larger profile.
+    # Live ordinary availability already excludes the root image (including its
+    # metadata, stack and heap), kernel objects and staged graph reservations.
+    if platform_bytes != 2 * 1024**3:
+        fail(prefix + "qualification must boot the 2 GiB platform")
+    if values["image"] == 0 or values["image"] > platform_bytes:
+        fail(prefix + "root_image is outside the platform envelope")
+    if values["metadata"] == 0:
+        fail(prefix + "root_metadata is zero")
+    if values["stack"] != 1_048_576 or values["heap"] != 524_288:
+        fail(prefix + "root stack or heap diagnostic changed")
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+        help="the pinned QEMU profile and image to build and boot",
+    )
+    arguments = parser.parse_args()
     declared = declared_quotas()
-    build_image()
-    pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
-    profile = pins.get("qemu_arm_virt")
-    if not isinstance(profile, dict):
-        fail("missing qemu profile")
-    transcript = boot(profile)
+    section, qemu_binary = PLATFORMS[arguments.platform]
+    build_image(arguments.platform)
+    image = image_path(arguments.platform)
+    if image is None or not image.is_file():
+        fail(f"missing packaged image for {arguments.platform}")
+    profile = load_qemu_profile(fail, PINS, section)
+    transcript = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image=image,
+    )
     check_markers(transcript)
     check_declared_is_installed(transcript, declared)
     check_measured_ceiling(transcript, declared)
     check_only_declared_pages_were_charged(transcript, declared)
     check_growth_was_batched_and_reused(transcript, declared)
     check_the_two_planes_are_independent(transcript, declared)
+    if arguments.platform == CLOSURE_PLATFORM:
+        large_map = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=build_named_image(LARGE_MAP_CLOSURE),
+        )
+        check_large_map_retry(large_map)
+        check_declared_is_installed(large_map, declared)
+        check_measured_ceiling(large_map, declared)
+        check_only_declared_pages_were_charged(large_map, declared)
+        check_segmented_capacity_report(large_map, profile, section)
+        if any(re.search(pattern, large_map) for pattern in FAILURE_MARKERS):
+            fail("large-map qualification contains an explicit failure marker")
+        if re.search(r"SLIME_GRAPH HEALTHY generation=\d+ required=\d+ live=\d+ completed=\d+ failed=0", large_map) is None:
+            fail("large-map qualification did not reach a healthy graph terminal")
+        rollback = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=build_named_image(ROLLBACK_CLOSURE),
+        )
+        check_incremental_rollback(rollback)
+    cases = 3 if arguments.platform == CLOSURE_PLATFORM else 1
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "
-        f"{len(CHAINS)} causal chains; the declared quota "
-        f"({declared['private-memory-granted']} page(s)) is the measured ceiling, "
-        f"{declared['private-heap-granted']} page(s) is the allocator's ceiling, "
-        "and an omitted holder grows nothing"
+        f"{len(CHAINS)} causal chains and {cases} image case(s) on {arguments.platform}; "
+        f"the declared quota ({declared['private-memory-granted']} page(s)) is the "
+        "measured ceiling, worker RPC remained exactly-once, a worker's own growth "
+        "was adjudicated against its task's region, failed large-map backing "
+        "retried, and incremental rollback preserved committed bytes"
     )
 
 

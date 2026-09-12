@@ -72,6 +72,7 @@ machine = "virt,virtualization=on"
 cpu = "cortex-a53"
 cpus = 1
 memory_mib = 2048
+root_cnode_size_bits = 19
 qemu_version = "11.0.1"
 # `slime-root`'s timer phase programs the EL1 physical timer directly from
 # EL0 (`slime-root/src/platform_timer.rs`); these grant PL0 access to the
@@ -96,6 +97,7 @@ machine = "virt"
 cpu = "rv64"
 cpus = 1
 memory_mib = 3072
+root_cnode_size_bits = 19
 qemu_version = "11.0.1"
 firmware = "rust-sel4 kernel loader with embedded OpenSBI"
 interrupt_controller = "sifive-plic-1.0.0"
@@ -523,18 +525,18 @@ platform_info_sha256 = "992415a47d0ccd67a180b01bb35a49e5a5545165458e6e3027e68f53
 # `RISCV_EXPORT_TIME_USER` option, QEMU machine facts, config, and GNU RISC-V
 # toolchain.
 [observed_prefix_qemu_riscv_virt]
-kernel_sha256 = "ef24f1fbc8084cb307d12e73a72d41d0944e67ffc3e872079fc44eda56a40d9f"
-kernel_config_sha256 = "8d0ef4446b1332312dd9f2ab0557c8027fb2df6f391bb04f08a0c74b73b83ca6"
+kernel_sha256 = "79e6274117bce5ac0e91dbfc4e3b776739c8c5873bdcce2ce762df6d0a59e1e0"
+kernel_config_sha256 = "e306b157aff546dbd59809319a67525ce9f4da745d57d57b2aca069349192077"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "7e60b8954a02e149a36e3e58eb70af2f4853ae347e9d8df0194c3fcb5f1e9c87"
 platform_info_sha256 = "1433a46cdc40b51d91b3f6c2dc7a7d5d1692fe2aae3c401c02d12622d5fb85e2"
 
 [observed_prefix]
-kernel_sha256 = "97dcb029127bcc0fac1fd6cc83950ba878040a773a380e2d000b0ebc20d875ce"
-kernel_config_sha256 = "3a76491c41dc53e6c5c754cd839d350a67298e9d19fc47c9cc9544db91497e2f"
+kernel_sha256 = "ea512f770e03765304159db48eebb5ce8fd4811d67c07b3008b54975e70276f7"
+kernel_config_sha256 = "ae1047e132f70aeaf2f8f1a0f5e8fc5397c2ca36a65bcbf468cae6694da9dca2"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
-dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"
-platform_info_sha256 = "9a8eca4b07ddf06130d713ce4e4a7d52944955fc29fa826b5e28c9a318d65f6c"
+dtb_sha256 = "1b0761bca398010789a39ff132bfccd57261bd4dbff01a698a876afe77ccfc1b"
+platform_info_sha256 = "006e9747dc0ddb8f49b00c65fe2488e07d06a86e1a2c99972ad63ebeb22712f7"
 
 # The same contract for P4's board kernel, observed from
 # `just sel4_rpi5_image_check`. A separate table because this is a different

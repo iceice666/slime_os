@@ -15,10 +15,11 @@ def chains_from_gate(gate: object) -> tuple[Chain, ...]:
 
     A gate may also declare `EXPECTED_UNORDERED`: markers it requires but whose
     position is not causally ordered against its chains — an independent task's
-    completion, typically. Those are appended as their own pseudo-chain so the
-    meta-gate's coverage count still sees them. Without this, moving a racy
-    marker out of a causal chain reads as *lost* coverage rather than as the same
-    coverage asserted correctly (B63).
+    completion, typically. Each becomes a one-marker pseudo-chain so matching
+    imposes no order between independent evidence while the meta-gate's coverage
+    count still sees every marker. Without this, moving racy evidence out of a
+    causal chain reads as lost coverage rather than the same coverage asserted
+    correctly (B63).
     """
     chains = getattr(gate, "CHAINS", None)
     if chains is not None:
@@ -31,8 +32,7 @@ def chains_from_gate(gate: object) -> tuple[Chain, ...]:
             raise AttributeError("gate declares neither CHAINS, REQUIRED_MARKERS, nor MARKERS")
         declared = [("required marker sequence", tuple(pattern for _, pattern in markers))]
     unordered = tuple(getattr(gate, "EXPECTED_UNORDERED", ()))
-    if unordered:
-        declared.append(("order-independent markers", unordered))
+    declared.extend(("order-independent marker", (pattern,)) for pattern in unordered)
     return tuple(declared)
 
 

@@ -489,7 +489,8 @@ impl Task {
         (live, peak)
     }
 
-    /// Stop the thread. Idempotent from the root task's perspective.
+    /// Stop the main thread during teardown. Idempotent from the root task's
+    /// perspective; arena revocation destroys every worker with it.
     pub fn suspend(&self) -> Result<(), sel4::Error> {
         self.tcb.tcb_suspend()
     }
@@ -499,6 +500,9 @@ impl Task {
 /// object recorded here.
 pub struct TaskTable<const CAPACITY: usize = MAX_TASKS> {
     tasks: [Option<Task>; CAPACITY],
+    /// Arena ownership from a construction that failed before publication.
+    /// No later construction starts until this record's retry succeeds.
+    construction_cleanup: Option<CleanupRecord>,
     len: usize,
     next_id: u32,
     activated: usize,
@@ -516,6 +520,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     pub const fn new() -> Self {
         Self {
             tasks: [const { None }; CAPACITY],
+            construction_cleanup: None,
             len: 0,
             next_id: 0,
             activated: 0,
@@ -542,6 +547,51 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
 
     pub const fn reclaimed_slots(&self) -> usize {
         self.reclaimed_slots
+    }
+    pub const fn has_failed_construction(&self) -> bool {
+        self.construction_cleanup.is_some()
+    }
+
+    /// Finish a pre-publication cleanup before any later task can allocate.
+    pub fn retry_failed_construction(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+    ) -> Result<(), TaskError> {
+        let Some(cleanup) = self.construction_cleanup else {
+            return Ok(());
+        };
+        let reclaimed = cleanup.revoke(allocator)?;
+        self.construction_cleanup = None;
+        self.reclaimed_slots += reclaimed;
+        Ok(())
+    }
+
+    /// Release a pre-publication arena and charge what it actually returned.
+    ///
+    /// Every construction failure — descriptor preflight, private provisioning,
+    /// and the construction body — reaches the allocator through here, because
+    /// released slots become reusable immediately: an unwind that dropped the
+    /// count would leave `reclaimed_slots` permanently short of the slots the
+    /// allocator has already handed back. A failed revoke keeps the record for
+    /// `retry_failed_construction` and is charged only when that retry lands.
+    fn unwind_construction(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+        id: TaskId,
+        arena: TaskArenaId,
+    ) -> Result<(), TaskError> {
+        let cleanup =
+            construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
+        match cleanup.revoke(allocator) {
+            Ok(reclaimed) => {
+                self.reclaimed_slots += reclaimed;
+                Ok(())
+            }
+            Err(cleanup_error) => {
+                self.construction_cleanup = Some(cleanup);
+                Err(cleanup_error)
+            }
+        }
     }
 
     /// How many live tasks `spawner` created and has not yet lost.
@@ -650,11 +700,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // (C10.1). Zero for every task the generation declares no quota for,
         // and for the fixture paths, which is deny-by-default: a task with no
         // quota grows nothing. The frames are charged to the arena here even
-        // though they are handed out on demand, because an arena is fixed at
-        // `begin_task_arena` and a quota whose frames it cannot hold would be a
-        // ceiling the task could never reach.
+        // though they are handed out on demand, because construction reserves
+        // the task's complete segmented backing before publication and a quota
+        // whose extents it cannot hold would be one the task could never reach.
         private_memory_pages: usize,
     ) -> Result<TaskId, TaskError> {
+        self.retry_failed_construction(allocator)?;
         admit_priority(priority)?;
         admit_thread_count(threads)?;
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
@@ -679,15 +730,6 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     remaining: 0,
                 }))?;
         }
-        // Every leaf frame the private-memory quota authorizes (C10.1). The
-        // window's translation tables are already in `vspace_arena_plan`, which
-        // spans it; these are the pages a growth hands out.
-        crate::private_memory::arena_reservation(&mut plan, private_memory_pages).ok_or(
-            TaskError::Alloc(AllocError::UntypedExhausted {
-                size_bits: usize::BITS as usize,
-                remaining: 0,
-            }),
-        )?;
         let arena_bits =
             plan.required_size_bits()
                 .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
@@ -695,6 +737,31 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     remaining: 0,
                 }))?;
         let arena = allocator.begin_task_arena(arena_bits)?;
+        // Reserve physical extents, allocation descriptors, and CSlots as one
+        // construction boundary. `plan` counts retyped VSpace, image, and
+        // thread objects. Each thread also keeps one copied transfer-window
+        // capability in a descriptor-only slot; count those aliases before
+        // private provisioning so construction cannot exhaust the global table
+        // after passing this preflight.
+        let private_allocations =
+            crate::object_allocator::PrivateBackingLayout::for_quota(private_memory_pages)
+                .allocation_descriptors;
+        if construction_allocation_descriptors(
+            private_allocations,
+            plan.allocation_count(),
+            threads,
+        )
+        .is_none_or(|required| required > allocator.allocation_descriptors_free())
+        {
+            self.unwind_construction(allocator, id, arena)?;
+            return Err(TaskError::Alloc(AllocError::ArenaSlotTableFull {
+                limit: allocator.allocation_descriptors_free(),
+            }));
+        }
+        if let Err(error) = allocator.provision_private_backing(arena, private_memory_pages) {
+            self.unwind_construction(allocator, id, arena)?;
+            return Err(TaskError::Alloc(error));
+        }
 
         let construction = (|| {
             let vspace = create_child_vspace(
@@ -945,9 +1012,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let (vspace, cnode, tcb, entry, workers) = match construction {
             Ok(task) => task,
             Err(error) => {
-                let cleanup =
-                    construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
-                cleanup.revoke(allocator)?;
+                self.unwind_construction(allocator, id, arena)?;
                 return Err(error);
             }
         };
@@ -1067,16 +1132,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             self.activated -= 1;
         }
         self.reclaimed_slots += reclaimed;
-        // The count the arena actually returned, not the construction-time
-        // snapshot in `cleanup.slots`.
-        //
-        // The two agreed for as long as a task allocated nothing after it was
-        // built. C10.1 broke that: a private-memory growth charges root CSlots
-        // to the arena while the task runs, so the snapshot is short by however
-        // many pages the task grew, and the per-task and aggregate markers
-        // stopped stating the same fact — `just sel4_root_boot_check`'s
-        // conservation arm is what caught it. Reporting the revoke's own answer
-        // makes the record what was reclaimed rather than what was predicted.
+        // Use the revoke's actual slot count: runtime allocations can make the
+        // construction-time snapshot in `cleanup.slots` stale.
         Ok(CleanupRecord {
             slots: reclaimed,
             ..task.cleanup
@@ -1086,11 +1143,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     /// Grow one task's private memory by `delta` pages, answering the page
     /// count before the growth (C10.1).
     ///
-    /// The task is named by the caller's own badge, never by an argument, which
-    /// is what makes the operation self-scoped: there is no task parameter a
-    /// component could forge. The region and the VSpace it maps into both come
-    /// from the task record, so a growth cannot land in another task's window
-    /// even if the accounting were wrong.
+    /// The caller is identified by its task badge; every thread in the process
+    /// shares that badge and may use this operation. No sibling is suspended:
+    /// seL4 suspension cancels an outstanding IPC and resume restarts it, which
+    /// would make an unrelated worker's `Call` execute more than once. Tail-only
+    /// mappings are published by the kernel one operation at a time, while the
+    /// region count remains unchanged until the whole transaction commits.
     pub fn grow_private_memory(
         &mut self,
         allocator: &mut ObjectAllocator,
@@ -1132,6 +1190,16 @@ fn child_service_rights(_authority: Authority) -> sel4::CapRights {
         .write(true)
         .grant_reply(true)
         .build()
+}
+
+fn construction_allocation_descriptors(
+    private_allocations: usize,
+    planned_allocations: usize,
+    threads: usize,
+) -> Option<usize> {
+    private_allocations
+        .checked_add(planned_allocations)?
+        .checked_add(threads)
 }
 
 fn construction_record(task: TaskId, arena: TaskArenaId, slots: usize) -> CleanupRecord {
@@ -1374,10 +1442,58 @@ mod tests {
     use super::{
         Arrival, CHILD_CNODE_SIZE_BITS, CHILD_PRIORITY, CHILD_SLOT_CONSOLE, CHILD_SLOT_FAULT,
         CHILD_SLOT_SERVICE, ChildSlots, ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS,
-        TaskError, TaskId, admit_priority, child_service_rights, construction_record,
+        TaskError, TaskId, TaskTable, admit_priority, child_service_rights,
+        construction_allocation_descriptors, construction_record,
     };
     use crate::generation::Authority;
-    use crate::object_allocator::TaskArenaId;
+    use crate::object_allocator::{ObjectAllocator, TaskArenaId};
+    extern crate std;
+
+    /// Every pre-publication unwind charges what the allocator gave back.
+    ///
+    /// The released CSlots are reusable the moment the revoke lands, so an
+    /// unwind that dropped the count would leave the root reporting fewer
+    /// reclaimed slots than the allocator has already reissued — a ledger
+    /// that disagrees with the pool it describes.
+    #[test]
+    fn every_construction_unwind_charges_the_slots_the_allocator_returned() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = ObjectAllocator::empty();
+                let mut tasks = TaskTable::<4>::new();
+                assert_eq!(tasks.reclaimed_slots(), 0);
+                let mut charged = 0;
+                for (index, slots) in [7usize, 0, 23].into_iter().enumerate() {
+                    let arena = allocator.arena_owning_slots_for_test(slots);
+                    assert_eq!(allocator.arena_slot_count(arena), Ok(slots));
+                    assert_eq!(
+                        tasks.unwind_construction(&mut allocator, TaskId(index as u32), arena),
+                        Ok(())
+                    );
+                    charged += slots;
+                    assert_eq!(
+                        tasks.reclaimed_slots(),
+                        charged,
+                        "unwind {index} dropped its released slots"
+                    );
+                    assert!(
+                        !tasks.has_failed_construction(),
+                        "a completed revoke leaves nothing to retry"
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn construction_descriptor_preflight_counts_one_transfer_alias_per_thread() {
+        assert_eq!(construction_allocation_descriptors(512, 19, 2), Some(533));
+        assert_eq!(construction_allocation_descriptors(0, 19, 1), Some(20));
+        assert_eq!(construction_allocation_descriptors(usize::MAX, 0, 1), None);
+    }
 
     /// B48: a declared priority at or above the root's is refused, not clamped.
     ///

@@ -405,6 +405,7 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-02 | [System-image closures replace composition build variants](2026-09-02-system-image-closure-roadmap/index.md) | Decision | Proposed | CP11, CP12, CP13, CP14, CP15 |
 | 2026-09-02 | [Canonical system-image and test-run closures](2026-09-02-cp11-system-image-closure/index.md) | Change | Verified | CP11 |
 | 2026-09-02 | [CP12/CP13/CP14 - composition derivation, the closure builder, and scenario identities](2026-09-02-cp12-composition-derivation/index.md) | Change | Verified | CP12, CP13, CP14 |
+| 2026-09-02 | [Capacity ceilings: what a raise actually costs, and why single-core is now written down](2026-09-02-capacity-ceilings-register/index.md) | Decision | Proposed | none |
 | 2026-09-03 | [CP15 - plane gates build by closure identity, and two reproducibility defects it exposed](2026-09-03-cp15-closure-cutover/index.md) | Change | Verified | CP14, CP15 |
 | 2026-09-04 | [CP15 - the remaining plane gates unblock, the legacy flag surface deletes, and a keyboard parameter the closure model dropped](2026-09-04-cp15-legacy-deletion/index.md) | Change | Verified | CP12, CP15 |
 | 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
@@ -412,11 +413,29 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-06 | [Work-item identity moves from roadmap headings to MyQue UUIDs](2026-09-06-myque-work-item-identity/index.md) | Change | Verified | MQ1 |
 | 2026-09-06 | [The backlog file becomes an index over the work-item store](2026-09-06-backlog-as-index/index.md) | Change | Verified | MQ2 |
 | 2026-09-07 | [The work-item store hard cutover: deleting the pre-MyQue identifier system](2026-09-07-work-item-store-hard-cutover/index.md) | Change | Verified | MQ3 |
+| 2026-09-07 | [Memory capacity milestones: mechanism before larger working sets](2026-09-07-memory-capacity-milestones/index.md) | Decision | Proposed | MEM-CAPACITY, MEM-LARGE, MEM-ARENAS, MEM-64M, MEM-PLATFORM, MEM-1G |
+| 2026-09-07 | [Mixed-size private frames preserve exact growth semantics](2026-09-07-mem-large-private-frames/index.md) | Change | Verified | MEM-LARGE |
 | 2026-09-07 | [Driving a motor ESC from the H1V1: opening the lane and its bench probe](2026-09-07-h1v1-esc-lane/index.md) | Decision | Proposed | P6.PWM, P6.PWM.A, IO8, P6.D |
 | 2026-09-08 | [The H1V1 PWM probe: an ESC driven from the vendor prompt, and the pad found](2026-09-08-h1v1-pwm-probe/index.md) | Audit | Verified | P6.PWM.A, P6.PWM |
+| 2026-09-08 | [MEM-ARENAS: capacity-scaled CSpace and segmented task backing](2026-09-08-mem-arenas-segmented-backing/index.md) | Change | Verified | MEM-ARENAS |
+| 2026-09-08 | [Private growth: the rollback boundary, failed-map ownership, and worker IPC](2026-09-08-private-growth-rollback-and-worker-ipc/index.md) | Defect | Verified | none |
+| 2026-09-08 | [Private-memory capacity qualification and zero-page retry review](2026-09-08-private-memory-capacity-and-retry-review/index.md) | Defect | Verified | none |
+| 2026-09-09 | [Private backing accounting and bounded growth traversal](2026-09-09-private-backing-accounting/index.md) | Defect | Fixed | none |
 | 2026-09-10 | [A MAVLink heartbeat from the H1V1: opening the lane and its bench probe](2026-09-10-h1v1-mavlink-lane/index.md) | Decision | Proposed | P6.MAV, P6.MAV.A, IO9, P6.E |
 | 2026-09-10 | [The H1V1 UART7 probe: heartbeats decoded on the ground radio, and the pad placed](2026-09-10-h1v1-uart-probe/index.md) | Audit | Verified | P6.MAV.A, P6.MAV |
+| 2026-09-10 | [Admission extent CSlots and the stale RV64 SDK prefix](2026-09-10-admission-extent-slots-and-rv64-sdk-prefix/index.md) | Defect | Fixed | none |
+| 2026-09-10 | [Second review round: refusal scoping, notification scope, and two coverage gaps](2026-09-10-second-review-round-checker-coverage/index.md) | Defect | Fixed | none |
+| 2026-09-10 | [Descriptor tables sized against the linked kernel's root CSpace](2026-09-10-descriptor-tables-versus-kernel-cspace/index.md) | Defect | Fixed | none |
+| 2026-09-10 | [A host-side closure gate and the extent bound's unasserted contract coupling](2026-09-10-host-side-closure-gate-and-extent-bound/index.md) | Defect | Fixed | none |
 | 2026-09-11 | [The zutai gate passes: memoized by content, prefetched in parallel](2026-09-11-zutai-gate-cache/index.md) | Change | Verified | none |
 | 2026-09-11 | [B93: the block driver's shutdown drain raced the root's reclamation of its client](2026-09-11-b93-rollback-driver-fault/index.md) | Defect | Verified | B93 |
 | 2026-09-11 | [TCP over the IO substrate: opening the lane](2026-09-11-io-tcp-lane/index.md) | Decision | Proposed | IO10, IO11, P6.F |
+| 2026-09-11 | [SMP rationale ownership and capacity-branch integration](2026-09-11-smp-comment-and-capacity-merge/index.md) | Change | Verified | none |
+| 2026-09-11 | [MEM-ARENAS recycled private backing](2026-09-11-mem-arenas-recycled-backing/index.md) | Defect | Verified | MEM-ARENAS |
 | 2026-09-11 | [IO11: the network service attaches to virtio-net, and answers ARP and ICMP under QEMU](2026-09-11-io11-link-attach/index.md) | Change | Verified | IO11 |
+| 2026-09-12 | [Pre-publication construction unwinds dropped the slots they reclaimed](2026-09-12-construction-unwind-slot-accounting/index.md) | Defect | Verified | MEM-ARENAS |
+| 2026-09-12 | [Closure contract v2, descriptor conservation, and two derived report facts](2026-09-12-closure-contract-v2-and-descriptor-conservation/index.md) | Change | Verified | MEM-ARENAS |
+| 2026-09-12 | [Comment ownership across four files, and closure decoding through the shared evaluator](2026-09-12-comment-ownership-and-closure-evaluator-cache/index.md) | Change | Verified | MEM-ARENAS |
+| 2026-09-12 | [A single-profile SDK export could not publish, and five more comment-ownership fixes](2026-09-12-corpus-profile-and-comment-ownership/index.md) | Defect | Verified | MEM-ARENAS |
+| 2026-09-12 | [The descriptor tables are `.data`, not `.bss`, and three RV64 arms had no record](2026-09-12-descriptor-residency-and-rv64-run-records/index.md) | Defect | Verified | MEM-ARENAS |
+| 2026-09-12 | [One `formatVersion` stamped three record types, two of which never changed](2026-09-12-per-record-format-versions/index.md) | Defect | Verified | MEM-ARENAS |

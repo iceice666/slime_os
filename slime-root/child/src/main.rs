@@ -143,6 +143,8 @@ pub(crate) fn main() -> ! {
 
     match directive {
         DIRECTIVE_FAULT => {
+            #[cfg(slime_private_fail_second_allocation)]
+            private_memory_zero_page_retry(service);
             sel4::debug_println!("SLIME_CHILD fault requested addr={UNMAPPED_ADDRESS:#x}");
             // SAFETY: this store is intended to fault. The address is unmapped
             // in this task's VSpace by construction, so the kernel raises a VM
@@ -323,6 +325,7 @@ fn shared_buffer_phase(service: sel4::cap::Endpoint) {
 /// No `.bss` array stands in for the region: every access below is through the
 /// base the root reports, so a mapping the root did not install would fault
 /// rather than silently read this image's own memory.
+#[cfg(not(slime_private_fail_second_allocation))]
 fn private_memory_phase(service: sel4::cap::Endpoint) {
     let mut flags: sel4::Word = 0;
 
@@ -440,6 +443,124 @@ fn private_memory_phase(service: sel4::cap::Endpoint) {
     sel4::debug_println!(
         "SLIME_CHILD mem report flags={flags:#x} result={}",
         reply.msg[0] as i64
+    );
+}
+
+#[cfg(slime_private_fail_second_allocation)]
+fn private_memory_phase(service: sel4::cap::Endpoint) {
+    let (initial, base) = grow(service, 0);
+    let (first, first_base) = grow(service, 1);
+    let mut flags = 0;
+    if initial == 0 && base != 0 {
+        flags |= REPORT_MEM_QUERY_OK;
+    }
+    let base = base as usize;
+    if first == 0 && first_base as usize == base {
+        flags |= REPORT_MEM_FIRST_GROWTH_OK;
+    }
+    // The grown page must read as zero before anything writes it: a growth
+    // that recycled a frame with contents is otherwise indistinguishable from
+    // a fresh one, since the pattern store below would overwrite the evidence.
+    let mut zeros = true;
+    for offset in [0usize, 8, PAGE_BYTES - 8] {
+        let addr = base + offset;
+        // SAFETY: the root mapped one read-write granule at `base` before
+        // answering the growth above, `addr` is inside it and 8-byte aligned,
+        // and no Rust reference aliases it.
+        let observed = unsafe { (addr as *const u64).read_volatile() };
+        if observed != 0 {
+            zeros = false;
+            sel4::debug_println!("SLIME_CHILD mem nonzero addr={addr:#x} value={observed:#x}");
+        }
+    }
+    if zeros {
+        flags |= REPORT_MEM_ZEROED;
+    }
+    sel4::debug_println!(
+        "SLIME_CHILD mem read base={base:#x} pages=1 bytes={PAGE_BYTES} zeroed={}",
+        u8::from(zeros),
+    );
+    // SAFETY: as above; the mapping is read-write, so this store is permitted.
+    unsafe { (base as *mut u64).write_volatile(MEM_PATTERN) };
+    let (failed, _) = call_grow(service, 2);
+    let (after, after_base) = grow(service, 0);
+    let survived = unsafe { (base as *const u64).read_volatile() };
+    if failed < 0 && after == 1 && after_base as usize == base && survived == MEM_PATTERN {
+        flags |= REPORT_MEM_SECOND_GROWTH_OK
+            | REPORT_MEM_BASE_STABLE
+            | REPORT_MEM_QUOTA_REFUSED
+            | REPORT_MEM_REFUSAL_HAD_NO_EFFECT;
+        sel4::debug_println!(
+            "SLIME_CHILD mem rollback preserved pages={after} base={base:#x} survived={survived:#x}"
+        );
+    } else {
+        sel4::debug_println!(
+            "SLIME_CHILD mem rollback failed result={failed} pages={after} base={after_base:#x} survived={survived:#x}"
+        );
+    }
+    let reply = service.call_with_mrs(
+        sel4::MessageInfoBuilder::default()
+            .label(OP_SHARED_BUFFER_REPORT)
+            .length(4)
+            .build(),
+        [REQUEST_TAG, MEM_REPORT_TAG, flags, 0],
+    );
+    sel4::debug_println!(
+        "SLIME_CHILD mem report flags={flags:#x} result={}",
+        reply.msg[0] as i64
+    );
+}
+
+#[cfg(slime_private_fail_second_allocation)]
+fn private_memory_zero_page_retry(service: sel4::cap::Endpoint) {
+    let (initial, base) = grow(service, 0);
+    if initial != 0 || base == 0 {
+        sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+        return;
+    }
+    let (failed, _) = call_grow(service, 2);
+    if failed >= 0 {
+        sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+        return;
+    }
+    let (after, after_base) = grow(service, 0);
+    if after != 0 || after_base != base {
+        sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+        return;
+    }
+    sel4::debug_println!("SLIME_CHILD mem zero rollback result={failed} pages=0 base={base:#x}");
+    let (previous, retry_base) = grow(service, 512);
+    if previous != 0 || retry_base != base {
+        sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+        return;
+    }
+    let base_addr = base as usize;
+    for page in 0..512usize {
+        let addr = base_addr + page * PAGE_BYTES;
+        // SAFETY: the successful whole-window growth mapped every page at this
+        // fixed base read-write before returning.
+        if unsafe { (addr as *const u64).read_volatile() } != 0 {
+            sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+            return;
+        }
+        unsafe { (addr as *mut u64).write_volatile(MEM_PATTERN ^ page as u64) };
+    }
+    for page in 0..512usize {
+        let addr = base_addr + page * PAGE_BYTES;
+        // SAFETY: the mapping above remains live and the address is the first
+        // aligned word of the selected page.
+        if unsafe { (addr as *const u64).read_volatile() } != MEM_PATTERN ^ page as u64 {
+            sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+            return;
+        }
+    }
+    let (final_pages, final_base) = grow(service, 0);
+    if final_pages != 512 || final_base != base {
+        sel4::debug_println!("SLIME_CHILD mem zero retry failed");
+        return;
+    }
+    sel4::debug_println!(
+        "SLIME_CHILD mem whole retry pages=512 base={base:#x} zeroed=1 preserved=1 survived=0x4d454d5f42415345"
     );
 }
 

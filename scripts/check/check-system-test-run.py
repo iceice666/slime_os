@@ -42,7 +42,7 @@ from zutai_cli import STDLIB, binary
 
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
 CONTRACT = ROOT / "contracts" / "system-test-run" / "v1"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-test-runs.py"
 AGGREGATE = ROOT / "scripts" / "check" / "check-system-image-aggregate.py"
 
@@ -79,17 +79,21 @@ def aggregate_exempt_images() -> set[str]:
 
 
 def check_records_and_planes_correspond() -> int:
-    """Every plane gate has a record and every record has a plane gate."""
-    expected = {GENERATOR_MODULE.run_name(path) for path in GENERATOR_MODULE.plane_checkers()}
+    """Every declared checker target has one record and no record is orphaned."""
+    expected = {
+        name
+        for checker in GENERATOR_MODULE.plane_checkers()
+        for name, _closure, _profile, _image in GENERATOR_MODULE.run_variants(checker)
+    }
     present = {path.stem for path in RUN_ROOT.glob("*.zti")}
     if not expected:
-        fail("no plane checker was found, so this gate asserts nothing")
+        fail("no plane checker target was found, so this gate asserts nothing")
     missing = sorted(expected - present)
     if missing:
-        fail(f"plane gate(s) with no test-run record: {missing}")
+        fail(f"plane gate target(s) with no test-run record: {missing}")
     extra = sorted(present - expected)
     if extra:
-        fail(f"test-run record(s) naming no plane gate: {extra}")
+        fail(f"test-run record(s) naming no plane gate target: {extra}")
     return len(present)
 
 
@@ -211,23 +215,31 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
             faults += 1
 
         identity = record["imageClosureIdentity"]
-        checker = next(
-            path
-            for path in GENERATOR_MODULE.plane_checkers()
-            if GENERATOR_MODULE.run_name(path) == name
-        )
+        matches = [
+            (checker, closure, profile, image)
+            for checker in GENERATOR_MODULE.plane_checkers()
+            for variant_name, closure, profile, image in GENERATOR_MODULE.run_variants(checker)
+            if variant_name == name
+        ]
+        if len(matches) != 1:
+            fail(f"{name}: resolves to {len(matches)} checker targets, expected exactly one")
+        checker, expected_closure, expected_profile, expected_image = matches[0]
+        if record["executionProfile"] != expected_profile:
+            fail(
+                f"{name}: execution profile {record['executionProfile']!r} differs from "
+                f"its checker's declared {expected_profile!r}"
+            )
         if identity:
             if identity not in closures:
                 fail(f"{name}: names closure identity {identity} that resolves to no closure")
-            expected_closure = GENERATOR_MODULE.closure_name_for(checker, name)
             if closures[identity] != expected_closure:
                 fail(
                     f"{name}: names the closure for {closures[identity]!r}, but its own "
-                    f"checker declares closure {expected_closure!r}"
+                    f"checker target declares closure {expected_closure!r}"
                 )
             resolved += 1
         else:
-            image = GENERATOR_MODULE.booted_image(checker)
+            image = expected_image
             if image not in exempt_images:
                 fail(
                     f"{name}: names no closure, but {image} is not one the aggregate gate "
@@ -290,6 +302,7 @@ def check_controls(vocabulary: dict[str, set[str]]) -> int:
                 GENERATOR_MODULE.render(
                     value["name"],
                     value["imageClosureIdentity"],
+                    value["executionProfile"],
                     {
                         "timeoutSeconds": value["timeoutSeconds"],
                         "drives": len(value["disks"]),

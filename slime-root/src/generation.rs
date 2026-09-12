@@ -1303,6 +1303,10 @@ pub struct Admission {
     pub slime_component_images: usize,
     pub unrecognized_images: usize,
     pub wrong_target_images: usize,
+    /// Root CSlots required by the admitted product graph before future private
+    /// capacity holders are added. Filled from the actual BootInfo span in
+    /// `main` after aggregate slot admission succeeds.
+    pub required_root_slots: usize,
     pub fabric_graph_admitted: bool,
     pub fabric_schemas: usize,
     pub fabric_routes: usize,
@@ -1494,6 +1498,7 @@ impl Admission {
             slime_component_images,
             unrecognized_images,
             wrong_target_images,
+            required_root_slots: 0,
             clock_holders,
             fabric_graph_admitted: fabric.is_some(),
             fabric_schemas: fabric.map_or(0, |shape| shape.schemas),
@@ -1576,7 +1581,7 @@ pub fn admit_total_slots(
     generation: &Generation<'_>,
     available: usize,
 ) -> Result<usize, GenerationError> {
-    let mut required = 0usize;
+    let mut declared_objects = 0usize;
     for index in 0..generation.resource_quota_count() {
         let quota = generation.resource_quota(index)?;
         let per_process = (quota.cnode_count
@@ -1585,20 +1590,39 @@ pub fn admit_total_slots(
             + quota.notification_count
             + quota.frame_count
             + quota.page_table_count) as usize;
-        required = required.saturating_add(per_process);
+        declared_objects = declared_objects.saturating_add(per_process);
     }
     // Each declared object costs at least one root CSlot, and in practice
     // more: intermediate page tables the loader creates, the window alias, and
     // the arena's parent untyped are root-side costs no per-process quota
-    // names. Measured on the 48-instance stress plane, construction consumed
-    // 81 slots per instance against 33 declared objects.
+    // names. The factor remains the measured conservative construction cost.
+    let mut required = declared_objects.saturating_mul(ROOT_SLOTS_PER_DECLARED_OBJECT);
+
+    // Private backing CSlots are different: task construction reserves these
+    // eagerly and exactly, before any child starts. Add the authenticated
+    // budget's quota-scaled reservation rather than hiding it inside the
+    // measured factor, so a graph cannot admit and then exhaust root CSpace
+    // partway through construction.
     //
-    // The factor is deliberately a measured constant rather than a model of
-    // every source: a model that claimed precision it does not have would
-    // admit graphs that then die mid-construction, which is the failure this
-    // check exists to prevent. Refusing a graph that would have fit is
-    // recoverable; admitting one that does not is not.
-    let required = required.saturating_mul(ROOT_SLOTS_PER_DECLARED_OBJECT);
+    // A holder costs one CSlot per allocation descriptor *and* one per extent,
+    // because each extent retains its parent untyped in a root CSlot. Counting
+    // only descriptors leaves a two-or-three-slot-per-holder margin in which
+    // admission succeeds and task staging then fails with `SlotsExhausted`,
+    // which is precisely the mid-construction death this check exists to
+    // prevent.
+    if let Some(budget) = private_memory_budget_object(generation) {
+        let budget = budget.map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
+        for index in 0..budget.holder_count() {
+            let quota = budget
+                .holder(index)
+                .ok_or(GenerationError::UnsatisfiablePrivateMemoryBudget)?;
+            let layout =
+                crate::object_allocator::PrivateBackingLayout::for_quota(quota.page_quota as usize);
+            required = required
+                .saturating_add(layout.allocation_descriptors)
+                .saturating_add(layout.extent_parent_slots());
+        }
+    }
     if required > available {
         return Err(GenerationError::PlanExceedsRootSlots {
             required,

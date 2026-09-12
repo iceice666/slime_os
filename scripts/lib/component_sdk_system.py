@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 from pathlib import Path
 
 
 SYSTEM_NAME = "sel4-channel"
 ARCHIVE_PATH = f"assets/system-{SYSTEM_NAME}.tar"
-CLOSURE_PATH = f"contracts/system-image-closure/v1/closures/{SYSTEM_NAME}.zti"
+CLOSURE_PATH = f"contracts/system-image-closure/v2/closures/{SYSTEM_NAME}.zti"
 TEST_RUN_PATH = f"contracts/system-test-run/v1/runs/{SYSTEM_NAME}.zti"
 
 # A repository-shaped corpus preserves every canonical path embedded in the
@@ -34,7 +33,25 @@ COPY_ROOTS = (
 )
 
 
-def export_asset(destination: Path, source: Path, *, sdk_module) -> dict:
+def required_profile(source: Path) -> str:
+    """The target profile this corpus's closure names, read from the closure itself.
+
+    The corpus publishes exactly one closure, and a closure names one target
+    profile. An SDK release that does not export that profile cannot carry a
+    corpus whose prefix provenance resolves, so the caller must not stage one.
+    """
+    from system_image_closure import compile_closure
+
+    return compile_closure(source / CLOSURE_PATH).value["target"]["profile"]
+
+
+def export_asset(
+    destination: Path,
+    source: Path,
+    *,
+    sdk_module,
+    profile_records: list[dict],
+) -> dict:
     """Write one deterministic system corpus and return its release-record row."""
     staging = destination.parent / f".{destination.name}-system"
     if staging.exists():
@@ -58,7 +75,7 @@ def export_asset(destination: Path, source: Path, *, sdk_module) -> dict:
                 raise sdk_module.ComponentSdkError(
                     f"system-image export input is missing: {relative}"
                 )
-        prefix = staging / "contracts/system-image-closure/v1/inputs/sel4-prefix"
+        prefix = staging / "contracts/system-image-closure/v2/inputs/sel4-prefix"
         sdk_module.canonicalize_prefix(prefix, source)
         source_needle = str(source).encode("utf-8")
         for path in sdk_module.tree_files(staging):
@@ -91,25 +108,21 @@ def export_asset(destination: Path, source: Path, *, sdk_module) -> dict:
         for release_input in closure_value["releaseInputs"]:
             rebind(release_input["artifact"])
 
-        # The published SDK release asset is copied verbatim, so its own
-        # identity never moves; what must hold is that it still names the
-        # exact canonicalized prefix this export just produced, for the same
-        # profile. `canonicalize_prefix` rewrites the checkout-relative prefix
-        # into the tree the release asset pins, so a mismatch here means the
-        # published prefix and this corpus's prefix have diverged.
-        sdk_release = staging / closure_value["target"]["sdkRelease"]["path"]
-        released = json.loads(sdk_release.read_text(encoding="utf-8"))
+        # The outer SDK release record is the sole authority for exported
+        # profile provenance. Its selected prefix must be the exact
+        # canonicalized prefix this corpus closure now pins.
         selected = [
             entry
-            for entry in released["profiles"]
+            for entry in profile_records
             if entry["profile"] == closure_value["target"]["profile"]
         ]
         if (
             len(selected) != 1
-            or selected[0]["prefix"]["treeHash"] != closure_value["target"]["prefix"]["identity"]
+            or selected[0]["prefix"]["treeHash"]
+            != closure_value["target"]["prefix"]["identity"]
         ):
             raise sdk_module.ComponentSdkError(
-                "canonicalized prefix does not match the corpus SDK release asset"
+                "canonicalized prefix does not match the selected exported profile"
             )
         closure_path.write_text(sdk_module.zti(closure_value) + "\n", encoding="utf-8")
         closure = compile_closure(closure_path)

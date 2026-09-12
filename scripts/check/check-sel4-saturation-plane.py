@@ -93,7 +93,7 @@ BOOT_TIMEOUT_SECONDS = 240
 # B62: read the ceilings from the closure that names the build inputs, so the
 # number the image was built with and the number this gate asserts against cannot drift.
 def _variant_limit_overrides() -> dict[str, int]:
-    closure = ROOT / "contracts" / "system-image-closure" / "v1" / "closures" / f"{CLOSURE}.zti"
+    closure = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / f"{CLOSURE}.zti"
     parameters = {
         entry["name"]: entry["value"]
         for entry in compile_closure(closure).value["buildParameters"]

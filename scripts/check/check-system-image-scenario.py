@@ -54,7 +54,7 @@ from system_image_closure import (
 )
 from system_spec import prefetch_systems, system_paths
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
 BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
 
@@ -203,19 +203,21 @@ def check_unknown_profile_refused() -> None:
 
 
 def check_root_roles() -> int:
-    """Root roles are closed, platform-qualified, and change the root ELF.
+    """Root roles are closed, platform-qualified, and change root-side bytes.
 
-    A root role is a distinct root *build* over the same composition: the
-    selector carries no embedded generation, the fixture root reports its
-    capability layout, the unwind root forces B38's construction unwind. Each
-    was a `build-sel4.py` variant branch, so each could change root bytes with
-    nothing in any build key to say which. This asserts the vocabulary is
-    closed, an unadmitted role or parameter is refused, a parameter on the
-    wrong platform is refused before Cargo runs, and — the arm that matters —
-    a role-only closure builds a different, reproducible root while leaving the
-    generation alone.
+    A root role is a distinct build over the same composition: the selector
+    carries no embedded generation, fixture and unwind roles change root
+    behavior, and private-memory roles compile bounded failure probes into the
+    root and its embedded fixture. Each role has its own closure identity.
     """
-    expected = ("embedded-generation", "boot-selector", "root-fixture", "reclamation-unwind")
+    expected = (
+        "embedded-generation",
+        "boot-selector",
+        "root-fixture",
+        "reclamation-unwind",
+        "private-memory-fail-second-allocation",
+        "private-memory-fail-large-map",
+    )
     if tuple(CONTRACT.ROOT_ROLES) != expected:
         fail(f"the contract admits root roles {tuple(CONTRACT.ROOT_ROLES)}; expected {expected}")
     if tuple(CONTRACT.ROOT_PARAMETERS) != ("qemuKeyboard", "duoTestTerminator"):
@@ -374,7 +376,7 @@ def check_negative_build(name: str) -> str:
     the build must refuse to emit the two artifacts every consumer reads as
     "this is a verified image" — `image.identity.json` and `build-result.json`.
     """
-    case_path = ROOT / "contracts" / "system-image-closure" / "v1" / "negative" / f"{name}.zti"
+    case_path = ROOT / "contracts" / "system-image-closure" / "v2" / "negative" / f"{name}.zti"
     case = compile_negative_case(case_path)
     base_name = next(
         path.stem
@@ -668,7 +670,8 @@ print(
     f"all {closure_count} closures' parameters apply to their own manifests; and "
     f"{BYTE_ARM}'s profile moved its component ELF from {base_elf[:12]} to "
     f"{scenario_elf[:12]} reproducibly, leaving unnamed components and the base image "
-    "byte-identical; the 4-name root-role vocabulary is closed with an unadmitted role, "
+    f"byte-identical; the {len(CONTRACT.ROOT_ROLES)}-name root-role vocabulary is closed "
+    "with an unadmitted role, "
     f"an unadmitted parameter, and a wrong-platform parameter all refused, {role_count} "
     f"root-role closure(s) resolving distinctly from their bases, and {ROOT_ROLE_ARM} moving "
     f"root.elf from {base_root[:12]} to {role_root[:12]} reproducibly with its generation "

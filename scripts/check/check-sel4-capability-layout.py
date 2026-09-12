@@ -41,7 +41,7 @@ from harness import load_script  # noqa: E402
 boot_plane = load_script("boot_plane", "check/check-sel4-boot-plane.py")
 
 BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
-NEGATIVE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "negative"
+NEGATIVE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "negative"
 CLOSURE = "sel4-boot"
 
 def negative_cases() -> dict[str, Path]:

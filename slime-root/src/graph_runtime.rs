@@ -760,6 +760,81 @@ pub(super) fn launch_instance_graph(
     }
     sel4::debug_println!("[layout] end");
 
+    #[cfg(slime_private_fail_large_map)]
+    {
+        const PAGES_256_MIB: usize = 256 * 1024 * 1024 / child_vspace::GRANULE_SIZE;
+        const HOLDERS: usize = 4;
+        const ROOT_STACK_BYTES: usize = 1024 * 1024;
+        const ROOT_HEAP_BYTES: usize = 512 * 1024;
+        let exemplar_instance = (0..generation.instance_count()).find(|index| {
+            generation
+                .instance(*index)
+                .is_ok_and(|instance| instance.name == "private-memory-granted")
+        });
+        let Some(exemplar_task) = exemplar_instance
+            .and_then(|instance| launched_instances.task_for_instance(instance))
+            .and_then(|id| tasks.get(id))
+        else {
+            fatal!("SLIME_MEM FAIL capacity exemplar missing")
+        };
+        let Some(static_backing) = allocator.task_static_backing(exemplar_task.cleanup.arena)
+        else {
+            fatal!("SLIME_MEM FAIL capacity exemplar backing unavailable")
+        };
+        let Some(plan) = object_allocator::plan_task_backing(PAGES_256_MIB) else {
+            fatal!("SLIME_MEM FAIL capacity arithmetic overflow")
+        };
+        let capacity = object_allocator::TaskBackingCapacity {
+            plan,
+            static_backing,
+            holders: HOLDERS,
+            cslots_available: allocator.free_slots(),
+            allocation_descriptors_available: allocator.allocation_descriptors_free(),
+            extent_descriptors_available: allocator.extent_descriptors_free(),
+            ordinary_bytes_available: allocator.untyped_bytes_remaining(),
+            ordinary_layout_fits: allocator.task_backing_extents_fit(plan, static_backing, HOLDERS),
+            root_image_bytes: bootinfo.user_image_frames().len() * child_vspace::GRANULE_SIZE,
+            root_stack_bytes: ROOT_STACK_BYTES,
+            root_heap_bytes: ROOT_HEAP_BYTES,
+        };
+        let Some(required) = capacity.requirements() else {
+            fatal!("SLIME_MEM FAIL capacity arithmetic overflow")
+        };
+        let private_allocations = plan.allocation_descriptors * HOLDERS;
+        let private_extents = plan.extent_descriptors * HOLDERS;
+        let private_cslots = plan.required_cslots * HOLDERS;
+        let private_reserved = plan.reserved_bytes * HOLDERS;
+        sel4::debug_println!(
+            "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
+            capacity.holders,
+            plan.private_pages,
+            private_allocations,
+            private_extents,
+            private_cslots,
+            private_reserved,
+            plan.payload_bytes * HOLDERS,
+            plan.page_table_bytes * HOLDERS,
+            plan.alignment_waste * HOLDERS,
+            static_backing.allocation_descriptors,
+            static_backing.reserved_bytes,
+            required.allocation_descriptors,
+            required.extent_descriptors,
+            required.cslots,
+            required.reserved_bytes,
+            object_allocator::MAX_TASK_ALLOCATIONS,
+            capacity.allocation_descriptors_available,
+            object_allocator::MAX_TASK_EXTENTS,
+            capacity.extent_descriptors_available,
+            capacity.cslots_available,
+            capacity.ordinary_bytes_available,
+            capacity.ordinary_layout_fits as u8,
+            capacity.root_image_bytes,
+            core::mem::size_of::<ObjectAllocator>() + core::mem::size_of::<TaskTable<MAX_TASKS>>(),
+            capacity.root_stack_bytes,
+            capacity.root_heap_bytes,
+            capacity.fits() as u8,
+        );
+    }
     let mut active = [false; MAX_TASKS];
     let mut activated = 0;
     while activated < launched {

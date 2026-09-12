@@ -204,15 +204,18 @@ BOOT_SELECTION_IMAGE = BUILD_ROOT / "slime-sel4-boot-selection.elf"
 BOOT_SELECTION_MANIFEST = BUILD_ROOT / "slime-sel4-boot-selection.identity.json"
 DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
+PRIVATE_MEMORY_IMAGE = BUILD_ROOT / "slime-sel4-private-memory.elf"
+PRIVATE_MEMORY_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`. Every other plane now
-# builds by closure identity (`scripts/lib/closure_image.py`); these seven
+# builds by closure identity (`scripts/lib/closure_image.py`); these eight
 # remain because a legacy or SDK gate still selects them directly.
 FIXTURE_VARIANT = "fixture"
 GRAPH_VARIANT = "graph"
 SAMPLE_VARIANT = "sample"
 DEMO_VARIANT = "demo"
+PRIVATE_MEMORY_VARIANT = "private-memory"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -234,6 +237,7 @@ VARIANT_MANIFESTS = {
     ROLLBACK_VARIANT: "sel4-rollback",
     GENERATION_VARIANT: "sel4-generation",
     BOOT_SELECTION_VARIANT: "sel4",
+    PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -243,6 +247,7 @@ VARIANT_TARGET_DIRS = {
     ROLLBACK_VARIANT: "root-rollback",
     GENERATION_VARIANT: "root-generation",
     BOOT_SELECTION_VARIANT: "root-boot-selection",
+    PRIVATE_MEMORY_VARIANT: "root-private-memory",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -252,6 +257,7 @@ VARIANT_IMAGES = {
     ROLLBACK_VARIANT: (ROLLBACK_IMAGE, ROLLBACK_MANIFEST),
     GENERATION_VARIANT: (GENERATION_IMAGE, GENERATION_MANIFEST),
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
+    PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -625,7 +631,7 @@ QEMU_DTB_PARAMETERS = {
         "qemu-system-aarch64",
         "virt,secure=off,virtualization=on,gic-version=2,dtb-randomness=off",
         "cortex-a53",
-        "1024",
+        "2048",
     ),
     "qemu-riscv-virt": ("qemu-system-riscv64", "virt", "rv64", "3072"),
 }
@@ -640,10 +646,10 @@ def dump_device_tree(platform: Platform) -> Path:
     board's own memory map, interrupt controller, and console with a machine
     that is not the target.
 
-    Memory size is the kernel's own `QEMU_MEMORY` default for this platform,
-    not the 2048 MiB the product boots with: the kernel derives its physical
-    memory window from this description, and the pinned prefix was produced
-    with the default. Widening it is a platform change, not a harness knob.
+    Memory size is the profile's pinned product envelope. The installed DTB is
+    the kernel's physical-memory authority, so it must match the RAM size the
+    corresponding product and capacity gates boot; changing either is a pinned
+    platform change, never a harness-only knob.
     """
     dtb = platform.build_dir / f"slime-{platform.name}.dtb"
     dtb.parent.mkdir(parents=True, exist_ok=True)
@@ -848,11 +854,18 @@ def build_application(
     child_target = child_target or RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
-
     child_target_dir = CARGO_BUILD / platform.name / "child"
     child_environment = environment.copy()
     child_remap = f"--remap-path-prefix={child_target_dir}=./target/sel4/{platform.name}/child"
-    child_environment["RUSTFLAGS"] = f"{child_environment.get('RUSTFLAGS', '')} {child_remap}".strip()
+    child_environment["RUSTFLAGS"] = (
+        f"{child_environment.get('RUSTFLAGS', '')} {child_remap}".strip()
+    )
+    if closure_root_role == "private-memory-fail-second-allocation":
+        child_rustflags = child_environment.get("RUSTFLAGS", "")
+        child_environment["RUSTFLAGS"] = (
+            f"{child_rustflags} --cfg slime_private_fail_second_allocation".strip()
+        )
+
     cargo_build(
         manifest=CHILD_MANIFEST,
         package="slime-root-child",
@@ -889,12 +902,29 @@ def build_application(
                 fail(f"root role {closure_root_role!r} requires a resolved generation")
             generation = resolved_generation.resolve()
             root_environment["SLIME_GENERATION"] = str(generation)
-            if closure_root_role == "root-fixture":
+            # The rollback case's probe is the root's own embedded child, whose
+            # private-memory phase carries the injected-failure arm. Building it
+            # as a graph root would compile that arm out of the boot and leave
+            # the injection to land on whichever component grew first.
+            if closure_root_role in (
+                "root-fixture",
+                "private-memory-fail-second-allocation",
+            ):
                 root_environment["SLIME_ROOT_FIXTURE"] = "1"
         if closure_root_role == "reclamation-unwind":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (
                 f"{rustflags} --cfg slime_b38_force_unwind".strip()
+            )
+        if closure_root_role == "private-memory-fail-second-allocation":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_fail_second_allocation".strip()
+            )
+        if closure_root_role == "private-memory-fail-large-map":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_fail_large_map".strip()
             )
     elif platform.name == QEMU_ARM_VIRT.name and variant == GRAPH_VARIANT:
         # Temporary interactive product path: the root polls QEMU virt's PL011
@@ -1278,6 +1308,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--private-memory-plane",
+        action="store_true",
+        help="embed the private-memory generation, writing a separate image",
+    )
+    parser.add_argument(
         "--component-spec-root",
         type=Path,
         help="load component specifications from this directory",
@@ -1313,6 +1348,7 @@ def main() -> None:
             (ROLLBACK_VARIANT, arguments.rollback_plane),
             (GENERATION_VARIANT, arguments.generation_plane),
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
+            (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
         )
         if chosen
     ]

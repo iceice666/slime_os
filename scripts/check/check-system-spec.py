@@ -72,15 +72,12 @@ SORTED_SECTIONS = {
     "mintedBindings": lambda entry: entry["name"],
 }
 
-# Sections the frozen baseline predates.
-#
-# The baseline is the pre-CP1 hand-authored `valid.zti`, and it is never
-# regenerated and never edited — that is what makes it evidence rather than the
-# generator's own output. So a section the repository adds *after* it was frozen
-# cannot appear there, and the derivation legitimately produces one the baseline
-# has no opinion about. C10.4's `privateMemoryBudget`, and the
-# `private-memory-budget` resource object that carries it, are the first such
-# section.
+# Sections no system's frozen baseline could ever have, because the baseline is
+# the pre-CP1 hand-authored `valid.zti` and the feature postdates every system
+# it covers. Excused globally is safe here specifically because there is no
+# pre-existing populated content in any baseline for it to hide: C10.4's
+# `privateMemoryBudget`, and the `private-memory-budget` resource object that
+# carries it, are the first section of this shape.
 #
 # Excused for the baseline comparison, never unchecked. `check_post_baseline`
 # below asserts the derived content equals what the component specs declare,
@@ -90,6 +87,28 @@ SORTED_SECTIONS = {
 # `KNOWN_DEAD_BINDINGS` is written to avoid on its own axis.
 POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
 POST_BASELINE_OBJECTS = ("private-memory-budget",)
+
+# Sections one *specific* system's frozen baseline predates, unlike the ones
+# above. Keyed per system, on the same terms as
+# `POST_BASELINE_INSTANCE_FIELDS`/`POST_BASELINE_GRANTS` below: an equivalent
+# fact in another system stays baseline-visible, because other systems carry
+# real `notificationGrants`/`notificationBindings` content their baselines can
+# still compare. `check_post_baseline` independently compares exactly the
+# sections named here against the system spec's own declared notifications.
+POST_BASELINE_SYSTEM_SECTIONS: dict[str, frozenset[str]] = {
+    "sel4-private-memory": frozenset({"notificationGrants", "notificationBindings"}),
+}
+
+# Instance fields and capability edges added after a system's frozen pre-CP1
+# baseline. Keep these system-scoped: equivalent facts in another system remain
+# baseline-visible. They are lifted only from the frozen comparison; the live
+# system contract and builder validation still own their contents.
+POST_BASELINE_INSTANCE_FIELDS = {
+    "sel4-private-memory": frozenset({"priority", "extraThreads", "workerPriority"}),
+}
+POST_BASELINE_GRANTS = {
+    "sel4-private-memory": frozenset({"private-memory-worker-rpc"}),
+}
 
 # `InstanceBinding.slotReason` postdates the frozen baseline too, on the same
 # terms (B91): the baseline's pinned bindings carry a number and no reason, so it
@@ -261,19 +280,13 @@ def strip_retired_kinds(manifest: dict) -> tuple[dict, list[dict]]:
     """
     value = copy.deepcopy(manifest)
     removed = [
-        grant
-        for grant in value["grants"]
-        if grant["capabilityKind"] in RETIRED_CAPABILITY_KINDS
+        grant for grant in value["grants"] if grant["capabilityKind"] in RETIRED_CAPABILITY_KINDS
     ]
     retired_names = {grant["name"] for grant in removed}
-    value["grants"] = [
-        grant for grant in value["grants"] if grant["name"] not in retired_names
-    ]
+    value["grants"] = [grant for grant in value["grants"] if grant["name"] not in retired_names]
     for instance in value["instances"]:
         instance["bindings"] = [
-            binding
-            for binding in instance["bindings"]
-            if binding["grant"] not in retired_names
+            binding for binding in instance["bindings"] if binding["grant"] not in retired_names
         ]
     return value, removed
 
@@ -305,8 +318,8 @@ def check_retired_kinds() -> None:
             )
 
 
-def split_post_baseline(manifest: dict) -> tuple[dict, dict]:
-    """Separate the sections the frozen baseline predates from the rest.
+def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
+    """Separate facts the frozen baseline predates from the comparison.
 
     Returns `(comparable, added)`. `comparable` is what the baseline can be
     compared against; `added` is what `check_post_baseline` asserts on its own
@@ -314,12 +327,35 @@ def split_post_baseline(manifest: dict) -> tuple[dict, dict]:
     """
     value = copy.deepcopy(manifest)
     added = {section: value.pop(section) for section in POST_BASELINE_SECTIONS if section in value}
+    for section in POST_BASELINE_SYSTEM_SECTIONS.get(name, frozenset()):
+        if section in value:
+            added[section] = value.pop(section)
     if "objects" in value:
         kept, removed = [], []
         for entry in value["objects"]:
             (removed if entry["id"] in POST_BASELINE_OBJECTS else kept).append(entry)
         value["objects"] = kept
         added["objects"] = removed
+    post_grants = POST_BASELINE_GRANTS.get(name, frozenset())
+    if post_grants:
+        added["grants"] = [
+            grant for grant in value.get("grants", []) if grant["name"] in post_grants
+        ]
+        value["grants"] = [
+            grant for grant in value.get("grants", []) if grant["name"] not in post_grants
+        ]
+        added["bindings"] = []
+        for instance in value.get("instances", []):
+            kept = []
+            for binding in instance.get("bindings", []):
+                if binding["grant"] in post_grants:
+                    added["bindings"].append({"holder": instance["name"], **binding})
+                else:
+                    kept.append(binding)
+            instance["bindings"] = kept
+    for instance in value.get("instances", []):
+        for field in POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset()):
+            instance.pop(field, None)
     for instance in value.get("instances", []):
         for binding in instance.get("bindings", []):
             for field in POST_BASELINE_BINDING_FIELDS:
@@ -345,16 +381,16 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
     }
     expected = {}
     for instance in resolved_instances(system.spec):
-        component = component_by_executable.get(
-            instance["executable"], instance["executable"]
-        )
+        component = component_by_executable.get(instance["executable"], instance["executable"])
         default = COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
         quota = instance.get(
             "privatePageQuota", placements.get(component, {}).get("privatePageQuota", default)
         )
         if quota:
             expected[instance["name"]] = quota
-    budget = {entry["holder"]: entry["pageQuota"] for entry in derived.get("privateMemoryBudget", [])}
+    budget = {
+        entry["holder"]: entry["pageQuota"] for entry in derived.get("privateMemoryBudget", [])
+    }
     if budget != expected:
         fail(
             f"{name}: derived privateMemoryBudget {sorted(budget.items())} does not match "
@@ -372,6 +408,73 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
             f"{name}: privateMemoryBudget has {len(budget)} holder(s) but the "
             f"private-memory-budget resource object is {'present' if carried else 'absent'}"
         )
+    post_grants = POST_BASELINE_GRANTS.get(name, frozenset())
+    declared_post_grants = sorted(
+        (grant for grant in system.spec["grants"] if grant["name"] in post_grants),
+        key=SORTED_SECTIONS["grants"],
+    )
+    derived_post_grants = sorted(
+        (grant for grant in derived.get("grants", []) if grant["name"] in post_grants),
+        key=SORTED_SECTIONS["grants"],
+    )
+    if {grant["name"] for grant in declared_post_grants} != post_grants:
+        fail(
+            f"{name}: post-baseline grant exemption {sorted(post_grants)} does not "
+            "name exactly the live system declarations"
+        )
+    if derived_post_grants != declared_post_grants:
+        fail(
+            f"{name}: derived post-baseline grants do not match the live system "
+            f"declarations: {first_difference(derived_post_grants, declared_post_grants, 'grants')}"
+        )
+    # The notification sections split off by `POST_BASELINE_SYSTEM_SECTIONS`
+    # get the same independent treatment as the post-baseline grants above:
+    # `derive_manifest` assigns these directly from the system spec, so a
+    # divergence here means the derivation or normalization mutated them, not
+    # a fact the baseline itself could have disagreed with.
+    post_notification_sections = POST_BASELINE_SYSTEM_SECTIONS.get(name, frozenset())
+    if "notificationGrants" in post_notification_sections:
+        declared_notifications = system.spec["notifications"]
+        derived_notifications = derived.get("notificationGrants", [])
+        if derived_notifications != declared_notifications:
+            fail(
+                f"{name}: derived notificationGrants do not match the live system "
+                "declarations: "
+                f"{first_difference(derived_notifications, declared_notifications, 'notificationGrants')}"
+            )
+    if "notificationBindings" in post_notification_sections:
+        declared_bindings = system.spec["notificationBindings"]
+        derived_bindings = derived.get("notificationBindings", [])
+        if derived_bindings != declared_bindings:
+            fail(
+                f"{name}: derived notificationBindings do not match the live system "
+                "declarations: "
+                f"{first_difference(derived_bindings, declared_bindings, 'notificationBindings')}"
+            )
+    # Instance fields split off by `POST_BASELINE_INSTANCE_FIELDS` are checked
+    # against the live system declaration by holder. Omitting a field is a
+    # different statement from assigning its default, so compare only the
+    # exempted keys and preserve absence on both sides.
+    post_instance_fields = POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset())
+    if post_instance_fields:
+        declared_instances = {
+            instance["name"]: {
+                field: instance[field] for field in post_instance_fields if field in instance
+            }
+            for instance in resolved_instances(system.spec)
+        }
+        derived_instances = {
+            instance["name"]: {
+                field: instance[field] for field in post_instance_fields if field in instance
+            }
+            for instance in derived.get("instances", [])
+        }
+        if derived_instances != declared_instances:
+            fail(
+                f"{name}: derived post-baseline instance fields do not match the live "
+                "system declarations: "
+                f"{first_difference(derived_instances, declared_instances, 'instances')}"
+            )
     # B91: every pin the derivation emits carries the reason its system spec
     # declared, and that reason is what the derived manifest itself implies. The
     # builder's own predicate is reused rather than restated, so this gate cannot
@@ -453,8 +556,8 @@ for name, system in sorted(systems.items()):
     committed = normalized(strip_dead_bindings(without_retired))
     # Sections the baseline predates are lifted out and asserted separately: it
     # was frozen before they existed, so it has no opinion to compare against.
-    derived, _added = split_post_baseline(derived)
-    committed, _ = split_post_baseline(committed)
+    derived, _added = split_post_baseline(derived, name)
+    committed, _ = split_post_baseline(committed, name)
     if derived != committed:
         fail(
             f"{name}: derived manifest diverges from {DERIVED_FIXTURES[name]}: "
@@ -491,11 +594,7 @@ for name, system in sorted(systems.items()):
                 f"retired-kind: {sorted(unexplained)}"
             )
         grants = {grant["name"] for grant in fixture["grants"]}
-        live = [
-            entry
-            for entry in removed
-            if entry[1] in grants and entry[1] not in retired_names
-        ]
+        live = [entry for entry in removed if entry[1] in grants and entry[1] not in retired_names]
         if live:
             fail(f"{name}: a stripped binding names a real grant: {sorted(live)}")
 
@@ -531,7 +630,8 @@ for name, system in sorted(systems.items()):
         fail(
             f"{name}: derivation moved capability slot(s) the committed fixture pinned: "
             + ", ".join(
-                f"{holder}/{grant} {was}->{now}" for (holder, grant), (was, now) in sorted(moved.items())
+                f"{holder}/{grant} {was}->{now}"
+                for (holder, grant), (was, now) in sorted(moved.items())
             )
             + "; pin them in the system spec"
         )

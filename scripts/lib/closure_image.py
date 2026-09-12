@@ -34,7 +34,7 @@ from pathlib import Path
 from harness import ROOT
 from system_image_closure import compile_closure, resolve_closure
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 BUILD_ROOT = ROOT / "build" / "closure"
 
@@ -124,7 +124,12 @@ def build(name: str, *, output: Path | None = None, reuse: bool = True) -> Built
     command = [sys.executable, str(BUILDER), str(closure_path(name)), str(destination)]
     print(f"[closure build] {name} {identity[:12]}", flush=True)
     process = subprocess.run(
-        command, cwd=ROOT, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        command,
+        cwd=ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     if process.returncode != 0:
         tail = "\n".join(process.stdout.strip().splitlines()[-20:])

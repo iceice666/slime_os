@@ -30,7 +30,7 @@
     resource = {
       stackBytes = 16384;
       spawnBudget = 0;
-      extraThreads = 0;
+      extraThreads = 1;
       bufferBytePages = 0;
       bufferCount = 0;
       mappingCount = 0;

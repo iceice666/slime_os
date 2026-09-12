@@ -1,6 +1,12 @@
 set(KernelPlatform "qemu-arm-virt" CACHE STRING "")
 set(KernelSel4Arch "aarch64" CACHE STRING "")
 set(KernelArmHypervisorSupport ON CACHE BOOL "")
+# The root CSpace needs 19 address bits to hold the allocator's descriptor
+# tables alongside the product graph. This CNode costs 16 MiB of kernel memory
+# at 32 bytes per slot. Physical targets keep their existing 12-bit default, so
+# `slime-root` selects its descriptor-table sizes from the linked kernel's own
+# `ROOT_CNODE_SIZE_BITS` rather than from a per-platform allowlist.
+set(KernelRootCNodeSizeBits 19 CACHE STRING "" FORCE)
 # B48's MCS half, deferred with the reason recorded rather than left blank.
 #
 # MCS replaces seL4's priority-only scheduler with scheduling contexts,
@@ -36,6 +42,14 @@ set(KernelArmHypervisorSupport ON CACHE BOOL "")
 # proofs extend to MCS on this platform, or the project accepts an unverified
 # kernel for a stated reason.
 set(KernelIsMCS OFF CACHE BOOL "")
+# Single core. Raising this is an assurance decision, not a config edit: this
+# build is outside the verified set, `slime-root`'s bounded tables assume
+# children do not run concurrently, and thread placement moves between
+# `tcb_set_affinity` and the scheduling context depending on `KernelIsMCS`, so
+# the two options are not independent. The terms a multi-core claim must meet
+# are recorded in `docs/directions/34-capacity-ceilings.md`, which also carries
+# the private-memory and per-component thread ceilings this bound interacts
+# with.
 set(KernelMaxNumNodes 1 CACHE STRING "")
 set(KernelVerificationBuild OFF CACHE BOOL "")
 set(KernelDebugBuild ON CACHE BOOL "")

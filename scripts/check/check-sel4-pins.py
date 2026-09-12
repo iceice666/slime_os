@@ -232,6 +232,8 @@ def expected_cmake_values(profile: dict[str, object], section: str) -> dict[str,
         "KernelDebugBuild": "ON" if boolean(profile, "debug_build", section) else "OFF",
         "KernelPrinting": "ON" if boolean(profile, "printing", section) else "OFF",
     }
+    if section in ("qemu_arm_virt", "qemu_riscv_virt"):
+        values["KernelRootCNodeSizeBits"] = str(integer(profile, "root_cnode_size_bits", section))
     if section in ("qemu_arm_virt", "ns02201_h1v1"):
         values.update(
             {

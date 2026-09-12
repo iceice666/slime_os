@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-saturation";
-  imageClosureIdentity = "bace2a30ad78828a1c57cb3b876ccb4a38eeebe89347dae15235d32900508552";
+  imageClosureIdentity = "15056377d027976a1e5aab2e6277c7ccae1761a7c3e1fe80df7d5d9c4d43982c";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

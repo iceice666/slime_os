@@ -61,6 +61,8 @@ system_composition_closure_check: system_spec_check
     python3 scripts/generate/generate-composition-inventory-bindings.py --check
     python3 scripts/check/check-composition-inventory.py
 
+# Resolution checks each closure's committed prefix against `sel4/pins.toml`;
+# no installed platform build or published SDK record is needed for that check.
 [group('contracts')]
 system_image_builder_check: system_composition_closure_check
     python3 scripts/generate/generate-system-image-closures.py --check

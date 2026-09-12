@@ -1,0 +1,16 @@
+{
+  formatVersion = 1;
+  name = "sel4-private-memory-fail-second-allocation";
+  imageClosureIdentity = "5bc1aaed12e58c7e72eacf216f98670df0c7802d50c69d7a13e510a5cf07acf6";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

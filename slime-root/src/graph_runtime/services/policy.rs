@@ -783,12 +783,12 @@ pub(super) fn reclaim_task_objects(
     // starting value; `live_objects` is what must return to *its* starting
     // value even though the arena is reused rather than freed.
     sel4::debug_println!(
-        "SLIME_ROOT reclaim census task={} slots={} bytes={} live_objects={} arena_reuses={}",
+        "SLIME_ROOT reclaim census task={} slots={} bytes={} live_objects={} extent_reuses={}",
         id.0,
         allocator.slots_remaining(),
         allocator.untyped_bytes_remaining(),
         allocator.live_objects(),
-        allocator.arena_reuses(),
+        allocator.extents_reused(),
     );
 }
 
