@@ -351,6 +351,9 @@ def _unicast_host(address: ipaddress.IPv4Address, network: ipaddress.IPv4Network
         and address != network.broadcast_address
         and not address.is_multicast
         and int(address) >> 24 != 0
+        # Class E (240/4) is not unicast either; the decoder refuses it, so the
+        # build must as well.
+        and int(address) >> 24 < 224
     )
 
 

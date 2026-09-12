@@ -1039,7 +1039,7 @@ pub(super) fn serve_instance_graph(
             }
             capability_transfer_labels::IMPORT => {
                 ipc::reply(serve_capability_import(
-                    allocator, tasks, generation, instance, id, &words,
+                    allocator, tasks, generation, launched, instance, id, &words,
                 ));
             }
             capability_transfer_labels::EXPORT_CANCEL => {

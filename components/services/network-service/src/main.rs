@@ -21,8 +21,8 @@ use slime_proto::io_queue_ring::{Queue, QueueError};
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_request;
 use slime_rt::{
-    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, capability_import, debug_write, exit,
-    monotonic_frequency, monotonic_read, network_destinations_read, network_interface_read,
+    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, capability_import_from, debug_write,
+    exit, monotonic_frequency, monotonic_read, network_destinations_read, network_interface_read,
     resolve_binding, shared_buffer_loan_map, yield_now,
 };
 use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet, SocketStorage};
@@ -37,7 +37,9 @@ slime_rt::entry!(main);
 
 const MAX_ROWS: usize = MAX_DESTINATIONS;
 const PAGE_ROWS: usize = 6;
-const INTERFACE_PAGE_ROWS: usize = 4;
+/// The root copies up to every declared interface in one call, so the page
+/// must hold the contract's maximum or a fuller table reads as none.
+const INTERFACE_PAGE_ROWS: usize = network_interface::MAX_INTERFACES;
 /// The link peer endpoint and the buffer factory sit at fixed slots, as the
 /// IO3 probe's do: a loan names its receiver by endpoint slot, and the root
 /// reads that number as an endpoint only while no shared-buffer capability
@@ -49,8 +51,11 @@ const MAX_CAPABILITIES: usize = 8;
 /// ceiling on declarations; this is the storage one service instance carries.
 const TCP_SOCKETS: usize = 4;
 const SOCKET_BUFFER_BYTES: usize = 4096;
-/// A connect that the peer neither answers nor refuses is failed after this.
-const CONNECT_TIMEOUT_MS: i64 = 5000;
+/// A socket whose peer stays silent this long while it owes an answer is
+/// aborted: first the connect, and later any data the peer has not
+/// acknowledged. A connect that is neither answered nor refused therefore
+/// settles as unreachable within this bound.
+const SOCKET_TIMEOUT_MS: i64 = 5000;
 const FIRST_LOCAL_PORT: u16 = 49152;
 /// One IO0 queue of this depth per data client, and at most as many requests
 /// held pending while their socket cannot yet take or give the bytes.
@@ -75,6 +80,11 @@ const CLIENTS: [(&[u8], &str); 3] = [
     (b"network-intruder-service", "io-network-intruder"),
     (b"network-tcp-probe-service", "io-tcp-probe"),
 ];
+
+/// Sockets whose holders closed them, draining in the stack (TIME-WAIT for an
+/// active close) until it lets them go. Their capabilities are gone, so they
+/// charge no holder's ceiling; only the storage stays occupied.
+type Draining = [Option<SocketHandle>; TCP_SOCKETS];
 
 // Socket buffers live in the image's writable data rather than on the stack:
 // four sockets' worth is twice the declared stack.
@@ -152,9 +162,6 @@ struct Capability {
     kind: u8,
     epoch: u64,
     socket: Option<SocketHandle>,
-    /// Closed by its holder; the socket finishes its own close before the
-    /// slot is reused.
-    closing: bool,
 }
 
 #[derive(Default)]
@@ -256,6 +263,7 @@ fn main(_: u32) {
     let storage = unsafe { &mut *core::ptr::addr_of_mut!(SOCKET_STORAGE) };
     let mut sockets = SocketSet::new(&mut storage[..]);
     let mut socket_slots: SocketSlots = [None; TCP_SOCKETS];
+    let mut draining: Draining = [None; TCP_SOCKETS];
 
     while clients.iter().flatten().any(|client| !client.closed) {
         let mut progress = false;
@@ -274,7 +282,9 @@ fn main(_: u32) {
                     // A delegated loan arrives as a full descriptor carrying no
                     // protocol magic; everything else is a request.
                     if length == MAX_MSG && !has_network_magic(&bytes) {
-                        accept_delegation(client, &bytes);
+                        if let Err(reason) = accept_delegation(client, &bytes) {
+                            refuse_client(client, reason);
+                        }
                         continue;
                     }
                     observed.requests += 1;
@@ -304,6 +314,7 @@ fn main(_: u32) {
                             stack.as_mut(),
                             &mut sockets,
                             &mut socket_slots,
+                            &mut draining,
                         ),
                         _ => Some((STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0)),
                     };
@@ -331,15 +342,21 @@ fn main(_: u32) {
                     &mut socket_slots,
                     &mut observed,
                 );
-                progress |= serve_data(
+                match serve_data(
                     client,
                     &mut capabilities,
                     &destinations,
                     &mut sockets,
                     &mut observed,
-                );
+                ) {
+                    Ok(served) => progress |= served,
+                    Err(reason) => {
+                        refuse_client(client, reason);
+                        progress = true;
+                    }
+                }
             }
-            progress |= reap_closed(&mut capabilities, &mut sockets, &mut socket_slots);
+            progress |= reap_drained(&mut draining, &mut sockets, &mut socket_slots);
         }
         if !progress {
             yield_now();
@@ -358,23 +375,42 @@ fn has_network_magic(bytes: &[u8; MAX_MSG]) -> bool {
 
 /// A client lends this service one queue page and then its data pages. The
 /// descriptor names the buffer, the loan, and which of the two it is; the
-/// authority behind it is imported through the runtime, never trusted from
-/// the bytes.
-fn accept_delegation(client: &mut Client, descriptor: &[u8; MAX_MSG]) {
+/// authority behind it is claimed through the runtime from this client's
+/// endpoint and no other sender, never trusted from the bytes. A descriptor
+/// this client may not send, or a loan the root will not map, refuses the
+/// client; it is never fatal to the service.
+fn accept_delegation(client: &mut Client, descriptor: &[u8; MAX_MSG]) -> Result<(), &'static [u8]> {
     let buffer = u64::from_le_bytes(descriptor[..8].try_into().unwrap());
     let lease = u64::from_le_bytes(descriptor[8..16].try_into().unwrap());
     let kind = descriptor[16];
-    let slot = capability_import().unwrap_or_else(|_| fail(b"client loan import"));
+    // Every structural check first: nothing is claimed for a descriptor that
+    // could not be installed.
+    match kind {
+        DESCRIPTOR_QUEUE if client.data.is_none() => {}
+        DESCRIPTOR_QUEUE => return Err(b"second queue"),
+        DESCRIPTOR_DATA => match client.data.as_ref() {
+            None => return Err(b"data page before queue"),
+            Some(data) if data.pages.iter().all(|page| page.is_some()) => {
+                return Err(b"too many data pages");
+            }
+            Some(_) => {}
+        },
+        _ => return Err(b"delegation kind"),
+    }
+    let Ok(slot) = capability_import_from(client.slot) else {
+        return Err(b"no export from this client");
+    };
     let base = client.next_base;
     if shared_buffer_loan_map(slot, base, 0, PAGE) != ERR_SUCCESS {
-        fail(b"client loan map");
+        return Err(b"loan map");
     }
     client.next_base += PAGE;
     match kind {
-        DESCRIPTOR_QUEUE if client.data.is_none() => {
+        DESCRIPTOR_QUEUE => {
             let bytes = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, PAGE as usize) };
-            let queue =
-                Queue::attach(bytes, DATA_SLOTS).unwrap_or_else(|_| fail(b"client queue attach"));
+            let Ok(queue) = Queue::attach(bytes, DATA_SLOTS) else {
+                return Err(b"queue format");
+            };
             client.queue_slot = Some(slot);
             client.data = Some(DataQueue {
                 queue,
@@ -382,21 +418,33 @@ fn accept_delegation(client: &mut Client, descriptor: &[u8; MAX_MSG]) {
                 pending: [None; DATA_SLOTS],
             });
         }
-        DESCRIPTOR_DATA => {
-            let Some(data) = client.data.as_mut() else {
-                fail(b"data page before queue");
-            };
-            let Some(entry) = data.pages.iter_mut().find(|page| page.is_none()) else {
-                fail(b"too many data pages");
-            };
+        _ => {
+            let data = client.data.as_mut().unwrap_or_else(|| unreachable!());
+            let entry = data
+                .pages
+                .iter_mut()
+                .find(|page| page.is_none())
+                .unwrap_or_else(|| unreachable!());
             *entry = Some(DataPage {
                 buffer,
                 lease,
                 base,
             });
         }
-        _ => fail(b"client delegation kind"),
     }
+    Ok(())
+}
+
+/// Close a client that stepped outside the protocol. Its queue and pages are
+/// forgotten (their loans stay charged to it until the root settles them), its
+/// endpoint is no longer received, and every other client is unaffected.
+fn refuse_client(client: &mut Client, reason: &[u8]) {
+    debug_write(b"[network-service] client refused reason=");
+    debug_write(reason);
+    debug_write(b"\n");
+    client.closed = true;
+    client.data = None;
+    client.pending_connect = None;
 }
 
 /// Bind to the link and configure the stack when the generation declares an
@@ -585,6 +633,7 @@ fn dispatch(
     stack: Option<&mut Stack>,
     sockets: &mut SocketSet<'static>,
     socket_slots: &mut SocketSlots,
+    draining: &mut Draining,
 ) -> Option<(i32, u8, u64)> {
     let holder = client.holder;
     let deny = Some((STATUS_DENIED, network_service::CAPABILITY_NONE, 0));
@@ -714,7 +763,7 @@ fn dispatch(
                 tcp::SocketBuffer::new(&mut rx[..]),
                 tcp::SocketBuffer::new(&mut tx[..]),
             );
-            socket.set_timeout(Some(Duration::from_millis(CONNECT_TIMEOUT_MS as u64)));
+            socket.set_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS as u64)));
             let local_port = stack.next_port;
             stack.next_port = stack.next_port.checked_add(1).unwrap_or(FIRST_LOCAL_PORT);
             let remote = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from(remote)), request.port);
@@ -778,18 +827,27 @@ fn dispatch(
                 return deny;
             }
             if request.op == network_service::OP_CLOSE {
-                match cap.socket {
-                    Some(handle) => {
-                        // The socket finishes its own close; the slot is
-                        // reused once the stack has let it go.
-                        sockets.get_mut::<tcp::Socket>(handle).close();
-                        capabilities[index] = Some(Capability {
-                            closing: true,
-                            ..cap
-                        });
+                // The capability is gone at once; the socket finishes its own
+                // close in the draining list, charging no ceiling. A connect
+                // still in flight is aborted rather than closed: nothing was
+                // ever established to close.
+                if let Some(handle) = cap.socket {
+                    let socket = sockets.get_mut::<tcp::Socket>(handle);
+                    if client.pending_connect == Some(cap.id) {
+                        client.pending_connect = None;
+                        socket.abort();
+                    } else {
+                        socket.close();
                     }
-                    None => capabilities[index] = None,
+                    let Some(entry) = draining.iter_mut().find(|entry| entry.is_none()) else {
+                        // Every socket slot is already draining; the storage
+                        // is bounded by TCP_SOCKETS, so this cannot happen
+                        // while the handle also holds a slot.
+                        fail(b"draining list")
+                    };
+                    *entry = Some(handle);
                 }
+                capabilities[index] = None;
             } else if cap.socket.is_some() {
                 // The bytes travel in the client's data queue; the endpoint
                 // carries no slice.
@@ -862,20 +920,27 @@ fn settle_connect(
 /// Admit and service the client's data requests: each is validated against
 /// the capability's holder and rights and the lent pages before a byte
 /// touches a socket, then held pending until the socket takes or gives it.
+/// `Err` is a client that wedged its own ring; the caller refuses it.
 fn serve_data(
     client: &mut Client,
     capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
     destinations: &NetworkDestinations<'_>,
     sockets: &mut SocketSet<'static>,
     observed: &mut Observed,
-) -> bool {
+) -> Result<bool, &'static [u8]> {
     let holder = client.holder;
     let Some(data) = client.data.as_mut() else {
-        return false;
+        return Ok(false);
     };
     let mut progress = false;
     let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
     loop {
+        // Every taken request needs a completion slot; a ring the client has
+        // not drained is not taken from, so a completion can always be
+        // published.
+        if data.queue.completions_pending() >= DATA_SLOTS as u64 {
+            break;
+        }
         let submission = match data.queue.take_request(&mut body, PAGE) {
             Ok(value) => value,
             Err(error) if error.error == QueueError::Empty => break,
@@ -883,7 +948,7 @@ fn serve_data(
                 if error.request_id != 0 {
                     data.queue
                         .complete(error.request_id, io_queue::STATUS_MALFORMED, 0, &[], false)
-                        .unwrap_or_else(|_| fail(b"malformed completion"));
+                        .map_err(|_| b"completion ring".as_slice())?;
                 }
                 progress = true;
                 continue;
@@ -899,8 +964,7 @@ fn serve_data(
                 io_queue::STATUS_MALFORMED,
                 STATUS_MALFORMED,
                 0,
-                0,
-            );
+            )?;
             continue;
         };
         if !matches!(
@@ -914,8 +978,7 @@ fn serve_data(
                 io_queue::STATUS_UNSUPPORTED,
                 STATUS_UNSUPPORTED,
                 0,
-                0,
-            );
+            )?;
             continue;
         }
         let capability = capabilities
@@ -923,8 +986,10 @@ fn serve_data(
             .flatten()
             .find(|cap| cap.id == request.capability)
             .copied();
-        let Some(cap) = capability.filter(|cap| cap.holder == holder && !cap.closing) else {
-            observed.cross_holder_refusals += u32::from(capability.is_some());
+        let Some(cap) = capability.filter(|cap| cap.holder == holder) else {
+            if capability.is_some() {
+                observed.cross_holder_refusals += 1;
+            }
             complete_data(
                 data,
                 submission.request_id,
@@ -932,8 +997,7 @@ fn serve_data(
                 io_queue::STATUS_BAD_RIGHTS,
                 STATUS_DENIED,
                 0,
-                0,
-            );
+            )?;
             continue;
         };
         let (required, direction) = if request.op == network_service::OP_SEND {
@@ -949,8 +1013,7 @@ fn serve_data(
                 io_queue::STATUS_BAD_RIGHTS,
                 STATUS_DENIED,
                 0,
-                0,
-            );
+            )?;
             continue;
         }
         let slice: WireBufferSlice = submission.slice;
@@ -974,8 +1037,7 @@ fn serve_data(
                 io_queue::STATUS_BAD_SLICE,
                 STATUS_DENIED,
                 0,
-                0,
-            );
+            )?;
             continue;
         };
         let depth = destinations
@@ -1000,8 +1062,7 @@ fn serve_data(
                 io_queue::STATUS_EXHAUSTED,
                 STATUS_DENIED,
                 0,
-                0,
-            );
+            )?;
             continue;
         };
         data.pending[slot] = Some(Pending {
@@ -1025,7 +1086,8 @@ fn serve_data(
             .find(|cap| cap.id == pending.capability)
             .copied()
         else {
-            // The capability went away under the request: settle it as cancelled.
+            // The capability went away under the request: settled as
+            // cancelled, and a refusal reports no transfer.
             complete_data(
                 data,
                 pending.request_id,
@@ -1033,8 +1095,7 @@ fn serve_data(
                 io_queue::STATUS_CANCELLED,
                 STATUS_DENIED,
                 0,
-                pending.progress as u64,
-            );
+            )?;
             data.pending[slot] = None;
             progress = true;
             continue;
@@ -1054,18 +1115,40 @@ fn serve_data(
                     io_queue::STATUS_DEVICE_ERROR,
                     STATUS_RESET_BY_PEER,
                     0,
-                    pending.progress as u64,
-                );
+                )?;
                 data.pending[slot] = None;
                 progress = true;
                 continue;
             }
             let taken = socket.send_slice(&region[pending.progress..]).unwrap_or(0);
+            let done = pending.progress + taken;
             if taken > 0 {
                 progress = true;
                 observed.bytes_sent += taken as u64;
-                let done = pending.progress + taken;
-                if done == pending.length {
+            }
+            if done == pending.length || pending.nonblocking {
+                // A nonblocking send completes with whatever the socket took.
+                complete_data(
+                    data,
+                    pending.request_id,
+                    pending.op,
+                    io_queue::STATUS_OK,
+                    0,
+                    done as u64,
+                )?;
+                data.pending[slot] = None;
+                progress = true;
+            } else if taken > 0 {
+                data.pending[slot] = Some(Pending {
+                    progress: done,
+                    ..pending
+                });
+            }
+        } else {
+            // The stack tells a peer's FIN (nothing more will ever arrive) from
+            // a reset or timed-out socket; the two are different answers.
+            match socket.recv_slice(region) {
+                Ok(0) if pending.nonblocking => {
                     complete_data(
                         data,
                         pending.request_id,
@@ -1073,21 +1156,12 @@ fn serve_data(
                         io_queue::STATUS_OK,
                         0,
                         0,
-                        done as u64,
-                    );
+                    )?;
                     data.pending[slot] = None;
-                } else {
-                    data.pending[slot] = Some(Pending {
-                        progress: done,
-                        ..pending
-                    });
-                }
-            }
-        } else {
-            if socket.can_recv() {
-                let received = socket.recv_slice(region).unwrap_or(0);
-                if received > 0 {
                     progress = true;
+                }
+                Ok(0) => {}
+                Ok(received) => {
                     observed.bytes_received += received as u64;
                     complete_data(
                         data,
@@ -1095,76 +1169,98 @@ fn serve_data(
                         pending.op,
                         io_queue::STATUS_OK,
                         0,
-                        0,
                         received as u64,
-                    );
+                    )?;
                     data.pending[slot] = None;
-                    continue;
+                    progress = true;
                 }
-            }
-            if !socket.may_recv() {
-                // The peer closed and everything it sent was delivered.
-                complete_data(
-                    data,
-                    pending.request_id,
-                    pending.op,
-                    io_queue::STATUS_OK,
-                    0,
-                    network_service::FLAG_END_OF_STREAM,
-                    0,
-                );
-                data.pending[slot] = None;
-                progress = true;
-            } else if pending.nonblocking {
-                complete_data(
-                    data,
-                    pending.request_id,
-                    pending.op,
-                    io_queue::STATUS_OK,
-                    0,
-                    0,
-                    0,
-                );
-                data.pending[slot] = None;
-                progress = true;
+                Err(tcp::RecvError::Finished) => {
+                    complete_end_of_stream(data, pending.request_id)?;
+                    data.pending[slot] = None;
+                    progress = true;
+                }
+                Err(tcp::RecvError::InvalidState) => {
+                    complete_data(
+                        data,
+                        pending.request_id,
+                        pending.op,
+                        io_queue::STATUS_DEVICE_ERROR,
+                        STATUS_RESET_BY_PEER,
+                        0,
+                    )?;
+                    data.pending[slot] = None;
+                    progress = true;
+                }
             }
         }
     }
-    progress
+    Ok(progress)
 }
 
+/// Publish one terminal answer. Only a successful completion reports a
+/// transfer; a refusal always reports zero, as the contract validator on the
+/// client side requires. `Err` is a completion ring the client has wedged.
 fn complete_data(
     data: &mut DataQueue,
     request_id: u64,
     op: u8,
     status: u32,
     detail: i32,
-    flags: u32,
     transferred: u64,
-) {
-    let payload = completion(op, network_service::CAPABILITY_NONE, detail, flags, 0).encode();
-    data.queue
-        .complete(request_id, status, transferred, &payload, false)
-        .unwrap_or_else(|_| fail(b"data completion"));
+) -> Result<(), &'static [u8]> {
+    publish(
+        data,
+        request_id,
+        status,
+        transferred,
+        completion(op, network_service::CAPABILITY_NONE, detail, 0, 0),
+    )
 }
 
-/// Sockets whose holders closed them and that the stack has since let go
-/// give their storage back.
-fn reap_closed(
-    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+/// The peer closed and every byte it sent has been delivered: a successful
+/// receive of nothing, flagged as the end of the stream.
+fn complete_end_of_stream(data: &mut DataQueue, request_id: u64) -> Result<(), &'static [u8]> {
+    publish(
+        data,
+        request_id,
+        io_queue::STATUS_OK,
+        0,
+        completion(
+            network_service::OP_RECV,
+            network_service::CAPABILITY_NONE,
+            0,
+            network_service::FLAG_END_OF_STREAM,
+            0,
+        ),
+    )
+}
+
+fn publish(
+    data: &mut DataQueue,
+    request_id: u64,
+    status: u32,
+    transferred: u64,
+    payload: WireNetworkCompletion,
+) -> Result<(), &'static [u8]> {
+    data.queue
+        .complete(request_id, status, transferred, &payload.encode(), false)
+        .map(|_| ())
+        .map_err(|_| b"completion ring".as_slice())
+}
+
+/// Sockets their holders closed give their storage back once the stack has
+/// let them go.
+fn reap_drained(
+    draining: &mut Draining,
     sockets: &mut SocketSet<'static>,
     socket_slots: &mut SocketSlots,
 ) -> bool {
     let mut progress = false;
-    for entry in capabilities.iter_mut() {
-        let Some(cap) = *entry else {
+    for entry in draining.iter_mut() {
+        let Some(handle) = *entry else {
             continue;
         };
-        let Some(handle) = cap.socket.filter(|_| cap.closing) else {
-            continue;
-        };
-        let socket = sockets.get_mut::<tcp::Socket>(handle);
-        if socket.state() == tcp::State::Closed {
+        if sockets.get_mut::<tcp::Socket>(handle).state() == tcp::State::Closed {
             free_socket(socket_slots, sockets, handle);
             *entry = None;
             progress = true;
@@ -1197,7 +1293,6 @@ fn mint(
         kind,
         epoch,
         socket,
-        closing: false,
     });
     (0, kind, id)
 }

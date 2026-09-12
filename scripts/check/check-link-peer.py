@@ -36,6 +36,20 @@ def check_checksums() -> None:
     expect(lp.checksum(bytes(corrupted)) != 0, "a corrupted ICMP echo still verifies")
 
 
+def check_tcp_checksum_known_answer() -> None:
+    # Computed by hand once (RFC 793 pseudo-header, RFC 1071 fold) over an
+    # odd-length segment, so the encoder is checked against a value it did not
+    # produce.
+    header = struct.pack("!HHIIBBHHH", 4242, 49152, 0x10000000, 0x0000ABCD, 5 << 4, 0x18, 8192, 0, 0)
+    segment = header + b"hello, slime"
+    expect(
+        lp.tcp_checksum(lp.PEER_IP, lp.GUEST_IP, segment) == 0xb11d,
+        "the TCP checksum of the known-answer segment is wrong",
+    )
+    built = lp.tcp_segment(lp.PEER_IP, lp.GUEST_IP, 4242, 49152, 0x10000000, 0x0000ABCD, 0x18, b"hello, slime")
+    expect(struct.unpack("!H", built[16:18])[0] == 0xb11d, "tcp_segment did not place the known checksum")
+
+
 def check_frames_decode_and_pad() -> None:
     request = lp.ethernet(lp.BROADCAST, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), lp.PEER_IP))
     expect(len(request) == lp.MIN_FRAME, "an ARP request is not padded to the minimum frame")
@@ -139,6 +153,7 @@ def check_tcp_echo_server() -> None:
 
 def main() -> None:
     check_checksums()
+    check_tcp_checksum_known_answer()
     check_frames_decode_and_pad()
     check_peer_answers_arp_and_echo()
     check_peer_learns_the_guest_and_pings_it()

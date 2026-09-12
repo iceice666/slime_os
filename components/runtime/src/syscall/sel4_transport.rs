@@ -832,6 +832,19 @@ pub fn capability_import() -> Result<u32, i64> {
     u32::try_from(slot).map_err(|_| ERR_INVALID_ARG)
 }
 
+/// Claim the oldest root-side export addressed to this component from the
+/// peer of the endpoint at `endpoint_slot`, and no other sender.
+pub fn capability_import_from(endpoint_slot: u32) -> Result<u32, i64> {
+    let slot = result_of(
+        capability_transfer_labels::IMPORT,
+        &[0, Word::from(endpoint_slot) + 1],
+    );
+    if slot < 0 {
+        return Err(slot);
+    }
+    u32::try_from(slot).map_err(|_| ERR_INVALID_ARG)
+}
+
 pub fn shared_buffer_create(factory_slot: u32, pages: usize, writable: bool) -> (i64, u64) {
     pair_of(
         shared_buffer_labels::CREATE,

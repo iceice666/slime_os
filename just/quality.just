@@ -281,8 +281,9 @@ test_sel4_root:
     fi
     # The count is pinned so a silently dropped or unregistered `#[test]` fails
     # the gate rather than passing as a smaller run; raise it in the same change
-    # that adds a test.
-    expected=240
+    # that adds a test. IO11's review follow-ups add the two peer-lookup tests
+    # behind the sender-bound import.
+    expected=242
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

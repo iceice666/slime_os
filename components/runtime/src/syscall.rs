@@ -241,6 +241,14 @@ pub fn capability_import() -> Result<u32, i64> {
     transport::capability_import()
 }
 
+/// Claim the oldest export addressed to this component that the peer of the
+/// endpoint at `endpoint_slot` made, and no other sender's. A receiver with
+/// several clients must name the endpoint a descriptor arrived on, or one
+/// client's descriptor could take up another client's export.
+pub fn capability_import_from(endpoint_slot: u32) -> Result<u32, i64> {
+    transport::capability_import_from(endpoint_slot)
+}
+
 /// A shared buffer allocated through a `SharedBufferFactory` capability: the
 /// slot holding the new `SharedBuffer` handle, plus the assigned unforgeable
 /// identity that names it across a transfer.

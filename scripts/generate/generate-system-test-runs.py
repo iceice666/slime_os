@@ -86,6 +86,9 @@ EXTRA_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 # execution profile)`; the image resolves through the closure, so there is no
 # literal path to name.
 EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    # `check-sel4-io-network-plane.py --arm tcp` boots generation 54 with the
+    # virtio-net device; its default arm boots generation 53 with no device.
+    "sel4-io-network": (("sel4-io-tcp", "sel4-io-tcp", "qemu-arm-virt"),),
     "sel4-private-memory": (
         (
             "sel4-private-memory-fail-large-map",
@@ -131,6 +134,16 @@ def plane_checkers() -> list[_Path]:
         for path in sorted(CHECK_ROOT.glob("check-sel4-*.py"))
         if path.name not in NOT_A_PLANE
     ]
+
+
+# Devices per run, where one checker's arms attach different devices. The
+# textual scan below attributes every `-device` in a checker to every run it
+# emits, which is wrong for a checker whose default arm attaches none: a record
+# is what a reader trusts, so the arm that attaches nothing must say so.
+RUN_DEVICES: dict[str, list[str]] = {
+    "sel4-io-network": [],
+    "sel4-io-tcp": ["virtio-net-device"],
+}
 
 
 def run_name(path: _Path) -> str:
@@ -357,11 +370,14 @@ def outputs() -> dict[_Path, str]:
     emitted: dict[_Path, str] = {}
     for path in plane_checkers():
         for name, closure_name, profile, _image in run_variants(path):
+            facts = extract(path)
+            if name in RUN_DEVICES:
+                facts["devices"] = sorted(RUN_DEVICES[name])
             emitted[RUN_ROOT / f"{name}.zti"] = render(
                 name,
                 closure_identity_for(closure_name) if closure_name else "",
                 profile,
-                extract(path),
+                facts,
             )
     return emitted
 

@@ -157,6 +157,9 @@ class Ledger:
     received: list[Frame] = dataclasses.field(default_factory=list)
     sent: list[Frame] = dataclasses.field(default_factory=list)
     guest_mac: bytes | None = None
+    # The exception that ended `serve`, if one did: a gate reads it before it
+    # trusts a partial ledger.
+    failure: str | None = None
 
     def count_received(self, kind: str) -> int:
         return sum(1 for frame in self.received if frame.kind == kind)
@@ -170,12 +173,24 @@ class Ledger:
     def ip_destinations(self) -> set[bytes]:
         return {frame.ip_destination for frame in self.received if frame.ip_destination is not None}
 
-    def echo_replies_matching(self, identifier: int) -> list[int]:
+    def echo_replies_matching(self, identifier: int, payload: bytes | None = None, source: bytes | None = None) -> list[int]:
+        """Sequence numbers of the echo replies carrying `identifier`, and when
+        given, exactly `payload` from exactly `source`: a reply that mangled the
+        request's bytes or came from another address does not count."""
         return sorted(
             frame.icmp_sequence
             for frame in self.received
-            if frame.kind == "icmp-echo-reply" and frame.icmp_identifier == identifier and frame.icmp_sequence is not None
+            if frame.kind == "icmp-echo-reply"
+            and frame.icmp_identifier == identifier
+            and frame.icmp_sequence is not None
+            and (payload is None or frame.icmp_payload == payload)
+            and (source is None or frame.ip_source == source)
         )
+
+    def arp_targets(self) -> set[bytes]:
+        """Every address the guest asked to resolve: a host the guest tried to
+        reach shows up here before any IPv4 packet could."""
+        return {frame.arp_target_ip for frame in self.received if frame.kind == "arp-request" and frame.arp_target_ip is not None}
 
     def summary(self) -> str:
         kinds: dict[str, int] = {}
@@ -245,7 +260,14 @@ def serve(receiver: socket.socket, qemu_port: int, stop: threading.Event, peer: 
     try:
         next_probe = time.monotonic()
         sequence = 0
-        while not stop.is_set():
+        # After `stop`, one more pass over the socket: frames already queued
+        # belong to the ledger the gate is about to read.
+        draining = False
+        while True:
+            if stop.is_set():
+                if draining:
+                    break
+                draining = True
             try:
                 raw, _ = receiver.recvfrom(4096)
             except socket.timeout:
@@ -254,7 +276,7 @@ def serve(receiver: socket.socket, qemu_port: int, stop: threading.Event, peer: 
                 for reply in peer.handle(raw):
                     sender.sendto(reply, ("127.0.0.1", qemu_port))
             now = time.monotonic()
-            if now >= next_probe:
+            if now >= next_probe and not draining:
                 next_probe = now + ECHO_INTERVAL_SECONDS
                 if peer.ledger.guest_mac is None:
                     sender.sendto(peer.arp_request_for_guest(), ("127.0.0.1", qemu_port))
@@ -263,6 +285,8 @@ def serve(receiver: socket.socket, qemu_port: int, stop: threading.Event, peer: 
                     request = peer.echo_request(ECHO_IDENTIFIER, sequence, ECHO_PAYLOAD)
                     if request is not None:
                         sender.sendto(request, ("127.0.0.1", qemu_port))
+    except Exception as error:  # noqa: BLE001 - recorded for the gate, which fails on it
+        peer.ledger.failure = f"{type(error).__name__}: {error}"
     finally:
         sender.close()
 
@@ -329,6 +353,9 @@ class Flow:
     echoed: int = 0
     received: int = 0
     fin_sent: bool = False
+    # Every in-order byte the guest sent, so a gate can compare the stream's
+    # content and not only its length.
+    payload: bytearray = dataclasses.field(default_factory=bytearray)
 
 
 class TcpServer:
@@ -380,6 +407,7 @@ class TcpServer:
         if data:
             flow.rcv_next += len(data)
             flow.received += len(data)
+            flow.payload += data
             out.append(self.emit(frame, ECHO_PORT, segment.source_port, flow.snd_next, flow.rcv_next, TCP_ACK))
             for start in range(0, len(data), SEGMENT_BYTES):
                 chunk = data[start : start + SEGMENT_BYTES]

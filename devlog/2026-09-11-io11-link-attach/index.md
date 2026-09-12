@@ -45,7 +45,7 @@ undeclared MAC, no undeclared host addressed.
 | The release handshake regresses and the driver or the service faults at exit | `just io_tcp_check` | `SLIME_ROOT FATAL`, a missing `fresh epoch old=1 new=2`, or the 240 s timeout |
 | The authority-only plane changes shape | `just io_network_check` | Its 16 markers |
 | The driver's own plane changes | `just io_link_check` | Its 28 markers |
-| A marker is deleted or reordered without notice | `just sel4_gate_control_check` | The pinned count 39 |
+| A marker is deleted or reordered without notice | `just sel4_gate_control_check` | The pinned count 39 after this entry, 47 after the tcp-client entry |
 
 ## Verification
 

@@ -36,6 +36,12 @@ CLOSURE = "sel4-io-network"
 TCP_CLOSURE = "sel4-io-tcp"
 # The probe's one stream: one page, and the destination's whole byte budget.
 STREAM_BYTES = 4096
+
+
+def stream_pattern(length: int) -> bytes:
+    """The bytes the probe sends: its `expected(index)` function, restated here
+    so the peer's copy of the stream is compared against the same source."""
+    return bytes((index * 7 + (index >> 8)) & 0xFF for index in range(length))
 IMAGE: Path | None = None
 COMPOSITIONS = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions"
 FIXTURE = COMPOSITIONS / "sel4-io-network.zti"
@@ -277,6 +283,8 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
         raise
     ledger = peer.ledger
     print(f"[peer] {ledger.summary()}")
+    if ledger.failure is not None:
+        fail(f"the peer stopped serving: {ledger.failure}")
     guest_mac = bytes.fromhex(mac.replace(":", ""))
     foreign = ledger.foreign_sources(guest_mac)
     if foreign:
@@ -285,12 +293,25 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
         fail("the guest never answered the peer's ARP request for its declared address")
     if ledger.count_received("arp-reply") < 1:
         fail("no ARP reply from the guest")
-    replies = ledger.echo_replies_matching(link_peer.ECHO_IDENTIFIER)
+    replies = ledger.echo_replies_matching(link_peer.ECHO_IDENTIFIER, link_peer.ECHO_PAYLOAD, link_peer.GUEST_IP)
     if replies != list(range(1, link_peer.ECHO_COUNT + 1)):
-        fail(f"echo replies from the guest were {replies}, expected every sequence 1..{link_peer.ECHO_COUNT}")
+        fail(
+            f"echo replies from the guest carrying the request's bytes were {replies}, "
+            f"expected every sequence 1..{link_peer.ECHO_COUNT}"
+        )
+    # An undeclared host on the link would be asked for by ARP before any IPv4
+    # packet could name it, so both tables are checked.
     undeclared = {destination for destination in ledger.ip_destinations() if destination != link_peer.PEER_IP}
+    undeclared |= {target for target in ledger.arp_targets() if target != link_peer.PEER_IP}
     if undeclared:
-        fail(f"the guest addressed IPv4 hosts the composition does not declare: {sorted(undeclared)}")
+        fail(f"the guest addressed hosts the composition does not declare: {sorted(undeclared)}")
+    # The service's own count of frames it transmitted is what the peer received;
+    # the two are independent ledgers of one wire.
+    statistics = re.search(r"\[network-service\] link statistics tx=(\d+) rx=(\d+)", transcript)
+    if statistics is None:
+        fail("the service printed no link statistics")
+    if int(statistics.group(1)) != len(ledger.received):
+        fail(f"the service transmitted {statistics.group(1)} frames but the peer received {len(ledger.received)}")
     # The byte stream, as the peer saw it: one connection to the echo port
     # carrying the probe's 4096 bytes each way and closed by both sides, one
     # refused attempt on the closed port, and nothing else.
@@ -300,6 +321,8 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
     flow = next(iter(flows.values()))
     if flow.received != STREAM_BYTES or flow.echoed != STREAM_BYTES:
         fail(f"the echo flow carried rx={flow.received} echo={flow.echoed}, expected {STREAM_BYTES} each way")
+    if bytes(flow.payload) != stream_pattern(STREAM_BYTES):
+        fail("the bytes the peer received are not the probe's seeded stream")
     if flow.state != "closed":
         fail(f"the echo flow ended in state {flow.state!r}, expected both FINs acknowledged")
     if len(peer.tcp.refused) != 1:

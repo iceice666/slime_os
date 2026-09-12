@@ -10,8 +10,8 @@ use boot_contracts::clock_authority::{self, ClockAuthority};
 use boot_contracts::component_image::{self, ComponentTargetError};
 use boot_contracts::fabric_graph::{self, FabricGraph, MAX_INTERPOSITION_HOPS};
 use boot_contracts::generation::{
-    DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
-    KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
+    DecodeError, Generation, GrantEndpoint, Instance, InstanceBinding, KIND_BOOTSTRAP,
+    KIND_COMPONENT, KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
 use boot_contracts::io_resource::{self, IoResourceBudget};
 use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
@@ -2687,6 +2687,84 @@ mod tests {
         assert_eq!(
             transferable.endpoint_rights(),
             sel4::CapRights::new(true, true, true, true)
+        );
+    }
+}
+
+/// The instance on the other end of the grant bound at `slot` in
+/// `receiver_instance`'s table, if that slot binds a grant between two
+/// instances. Pure over the binding and grant tables so it can be checked on
+/// the host without a launched graph.
+pub fn peer_instance_for_slot(
+    bindings: impl Iterator<Item = (usize, usize)>,
+    grant_ends: impl Fn(usize) -> Option<(GrantEndpoint, GrantEndpoint)>,
+    receiver_instance: usize,
+    slot: usize,
+) -> Option<usize> {
+    let (grant, _) = bindings.into_iter().find(|(_, bound)| *bound == slot)?;
+    match grant_ends(grant)? {
+        (GrantEndpoint::Instance(source), GrantEndpoint::Instance(target))
+            if source == receiver_instance =>
+        {
+            Some(target)
+        }
+        (GrantEndpoint::Instance(source), GrantEndpoint::Instance(target))
+            if target == receiver_instance =>
+        {
+            Some(source)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod peer_instance_tests {
+    use super::{GrantEndpoint, peer_instance_for_slot};
+
+    fn ends(index: usize) -> Option<(GrantEndpoint, GrantEndpoint)> {
+        match index {
+            // instance 3 -> instance 7 over grant 0; executable-sourced grant 1
+            0 => Some((GrantEndpoint::Instance(3), GrantEndpoint::Instance(7))),
+            1 => Some((GrantEndpoint::Executable(1), GrantEndpoint::Instance(7))),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_peer_is_the_other_end_of_the_grant_bound_at_the_slot() {
+        let bindings = [(0usize, 4usize), (1, 5)];
+        // The target reading its slot 4 finds the source, and the source reading
+        // the same grant finds the target.
+        assert_eq!(
+            peer_instance_for_slot(bindings.into_iter(), ends, 7, 4),
+            Some(3)
+        );
+        assert_eq!(
+            peer_instance_for_slot(bindings.into_iter(), ends, 3, 4),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn a_slot_that_binds_no_instance_pair_names_no_sender() {
+        let bindings = [(0usize, 4usize), (1, 5), (9, 6)];
+        // An executable-sourced grant, an unbound slot, an unknown grant, and a
+        // grant the receiver is not part of all claim nothing.
+        assert_eq!(
+            peer_instance_for_slot(bindings.into_iter(), ends, 7, 5),
+            None
+        );
+        assert_eq!(
+            peer_instance_for_slot(bindings.into_iter(), ends, 7, 8),
+            None
+        );
+        assert_eq!(
+            peer_instance_for_slot(bindings.into_iter(), ends, 7, 6),
+            None
+        );
+        assert_eq!(
+            peer_instance_for_slot(bindings.into_iter(), ends, 2, 4),
+            None
         );
     }
 }

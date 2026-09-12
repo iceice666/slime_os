@@ -886,8 +886,10 @@ undeclared MAC. Evidence:
   remain decoded only.
 - One backend (virtio-net under QEMU); backend independence is P6.F's claim to
   make, not this milestone's.
-- Client death while the service holds its loans is settled by the root's
-  reclamation of the dead holder's loans, not observed on this plane.
+- A client that dies without the shutdown rendezvous is invisible to the
+  service, which then faults on the page the root reclaimed: no mechanism yet
+  places a supervision capability between root-launched instances
+  (`01a09446-bbf5-7df6-9b22-ba7f65c0ed76`).
 
 ### Verification target
 

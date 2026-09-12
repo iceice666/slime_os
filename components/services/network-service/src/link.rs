@@ -1,5 +1,5 @@
-//! The service's side of one `LinkDevice`: the IO3 client shape, driven by
-//! smoltcp instead of a probe script.
+//! The service's side of one `LinkDevice`: two IO0 queues and eight frame
+//! pages lent to the driver, presented to smoltcp as a `phy::Device`.
 //!
 //! Two IO0 queues and eight one-page frame buffers are created here, lent to
 //! the driver, and never touched by anyone else. Four pages are receive
@@ -175,7 +175,7 @@ impl<const N: usize> Side<N> {
                     return Some((completion.request_id, completion.status, reply));
                 }
                 // A completion for an identity this side never issued: consumed
-                // and counted nowhere, exactly as the probe treats it.
+                // so the ring advances, and counted nowhere.
                 Err(QueueError::Unknown) => continue,
                 Err(QueueError::Empty) => return None,
                 Err(_) => fail(b"link completion"),
@@ -344,7 +344,7 @@ impl Link {
         }
     }
 
-    /// Hand the link back the way the IO3 probe does: a reset the driver
+    /// Hand the link back through the driver's reset handshake: a reset the driver
     /// settles, an acknowledgement once every settled completion has been
     /// read, and its fresh-epoch signal before this side goes away. Until that
     /// signal the driver still writes the rings this side lent it.
