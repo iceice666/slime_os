@@ -145,6 +145,14 @@ RUN_DEVICES: dict[str, list[str]] = {
     "sel4-io-tcp": ["virtio-net-device"],
 }
 
+# Network backends per run, on the same grounds: the scan attributes every
+# `-netdev` in a checker to every run it emits, and only the tcp arm attaches
+# the UDP socket backend its host peer speaks through.
+RUN_NETWORKS: dict[str, list[str]] = {
+    "sel4-io-network": [],
+    "sel4-io-tcp": ["socket-udp"],
+}
+
 
 def run_name(path: _Path) -> str:
     """`check-sel4-io-block-plane.py` -> `sel4-io-block`."""
@@ -253,6 +261,14 @@ def extract(path: _Path) -> dict:
         | set(re.findall(r'"(usb-kbd)"', text))
     )
 
+    # One `-netdev` backend is one attached network, named by its QEMU backend
+    # kind: what the frames cross, not the device they reach (that is a device
+    # above). The socket backend's ports are chosen per run, so the record
+    # names the kind and nothing ephemeral.
+    networks = sorted(
+        {f"socket-{kind}" for kind in re.findall(r'"socket,id=[a-z0-9-]+,(udp|tcp)=', text)}
+    )
+
     # A forbidden outcome is written either as a bare literal or as a regex with
     # a trailing matcher (`r"SLIME_ROOT FATAL .*"`). Matching only the literal
     # form silently reported "forbids nothing" for every plane using the regex
@@ -286,6 +302,7 @@ def extract(path: _Path) -> dict:
     return {
         "timeoutSeconds": timeout,
         "drives": drive_sites,
+        "networks": networks,
         "devices": devices,
         "forbiddenOutcomes": forbidden,
         "faults": faults,
@@ -316,6 +333,24 @@ def render(name: str, closure: str, profile: str, facts: dict) -> str:
         disks = "[\n" + "\n".join(rows) + "\n  ]"
     else:
         disks = "[]"
+
+    # A network is writable: the host peer injects frames into the guest
+    # through it, where a device fixture is only read.
+    networks = ""
+    if facts["networks"]:
+        rows = []
+        for network in facts["networks"]:
+            rows.append(
+                "    {\n"
+                f'      name = "{network}";\n'
+                f'      path = "";\n'
+                f'      identity = "";\n'
+                "      writable = true;\n"
+                "    };"
+            )
+        networks = "[\n" + "\n".join(rows) + "\n  ]"
+    else:
+        networks = "[]"
 
     devices = ""
     if facts["devices"]:
@@ -356,7 +391,7 @@ def render(name: str, closure: str, profile: str, facts: dict) -> str:
         '  executionKind = "emulator";\n'
         f'  executionProfile = "{profile}";\n'
         f"  disks = {disks};\n"
-        "  networks = [];\n"
+        f"  networks = {networks};\n"
         f"  devices = {devices};\n"
         f"  faultControls = {faults};\n"
         f'  timeoutSeconds = {facts["timeoutSeconds"]};\n'
@@ -373,6 +408,8 @@ def outputs() -> dict[_Path, str]:
             facts = extract(path)
             if name in RUN_DEVICES:
                 facts["devices"] = sorted(RUN_DEVICES[name])
+            if name in RUN_NETWORKS:
+                facts["networks"] = sorted(RUN_NETWORKS[name])
             emitted[RUN_ROOT / f"{name}.zti"] = render(
                 name,
                 closure_identity_for(closure_name) if closure_name else "",

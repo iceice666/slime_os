@@ -147,10 +147,11 @@ impl<'a> SharedBufferBudget<'a> {
             if entry.buffer_count > entry.byte_pages {
                 return Err(DecodeError::Impossible);
             }
-            // A mapping references pages already charged to the holder, so the
-            // holder cannot ever have more live mappings than pages; likewise a
-            // loan references at most one live buffer.
-            if entry.mapping_count > entry.byte_pages || entry.loan_count > entry.buffer_count {
+            // A loan references at most one live buffer. Mappings carry no
+            // such per-holder relation: a mapping is charged to whoever maps,
+            // and a holder maps loans it imported as readily as pages it owns,
+            // so a driver with no pages of its own legitimately holds many.
+            if entry.loan_count > entry.buffer_count {
                 return Err(DecodeError::Impossible);
             }
             // A holder's mapping and loan ceilings are also bounded by the
@@ -351,6 +352,13 @@ mod tests {
         assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
         // A satisfiable budget passes.
         let bytes = build(&[quota(0x11, 8, 2)]);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(check(&budget).is_ok());
+        // More mappings than pages is satisfiable: an importer maps loans it
+        // does not own, so a holder with no pages may still map.
+        let mut entry = quota(0x11, 0, 0);
+        entry.mapping_count = 2;
+        let bytes = build(&[entry]);
         let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
         assert!(check(&budget).is_ok());
         // A zero quota is legal (holder may hold nothing).

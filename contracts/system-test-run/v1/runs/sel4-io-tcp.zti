@@ -1,11 +1,18 @@
 {
   formatVersion = 1;
   name = "sel4-io-tcp";
-  imageClosureIdentity = "95765d61ce2a8b475baa8a20e77f9e2caa4ee0f7d60856a0c593f75dbfa37ca4";
+  imageClosureIdentity = "7a4d59eded6599d30bd4b312177f83b1d2355dad8ebcab198bf16587362a4512";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
-  networks = [];
+  networks = [
+    {
+      name = "socket-udp";
+      path = "";
+      identity = "";
+      writable = true;
+    };
+  ];
   devices = [
     {
       name = "virtio-net-device";

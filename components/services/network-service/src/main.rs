@@ -18,8 +18,10 @@ use slime_proto::io_queue::{
     self, DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE, REQUEST_PAYLOAD_BYTES, WireBufferSlice,
 };
 use slime_proto::io_queue_ring::{Queue, QueueError};
-use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
-use slime_proto::valid_network_request;
+use slime_proto::network_service::{
+    self, WireLoanDelegation, WireNetworkCompletion, WireNetworkRequest,
+};
+use slime_proto::{valid_loan_delegation, valid_network_request};
 use slime_rt::{
     ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, capability_import_from, debug_write,
     exit, monotonic_frequency, monotonic_read, network_destinations_read, network_interface_read,
@@ -54,8 +56,15 @@ const SOCKET_BUFFER_BYTES: usize = 4096;
 /// A socket whose peer stays silent this long while it owes an answer is
 /// aborted: first the connect, and later any data the peer has not
 /// acknowledged. A connect that is neither answered nor refused therefore
-/// settles as unreachable within this bound.
+/// settles as unreachable within this bound. The stack counts the bound from
+/// the peer's last packet whether or not anything is owed, so it is armed only
+/// while a connect or a data request is pending on the socket; an idle
+/// connection is never aborted for being idle.
 const SOCKET_TIMEOUT_MS: i64 = 5000;
+
+fn socket_timeout() -> Option<Duration> {
+    Some(Duration::from_millis(SOCKET_TIMEOUT_MS as u64))
+}
 const FIRST_LOCAL_PORT: u16 = 49152;
 /// One IO0 queue of this depth per data client, and at most as many requests
 /// held pending while their socket cannot yet take or give the bytes.
@@ -64,8 +73,6 @@ const DATA_PAGES: usize = 2;
 const PAGE: u64 = 4096;
 /// Where a client's lent pages are mapped: above the link's own pages.
 const DATA_BASE: u64 = 0x0000_0019_0000_0000 + 16 * PAGE;
-const DESCRIPTOR_QUEUE: u8 = 1;
-const DESCRIPTOR_DATA: u8 = 2;
 const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
 const STATUS_DENIED: i32 = -1;
 const STATUS_MALFORMED: i32 = -2;
@@ -279,10 +286,12 @@ fn main(_: u32) {
                 result => {
                     progress = true;
                     let length = result as usize;
-                    // A delegated loan arrives as a full descriptor carrying no
-                    // protocol magic; everything else is a request.
-                    if length == MAX_MSG && !has_network_magic(&bytes) {
-                        if let Err(reason) = accept_delegation(client, &bytes) {
+                    // A delegated loan arrives as its own record, told from a
+                    // request by its magic; everything else is a request.
+                    if let Some(delegation) = WireLoanDelegation::decode(&bytes[..length])
+                        .filter(|delegation| delegation.magic == network_service::DELEGATION_MAGIC)
+                    {
+                        if let Err(reason) = accept_delegation(client, &delegation) {
                             refuse_client(client, reason);
                         }
                         continue;
@@ -369,26 +378,31 @@ fn main(_: u32) {
     exit(0)
 }
 
-fn has_network_magic(bytes: &[u8; MAX_MSG]) -> bool {
-    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == network_service::NETWORK_MAGIC
-}
-
 /// A client lends this service one queue page and then its data pages. The
 /// descriptor names the buffer, the loan, and which of the two it is; the
 /// authority behind it is claimed through the runtime from this client's
 /// endpoint and no other sender, never trusted from the bytes. A descriptor
 /// this client may not send, or a loan the root will not map, refuses the
 /// client; it is never fatal to the service.
-fn accept_delegation(client: &mut Client, descriptor: &[u8; MAX_MSG]) -> Result<(), &'static [u8]> {
-    let buffer = u64::from_le_bytes(descriptor[..8].try_into().unwrap());
-    let lease = u64::from_le_bytes(descriptor[8..16].try_into().unwrap());
-    let kind = descriptor[16];
+fn accept_delegation(
+    client: &mut Client,
+    delegation: &WireLoanDelegation,
+) -> Result<(), &'static [u8]> {
+    if !valid_loan_delegation(delegation) {
+        return Err(b"delegation record");
+    }
+    let WireLoanDelegation {
+        kind,
+        buffer,
+        lease,
+        ..
+    } = *delegation;
     // Every structural check first: nothing is claimed for a descriptor that
     // could not be installed.
     match kind {
-        DESCRIPTOR_QUEUE if client.data.is_none() => {}
-        DESCRIPTOR_QUEUE => return Err(b"second queue"),
-        DESCRIPTOR_DATA => match client.data.as_ref() {
+        network_service::DELEGATION_QUEUE if client.data.is_none() => {}
+        network_service::DELEGATION_QUEUE => return Err(b"second queue"),
+        network_service::DELEGATION_DATA => match client.data.as_ref() {
             None => return Err(b"data page before queue"),
             Some(data) if data.pages.iter().all(|page| page.is_some()) => {
                 return Err(b"too many data pages");
@@ -406,7 +420,7 @@ fn accept_delegation(client: &mut Client, descriptor: &[u8; MAX_MSG]) -> Result<
     }
     client.next_base += PAGE;
     match kind {
-        DESCRIPTOR_QUEUE => {
+        network_service::DELEGATION_QUEUE => {
             let bytes = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, PAGE as usize) };
             let Ok(queue) = Queue::attach(bytes, DATA_SLOTS) else {
                 return Err(b"queue format");
@@ -763,7 +777,7 @@ fn dispatch(
                 tcp::SocketBuffer::new(&mut rx[..]),
                 tcp::SocketBuffer::new(&mut tx[..]),
             );
-            socket.set_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS as u64)));
+            socket.set_timeout(socket_timeout());
             let local_port = stack.next_port;
             stack.next_port = stack.next_port.checked_add(1).unwrap_or(FIRST_LOCAL_PORT);
             let remote = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from(remote)), request.port);
@@ -889,6 +903,9 @@ fn settle_connect(
     let socket = sockets.get_mut::<tcp::Socket>(handle);
     if socket.may_send() {
         client.pending_connect = None;
+        // Established and owing nothing: `serve_data` re-arms the bound for
+        // each request it holds pending on this socket.
+        socket.set_timeout(None);
         observed.tcp_established += 1;
         send(
             client.slot,
@@ -920,7 +937,8 @@ fn settle_connect(
 /// Admit and service the client's data requests: each is validated against
 /// the capability's holder and rights and the lent pages before a byte
 /// touches a socket, then held pending until the socket takes or gives it.
-/// `Err` is a client that wedged its own ring; the caller refuses it.
+/// `Err` is a client that wedged or corrupted its own ring; the caller
+/// refuses it.
 fn serve_data(
     client: &mut Client,
     capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
@@ -929,12 +947,16 @@ fn serve_data(
     observed: &mut Observed,
 ) -> Result<bool, &'static [u8]> {
     let holder = client.holder;
+    let pending_connect = client.pending_connect;
     let Some(data) = client.data.as_mut() else {
         return Ok(false);
     };
     let mut progress = false;
     let mut body = [0u8; REQUEST_PAYLOAD_BYTES];
-    loop {
+    // One ring's worth per pass: the client owns both of its cursors and may
+    // move them while this runs, so the loop's exits below are not a bound on
+    // their own. Every other client, and the stack, gets its turn regardless.
+    for _ in 0..DATA_SLOTS {
         // Every taken request needs a completion slot; a ring the client has
         // not drained is not taken from, so a completion can always be
         // published.
@@ -944,6 +966,9 @@ fn serve_data(
         let submission = match data.queue.take_request(&mut body, PAGE) {
             Ok(value) => value,
             Err(error) if error.error == QueueError::Empty => break,
+            Err(error) if error.error == QueueError::Inconsistent => {
+                return Err(b"submission ring");
+            }
             Err(error) => {
                 if error.request_id != 0 {
                     data.queue
@@ -1193,6 +1218,28 @@ fn serve_data(
                 }
             }
         }
+    }
+    // The silence bound is armed exactly while this client holds a request
+    // pending on the socket; a connect still settling keeps the bound it was
+    // opened with until `settle_connect` answers it.
+    for cap in capabilities
+        .iter()
+        .flatten()
+        .filter(|cap| cap.holder == holder && Some(cap.id) != pending_connect)
+    {
+        let Some(handle) = cap.socket else {
+            continue;
+        };
+        let owed = data
+            .pending
+            .iter()
+            .flatten()
+            .any(|pending| pending.capability == cap.id);
+        sockets.get_mut::<tcp::Socket>(handle).set_timeout(if owed {
+            socket_timeout()
+        } else {
+            None
+        });
     }
     Ok(progress)
 }

@@ -156,6 +156,9 @@ struct LinkQueue<'a> {
     dma: [Option<DmaMapping>; IO_SLOTS],
     request_ids: [Option<u64>; IO_SLOTS],
     frame_lengths: [u16; IO_SLOTS],
+    /// The client's submit cursor is past the ring's depth, so nothing is
+    /// served until it repairs it. Counted when it becomes true, not per pass.
+    inconsistent: bool,
 }
 
 /// Every count below is observed, never assumed: the plane's markers are
@@ -255,6 +258,7 @@ fn main(_startup_arg: u32) {
             dma: [None; IO_SLOTS],
             request_ids: [None; IO_SLOTS],
             frame_lengths: [0; IO_SLOTS],
+            inconsistent: false,
         },
         rx: LinkQueue {
             queue: Queue::attach(rx_bytes, IO_SLOTS).unwrap_or_else(|_| fail(b"rx attach")),
@@ -262,6 +266,7 @@ fn main(_startup_arg: u32) {
             dma: [None; IO_SLOTS],
             request_ids: [None; IO_SLOTS],
             frame_lengths: [0; IO_SLOTS],
+            inconsistent: false,
         },
         tx_control: ControlQueue {
             base: TX_QUEUE_BASE,
@@ -358,8 +363,25 @@ fn drain_requests(
                 &mut driver.rx
             };
             match link.queue.take_request(&mut body, PAGE) {
-                Ok(value) => value,
-                Err(error) if error.error == QueueError::Empty => break,
+                Ok(value) => {
+                    link.inconsistent = false;
+                    value
+                }
+                Err(error) if error.error == QueueError::Empty => {
+                    link.inconsistent = false;
+                    break;
+                }
+                // A cursor past the ring's depth names no entry: nothing is
+                // consumed and the pass ends. Counted as one refused overrun
+                // when the ring enters that state, not on every signal the
+                // client sends while it stays there.
+                Err(error) if error.error == QueueError::Inconsistent => {
+                    if !link.inconsistent {
+                        link.inconsistent = true;
+                        driver.overrun_refused += 1;
+                    }
+                    break;
+                }
                 Err(error) => {
                     driver.overrun_refused += 1;
                     if error.request_id != 0 {

@@ -4,6 +4,13 @@
 -- typed service capabilities; it deliberately contains no NIC identity, raw
 -- frame operation, ambient socket operation, or resolver-wide authority.
 -- Send and receive data travel in the IO0 buffer slice beside these payloads.
+--
+-- `LoanDelegation` is the descriptor a client sends beside each shared-buffer
+-- loan it delegates to the service: first its IO0 queue page, then its data
+-- pages. It names the buffer and loan the pages carry and which of the two
+-- kinds they are; the authority itself is claimed from the client's endpoint
+-- through the runtime, never from these bytes. Its magic differs from the
+-- request magic so the service tells the two apart by decoding, not by size.
 
 env ::= import stdlib.env;
 fs ::= import stdlib.fs;
@@ -14,7 +21,10 @@ formatVersion :: Int = 1;
 requestBytes :: Int = 56;
 completionBytes :: Int = 24;
 maxNameBytes :: Int = 24;
+delegationBytes :: Int = 64;
 networkMagic :: Int = 1414745678;
+-- Little-endian `NNLD`.
+delegationMagic :: Int = 1145851470;
 
 opConnect :: Int = 1;
 opSend :: Int = 2;
@@ -44,6 +54,9 @@ knownRequestFlags :: Int = 1;
 flagEndOfStream :: Int = 1;
 knownCompletionFlags :: Int = 1;
 
+delegationQueue :: Int = 1;
+delegationData :: Int = 2;
+
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
 NetworkRequest :: type {
@@ -70,8 +83,19 @@ NetworkCompletion :: type {
   capability : Int;
 };
 
+LoanDelegation :: type {
+  magic : Int;
+  version : Int;
+  kind : Int;
+  reserved : Int;
+  buffer : Int;
+  lease : Int;
+  padding : Int;
+};
+
 requestSchema ::= schema NetworkRequest;
 completionSchema ::= schema NetworkCompletion;
+delegationSchema ::= schema LoanDelegation;
 
 requestLayout :: List WireField = {
   { name = "magic"; width = 4; signed = false; byteArray = false; };
@@ -97,22 +121,37 @@ completionLayout :: List WireField = {
   { name = "capability"; width = 8; signed = false; byteArray = false; };
 };
 
+delegationLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "kind"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 1; signed = false; byteArray = false; };
+  { name = "buffer"; width = 8; signed = false; byteArray = false; };
+  { name = "lease"; width = 8; signed = false; byteArray = false; };
+  { name = "padding"; width = 40; signed = false; byteArray = true; };
+};
+
 protocol ::= {
   formatVersion =;
   requestBytes =;
   completionBytes =;
   maxNameBytes =;
+  delegationBytes =;
   networkMagic =;
+  delegationMagic =;
   opConnect =; opSend =; opRecv =; opClose =; opListen =; opAccept =; opResolve =;
   transportNone =; transportTcp =; transportUdp =;
   addressNone =; addressIpv4 =; addressIpv6 =; addressDns =;
   capabilityNone =; capabilityTcpConnection =; capabilityUdpEndpoint =;
   capabilityTcpListener =; capabilityDnsRecord =;
   flagNonblocking =; knownRequestFlags =; flagEndOfStream =; knownCompletionFlags =;
+  delegationQueue =; delegationData =;
   requestFields = requestSchema.fields ?? {;};
   completionFields = completionSchema.fields ?? {;};
+  delegationFields = delegationSchema.fields ?? {;};
   requestLayout =;
   completionLayout =;
+  delegationLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

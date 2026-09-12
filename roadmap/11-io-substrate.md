@@ -824,7 +824,9 @@ own IPv4 address, prefix, gateway, and MAC are generation data
 READ`), never constants; the tick rate the stack's timers run on is the root's
 (`CLOCK RATE READ`); and client bytes travel in an IO0 queue per client, with
 the existing 56-byte `NetworkRequest` and 24-byte `NetworkCompletion` as
-payloads, so no protocol contract changed to carry them.
+payloads, so no protocol contract changed to carry them. The pages a client
+lends for that queue are delegated with the contract's `LoanDelegation`
+record, which names the buffer and loan and which of the two kinds they are.
 
 ## IO11 — QEMU TCP client byte stream over virtio-net
 

@@ -247,8 +247,8 @@ def validated_shared_buffer_quotas(holders: list[dict]) -> dict[str, dict]:
             totals[key] += value
         if holder["bufferCount"] > holder["bytePages"]:
             fail(f"shared-buffer budget: {name} buffers exceed its page quota")
-        if holder["mappingCount"] > holder["bytePages"]:
-            fail(f"shared-buffer budget: {name} mappings exceed its page quota")
+        # Mappings are not bounded by the holder's pages: an importer maps
+        # loans it does not own, mirroring `SharedBufferBudget::validate_against`.
         if holder["loanCount"] > holder["bufferCount"]:
             fail(f"shared-buffer budget: {name} loans exceed its buffer quota")
         by_name[name] = holder

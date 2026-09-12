@@ -149,6 +149,10 @@ fn main(_startup_arg: u32) {
     // absolute and monotonic, so it cannot be re-derived per pass.
     let mut used = 0u16;
     let mut unanswerable_requests = 0u64;
+    // The client's submit cursor is past the ring's depth: nothing is served
+    // until it repairs it, and the state is counted once on entry, not on
+    // every signal the client sends while it stays there.
+    let mut ring_inconsistent = false;
     let device = Device {
         mmio,
         queue_dma,
@@ -171,6 +175,7 @@ fn main(_startup_arg: u32) {
                 &device,
                 &mut used,
                 &mut unanswerable_requests,
+                &mut ring_inconsistent,
             ),
             Ok(None) => {}
             Err(_) => peer_dead(
@@ -199,6 +204,7 @@ fn main(_startup_arg: u32) {
                     &device,
                     &mut used,
                     &mut unanswerable_requests,
+                    &mut ring_inconsistent,
                 );
                 // The marker precedes the reply so that it also precedes
                 // everything the client prints after its call returns: the
@@ -280,6 +286,7 @@ fn drain(
     device: &Device<'_>,
     used: &mut u16,
     unanswerable_requests: &mut u64,
+    ring_inconsistent: &mut bool,
 ) {
     let Device {
         mmio,
@@ -295,8 +302,28 @@ fn drain(
     let mut payload = [0u8; REQUEST_PAYLOAD_BYTES];
     loop {
         let submission = match queue.take_request(&mut payload, DATA_BYTES) {
-            Ok(value) => value,
-            Err(error) if error.error == QueueError::Empty => break,
+            Ok(value) => {
+                *ring_inconsistent = false;
+                value
+            }
+            Err(error) if error.error == QueueError::Empty => {
+                *ring_inconsistent = false;
+                break;
+            }
+            // A cursor past the ring's depth is the client's claim, not an
+            // entry: nothing is consumed and the pass ends. Counted once, as
+            // unanswerable, when the ring enters that state: the request it
+            // pretends to hold never gets a completion.
+            Err(error) if error.error == QueueError::Inconsistent => {
+                if !*ring_inconsistent {
+                    *ring_inconsistent = true;
+                    *unanswerable_requests += 1;
+                    debug_write(b"[virtio-blk-driver] unanswerable requests=");
+                    debug_u64(*unanswerable_requests);
+                    debug_write(b"\n");
+                }
+                break;
+            }
             Err(error) => {
                 if error.request_id == 0 {
                     *unanswerable_requests += 1;

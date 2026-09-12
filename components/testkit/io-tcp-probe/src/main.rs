@@ -12,7 +12,9 @@ use slime_proto::io_queue::{
     self, COMPLETION_PAYLOAD_BYTES, DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE, WireBufferSlice,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError, format};
-use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
+use slime_proto::network_service::{
+    self, WireLoanDelegation, WireNetworkCompletion, WireNetworkRequest,
+};
 use slime_proto::valid_network_completion;
 use slime_rt::{
     CapabilityDisposition, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
@@ -38,8 +40,6 @@ const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_0019_0000_0000;
 const SLOTS: usize = 8;
 const EPOCH: u64 = 1;
-const DESCRIPTOR_QUEUE: u8 = 1;
-const DESCRIPTOR_DATA: u8 = 2;
 const OBJECT_KIND_SHARED_BUFFER_LOAN: u32 =
     slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 const RIGHT_BUFFER_WRITE: u64 = 1 << 8;
@@ -75,8 +75,6 @@ impl Page {
 
 fn main(_: u32) {
     let rate = monotonic_frequency().unwrap_or_else(|_| fail(b"clock rate"));
-    let base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
-    let clock = TickClock::new(rate, base).unwrap_or_else(|_| fail(b"clock rate too slow"));
     write_number(b"[io-tcp-probe] clock rate=", rate);
     debug_write(b"\n");
 
@@ -165,8 +163,11 @@ fn main(_: u32) {
     write_number(b"[io-tcp-probe] undeclared destination refusals=", 1);
     debug_write(b"\n");
 
-    while clock.millis(monotonic_read().unwrap_or_else(|_| fail(b"monotonic read")))
-        < HOLD_MS as i64
+    // The hold starts now, not at process start: the arms above took their
+    // own time, and the peer's pings need the whole window after them.
+    let hold_base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
+    let hold = TickClock::new(rate, hold_base).unwrap_or_else(|_| fail(b"clock rate too slow"));
+    while hold.millis(monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"))) < HOLD_MS as i64
     {
         yield_now();
     }
@@ -206,7 +207,7 @@ fn lend_queue() -> (DataQueue, [Page; 2]) {
         queue_loan.slot,
         queue_buffer.id,
         queue_loan.id,
-        DESCRIPTOR_QUEUE,
+        network_service::DELEGATION_QUEUE,
     );
 
     let mut pages = [Page {
@@ -223,7 +224,12 @@ fn lend_queue() -> (DataQueue, [Page; 2]) {
         }
         let loan = shared_buffer_loan(buffer.slot, SERVICE_SLOT, 0, PAGE, true)
             .unwrap_or_else(|_| fail(b"data loan"));
-        delegate(loan.slot, buffer.id, loan.id, DESCRIPTOR_DATA);
+        delegate(
+            loan.slot,
+            buffer.id,
+            loan.id,
+            network_service::DELEGATION_DATA,
+        );
         *page = Page {
             buffer: buffer.id,
             lease: loan.id,
@@ -239,10 +245,16 @@ fn lend_queue() -> (DataQueue, [Page; 2]) {
 }
 
 fn delegate(slot: u32, buffer: u64, lease: u64, kind: u8) {
-    let mut descriptor = [0u8; 64];
-    descriptor[..8].copy_from_slice(&buffer.to_le_bytes());
-    descriptor[8..16].copy_from_slice(&lease.to_le_bytes());
-    descriptor[16] = kind;
+    let descriptor = WireLoanDelegation {
+        magic: network_service::DELEGATION_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        kind,
+        reserved: 0,
+        buffer,
+        lease,
+        padding: [0; 40],
+    }
+    .encode();
     if capability_delegate(
         SERVICE_SLOT,
         slot,
