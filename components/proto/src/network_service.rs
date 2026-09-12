@@ -33,6 +33,13 @@ pub const FLAG_END_OF_STREAM: u32 = 1;
 pub const KNOWN_COMPLETION_FLAGS: u32 = 1;
 pub const DELEGATION_QUEUE: u8 = 1;
 pub const DELEGATION_DATA: u8 = 2;
+pub const STATUS_DENIED: i32 = -1;
+pub const STATUS_MALFORMED: i32 = -2;
+pub const STATUS_UNSUPPORTED: i32 = -3;
+pub const STATUS_RESET_BY_PEER: i32 = -4;
+pub const STATUS_UNREACHABLE: i32 = -5;
+pub const SHUTDOWN_CAPABILITY: u64 = 18446744073709551615;
+pub const DATA_QUEUE_SLOTS: usize = 8;
 
 pub const OFF_REQUEST_MAGIC: usize = 0;
 pub const OFF_REQUEST_VERSION: usize = 4;

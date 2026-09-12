@@ -1121,6 +1121,7 @@ dependencies = [
 name = "slime-component-io-tcp-probe"
 version = "0.1.0"
 dependencies = [
+ "boot-contracts",
  "slime-build-support",
  "slime-components",
  "slime-proto",

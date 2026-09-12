@@ -18,6 +18,8 @@ Protocol :: type {
   capabilityTcpListener : Int; capabilityDnsRecord : Int;
   flagNonblocking : Int; knownRequestFlags : Int; flagEndOfStream : Int; knownCompletionFlags : Int;
   delegationQueue : Int; delegationData : Int;
+  statusDenied : Int; statusMalformed : Int; statusUnsupported : Int; statusResetByPeer : Int; statusUnreachable : Int;
+  shutdownCapabilityText : Text; dataQueueSlots : Int;
   requestFields : List refl.SchemaField; completionFields : List refl.SchemaField;
   delegationFields : List refl.SchemaField;
   requestLayout : List WireField; completionLayout : List WireField;
@@ -63,12 +65,21 @@ rustBindings :: Protocol -> Text = p => w.join {
   "pub const ADDRESS_NONE: u8 = "; n.toText p.addressNone; ";\npub const ADDRESS_IPV4: u8 = "; n.toText p.addressIpv4; ";\npub const ADDRESS_IPV6: u8 = "; n.toText p.addressIpv6; ";\npub const ADDRESS_DNS: u8 = "; n.toText p.addressDns; ";\n";
   "pub const CAPABILITY_NONE: u8 = "; n.toText p.capabilityNone; ";\npub const CAPABILITY_TCP_CONNECTION: u8 = "; n.toText p.capabilityTcpConnection; ";\npub const CAPABILITY_UDP_ENDPOINT: u8 = "; n.toText p.capabilityUdpEndpoint; ";\npub const CAPABILITY_TCP_LISTENER: u8 = "; n.toText p.capabilityTcpListener; ";\npub const CAPABILITY_DNS_RECORD: u8 = "; n.toText p.capabilityDnsRecord; ";\n";
   "pub const FLAG_NONBLOCKING: u32 = "; n.toText p.flagNonblocking; ";\npub const KNOWN_REQUEST_FLAGS: u32 = "; n.toText p.knownRequestFlags; ";\npub const FLAG_END_OF_STREAM: u32 = "; n.toText p.flagEndOfStream; ";\npub const KNOWN_COMPLETION_FLAGS: u32 = "; n.toText p.knownCompletionFlags; ";\n";
-  "pub const DELEGATION_QUEUE: u8 = "; n.toText p.delegationQueue; ";\npub const DELEGATION_DATA: u8 = "; n.toText p.delegationData; ";\n\n";
+  "pub const DELEGATION_QUEUE: u8 = "; n.toText p.delegationQueue; ";\npub const DELEGATION_DATA: u8 = "; n.toText p.delegationData; ";\n";
+  "pub const STATUS_DENIED: i32 = "; n.toText p.statusDenied; ";\npub const STATUS_MALFORMED: i32 = "; n.toText p.statusMalformed; ";\npub const STATUS_UNSUPPORTED: i32 = "; n.toText p.statusUnsupported; ";\npub const STATUS_RESET_BY_PEER: i32 = "; n.toText p.statusResetByPeer; ";\npub const STATUS_UNREACHABLE: i32 = "; n.toText p.statusUnreachable; ";\n";
+  w.u64TextConst "SHUTDOWN_CAPABILITY" p.shutdownCapabilityText;
+  "pub const DATA_QUEUE_SLOTS: usize = "; n.toText p.dataQueueSlots; ";\n\n";
   offsetConsts "REQUEST" 0 p.requestLayout; "\n"; wireStruct "WireNetworkRequest" "REQUEST" "REQUEST_BYTES" p.requestLayout; "\n";
   offsetConsts "COMPLETION" 0 p.completionLayout; "\n"; wireStruct "WireNetworkCompletion" "COMPLETION" "COMPLETION_BYTES" p.completionLayout; "\n";
   offsetConsts "DELEGATION" 0 p.delegationLayout; "\n"; wireStruct "WireLoanDelegation" "DELEGATION" "DELEGATION_BYTES" p.delegationLayout;
 };
 
+sameStatus :: Int -> Int -> Bool = a b => a == b;
+-- Every refusal status is negative (zero is success) and no two share a value.
+statusesDistinctAndNegative :: List Int -> Bool = statuses => match statuses {
+  | {;} => true;
+  | { status; ...rest } => status < 0 && not (l.any (sameStatus status) rest) && statusesDistinctAndNegative rest;
+};
 valid :: Protocol -> Bool = p =>
   w.schemaFieldsValid p.requestFields
     && w.schemaFieldsValid p.completionFields
@@ -83,6 +94,8 @@ valid :: Protocol -> Bool = p =>
     && wireBytes p.completionLayout == p.completionBytes
     && wireBytes p.delegationLayout == p.delegationBytes
     && p.networkMagic != p.delegationMagic
-    && p.maxNameBytes <= 24;
+    && p.maxNameBytes <= 24
+    && statusesDistinctAndNegative { p.statusDenied; p.statusMalformed; p.statusUnsupported; p.statusResetByPeer; p.statusUnreachable; }
+    && p.dataQueueSlots >= 2 && p.dataQueueSlots <= 256;
 render :: Protocol -> { rust : Text; } = p => if valid p then { rust = rustBindings p; } else { rust = "INVALID_NETWORK_SERVICE_SCHEMA"; };
 { render =; }

@@ -11,6 +11,11 @@
 -- kinds they are; the authority itself is claimed from the client's endpoint
 -- through the runtime, never from these bytes. Its magic differs from the
 -- request magic so the service tells the two apart by decoding, not by size.
+--
+-- Completion `status_detail` values, the shutdown sentinel a client closes to
+-- end its session, and the depth of the IO0 data ring a client lends are named
+-- here too: a client written against the generated bindings shares them with
+-- the service instead of restating them.
 
 env ::= import stdlib.env;
 fs ::= import stdlib.fs;
@@ -56,6 +61,20 @@ knownCompletionFlags :: Int = 1;
 
 delegationQueue :: Int = 1;
 delegationData :: Int = 2;
+
+-- Completion `status_detail`: zero is success; a refusal reports one of these
+-- with no capability.
+statusDenied :: Int = -1;
+statusMalformed :: Int = -2;
+statusUnsupported :: Int = -3;
+statusResetByPeer :: Int = -4;
+statusUnreachable :: Int = -5;
+-- The capability number whose `OP_CLOSE` ends a client's session; no minted
+-- capability ever carries it. `u64::MAX`, as text: Zutai's Int is i64.
+shutdownCapabilityText :: Text = "18446744073709551615";
+-- The depth of the IO0 data ring a client lends; the service attaches at
+-- exactly this count.
+dataQueueSlots :: Int = 8;
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
@@ -146,6 +165,8 @@ protocol ::= {
   capabilityTcpListener =; capabilityDnsRecord =;
   flagNonblocking =; knownRequestFlags =; flagEndOfStream =; knownCompletionFlags =;
   delegationQueue =; delegationData =;
+  statusDenied =; statusMalformed =; statusUnsupported =; statusResetByPeer =; statusUnreachable =;
+  shutdownCapabilityText =; dataQueueSlots =;
   requestFields = requestSchema.fields ?? {;};
   completionFields = completionSchema.fields ?? {;};
   delegationFields = delegationSchema.fields ?? {;};

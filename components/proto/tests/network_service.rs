@@ -180,3 +180,47 @@ fn a_loan_delegation_round_trips_and_is_told_apart_from_a_request() {
         assert!(!valid_loan_delegation(&bad));
     }
 }
+
+#[test]
+fn the_contract_names_every_status_and_the_shutdown_sentinel() {
+    use slime_proto::io_queue_ring;
+
+    // Zero is success; every refusal is negative and no two share a value.
+    let statuses = [
+        network_service::STATUS_DENIED,
+        network_service::STATUS_MALFORMED,
+        network_service::STATUS_UNSUPPORTED,
+        network_service::STATUS_RESET_BY_PEER,
+        network_service::STATUS_UNREACHABLE,
+    ];
+    for (index, status) in statuses.iter().enumerate() {
+        assert!(*status < 0, "status {status} is not a refusal");
+        assert!(
+            !statuses[index + 1..].contains(status),
+            "status {status} is named twice"
+        );
+        // A refusal carries no capability, and the validator accepts each one
+        // in that shape.
+        let refusal = WireNetworkCompletion {
+            magic: network_service::NETWORK_MAGIC,
+            version: network_service::FORMAT_VERSION,
+            op: network_service::OP_CONNECT,
+            capability_kind: network_service::CAPABILITY_NONE,
+            status_detail: *status,
+            flags: 0,
+            capability: 0,
+        };
+        assert!(valid_network_completion(&refusal));
+        assert!(!valid_network_completion(&WireNetworkCompletion {
+            capability: 1,
+            ..refusal
+        }));
+    }
+    // The shutdown sentinel is the one capability number no mint can reach.
+    assert_eq!(network_service::SHUTDOWN_CAPABILITY, u64::MAX);
+    // The data ring a client lends is formatted and attached at this depth.
+    let mut mapping =
+        vec![0u8; io_queue_ring::mapping_bytes(network_service::DATA_QUEUE_SLOTS).unwrap()];
+    io_queue_ring::format(&mut mapping, network_service::DATA_QUEUE_SLOTS, 1).unwrap();
+    assert!(io_queue_ring::Queue::attach(&mut mapping, network_service::DATA_QUEUE_SLOTS).is_ok());
+}

@@ -1,13 +1,14 @@
 #![no_std]
 #![no_main]
-use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
+use slime_proto::network_service::{
+    self, SHUTDOWN_CAPABILITY, WireNetworkCompletion, WireNetworkRequest,
+};
 use slime_proto::valid_network_completion;
 use slime_rt::{
     ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, yield_now,
 };
 slime_rt::entry!(main);
 const SERVICE: u32 = 0;
-const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
 fn main(_: u32) {
     let mut tcp_capabilities = 0u64;
     let mut successful_transfers = 0u64;

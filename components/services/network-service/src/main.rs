@@ -19,7 +19,9 @@ use slime_proto::io_queue::{
 };
 use slime_proto::io_queue_ring::{Queue, QueueError};
 use slime_proto::network_service::{
-    self, WireLoanDelegation, WireNetworkCompletion, WireNetworkRequest,
+    self, DATA_QUEUE_SLOTS, SHUTDOWN_CAPABILITY, STATUS_DENIED, STATUS_MALFORMED,
+    STATUS_RESET_BY_PEER, STATUS_UNREACHABLE, STATUS_UNSUPPORTED, WireLoanDelegation,
+    WireNetworkCompletion, WireNetworkRequest,
 };
 use slime_proto::{valid_loan_delegation, valid_network_request};
 use slime_rt::{
@@ -66,19 +68,10 @@ fn socket_timeout() -> Option<Duration> {
     Some(Duration::from_millis(SOCKET_TIMEOUT_MS as u64))
 }
 const FIRST_LOCAL_PORT: u16 = 49152;
-/// One IO0 queue of this depth per data client, and at most as many requests
-/// held pending while their socket cannot yet take or give the bytes.
-const DATA_SLOTS: usize = 8;
 const DATA_PAGES: usize = 2;
 const PAGE: u64 = 4096;
 /// Where a client's lent pages are mapped: above the link's own pages.
 const DATA_BASE: u64 = 0x0000_0019_0000_0000 + 16 * PAGE;
-const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
-const STATUS_DENIED: i32 = -1;
-const STATUS_MALFORMED: i32 = -2;
-const STATUS_UNSUPPORTED: i32 = -3;
-const STATUS_RESET_BY_PEER: i32 = -4;
-const STATUS_UNREACHABLE: i32 = -5;
 /// The clients a generation may bind to this service, by the grant name each
 /// resolves and the instance name its holder identity derives from. A grant
 /// the generation does not declare simply resolves to no client.
@@ -145,7 +138,7 @@ struct Pending {
 struct DataQueue {
     queue: Queue<'static>,
     pages: [Option<DataPage>; DATA_PAGES],
-    pending: [Option<Pending>; DATA_SLOTS],
+    pending: [Option<Pending>; DATA_QUEUE_SLOTS],
 }
 
 struct Client {
@@ -440,14 +433,14 @@ fn accept_delegation(
     match kind {
         network_service::DELEGATION_QUEUE => {
             let bytes = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, PAGE as usize) };
-            let Ok(queue) = Queue::attach(bytes, DATA_SLOTS) else {
+            let Ok(queue) = Queue::attach(bytes, DATA_QUEUE_SLOTS) else {
                 return Err(b"queue format");
             };
             client.queue_slot = Some(slot);
             client.data = Some(DataQueue {
                 queue,
                 pages: [None; DATA_PAGES],
-                pending: [None; DATA_SLOTS],
+                pending: [None; DATA_QUEUE_SLOTS],
             });
         }
         _ => {
@@ -996,11 +989,11 @@ fn serve_data(
     // One ring's worth per pass: the client owns both of its cursors and may
     // move them while this runs, so the loop's exits below are not a bound on
     // their own. Every other client, and the stack, gets its turn regardless.
-    for _ in 0..DATA_SLOTS {
+    for _ in 0..DATA_QUEUE_SLOTS {
         // Every taken request needs a completion slot; a ring the client has
         // not drained is not taken from, so a completion can always be
         // published.
-        if data.queue.completions_pending() >= DATA_SLOTS as u64 {
+        if data.queue.completions_pending() >= DATA_QUEUE_SLOTS as u64 {
             break;
         }
         let submission = match data.queue.take_request(&mut body, PAGE) {
@@ -1141,7 +1134,7 @@ fn serve_data(
             nonblocking: request.flags & network_service::FLAG_NONBLOCKING != 0,
         });
     }
-    for slot in 0..DATA_SLOTS {
+    for slot in 0..DATA_QUEUE_SLOTS {
         let Some(pending) = data.pending[slot] else {
             continue;
         };

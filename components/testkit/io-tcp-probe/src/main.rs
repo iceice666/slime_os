@@ -7,13 +7,15 @@
 //! the refused and the undeclared destination before closing everything it
 //! opened. Every count in a marker is observed.
 
+use boot_contracts::generation::{RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE};
 use slime_components::tick_clock::TickClock;
 use slime_proto::io_queue::{
     self, COMPLETION_PAYLOAD_BYTES, DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE, WireBufferSlice,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError, format};
 use slime_proto::network_service::{
-    self, WireLoanDelegation, WireNetworkCompletion, WireNetworkRequest,
+    self, DATA_QUEUE_SLOTS, SHUTDOWN_CAPABILITY, STATUS_DENIED, STATUS_UNREACHABLE,
+    WireLoanDelegation, WireNetworkCompletion, WireNetworkRequest,
 };
 use slime_proto::valid_network_completion;
 use slime_rt::{
@@ -29,21 +31,15 @@ slime_rt::entry!(main);
 /// endpoint only while no shared-buffer capability occupies it.
 const SERVICE_SLOT: u32 = 0;
 const FACTORY_SLOT: u32 = 1;
-const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
 const PEER: [u8; 4] = [10, 0, 0, 2];
 const UNDECLARED: [u8; 4] = [10, 0, 0, 3];
 const ECHO_PORT: u16 = 4242;
 const REFUSED_PORT: u16 = 4243;
-const STATUS_DENIED: i32 = -1;
-const STATUS_UNREACHABLE: i32 = -5;
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_0019_0000_0000;
-const SLOTS: usize = 8;
 const EPOCH: u64 = 1;
 const OBJECT_KIND_SHARED_BUFFER_LOAN: u32 =
     slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
-const RIGHT_BUFFER_WRITE: u64 = 1 << 8;
-const RIGHT_BUFFER_MAP: u64 = 1 << 9;
 /// How long the service stays bound to the link after the client's own arms
 /// are done: the plane's peer needs a resident stack to address its ICMP echo
 /// requests to, and a peer cannot tell a client when it is done.
@@ -54,7 +50,7 @@ const STREAM_BYTES: usize = 4096;
 
 struct DataQueue {
     queue: Queue<'static>,
-    outstanding: Outstanding<SLOTS>,
+    outstanding: Outstanding<DATA_QUEUE_SLOTS>,
     next_id: u64,
 }
 
@@ -200,7 +196,7 @@ fn lend_queue() -> (DataQueue, [Page; 2]) {
         fail(b"queue map");
     }
     let queue_bytes = unsafe { core::slice::from_raw_parts_mut(BASE as *mut u8, PAGE as usize) };
-    format(queue_bytes, SLOTS, EPOCH).unwrap_or_else(|_| fail(b"queue format"));
+    format(queue_bytes, DATA_QUEUE_SLOTS, EPOCH).unwrap_or_else(|_| fail(b"queue format"));
     let queue_loan = shared_buffer_loan(queue_buffer.slot, SERVICE_SLOT, 0, PAGE, true)
         .unwrap_or_else(|_| fail(b"queue loan"));
     delegate(
@@ -237,7 +233,8 @@ fn lend_queue() -> (DataQueue, [Page; 2]) {
         };
     }
     let data = DataQueue {
-        queue: Queue::attach(queue_bytes, SLOTS).unwrap_or_else(|_| fail(b"queue attach")),
+        queue: Queue::attach(queue_bytes, DATA_QUEUE_SLOTS)
+            .unwrap_or_else(|_| fail(b"queue attach")),
         outstanding: Outstanding::new(EPOCH),
         next_id: 1,
     };

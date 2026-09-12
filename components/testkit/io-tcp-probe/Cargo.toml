@@ -12,6 +12,7 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
+boot-contracts = { path = "../../../boot-contracts" }
 slime-components = { path = "../../lib" }
 slime-proto = { path = "../../proto" }
 slime-rt = { path = "../../runtime" }
