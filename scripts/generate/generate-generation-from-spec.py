@@ -31,6 +31,7 @@ from system_spec import (
     compile_system,
     derive_manifest,
     derived_manifest_path,
+    prefetch_systems,
     system_paths,
 )
 
@@ -61,7 +62,9 @@ def render() -> dict[Path, str]:
     catalogue = interface_catalogue()
     components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
     outputs: dict[Path, str] = {}
-    for path in system_paths():
+    paths = system_paths()
+    prefetch_systems(paths)
+    for path in paths:
         fixture = DERIVED_FIXTURES.get(path.stem)
         if fixture is None:
             raise SystemExit(

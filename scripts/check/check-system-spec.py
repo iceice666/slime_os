@@ -38,6 +38,7 @@ from system_spec import (
     compile_system,
     derive_manifest,
     derived_manifest_path,
+    prefetch_systems,
     resolved_instances,
     system_paths,
 )
@@ -404,6 +405,7 @@ if {path.stem for path in paths} != set(DERIVED_FIXTURES):
         f"derivation table {sorted(DERIVED_FIXTURES)}"
     )
 
+prefetch_systems(paths)
 systems = {}
 for path in paths:
     try:

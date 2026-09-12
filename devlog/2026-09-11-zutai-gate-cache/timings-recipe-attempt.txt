@@ -1,0 +1,30 @@
+workers: 3
+== before contracts_check (prefix, unaffected) | MemAvailable 7771 | load 3.44 | entries 448
+contracts_check (prefix, unaffected): rc=1 wall=136.7s tree=0 modified
+python3 scripts/check/check-boot-layout-resource.py
+python3 scripts/check/check-lifecycle-identity.py
+python3 scripts/check/check-generation-v5.py
+generation v5 check: Slisp build failed: ['missing build/sel4-prefix; build the selected seL4 platform first']
+error: recipe `contracts_check` failed on line 37 with exit code 1
+== before system_spec_check serial baseline (SLIME_ZUTAI_CACHE=0) | MemAvailable 6836 | load 7.61 | entries 448
+system_spec_check serial baseline (SLIME_ZUTAI_CACHE=0): rc=1 wall=132.9s tree=0 modified
+python3 scripts/check/check-boot-layout-resource.py
+python3 scripts/check/check-lifecycle-identity.py
+python3 scripts/check/check-generation-v5.py
+generation v5 check: Slisp build failed: ['missing build/sel4-prefix; build the selected seL4 platform first']
+error: recipe `contracts_check` failed on line 37 with exit code 1
+== before system_spec_check cold cache | MemAvailable 7353 | load 9.11 | entries 0
+system_spec_check cold cache: rc=1 wall=130.3s tree=0 modified
+python3 scripts/check/check-boot-layout-resource.py
+python3 scripts/check/check-lifecycle-identity.py
+python3 scripts/check/check-generation-v5.py
+generation v5 check: Slisp build failed: ['missing build/sel4-prefix; build the selected seL4 platform first']
+error: recipe `contracts_check` failed on line 37 with exit code 1
+== before system_spec_check warm cache | MemAvailable 7156 | load 8.04 | entries 172
+system_spec_check warm cache: rc=1 wall=135.2s tree=0 modified
+python3 scripts/check/check-boot-layout-resource.py
+python3 scripts/check/check-lifecycle-identity.py
+python3 scripts/check/check-generation-v5.py
+generation v5 check: Slisp build failed: ['missing build/sel4-prefix; build the selected seL4 platform first']
+error: recipe `contracts_check` failed on line 37 with exit code 1
+== before check-system-spec.py warm (arms hit) | MemAvailable 6445 | load 9.22 | entries 172
