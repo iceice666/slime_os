@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-supervision";
-  imageClosureIdentity = "fa66ff0ddea0b63f9421844ef2debd0aee228622817e129afa98a83a4439ec8b";
+  imageClosureIdentity = "ef056d3e6c1d17b9628f4a2e1c3da82cd24728ca03eda68f802aa967e17c94ca";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

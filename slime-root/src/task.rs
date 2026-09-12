@@ -566,6 +566,34 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         Ok(())
     }
 
+    /// Release a pre-publication arena and charge what it actually returned.
+    ///
+    /// Every construction failure — descriptor preflight, private provisioning,
+    /// and the construction body — reaches the allocator through here, because
+    /// released slots become reusable immediately: an unwind that dropped the
+    /// count would leave `reclaimed_slots` permanently short of the slots the
+    /// allocator has already handed back. A failed revoke keeps the record for
+    /// `retry_failed_construction` and is charged only when that retry lands.
+    fn unwind_construction(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+        id: TaskId,
+        arena: TaskArenaId,
+    ) -> Result<(), TaskError> {
+        let cleanup =
+            construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
+        match cleanup.revoke(allocator) {
+            Ok(reclaimed) => {
+                self.reclaimed_slots += reclaimed;
+                Ok(())
+            }
+            Err(cleanup_error) => {
+                self.construction_cleanup = Some(cleanup);
+                Err(cleanup_error)
+            }
+        }
+    }
+
     /// How many live tasks `spawner` created and has not yet lost.
     ///
     /// Derived from the table rather than from a counter, so a task reclaimed
@@ -725,23 +753,13 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         )
         .is_none_or(|required| required > allocator.allocation_descriptors_free())
         {
-            let cleanup =
-                construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
-            if let Err(cleanup_error) = cleanup.revoke(allocator) {
-                self.construction_cleanup = Some(cleanup);
-                return Err(cleanup_error);
-            }
+            self.unwind_construction(allocator, id, arena)?;
             return Err(TaskError::Alloc(AllocError::ArenaSlotTableFull {
                 limit: allocator.allocation_descriptors_free(),
             }));
         }
         if let Err(error) = allocator.provision_private_backing(arena, private_memory_pages) {
-            let cleanup =
-                construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
-            if let Err(cleanup_error) = cleanup.revoke(allocator) {
-                self.construction_cleanup = Some(cleanup);
-                return Err(cleanup_error);
-            }
+            self.unwind_construction(allocator, id, arena)?;
             return Err(TaskError::Alloc(error));
         }
 
@@ -994,15 +1012,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let (vspace, cnode, tcb, entry, workers) = match construction {
             Ok(task) => task,
             Err(error) => {
-                let cleanup =
-                    construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
-                match cleanup.revoke(allocator) {
-                    Ok(reclaimed) => self.reclaimed_slots += reclaimed,
-                    Err(cleanup_error) => {
-                        self.construction_cleanup = Some(cleanup);
-                        return Err(cleanup_error);
-                    }
-                }
+                self.unwind_construction(allocator, id, arena)?;
                 return Err(error);
             }
         };
@@ -1432,11 +1442,51 @@ mod tests {
     use super::{
         Arrival, CHILD_CNODE_SIZE_BITS, CHILD_PRIORITY, CHILD_SLOT_CONSOLE, CHILD_SLOT_FAULT,
         CHILD_SLOT_SERVICE, ChildSlots, ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS,
-        TaskError, TaskId, admit_priority, child_service_rights,
+        TaskError, TaskId, TaskTable, admit_priority, child_service_rights,
         construction_allocation_descriptors, construction_record,
     };
     use crate::generation::Authority;
-    use crate::object_allocator::TaskArenaId;
+    use crate::object_allocator::{ObjectAllocator, TaskArenaId};
+    extern crate std;
+
+    /// Every pre-publication unwind charges what the allocator gave back.
+    ///
+    /// The released CSlots are reusable the moment the revoke lands, so an
+    /// unwind that dropped the count would leave the root reporting fewer
+    /// reclaimed slots than the allocator has already reissued — a ledger
+    /// that disagrees with the pool it describes.
+    #[test]
+    fn every_construction_unwind_charges_the_slots_the_allocator_returned() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = ObjectAllocator::empty();
+                let mut tasks = TaskTable::<4>::new();
+                assert_eq!(tasks.reclaimed_slots(), 0);
+                let mut charged = 0;
+                for (index, slots) in [7usize, 0, 23].into_iter().enumerate() {
+                    let arena = allocator.arena_owning_slots_for_test(slots);
+                    assert_eq!(allocator.arena_slot_count(arena), Ok(slots));
+                    assert_eq!(
+                        tasks.unwind_construction(&mut allocator, TaskId(index as u32), arena),
+                        Ok(())
+                    );
+                    charged += slots;
+                    assert_eq!(
+                        tasks.reclaimed_slots(),
+                        charged,
+                        "unwind {index} dropped its released slots"
+                    );
+                    assert!(
+                        !tasks.has_failed_construction(),
+                        "a completed revoke leaves nothing to retry"
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn construction_descriptor_preflight_counts_one_transfer_alias_per_thread() {

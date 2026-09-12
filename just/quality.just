@@ -281,9 +281,11 @@ test_sel4_root:
     # three record-level ownership cases on the private-growth rollback boundary,
     # bounded private-backing scans plus four record-state coverage cases,
     # construction's per-thread transfer aliases, aligned placement across live
-    # ordinary untyped regions, and that the allocator's own tables fit the
-    # linked kernel's root CSpace.
-    expected=233
+    # ordinary untyped regions, reservation-shortfall refusal, reusable
+    # large-extent revocation before base-page retry, that every pre-publication
+    # construction unwind charges the slots the allocator returned, and that the
+    # allocator's own tables fit the linked kernel's root CSpace.
+    expected=235
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

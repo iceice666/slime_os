@@ -1978,6 +1978,31 @@ impl ObjectAllocator {
         Ok(self.arena(id)?.slot_len)
     }
 
+    /// Register an arena already owning `slots` root CSlots, for host tests.
+    ///
+    /// `begin_task_arena` retypes its static extent, which needs a live
+    /// kernel; this records the same arena identity and slot ownership without
+    /// one. The arena holds no allocation or extent record, so
+    /// `release_task_arena` reports its slot count without invoking the
+    /// kernel.
+    #[cfg(test)]
+    pub(crate) fn arena_owning_slots_for_test(&mut self, slots: usize) -> TaskArenaId {
+        let index = self
+            .arenas
+            .iter()
+            .position(|arena| !arena.active)
+            .expect("test arena table has room");
+        let serial = self.next_arena_serial;
+        self.next_arena_serial = self.next_arena_serial.wrapping_add(1).max(1);
+        self.arenas[index] = ArenaRecord {
+            serial,
+            active: true,
+            slot_len: slots,
+            ..ArenaRecord::empty()
+        };
+        self.arenas[index].id(index)
+    }
+
     pub fn provision_private_backing(
         &mut self,
         id: TaskArenaId,
