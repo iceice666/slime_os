@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Render `contracts/system-image-closure/v1` host constants."""
+"""Render `contracts/system-image-closure/v2` host constants."""
 
 from __future__ import annotations
 import sys as _sys
@@ -19,7 +19,7 @@ from pathlib import Path
 from harness import ROOT
 from zutai_cli import STDLIB, binary
 
-CONTRACT_GENERATOR = ROOT / "contracts" / "system-image-closure" / "v1" / "gen_python.zt"
+CONTRACT_GENERATOR = ROOT / "contracts" / "system-image-closure" / "v2" / "gen_python.zt"
 PYTHON_OUTPUT = ROOT / "scripts" / "lib" / "system_image_closure_contract.py"
 LOCK_PATH = Path(tempfile.gettempdir()) / "slime-system-image-closure-bindings.lock"
 

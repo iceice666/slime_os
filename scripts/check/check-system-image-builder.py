@@ -65,7 +65,7 @@ from system_spec import (
 )
 from component_spec import admit_specs, interface_catalogue
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"

@@ -42,7 +42,7 @@ from zutai_cli import STDLIB, binary
 
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
 CONTRACT = ROOT / "contracts" / "system-test-run" / "v1"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-test-runs.py"
 AGGREGATE = ROOT / "scripts" / "check" / "check-system-image-aggregate.py"
 

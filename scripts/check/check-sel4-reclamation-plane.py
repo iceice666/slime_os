@@ -156,6 +156,38 @@ def main() -> None:
     # that it specifically was reclaimed rather than leaked.
     if int(terminal.group(7)) == 0:
         fail("no private-backing extent was retained for reuse")
+    # An arena release that returned slots, extents, and the page charge but
+    # stranded an `AllocationRecord` leaks descriptor capacity silently: this
+    # plane's 80 iterations stay far below the pool, so every liveness and
+    # reuse assertion above still passes while a longer-running system
+    # eventually fails construction with `ArenaSlotTableFull`. The plane ends
+    # with no live task, so the exact law holds: every allocation descriptor
+    # is back.
+    capacity = re.search(
+        r"SLIME_ROOT allocator baseline live_slots=\d+ live_objects=\d+ live_bytes=\d+ "
+        r"allocation_descriptor_capacity=(\d+) extent_descriptor_capacity=(\d+)",
+        transcript,
+    )
+    if capacity is None:
+        fail("the root reported no allocator descriptor capacity")
+    if terminal.group(8) != capacity.group(1):
+        fail(
+            f"{int(capacity.group(1)) - int(terminal.group(8))} allocation "
+            "descriptor(s) survived reclamation of every task: "
+            f"{terminal.group(8)} free of {capacity.group(1)}"
+        )
+    # Extent descriptors are deliberately *not* returned: `release_task_arena`
+    # deactivates a record rather than clearing it, so `provision_extent` can
+    # re-retype into it. Retention is therefore proved by reuse dominating new
+    # records, not by the free count returning: were retention to break, every
+    # provision would take a fresh record and `extent_reuses` would collapse.
+    extent_growth = int(capacity.group(2)) - int(terminal.group(9))
+    if extent_growth >= int(terminal.group(11)):
+        fail(
+            f"extent descriptors grew by {extent_growth} against "
+            f"{terminal.group(11)} reuse(s): released records are not being "
+            "retained for reuse"
+        )
     if re.search(r"SLIME_ROOT FATAL|reclamation plane fail|spawn unwound", transcript):
         fail("failure marker present")
     print(

@@ -44,10 +44,12 @@ pub(super) fn serve_instance_graph(
     let mut healthy_emitted = false;
 
     sel4::debug_println!(
-        "SLIME_ROOT allocator baseline live_slots={} live_objects={} live_bytes={}",
+        "SLIME_ROOT allocator baseline live_slots={} live_objects={} live_bytes={} allocation_descriptor_capacity={} extent_descriptor_capacity={}",
         allocator.live_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
+        object_allocator::MAX_TASK_ALLOCATIONS,
+        object_allocator::MAX_TASK_EXTENTS,
     );
     let mut live = tasks.len();
     let mut unsupported = 0;

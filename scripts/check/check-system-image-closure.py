@@ -25,7 +25,7 @@ from system_image_closure import (
     tree_identity,
 )
 
-CLOSURE = ROOT / "contracts" / "system-image-closure" / "v1" / "closures" / "sel4-channel.zti"
+CLOSURE = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / "sel4-channel.zti"
 TEST_RUN = ROOT / "contracts" / "system-test-run" / "v1" / "runs" / "sel4-channel.zti"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 

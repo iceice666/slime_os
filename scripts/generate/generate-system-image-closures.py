@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Emit one `contracts/system-image-closure/v1` closure per derived composition.
+"""Emit one `contracts/system-image-closure/v2` closure per derived composition.
 
 CP11 authored one closure by hand to prove the contract. CP13 needs one per
 composition, and hand-authoring 40 records whose every field is a digest of
@@ -43,9 +43,9 @@ from system_spec import (
     prefetch_systems,
 )
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 NEGATIVE_ROOT = CLOSURE_ROOT.parent / "negative"
-INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "inputs"
+INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "inputs"
 PREFIX = INPUT_ROOT / "sel4-prefix"
 
 # The shared workspace inputs `resolve_closure` requires of every closure, as
@@ -235,7 +235,7 @@ def implementation_path(spec: dict) -> tuple[str, str]:
         name = artifacts.get(binary)
         if name is None:
             raise LookupError(provider)
-        return f"contracts/system-image-closure/v1/inputs/components/{name}", "file"
+        return f"contracts/system-image-closure/v2/inputs/components/{name}", "file"
     raise LookupError(provider)
 
 

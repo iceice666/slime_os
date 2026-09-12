@@ -34,7 +34,7 @@ from pathlib import Path
 from harness import ROOT
 from system_image_closure import compile_closure, resolve_closure
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 BUILD_ROOT = ROOT / "build" / "closure"
 

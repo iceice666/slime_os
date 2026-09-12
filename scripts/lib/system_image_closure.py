@@ -19,7 +19,7 @@ from harness import ROOT
 from system_spec import CompiledSystem, compile_system, derive_manifest
 from zutai_cli import STDLIB, binary
 
-IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v1"
+IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2"
 TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v1"
 IMAGE_CHECKER = IMAGE_CONTRACT_ROOT / "check.zt"
 NEGATIVE_CHECKER = IMAGE_CONTRACT_ROOT / "check-negative.zt"

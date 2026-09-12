@@ -34,7 +34,7 @@ from system_image_closure import compile_closure
 
 CHECK_ROOT = ROOT / "scripts" / "check"
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 
 # The marker contract each plane's expectations are stated against. One
 # identity for the seL4 serial marker vocabulary: the planes assert different

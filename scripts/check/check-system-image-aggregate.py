@@ -46,7 +46,7 @@ from system_image_closure import negative_case_paths
 from system_spec import DERIVED_GENERATION_FIXTURES
 
 CHECK_ROOT = ROOT / "scripts" / "check"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 
@@ -399,7 +399,7 @@ def check_no_undeclared_build_knobs(extra_source: str | None = None) -> tuple[in
     # restating the three names means adding a fourth parameter cannot leave
     # this gate checking a stale set.
     schema = (
-        ROOT / "contracts" / "system-image-closure" / "v1" / "schema.zt"
+        ROOT / "contracts" / "system-image-closure" / "v2" / "schema.zt"
     ).read_text(encoding="utf-8")
     admitted = set(re.findall(r'^parameter[A-Za-z]+ :: Text = "([a-zA-Z]+)";', schema, re.MULTILINE))
     if not admitted:

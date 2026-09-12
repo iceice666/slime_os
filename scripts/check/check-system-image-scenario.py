@@ -54,7 +54,7 @@ from system_image_closure import (
 )
 from system_spec import prefetch_systems, system_paths
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v1" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
 BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
 
@@ -376,7 +376,7 @@ def check_negative_build(name: str) -> str:
     the build must refuse to emit the two artifacts every consumer reads as
     "this is a verified image" — `image.identity.json` and `build-result.json`.
     """
-    case_path = ROOT / "contracts" / "system-image-closure" / "v1" / "negative" / f"{name}.zti"
+    case_path = ROOT / "contracts" / "system-image-closure" / "v2" / "negative" / f"{name}.zti"
     case = compile_negative_case(case_path)
     base_name = next(
         path.stem
@@ -670,7 +670,8 @@ print(
     f"all {closure_count} closures' parameters apply to their own manifests; and "
     f"{BYTE_ARM}'s profile moved its component ELF from {base_elf[:12]} to "
     f"{scenario_elf[:12]} reproducibly, leaving unnamed components and the base image "
-    "byte-identical; the 4-name root-role vocabulary is closed with an unadmitted role, "
+    f"byte-identical; the {len(CONTRACT.ROOT_ROLES)}-name root-role vocabulary is closed "
+    "with an unadmitted role, "
     f"an unadmitted parameter, and a wrong-platform parameter all refused, {role_count} "
     f"root-role closure(s) resolving distinctly from their bases, and {ROOT_ROLE_ARM} moving "
     f"root.elf from {base_root[:12]} to {role_root[:12]} reproducibly with its generation "

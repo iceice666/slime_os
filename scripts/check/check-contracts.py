@@ -79,7 +79,7 @@ COMPONENT_SDK_RELEASE_CONTRACT = ROOT / "contracts" / "component-sdk-release" / 
 COMPONENT_SDK_RELEASE_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-component-sdk-release-bindings.py"
 )
-SYSTEM_IMAGE_CLOSURE_CONTRACT = ROOT / "contracts" / "system-image-closure" / "v1"
+SYSTEM_IMAGE_CLOSURE_CONTRACT = ROOT / "contracts" / "system-image-closure" / "v2"
 SYSTEM_IMAGE_CLOSURE_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-system-image-closure-bindings.py"
 )

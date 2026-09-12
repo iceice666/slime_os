@@ -9,7 +9,7 @@ from pathlib import Path
 
 SYSTEM_NAME = "sel4-channel"
 ARCHIVE_PATH = f"assets/system-{SYSTEM_NAME}.tar"
-CLOSURE_PATH = f"contracts/system-image-closure/v1/closures/{SYSTEM_NAME}.zti"
+CLOSURE_PATH = f"contracts/system-image-closure/v2/closures/{SYSTEM_NAME}.zti"
 TEST_RUN_PATH = f"contracts/system-test-run/v1/runs/{SYSTEM_NAME}.zti"
 
 # A repository-shaped corpus preserves every canonical path embedded in the
@@ -63,7 +63,7 @@ def export_asset(
                 raise sdk_module.ComponentSdkError(
                     f"system-image export input is missing: {relative}"
                 )
-        prefix = staging / "contracts/system-image-closure/v1/inputs/sel4-prefix"
+        prefix = staging / "contracts/system-image-closure/v2/inputs/sel4-prefix"
         sdk_module.canonicalize_prefix(prefix, source)
         source_needle = str(source).encode("utf-8")
         for path in sdk_module.tree_files(staging):

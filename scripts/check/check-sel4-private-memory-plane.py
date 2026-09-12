@@ -540,12 +540,11 @@ def check_measured_ceiling(transcript: str, declared: dict[str, int]) -> None:
             f"the granted probe grew to {measured.group(1)} page(s) against a "
             f"declared quota of {expected}"
         )
-    # The denied probe emits the same `ReservationExceeded` shape with
-    # pages=0, and B68 already found this plane's two probes running in an
-    # unconstrained order — so the refusal must be scoped to the granted
-    # task's own id, not taken as the transcript's first match. Captured here
-    # in the same search as the installed base, which the refusal must also
-    # agree with below.
+    # Both probes run in unconstrained order and the denied one emits the same
+    # `ReservationExceeded` shape with pages=0, so the refusal must be scoped
+    # to the granted task's own id rather than taken as the transcript's first
+    # match. Captured here in the same search as the installed base, which the
+    # refusal must also agree with below.
     granted = re.search(
         r"SLIME_MEM quota task=(\d+) instance=private-memory-granted "
         r"declared=\d+ installed=\d+ base=(0x[0-9a-f]+)",

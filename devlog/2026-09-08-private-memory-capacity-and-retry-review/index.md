@@ -93,5 +93,14 @@ Qualification mixed a test workload claim into admission for every private-memor
 - Implementation: [`slime-root/src/graph_runtime.rs`](../../slime-root/src/graph_runtime.rs), [`slime-root/src/object_allocator.rs`](../../slime-root/src/object_allocator.rs), [`slime-root/src/private_memory.rs`](../../slime-root/src/private_memory.rs), [`slime-root/src/main.rs`](../../slime-root/src/main.rs), and [`slime-root/child/src/main.rs`](../../slime-root/child/src/main.rs)
 - Build selection: [`scripts/build/build-sel4.py`](../../scripts/build/build-sel4.py) and [`slime-root/build.rs`](../../slime-root/build.rs)
 - Gates: [`scripts/check/check-sel4-private-memory-plane.py`](../../scripts/check/check-sel4-private-memory-plane.py) and [`scripts/check/check-sel4-gate-controls.py`](../../scripts/check/check-sel4-gate-controls.py)
-- Generated identities: [`contracts/system-image-closure/v1/closures/`](../../contracts/system-image-closure/v1/closures/) and [`contracts/system-test-run/v1/runs/`](../../contracts/system-test-run/v1/runs/)
+- Generated identities: [`contracts/system-image-closure/v2/closures/`](../../contracts/system-image-closure/v2/closures/) and [`contracts/system-test-run/v1/runs/`](../../contracts/system-test-run/v1/runs/)
 - Preceding investigation: [Private growth rollback and worker IPC](../2026-09-08-private-growth-rollback-and-worker-ipc/index.md)
+
+## Corrections
+
+- **2026-09-12:** This entry's generated-identity link now names
+  `contracts/system-image-closure/v2/closures/`. The contract was versioned to
+  v2 when `target.sdkRelease` was removed; only the path moved, and every
+  conclusion above is unchanged. The closure identities this entry observed
+  were recorded under the v1 domain and are not the identities the v2 corpus
+  now carries.

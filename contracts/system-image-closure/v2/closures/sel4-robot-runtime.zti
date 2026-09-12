@@ -1,0 +1,270 @@
+{
+  formatVersion = 2;
+  name = "sel4-robot-runtime";
+  systemSpec = {
+    path = "contracts/system-spec/v1/systems/sel4-robot-runtime.zti";
+    kind = "file";
+    identity = "dbd50785f836bef9da51669b37d1b49593f979bd4aa4667777e4efcc96b794bf";
+  };
+  systemIdentity = "17336d0345074839b16855b8f072d68efa749c1a48c8e11f81d2ebe26b8218ee";
+  implementations = [
+    {
+      component = "fabric-call-worker";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/fabric-call-worker";
+        kind = "tree";
+        identity = "aacdb18c7a219ae5e3cdbb966687b0e5c31962e3c218acef96a2fd43d26d5fe3";
+      };
+      identity = "6db506528b40834f2bf101f77fdf1c8bb0d3a97c2b77e85817e3a374f3450deb";
+      buildProfile = "default";
+    };
+    {
+      component = "fabric-service";
+      provider = "workspace";
+      artifact = {
+        path = "components/services/fabric-service";
+        kind = "tree";
+        identity = "8a0ccfdd939bee0edbcaed163373255b3825bd899f455fa9eb673f8fb1455ac8";
+      };
+      identity = "c825f80940562ad7f0231f9f0db5855b7b006b48d2bf1edb1a2fe179c4d42732";
+      buildProfile = "default";
+    };
+    {
+      component = "init";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/init";
+        kind = "tree";
+        identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
+      };
+      identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-actuator";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-actuator";
+        kind = "tree";
+        identity = "8bfb1beb1af1a17e9e17b6e4011efe92dc0ff2473e13cae3277f2fbbd034b629";
+      };
+      identity = "fd3997c7d8657ba9a018bfb928fbf2a9c62a84955a6c74db8e18a2427f5267c7";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-burner";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-burner";
+        kind = "tree";
+        identity = "d8ce8e44c98beb4a2d6cd57138f65d7e9edb188e1c8ab8f1cce79e56ddf98b91";
+      };
+      identity = "a61c274b10108cc888fbcadb33f428f05c74eef8d622ce0e74e5b4afb065d52f";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-clock";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-clock";
+        kind = "tree";
+        identity = "82bd3006cd45fe9ed219cb84f34b6a036a781f8c5c7d84e122afe3807f8c005c";
+      };
+      identity = "abe211395dc0c4f6044039d99d84d3e5ee071bcc17bc5fb7a786e77d6b77867b";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-controller";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-controller";
+        kind = "tree";
+        identity = "1e943c54afe6248e02d09c4f6e289679d4a644768b0363096b8a09f4cc0b759d";
+      };
+      identity = "0e956f228e05b2f5bc41c8c1f127fffea539c8ecc8e433d6e314fdaeb680db8a";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-sensor";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-sensor";
+        kind = "tree";
+        identity = "abd4998f49e9de406a5d06e7c5397351f598aecc5029d28c82f64f989092aea5";
+      };
+      identity = "85c567acad1dad058e7013b0d7e112461986b9e7f858d6a7ea7785bbd63615a7";
+      buildProfile = "default";
+    };
+    {
+      component = "robot-supervisor";
+      provider = "workspace";
+      artifact = {
+        path = "components/applications/robot-supervisor";
+        kind = "tree";
+        identity = "f1a222ac3cde5ba0e56fbfbec2f23fc3f7afe3a832c3a7c7070fbd8d27d6e2db";
+      };
+      identity = "c0402b9deaeb053186bf2f8f71a9e4f7f43c684974e1f5b20f3a80a02518d0f4";
+      buildProfile = "default";
+    };
+  ];
+  target = {
+    profile = "aarch64-sel4-qemu-virt";
+    platform = "qemu-arm-virt";
+    prefix = {
+      path = "contracts/system-image-closure/v2/inputs/sel4-prefix";
+      kind = "tree";
+      identity = "8ec18dc551401eacc51c91be90616b51007a58ce8b9bdefccd4611290dfe5cc1";
+    };
+    toolchain = "nightly-2026-04-04";
+    rustSel4Commit = "d441a880938209f661201704dfbee7b91c5aa905";
+  };
+  root = {
+    role = "embedded-generation";
+    implementation = {
+      path = "slime-root";
+      kind = "tree";
+      identity = "d9b750f5e5f065dd5c45bf70612e2296991b219f40418525f164f5bcd00d5bad";
+    };
+    parameters = [];
+  };
+  loader = {
+    role = "kernel-loader";
+    implementation = {
+      path = "deps/rust-sel4";
+      kind = "tree";
+      identity = "5dab11d1b195fa22e4aab846fdccdd1578c0f00089f9a8ce0baba536b09a3629";
+    };
+    parameters = [];
+  };
+  releaseInputs = [
+    {
+      name = "boot-contracts";
+      artifact = {
+        path = "boot-contracts";
+        kind = "tree";
+        identity = "3d5279775385931a5412c7da73a2c68c0ad2b2dd856e287b2547fd6e8d1e15ae";
+      };
+    };
+    {
+      name = "cargo-lock";
+      artifact = {
+        path = "Cargo.lock";
+        kind = "file";
+        identity = "47d09aea32e7c6bcb01d14a88ce680306b4cc9d13ea4893724565cec5e9ef0c1";
+      };
+    };
+    {
+      name = "component-build-support";
+      artifact = {
+        path = "components/build-support";
+        kind = "tree";
+        identity = "882848d9d044dd7a81d44569def459d5c89301c3e14b979a1cf38fa42cb60fcf";
+      };
+    };
+    {
+      name = "component-cargo-config";
+      artifact = {
+        path = "components/.cargo/config.toml";
+        kind = "file";
+        identity = "72d96fb55bcebb410801048015a47bbbc5993267819b9d6ebc9eccfdfd1dd34e";
+      };
+    };
+    {
+      name = "component-library";
+      artifact = {
+        path = "components/lib";
+        kind = "tree";
+        identity = "926df1bf8653a28a53a7f88dfdf3c54280a9173c1e4396b634d2bff85dc30564";
+      };
+    };
+    {
+      name = "component-proto";
+      artifact = {
+        path = "components/proto";
+        kind = "tree";
+        identity = "babaf698b3cc9d4420cbb7f0096b189fe63bd2cb95e4b87d3d0a0ec89d57bd0b";
+      };
+    };
+    {
+      name = "component-runtime";
+      artifact = {
+        path = "components/runtime";
+        kind = "tree";
+        identity = "6a5b43e8a50b70db7308f9056aa7c359f3e17c8be768220fefcc9a83e2108547";
+      };
+    };
+    {
+      name = "component-spec-contract";
+      artifact = {
+        path = "contracts/component-spec/v1";
+        kind = "tree";
+        identity = "516bd6c07cfddaa82e945fa5961627fe23db4922f4e69b8a95ed2bee9cd11f97";
+      };
+    };
+    {
+      name = "interface-schema-contract";
+      artifact = {
+        path = "contracts/interface-schema/v1";
+        kind = "tree";
+        identity = "d46bc39a3520c42be851354de67cc7e8551a15ac140bd4ee27632d72fad48324";
+      };
+    };
+    {
+      name = "just-recipes";
+      artifact = {
+        path = "just";
+        kind = "tree";
+        identity = "1987cc8b92324628ae172492d405be107f64e5d8392b02189d5d2c6c4d054c90";
+      };
+    };
+    {
+      name = "justfile";
+      artifact = {
+        path = "Justfile";
+        kind = "file";
+        identity = "901c66d9e205a1a61eeb2fccdd36ef3fa50f0c9e2ebc9b6e3f7d10e6049f20e2";
+      };
+    };
+    {
+      name = "root-child";
+      artifact = {
+        path = "slime-root/child";
+        kind = "tree";
+        identity = "1495f174a337b83e1efa3ea83ea90615e8cfc4958dea5c385441e141fc3874a7";
+      };
+    };
+    {
+      name = "root-target";
+      artifact = {
+        path = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json";
+        kind = "file";
+        identity = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e";
+      };
+    };
+    {
+      name = "target-spec";
+      artifact = {
+        path = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json";
+        kind = "file";
+        identity = "0762fbeca23afb9f148f622f3f40f3a01b093630b905cab760592141f72d7015";
+      };
+    };
+    {
+      name = "workspace-manifest";
+      artifact = {
+        path = "Cargo.toml";
+        kind = "file";
+        identity = "a3af9b61079517ab0e55dc57fc43724a8820e39cd2bcb65192c7053d1da48d6f";
+      };
+    };
+  ];
+  buildParameters = [];
+  expectedOutputs = [
+    "generation";
+    "root";
+    "loader";
+    "image";
+    "identity-manifest";
+  ];
+}
