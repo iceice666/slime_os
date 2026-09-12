@@ -70,6 +70,15 @@ from boot_contracts import (
     NETWORK_DESTINATION_HEADER_BYTES,
     NETWORK_DESTINATION_MAGIC,
     NETWORK_DESTINATION_VERSION,
+    NETWORK_INTERFACE_ENTRY,
+    NETWORK_INTERFACE_ENTRY_BYTES,
+    NETWORK_INTERFACE_HEADER,
+    NETWORK_INTERFACE_HEADER_BYTES,
+    NETWORK_INTERFACE_MAGIC,
+    NETWORK_INTERFACE_MAX_PREFIX_LEN,
+    NETWORK_INTERFACE_MIN_PREFIX_LEN,
+    NETWORK_INTERFACE_VERSION,
+    MAX_NETWORK_INTERFACES,
     PRIVATE_MEMORY_BUDGET_ENTRY,
     PRIVATE_MEMORY_BUDGET_ENTRY_BYTES,
     PRIVATE_MEMORY_BUDGET_HEADER,
@@ -322,6 +331,66 @@ def build_network_destinations(declarations: list[dict]) -> bytes:
         fail("network destination: duplicate exact tuple")
     total_len = NETWORK_DESTINATION_HEADER_BYTES + len(entries) * NETWORK_DESTINATION_ENTRY_BYTES
     header = NETWORK_DESTINATION_HEADER.pack(NETWORK_DESTINATION_MAGIC, NETWORK_DESTINATION_VERSION, NETWORK_DESTINATION_HEADER_BYTES, 0, len(entries), total_len)
+    return header + b"".join(entry for _, entry in entries)
+
+
+def network_interface_holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching `boot_contracts::network_interface`.
+
+    Its own domain tag, for the reason `block_ring_holder_identity` gives.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-network-interface-holder-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def _unicast_host(address: ipaddress.IPv4Address, network: ipaddress.IPv4Network) -> bool:
+    return (
+        address in network
+        and address != network.network_address
+        and address != network.broadcast_address
+        and not address.is_multicast
+        and int(address) >> 24 != 0
+    )
+
+
+def build_network_interfaces(declarations: list[dict]) -> bytes:
+    """Encode IO11's static interface table: one IPv4 interface per holder."""
+    if len(declarations) > MAX_NETWORK_INTERFACES:
+        fail("network interfaces exceed entry bound")
+    entries = []
+    for declaration in declarations:
+        holder = network_interface_holder_identity(declaration["holder"])
+        prefix_len = declaration["prefixLen"]
+        if not isinstance(prefix_len, int) or isinstance(prefix_len, bool) or not (
+            NETWORK_INTERFACE_MIN_PREFIX_LEN <= prefix_len <= NETWORK_INTERFACE_MAX_PREFIX_LEN
+        ):
+            fail("network interface: prefix length outside the contract's range")
+        try:
+            address = ipaddress.IPv4Address(declaration["address"])
+            gateway = ipaddress.IPv4Address(declaration["gateway"])
+        except ipaddress.AddressValueError:
+            fail("network interface: invalid IPv4 address or gateway")
+        network = ipaddress.IPv4Network((address, prefix_len), strict=False)
+        if not _unicast_host(address, network):
+            fail("network interface: address is not a unicast host on its prefix")
+        if int(gateway) != 0 and (gateway == address or not _unicast_host(gateway, network)):
+            fail("network interface: gateway is not a distinct unicast host on the prefix")
+        try:
+            mac = bytes.fromhex(declaration["mac"].replace(":", ""))
+        except ValueError:
+            fail("network interface: malformed MAC")
+        if len(mac) != 6 or mac == bytes(6) or mac[0] & 1:
+            fail("network interface: MAC is not a unicast hardware address")
+        entries.append(
+            (holder, NETWORK_INTERFACE_ENTRY.pack(holder, address.packed, gateway.packed, mac, prefix_len, 0))
+        )
+    entries.sort(key=lambda value: value[0])
+    if any(left[0] == right[0] for left, right in zip(entries, entries[1:], strict=False)):
+        fail("network interface: one holder declares two interfaces")
+    total_len = NETWORK_INTERFACE_HEADER_BYTES + len(entries) * NETWORK_INTERFACE_ENTRY_BYTES
+    header = NETWORK_INTERFACE_HEADER.pack(
+        NETWORK_INTERFACE_MAGIC, NETWORK_INTERFACE_VERSION, NETWORK_INTERFACE_HEADER_BYTES, 0, len(entries), total_len
+    )
     return header + b"".join(entry for _, entry in entries)
 
 

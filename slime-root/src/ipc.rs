@@ -104,6 +104,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::RESOLVE_BINDING
         | capability_table_labels::GRAPH_READ
         | capability_table_labels::NETWORK_DESTINATIONS_READ
+        | capability_table_labels::NETWORK_INTERFACE_READ
         | capability_table_labels::BLOCK_RING_AUTHORITY_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_table_labels::GRAPH_QUERY
@@ -126,7 +127,8 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | clock_labels::TIMER_ARM
         | clock_labels::TIMER_CANCEL
         | clock_labels::SIMULATED_READ
-        | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
+        | clock_labels::SIMULATED_ADVANCE
+        | clock_labels::RATE_READ => Some(SERVICE_CLOCK),
         io_resource_labels::BIND
         | io_resource_labels::MAP_MMIO
         | io_resource_labels::DMA_MAP
@@ -174,7 +176,9 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
 pub const fn clock_request_len(label: sel4::Word) -> Option<usize> {
     use slime_proto::syscall_abi::clock_labels;
     match label {
-        clock_labels::MONOTONIC_READ | clock_labels::SIMULATED_READ => Some(0),
+        clock_labels::MONOTONIC_READ | clock_labels::SIMULATED_READ | clock_labels::RATE_READ => {
+            Some(0)
+        }
         clock_labels::TIMER_ARM | clock_labels::TIMER_CANCEL | clock_labels::SIMULATED_ADVANCE => {
             Some(1)
         }
@@ -1242,6 +1246,40 @@ pub const NETWORK_DESTINATION_ROW_BYTES: usize = boot_contracts::network_destina
 pub const NETWORK_DESTINATION_ROWS_PER_CALL: usize =
     crate::transfer_window::MAX_STAGED_ARRAY_BYTES / NETWORK_DESTINATION_ROW_BYTES;
 
+pub const NETWORK_INTERFACE_ROW_BYTES: usize = boot_contracts::network_interface::ENTRY_BYTES;
+pub const NETWORK_INTERFACE_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / NETWORK_INTERFACE_ROW_BYTES;
+
+/// Copy authenticated IO11 interface rows only to the generation's declared
+/// `network-service`, on `read_network_destinations`' exact shape. Which row
+/// is the caller's own is decided by the caller from its holder identity.
+pub fn read_network_interface(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(interfaces)) = crate::generation::network_interface_object(generation) else {
+        return None;
+    };
+    let caller = generation.instance(instance).ok()?;
+    if caller.name != "network-service" {
+        return None;
+    }
+    let mut written = 0;
+    for index in cursor..interfaces.interface_count() {
+        let end = written + NETWORK_INTERFACE_ROW_BYTES;
+        if end > out.len()
+            || written / NETWORK_INTERFACE_ROW_BYTES >= NETWORK_INTERFACE_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(interfaces.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / NETWORK_INTERFACE_ROW_BYTES)
+}
+
 /// Copy authenticated IO4 entries only to the generation's declared
 /// `network-service`. This is identity gating, not destination policy.
 pub fn read_network_destinations(
@@ -1506,6 +1544,10 @@ mod tests {
                 SERVICE_CAPABILITY_TRANSFER,
             ),
             (
+                capability_table_labels::NETWORK_INTERFACE_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
                 capability_table_labels::BLOCK_RING_AUTHORITY_READ,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
@@ -1554,6 +1596,7 @@ mod tests {
             (clock_labels::TIMER_CANCEL, SERVICE_CLOCK),
             (clock_labels::SIMULATED_READ, SERVICE_CLOCK),
             (clock_labels::SIMULATED_ADVANCE, SERVICE_CLOCK),
+            (clock_labels::RATE_READ, SERVICE_CLOCK),
             // C9.5's recording participation, gated on lifecycle for
             // `WAIT_SOURCES`' reason: whether the generation claims this instance
             // deterministic is a property of being that instance, not of a grant.
@@ -1620,6 +1663,7 @@ mod tests {
     fn clock_request_shapes_are_exact() {
         assert_eq!(clock_request_len(clock_labels::MONOTONIC_READ), Some(0));
         assert_eq!(clock_request_len(clock_labels::SIMULATED_READ), Some(0));
+        assert_eq!(clock_request_len(clock_labels::RATE_READ), Some(0));
         assert_eq!(clock_request_len(clock_labels::TIMER_ARM), Some(1));
         assert_eq!(clock_request_len(clock_labels::TIMER_CANCEL), Some(1));
         assert_eq!(clock_request_len(clock_labels::SIMULATED_ADVANCE), Some(1));

@@ -124,6 +124,7 @@ from generation_resources import (
     build_clock_authority,
     build_io_resource_budget,
     build_network_destinations,
+    build_network_interfaces,
     build_lifecycle_policy,
     build_private_memory_budget,
     build_recording_policy,
@@ -324,6 +325,7 @@ SEL4_MANIFESTS = {
     "sel4-io-queue": GENERATION_COMPOSITIONS / "sel4-io-queue.zti",
     "sel4-io-driver-authority": GENERATION_COMPOSITIONS / "sel4-io-driver-authority.zti",
     "sel4-io-network": GENERATION_COMPOSITIONS / "sel4-io-network.zti",
+    "sel4-io-tcp": GENERATION_COMPOSITIONS / "sel4-io-tcp.zti",
     "sel4-io-block": GENERATION_COMPOSITIONS / "sel4-io-block.zti",
     "sel4-io-link": GENERATION_COMPOSITIONS / "sel4-io-link.zti",
     "sel4-spawn": GENERATION_COMPOSITIONS / "sel4-spawn.zti",
@@ -3010,6 +3012,11 @@ def build_sel4_generation(
         payloads["network-destinations"] = build_network_destinations(declared_network_destinations)
     elif declared_network_destinations:
         fail("networkDestinations declared without a network-destinations resource object")
+    declared_network_interfaces = manifest.get("networkInterfaces") or []
+    if "network-interface" in object_ids:
+        payloads["network-interface"] = build_network_interfaces(declared_network_interfaces)
+    elif declared_network_interfaces:
+        fail("networkInterfaces declared without a network-interface resource object")
     declared_block_rings = manifest.get("blockRingAuthority") or []
     if "block-ring-authority" in object_ids:
         payloads["block-ring-authority"] = build_block_ring_authority(declared_block_rings)

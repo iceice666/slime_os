@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-channel";
-  imageClosureIdentity = "ffb2cb72b19f73f6982099735804e3b855d8a444a74795a5f9864c17c6687fc7";
+  imageClosureIdentity = "15b1f7a0ddabda094fe0c4c6168ceed6e2c24ce1a2ac6de018c72c6ba29a6370";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

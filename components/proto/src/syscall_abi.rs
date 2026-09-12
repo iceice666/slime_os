@@ -46,6 +46,7 @@ pub mod capability_table_labels {
     pub const SPAWN_BUDGET: u64 = 42;
     pub const NETWORK_DESTINATIONS_READ: u64 = 64;
     pub const BLOCK_RING_AUTHORITY_READ: u64 = 69;
+    pub const NETWORK_INTERFACE_READ: u64 = 71;
 }
 
 pub mod directory_labels {
@@ -78,6 +79,7 @@ pub mod clock_labels {
     pub const TIMER_CANCEL: u64 = 46;
     pub const SIMULATED_READ: u64 = 47;
     pub const SIMULATED_ADVANCE: u64 = 48;
+    pub const RATE_READ: u64 = 70;
 }
 
 pub mod scheduling_labels {

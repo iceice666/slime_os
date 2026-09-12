@@ -13,8 +13,18 @@ test = false
 
 [dependencies]
 boot-contracts = { path = "../../../boot-contracts" }
+slime-components = { path = "../../lib" }
 slime-proto = { path = "../../proto" }
 slime-rt = { path = "../../runtime" }
+smoltcp = { version = "=0.13.0", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-tcp",
+    "auto-icmp-echo-reply",
+    "iface-max-addr-count-1",
+    "iface-max-route-count-1",
+    "iface-neighbor-cache-count-4",
+] }
 
 [build-dependencies]
 slime-build-support = { path = "../../build-support" }

@@ -24,6 +24,7 @@ pub mod io_resource;
 pub mod kernel_image;
 pub mod lifecycle_policy;
 pub mod network_destination;
+pub mod network_interface;
 pub mod normalized_interface_schemas;
 #[cfg(feature = "gpt")]
 pub mod object_store;
