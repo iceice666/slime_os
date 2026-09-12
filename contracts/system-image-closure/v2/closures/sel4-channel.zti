@@ -47,7 +47,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "e03d578c8c3b2f5fd1e0e391293fbcb27369cba3be1895dcf199ecddd66a48c3";
+      identity = "34a6ba906c7e5adfc0d80fa8a7eccb42475b27613e7217d4f331e2b4eb62b779";
     };
     parameters = [];
   };

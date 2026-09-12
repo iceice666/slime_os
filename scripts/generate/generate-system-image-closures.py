@@ -419,7 +419,7 @@ def outputs() -> dict[Path, str]:
     for mutation in CONTRACT.MUTATIONS:
         name = f"sel4-b40-{mutation.replace('_', '-')}"
         case = {
-            "formatVersion": CONTRACT.FORMAT_VERSION,
+            "formatVersion": CONTRACT.NEGATIVE_FORMAT_VERSION,
             "name": name,
             "baseClosureIdentity": identity,
             "mutation": mutation,

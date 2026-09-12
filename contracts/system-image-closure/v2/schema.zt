@@ -212,12 +212,16 @@ mutationWrongSlot :: Text = "wrong_slot";
 mutationWrongType :: Text = "wrong_type";
 mutationWrongRights :: Text = "wrong_rights";
 
+-- A version and an identity domain describe the same shape, so they move
+-- together or not at all. `SystemImageClosure` lost `target.sdkRelease` in v2,
+-- and a v1 record with that field dropped must not hash to the same key as a
+-- v2 record that never had it. `SystemImageBuildResult` and `NegativeBuildCase`
+-- did not change shape, so they keep both their v1 version and their v1 domain:
+-- stamping them v2 under a v1 domain would declare a change that did not
+-- happen and leave every persisted v1 record undecodable.
 formatVersion :: Int = 2;
--- A domain names the shape it hashes, so only the shape that changed moves.
--- `SystemImageClosure` lost `target.sdkRelease` in v2, and a v1 record with
--- that field dropped must not hash to the same key as a v2 record that never
--- had it. `SystemImageBuildResult` and `NegativeBuildCase` are unchanged;
--- their identities move only through the closure identities they carry.
+buildResultFormatVersion :: Int = 1;
+negativeFormatVersion :: Int = 1;
 identityDomain :: Text = "slime-system-image-closure-v2:";
 buildResultIdentityDomain :: Text = "slime-system-image-build-result-v1:";
 
@@ -306,6 +310,8 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   decodeSystemImageClosure =;
   decodeSystemImageBuildResult =;
   formatVersion =;
+  buildResultFormatVersion =;
+  negativeFormatVersion =;
   identityDomain =;
   buildResultIdentityDomain =;
   artifactKindFile =;

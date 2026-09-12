@@ -123,8 +123,11 @@ pub enum GrowError {
         delta: usize,
         ceiling: usize,
     },
-    /// A frame could not be retyped or mapped. Every backing object the attempt
-    /// had already taken has been returned before this is reported.
+    /// A frame could not be retyped or mapped. The attempt's own objects are
+    /// unwound but retained: frames are unmapped and their typed records become
+    /// reusable, mapped leaf tables stay mapped, and no backing extent is
+    /// revoked, so `allocated` pages of this attempt remain owned by the task
+    /// and available to its retry.
     Frames { allocated: usize, error: AllocError },
 }
 

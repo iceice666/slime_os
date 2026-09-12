@@ -556,7 +556,7 @@ def make_build_result(
         }
 
     value = {
-        "formatVersion": image_contract.FORMAT_VERSION,
+        "formatVersion": image_contract.BUILD_RESULT_FORMAT_VERSION,
         "closureIdentity": resolved.compiled.identity.hex(),
         "systemIdentity": resolved.system.identity.hex(),
         "platform": resolved.compiled.value["target"]["platform"],
@@ -593,7 +593,7 @@ def compile_negative_case(path: Path, contract: ModuleType = image_contract) -> 
         _NEGATIVE_FIELDS,
         str(path),
     )
-    if value["formatVersion"] != contract.FORMAT_VERSION:
+    if value["formatVersion"] != contract.NEGATIVE_FORMAT_VERSION:
         _fail(f"unsupported negative build case version {value['formatVersion']}")
     name = _bounded_text(value["name"], contract.MAX_NAME_BYTES, "name")
     if _NAME.fullmatch(name) is None or name != path.stem:

@@ -726,16 +726,13 @@ struct MemoryPhase {
 }
 /// The allocator's descriptor tables.
 ///
-/// `const`-initialized rather than `MaybeUninit`, unlike `graph_runtime`'s
-/// `LAUNCH_TASKS`: the record sentinels are `MAX`-valued, so this lands in
-/// `.data` and the image carries its bytes. Deferring the write is not
-/// available here — `MaybeUninit::new(ObjectAllocator::empty())` materializes
-/// the whole multi-megabyte value as a temporary before storing it, which
-/// overflows the root's 1 MiB stack and cap-faults before the first marker
-/// (observed on both QEMU planes). That is backlog B3's failure mode, which
-/// `LAUNCH_TASKS` avoids only because its table is small enough to build in a
-/// frame. Shrinking this cost is a representation change — zero-valued
-/// sentinels — not a storage-class change.
+/// `const`-initialized, so the `MAX`-valued record sentinels place this in
+/// `.data` and the image carries its bytes. It must stay a static initializer:
+/// the value is multi-megabyte, and any form that constructs it before storing
+/// it — `MaybeUninit::new(ObjectAllocator::empty())`, or a local moved into
+/// place — materializes it in a frame and overruns the root's 1 MiB stack.
+/// Reducing the image cost therefore requires zero-valued sentinels, not a
+/// different storage class.
 static mut OBJECT_ALLOCATOR: ObjectAllocator = ObjectAllocator::empty();
 
 /// Supervised protection probes the shared-buffer phase expects. One store to
