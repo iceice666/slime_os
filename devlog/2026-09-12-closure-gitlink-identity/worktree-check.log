@@ -1,0 +1,29 @@
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+50 system-image closures are current
+WT-CHECK-PASS
+WT-DONE

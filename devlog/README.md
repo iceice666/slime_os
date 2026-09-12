@@ -439,3 +439,4 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-12 | [A single-profile SDK export could not publish, and five more comment-ownership fixes](2026-09-12-corpus-profile-and-comment-ownership/index.md) | Defect | Verified | MEM-ARENAS |
 | 2026-09-12 | [The descriptor tables are `.data`, not `.bss`, and three RV64 arms had no record](2026-09-12-descriptor-residency-and-rv64-run-records/index.md) | Defect | Verified | MEM-ARENAS |
 | 2026-09-12 | [One `formatVersion` stamped three record types, two of which never changed](2026-09-12-per-record-format-versions/index.md) | Defect | Verified | MEM-ARENAS |
+| 2026-09-12 | [System image closures digested a submodule's `.git` gitlink, so every closure was stale in a git worktree](2026-09-12-closure-gitlink-identity/index.md) | Defect | Verified | none |
