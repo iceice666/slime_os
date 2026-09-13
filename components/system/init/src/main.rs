@@ -816,6 +816,75 @@ fn fail_reclamation(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
+/// MEM-64M's reuse clause: relaunch one declared 64 MiB holder until the root
+/// has reclaimed and re-served that quota this many times.
+///
+/// Twenty because that is the number the milestone's exit condition states. The
+/// count is the workload, not a watchdog: each incarnation reserves its whole
+/// declared ceiling before it runs, so a root that failed to return a dead
+/// holder's backing, descriptors, or CSlots refuses a later spawn rather than
+/// drifting quietly, and the census the root prints after each reclamation is
+/// what makes the absence of drift observable.
+const PRIVATE_CYCLE_COUNT: u32 = 20;
+
+/// Unlike the reclamation plane's children, this holder carries a declared
+/// quota and must be told which incarnation it is: a pattern that did not vary
+/// between lives could not distinguish a zeroed page from one re-served to a
+/// later task with an earlier task's bytes still in it. The cycle number goes
+/// over the composition's declared endpoint, which both sides hold before the
+/// child runs.
+fn drive_private_memory_cycles_plane() {
+    let executable = resolve_executable(b"executable:private-cycle-probe");
+    let token = slime_rt::resolve_binding(b"private-cycle-token")
+        .unwrap_or_else(|_| fail_private_cycles(b"cycle token endpoint missing"));
+    let mut exits = 0u32;
+    let mut faults = 0u32;
+    for cycle in 0..PRIVATE_CYCLE_COUNT {
+        let child = slime_rt::spawn(executable, &[])
+            .unwrap_or_else(|_| fail_private_cycles(b"holder spawn refused"));
+        // Sent after the spawn returns and before the status poll: the child
+        // blocks on this endpoint as its first act, so a send that preceded
+        // construction would have no receiver, and one issued after the poll
+        // began would deadlock against a child that never reaches its exit.
+        if slime_rt::send(token, &[cycle as u8], &[]) != slime_rt::ERR_SUCCESS {
+            fail_private_cycles(b"cycle token send failed");
+        }
+        // Even cycles exit, odd ones fault. Asserting which rather than merely
+        // "it ended" is what keeps both reclamation paths covered: a probe that
+        // stopped faulting would still terminate cleanly twenty times and leave
+        // half the exit condition unobserved.
+        loop {
+            match slime_rt::supervision_status(child.supervision_slot) {
+                Ok(None) => slime_rt::yield_now(),
+                Ok(Some(slime_rt::Termination::Exit(0))) if cycle % 2 == 0 => {
+                    exits += 1;
+                    break;
+                }
+                Ok(Some(slime_rt::Termination::Fault(_))) if cycle % 2 == 1 => {
+                    faults += 1;
+                    break;
+                }
+                _ => fail_private_cycles(b"holder ended by the wrong path"),
+            }
+        }
+    }
+    if exits + faults != PRIVATE_CYCLE_COUNT || exits == 0 || faults == 0 {
+        fail_private_cycles(b"cycle census incomplete");
+    }
+    slime_rt::debug_write(b"[init] private memory cycles exits=");
+    write_u32(exits);
+    slime_rt::debug_write(b" faults=");
+    write_u32(faults);
+    slime_rt::debug_write(b"\n");
+}
+
+fn fail_private_cycles(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] private memory cycles plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
 /// C10.2's plane needs nothing from init.
 ///
 /// Both probes are declared **root-autostart** instances, so the root launches

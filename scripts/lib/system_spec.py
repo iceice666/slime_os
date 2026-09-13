@@ -95,6 +95,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-operation": "sel4-operation.zti",
     "sel4-powerbox": "sel4-powerbox.zti",
     "sel4-private-memory": "sel4-private-memory.zti",
+    "sel4-private-memory-cycles": "sel4-private-memory-cycles.zti",
     "sel4-qos": "sel4-qos.zti",
     "sel4-reclamation": "sel4-reclamation.zti",
     "sel4-recovery": "sel4-recovery.zti",

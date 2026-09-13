@@ -3,6 +3,14 @@ private_memory_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py --platform qemu-arm-virt
     python3 scripts/check/check-sel4-private-memory-plane.py --platform qemu-riscv-virt
 
+# MEM-64M's reuse clause names no architecture, unlike the milestone's
+# grow-to-ceiling condition, which `private_memory_check` already observes on
+# both. So this arm is closure-backed and AArch64 only rather than extending
+# the legacy per-plane build flags CP15 is retiring.
+[group('planes / runtime')]
+private_memory_cycles_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm cycles
+
 [group('planes / runtime')]
 clock_authority_check: sel4_pin_check
     python3 scripts/check/check-sel4-clock-authority-plane.py

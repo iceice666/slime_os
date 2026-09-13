@@ -36,7 +36,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "5152fc1574662e3f7c05bf45e065da7459dd4cc650bae903fcfab5387cee55fe";
+        identity = "26df6c1c6c67c96f49b979a0453073285320dfcf6e28810ea7532a5a9b74aa6d";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
       buildProfile = "default";
@@ -88,7 +88,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "210dcb87725218ec4892441d9d5c157cd974c165a27eda67cad585d1028031a1";
+        identity = "5ce070eda2d4e2f28ecfa29f027e2fb9d1f5b6d2e0a1705e2e5954f76925afdb";
       };
     };
     {
@@ -96,7 +96,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "c73f45c1df83d6252b4f7fb2d0f5f51f5d7806a035edcc0498feba894e089998";
+        identity = "fc098db1c52b1f2cf55fdd6a6bdd9841f53263d5dec36feaef124fe0fa7bd3ec";
       };
     };
     {
@@ -144,7 +144,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "516bd6c07cfddaa82e945fa5961627fe23db4922f4e69b8a95ed2bee9cd11f97";
+        identity = "a08e527fa20670d6033135fd76a881c4e129efa7f3b71528d234093849edbf11";
       };
     };
     {
@@ -160,7 +160,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "74becd571c8bb152c232911e18710f800eefe097a62b541f4f9f75cded31e329";
+        identity = "f6b61fee9194cd756f083e9eded8ef1fa1bf3642553a59699e881976d23f3614";
       };
     };
     {
@@ -200,7 +200,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "a3af9b61079517ab0e55dc57fc43724a8820e39cd2bcb65192c7053d1da48d6f";
+        identity = "66ef737a5eb97e761701c6b25d2f5f7e730e77e76f8603eb89244a319da5863c";
       };
     };
   ];

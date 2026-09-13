@@ -55,6 +55,9 @@ mod boot_action {
 
     /// C9.6's robot workload composition.
     pub const ROBOT_RUNTIME: u32 = 36;
+
+    /// MEM-64M's private-memory reuse clause.
+    pub const PRIVATE_MEMORY_CYCLES: u32 = 39;
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
     // file matches on it. Renumbering a variant in the contract without
@@ -96,6 +99,7 @@ mod boot_action {
     const _: () = assert!(LIFECYCLE_RESTART == BootAction::LifecycleRestart.id());
     const _: () = assert!(REPLAY == BootAction::Replay.id());
     const _: () = assert!(ROBOT_RUNTIME == BootAction::RobotRuntime.id());
+    const _: () = assert!(PRIVATE_MEMORY_CYCLES == BootAction::PrivateMemoryCycles.id());
 }
 
 /// Compose the graph the generation selected.
@@ -161,6 +165,11 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
         action::PRIVATE_MEMORY => {
             drive_private_memory_plane();
             slime_rt::debug_write(b"[init] private memory plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::PRIVATE_MEMORY_CYCLES => {
+            drive_private_memory_cycles_plane();
+            slime_rt::debug_write(b"[init] private memory cycles plane complete\n");
             slime_rt::exit(0)
         }
         action::CLOCK_AUTHORITY => {

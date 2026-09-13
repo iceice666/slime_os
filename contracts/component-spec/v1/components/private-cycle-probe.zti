@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "private-cycle-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "Grows a private region to its declared 64 MiB ceiling, proves every served page is zero, then ends by exit or deliberate fault so a later task reuses it.";
+  implementation = {
+    provider = "workspace";
+    binary = "private-cycle-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 16384;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the private_memory_cycles_check gate boots a generation declaring private-cycle-probe and relaunches it twenty times";
+    expectedResult = "every incarnation is served a zeroed 64 MiB region and the root's reclamation census does not drift";
+    passFailCriteria = "[init] private memory cycles plane complete";
+    requiredTestEnvironment = "private_memory_cycles_check";
+  };
+}

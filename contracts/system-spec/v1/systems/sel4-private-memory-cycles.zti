@@ -1,0 +1,95 @@
+{
+  formatVersion = 1;
+  name = "sel4-private-memory-cycles";
+  generation = 55;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "private-memory-cycles";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "private-cycle-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+    {
+      component = "private-cycle-probe";
+      health = "optional";
+      privatePageQuota = 16384;
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "init-private-cycle-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "private-cycle-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "private-cycle-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "private-cycle-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "private-cycle-probe";
+      grant = "private-cycle-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "init";
+      grant = "private-cycle-token";
+      slot = 1;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-private-cycle-probe";
+      slot = 2;
+      reason = "bootLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -1,0 +1,124 @@
+{
+  bootAction = "private-memory-cycles";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "private-cycle-probe";
+      object = "sha256:private-cycle-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 55;
+  grants = [
+    {
+      name = "init-private-cycle-probe";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "private-cycle-probe";
+      transferable = false;
+    };
+    {
+      name = "private-cycle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "private-cycle-probe";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-private-cycle-probe";
+          slot = 2;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "private-cycle-token";
+          slot = 1;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "private-cycle-token";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "private-cycle-probe";
+      health = "optional";
+      name = "private-cycle-probe";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "private-memory-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-cycle-probe";
+      kind = "component";
+      size = 65536;
+    };
+  ];
+  privateMemoryBudget = [
+    {
+      holder = "private-cycle-probe";
+      pageQuota = 16384;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

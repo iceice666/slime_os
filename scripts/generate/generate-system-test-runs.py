@@ -84,6 +84,11 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
             "sel4-private-memory-fail-second-allocation",
             "qemu-arm-virt",
         ),
+        (
+            "sel4-private-memory-cycles",
+            "sel4-private-memory-cycles",
+            "qemu-arm-virt",
+        ),
     ),
 }
 
