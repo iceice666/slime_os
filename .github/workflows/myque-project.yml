@@ -1,0 +1,27 @@
+name: Project canonical myque items
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.tasks/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  checks: read
+
+jobs:
+  project:
+    uses: mozufu/myque-gh/.github/workflows/reconcile.yml@c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+    with:
+      branch: main
+      project: tag = github
+      myque-gh-ref: c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+      issue-authors: github-actions[bot]
+      source-repo: iceice666/slime_os
+      source-branch: main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
