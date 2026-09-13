@@ -47,22 +47,35 @@ MARKER_CONTRACT = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd
 # it names with `--platform qemu-riscv-virt` and can execute belongs here: a
 # real invocation without a record leaves its execution profile and image
 # provenance unfrozen. The tuple is `(run name, execution profile, image
-# name)`.
-EXTRA_RUNS: dict[str, tuple[str, str, str]] = {
+# name)`, and a checker may name more than one: MEM-64M's reuse arm boots its
+# own RV64 image beside the ceiling arm's, and a single-tuple table would leave
+# the second one unrecorded.
+EXTRA_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "sel4-generation": (
-        "sel4-generation-qemu-riscv-virt",
-        "qemu-riscv-virt",
-        "slime-sel4-generation-qemu-riscv-virt.elf",
+        (
+            "sel4-generation-qemu-riscv-virt",
+            "qemu-riscv-virt",
+            "slime-sel4-generation-qemu-riscv-virt.elf",
+        ),
     ),
     "sel4-private-memory": (
-        "sel4-private-memory-qemu-riscv-virt",
-        "qemu-riscv-virt",
-        "slime-sel4-private-memory-qemu-riscv-virt.elf",
+        (
+            "sel4-private-memory-qemu-riscv-virt",
+            "qemu-riscv-virt",
+            "slime-sel4-private-memory-qemu-riscv-virt.elf",
+        ),
+        (
+            "sel4-private-memory-cycles-qemu-riscv-virt",
+            "qemu-riscv-virt",
+            "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf",
+        ),
     ),
     "sel4-rollback": (
-        "sel4-rollback-qemu-riscv-virt",
-        "qemu-riscv-virt",
-        "slime-sel4-rollback-qemu-riscv-virt.elf",
+        (
+            "sel4-rollback-qemu-riscv-virt",
+            "qemu-riscv-virt",
+            "slime-sel4-rollback-qemu-riscv-virt.elf",
+        ),
     ),
 }
 
@@ -136,9 +149,7 @@ def run_variants(path: _Path) -> list[tuple[str, str, str, str]]:
     # from its checker so the aggregate exemption remains independently checked.
     closure_exists = (CLOSURE_ROOT / f"{closure}.zti").is_file()
     variants = [(name, closure, "qemu-arm-virt", "" if closure_exists else booted_image(path))]
-    extra = EXTRA_RUNS.get(name)
-    if extra is not None:
-        run, profile, image = extra
+    for run, profile, image in EXTRA_RUNS.get(name, ()):
         variants.append((run, "", profile, image))
     for run, extra_closure, profile in EXTRA_CLOSURE_RUNS.get(name, ()):
         variants.append((run, extra_closure, profile, ""))
