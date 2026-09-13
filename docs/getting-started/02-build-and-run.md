@@ -141,8 +141,36 @@ prints, and compare against the marker table in its
 | `build/sel4-cargo/` | cargo target directories for the seL4-target crates |
 | `build/slime-sel4-graph.elf` | the packaged product image `just run` boots |
 | `build/slime-sel4.identity.json` | digests tying the image to its sources |
+| `build/closure/<plane>/` | one cargo target directory per closure-backed plane, built by the plane gates |
+| `build/zutai-cache/` | content-keyed zutai evaluations the contract gates reuse |
+| `target/components/<profile>/<generation>/` | one cargo target directory per generation the builder assembled directly |
 
-`build/` is disposable; deleting it costs you one full rebuild.
+## Disk use
+
+Everything under `build/` and `target/` is regenerable; nothing there is
+tracked or blessed. It is also large: every plane gets its own cargo target
+directory, about 1.2 GiB each, so a tree that has run every gate holds roughly
+40 GiB under `build/closure/`, 15 GiB under `target/components/`, and 13 GiB
+under `build/sel4-cargo/`, next to a `target/` of a few GiB for host tests. A
+worktree or clone that has run the gates carries the same again.
+
+Delete by cost, not by name:
+
+- `build/closure/` and `target/components/` are the bulk. Removing them costs
+  one component rebuild per plane the next gate boots (a few minutes each), or
+  about ten minutes for `generate-system-image-closures.py` over every plane.
+- `build/sel4-cargo/` costs one root, child, and lint rebuild.
+- `build/sel4-prefix/` costs a kernel build (`just sel4_qemu_image_check`).
+  Rebuild it deliberately whenever `sel4/config/`, `sel4/pins.toml`, or the
+  pinned submodules move under you: `just sel4_pin_check` verifies the pinned
+  sources and host tools, and the installed prefix's own hashes are compared
+  only by `check-sel4-pins.py --prefix`, which no gate runs. A prefix older
+  than the config therefore boots every plane on the previous kernel without
+  a word, and `slime-root`, which sizes its descriptor tables from that
+  prefix's generated config, fails `test_sel4_root` at const-evaluation.
+- `build/zutai-cache/` is small and saves minutes per contract gate; keep it.
+- A worktree or clone that holds submodules cannot be removed with
+  `git worktree remove`; delete the directory and run `git worktree prune`.
 
 ## Next
 
