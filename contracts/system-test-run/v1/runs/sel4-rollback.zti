@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-rollback";
-  imageClosureIdentity = "e6d1843d083ff185b4bdd7e9d986ea31b474800b0e3f29d4eaf5a2b346dc913c";
+  imageClosureIdentity = "a83019f22ac23ad5e1c7cab653c4ecb0879496a570d017647d1e957c9d9b0134";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [

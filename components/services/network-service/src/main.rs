@@ -55,17 +55,21 @@ const MAX_CAPABILITIES: usize = 8;
 /// ceiling on declarations; this is the storage one service instance carries.
 const TCP_SOCKETS: usize = 4;
 const SOCKET_BUFFER_BYTES: usize = 4096;
-/// A socket whose peer stays silent this long while it owes an answer is
-/// aborted: first the connect, and later any data the peer has not
-/// acknowledged. A connect that is neither answered nor refused therefore
-/// settles as unreachable within this bound. The stack counts the bound from
-/// the peer's last packet whether or not anything is owed, so it is armed only
-/// while a connect or a data request is pending on the socket; an idle
-/// connection is never aborted for being idle.
+/// How long a socket may owe an answer before it is aborted: the handshake a
+/// connect started, the settling of a close, and a blocking data request the
+/// peer has neither served nor advanced. Only the connect uses the stack's own
+/// silence bound, which starts with the SYN; the others are deadlines this
+/// service keeps, because the stack counts its bound from the peer's last
+/// packet whatever is owed, and arming it on a socket that has been idle
+/// aborts at the next poll. An idle connection is never aborted for being idle.
 const SOCKET_TIMEOUT_MS: i64 = 5000;
 
 fn socket_timeout() -> Option<Duration> {
     Some(Duration::from_millis(SOCKET_TIMEOUT_MS as u64))
+}
+
+fn silence_bound() -> Duration {
+    Duration::from_millis(SOCKET_TIMEOUT_MS as u64)
 }
 const FIRST_LOCAL_PORT: u16 = 49152;
 const DATA_PAGES: usize = 2;
@@ -84,7 +88,15 @@ const CLIENTS: [(&[u8], &str); 3] = [
 /// Sockets whose holders closed them, draining in the stack (TIME-WAIT for an
 /// active close) until it lets them go. Their capabilities are gone, so they
 /// charge no holder's ceiling; only the storage stays occupied.
-type Draining = [Option<SocketHandle>; TCP_SOCKETS];
+/// A socket its holder let go of, finishing its close: the deadline is set
+/// the first time it is reaped, since the release that lists it has no clock.
+#[derive(Clone, Copy)]
+struct Drain {
+    handle: SocketHandle,
+    deadline: Option<Instant>,
+}
+
+type Draining = [Option<Drain>; TCP_SOCKETS];
 
 // Socket buffers live in the image's writable data rather than on the stack:
 // four sockets' worth is twice the declared stack.
@@ -132,6 +144,8 @@ struct Pending {
     length: usize,
     progress: usize,
     nonblocking: bool,
+    /// When a blocking request the socket has not advanced aborts it.
+    deadline: Instant,
 }
 
 /// A client's IO0 data queue and the pages it lent, once delegated.
@@ -355,6 +369,7 @@ fn main(_: u32) {
                     &destinations,
                     &mut sockets,
                     &mut observed,
+                    now,
                 ) {
                     Ok(served) => progress |= served,
                     Err(reason) => {
@@ -369,7 +384,7 @@ fn main(_: u32) {
                     }
                 }
             }
-            progress |= reap_drained(&mut draining, &mut sockets, &mut socket_slots);
+            progress |= reap_drained(&mut draining, &mut sockets, &mut socket_slots, now);
         }
         if !progress {
             yield_now();
@@ -405,18 +420,20 @@ fn quiesce_sockets(
         progress |=
             stack.iface.poll(now, &mut stack.link, sockets) == PollResult::SocketStateChanged;
         progress |= stack.link.replenish();
-        progress |= reap_drained(draining, sockets, socket_slots);
+        progress |= reap_drained(draining, sockets, socket_slots, now);
         let unsettled = draining
             .iter()
             .flatten()
-            .filter(|handle| sockets.get::<tcp::Socket>(**handle).state() != tcp::State::TimeWait)
+            .filter(|drain| {
+                sockets.get::<tcp::Socket>(drain.handle).state() != tcp::State::TimeWait
+            })
             .count();
         if unsettled == 0 {
             break;
         }
         if now >= deadline {
-            for handle in draining.iter().flatten() {
-                let socket = sockets.get_mut::<tcp::Socket>(*handle);
+            for drain in draining.iter().flatten() {
+                let socket = sockets.get_mut::<tcp::Socket>(drain.handle);
                 if socket.state() != tcp::State::TimeWait {
                     socket.abort();
                     aborted += 1;
@@ -524,8 +541,9 @@ fn refuse_client(
 }
 
 /// End a client, whether it asked to or was refused: it is never received or
-/// served again, its queue is forgotten, and everything it still holds goes
-/// with it through the same path as `OP_CLOSE`, so an open socket's slot
+/// served again, every request it still holds pending is answered as
+/// cancelled and then its queue is forgotten, and everything it still holds
+/// goes with it through the same path as `OP_CLOSE`, so an open socket's slot
 /// returns once the peer answers or the bound expires rather than staying
 /// with a holder nothing will ever settle.
 fn close_client(
@@ -535,6 +553,24 @@ fn close_client(
     draining: &mut Draining,
 ) {
     client.closed = true;
+    if let Some(data) = client.data.as_mut() {
+        for slot in 0..DATA_QUEUE_SLOTS {
+            let Some(pending) = data.pending[slot].take() else {
+                continue;
+            };
+            // Admission reserved this request's completion slot, so a client
+            // whose cursors are its own always hears the cancellation; a
+            // refused client may have wedged its ring, and then it does not.
+            let _ = complete_data(
+                data,
+                pending.request_id,
+                pending.op,
+                io_queue::STATUS_CANCELLED,
+                STATUS_DENIED,
+                0,
+            );
+        }
+    }
     client.data = None;
     for index in 0..MAX_CAPABILITIES {
         if capabilities[index].is_some_and(|cap| cap.holder == client.holder) {
@@ -872,8 +908,7 @@ fn dispatch(
                 tcp::SocketBuffer::new(&mut tx[..]),
             );
             socket.set_timeout(socket_timeout());
-            let local_port = stack.next_port;
-            stack.next_port = stack.next_port.checked_add(1).unwrap_or(FIRST_LOCAL_PORT);
+            let local_port = allocate_port(stack, socket_slots, sockets);
             let remote = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from(remote)), request.port);
             if socket
                 .connect(stack.iface.context(), remote, local_port)
@@ -955,8 +990,9 @@ fn dispatch(
 /// Drop one capability at once. Its socket, if any, finishes its own close
 /// in the draining list, charging no ceiling: a connect still in flight is
 /// aborted rather than closed, since nothing was ever established, and an
-/// established socket is closed with the silence bound armed, because a close
-/// owes the peer's answer and an unanswered one must not hold its slot forever.
+/// established socket is closed under the draining list's deadline, because a
+/// close owes the peer's answer and an unanswered one must not hold its slot
+/// forever.
 fn release_capability(
     client: &mut Client,
     capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
@@ -975,7 +1011,6 @@ fn release_capability(
         client.pending_connect = None;
         socket.abort();
     } else {
-        socket.set_timeout(socket_timeout());
         socket.close();
     }
     let Some(entry) = draining.iter_mut().find(|entry| entry.is_none()) else {
@@ -984,7 +1019,35 @@ fn release_capability(
         // slot.
         fail(b"draining list")
     };
-    *entry = Some(handle);
+    *entry = Some(Drain {
+        handle,
+        deadline: None,
+    });
+}
+
+/// The next ephemeral port no socket in a slot is bound to, draining and
+/// TIME-WAIT sockets included: a second socket on a live four-tuple could not
+/// be told apart by the stack. The caller holds a free slot, so at most
+/// `TCP_SOCKETS - 1` ports are taken and the walk always ends.
+fn allocate_port(
+    stack: &mut Stack,
+    socket_slots: &SocketSlots,
+    sockets: &SocketSet<'static>,
+) -> u16 {
+    for _ in 0..TCP_SOCKETS {
+        let port = stack.next_port;
+        stack.next_port = stack.next_port.checked_add(1).unwrap_or(FIRST_LOCAL_PORT);
+        let taken = socket_slots.iter().flatten().any(|handle| {
+            sockets
+                .get::<tcp::Socket>(*handle)
+                .local_endpoint()
+                .is_some_and(|endpoint| endpoint.port == port)
+        });
+        if !taken {
+            return port;
+        }
+    }
+    fail(b"local port")
 }
 
 /// Answer a deferred connect once the handshake finished or failed.
@@ -1012,8 +1075,8 @@ fn settle_connect(
     let socket = sockets.get_mut::<tcp::Socket>(handle);
     if socket.may_send() {
         client.pending_connect = None;
-        // Established and owing nothing: `serve_data` re-arms the bound for
-        // each request it holds pending on this socket.
+        // Established and owing nothing: from here what the socket owes is
+        // bounded by the deadline of each request `serve_data` holds pending.
         socket.set_timeout(None);
         observed.tcp_established += 1;
         send(
@@ -1054,9 +1117,9 @@ fn serve_data(
     destinations: &NetworkDestinations<'_>,
     sockets: &mut SocketSet<'static>,
     observed: &mut Observed,
+    now: Instant,
 ) -> Result<bool, &'static [u8]> {
     let holder = client.holder;
-    let pending_connect = client.pending_connect;
     let Some(data) = client.data.as_mut() else {
         return Ok(false);
     };
@@ -1066,10 +1129,13 @@ fn serve_data(
     // move them while this runs, so the loop's exits below are not a bound on
     // their own. Every other client, and the stack, gets its turn regardless.
     for _ in 0..DATA_QUEUE_SLOTS {
-        // Every taken request needs a completion slot; a ring the client has
-        // not drained is not taken from, so a completion can always be
-        // published.
-        if data.queue.completions_pending() >= DATA_QUEUE_SLOTS as u64 {
+        // Every taken request needs a completion slot, whether it is answered
+        // now or held pending and answered later, so a request is taken only
+        // while the ring has room for it beyond every answer not yet drained
+        // and every request still held: a client cannot fill the ring with
+        // refusals and leave a held request nowhere to settle.
+        let held = data.pending.iter().flatten().count() as u64;
+        if data.queue.completions_pending() + held >= DATA_QUEUE_SLOTS as u64 {
             break;
         }
         let submission = match data.queue.take_request(&mut body, PAGE) {
@@ -1208,6 +1274,7 @@ fn serve_data(
             length: slice.length as usize,
             progress: 0,
             nonblocking: request.flags & network_service::FLAG_NONBLOCKING != 0,
+            deadline: now + silence_bound(),
         });
     }
     for slot in 0..DATA_QUEUE_SLOTS {
@@ -1236,6 +1303,12 @@ fn serve_data(
         };
         let handle = cap.socket.unwrap_or_else(|| fail(b"data socket"));
         let socket = sockets.get_mut::<tcp::Socket>(handle);
+        if !pending.nonblocking && now >= pending.deadline {
+            // The peer has neither served nor advanced this request within
+            // the bound: the socket is aborted, and the request settles below
+            // as the reset it now is, with every other request it holds.
+            socket.abort();
+        }
         let page = data.pages[pending.page]
             .unwrap_or_else(|| fail(b"data page"))
             .bytes();
@@ -1273,8 +1346,11 @@ fn serve_data(
                 data.pending[slot] = None;
                 progress = true;
             } else if taken > 0 {
+                // The socket took some: the peer is acknowledging, and the
+                // bound starts over from here.
                 data.pending[slot] = Some(Pending {
                     progress: done,
+                    deadline: now + silence_bound(),
                     ..pending
                 });
             }
@@ -1327,28 +1403,6 @@ fn serve_data(
                 }
             }
         }
-    }
-    // The silence bound is armed exactly while this client holds a request
-    // pending on the socket; a connect still settling keeps the bound it was
-    // opened with until `settle_connect` answers it.
-    for cap in capabilities
-        .iter()
-        .flatten()
-        .filter(|cap| cap.holder == holder && Some(cap.id) != pending_connect)
-    {
-        let Some(handle) = cap.socket else {
-            continue;
-        };
-        let owed = data
-            .pending
-            .iter()
-            .flatten()
-            .any(|pending| pending.capability == cap.id);
-        sockets.get_mut::<tcp::Socket>(handle).set_timeout(if owed {
-            socket_timeout()
-        } else {
-            None
-        });
     }
     Ok(progress)
 }
@@ -1405,20 +1459,29 @@ fn publish(
 }
 
 /// Sockets their holders closed give their storage back once the stack has
-/// let them go.
+/// let them go. One that has not closed within the silence bound of its
+/// first reaping is aborted, as an unanswered close is in service, and its
+/// storage returns on the next pass.
 fn reap_drained(
     draining: &mut Draining,
     sockets: &mut SocketSet<'static>,
     socket_slots: &mut SocketSlots,
+    now: Instant,
 ) -> bool {
     let mut progress = false;
     for entry in draining.iter_mut() {
-        let Some(handle) = *entry else {
+        let Some(drain) = entry.as_mut() else {
             continue;
         };
-        if sockets.get_mut::<tcp::Socket>(handle).state() == tcp::State::Closed {
+        let handle = drain.handle;
+        let deadline = *drain.deadline.get_or_insert(now + silence_bound());
+        let socket = sockets.get_mut::<tcp::Socket>(handle);
+        if socket.state() == tcp::State::Closed {
             free_socket(socket_slots, sockets, handle);
             *entry = None;
+            progress = true;
+        } else if now >= deadline {
+            socket.abort();
             progress = true;
         }
     }

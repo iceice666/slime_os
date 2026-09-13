@@ -1,19 +1,12 @@
 {
   formatVersion = 1;
   name = "sel4-io-network";
-  imageClosureIdentity = "41fa06714a882f28eb10cfbf92ca65155d09f06522268b6430cef569955bec67";
+  imageClosureIdentity = "6e350ff18bac166697e4de503b334e04a4dc7b7869d059afc66d64264baf083c";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
   networks = [];
-  devices = [
-    {
-      name = "virtio-net-device";
-      path = "";
-      identity = "";
-      writable = false;
-    };
-  ];
+  devices = [];
   faultControls = [];
   timeoutSeconds = 240;
   markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
