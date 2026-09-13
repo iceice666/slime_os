@@ -1,0 +1,212 @@
+{
+  formatVersion = 1;
+  name = "sel4-lifecycle-restart";
+  generation = 44;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "lifecycle-restart";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "lifecycle-restart-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "lifecycle-denied";
+      executable = "lifecycle-restart-probe";
+    };
+    {
+      name = "lifecycle-graph";
+      executable = "lifecycle-restart-probe";
+    };
+    {
+      name = "lifecycle-supervisor";
+      executable = "lifecycle-restart-probe";
+    };
+    {
+      name = "lifecycle-worker";
+      executable = "lifecycle-restart-probe";
+      owner = "lifecycle-supervisor";
+      autostart = false;
+      health = "optional";
+      dependencies = [
+        "lifecycle-supervisor";
+      ];
+      privatePageQuota = 4;
+    };
+  ];
+  grants = [
+    {
+      name = "lifecycle-worker-executable";
+      capabilityKind = "executable";
+      source = "lifecycle-supervisor";
+      target = "lifecycle-restart-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "lifecycle-supervisor";
+      grant = "lifecycle-worker-executable";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "lifecycle-supervisor-tick";
+      source = "init";
+      target = "lifecycle-supervisor";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "lifecycle-supervisor-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "lifecycle-supervisor-tick";
+      holder = "lifecycle-supervisor";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    {
+      holder = "lifecycle-supervisor";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "lifecycle-supervisor-tick";
+      timerQuota = 2;
+      timerUse = true;
+    };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  schedulingClass = {
+    bands = [
+      {
+        class = "normal";
+        priority = 150;
+      };
+    ];
+    instances = [
+      {
+        class = "normal";
+        instance = "lifecycle-worker";
+      };
+    ];
+    promotions = [];
+  };
+  lifecyclePolicy = {
+    dependencies = [
+      {
+        dependency = "lifecycle-supervisor";
+        instance = "lifecycle-worker";
+        requiredState = "Running";
+      };
+    ];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "lifecycle-supervisor";
+        read = true;
+        subject = "lifecycle-supervisor";
+        write = true;
+      };
+      {
+        holder = "lifecycle-supervisor";
+        read = true;
+        subject = "lifecycle-worker";
+        write = true;
+      };
+      {
+        holder = "lifecycle-worker";
+        read = true;
+        subject = "lifecycle-worker";
+        write = false;
+      };
+      {
+        holder = "lifecycle-graph";
+        read = false;
+        subject = "lifecycle-graph";
+        write = true;
+      };
+    ];
+    restarts = [
+      {
+        attempts = 3;
+        backoffFactor = 512;
+        backoffNs = 200000;
+        causes = [
+          "exit";
+          "fault";
+          "unhealthy";
+        ];
+        instance = "lifecycle-worker";
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Ready";
+      };
+      {
+        from = "Running";
+        to = "Stop";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+      {
+        from = "Ready";
+        to = "Stop";
+      };
+    ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -1,0 +1,13 @@
+schema ::= import "schema.zt";
+env ::= import stdlib.env;
+load ::= import stdlib.load;
+
+main :: { env : Env; load : Load; }
+  -> Validation DecodeIssue schema.CompositionInventory
+  ! { * env.GetEffects; * load.ZtiEffects; }
+  = caps => [
+    path := env.get caps.env "SLIME_COMPOSITION_INVENTORY_PATH" ?? "";
+    schema.decodeCompositionInventory (load.zti caps.load path)
+  ];
+
+main

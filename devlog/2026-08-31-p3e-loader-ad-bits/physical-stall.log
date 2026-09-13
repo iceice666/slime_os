@@ -1,0 +1,48 @@
+Command: python3 scripts/check/check-duo-sel4.py --no-build --serial /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 --evidence-dir devlog/2026-08-31-p3e-sel4-milkv-duo
+Exit: 1
+
+[deploy] /boot/slime-sel4-sample-cv1800b-duo.itb on 192.168.42.1 matches 16f4051316a38aba…
+[deploy] /boot/slime-sel4-sample-cv1800b-duo-early-fault.itb on 192.168.42.1 matches f272f5e8de3ec87e…
+---- serial transcript (last 40 lines) ----
+     Decompressing 1122704 bytes used 1ms
+  ERROR: reserving fdt memory region failed (addr=80000000 size=40000 flags=0)
+     Loading Device Tree to 0000000081be5000, end 0000000081becfff ... OK
+  
+  Starting kernel ...
+  
+  seL4 kernel loader | INFO   Starting loader
+  seL4 kernel loader | DEBUG  Platform info: PlatformInfo {
+      memory: [
+          0x80040000..0x83f40000,
+      ],
+      devices: [
+          0x0..0x70000000,
+          0x74200000..0x80040000,
+          0x83f40000..0x8000000000,
+      ],
+  }
+  seL4 kernel loader | DEBUG  Loader footprint: 0x800a6000..0x801b8190
+  seL4 kernel loader | DEBUG  Payload info: ArchivedPayloadInfo {
+      kernel_entry: 0xffffffff80040000,
+      user_image: ArchivedUserImageInfo {
+          ui_p_reg_start: 0x83b84000,
+          ui_p_reg_end: 0x83f40000,
+          pv_offset: 0x83b74000,
+          v_entry: 0xa8ebe,
+      },
+      dtb: Some(
+          ArchivedDtbInfo {
+              addr_p: 0x83b7f000,
+              size: 0x4cb2,
+          },
+      ),
+  }
+  seL4 kernel loader | DEBUG  Payload regions:
+  seL4 kernel loader | DEBUG      0x80040000 (filesz = 0x26000, memsz = 0x1da30)
+  seL4 kernel loader | DEBUG      0x83b84000 (filesz = 0xd2e1a, memsz = 0xd2e1a)
+  seL4 kernel loader | DEBUG      0x83c57e20 (filesz = 0x2e74b8, memsz = 0x8980)
+  seL4 kernel loader | DEBUG      0x83b7f000 (filesz = 0x4cb2, memsz = 0x4cb2)
+  seL4 kernel loader | DEBUG  Copying payload data
+  seL4 kernel loader | INFO   Entering kernel
+---- end of serial transcript ----
+duo seL4 check: slime-sel4-sample-cv1800b-duo.itb did not reach its terminal marker within 180s

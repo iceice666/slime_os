@@ -1,0 +1,72 @@
+fatload mmc 0:1 0x81400000 slime-sel4-sample-cv1800b-duo-early-fault.itb
+284408 bytes read in 14 ms (19.4 MiB/s)
+cv180x_c906# bootm 0x81400000#config-duo-sel4
+## Loading kernel from FIT Image at 81400000 ...
+   Using 'config-duo-sel4' configuration
+   Trying 'kernel-1' kernel subimage
+   Verifying Hash Integrity ... crc32+ OK
+## Loading fdt from FIT Image at 81400000 ...
+   Using 'config-duo-sel4' configuration
+   Trying 'fdt-duo' fdt subimage
+   Verifying Hash Integrity ... crc32+ OK
+   Booting using the fdt blob at 0x814404ac
+   Loading Kernel Image
+   Decompressing 262864 bytes used 0ms
+ERROR: reserving fdt memory region failed (addr=80000000 size=40000 flags=0)
+   Loading Device Tree to 0000000081be5000, end 0000000081becfff ... OK
+
+Starting kernel ...
+
+seL4 kernel loader | INFO   Starting loader
+seL4 kernel loader | DEBUG  Platform info: PlatformInfo {
+    memory: [
+        0x80040000..0x83f40000,
+    ],
+    devices: [
+        0x0..0x70000000,
+        0x74200000..0x80040000,
+        0x83f40000..0x8000000000,
+    ],
+}
+seL4 kernel loader | DEBUG  Loader footprint: 0x800a4000..0x800e42d0
+seL4 kernel loader | DEBUG  Payload info: ArchivedPayloadInfo {
+    kernel_entry: 0xffffffff80040000,
+    user_image: ArchivedUserImageInfo {
+        ui_p_reg_start: 0x83dba000,
+        ui_p_reg_end: 0x83f40000,
+        pv_offset: 0x83daa000,
+        v_entry: 0x153b8,
+    },
+    dtb: Some(
+        ArchivedDtbInfo {
+            addr_p: 0x83db5000,
+            size: 0x4cb2,
+        },
+    ),
+}
+seL4 kernel loader | DEBUG  Payload regions:
+seL4 kernel loader | DEBUG      0x80040000 (filesz = 0x24000, memsz = 0x1c610)
+seL4 kernel loader | DEBUG      0x83dba000 (filesz = 0xace8, memsz = 0xace8)
+seL4 kernel loader | DEBUG      0x83dc5ce8 (filesz = 0x179a58, memsz = 0x10)
+seL4 kernel loader | DEBUG      0x83db5000 (filesz = 0x4cb2, memsz = 0x4cb2)
+seL4 kernel loader | DEBUG  Copying payload data
+seL4 kernel loader | INFO   Entering kernel
+SLIME_DUO loader page tables active
+Init local IRQ
+Bootstrapping kernel
+Initializing PLIC...
+Available phys memory regions: 1
+  [80040000..83f40000)
+Reserved virt address space regions: 3
+  [ffffffc080040000..ffffffc080064000)
+  [ffffffc083db5000..ffffffc083db9cb2)
+  [ffffffc083dba000..ffffffc083f40000)
+Booting all finished, dropped to user space
+SLIME_ROOT allocator slots=3636 untypeds=23 bytes=64117568
+SLIME_TIMER acquired irq=17 freq_hz=1
+SLIME_TIMER delivered badge=0x1 polls=1097032
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=220 end=221 delta=1
+SLIME_TIMER OK
+SLIME_DUO EARLY_FAULT phase=post-timer cause=timer-range-refused bounded=1
+SLIME_DUO reset request kind=cold�

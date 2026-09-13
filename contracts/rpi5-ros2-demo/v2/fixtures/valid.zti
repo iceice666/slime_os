@@ -1,0 +1,373 @@
+{
+  formatVersion = 2;
+  id = "rpi5-ros2-demo-v2";
+  targetProfile = "aarch64-rpi5";
+  board = {
+    id = "raspberry-pi-5-model-b-rev1";
+    model = "Raspberry Pi 5 Model B";
+    acceptedRevisionCodes = [
+      "c04170";
+      "d04170";
+    ];
+    soc = "bcm2712c1";
+    architecture = "aarch64";
+    abi = "slime-aarch64-v1";
+    pageProfile = "aarch64-4k";
+    firmwareId = "rpi-eeprom-2712-2026-05-27-default";
+    bootFlow = "bcm2712-rom-to-spi-eeprom-to-fat32";
+    kernelPath = "kernel8.img";
+    configPath = "config.txt";
+    deviceTreePath = "bcm2712-rpi-5-b.dtb";
+    mediaKind = "removable-microsd";
+    mediaLayout = "mbr-fat32-boot-plus-slime-generation-store";
+    memoryMapSource = "firmware-final-device-tree";
+    interruptController = "arm-gic-400-gicv2-from-device-tree";
+    genericTimer = "arm-armv8-timer-from-device-tree";
+    serialPath = "uart10-debug-header-pl011-0x107d001000";
+    serialBaud = 115200;
+    requiredDevices = [
+      "bcm2712-cortex-a76";
+      "arm-gic-400";
+      "arm-armv8-timer";
+      "uart10-pl011";
+      "microsd-boot-media-read-only-after-boot";
+      "firmware-final-device-tree";
+    ];
+  };
+  ros = {
+    id = "ros2-profile-0-kilted-native";
+    distribution = "kilted-kaiju";
+    nodeRoute = "slime-native-ros-compatible-components";
+    apiSubset = [
+      "init";
+      "create-node";
+      "create-publisher";
+      "create-subscription";
+      "spin";
+      "publish";
+      "receive-callback";
+      "log";
+      "shutdown";
+    ];
+    rmwBoundary = "slime-rmw-profile-0-over-bounded-zenoh";
+    transportRuntime = "slime-zenoh-profile-0";
+    representation = "cdr-le";
+    endianness = "little";
+    securityEnabled = false;
+  };
+  transport = "zenoh";
+  zenoh = {
+    id = "zenoh-profile-0-static-local-reliable";
+    protocolVersion = 9;
+    sessionMode = "peer";
+    linkProtocol = "tcp";
+    batchLengthBytes = 2;
+    maxBatchBytes = 512;
+    sessionMessages = [
+      "INIT_SYN";
+      "INIT_ACK";
+      "OPEN_SYN";
+      "OPEN_ACK";
+      "FRAME";
+      "CLOSE";
+    ];
+    declarationMessages = [
+      "DECLARE_SUBSCRIBER";
+      "UNDECLARE_SUBSCRIBER";
+      "PUSH_PUT";
+    ];
+    routerRequired = false;
+    multicastScouting = false;
+    gossipScouting = false;
+    discoveryMode = "static-generation-declared";
+    livelinessTokens = false;
+    domainId = 0;
+    keyexprFormat = "<domainId>/<topicWithoutOuterSlashes>/<typeNameOnWire>/<typeHash>";
+    dataKeyexpr = "0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_a82fd5ffcb96d0a197a5ad3680d1c4e6ba43a962928ecd592fb565eb8129595b";
+    typeNameOnWire = "slime_demo_msgs::msg::dds_::Counter_";
+    typeHash = "RIHS01_a82fd5ffcb96d0a197a5ad3680d1c4e6ba43a962928ecd592fb565eb8129595b";
+    attachmentFields = [
+      "sequenceNumber:i64le";
+      "sourceTimestamp:i64le";
+      "sourceGid:leb128len+16";
+    ];
+    attachmentBytes = 33;
+    endpoints = [
+      {
+        name = "publisher-session";
+        protocol = "tcp";
+        address = "127.0.0.1";
+        port = 7447;
+        direction = "connect";
+      };
+      {
+        name = "subscriber-session";
+        protocol = "tcp";
+        address = "127.0.0.1";
+        port = 7447;
+        direction = "listen";
+      };
+    ];
+    qos = {
+      history = "keep-last";
+      historyDepth = 4;
+      reliability = "reliable";
+      durability = "volatile";
+      liveliness = "automatic";
+      deadlineNs = 1000000000;
+      lifespanNs = 5000000000;
+      leaseNs = 2000000000;
+    };
+    teardown = "undeclare-subscriber-then-close-session";
+  };
+  workload = {
+    publisher = {
+      component = "ros2-demo-publisher";
+      name = "slime_counter_publisher";
+      namespace = "/slime_demo";
+      role = "publisher";
+    };
+    subscriber = {
+      component = "ros2-demo-subscriber";
+      name = "slime_counter_subscriber";
+      namespace = "/slime_demo";
+      role = "subscriber";
+    };
+    topic = "/slime_demo/counter";
+    message = {
+      rosName = "slime_demo_msgs/msg/Counter";
+      typeIdentity = "sha256:2532949972780cffb70648fc6e922a610b9f23b731c272f9316c8aa48d456512";
+      typeHash = "RIHS01_a82fd5ffcb96d0a197a5ad3680d1c4e6ba43a962928ecd592fb565eb8129595b";
+      typeHashInput = "{\"type_description\": {\"type_name\": \"slime_demo_msgs/msg/Counter\", \"fields\": [{\"name\": \"sequence\", \"type\": {\"type_id\": 7, \"capacity\": 0, \"string_capacity\": 0, \"nested_type_name\": \"\"}}, {\"name\": \"value\", \"type\": {\"type_id\": 6, \"capacity\": 0, \"string_capacity\": 0, \"nested_type_name\": \"\"}}]}, \"referenced_type_descriptions\": []}";
+      idl = "module slime_demo_msgs { module msg { struct Counter { uint32 sequence; int32 value; }; }; };";
+      fields = [
+        {
+          name = "sequence";
+          kind = "uint32";
+          bound = 1;
+        };
+        {
+          name = "value";
+          kind = "int32";
+          bound = 1;
+        };
+      ];
+      maxSerializedBytes = 12;
+    };
+    publishCount = 4;
+    publishPeriodNs = 250000000;
+    samples = [
+      {
+        sequence = 0;
+        value = 10;
+        cdrHex = "00010000000000000a000000";
+      };
+      {
+        sequence = 1;
+        value = 20;
+        cdrHex = "000100000100000014000000";
+      };
+      {
+        sequence = 2;
+        value = 30;
+        cdrHex = "00010000020000001e000000";
+      };
+      {
+        sequence = 3;
+        value = 40;
+        cdrHex = "000100000300000028000000";
+      };
+    ];
+    expectedSubscriberLine = "[rpi5-ros2-demo] received count=4 sequences=0,1,2,3 values=10,20,30,40";
+  };
+  bounds = {
+    maxTextBytes = 384;
+    maxSequenceItems = 16;
+    maxMessageBytes = 12;
+    maxPayloadBytes = 12;
+    maxTransportMessageBytes = 512;
+    maxAttachmentBytes = 33;
+    maxKeyexprBytes = 129;
+    maxFragmentBytes = 0;
+    maxFragmentsPerSample = 0;
+    maxQueueDepth = 4;
+    maxHistoryDepth = 4;
+    maxSessions = 2;
+    maxPublishers = 1;
+    maxSubscribers = 1;
+    maxOutstandingSamples = 4;
+    maxRetries = 3;
+    maxTraceRecords = 32;
+    maxTraceRecordBytes = 192;
+    maxTraceBytes = 6144;
+    maxSerialLineBytes = 256;
+    maxLogBytes = 8192;
+    maxCapabilityGrants = 13;
+  };
+  capabilities = [
+    {
+      holder = "ros2-demo-publisher";
+      kind = "zenoh-publisher";
+      object = "counter-publisher";
+      rights = [
+        "publish";
+      ];
+    };
+    {
+      holder = "ros2-demo-publisher";
+      kind = "clock";
+      object = "demo-monotonic-clock";
+      rights = [
+        "read";
+        "wait";
+      ];
+    };
+    {
+      holder = "ros2-demo-publisher";
+      kind = "log-sink";
+      object = "demo-serial-log";
+      rights = [
+        "write";
+      ];
+    };
+    {
+      holder = "ros2-demo-subscriber";
+      kind = "zenoh-subscriber";
+      object = "counter-subscriber";
+      rights = [
+        "subscribe";
+      ];
+    };
+    {
+      holder = "ros2-demo-subscriber";
+      kind = "clock";
+      object = "demo-monotonic-clock";
+      rights = [
+        "read";
+        "wait";
+      ];
+    };
+    {
+      holder = "ros2-demo-subscriber";
+      kind = "log-sink";
+      object = "demo-serial-log";
+      rights = [
+        "write";
+      ];
+    };
+    {
+      holder = "slime-zenoh-profile-0";
+      kind = "stream-connect";
+      object = "tcp/127.0.0.1:7447";
+      rights = [
+        "connect";
+        "send";
+        "receive";
+      ];
+    };
+    {
+      holder = "slime-zenoh-profile-0";
+      kind = "stream-listen";
+      object = "tcp/127.0.0.1:7447";
+      rights = [
+        "listen";
+        "send";
+        "receive";
+      ];
+    };
+    {
+      holder = "slime-zenoh-profile-0";
+      kind = "session";
+      object = "publisher-session";
+      rights = [
+        "open-static";
+        "write";
+      ];
+    };
+    {
+      holder = "slime-zenoh-profile-0";
+      kind = "session";
+      object = "subscriber-session";
+      rights = [
+        "open-static";
+        "read";
+      ];
+    };
+    {
+      holder = "slime-zenoh-profile-0";
+      kind = "trace-sink";
+      object = "rpi5-ros2-demo-trace";
+      rights = [
+        "append";
+        "seal";
+      ];
+    };
+    {
+      holder = "rpi5-board-service";
+      kind = "device";
+      object = "uart10-pl011";
+      rights = [
+        "configure";
+        "write";
+      ];
+    };
+    {
+      holder = "rpi5-board-service";
+      kind = "storage";
+      object = "boot-microsd";
+      rights = [
+        "read";
+      ];
+    };
+  ];
+  trace = {
+    id = "rpi5-ros2-demo-trace-v2";
+    version = 2;
+    recordKinds = [
+      "contract-admitted";
+      "board-admitted";
+      "generation-admitted";
+      "session-open";
+      "declaration-matched";
+      "wire-put-sent";
+      "payload-decoded";
+      "subscriber-sample-validated";
+      "session-closed";
+      "teardown-complete";
+      "failure";
+    ];
+    requiredSuccessSequence = [
+      "contract-admitted";
+      "board-admitted";
+      "generation-admitted";
+      "session-open:publisher";
+      "session-open:subscriber";
+      "declaration-matched";
+      "wire-put-sent:0";
+      "payload-decoded:0";
+      "subscriber-sample-validated:0:10";
+      "wire-put-sent:1";
+      "payload-decoded:1";
+      "subscriber-sample-validated:1:20";
+      "wire-put-sent:2";
+      "payload-decoded:2";
+      "subscriber-sample-validated:2:30";
+      "wire-put-sent:3";
+      "payload-decoded:3";
+      "subscriber-sample-validated:3:40";
+      "session-closed:4";
+      "teardown-complete";
+    ];
+  };
+  markers = {
+    success = "[rpi5-ros2-demo] success profile=rpi5-ros2-demo-v2 samples=4";
+    denial = "[rpi5-ros2-demo] failure class=denied";
+    timeout = "[rpi5-ros2-demo] failure class=timeout";
+    wrongBoard = "[rpi5-ros2-demo] failure class=wrong-board";
+    wrongTarget = "[rpi5-ros2-demo] failure class=wrong-target";
+    wrongTransport = "[rpi5-ros2-demo] failure class=wrong-transport";
+    malformedWire = "[rpi5-ros2-demo] failure class=malformed-wire";
+    malformedPayload = "[rpi5-ros2-demo] failure class=malformed-payload";
+    malformedGeneration = "[rpi5-ros2-demo] failure class=malformed-generation";
+  };
+}

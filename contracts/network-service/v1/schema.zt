@@ -1,0 +1,126 @@
+-- Slime OS network service control protocol, version 1 (IO4).
+--
+-- This is the application-facing protocol. It names exact destinations and
+-- typed service capabilities; it deliberately contains no NIC identity, raw
+-- frame operation, ambient socket operation, or resolver-wide authority.
+-- Send and receive data travel in the IO0 buffer slice beside these payloads.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestBytes :: Int = 56;
+completionBytes :: Int = 24;
+maxNameBytes :: Int = 24;
+networkMagic :: Int = 1414745678;
+
+opConnect :: Int = 1;
+opSend :: Int = 2;
+opRecv :: Int = 3;
+opClose :: Int = 4;
+opListen :: Int = 5;
+opAccept :: Int = 6;
+opResolve :: Int = 7;
+
+transportNone :: Int = 0;
+transportTcp :: Int = 1;
+transportUdp :: Int = 2;
+
+addressNone :: Int = 0;
+addressIpv4 :: Int = 1;
+addressIpv6 :: Int = 2;
+addressDns :: Int = 3;
+
+capabilityNone :: Int = 0;
+capabilityTcpConnection :: Int = 1;
+capabilityUdpEndpoint :: Int = 2;
+capabilityTcpListener :: Int = 3;
+capabilityDnsRecord :: Int = 4;
+
+flagNonblocking :: Int = 1;
+knownRequestFlags :: Int = 1;
+flagEndOfStream :: Int = 1;
+knownCompletionFlags :: Int = 1;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+NetworkRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  transport : Int;
+  flags : Int;
+  port : Int;
+  name_len : Int;
+  capability : Int;
+  address_kind : Int;
+  reserved : Int;
+  endpoint : Int;
+};
+
+NetworkCompletion :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  capability_kind : Int;
+  status_detail : Int;
+  flags : Int;
+  capability : Int;
+};
+
+requestSchema ::= schema NetworkRequest;
+completionSchema ::= schema NetworkCompletion;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "transport"; width = 1; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "port"; width = 2; signed = false; byteArray = false; };
+  { name = "name_len"; width = 2; signed = false; byteArray = false; };
+  { name = "capability"; width = 8; signed = false; byteArray = false; };
+  { name = "address_kind"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 7; signed = false; byteArray = true; };
+  { name = "endpoint"; width = 24; signed = false; byteArray = true; };
+};
+
+completionLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "capability_kind"; width = 1; signed = false; byteArray = false; };
+  { name = "status_detail"; width = 4; signed = true; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "capability"; width = 8; signed = false; byteArray = false; };
+};
+
+protocol ::= {
+  formatVersion =;
+  requestBytes =;
+  completionBytes =;
+  maxNameBytes =;
+  networkMagic =;
+  opConnect =; opSend =; opRecv =; opClose =; opListen =; opAccept =; opResolve =;
+  transportNone =; transportTcp =; transportUdp =;
+  addressNone =; addressIpv4 =; addressIpv6 =; addressDns =;
+  capabilityNone =; capabilityTcpConnection =; capabilityUdpEndpoint =;
+  capabilityTcpListener =; capabilityDnsRecord =;
+  flagNonblocking =; knownRequestFlags =; flagEndOfStream =; knownCompletionFlags =;
+  requestFields = requestSchema.fields ?? {;};
+  completionFields = completionSchema.fields ?? {;};
+  requestLayout =;
+  completionLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_NETWORK_SERVICE_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render protocol;
+    path := t.join "" { root; "/components/proto/src/network_service.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

@@ -1,0 +1,208 @@
+python3 scripts/check/check-sel4-pins.py
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+python3 scripts/check/check-sel4-crossing-plane.py
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --crossing-plane
+[verify seL4 pins] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/check/check-sel4-pins.py
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+[dump platform device tree] /nix/store/zgwls89pn2vzxiwmnni9wjnwfcrs3cj3-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,secure=off,virtualization=on,gic-version=2,dtb-randomness=off,dumpdtb=/Users/iceice666/code/slime_os/build/sel4-qemu/slime-qemu-arm-virt.dtb -cpu cortex-a53 -smp 1 -m 1024 -nographic
+[configure seL4] cmake -S /Users/iceice666/code/slime_os/deps/sel4 -B /Users/iceice666/code/slime_os/build/sel4-qemu -G Ninja -C /Users/iceice666/code/slime_os/sel4/config/qemu-arm-virt.cmake -DCMAKE_INSTALL_PREFIX=/Users/iceice666/code/slime_os/build/sel4-prefix -DCROSS_COMPILER_PREFIX=/nix/store/vwv7j4a4rwx0psbcj6da0w664ravl2hq-aarch64-unknown-linux-gnu-gcc-wrapper-15.2.0/bin/aarch64-unknown-linux-gnu- -DQEMU_DTB=/Users/iceice666/code/slime_os/build/sel4-qemu/slime-qemu-arm-virt.dtb -DCMAKE_C_FLAGS=-ffile-prefix-map=/Users/iceice666/code/slime_os/deps/sel4=/slime/sel4 -ffile-prefix-map=/Users/iceice666/code/slime_os/build/sel4-qemu=/slime/build -frandom-seed=slime-sel4-qemu-arm-virt -fomit-frame-pointer -momit-leaf-frame-pointer -DCMAKE_ASM_FLAGS=-ffile-prefix-map=/Users/iceice666/code/slime_os/deps/sel4=/slime/sel4 -ffile-prefix-map=/Users/iceice666/code/slime_os/build/sel4-qemu=/slime/build -frandom-seed=slime-sel4-qemu-arm-virt -fomit-frame-pointer -momit-leaf-frame-pointer -DCMAKE_EXE_LINKER_FLAGS=
+loading initial cache file /Users/iceice666/code/slime_os/sel4/config/qemu-arm-virt.cmake
+-- ARM_CPU not set, defaulting to cortex-a53
+-- /Users/iceice666/code/slime_os/build/sel4-qemu/gen_headers/plat/machine/devices_gen.h is out of date. Regenerating from DTB...
+-- Configuring done (0.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/iceice666/code/slime_os/build/sel4-qemu
+[build seL4] cmake --build /Users/iceice666/code/slime_os/build/sel4-qemu --parallel
+[1/16] Building C object CMakeFiles/kernel_all_pp_prune_wrapper_temp_lib.dir/kernel_all_pp_prune_wrapper_temp.c.obj
+[2/16] Generating kernel_all_pp_prune.c
+[3/16] Generating from generated/arch/object/structures.bf.pbf
+[4/16] Creating C input file for preprocessor
+[5/16] Building C object CMakeFiles/kernel_bf_gen_target_11_pbf_temp_lib.dir/kernel_bf_gen_target_11_pbf_temp.c.obj
+[6/16] Generating generated/sel4/shared_types.bf.pbf
+[7/16] Generating from generated/sel4/shared_types.bf.pbf
+[8/16] Creating C input file for preprocessor
+[9/16] Creating C input file for preprocessor
+[10/16] Building C object CMakeFiles/linker_ld_wrapper_temp_lib.dir/linker_ld_wrapper_temp.c.obj
+[11/16] Generating linker.lds_pp
+[12/16] Building C object CMakeFiles/kernel_i_wrapper_temp_lib.dir/kernel_all_copy.c.obj
+[13/16] Generating kernel_all.i
+[14/16] Generating circular_includes_valid
+[15/16] Building C object CMakeFiles/kernel.elf.dir/kernel_all.c.obj
+[16/16] Linking C executable kernel.elf
+/nix/store/2sabl012yimcailif77ibzyv25qv9brl-aarch64-unknown-linux-gnu-binutils-2.46/bin/aarch64-unknown-linux-gnu-ld: warning: kernel.elf has a LOAD segment with RWX permissions
+[install seL4] cmake --install /Users/iceice666/code/slime_os/build/sel4-qemu
+-- Install configuration: "None"
+-- Installing: /Users/iceice666/code/slime_os/build/sel4-prefix/bin/kernel.elf
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/benchmark_utilisation_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/bootinfo_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/bootinfo.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/config.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/errors.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/benchmark_track_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/benchmark_tracepoints_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/syscalls_master.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/debug_assert.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/constants.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/syscalls_mcs.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/macros.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/objecttype.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/deprecated.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/faults.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/functions.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/assert.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/shared_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/virtual_client.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/syscalls.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/simple_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/api
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/api/syscall.xsd
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/api/syscall.xml
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces/object-api.xml
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a53.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a76.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a8.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a72.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a57.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/mapping.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a35.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a15.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a55.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/objecttype.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/deprecated.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/shared_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a7.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/constants_cortex_a9.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/syscalls.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/simple_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces/object-api-arch.xml
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/mapping.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/constants.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/objecttype.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/deprecated.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/faults.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/syscalls.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/simple_types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces/object-api-sel4-arch.xml
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/plat
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/plat/api
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/plat/api/constants.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/mode
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/mode/types.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/invocation.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/shared_types.pbf
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/shared_types_gen.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/syscall.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/interfaces/sel4_client.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/arch/invocation.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/invocation.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/types.pbf
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/sel4_arch/types_gen.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/kernel
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/kernel/gen_config.json
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/kernel/gen_config.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/gen_config.json
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/sel4/gen_config.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/include/autoconf.h
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/src
+-- Up-to-date: /Users/iceice666/code/slime_os/build/sel4-prefix/libsel4/src/sel4_bootinfo.c
+-- Installing: /Users/iceice666/code/slime_os/build/sel4-prefix/support/kernel.dtb
+-- Installing: /Users/iceice666/code/slime_os/build/sel4-prefix/support/platform_gen.yaml
+-- Installing: /Users/iceice666/code/slime_os/build/sel4-prefix/support/platform_gen.json
+[verify installed seL4 prefix] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/check/check-sel4-pins.py --prefix
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+[build root child] cargo build --locked --offline --release --manifest-path /Users/iceice666/code/slime_os/slime-root/child/Cargo.toml --package slime-root-child --target /Users/iceice666/code/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-minimal.json --target-dir /Users/iceice666/code/slime_os/build/sel4-cargo/child -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+    Finished `release` profile [optimized] target(s) in 0.04s
+[build seL4 generation] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-generation.py /dev/null /Users/iceice666/code/slime_os/build/sel4-crossing-generation
+   Compiling slime-components v0.1.0 (/Users/iceice666/code/slime_os/components/bins)
+    Finished `release` profile [optimized] target(s) in 0.39s
+Built seL4 generation d0bd244c409a92e635543236a6def8420f97977cbb3166a6bf1f26914231265e target=aarch64-sel4-qemu-virt
+Built boot-store.bin (33554432 bytes)
+[build root task] cargo build --locked --offline --release --manifest-path /Users/iceice666/code/slime_os/Cargo.toml --package slime-root --target /Users/iceice666/code/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json --target-dir /Users/iceice666/code/slime_os/build/sel4-cargo/root-crossing -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling slime-root v0.1.0 (/Users/iceice666/code/slime_os/slime-root)
+    Finished `release` profile [optimized] target(s) in 1.58s
+[build seL4 kernel loader] cargo build --locked --offline --release --manifest-path /Users/iceice666/code/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader --target aarch64-unknown-none --target-dir /Users/iceice666/code/slime_os/build/sel4-cargo/loader -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling sel4-platform-info v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4-platform-info)
+   Compiling sel4-kernel-loader v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4-kernel-loader)
+    Finished `release` profile [optimized] target(s) in 0.80s
+[build loader payload tool] cargo build --locked --offline --release --manifest-path /Users/iceice666/code/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader-add-payload --target-dir /Users/iceice666/code/slime_os/build/sel4-cargo/host-tools
+    Finished `release` profile [optimized] target(s) in 0.07s
+[package seL4 image] /Users/iceice666/code/slime_os/build/sel4-cargo/host-tools/release/sel4-kernel-loader-add-payload --sel4-prefix /Users/iceice666/code/slime_os/build/sel4-prefix --loader /Users/iceice666/code/slime_os/build/sel4-cargo/loader/aarch64-unknown-none/release/sel4-kernel-loader --app /Users/iceice666/code/slime_os/build/sel4-cargo/root-crossing/aarch64-sel4-roottask-minimal/release/slime-root.elf -o /Users/iceice666/code/slime_os/build/slime-sel4-crossing.elf
+seL4 image build: wrote build/slime-sel4-crossing.elf and build/slime-sel4-crossing.identity.json
+[boot] /nix/store/zgwls89pn2vzxiwmnni9wjnwfcrs3cj3-qemu-11.0.1/bin/qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m size=2048M -nographic -serial mon:stdio -kernel /Users/iceice666/code/slime_os/build/slime-sel4-crossing.elf
+--- serial transcript (tail) ---
+SLIME_GRAPH sent task=1 channel=27 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=27 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=28 slots=6,7
+SLIME_GRAPH sent task=1 channel=28 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=28 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=29 slots=6,7
+SLIME_GRAPH sent task=1 channel=29 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=29 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=30 slots=6,7
+SLIME_GRAPH sent task=1 channel=30 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=30 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=31 slots=6,7
+SLIME_GRAPH sent task=1 channel=31 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=31 bytes=4 caps=0
+SLIME_GRAPH channels swept freed=29 live=3 minted=32
+SLIME_GRAPH endpoint minted task=1 key=32 slots=6,7
+SLIME_GRAPH sent task=1 channel=32 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=32 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=33 slots=6,7
+SLIME_GRAPH sent task=1 channel=33 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=33 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=34 slots=6,7
+SLIME_GRAPH sent task=1 channel=34 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=34 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=35 slots=6,7
+SLIME_GRAPH sent task=1 channel=35 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=35 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=36 slots=6,7
+SLIME_GRAPH sent task=1 channel=36 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=36 bytes=4 caps=0
+[init] channel lifetime bound crossed
+SLIME_GRAPH sent task=1 channel=3 bytes=5 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=3 bytes=5 caps=0
+[init] retained pair carried after crossing
+SLIME_GRAPH sent task=1 channel=1 bytes=2 caps=0 queued=1
+SLIME_GRAPH parked task=1 reason=wait
+SLIME_GRAPH window bound task=2 base=0x236000 len=4096
+SLIME_GRAPH received task=2 channel=1 bytes=2 caps=0
+SLIME_GRAPH received task=2 channel=0 bytes=64 caps=1
+[crossing-peer] fail: the collected end no longer resolves for send
+--- end transcript ---
+seL4 crossing plane check: failure marker in serial transcript: '[crossing-peer] fail: the collected end no longer resolves for send'
+error: recipe `sel4_crossing_check` failed on line 127 with exit code 1

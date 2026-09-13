@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "replay-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Records and deterministically replays declared inputs while proving IO0 block-read authority remains an unrecorded nondeterminism source.";
+  implementation = {
+    provider = "workspace";
+    binary = "replay-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/block/v2";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "replay_check boots one generation twice and compares its declared semantic trace";
+    expectedResult = "recorded inputs replay to identical typed outputs while malformed streams and unrecorded authority are refused";
+    passFailCriteria = "seL4 replay plane check: a recorded run's clock reads";
+    requiredTestEnvironment = "replay_check";
+  };
+}

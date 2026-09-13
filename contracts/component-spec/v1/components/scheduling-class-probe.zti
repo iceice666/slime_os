@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "scheduling-class-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Runs at each declared C9.3 scheduling band and drives promotion edges, so band ordering and an undeclared class request are both observable.";
+  implementation = {
+    provider = "workspace";
+    binary = "scheduling-class-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "executable";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 1;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the scheduling_class_check gate boots a generation declaring scheduling-class-probe";
+    expectedResult = "the declared bands order execution and an undeclared class or priority is refused";
+    passFailCriteria = "[sched-burner] bestEffort complete";
+    requiredTestEnvironment = "scheduling_class_check";
+  };
+}

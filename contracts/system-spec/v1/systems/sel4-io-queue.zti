@@ -1,0 +1,160 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-queue";
+  generation = 49;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "io-queue-client";
+    "io-queue-driver";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "io-queue-client";
+      dependencies = [];
+    };
+    {
+      component = "io-queue-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "io-queue-peer";
+      capabilityKind = "endpoint";
+      source = "io-queue-client";
+      target = "io-queue-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "io-queue-client-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "io-queue-client";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "io-queue-client";
+      grant = "io-queue-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-queue-client";
+      grant = "io-queue-client-shared-buffer-factory";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-queue-driver";
+      grant = "io-queue-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "io-queue-request-ready";
+      source = "io-queue-client";
+      target = "io-queue-driver";
+    };
+    {
+      name = "io-queue-completion-ready";
+      source = "io-queue-driver";
+      target = "io-queue-client";
+    };
+    {
+      name = "io-queue-state-changed";
+      source = "io-queue-driver";
+      target = "io-queue-client";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "io-queue-request-ready";
+      holder = "io-queue-client";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "io-queue-request-ready";
+      holder = "io-queue-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-queue-completion-ready";
+      holder = "io-queue-driver";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "io-queue-completion-ready";
+      holder = "io-queue-client";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "io-queue-state-changed";
+      holder = "io-queue-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "io-queue-state-changed";
+      holder = "io-queue-client";
+      role = "wait";
+      slot = 2;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [
+    {
+      badgeBit = 1;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "io-queue-completion-ready";
+      waiter = "io-queue-client";
+    };
+  ];
+  waitSetObject = true;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -1,0 +1,24 @@
+{
+  formatVersion = 1;
+  name = "io-driver-probe";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves generation-scoped device, exact MMIO, DMA-account, interrupt, and epoch authority.";
+  implementation = { provider = "workspace"; binary = "io-driver-probe"; contentHash = ""; };
+  provides = [];
+  requires = [ "device"; "dmaAccount"; "interruptSource"; "mmioRegion"; ];
+  interfaces = [];
+  dependencies = [];
+  communication = { semantic = "none"; qos = []; };
+  configuration = [];
+  lifecycle = [ "Initialize"; "Start"; "Ready"; "Running"; "Error"; ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = { stackBytes = 16384; spawnBudget = 0; extraThreads = 0; bufferBytePages = 0; bufferCount = 0; mappingCount = 0; loanCount = 0; privatePageQuota = 0; };
+    devices = [ "device"; ];
+  };
+  health = "required";
+  compatibility = { platform = "aarch64-sel4-qemu-virt"; interface = "contracts/interface-schema/v1"; dependency = "none"; resource = "atMost"; runtime = "exact"; qos = "none"; };
+  test = { testCondition = "the io_driver_authority_check gate boots the authority composition"; expectedResult = "only the granted probe receives bounded hardware authority, and stale-epoch map, interrupt spoof, and physical-address exposure are each refused"; passFailCriteria = "[io-driver-probe] io driver authority plane complete"; requiredTestEnvironment = "io_driver_authority_check"; };
+}

@@ -1,0 +1,189 @@
+{
+  formatVersion = 1;
+  name = "sel4-stress";
+  generation = 1;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "stress";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "supervision-child";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "supervision-child";
+      role = "service";
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "stress-00";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-01";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-02";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-03";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-04";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-05";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-06";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-07";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-08";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-09";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-10";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-11";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-12";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-13";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-14";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-15";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-16";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-17";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-18";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-19";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-20";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+    {
+      name = "stress-21";
+      executable = "supervision-child";
+      owner = "root";
+      dependencies = [];
+    };
+  ];
+  grants = [];
+  slotPins = [];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = false;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

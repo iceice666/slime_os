@@ -1,0 +1,72 @@
+SLIME_ROOT generation admitted number=1 components=3 grants=3 health=3 kernel=1 bootstrap=1
+SLIME_ROOT authority manifest=[aa, 47, 30, e1, bd, 95, da, 41, 81, 4d, de, 24, 7a, 87, 1b, 8c, b7, a2, 88, e3, d9, 1d, 29, 23, 59, 99, 35, 00, 95, ad, 32, 12]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=3 slimecm=0 elf=3 unrecognized=0
+SLIME_ROOT allocator slots=3469 untypeds=32 bytes=532171120
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=3444
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=2996201 end=3681194 delta=684993
+SLIME_TIMER OK
+SLIME_GRAPH staged task=0 component=console grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x2112f0
+SLIME_GRAPH factory placed task=1 component=init slot=0 kind=endpoint-factory
+SLIME_GRAPH staged task=1 component=init grants=1 executables=2 window=0x237000 frames=56 tables=3 entry=0x211c68
+SLIME_GRAPH staged task=2 component=sysinfo grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211488
+SLIME_GRAPH staged components=3 loadable=3 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channels grants=0 channels=0 queues=0 slots=0 unplaced=0
+SLIME_GRAPH activated components=3
+SLIME_GRAPH quota task=0 component=console pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=1 component=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=2 component=sysinfo pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quotas declared=3 budgeted=0 holders=0
+SLIME_GRAPH window bound task=2 base=0x236000 len=4096
+SLIME_GRAPH component exit task=2 status=1
+SLIME_GRAPH window bound task=1 base=0x237000 len=4096
+SLIME_GRAPH spawn refused task=1 slot=63 ungranted
+SLIME_GRAPH spawn refused task=1 slot=0 ungranted
+[init] ungranted executable refused
+SLIME_GRAPH spawn refused task=1 slot=1 ungranted
+[init] widened grant refused
+SLIME_GRAPH spawn refused task=1 slot=1 ungranted
+[init] self-executable grant refused
+SLIME_GRAPH endpoint minted task=1 key=0 slots=2,3
+SLIME_GRAPH spawn authorized task=1 slot=1 component=console grants=1
+SLIME_GRAPH channel handed parent=1 child=3 key=0 slot=0
+SLIME_GRAPH spawned task=1 child=3 component=console grants=1 channels=1 handle=3
+[init] console spawned
+[init] live child reports no outcome
+SLIME_GRAPH sent task=1 channel=0 bytes=32 caps=0 queued=1
+[init] handed channel end released
+SLIME_GRAPH endpoint minted task=1 key=1 slots=5,6
+[init] context channel minted
+SLIME_GRAPH spawn authorized task=1 slot=4 component=sysinfo grants=1
+SLIME_GRAPH channel handed parent=1 child=4 key=1 slot=0
+SLIME_GRAPH spawned task=1 child=4 component=sysinfo grants=1 channels=1 handle=6
+[init] sysinfo spawned
+SLIME_GRAPH sent task=1 channel=1 bytes=64 caps=0 queued=1
+[init] launch context sent
+SLIME_GRAPH parked task=1 reason=wait
+SLIME_GRAPH window bound task=4 base=0x236000 len=4096
+SLIME_GRAPH received task=4 channel=1 bytes=64 caps=0
+[sysinfo] command=sysinfo args=0 env=0 cwd=none stdin=none
+[sysinfo] spawned through profile
+SLIME_GRAPH component exit task=4 status=0
+SLIME_GRAPH supervision woken task=1 child=4
+SLIME_GRAPH peer death task=4 channels=1 woken=0
+SLIME_GRAPH supervision collected task=1 child=4 kind=0
+[init] sysinfo outcome collected
+[init] collected handle consumed
+[init] dropped handle released
+[init] spawn plane complete
+SLIME_GRAPH component exit task=1 status=0
+SLIME_GRAPH peer death task=1 channels=2 woken=0
+SLIME_GRAPH window bound task=3 base=0x236000 len=4096
+SLIME_GRAPH received task=3 channel=0 bytes=32 caps=0
+[console] spawned child reached
+SLIME_GRAPH component exit task=3 status=0
+SLIME_GRAPH peer death task=3 channels=1 woken=0
+SLIME_GRAPH window bound task=0 base=0x236000 len=4096
+SLIME_GRAPH component exit task=0 status=1
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 windows=0 tables=0
+SLIME_GRAPH channels served sends=2 receives=2 parks=1 settled=4 parked=0 queues=0 replies=9
+SLIME_GRAPH loans served=0 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0
+SLIME_GRAPH spawns served=2 drops=1 endpoints=2 terminated=5 waits=0

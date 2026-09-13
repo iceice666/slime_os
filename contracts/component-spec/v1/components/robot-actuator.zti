@@ -1,0 +1,78 @@
+{
+  formatVersion = 1;
+  name = "robot-actuator";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "C9.6's robot call server: answers the controller's ParameterCall with an applied value, reporting unanswered/cancelled commands under injected faults.";
+  implementation = {
+    provider = "workspace";
+    binary = "robot-actuator";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [
+    {
+      name = "parameters";
+      tag = "event";
+      interface = "ParameterCall";
+    };
+  ];
+  dependencies = [];
+  communication = {
+    semantic = "call";
+    qos = [
+      {
+        reference = "parameters";
+        reliability = "reliable";
+        durability = "volatile";
+        liveliness = "manual";
+        historyDepth = 4;
+        retainedDepth = 0;
+        deadlineNs = 1000000;
+        lifespanNs = 2000000;
+        leaseNs = 5000000;
+      };
+    ];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Degraded";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "compatible";
+  };
+  test = {
+    testCondition = "the robot_runtime_check gate boots a generation declaring robot-actuator";
+    expectedResult = "the actuator applies commands from the controller and reports unanswered/cancelled totals across an injected fault";
+    passFailCriteria = "[robot-actuator] applied value=";
+    requiredTestEnvironment = "robot_runtime_check";
+  };
+}

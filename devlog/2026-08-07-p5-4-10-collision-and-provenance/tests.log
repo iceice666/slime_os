@@ -1,0 +1,3 @@
+test generation::tests::distinct_schemas_may_share_no_type_tag ... ok
+test generation::tests::a_graph_may_not_name_a_component_the_generation_lacks ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.00s

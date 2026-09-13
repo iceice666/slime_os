@@ -1,0 +1,177 @@
+{
+  bootAction = "directory";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "sel4-directory-probe";
+      object = "sha256:sel4-directory-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 28;
+  grants = [
+    {
+      name = "init-sel4-directory-probe";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sel4-directory-probe";
+      transferable = false;
+    };
+    {
+      name = "directory-probe-root";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      source = "sel4-directory-probe";
+      target = "sel4-directory-probe";
+      transferable = false;
+    };
+    {
+      name = "directory-probe-root-idle";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      source = "sel4-directory-probe-idle";
+      target = "sel4-directory-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-directory-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-directory-probe";
+      transferable = false;
+    };
+    {
+      name = "sel4-directory-probe-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-directory-probe-idle";
+      target = "sel4-directory-probe-idle";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-sel4-directory-probe";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "sel4-directory-probe-run-token";
+          slot = 2;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "directory-probe-root";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "sel4-directory-probe-run-token";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-directory-probe";
+      health = "optional";
+      name = "sel4-directory-probe";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "directory-probe-root-idle";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "sel4-directory-probe-idle-token";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-directory-probe";
+      health = "optional";
+      name = "sel4-directory-probe-idle";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-directory-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

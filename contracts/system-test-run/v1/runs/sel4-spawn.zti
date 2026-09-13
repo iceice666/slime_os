@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-spawn";
+  imageClosureIdentity = "6dd84919bdd7b302f83f900b3baac8c2886a21ed2175559cd7c704ef7f1c1e97";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 120;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

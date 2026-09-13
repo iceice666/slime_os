@@ -1,0 +1,140 @@
+{
+  bootAction = "crossing";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 2;
+    };
+    {
+      commandProfile = [];
+      name = "crossing-peer";
+      object = "sha256:crossing-peer";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-crossing-peer";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "crossing-peer";
+      transferable = false;
+    };
+    {
+      name = "crossing-carrier";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "crossing-peer";
+      transferable = true;
+    };
+    {
+      name = "crossing-gate";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "crossing-peer";
+      transferable = true;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "crossing-peer";
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-crossing-peer";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "crossing-carrier";
+          slot = 2;
+          slotReason = "encodedLayout";
+        };
+        {
+          grant = "crossing-gate";
+          slot = 3;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "crossing-carrier";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "crossing-gate";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "crossing-peer";
+      health = "required";
+      name = "crossing-peer";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:crossing-peer";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

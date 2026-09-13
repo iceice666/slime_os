@@ -1,0 +1,1569 @@
+=== just system_image_closure_check
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/bootstate/model/bootstate.zt
+scenario "main": ok (5416 states)
+graph: states=5416 transitions=10125 duplicates=4710 max-depth=76 terminals=0 deadlocks=0 sccs=2636 largest-scc=804
+scenario "skip-attempt": ok (violated "PendingAttemptConsumedBeforeTransfer" as expected)
+graph: states=571 transitions=944 duplicates=374 max-depth=23 terminals=0 deadlocks=0 sccs=336 largest-scc=139
+scenario "omitted-root": ok (violated "ProtectedRootsPresent" as expected)
+graph: states=11 transitions=11 duplicates=1 max-depth=4 terminals=0 deadlocks=0 sccs=11 largest-scc=1
+scenario "mixed-epoch": ok (violated "RetainedGraphsConsistent" as expected)
+graph: states=34 transitions=50 duplicates=17 max-depth=9 terminals=0 deadlocks=0 sccs=22 largest-scc=13
+model-check: all 4 scenarios passed
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/capability-rights/model/capability-rights.zt
+scenario "main": ok (300 states)
+graph: states=300 transitions=1436 duplicates=1137 max-depth=5 terminals=0 deadlocks=0 sccs=241 largest-scc=27
+scenario "widening-derive": ok (violated "DeriveOnlyNarrows" as expected)
+graph: states=90 transitions=118 duplicates=29 max-depth=3 terminals=0 deadlocks=0 sccs=86 largest-scc=4
+scenario "widening-transfer": ok (violated "TransferOnlyNarrows" as expected)
+graph: states=87 transitions=129 duplicates=43 max-depth=3 terminals=0 deadlocks=0 sccs=81 largest-scc=4
+scenario "transfer-without-right": ok (violated "TransferRequiresTransferRight" as expected)
+graph: states=71 transitions=99 duplicates=29 max-depth=3 terminals=0 deadlocks=0 sccs=67 largest-scc=4
+scenario "kind-blind-derive": ok (violated "RightsValidForKind" as expected)
+graph: states=34 transitions=34 duplicates=1 max-depth=1 terminals=0 deadlocks=0 sccs=34 largest-scc=1
+scenario "duplicate-on-finalize": ok (violated "NoTransferDuplication" as expected)
+graph: states=177 transitions=405 duplicates=229 max-depth=3 terminals=0 deadlocks=0 sccs=157 largest-scc=17
+scenario "undeclared-edge": ok (violated "TransferFollowsDeclaredEdge" as expected)
+graph: states=225 transitions=285 duplicates=61 max-depth=2 terminals=0 deadlocks=0 sccs=218 largest-scc=4
+model-check: all 7 scenarios passed
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/io-queue/model/io-queue.zt
+scenario "main": ok (2322 states)
+graph: states=2322 transitions=6039 duplicates=3718 max-depth=15 terminals=198 deadlocks=0 sccs=2322 largest-scc=1
+scenario "overwrite-when-full": ok (violated "RingNeverOverwrites" as expected)
+graph: states=99 transitions=153 duplicates=55 max-depth=4 terminals=1 deadlocks=0 sccs=99 largest-scc=1
+scenario "double-settle": ok (violated "SingleTerminalAssignment" as expected)
+graph: states=80 transitions=120 duplicates=41 max-depth=4 terminals=1 deadlocks=0 sccs=80 largest-scc=1
+scenario "double-release": ok (violated "LeaseReleasedAtMostOnce" as expected)
+graph: states=180 transitions=312 duplicates=133 max-depth=5 terminals=2 deadlocks=0 sccs=180 largest-scc=1
+scenario "release-while-in-flight": ok (violated "LeaseHeldUntilTerminal" as expected)
+graph: states=35 transitions=40 duplicates=6 max-depth=3 terminals=1 deadlocks=0 sccs=35 largest-scc=1
+scenario "epoch-reuse": ok (violated "EpochStrictlyAdvances" as expected)
+graph: states=61 transitions=91 duplicates=31 max-depth=3 terminals=1 deadlocks=0 sccs=61 largest-scc=1
+scenario "reset-without-settling": ok (violated "NoLiveRequestAcrossEpoch" as expected)
+graph: states=113 transitions=181 duplicates=69 max-depth=4 terminals=1 deadlocks=0 sccs=113 largest-scc=1
+model-check: all 7 scenarios passed
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/io-resource/model/io-resource.zt
+scenario "main": ok (198 states)
+graph: states=198 transitions=667 duplicates=470 max-depth=11 terminals=1 deadlocks=0 sccs=106 largest-scc=32
+scenario "over-charge": ok (violated "WithinDeclaredBudget" as expected)
+graph: states=50 transitions=84 duplicates=35 max-depth=4 terminals=0 deadlocks=0 sccs=40 largest-scc=9
+scenario "leak-dma-on-death": ok (violated "DeathReturnsEveryCharge" as expected)
+graph: states=67 transitions=142 duplicates=76 max-depth=5 terminals=0 deadlocks=0 sccs=47 largest-scc=13
+scenario "leak-requests-on-death": ok (violated "DeathReturnsEveryCharge" as expected)
+graph: states=94 transitions=244 duplicates=151 max-depth=6 terminals=0 deadlocks=0 sccs=60 largest-scc=20
+scenario "double-reclaim": ok (violated "ReclaimRunsAtMostOnce" as expected)
+graph: states=74 transitions=178 duplicates=105 max-depth=5 terminals=0 deadlocks=0 sccs=49 largest-scc=14
+scenario "epoch-reuse": ok (violated "EpochStrictlyAdvances" as expected)
+graph: states=45 transitions=88 duplicates=44 max-depth=4 terminals=0 deadlocks=0 sccs=33 largest-scc=9
+scenario "accept-stale-ack": ok (violated "StaleAckRefused" as expected)
+graph: states=79 transitions=183 duplicates=105 max-depth=5 terminals=0 deadlocks=0 sccs=54 largest-scc=14
+scenario "charge-before-bind": ok (violated "NoAuthorityWithoutDevice" as expected)
+graph: states=7 transitions=6 duplicates=0 max-depth=1 terminals=0 deadlocks=0 sccs=7 largest-scc=1
+model-check: all 8 scenarios passed
+python3 scripts/check/check-contracts.py
+Block protocol bindings are current
+Block v2 protocol bindings are current
+Component image bindings are current
+I/O queue protocol bindings are current
+LinkDevice protocol bindings are current
+Network service protocol bindings are current
+Store protocol bindings are current
+Filesystem protocol bindings are current
+Generation-management protocol bindings are current
+Powerbox protocol bindings are current
+Sample-descriptor protocol bindings are current
+Capability-transfer protocol bindings are current
+Fabric-stream protocol bindings are current
+Fabric-Qos protocol bindings are current
+Fabric-Time protocol bindings are current
+Fabric-call protocol bindings are current
+Fabric-operation protocol bindings are current
+Fabric-visibility protocol bindings are current
+Fabric-Trace protocol bindings are current
+Interface-schema bindings are current
+scripts/lib/component_spec_contract.py is current
+scripts/lib/system_spec_contract.py is current
+scripts/lib/composition_inventory_contract.py is current
+scripts/lib/component_sdk_release_contract.py is current
+scripts/lib/system_image_closure_contract.py is current
+scripts/lib/system_test_run_contract.py is current
+RP0 Raspberry Pi 5 / ROS 2 Jazzy / DDSI-RTPS 2.5 contract, bounds, authority inventory, trace, and rejection corpus passed
+Boot contract bindings are current
+
+running 315 tests
+....................................................................................... 87/315
+....................................................................................... 174/315
+....................................................................................... 261/315
+......................................................
+test result: ok. 315 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+published compatibility matrix: 2 rows at 9f3a7070c22bc28e
+slot pin reasons check: 622 pinned bindings across 44 manifests and 4 boot profiles (70 automatic)
+  bootLayout: 152
+  allocatorOrder: 14
+  encodedLayout: 187
+  componentAbi: 269
+  componentAbi pins on sourceless executables, exempt from the minimality clause: 2 (dango)
+  formerly pinned, now allocator-reproduced at their observed slots: 5
+slot pin reasons check: ok
+Generation source/binary, kernel image v1/v2, target profile, BootState, BootState trace, recovery, block, component v1/v2, store, spawn, filesystem, link-device, network-service, powerbox, generation-management, transfer, fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, fabric-call, fabric-operation, fabric-visibility, fabric-trace, component-spec, system-spec, component-sdk-release, system-image-closure, system-test-run, and rpi5-ros2-demo contracts passed
+python3 scripts/generate/generate-spawn-bindings.py --check
+Spawn protocol bindings are current
+python3 scripts/generate/generate-link-device-bindings.py --check
+LinkDevice protocol bindings are current
+python3 scripts/generate/generate-network-service-bindings.py --check
+Network service protocol bindings are current
+python3 scripts/check/check-boot-layout-resource.py
+boot layout resource: 18 generation/profile pairs encode and decode
+boot layout resource: 19 fixtures agree with the resource
+boot layout resource: 16 seL4 fixtures agree with layout_for()
+boot layout resource: 31 seL4 planes agree between the derived resource and the layout the root resolved (129 rows)
+boot layout resource check: ok
+python3 scripts/check/check-lifecycle-identity.py
+lifecycle identity check: 100 files carry no bare task id
+python3 scripts/check/check-generation-v5.py
+generation v5 check: all 41 seL4 manifests encode SLIMEG5 version 5
+python3 scripts/generate/generate-fabric-ring-bindings.py --check
+Fabric-stream protocol bindings are current
+python3 scripts/generate/generate-syscall-abi-bindings.py --check
+docs/syscall-abi.md documents all 58 declared operations
+Syscall ABI bindings are current
+python3 scripts/generate/generate-component-runtime-abi-bindings.py --check
+docs/syscall-abi.md documents all 4 console operations
+Component runtime ABI bindings are current
+python3 scripts/check/check-component-spec.py
+component spec model: 83 records validated against 4 declared interfaces and the reference generation; 43 named mutations refused, identities stable; declared-without-implementation: dango, generation-list, storage-fault-probe, storage-probe, storage-store-probe, storage-writer
+python3 scripts/check/check-system-spec.py
+system spec derivation: 44 systems compiled and 44 generation manifests derived semantically identical to their committed fixtures; 21 named mutations refused
+python3 scripts/generate/generate-generation-from-spec.py --check
+contracts/generation-manifest/v1/fixtures/valid.zti is current
+contracts/generation-manifest/v1/compositions/sel4-boot.zti is current
+contracts/generation-manifest/v1/compositions/sel4-c-runtime.zti is current
+contracts/generation-manifest/v1/compositions/sel4-call.zti is current
+contracts/generation-manifest/v1/compositions/sel4-channel.zti is current
+contracts/generation-manifest/v1/compositions/sel4-clock-authority.zti is current
+contracts/generation-manifest/v1/compositions/sel4-crossing.zti is current
+contracts/generation-manifest/v1/compositions/sel4-demo.zti is current
+contracts/generation-manifest/v1/compositions/sel4-directory.zti is current
+contracts/generation-manifest/v1/compositions/sel4-filesystem.zti is current
+contracts/generation-manifest/v1/compositions/sel4-generation.zti is current
+contracts/generation-manifest/v1/compositions/sel4-input.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-block.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-driver-authority.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-link.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-network.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-queue.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-tcp.zti is current
+contracts/generation-manifest/v1/compositions/sel4-lifecycle-restart.zti is current
+contracts/generation-manifest/v1/compositions/sel4-loan.zti is current
+contracts/generation-manifest/v1/compositions/sel4-matrix.zti is current
+contracts/generation-manifest/v1/compositions/sel4-operation.zti is current
+contracts/generation-manifest/v1/compositions/sel4-powerbox.zti is current
+contracts/generation-manifest/v1/compositions/sel4-private-memory.zti is current
+contracts/generation-manifest/v1/compositions/sel4-qos.zti is current
+contracts/generation-manifest/v1/compositions/sel4-reclamation.zti is current
+contracts/generation-manifest/v1/compositions/sel4-recovery.zti is current
+contracts/generation-manifest/v1/compositions/sel4-replay.zti is current
+contracts/generation-manifest/v1/compositions/sel4-robot-runtime.zti is current
+contracts/generation-manifest/v1/compositions/sel4-rollback.zti is current
+contracts/generation-manifest/v1/compositions/sel4-sample.zti is current
+contracts/generation-manifest/v1/compositions/sel4-scheduling-class.zti is current
+contracts/generation-manifest/v1/compositions/sel4-slisp.zti is current
+contracts/generation-manifest/v1/compositions/sel4-spawn.zti is current
+contracts/generation-manifest/v1/compositions/sel4-storage.zti is current
+contracts/generation-manifest/v1/compositions/sel4-store.zti is current
+contracts/generation-manifest/v1/compositions/sel4-stream.zti is current
+contracts/generation-manifest/v1/compositions/sel4-stress.zti is current
+contracts/generation-manifest/v1/compositions/sel4-supervision.zti is current
+contracts/generation-manifest/v1/compositions/sel4-traffic.zti is current
+contracts/generation-manifest/v1/compositions/sel4-transfer.zti is current
+contracts/generation-manifest/v1/compositions/sel4-visibility.zti is current
+contracts/generation-manifest/v1/compositions/sel4-wait-set.zti is current
+contracts/generation-manifest/v1/compositions/sel4.zti is current
+python3 scripts/generate/generate-system-image-closure-bindings.py --check
+scripts/lib/system_image_closure_contract.py is current
+python3 scripts/generate/generate-system-test-run-bindings.py --check
+scripts/lib/system_test_run_contract.py is current
+python3 scripts/check/check-system-image-closure.py
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling slime-rt v0.1.0 (/space/slime_os/components/runtime)
+   Compiling slime-components v0.1.0 (/space/slime_os/components/lib)
+   Compiling slime-component-init v0.1.0 (/space/slime_os/components/system/init)
+   Compiling slime-component-console v0.1.0 (/space/slime_os/components/system/console)
+    Finished `release` profile [optimized] target(s) in 1.99s
+Component source: executable=console implementation=console provider=workspace path=/space/slime_os/target/components/aarch64-sel4-qemu-virt/sel4-channel-1/aarch64-sel4-minimal/release/console.elf
+Component source: executable=init implementation=init provider=workspace path=/space/slime_os/target/components/aarch64-sel4-qemu-virt/sel4-channel-1/aarch64-sel4-minimal/release/init.elf
+Built seL4 generation b7a6d422cc3e131f1ec4112beb772d5aec2bf1510e8282650626210ce8ddbd2c target=aarch64-sel4-qemu-virt
+Built boot-store.bin (33554432 bytes)
+[build root child] cargo build --locked --offline --release --manifest-path /space/slime_os/slime-root/child/Cargo.toml --package slime-root-child --target /space/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-minimal.json --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/qemu-arm-virt/child -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling memchr v2.8.3
+   Compiling quote v1.0.47
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling itoa v1.0.18
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling glob v0.3.4
+   Compiling libc v0.2.189
+   Compiling ucd-trie v0.1.7
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling minimal-lexical v0.2.1
+   Compiling rustversion v1.0.23
+   Compiling fallible-iterator v0.3.0
+   Compiling libloading v0.8.9
+   Compiling either v1.17.0
+   Compiling bindgen v0.72.1
+   Compiling clang-sys v1.9.1
+   Compiling log v0.4.33
+   Compiling bitflags v2.13.1
+   Compiling rustc-hash v2.1.3
+   Compiling itertools v0.13.0
+   Compiling shlex v1.3.0
+   Compiling xml v1.3.0
+   Compiling pest v2.8.8
+   Compiling aho-corasick v1.1.4
+   Compiling nom v7.1.3
+   Compiling xmltree v0.12.0
+   Compiling sel4-bitfield-ops v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/bitfield-ops)
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling pest_meta v2.8.8
+   Compiling cexpr v0.6.0
+   Compiling regex-automata v0.4.16
+   Compiling serde_derive v1.0.229
+   Compiling regex v1.13.1
+   Compiling pest_generator v2.8.8
+   Compiling pest_derive v2.8.8
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling sel4-panicking-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking/env)
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-ctors-dtors v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-ctors-dtors)
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling sel4-runtime-common v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-runtime-common)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling slime-root-child v0.1.0 (/space/slime_os/slime-root/child)
+    Finished `release` profile [optimized] target(s) in 10.44s
+[build root task] cargo build --locked --offline --release --manifest-path /space/slime_os/Cargo.toml --package slime-root --target /space/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/qemu-arm-virt/closure-78a62b9c2794ac75 -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling memchr v2.8.3
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling itoa v1.0.18
+   Compiling prettyplease v0.2.37
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling glob v0.3.4
+   Compiling version_check v0.9.5
+   Compiling libc v0.2.189
+   Compiling ucd-trie v0.1.7
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling fallible-iterator v0.3.0
+   Compiling minimal-lexical v0.2.1
+   Compiling generic-array v0.14.7
+   Compiling rustversion v1.0.23
+   Compiling libloading v0.8.9
+   Compiling either v1.17.0
+   Compiling clang-sys v1.9.1
+   Compiling bindgen v0.72.1
+   Compiling bitflags v2.13.1
+   Compiling log v0.4.33
+   Compiling itertools v0.13.0
+   Compiling aho-corasick v1.1.4
+   Compiling pest v2.8.8
+   Compiling nom v7.1.3
+   Compiling rustc-hash v2.1.3
+   Compiling shlex v1.3.0
+   Compiling xml v1.3.0
+   Compiling semver v1.0.28
+   Compiling slime-proto v0.1.0 (/space/slime_os/components/proto)
+   Compiling object v0.38.1
+   Compiling slime-root v0.1.0 (/space/slime_os/slime-root)
+   Compiling rustc_version v0.4.1
+   Compiling sel4-bitfield-ops v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/bitfield-ops)
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling curve25519-dalek v4.1.3
+   Compiling xmltree v0.12.0
+   Compiling pest_meta v2.8.8
+   Compiling regex-automata v0.4.16
+   Compiling cexpr v0.6.0
+   Compiling serde_derive v1.0.229
+   Compiling regex v1.13.1
+   Compiling pest_generator v2.8.8
+   Compiling sel4-root-task-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-root-task/macros)
+   Compiling pest_derive v2.8.8
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling typenum v1.20.1
+   Compiling scopeguard v1.2.0
+   Compiling sel4-immediate-sync-once-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immediate-sync-once-cell)
+   Compiling sel4-panicking-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking/env)
+   Compiling signature v2.2.0
+   Compiling cpufeatures v0.2.17
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling subtle v2.6.1
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling sel4-ctors-dtors v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-ctors-dtors)
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling dlmalloc v0.2.14
+   Compiling lock_api v0.4.14
+   Compiling ed25519 v2.2.3
+   Compiling sel4-runtime-common v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-runtime-common)
+   Compiling sel4-panicking v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking)
+   Compiling sel4-dlmalloc v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-dlmalloc)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling sel4-sync v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-sync)
+   Compiling sel4-root-task v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-root-task)
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling boot-contracts v0.1.0 (/space/slime_os/boot-contracts)
+    Finished `release` profile [optimized] target(s) in 14.38s
+[build seL4 kernel loader] cargo build --locked --offline --release --manifest-path /space/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader --target aarch64-unknown-none --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/qemu-arm-virt/loader -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling serde_json v1.0.149
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling hashbrown v0.16.1
+   Compiling fallible-iterator v0.3.0
+   Compiling equivalent v1.0.2
+   Compiling thiserror v2.0.18
+   Compiling autocfg v1.5.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling ryu v1.0.23
+   Compiling crc32fast v1.5.0
+   Compiling simd-adler32 v0.3.8
+   Compiling cfg-if v1.0.4
+   Compiling heapless v0.9.1
+   Compiling adler2 v2.0.1
+   Compiling object v0.38.1
+   Compiling num-traits v0.2.19
+   Compiling miniz_oxide v0.8.9
+   Compiling twox-hash v2.1.2
+   Compiling rend v0.5.3
+   Compiling ruzstd v0.8.2
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling glob v0.3.3
+   Compiling cc v1.2.57
+   Compiling indexmap v2.13.0
+   Compiling syn v2.0.117
+   Compiling flate2 v1.1.9
+   Compiling serde_derive v1.0.228
+   Compiling ptr_meta_derive v0.3.1
+   Compiling munge_macro v0.4.7
+   Compiling thiserror-impl v2.0.18
+   Compiling rkyv_derive v0.8.15
+   Compiling ptr_meta v0.3.1
+   Compiling rancor v0.1.1
+   Compiling munge v0.4.7
+   Compiling cobs v0.3.0
+   Compiling rkyv v0.8.15
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-platform-info-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info/types)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling postcard v1.1.3
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-kernel-loader-payload-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/payload-types)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-platform-info v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info)
+   Compiling sel4-kernel-loader v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling byteorder v1.5.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling nb v1.1.0
+   Compiling embedded-hal v1.0.0
+   Compiling tock-registers v0.10.1
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling log v0.4.29
+   Compiling lock_api v0.4.14
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling sel4-rodata-static v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-rodata-static)
+   Compiling embedded-hal-nb v1.0.0
+   Compiling sel4-no-allocator v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-no-allocator)
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling hash32 v0.3.1
+   Compiling sel4-phdrs-patched v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/patched)
+   Compiling aarch64-cpu v11.2.0
+   Compiling smccc v0.2.2
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling spin v0.10.0
+   Compiling sel4-logging v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-logging)
+   Compiling chrono v0.4.44
+   Compiling rtcc v0.4.0
+   Compiling sel4-driver-interfaces v0.1.0 (/space/slime_os/deps/rust-sel4/crates/experimental/sel4-driver-interfaces)
+   Compiling sel4-bcm2835-aux-uart-driver v0.1.0 (/space/slime_os/deps/rust-sel4/crates/drivers/bcm2835-aux-uart)
+   Compiling sel4-pl011-driver v0.1.0 (/space/slime_os/deps/rust-sel4/crates/drivers/pl011)
+    Finished `release` profile [optimized] target(s) in 12.57s
+[build loader payload tool] cargo build --locked --offline --release --manifest-path /space/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader-add-payload --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/host-tools
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.0
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling crc32fast v1.5.0
+   Compiling cfg-if v1.0.4
+   Compiling simdutf8 v0.1.5
+   Compiling adler2 v2.0.1
+   Compiling utf8parse v0.2.2
+   Compiling hashbrown v0.16.1
+   Compiling simd-adler32 v0.3.8
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling object v0.38.1
+   Compiling anstyle-query v1.1.5
+   Compiling anstyle-parse v1.0.0
+   Compiling memchr v2.8.0
+   Compiling colorchoice v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling twox-hash v2.1.2
+   Compiling zmij v1.0.21
+   Compiling miniz_oxide v0.8.9
+   Compiling serde_json v1.0.149
+   Compiling anstream v1.0.0
+   Compiling ruzstd v0.8.2
+   Compiling heck v0.5.0
+   Compiling strsim v0.11.1
+   Compiling num-traits v0.2.19
+   Compiling equivalent v1.0.2
+   Compiling anyhow v1.0.102
+   Compiling clap_lex v1.1.0
+   Compiling itoa v1.0.18
+   Compiling unsafe-libyaml v0.2.11
+   Compiling ryu v1.0.23
+   Compiling flate2 v1.1.9
+   Compiling indexmap v2.13.0
+   Compiling clap_builder v4.6.0
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling syn v2.0.117
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling num-bigint v0.4.6
+   Compiling num-iter v0.1.45
+   Compiling num-rational v0.4.2
+   Compiling num v0.4.3
+   Compiling ptr_meta_derive v0.3.1
+   Compiling serde_derive v1.0.228
+   Compiling bytecheck_derive v0.8.2
+   Compiling munge_macro v0.4.7
+   Compiling rkyv_derive v0.8.15
+   Compiling clap_derive v4.6.0
+   Compiling bitfield-macros v0.19.4
+   Compiling ptr_meta v0.3.1
+   Compiling rancor v0.1.1
+   Compiling munge v0.4.7
+   Compiling bytecheck v0.8.2
+   Compiling bitfield v0.19.4
+   Compiling rend v0.5.3
+   Compiling sel4-patch-elf v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-patch-elf)
+   Compiling clap v4.6.0
+   Compiling sel4-platform-info-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info/types)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling rkyv v0.8.15
+   Compiling sel4-kernel-loader-payload-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/payload-types)
+   Compiling sel4-kernel-loader-add-payload v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/add-payload)
+    Finished `release` profile [optimized] target(s) in 7.90s
+[package seL4 image] /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/host-tools/release/sel4-kernel-loader-add-payload --sel4-prefix /space/slime_os/contracts/system-image-closure/v2/inputs/sel4-prefix --loader /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/qemu-arm-virt/loader/aarch64-unknown-none/release/sel4-kernel-loader --app /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/cargo/image/qemu-arm-virt/closure-78a62b9c2794ac75/aarch64-sel4-roottask-minimal/release/slime-root.elf -o /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a/image.elf
+system image build: wrote closure 78a62b9c2794ac75a36174455cf41dd73058da4788d4dbcfd8278bc33e17a3e3 to /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-a
+    Finished `release` profile [optimized] target(s) in 0.07s
+Component source: executable=console implementation=console provider=workspace path=/space/slime_os/target/components/aarch64-sel4-qemu-virt/sel4-channel-1/aarch64-sel4-minimal/release/console.elf
+Component source: executable=init implementation=init provider=workspace path=/space/slime_os/target/components/aarch64-sel4-qemu-virt/sel4-channel-1/aarch64-sel4-minimal/release/init.elf
+Built seL4 generation b7a6d422cc3e131f1ec4112beb772d5aec2bf1510e8282650626210ce8ddbd2c target=aarch64-sel4-qemu-virt
+Built boot-store.bin (33554432 bytes)
+[build root child] cargo build --locked --offline --release --manifest-path /space/slime_os/slime-root/child/Cargo.toml --package slime-root-child --target /space/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-minimal.json --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/qemu-arm-virt/child -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling memchr v2.8.3
+   Compiling unicode-ident v1.0.24
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling itoa v1.0.18
+   Compiling prettyplease v0.2.37
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling glob v0.3.4
+   Compiling ucd-trie v0.1.7
+   Compiling libc v0.2.189
+   Compiling regex-syntax v0.8.11
+   Compiling fallible-iterator v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling minimal-lexical v0.2.1
+   Compiling rustversion v1.0.23
+   Compiling libloading v0.8.9
+   Compiling bindgen v0.72.1
+   Compiling either v1.17.0
+   Compiling clang-sys v1.9.1
+   Compiling log v0.4.33
+   Compiling xml v1.3.0
+   Compiling bitflags v2.13.1
+   Compiling pest v2.8.8
+   Compiling aho-corasick v1.1.4
+   Compiling nom v7.1.3
+   Compiling itertools v0.13.0
+   Compiling shlex v1.3.0
+   Compiling rustc-hash v2.1.3
+   Compiling xmltree v0.12.0
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling sel4-bitfield-ops v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/bitfield-ops)
+   Compiling pest_meta v2.8.8
+   Compiling regex-automata v0.4.16
+   Compiling cexpr v0.6.0
+   Compiling serde_derive v1.0.229
+   Compiling regex v1.13.1
+   Compiling pest_generator v2.8.8
+   Compiling pest_derive v2.8.8
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling sel4-panicking-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking/env)
+   Compiling sel4-ctors-dtors v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-ctors-dtors)
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling sel4-runtime-common v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-runtime-common)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling slime-root-child v0.1.0 (/space/slime_os/slime-root/child)
+    Finished `release` profile [optimized] target(s) in 10.16s
+[build root task] cargo build --locked --offline --release --manifest-path /space/slime_os/Cargo.toml --package slime-root --target /space/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/qemu-arm-virt/closure-78a62b9c2794ac75 -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling memchr v2.8.3
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling itoa v1.0.18
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling glob v0.3.4
+   Compiling version_check v0.9.5
+   Compiling libc v0.2.189
+   Compiling ucd-trie v0.1.7
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling rustversion v1.0.23
+   Compiling minimal-lexical v0.2.1
+   Compiling fallible-iterator v0.3.0
+   Compiling generic-array v0.14.7
+   Compiling libloading v0.8.9
+   Compiling clang-sys v1.9.1
+   Compiling either v1.17.0
+   Compiling bindgen v0.72.1
+   Compiling xml v1.3.0
+   Compiling log v0.4.33
+   Compiling bitflags v2.13.1
+   Compiling aho-corasick v1.1.4
+   Compiling pest v2.8.8
+   Compiling nom v7.1.3
+   Compiling itertools v0.13.0
+   Compiling rustc-hash v2.1.3
+   Compiling shlex v1.3.0
+   Compiling semver v1.0.28
+   Compiling object v0.38.1
+   Compiling slime-proto v0.1.0 (/space/slime_os/components/proto)
+   Compiling slime-root v0.1.0 (/space/slime_os/slime-root)
+   Compiling rustc_version v0.4.1
+   Compiling xmltree v0.12.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling sel4-bitfield-ops v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/bitfield-ops)
+   Compiling regex-automata v0.4.16
+   Compiling pest_meta v2.8.8
+   Compiling cexpr v0.6.0
+   Compiling serde_derive v1.0.229
+   Compiling regex v1.13.1
+   Compiling pest_generator v2.8.8
+   Compiling sel4-root-task-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-root-task/macros)
+   Compiling pest_derive v2.8.8
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling typenum v1.20.1
+   Compiling scopeguard v1.2.0
+   Compiling subtle v2.6.1
+   Compiling sel4-panicking-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking/env)
+   Compiling sel4-immediate-sync-once-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immediate-sync-once-cell)
+   Compiling cpufeatures v0.2.17
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling signature v2.2.0
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling sel4-ctors-dtors v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-ctors-dtors)
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling dlmalloc v0.2.14
+   Compiling lock_api v0.4.14
+   Compiling ed25519 v2.2.3
+   Compiling sel4-panicking v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking)
+   Compiling sel4-runtime-common v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-runtime-common)
+   Compiling sel4-dlmalloc v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-dlmalloc)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling sel4-sync v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-sync)
+   Compiling sel4-root-task v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-root-task)
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling boot-contracts v0.1.0 (/space/slime_os/boot-contracts)
+    Finished `release` profile [optimized] target(s) in 14.45s
+[build seL4 kernel loader] cargo build --locked --offline --release --manifest-path /space/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader --target aarch64-unknown-none --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/qemu-arm-virt/loader -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling itoa v1.0.18
+   Compiling serde_json v1.0.149
+   Compiling memchr v2.8.0
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling hashbrown v0.16.1
+   Compiling fallible-iterator v0.3.0
+   Compiling equivalent v1.0.2
+   Compiling thiserror v2.0.18
+   Compiling autocfg v1.5.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling ryu v1.0.23
+   Compiling crc32fast v1.5.0
+   Compiling adler2 v2.0.1
+   Compiling simd-adler32 v0.3.8
+   Compiling heapless v0.9.1
+   Compiling cfg-if v1.0.4
+   Compiling rend v0.5.3
+   Compiling num-traits v0.2.19
+   Compiling indexmap v2.13.0
+   Compiling miniz_oxide v0.8.9
+   Compiling object v0.38.1
+   Compiling twox-hash v2.1.2
+   Compiling ruzstd v0.8.2
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling glob v0.3.3
+   Compiling cc v1.2.57
+   Compiling syn v2.0.117
+   Compiling flate2 v1.1.9
+   Compiling serde_derive v1.0.228
+   Compiling ptr_meta_derive v0.3.1
+   Compiling munge_macro v0.4.7
+   Compiling thiserror-impl v2.0.18
+   Compiling rkyv_derive v0.8.15
+   Compiling ptr_meta v0.3.1
+   Compiling rancor v0.1.1
+   Compiling munge v0.4.7
+   Compiling cobs v0.3.0
+   Compiling rkyv v0.8.15
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-platform-info-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info/types)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling postcard v1.1.3
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-kernel-loader-payload-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/payload-types)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-platform-info v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info)
+   Compiling sel4-kernel-loader v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling byteorder v1.5.0
+   Compiling embedded-hal v1.0.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling nb v1.1.0
+   Compiling tock-registers v0.10.1
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling sel4-rodata-static v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-rodata-static)
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling log v0.4.29
+   Compiling lock_api v0.4.14
+   Compiling smccc v0.2.2
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling sel4-no-allocator v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-no-allocator)
+   Compiling aarch64-cpu v11.2.0
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling hash32 v0.3.1
+   Compiling sel4-phdrs-patched v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/patched)
+   Compiling embedded-hal-nb v1.0.0
+   Compiling sel4-logging v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-logging)
+   Compiling spin v0.10.0
+   Compiling chrono v0.4.44
+   Compiling rtcc v0.4.0
+   Compiling sel4-driver-interfaces v0.1.0 (/space/slime_os/deps/rust-sel4/crates/experimental/sel4-driver-interfaces)
+   Compiling sel4-pl011-driver v0.1.0 (/space/slime_os/deps/rust-sel4/crates/drivers/pl011)
+   Compiling sel4-bcm2835-aux-uart-driver v0.1.0 (/space/slime_os/deps/rust-sel4/crates/drivers/bcm2835-aux-uart)
+    Finished `release` profile [optimized] target(s) in 12.63s
+[build loader payload tool] cargo build --locked --offline --release --manifest-path /space/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader-add-payload --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/host-tools
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.0
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling crc32fast v1.5.0
+   Compiling simdutf8 v0.1.5
+   Compiling cfg-if v1.0.4
+   Compiling adler2 v2.0.1
+   Compiling hashbrown v0.16.1
+   Compiling simd-adler32 v0.3.8
+   Compiling utf8parse v0.2.2
+   Compiling twox-hash v2.1.2
+   Compiling colorchoice v1.0.5
+   Compiling memchr v2.8.0
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle-query v1.1.5
+   Compiling object v0.38.1
+   Compiling zmij v1.0.21
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.14
+   Compiling ruzstd v0.8.2
+   Compiling miniz_oxide v0.8.9
+   Compiling itoa v1.0.18
+   Compiling clap_lex v1.1.0
+   Compiling anstream v1.0.0
+   Compiling num-traits v0.2.19
+   Compiling serde_json v1.0.149
+   Compiling equivalent v1.0.2
+   Compiling anyhow v1.0.102
+   Compiling strsim v0.11.1
+   Compiling heck v0.5.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling clap_builder v4.6.0
+   Compiling ryu v1.0.23
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling flate2 v1.1.9
+   Compiling indexmap v2.13.0
+   Compiling syn v2.0.117
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling num-bigint v0.4.6
+   Compiling num-iter v0.1.45
+   Compiling num-rational v0.4.2
+   Compiling num v0.4.3
+   Compiling ptr_meta_derive v0.3.1
+   Compiling serde_derive v1.0.228
+   Compiling bytecheck_derive v0.8.2
+   Compiling munge_macro v0.4.7
+   Compiling rkyv_derive v0.8.15
+   Compiling bitfield-macros v0.19.4
+   Compiling clap_derive v4.6.0
+   Compiling sel4-patch-elf v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-patch-elf)
+   Compiling ptr_meta v0.3.1
+   Compiling munge v0.4.7
+   Compiling rancor v0.1.1
+   Compiling bitfield v0.19.4
+   Compiling bytecheck v0.8.2
+   Compiling rend v0.5.3
+   Compiling clap v4.6.0
+   Compiling sel4-platform-info-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info/types)
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling rkyv v0.8.15
+   Compiling sel4-kernel-loader-payload-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/payload-types)
+   Compiling sel4-kernel-loader-add-payload v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/add-payload)
+    Finished `release` profile [optimized] target(s) in 8.10s
+[package seL4 image] /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/host-tools/release/sel4-kernel-loader-add-payload --sel4-prefix /space/slime_os/contracts/system-image-closure/v2/inputs/sel4-prefix --loader /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/qemu-arm-virt/loader/aarch64-unknown-none/release/sel4-kernel-loader --app /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/cargo/image/qemu-arm-virt/closure-78a62b9c2794ac75/aarch64-sel4-roottask-minimal/release/slime-root.elf -o /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b/image.elf
+system image build: wrote closure 78a62b9c2794ac75a36174455cf41dd73058da4788d4dbcfd8278bc33e17a3e3 to /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/build-b
+    Finished `release` profile [optimized] target(s) in 0.08s
+Component source: executable=console implementation=console provider=workspace path=/space/slime_os/target/components/aarch64-sel4-qemu-virt/sel4-channel-1/aarch64-sel4-minimal/release/console.elf
+Component source: executable=init implementation=init provider=workspace path=/space/slime_os/target/components/aarch64-sel4-qemu-virt/sel4-channel-1/aarch64-sel4-minimal/release/init.elf
+Built seL4 generation b7a6d422cc3e131f1ec4112beb772d5aec2bf1510e8282650626210ce8ddbd2c target=aarch64-sel4-qemu-virt
+Built boot-store.bin (33554432 bytes)
+[build root child] cargo build --locked --offline --release --manifest-path /space/slime_os/slime-root/child/Cargo.toml --package slime-root-child --target /space/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-minimal.json --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/qemu-arm-virt/child -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling memchr v2.8.3
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_json v1.0.151
+   Compiling itoa v1.0.18
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling glob v0.3.4
+   Compiling libc v0.2.189
+   Compiling ucd-trie v0.1.7
+   Compiling rustversion v1.0.23
+   Compiling minimal-lexical v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling fallible-iterator v0.3.0
+   Compiling libloading v0.8.9
+   Compiling either v1.17.0
+   Compiling bindgen v0.72.1
+   Compiling log v0.4.33
+   Compiling xml v1.3.0
+   Compiling clang-sys v1.9.1
+   Compiling itertools v0.13.0
+   Compiling shlex v1.3.0
+   Compiling rustc-hash v2.1.3
+   Compiling bitflags v2.13.1
+   Compiling pest v2.8.8
+   Compiling aho-corasick v1.1.4
+   Compiling nom v7.1.3
+   Compiling xmltree v0.12.0
+   Compiling sel4-bitfield-ops v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/bitfield-ops)
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling cexpr v0.6.0
+   Compiling pest_meta v2.8.8
+   Compiling regex-automata v0.4.16
+   Compiling serde_derive v1.0.229
+   Compiling pest_generator v2.8.8
+   Compiling regex v1.13.1
+   Compiling pest_derive v2.8.8
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling sel4-ctors-dtors v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-ctors-dtors)
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-panicking-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking/env)
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling sel4-runtime-common v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-runtime-common)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling slime-root-child v0.1.0 (/space/slime_os/slime-root/child)
+    Finished `release` profile [optimized] target(s) in 10.51s
+[build root task] cargo build --locked --offline --release --manifest-path /space/slime_os/Cargo.toml --package slime-root --target /space/slime_os/deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/qemu-arm-virt/closure-78a62b9c2794ac75 -Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling memchr v2.8.3
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling itoa v1.0.18
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling glob v0.3.4
+   Compiling ucd-trie v0.1.7
+   Compiling libc v0.2.189
+   Compiling version_check v0.9.5
+   Compiling cfg-if v1.0.4
+   Compiling minimal-lexical v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling fallible-iterator v0.3.0
+   Compiling rustversion v1.0.23
+   Compiling libloading v0.8.9
+   Compiling clang-sys v1.9.1
+   Compiling either v1.17.0
+   Compiling bindgen v0.72.1
+   Compiling log v0.4.33
+   Compiling generic-array v0.14.7
+   Compiling bitflags v2.13.1
+   Compiling shlex v1.3.0
+   Compiling rustc-hash v2.1.3
+   Compiling itertools v0.13.0
+   Compiling xml v1.3.0
+   Compiling pest v2.8.8
+   Compiling aho-corasick v1.1.4
+   Compiling nom v7.1.3
+   Compiling semver v1.0.28
+   Compiling object v0.38.1
+   Compiling slime-proto v0.1.0 (/space/slime_os/components/proto)
+   Compiling slime-root v0.1.0 (/space/slime_os/slime-root)
+   Compiling rustc_version v0.4.1
+   Compiling curve25519-dalek v4.1.3
+   Compiling xmltree v0.12.0
+   Compiling sel4-bitfield-ops v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/bitfield-ops)
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling pest_meta v2.8.8
+   Compiling cexpr v0.6.0
+   Compiling regex-automata v0.4.16
+   Compiling serde_derive v1.0.229
+   Compiling pest_generator v2.8.8
+   Compiling regex v1.13.1
+   Compiling sel4-root-task-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-root-task/macros)
+   Compiling pest_derive v2.8.8
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling typenum v1.20.1
+   Compiling scopeguard v1.2.0
+   Compiling sel4-panicking-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking/env)
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling cpufeatures v0.2.17
+   Compiling sel4-immediate-sync-once-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immediate-sync-once-cell)
+   Compiling signature v2.2.0
+   Compiling subtle v2.6.1
+   Compiling sel4-ctors-dtors v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-ctors-dtors)
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling dlmalloc v0.2.14
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling lock_api v0.4.14
+   Compiling ed25519 v2.2.3
+   Compiling sel4-panicking v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-panicking)
+   Compiling sel4-runtime-common v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-runtime-common)
+   Compiling sel4-dlmalloc v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-dlmalloc)
+   Compiling sel4 v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling sel4-sync v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-sync)
+   Compiling sel4-root-task v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-root-task)
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling boot-contracts v0.1.0 (/space/slime_os/boot-contracts)
+    Finished `release` profile [optimized] target(s) in 14.54s
+[build seL4 kernel loader] cargo build --locked --offline --release --manifest-path /space/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader --target aarch64-unknown-none --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/qemu-arm-virt/loader -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+   Compiling compiler_builtins v0.1.160 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling core v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.149
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling sel4-build-env v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/build-env)
+   Compiling prettyplease v0.2.37
+   Compiling hashbrown v0.16.1
+   Compiling fallible-iterator v0.3.0
+   Compiling thiserror v2.0.18
+   Compiling equivalent v1.0.2
+   Compiling unsafe-libyaml v0.2.11
+   Compiling ryu v1.0.23
+   Compiling autocfg v1.5.0
+   Compiling crc32fast v1.5.0
+   Compiling simd-adler32 v0.3.8
+   Compiling cfg-if v1.0.4
+   Compiling heapless v0.9.1
+   Compiling adler2 v2.0.1
+   Compiling object v0.38.1
+   Compiling rend v0.5.3
+   Compiling indexmap v2.13.0
+   Compiling miniz_oxide v0.8.9
+   Compiling twox-hash v2.1.2
+   Compiling ruzstd v0.8.2
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling cc v1.2.57
+   Compiling glob v0.3.3
+   Compiling num-traits v0.2.19
+   Compiling flate2 v1.1.9
+   Compiling syn v2.0.117
+   Compiling serde_derive v1.0.228
+   Compiling ptr_meta_derive v0.3.1
+   Compiling munge_macro v0.4.7
+   Compiling thiserror-impl v2.0.18
+   Compiling rkyv_derive v0.8.15
+   Compiling ptr_meta v0.3.1
+   Compiling rancor v0.1.1
+   Compiling munge v0.4.7
+   Compiling cobs v0.3.0
+   Compiling rkyv v0.8.15
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-platform-info-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info/types)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling postcard v1.1.3
+   Compiling sel4-config-data v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-kernel-loader-payload-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/payload-types)
+   Compiling sel4-config v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-platform-info v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info)
+   Compiling sel4-kernel-loader v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader)
+   Compiling alloc v0.0.0 (/home/lamb/.rustup/toolchains/nightly-2026-04-04-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling byteorder v1.5.0
+   Compiling embedded-hal v1.0.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling nb v1.1.0
+   Compiling tock-registers v0.10.1
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling sel4-rodata-static v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-rodata-static)
+   Compiling log v0.4.29
+   Compiling sel4-phdrs v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs)
+   Compiling lock_api v0.4.14
+   Compiling embedded-hal-nb v1.0.0
+   Compiling aarch64-cpu v11.2.0
+   Compiling sel4-immutable-cell v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-immutable-cell)
+   Compiling hash32 v0.3.1
+   Compiling sel4-phdrs-patched v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/patched)
+   Compiling smccc v0.2.2
+   Compiling sel4-stack v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-stack)
+   Compiling sel4-no-allocator v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-no-allocator)
+   Compiling spin v0.10.0
+   Compiling sel4-logging v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-logging)
+   Compiling chrono v0.4.44
+   Compiling rtcc v0.4.0
+   Compiling sel4-driver-interfaces v0.1.0 (/space/slime_os/deps/rust-sel4/crates/experimental/sel4-driver-interfaces)
+   Compiling sel4-pl011-driver v0.1.0 (/space/slime_os/deps/rust-sel4/crates/drivers/pl011)
+   Compiling sel4-bcm2835-aux-uart-driver v0.1.0 (/space/slime_os/deps/rust-sel4/crates/drivers/bcm2835-aux-uart)
+    Finished `release` profile [optimized] target(s) in 12.50s
+[build loader payload tool] cargo build --locked --offline --release --manifest-path /space/slime_os/deps/rust-sel4/Cargo.toml --package sel4-kernel-loader-add-payload --target-dir /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/host-tools
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling autocfg v1.5.0
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling crc32fast v1.5.0
+   Compiling adler2 v2.0.1
+   Compiling simdutf8 v0.1.5
+   Compiling hashbrown v0.16.1
+   Compiling cfg-if v1.0.4
+   Compiling utf8parse v0.2.2
+   Compiling simd-adler32 v0.3.8
+   Compiling object v0.38.1
+   Compiling twox-hash v2.1.2
+   Compiling zmij v1.0.21
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle v1.0.14
+   Compiling memchr v2.8.0
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling ruzstd v0.8.2
+   Compiling miniz_oxide v0.8.9
+   Compiling anyhow v1.0.102
+   Compiling heck v0.5.0
+   Compiling anstream v1.0.0
+   Compiling clap_lex v1.1.0
+   Compiling equivalent v1.0.2
+   Compiling strsim v0.11.1
+   Compiling num-traits v0.2.19
+   Compiling itoa v1.0.18
+   Compiling serde_json v1.0.149
+   Compiling ryu v1.0.23
+   Compiling unsafe-libyaml v0.2.11
+   Compiling sel4-phdrs-constants v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-phdrs/constants)
+   Compiling clap_builder v4.6.0
+   Compiling indexmap v2.13.0
+   Compiling syn v2.0.117
+   Compiling flate2 v1.1.9
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling num-bigint v0.4.6
+   Compiling num-iter v0.1.45
+   Compiling num-rational v0.4.2
+   Compiling num v0.4.3
+   Compiling ptr_meta_derive v0.3.1
+   Compiling serde_derive v1.0.228
+   Compiling bytecheck_derive v0.8.2
+   Compiling munge_macro v0.4.7
+   Compiling rkyv_derive v0.8.15
+   Compiling clap_derive v4.6.0
+   Compiling bitfield-macros v0.19.4
+   Compiling ptr_meta v0.3.1
+   Compiling rancor v0.1.1
+   Compiling munge v0.4.7
+   Compiling bitfield v0.19.4
+   Compiling bytecheck v0.8.2
+   Compiling rend v0.5.3
+   Compiling sel4-patch-elf v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-patch-elf)
+   Compiling clap v4.6.0
+   Compiling sel4-platform-info-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-platform-info/types)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling sel4-config-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling rkyv v0.8.15
+   Compiling sel4-kernel-loader-payload-types v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/payload-types)
+   Compiling sel4-kernel-loader-add-payload v0.1.0 (/space/slime_os/deps/rust-sel4/crates/sel4-kernel-loader/add-payload)
+    Finished `release` profile [optimized] target(s) in 8.03s
+[package seL4 image] /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/host-tools/release/sel4-kernel-loader-add-payload --sel4-prefix /space/slime_os/contracts/system-image-closure/v2/inputs/sel4-prefix --loader /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/qemu-arm-virt/loader/aarch64-unknown-none/release/sel4-kernel-loader --app /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/cargo/image/qemu-arm-virt/closure-78a62b9c2794ac75/aarch64-sel4-roottask-minimal/release/slime-root.elf -o /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline/image.elf
+system image build: wrote closure 78a62b9c2794ac75a36174455cf41dd73058da4788d4dbcfd8278bc33e17a3e3 to /tmp/nix-shell.zEmruG/slime-system-image-closure-check-bnhh_nvf/baseline
+system image closure check: contracts, resolution, identity, isolation, and bytes verified
+=== exit=0
+=== just system_image_builder_check
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/bootstate/model/bootstate.zt
+scenario "main": ok (5416 states)
+graph: states=5416 transitions=10125 duplicates=4710 max-depth=76 terminals=0 deadlocks=0 sccs=2636 largest-scc=804
+scenario "skip-attempt": ok (violated "PendingAttemptConsumedBeforeTransfer" as expected)
+graph: states=571 transitions=944 duplicates=374 max-depth=23 terminals=0 deadlocks=0 sccs=336 largest-scc=139
+scenario "omitted-root": ok (violated "ProtectedRootsPresent" as expected)
+graph: states=11 transitions=11 duplicates=1 max-depth=4 terminals=0 deadlocks=0 sccs=11 largest-scc=1
+scenario "mixed-epoch": ok (violated "RetainedGraphsConsistent" as expected)
+graph: states=34 transitions=50 duplicates=17 max-depth=9 terminals=0 deadlocks=0 sccs=22 largest-scc=13
+model-check: all 4 scenarios passed
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/capability-rights/model/capability-rights.zt
+scenario "main": ok (300 states)
+graph: states=300 transitions=1436 duplicates=1137 max-depth=5 terminals=0 deadlocks=0 sccs=241 largest-scc=27
+scenario "widening-derive": ok (violated "DeriveOnlyNarrows" as expected)
+graph: states=90 transitions=118 duplicates=29 max-depth=3 terminals=0 deadlocks=0 sccs=86 largest-scc=4
+scenario "widening-transfer": ok (violated "TransferOnlyNarrows" as expected)
+graph: states=87 transitions=129 duplicates=43 max-depth=3 terminals=0 deadlocks=0 sccs=81 largest-scc=4
+scenario "transfer-without-right": ok (violated "TransferRequiresTransferRight" as expected)
+graph: states=71 transitions=99 duplicates=29 max-depth=3 terminals=0 deadlocks=0 sccs=67 largest-scc=4
+scenario "kind-blind-derive": ok (violated "RightsValidForKind" as expected)
+graph: states=34 transitions=34 duplicates=1 max-depth=1 terminals=0 deadlocks=0 sccs=34 largest-scc=1
+scenario "duplicate-on-finalize": ok (violated "NoTransferDuplication" as expected)
+graph: states=177 transitions=405 duplicates=229 max-depth=3 terminals=0 deadlocks=0 sccs=157 largest-scc=17
+scenario "undeclared-edge": ok (violated "TransferFollowsDeclaredEdge" as expected)
+graph: states=225 transitions=285 duplicates=61 max-depth=2 terminals=0 deadlocks=0 sccs=218 largest-scc=4
+model-check: all 7 scenarios passed
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/io-queue/model/io-queue.zt
+scenario "main": ok (2322 states)
+graph: states=2322 transitions=6039 duplicates=3718 max-depth=15 terminals=198 deadlocks=0 sccs=2322 largest-scc=1
+scenario "overwrite-when-full": ok (violated "RingNeverOverwrites" as expected)
+graph: states=99 transitions=153 duplicates=55 max-depth=4 terminals=1 deadlocks=0 sccs=99 largest-scc=1
+scenario "double-settle": ok (violated "SingleTerminalAssignment" as expected)
+graph: states=80 transitions=120 duplicates=41 max-depth=4 terminals=1 deadlocks=0 sccs=80 largest-scc=1
+scenario "double-release": ok (violated "LeaseReleasedAtMostOnce" as expected)
+graph: states=180 transitions=312 duplicates=133 max-depth=5 terminals=2 deadlocks=0 sccs=180 largest-scc=1
+scenario "release-while-in-flight": ok (violated "LeaseHeldUntilTerminal" as expected)
+graph: states=35 transitions=40 duplicates=6 max-depth=3 terminals=1 deadlocks=0 sccs=35 largest-scc=1
+scenario "epoch-reuse": ok (violated "EpochStrictlyAdvances" as expected)
+graph: states=61 transitions=91 duplicates=31 max-depth=3 terminals=1 deadlocks=0 sccs=61 largest-scc=1
+scenario "reset-without-settling": ok (violated "NoLiveRequestAcrossEpoch" as expected)
+graph: states=113 transitions=181 duplicates=69 max-depth=4 terminals=1 deadlocks=0 sccs=113 largest-scc=1
+model-check: all 7 scenarios passed
+cargo build --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli
+ZUTAI_STDLIB_ROOT=deps/zutai/stdlib deps/zutai/target/release/zutai-cli model-check contracts/io-resource/model/io-resource.zt
+scenario "main": ok (198 states)
+graph: states=198 transitions=667 duplicates=470 max-depth=11 terminals=1 deadlocks=0 sccs=106 largest-scc=32
+scenario "over-charge": ok (violated "WithinDeclaredBudget" as expected)
+graph: states=50 transitions=84 duplicates=35 max-depth=4 terminals=0 deadlocks=0 sccs=40 largest-scc=9
+scenario "leak-dma-on-death": ok (violated "DeathReturnsEveryCharge" as expected)
+graph: states=67 transitions=142 duplicates=76 max-depth=5 terminals=0 deadlocks=0 sccs=47 largest-scc=13
+scenario "leak-requests-on-death": ok (violated "DeathReturnsEveryCharge" as expected)
+graph: states=94 transitions=244 duplicates=151 max-depth=6 terminals=0 deadlocks=0 sccs=60 largest-scc=20
+scenario "double-reclaim": ok (violated "ReclaimRunsAtMostOnce" as expected)
+graph: states=74 transitions=178 duplicates=105 max-depth=5 terminals=0 deadlocks=0 sccs=49 largest-scc=14
+scenario "epoch-reuse": ok (violated "EpochStrictlyAdvances" as expected)
+graph: states=45 transitions=88 duplicates=44 max-depth=4 terminals=0 deadlocks=0 sccs=33 largest-scc=9
+scenario "accept-stale-ack": ok (violated "StaleAckRefused" as expected)
+graph: states=79 transitions=183 duplicates=105 max-depth=5 terminals=0 deadlocks=0 sccs=54 largest-scc=14
+scenario "charge-before-bind": ok (violated "NoAuthorityWithoutDevice" as expected)
+graph: states=7 transitions=6 duplicates=0 max-depth=1 terminals=0 deadlocks=0 sccs=7 largest-scc=1
+model-check: all 8 scenarios passed
+python3 scripts/check/check-contracts.py
+Block protocol bindings are current
+Block v2 protocol bindings are current
+Component image bindings are current
+I/O queue protocol bindings are current
+LinkDevice protocol bindings are current
+Network service protocol bindings are current
+Store protocol bindings are current
+Filesystem protocol bindings are current
+Generation-management protocol bindings are current
+Powerbox protocol bindings are current
+Sample-descriptor protocol bindings are current
+Capability-transfer protocol bindings are current
+Fabric-stream protocol bindings are current
+Fabric-Qos protocol bindings are current
+Fabric-Time protocol bindings are current
+Fabric-call protocol bindings are current
+Fabric-operation protocol bindings are current
+Fabric-visibility protocol bindings are current
+Fabric-Trace protocol bindings are current
+Interface-schema bindings are current
+scripts/lib/component_spec_contract.py is current
+scripts/lib/system_spec_contract.py is current
+scripts/lib/composition_inventory_contract.py is current
+scripts/lib/component_sdk_release_contract.py is current
+scripts/lib/system_image_closure_contract.py is current
+scripts/lib/system_test_run_contract.py is current
+RP0 Raspberry Pi 5 / ROS 2 Jazzy / DDSI-RTPS 2.5 contract, bounds, authority inventory, trace, and rejection corpus passed
+Boot contract bindings are current
+
+running 315 tests
+....................................................................................... 87/315
+....................................................................................... 174/315
+....................................................................................... 261/315
+......................................................
+test result: ok. 315 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+published compatibility matrix: 2 rows at 9f3a7070c22bc28e
+slot pin reasons check: 622 pinned bindings across 44 manifests and 4 boot profiles (70 automatic)
+  bootLayout: 152
+  allocatorOrder: 14
+  encodedLayout: 187
+  componentAbi: 269
+  componentAbi pins on sourceless executables, exempt from the minimality clause: 2 (dango)
+  formerly pinned, now allocator-reproduced at their observed slots: 5
+slot pin reasons check: ok
+Generation source/binary, kernel image v1/v2, target profile, BootState, BootState trace, recovery, block, component v1/v2, store, spawn, filesystem, link-device, network-service, powerbox, generation-management, transfer, fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, fabric-call, fabric-operation, fabric-visibility, fabric-trace, component-spec, system-spec, component-sdk-release, system-image-closure, system-test-run, and rpi5-ros2-demo contracts passed
+python3 scripts/generate/generate-spawn-bindings.py --check
+Spawn protocol bindings are current
+python3 scripts/generate/generate-link-device-bindings.py --check
+LinkDevice protocol bindings are current
+python3 scripts/generate/generate-network-service-bindings.py --check
+Network service protocol bindings are current
+python3 scripts/check/check-boot-layout-resource.py
+boot layout resource: 18 generation/profile pairs encode and decode
+boot layout resource: 19 fixtures agree with the resource
+boot layout resource: 16 seL4 fixtures agree with layout_for()
+boot layout resource: 31 seL4 planes agree between the derived resource and the layout the root resolved (129 rows)
+boot layout resource check: ok
+python3 scripts/check/check-lifecycle-identity.py
+lifecycle identity check: 100 files carry no bare task id
+python3 scripts/check/check-generation-v5.py
+generation v5 check: all 41 seL4 manifests encode SLIMEG5 version 5
+python3 scripts/generate/generate-fabric-ring-bindings.py --check
+Fabric-stream protocol bindings are current
+python3 scripts/generate/generate-syscall-abi-bindings.py --check
+docs/syscall-abi.md documents all 58 declared operations
+Syscall ABI bindings are current
+python3 scripts/generate/generate-component-runtime-abi-bindings.py --check
+docs/syscall-abi.md documents all 4 console operations
+Component runtime ABI bindings are current
+python3 scripts/check/check-component-spec.py
+component spec model: 83 records validated against 4 declared interfaces and the reference generation; 43 named mutations refused, identities stable; declared-without-implementation: dango, generation-list, storage-fault-probe, storage-probe, storage-store-probe, storage-writer
+python3 scripts/check/check-system-spec.py
+system spec derivation: 44 systems compiled and 44 generation manifests derived semantically identical to their committed fixtures; 21 named mutations refused
+python3 scripts/generate/generate-generation-from-spec.py --check
+contracts/generation-manifest/v1/fixtures/valid.zti is current
+contracts/generation-manifest/v1/compositions/sel4-boot.zti is current
+contracts/generation-manifest/v1/compositions/sel4-c-runtime.zti is current
+contracts/generation-manifest/v1/compositions/sel4-call.zti is current
+contracts/generation-manifest/v1/compositions/sel4-channel.zti is current
+contracts/generation-manifest/v1/compositions/sel4-clock-authority.zti is current
+contracts/generation-manifest/v1/compositions/sel4-crossing.zti is current
+contracts/generation-manifest/v1/compositions/sel4-demo.zti is current
+contracts/generation-manifest/v1/compositions/sel4-directory.zti is current
+contracts/generation-manifest/v1/compositions/sel4-filesystem.zti is current
+contracts/generation-manifest/v1/compositions/sel4-generation.zti is current
+contracts/generation-manifest/v1/compositions/sel4-input.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-block.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-driver-authority.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-link.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-network.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-queue.zti is current
+contracts/generation-manifest/v1/compositions/sel4-io-tcp.zti is current
+contracts/generation-manifest/v1/compositions/sel4-lifecycle-restart.zti is current
+contracts/generation-manifest/v1/compositions/sel4-loan.zti is current
+contracts/generation-manifest/v1/compositions/sel4-matrix.zti is current
+contracts/generation-manifest/v1/compositions/sel4-operation.zti is current
+contracts/generation-manifest/v1/compositions/sel4-powerbox.zti is current
+contracts/generation-manifest/v1/compositions/sel4-private-memory.zti is current
+contracts/generation-manifest/v1/compositions/sel4-qos.zti is current
+contracts/generation-manifest/v1/compositions/sel4-reclamation.zti is current
+contracts/generation-manifest/v1/compositions/sel4-recovery.zti is current
+contracts/generation-manifest/v1/compositions/sel4-replay.zti is current
+contracts/generation-manifest/v1/compositions/sel4-robot-runtime.zti is current
+contracts/generation-manifest/v1/compositions/sel4-rollback.zti is current
+contracts/generation-manifest/v1/compositions/sel4-sample.zti is current
+contracts/generation-manifest/v1/compositions/sel4-scheduling-class.zti is current
+contracts/generation-manifest/v1/compositions/sel4-slisp.zti is current
+contracts/generation-manifest/v1/compositions/sel4-spawn.zti is current
+contracts/generation-manifest/v1/compositions/sel4-storage.zti is current
+contracts/generation-manifest/v1/compositions/sel4-store.zti is current
+contracts/generation-manifest/v1/compositions/sel4-stream.zti is current
+contracts/generation-manifest/v1/compositions/sel4-stress.zti is current
+contracts/generation-manifest/v1/compositions/sel4-supervision.zti is current
+contracts/generation-manifest/v1/compositions/sel4-traffic.zti is current
+contracts/generation-manifest/v1/compositions/sel4-transfer.zti is current
+contracts/generation-manifest/v1/compositions/sel4-visibility.zti is current
+contracts/generation-manifest/v1/compositions/sel4-wait-set.zti is current
+contracts/generation-manifest/v1/compositions/sel4.zti is current
+python3 scripts/generate/generate-composition-inventory-bindings.py --check
+scripts/lib/composition_inventory_contract.py is current
+python3 scripts/check/check-composition-inventory.py
+composition inventory: 43 compositions (43 derived from system specs, 0 hand-authored), every row backed by an owning gate; deferral reasons in use: ; 7 named mutations refused
+python3 scripts/generate/generate-system-image-closures.py --check
+59 system-image closures are current
+python3 scripts/check/check-system-image-builder.py
+system image builder check: 53 closures resolve with distinct identities and manifests matching their system specs; 1 derived compositions declared closure-exempt, 5 scenario and 5 root-role closure(s); 1 closure(s) built twice byte-identically through one command shape from clean corpus roots with no plane flag, variant table, or composition named in builder source
+=== exit=0
+=== just system_test_run_check
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+python3 scripts/check/check-system-test-run.py
+system test run check: 50 record(s) correspond one-to-one with the plane gates that boot a seL4 image, each decoded through the contract with closed execution and fault vocabularies and a bounded timeout; 46 name a closure that resolves to their own plane and 4 name none because their image is declared closure-exempt; 15 fault control(s) declared; every record matches the checker it was frozen from; and 5 named control(s) refused
+=== exit=0
+=== just system_image_closure_aggregate_check
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+python3 scripts/check/check-system-image-aggregate.py
+system image aggregate check: 16 booted plane image(s) — 8 reachable from exactly one canonical closure, 8 exempt with a declared reason; all 53 closures exercised by an owning build or boot gate; 5 plane build flag(s) each reachable from a just target; composition, scenario, root-role, and negative-case names pairwise disjoint; 6 negative case(s) carry no plane image; SLIME_* build knobs classified 11 closure-declared / 4 non-keying / 19 legacy pending CP15 deletion, with none unclassified, none misfiled, and every closure-declared knob reachable from the closure builder; 43 plane gate(s) build by closure identity, 3 still on the legacy flag, and 4 declared dual-path with none holding both undeclared; and 6 named drift control(s) refused
+=== exit=0
+=== just devlog_check
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+python3 scripts/check/check-devlog.py
+devlog check passed: 319 entries, 319 indexed
+=== exit=0
+=== just tasks_check
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+python3 scripts/check/check-work-items.py
+work-item check passed: 297 items, 94 frozen backlog headings indexed
+=== exit=0
+=== just ruff
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+ruff check scripts/
+All checks passed!
+=== exit=0
+=== just typos
+info: syncing channel updates for nightly-2026-05-26-x86_64-unknown-linux-gnu
+info: latest update on 2026-05-26 for version 1.98.0-nightly (31a9463c6 2026-05-25)
+info: component clippy is up to date
+info: component llvm-tools is up to date
+info: component miri is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-05-26-x86_64-unknown-linux-gnu unchanged - rustc 1.98.0-nightly (31a9463c6 2026-05-25)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+info: syncing channel updates for nightly-2026-04-04-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-04 for version 1.96.0-nightly (2972b5e59 2026-04-03)
+info: component clippy is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+info: component rustfmt is up to date
+
+  nightly-2026-04-04-x86_64-unknown-linux-gnu unchanged - rustc 1.96.0-nightly (2972b5e59 2026-04-03)
+
+info: self-update is disabled for this build of rustup
+info: any updates to rustup will need to be fetched with your system package manager
+typos
+=== exit=0
+ALL-DONE

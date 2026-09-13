@@ -1,0 +1,8 @@
+=== admitted shape, sel4-stream ===
+SLIME_ROOT fabric graph=admitted schemas=2 routes=2 participants=6 interpositions=0
+
+=== same boot, one participant dropped from route 1 ===
+SLIME_ROOT fabric graph=admitted schemas=2 routes=2 participants=5 interpositions=0
+
+(both read from build/slime-sel4-stream.elf under the pinned QEMU line;
+ the gate asserts the first and rejects the second.)

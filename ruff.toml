@@ -1,0 +1,27 @@
+# Lint config for the host-side build/check/generate scripts — `just ruff`.
+include = ["scripts/**/*.py"]
+extend-exclude = ["deps"]
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = [
+    "E4", # imports
+    "E7", # statement style
+    "E9", # syntax errors
+    "F",  # pyflakes: undefined names, unused vars/imports
+    "B",  # bugbear: likely bugs (mutable default args, etc.)
+    "PLE", # pylint errors
+]
+ignore = [
+    # scripts/lib/boot_contracts.py is a generated-constants namespace used
+    # via `from boot_contracts import *`; every name F405 flags is real.
+    "F403",
+    "F405",
+    # Compact one-line guards (`if x: return`) are idiomatic in these scripts.
+    "E701",
+    "E702",
+    # sys.path bootstrap must precede the scripts/lib imports.
+    "E402",
+    "E731",
+]

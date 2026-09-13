@@ -1,0 +1,72 @@
+Booting all finished, dropped to user space
+SLIME_ROOT generation admitted number=1 components=2 grants=2 health=2 kernel=1 bootstrap=1
+SLIME_ROOT authority manifest=[cc, f8, 34, ba, 76, 0c, a9, 7b, a4, 48, c7, 31, 2e, cd, 70, 06, d6, 23, b4, a0, dc, ab, 4a, 52, ea, fb, 95, 9d, 17, 9c, 09, 6a]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=2 slimecm=0 elf=2 unrecognized=0
+SLIME_ROOT allocator slots=3492 untypeds=31 bytes=532261232
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=6140
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=1615946 end=2275026 delta=659080
+SLIME_TIMER OK
+SLIME_GRAPH staged task=0 component=console grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x2112f0
+SLIME_GRAPH staged task=1 component=init grants=1 executables=0 window=0x237000 frames=56 tables=3 entry=0x211a08
+SLIME_GRAPH staged components=2 loadable=2 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channel grant=console-output key=0 producer=1 consumer=0 queues=1
+SLIME_GRAPH channel end task=1 slot=2 key=0 rights=0x1
+SLIME_GRAPH channel end task=0 slot=0 key=0 rights=0x2
+SLIME_GRAPH channel grant=service-spawn key=1 producer=1 consumer=1 queues=2
+SLIME_GRAPH channel end task=1 slot=7 key=1 rights=0x3
+SLIME_GRAPH channels grants=2 channels=2 queues=3 slots=3 unplaced=0
+SLIME_GRAPH activated components=2
+SLIME_GRAPH window bound task=1 base=0x237000 len=4096
+SLIME_GRAPH window bound task=0 base=0x236000 len=4096
+SLIME_GRAPH parked task=0 channel=0 reason=recv
+SLIME_GRAPH sent task=1 channel=0 bytes=42 queued=1
+[init] parked receiver sent
+SLIME_GRAPH capability transfer refused task=1 channel=0 caps=1
+[init] capability transfer denied
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=1
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=2
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=3
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=4
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=5
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=6
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=7
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=8
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=9
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=10
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=11
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=12
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=13
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=14
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=15
+SLIME_GRAPH sent task=1 channel=1 bytes=4 queued=16
+[init] queue full refused
+[init] ready wait answered
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+SLIME_GRAPH received task=1 channel=1 bytes=4
+[init] queue drained
+[console] channel plane carried this line
+SLIME_GRAPH parked task=0 channel=0 reason=recv
+[init] channel plane complete
+SLIME_GRAPH component exit task=1 status=0
+SLIME_GRAPH peer death task=1 channels=2 woken=1
+SLIME_GRAPH component exit task=0 status=0
+SLIME_GRAPH peer death task=0 channels=1 woken=0
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 windows=0 tables=0
+SLIME_GRAPH channels served sends=17 receives=17 parks=2 settled=3 parked=0 queues=0 replies=38
+qemu-system-aarch64: terminating on signal 15 from pid 4179455 (timeout)

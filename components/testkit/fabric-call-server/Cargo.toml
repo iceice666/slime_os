@@ -1,0 +1,33 @@
+[package]
+name = "slime-component-fabric-call-server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+build = "build.rs"
+
+[[bin]]
+name = "fabric-call-server"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+boot-contracts = { path = "../../../boot-contracts" }
+slime-components = { path = "../../lib" }
+slime-proto = { path = "../../proto" }
+slime-rt = { path = "../../runtime" }
+
+[build-dependencies]
+slime-build-support = { path = "../../build-support" }
+
+# `cargo-machete` reads only this crate's own directory, so it cannot see the
+# shared modules this component compiles in through `#[path]` from
+# `components/lib/src/`. Every dependency listed here is used by one of those
+# files. Verified by removal rather than asserted: dropping `slime-proto` from
+# `sysinfo` fails the build with `E0433: cannot find module or crate
+# `slime_proto``, from `components/lib/src/launch_context.rs:1`.
+[package.metadata.cargo-machete]
+ignored = ["boot-contracts", "slime-proto"]
+
+[lints]
+workspace = true

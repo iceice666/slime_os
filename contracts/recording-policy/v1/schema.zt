@@ -1,0 +1,197 @@
+-- Slime OS typed recording and deterministic replay, version 1 (C9.5).
+--
+-- A generation resource object declaring which instances participate in a
+-- recording stream, which end of it each holds, whether the generation claims
+-- that participation is *deterministic*, and how many records the stream holds.
+--
+-- # Where the determinism claim is checked, and why not here
+--
+-- "This component is deterministic" is a composition's claim -- it depends on
+-- which component is placed where -- so it is declared per entry below. Whether
+-- the claim is *admissible* is a different question, and its other half lives in
+-- `contracts/generation/v5`: each capability right there carries a `determinism`
+-- classification of `recorded`, `unrecorded`, or `neutral`, and both the builder
+-- and `slime-root` refuse a generation that declares an instance deterministic
+-- while granting it an unrecorded source.
+--
+-- The classification is on the right rather than in a list here, and that
+-- placement is the load-bearing decision. C9.5's refusal is only sound if
+-- *every* right has been classified: an unclassified authority would be treated
+-- as harmless, and the first component granted it would be certified
+-- deterministic on a table that never considered it. A list in this contract
+-- could be partial and the gap would be silent. A required field on the right
+-- cannot be: a right added without a classification does not type-check, and its
+-- bit lands in exactly one of `RIGHT_RECORDED`/`RIGHT_UNRECORDED`/the neutral
+-- remainder by construction.
+--
+-- So the refusal is a join over three sources -- this resource's declaration,
+-- the generation's own grant table, and that classification -- and no single one
+-- of the three could make it.
+--
+-- # Bytes are bounded before allocation
+--
+-- `maxRecordCapacity` records of `recordBytes` each is the whole recording, so a
+-- stream's ceiling is `4096` bytes -- one page -- and it is fixed by this format
+-- rather than by whichever buffer a recorder happens to create. A declared
+-- capacity above the ceiling is refused structurally, which is C9.5's fourth
+-- required check, and the refusal happens in the decoder before any reader sizes
+-- anything.
+--
+-- Logical records and concrete packed little-endian layouts live together.
+-- The renderer reflects every record, checks field order against its layout,
+-- and writes the Python and Rust binding fragments consumed by the boot binding
+-- assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+headerBytes :: Int = 32;
+entryBytes :: Int = 64;
+
+-- `contracts/generation/v5`'s admitted instance ceiling, for the reason
+-- `scheduling-class/v1` and `lifecycle-policy/v1` pin the same number: a
+-- resource naming more instances than a generation can admit could never be
+-- fully installed.
+maxInstances :: Int = 48;
+
+-- One recorded trace record, in bytes. This is `contracts/fabric-trace/v1`'s
+-- `recordLen`, and the reuse is C9.5's first deliverable: the recording carries
+-- C8.11's record shape rather than a second trace format. Pinned rather than
+-- imported because Zutai contracts do not import each other's schemas; the
+-- agreement is checked by `components/proto/tests/recording_stream.rs`, which is
+-- the one place both constants are visible — `boot-contracts` holds this one,
+-- `slime-proto` holds the trace's, and only `slime-proto`'s dev-dependency on
+-- `boot-contracts` sees both.
+recordBytes :: Int = 64;
+
+-- Records one recording stream may hold.
+--
+-- Equal to `fabric-trace/v1`'s `maxTraceDepth` for one reason and one
+-- coincidence. The reason: a recorder accumulates into a C8.11 sink before it
+-- writes anything, so a capacity above that sink's ceiling would declare a
+-- recording the recorder could not have produced. The coincidence: 64 records of
+-- 64 bytes is exactly one page, which is also the smallest shared-buffer
+-- allocation, so the recording's transport needs no second bound.
+maxRecordCapacity :: Int = 64;
+
+-- What one instance does with a recording stream.
+--
+-- Numbers are frozen: a component image built against one generation names the
+-- same role a later builder must still emit.
+roleRecord :: Int = 1;
+roleReplay :: Int = 2;
+maxRole :: Int = 2;
+
+-- Declared per-entry properties.
+--
+-- `deterministic` is the claim this whole contract exists to constrain. It is a
+-- flag on the entry rather than a separate table because it qualifies exactly
+-- one thing -- this instance's participation in this stream -- and a recorder
+-- that is not itself deterministic is a real and useful case: a component may
+-- capture inputs faithfully while its own scheduling is observed rather than
+-- reproducible.
+flagDeterministic :: Int = 1;
+knownFlags :: Int = 1;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+RecordingPolicyHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  entry_count : Int;
+  total_len : Int;
+};
+
+-- One instance's participation in one recording stream.
+--
+-- `stream_identity` joins a recorder to its replayer. It is a declared identity
+-- rather than a runtime handshake because the pairing is the composition's
+-- claim: a replayer that could accept any recording it was handed would be
+-- replaying whatever arrived, and "identical typed outputs from a complete
+-- recorded trace" says nothing unless the trace is the declared one.
+--
+-- `record_capacity` is per entry rather than per stream so a replayer's ceiling
+-- is stated by the generation it runs under rather than inferred from the bytes
+-- it receives. A stream whose two entries disagree is refused: one recording has
+-- one length.
+--
+-- `stream_grant_identity` names the generation grant the recording itself travels
+-- over, and it exists because of a circularity the determinism check would
+-- otherwise hit. Every authority that carries bytes into a component is an
+-- unrecorded nondeterminism source — `recv` included — so a replayer needs one
+-- such authority to receive the very recording it replays, and admission would
+-- refuse its determinism claim for holding it. The resolution is not to weaken
+-- the classification but to *declare* the exception: this field names one grant,
+-- admission subtracts exactly that grant's rights from the mask it tests, and
+-- every other authority the instance holds is checked unchanged.
+--
+-- Declared rather than inferred, because inferring it would mean guessing which
+-- of a component's endpoints carries its recording — and a wrong guess exempts
+-- a live input. Zero means no exception, which is what a recorder declares: a
+-- recorder *writes* the stream, and writing is neutral.
+RecordingEntry :: type {
+  instance_identity : Int;
+  stream_identity : Int;
+  stream_grant_identity : Int;
+  role : Int;
+  entry_flags : Int;
+  record_capacity : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema RecordingPolicyHeader;
+entrySchema ::= schema RecordingEntry;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "entry_count"; width = 4; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+};
+
+entryLayout :: List WireField = {
+  { name = "instance_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "stream_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "stream_grant_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "role"; width = 4; signed = false; byteArray = false; };
+  { name = "entry_flags"; width = 4; signed = false; byteArray = false; };
+  { name = "record_capacity"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = true; };
+};
+
+format ::= {
+  formatVersion =;
+  headerBytes =;
+  entryBytes =;
+  maxInstances =;
+  recordBytes =;
+  maxRecordCapacity =;
+  roleRecord =;
+  roleReplay =;
+  maxRole =;
+  flagDeterministic =;
+  knownFlags =;
+  headerFields = headerSchema.fields ?? {;};
+  entryFields = entrySchema.fields ?? {;};
+  headerLayout =;
+  entryLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/recording_policy.py"; };
+    rustPath := t.join "" { root; "/recording_policy.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

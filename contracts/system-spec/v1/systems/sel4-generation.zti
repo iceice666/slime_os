@@ -1,0 +1,439 @@
+{
+  formatVersion = 1;
+  name = "sel4-generation";
+  generation = 27;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "generation";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "generation-manager";
+    "init";
+    "sel4-generation-client";
+    "virtio-blk-driver";
+  ];
+  placements = [
+    {
+      component = "generation-manager";
+      executableName = "sel4-generation-manager";
+    };
+    {
+      component = "init";
+      spawnBudget = 2;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sel4-generation-client";
+      executable = "sel4-generation-client";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "sel4-generation-client-idle";
+      executable = "sel4-generation-client";
+      owner = "root";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "sel4-generation-manager";
+      executable = "sel4-generation-manager";
+      owner = "init";
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+    };
+    {
+      name = "sel4-generation-manager-idle";
+      executable = "sel4-generation-manager";
+    };
+    {
+      name = "virtio-blk-driver";
+      executable = "virtio-blk-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+  ];
+  grants = [
+    {
+      name = "init-sel4-generation-manager";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-generation-manager";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-sel4-generation-client";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-generation-client";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-init-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-manager-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "sel4-generation-manager";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = true;
+    };
+    {
+      name = "generation-block-peer";
+      capabilityKind = "endpoint";
+      source = "sel4-generation-manager";
+      target = "virtio-blk-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "generation-block-device";
+      capabilityKind = "device";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-block-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-block-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-block-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-blk-driver";
+      target = "virtio-blk-driver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-rpc";
+      capabilityKind = "endpoint";
+      source = "sel4-generation-client";
+      target = "sel4-generation-manager";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-manager-run-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sel4-generation-manager";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-client-run-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sel4-generation-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-manager-idle-token";
+      capabilityKind = "endpoint";
+      source = "sel4-generation-manager-idle";
+      target = "sel4-generation-manager-idle";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "generation-client-idle-token";
+      capabilityKind = "endpoint";
+      source = "sel4-generation-client-idle";
+      target = "sel4-generation-client-idle";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sel4-generation-client";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-sel4-generation-manager";
+      slot = 2;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "generation-manager-run-token";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "generation-client-run-token";
+      slot = 4;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "generation-init-buffer-factory";
+      slot = 5;
+      reason = "bootLayout";
+    };
+    {
+      holder = "sel4-generation-manager";
+      grant = "generation-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-generation-manager";
+      grant = "generation-manager-run-token";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-generation-manager";
+      grant = "generation-manager-buffer-factory";
+      slot = 4;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-generation-manager";
+      grant = "generation-block-peer";
+      slot = 8;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-generation-client";
+      grant = "generation-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-generation-client";
+      grant = "generation-client-run-token";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-generation-client-idle";
+      grant = "generation-client-idle-token";
+      slot = 1;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-generation-manager-idle";
+      grant = "generation-manager-idle-token";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "generation-block-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "generation-block-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "generation-block-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "generation-block-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-driver";
+      grant = "generation-block-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [
+    {
+      name = "sel4-generation-client-supervision";
+      owner = "init";
+      holder = "sel4-generation-manager";
+      capabilityKind = "supervision";
+      slot = 3;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+  ];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "generation-block-request-ready";
+      source = "sel4-generation-manager";
+      target = "virtio-blk-driver";
+    };
+    {
+      name = "generation-block-completion-ready";
+      source = "virtio-blk-driver";
+      target = "sel4-generation-manager";
+    };
+    {
+      name = "generation-block-state-changed";
+      source = "virtio-blk-driver";
+      target = "sel4-generation-manager";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "generation-block-request-ready";
+      holder = "sel4-generation-manager";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "generation-block-request-ready";
+      holder = "virtio-blk-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "generation-block-completion-ready";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "generation-block-completion-ready";
+      holder = "sel4-generation-manager";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "generation-block-state-changed";
+      holder = "virtio-blk-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "generation-block-state-changed";
+      holder = "sel4-generation-manager";
+      role = "wait";
+      slot = 2;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      bufferLoans = 4;
+      dmaMappings = 3;
+      dmaPages = 12;
+      holder = "virtio-blk-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 8;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [
+    {
+      device = 0;
+      holder = "sel4-generation-manager";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      ring = 0;
+      sectorLimit = 2048;
+    };
+  ];
+  blockRingAuthorityObject = true;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

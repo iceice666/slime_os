@@ -1,0 +1,31 @@
+{
+  formatVersion = 1;
+  name = "NavigationOperation";
+  kind = "operation";
+  roles = [
+    { role = "goal"; typeName = "NavigationGoal"; };
+    { role = "feedback"; typeName = "NavigationFeedback"; };
+    { role = "result"; typeName = "NavigationResult"; };
+  ];
+  types = [
+    {
+      name = "NavigationGoal";
+      fields = [
+        { name = "x_mm"; kind = "scalar"; width = 8; signed = true; bound = 0; typeName = ""; };
+        { name = "y_mm"; kind = "scalar"; width = 8; signed = true; bound = 0; typeName = ""; };
+      ];
+    };
+    {
+      name = "NavigationResult";
+      fields = [
+        { name = "status"; kind = "scalar"; width = 4; signed = true; bound = 0; typeName = ""; };
+      ];
+    };
+    {
+      name = "NavigationFeedback";
+      fields = [
+        { name = "remaining_mm"; kind = "scalar"; width = 8; signed = false; bound = 0; typeName = ""; };
+      ];
+    };
+  ];
+}

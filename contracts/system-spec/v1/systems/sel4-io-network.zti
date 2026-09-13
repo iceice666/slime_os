@@ -1,0 +1,213 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-network";
+  generation = 53;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "io-link-loopback";
+    "io-network-intruder";
+    "io-network-probe";
+    "network-service";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "io-network-intruder";
+      dependencies = [];
+    };
+    {
+      component = "io-network-probe";
+      dependencies = [];
+    };
+    {
+      component = "network-service";
+      dependencies = [];
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "network-probe-service";
+      capabilityKind = "endpoint";
+      source = "io-network-probe";
+      target = "network-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "network-intruder-service";
+      capabilityKind = "endpoint";
+      source = "io-network-intruder";
+      target = "network-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "network-service-link-device";
+      capabilityKind = "endpoint";
+      source = "network-service";
+      target = "io-link-loopback";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "network-service";
+      grant = "network-probe-service";
+      slot = 0;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "io-network-probe";
+      grant = "network-probe-service";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "io-network-intruder";
+      grant = "network-intruder-service";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [
+    {
+      address = "echo.test";
+      addressKind = "dns";
+      byteBudget = 4096;
+      dnsRecordLimit = 1;
+      holder = "io-network-probe";
+      listenerLimit = 0;
+      port = 4242;
+      queueDepth = 4;
+      reconnectLimit = 1;
+      retryLimit = 2;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 2;
+      timerBudget = 2;
+      transport = "tcp";
+    };
+    {
+      address = "echo.test";
+      addressKind = "dns";
+      byteBudget = 4096;
+      dnsRecordLimit = 1;
+      holder = "io-network-probe";
+      listenerLimit = 0;
+      port = 5353;
+      queueDepth = 4;
+      reconnectLimit = 1;
+      retryLimit = 1;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 2;
+      timerBudget = 1;
+      transport = "udp";
+    };
+    {
+      address = "send-only.test";
+      addressKind = "dns";
+      byteBudget = 1024;
+      dnsRecordLimit = 0;
+      holder = "io-network-intruder";
+      listenerLimit = 0;
+      port = 6000;
+      queueDepth = 2;
+      reconnectLimit = 0;
+      retryLimit = 0;
+      rights = [
+        "send";
+      ];
+      socketLimit = 1;
+      timerBudget = 0;
+      transport = "tcp";
+    };
+    {
+      address = "recv-only.test";
+      addressKind = "dns";
+      byteBudget = 1024;
+      dnsRecordLimit = 0;
+      holder = "io-network-intruder";
+      listenerLimit = 0;
+      port = 6001;
+      queueDepth = 2;
+      reconnectLimit = 0;
+      retryLimit = 0;
+      rights = [
+        "connect";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 0;
+      transport = "tcp";
+    };
+    {
+      address = "send-path.test";
+      addressKind = "dns";
+      byteBudget = 1024;
+      dnsRecordLimit = 0;
+      holder = "io-network-intruder";
+      listenerLimit = 0;
+      port = 6002;
+      queueDepth = 2;
+      reconnectLimit = 0;
+      retryLimit = 0;
+      rights = [
+        "connect";
+        "send";
+      ];
+      socketLimit = 1;
+      timerBudget = 0;
+      transport = "tcp";
+    };
+  ];
+  networkDestinationsObject = true;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = true;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

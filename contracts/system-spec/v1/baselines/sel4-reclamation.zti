@@ -1,0 +1,130 @@
+{
+  bootAction = "reclamation";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "supervision-child";
+      object = "sha256:supervision-child";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "reclamation-fault";
+      object = "sha256:reclamation-fault";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 38;
+  grants = [
+    {
+      name = "init-supervision-child";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "supervision-child";
+      transferable = false;
+    };
+    {
+      name = "init-reclamation-fault";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "reclamation-fault";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-supervision-child";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-reclamation-fault";
+          slot = 2;
+          slotReason = "bootLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "supervision-child";
+      health = "optional";
+      name = "supervision-child";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "reclamation-fault";
+      health = "optional";
+      name = "reclamation-fault";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:supervision-child";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:reclamation-fault";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

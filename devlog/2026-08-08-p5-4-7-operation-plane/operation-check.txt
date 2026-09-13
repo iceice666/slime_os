@@ -1,0 +1,24 @@
+Command: just sel4_operation_check
+Date: 2026-08-08
+Exit: 0
+
+Pinned build:
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+Built seL4 generation 9ce2b4c41773985a071364abbf8c8722b8f940c46bdbe87cc2e64ced39dab139 target=aarch64-sel4-qemu-virt
+Built boot-store.bin (33554432 bytes)
+Image: build/slime-sel4-operation.elf, identity variant "operation"
+Machine: virt,virtualization=on / cortex-a53 / 1 cpu / 2048M
+
+Terminal result:
+transcript: 53 markers observed across 12 causal chains; six spawned tasks and init exited cleanly
+seL4 operation plane check: init minted authenticated control pairs, vouched for four participant identities, every C8.7 bounded-operation arm ran with the unmodified broker and participants, and all six spawned tasks exited cleanly
+
+Enforced beyond the chains:
+- the restart replacement is provisioned exactly once
+  ("[fabric] operation participant restarted" counted, not merely present)
+- spawn order is exactly
+  fabric-service, fabric-op-client, fabric-op-client-b, fabric-op-server,
+  fabric-op-client-b-restart, fabric-op-time
+- every spawned child task and init has exit statuses [0], derived from the
+  root's own spawn records rather than from any component's claim
+- the parent delivered exactly four supervision introductions

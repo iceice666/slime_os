@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-c-runtime";
+  imageClosureIdentity = "b33f3ca391997e3ffaf2be5417d6b6ce66b7f1f9e5bb4e4c9db61d1f9d4eb5a9";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

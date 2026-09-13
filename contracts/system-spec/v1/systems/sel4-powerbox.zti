@@ -1,0 +1,152 @@
+{
+  formatVersion = 1;
+  name = "sel4-powerbox";
+  generation = 32;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "powerbox";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "powerbox-chooser";
+    "powerbox-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 2;
+    };
+    {
+      component = "powerbox-chooser";
+      owner = "init";
+    };
+    {
+      component = "powerbox-probe";
+      owner = "init";
+      dependencies = [
+        "init";
+      ];
+    };
+  ];
+  instances = [];
+  grants = [
+    {
+      name = "init-powerbox-chooser";
+      capabilityKind = "executable";
+      source = "init";
+      target = "powerbox-chooser";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "init-powerbox-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "powerbox-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "powerbox-a-root";
+      capabilityKind = "directory";
+      source = "powerbox-chooser";
+      target = "powerbox-chooser";
+      rights = [
+        "directoryRead";
+        "directoryDerive";
+      ];
+      transferable = true;
+    };
+    {
+      name = "powerbox-b-input";
+      capabilityKind = "input";
+      source = "powerbox-chooser";
+      target = "powerbox-chooser";
+      rights = [
+        "inputRead";
+      ];
+      transferable = false;
+    };
+    {
+      name = "powerbox-rpc";
+      capabilityKind = "endpoint";
+      source = "powerbox-probe";
+      target = "powerbox-chooser";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-powerbox-chooser";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "init-powerbox-probe";
+      slot = 2;
+      reason = "bootLayout";
+    };
+    {
+      holder = "powerbox-chooser";
+      grant = "powerbox-a-root";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "powerbox-chooser";
+      grant = "powerbox-b-input";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "powerbox-chooser";
+      grant = "powerbox-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "powerbox-probe";
+      grant = "powerbox-rpc";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

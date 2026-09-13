@@ -1,0 +1,27 @@
+bootm 0x81400000#config-duo
+## Loading kernel from FIT Image at 81400000 ...
+   Using 'config-duo' configuration
+   Trying 'kernel-1' kernel subimage
+   Verifying Hash Integrity ... crc32+ OK
+## Loading fdt from FIT Image at 81400000 ...
+   Using 'config-duo' configuration
+   Trying 'fdt-duo' fdt subimage
+   Verifying Hash Integrity ... crc32+ OK
+   Booting using the fdt blob at 0x81400470
+   Loading Kernel Image
+   Decompressing 635 bytes used 0ms
+ERROR: reserving fdt memory region failed (addr=80000000 size=40000 flags=0)
+   Loading Device Tree to 0000000081be5000, end 0000000081becfff ... OK
+
+Starting kernel ...
+
+
+=== SLIME_DUO smoke payload: S-mode entry reached ===
+SLIME_DUO hart      = 0x0000000000000000
+SLIME_DUO dtb       = 0x0000000081be5000
+SLIME_DUO satp      = 0x0000000000000000
+SLIME_DUO sxstatus  = 0x0000000040638000
+SLIME_DUO maee      = 0x0000000000000001
+SLIME_DUO rdtime    = 0x000000000c0934f3
+SLIME_DUO PAYLOAD_OK
+SLIME_DUO returning to U-Boot

@@ -1,0 +1,35 @@
+python3 scripts/check/check-sel4-pins.py
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+python3 scripts/check/check-sel4-boot-layout.py
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --component-graph --skip-pin-check
+sel4: 1 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --channel-plane --skip-pin-check
+sel4-channel: 2 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --loan-plane --skip-pin-check
+sel4-loan: 4 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --spawn-plane --skip-pin-check
+sel4-spawn: 3 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --sample-plane --skip-pin-check
+sel4-sample: 4 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --stream-plane --skip-pin-check
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --supervision-plane --skip-pin-check
+sel4-supervision: 3 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --crossing-plane --skip-pin-check
+sel4-crossing: 2 slots match
+sel4-stream: layout differs from contracts/boot-layout/v1/fixtures/sel4-stream.layout
+    was: [layout] 14 shared-buffer-factory - 0x1000000
+    now: [layout] 3 executable fabric-publisher-b 0x10008
+    was: [layout] 15 executable fabric-service 0x10008
+    now: [layout] 14 shared-buffer-factory - 0x1000000
+    was: [layout] 16 executable fabric-publisher 0x10008
+    now: [layout] 15 executable fabric-service 0x10008
+    was: [layout] 17 executable fabric-subscriber 0x10008
+    now: [layout] 16 executable fabric-publisher 0x10008
+    was: [layout] 18 executable fabric-intruder 0x10008
+    now: [layout] 17 executable fabric-subscriber 0x10008
+    was: [layout] 19 executable fabric-publisher-b 0x10008
+    now: [layout] 18 executable fabric-intruder 0x10008
+    was: [layout] 20 executable fabric-subscriber-b 0x10008
+    now: [layout] 19 executable fabric-subscriber-b 0x10008
+seL4 boot layout check: layouts moved
+error: recipe `sel4_boot_layout_check` failed on line 142 with exit code 1

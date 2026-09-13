@@ -1,0 +1,894 @@
+#!/usr/bin/env python3
+
+"""CP1 system-specification and generation-derivation gate.
+
+Validates every `contracts/system-spec/v1/systems/*.zti` against the component
+specs it references, derives a `contracts/generation-manifest/v1` manifest from each, and
+requires the derived manifest to be semantically identical to the committed
+fixture it replaces — same components, same authority, same graph, same resolved
+slots, same admitted bytes.
+
+"Semantically identical" rather than "byte-identical" is deliberate and is
+checked rather than asserted: the derived manifest is emitted in canonical
+order, while the hand-authored fixtures carry the order they were typed in. Every
+one of those sections is sorted by `build-generation.py` before it is encoded, so
+the comparison below normalizes exactly what the builder normalizes and nothing
+else. Any other divergence is a real one and fails.
+"""
+
+from __future__ import annotations
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
+
+import copy
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+import system_spec_contract as CONTRACT
+from component_spec import admit_specs, interface_catalogue
+from harness import ROOT, load_script
+from system_spec import (
+    DERIVED_GENERATION_FIXTURES,
+    SystemSpecError,
+    compile_system,
+    derive_manifest,
+    derived_manifest_path,
+    prefetch_systems,
+    resolved_instances,
+    system_paths,
+)
+from zutai_cli import STDLIB, binary
+
+
+# The pre-CP1 hand-authored fixtures, frozen. They are the derivation's
+# reference: once a fixture became this generator's output, comparing the
+# derivation against it would only assert the generator agrees with itself.
+# These files are never regenerated and never edited.
+BASELINE_FIXTURES = ROOT / "contracts" / "system-spec" / "v1" / "baselines"
+BUILDER = load_script("system_spec_check_builder", "build/build-generation.py")
+
+# Which committed generation fixture each system spec derives. Declared in
+# `scripts/lib/system_spec.py` so the gate and
+# `scripts/generate/generate-generation-from-spec.py` cannot disagree about what
+# is converted, and so importing one does not run the other.
+DERIVED_FIXTURES = DERIVED_GENERATION_FIXTURES
+
+# Sections `build-generation.py` sorts before encoding, and the key it sorts by.
+# Normalizing exactly these is what makes the comparison below a real equality
+# test rather than a lenient one: anything outside this set must match as-is.
+SORTED_SECTIONS = {
+    "objects": lambda entry: entry["id"],
+    "executables": lambda entry: entry["name"],
+    "instances": lambda entry: entry["name"],
+    "state": lambda entry: entry["name"],
+    "grants": lambda entry: (entry["name"], entry["source"], entry["target"]),
+    "sharedBufferBudget": lambda entry: entry["holder"],
+    "privateMemoryBudget": lambda entry: entry["holder"],
+    "mintedBindings": lambda entry: entry["name"],
+}
+
+# Sections no system's frozen baseline could ever have, because the baseline is
+# the pre-CP1 hand-authored `valid.zti` and the feature postdates every system
+# it covers. Excused globally is safe here specifically because there is no
+# pre-existing populated content in any baseline for it to hide: C10.4's
+# `privateMemoryBudget`, and the `private-memory-budget` resource object that
+# carries it, are the first section of this shape.
+#
+# Excused for the baseline comparison, never unchecked. `check_post_baseline`
+# below asserts the derived content equals what the component specs declare,
+# independently of the baseline, so the excusal is "the baseline cannot speak to
+# this" rather than "this is unverified". A blanket ignore here would let any
+# future divergence hide inside these names, which is exactly the failure
+# `KNOWN_DEAD_BINDINGS` is written to avoid on its own axis.
+POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
+POST_BASELINE_OBJECTS = ("private-memory-budget",)
+
+# Sections one *specific* system's frozen baseline predates, unlike the ones
+# above. Keyed per system, on the same terms as
+# `POST_BASELINE_INSTANCE_FIELDS`/`POST_BASELINE_GRANTS` below: an equivalent
+# fact in another system stays baseline-visible, because other systems carry
+# real `notificationGrants`/`notificationBindings` content their baselines can
+# still compare. `check_post_baseline` independently compares exactly the
+# sections named here against the system spec's own declared notifications.
+POST_BASELINE_SYSTEM_SECTIONS: dict[str, frozenset[str]] = {
+    "sel4-private-memory": frozenset({"notificationGrants", "notificationBindings"}),
+}
+
+# Instance fields and capability edges added after a system's frozen pre-CP1
+# baseline. Keep these system-scoped: equivalent facts in another system remain
+# baseline-visible. They are lifted only from the frozen comparison; the live
+# system contract and builder validation still own their contents.
+POST_BASELINE_INSTANCE_FIELDS = {
+    "sel4-private-memory": frozenset({"priority", "extraThreads", "workerPriority"}),
+}
+POST_BASELINE_GRANTS = {
+    "sel4-private-memory": frozenset({"private-memory-worker-rpc"}),
+}
+
+# `InstanceBinding.slotReason` postdates the frozen baseline too, on the same
+# terms (B91): the baseline's pinned bindings carry a number and no reason, so it
+# has nothing to compare a label against. Lifted out of the comparison and
+# asserted separately below against the generation builder's own re-derivation,
+# which is stricter than a frozen copy would have been — a wrong label fails even
+# though the baseline could not have caught it.
+POST_BASELINE_BINDING_FIELDS = ("slotReason",)
+
+# Bindings the committed `valid.zti` declares that name no grant at all. They are
+# dead text: `resolve_boot_profile` drops any binding whose grant is absent, so
+# every profile — `default`, `test`, `visibility`, `unified` — already boots
+# without them, and no generation byte carries them. The derivation cannot
+# reproduce them because it builds bindings from the grant table, which is the
+# point; listing them here records that the divergence is a removal of dead text
+# rather than a lost fact.
+KNOWN_DEAD_BINDINGS = {
+    ("filesystem-service", "filesystem-store"),
+    ("generation-manager", "generation-boot-update"),
+    ("generation-manager", "health-confirmation"),
+    ("storage-store-probe", "store-access"),
+}
+
+# Grants the frozen baseline declares in a capability kind the contract has
+# since retired, and the slots they pinned. They are not dead text the way
+# `KNOWN_DEAD_BINDINGS` is — they named real grants when the baseline froze —
+# but the vocabulary that made them expressible is gone, so the derivation
+# cannot reproduce them and re-blessing the baseline is not an option: it is
+# evidence precisely because it is never regenerated.
+#
+# B90 retired `block`. Its three grants were the only holders. The removal is
+# not an unexamined skip: `RETIRED_KINDS_COVERED` below refuses an entry that
+# covers no real grant, `check_retired_kinds` refuses a kind that has become
+# spellable again, and the per-system `unexplained`/`live` sets refuse a
+# stripped binding that names a live grant. A future retirement adds its kind
+# here and inherits all three rather than widening a blanket ignore.
+RETIRED_CAPABILITY_KINDS = {"block"}
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"system spec check: {message}")
+
+
+def zti(value: object, indent: int = 0) -> str:
+    padding = " " * indent
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True)
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        rows = "".join(f"{padding}  {zti(item, indent + 2)};\n" for item in value)
+        return "[\n" + rows + padding + "]"
+    if isinstance(value, dict):
+        rows = "".join(
+            f"{padding}  {key} = {zti(item, indent + 2)};\n" for key, item in value.items()
+        )
+        return "{\n" + rows + padding + "}"
+    raise TypeError(type(value))
+
+
+def _decode(path: Path, label: str) -> dict:
+    environment = os.environ.copy()
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    process = subprocess.run(
+        [str(binary()), "json", str(path)],
+        cwd=ROOT,
+        check=False,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0:
+        fail(f"cannot read {label}: {process.stderr.strip()}")
+    return json.loads(process.stdout)
+
+
+def load_baseline(name: str) -> dict:
+    """The frozen pre-CP1 hand-authored fixture this derivation must reproduce."""
+    path = BASELINE_FIXTURES / name
+    if not path.is_file():
+        fail(f"no frozen baseline for {name}; it is what the derivation is checked against")
+    return _decode(path, f"baseline {name}")
+
+
+def normalized(manifest: dict) -> dict:
+    """The manifest as the builder will see it: sorted sections, resolved slots."""
+    value = copy.deepcopy(manifest)
+    for section, key in SORTED_SECTIONS.items():
+        if section in value:
+            value[section] = sorted(value[section], key=key)
+    if "health" in value:
+        value["health"] = dict(
+            value["health"], requiredInstances=sorted(value["health"]["requiredInstances"])
+        )
+    # One instance's binding list is order-independent to the builder, so it is
+    # normalized on the same terms as the sections above rather than compared
+    # in the order a fixture was typed in. `assign_declared_slots` reserves
+    # explicit slots first and then takes omitted ones in grant-name order;
+    # `build_sel4_plan` emits capability records by grant index and looks each
+    # holder's binding up by name; `declared_services` accumulates a set. No
+    # encoded byte is a function of the position of a binding within its list,
+    # and `just generation_check` compares the built bytes.
+    resolved = BUILDER.assign_declared_slots(value)
+    for instance in resolved.get("instances", []):
+        instance["bindings"] = sorted(
+            instance.get("bindings", []), key=lambda entry: entry["grant"]
+        )
+    # An absent `streamControls` and an empty one are the same build:
+    # `generation_fabric.py`'s `declared_stream_controls or
+    # FABRIC_STREAM_CONTROL_GRANTS` falls back to the single-broker default for
+    # both. The derivation emits the field the contract declares, so the
+    # baseline's omission is normalized rather than treated as a divergence.
+    graph = resolved.get("fabricGraph")
+    if graph is not None:
+        for profile in graph.get("profiles", []):
+            profile.setdefault("streamControls", [])
+    # `bootProfiles` is likewise absent in some baselines and an empty list in
+    # others; `resolve_boot_profile` falls back to `health.requiredInstances`
+    # for both, so the two are one build and the derivation emits the field the
+    # manifest contract declares. The optional authority/policy tables below
+    # read the same way: `build-generation.py` reaches each through
+    # `manifest.get(field) or []`, so absence and emptiness are one deny-by-
+    # default answer. `sel4-io-network` is the case that requires it — it
+    # carries a `wait-set` resource object with no declared source at all.
+    resolved.setdefault("bootProfiles", [])
+    for field in (
+        "clockAuthority",
+        "ioResourceBudget",
+        "networkDestinations",
+        "networkInterfaces",
+        "blockRingAuthority",
+        "waitSet",
+        "recording",
+        "privateMemoryBudget",
+        "notificationGrants",
+        "notificationBindings",
+        "mintedBindings",
+        "interfaceSchemas",
+        "sharedBufferBudget",
+        "state",
+    ):
+        resolved.setdefault(field, [])
+    return resolved
+
+
+def strip_dead_bindings(manifest: dict) -> dict:
+    value = copy.deepcopy(manifest)
+    for instance in value["instances"]:
+        instance["bindings"] = [
+            binding
+            for binding in instance["bindings"]
+            if (instance["name"], binding["grant"]) not in KNOWN_DEAD_BINDINGS
+        ]
+    return value
+
+
+def strip_retired_kinds(manifest: dict) -> tuple[dict, list[dict]]:
+    """Drop grants in a retired capability kind, and the bindings naming them.
+
+    Returns `(comparable, removed)`. `removed` is not discarded: the caller
+    compares it against the unmodified fixture, and the module-level
+    `RETIRED_KINDS_COVERED` guard proves each listed kind covers a real grant, so
+    the removal is evidence rather than an unexamined skip.
+    """
+    value = copy.deepcopy(manifest)
+    removed = [
+        grant for grant in value["grants"] if grant["capabilityKind"] in RETIRED_CAPABILITY_KINDS
+    ]
+    retired_names = {grant["name"] for grant in removed}
+    value["grants"] = [grant for grant in value["grants"] if grant["name"] not in retired_names]
+    for instance in value["instances"]:
+        instance["bindings"] = [
+            binding for binding in instance["bindings"] if binding["grant"] not in retired_names
+        ]
+    return value, removed
+
+
+def check_retired_kinds() -> None:
+    """A kind listed as retired must really be unspellable.
+
+    One assertion, deliberately. An earlier version of this helper also re-read
+    each stripped grant's `capabilityKind` and refused a "live" one, but that
+    could not fire: `strip_retired_kinds` selects on exactly that field, so the
+    check was its own filter's complement. Rewriting it to read the untouched
+    fixture did not help either — `declared` is built from the same grant list
+    the stripped entries were selected out of, so it only fires on a duplicated
+    grant name, which `scripts/lib/system_spec.py` refuses independently.
+
+    The two properties that assertion was reaching for are checked where they
+    can actually fail: the caller's `unexplained`/`live` sets compare the
+    stripped bindings against the *unmodified* fixture, and the module-level
+    `RETIRED_KINDS_COVERED` guard refuses an entry that covers nothing. What is
+    left here is the one thing neither of those sees — a retired kind quietly
+    becoming spellable again while this comparison still skips its grants.
+    """
+    for kind in sorted(RETIRED_CAPABILITY_KINDS):
+        if kind in BUILDER.CAPABILITY_KIND:
+            fail(
+                f"{kind!r} is listed as a retired capability kind but the builder "
+                "still admits it; either the retirement was reverted or the "
+                "exemption is stale"
+            )
+
+
+def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
+    """Separate facts the frozen baseline predates from the comparison.
+
+    Returns `(comparable, added)`. `comparable` is what the baseline can be
+    compared against; `added` is what `check_post_baseline` asserts on its own
+    terms.
+    """
+    value = copy.deepcopy(manifest)
+    added = {section: value.pop(section) for section in POST_BASELINE_SECTIONS if section in value}
+    for section in POST_BASELINE_SYSTEM_SECTIONS.get(name, frozenset()):
+        if section in value:
+            added[section] = value.pop(section)
+    if "objects" in value:
+        kept, removed = [], []
+        for entry in value["objects"]:
+            (removed if entry["id"] in POST_BASELINE_OBJECTS else kept).append(entry)
+        value["objects"] = kept
+        added["objects"] = removed
+    post_grants = POST_BASELINE_GRANTS.get(name, frozenset())
+    if post_grants:
+        added["grants"] = [
+            grant for grant in value.get("grants", []) if grant["name"] in post_grants
+        ]
+        value["grants"] = [
+            grant for grant in value.get("grants", []) if grant["name"] not in post_grants
+        ]
+        added["bindings"] = []
+        for instance in value.get("instances", []):
+            kept = []
+            for binding in instance.get("bindings", []):
+                if binding["grant"] in post_grants:
+                    added["bindings"].append({"holder": instance["name"], **binding})
+                else:
+                    kept.append(binding)
+            instance["bindings"] = kept
+    for instance in value.get("instances", []):
+        for field in POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset()):
+            instance.pop(field, None)
+    for instance in value.get("instances", []):
+        for binding in instance.get("bindings", []):
+            for field in POST_BASELINE_BINDING_FIELDS:
+                binding.pop(field, None)
+    return value, added
+
+
+def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
+    """The post-baseline sections say exactly what the system declares.
+
+    The baseline predates these, so it cannot check them — and an excusal with
+    nothing behind it would let a wrong budget through under a name the
+    comparison skips. This is the replacement assertion, and it is stricter than
+    the baseline's would have been: it compares the derived budget against the
+    quota each *instance* is composed with, which is the component spec's value
+    unless the instance record or the component's placement declares its own.
+    An authenticated budget is keyed by instance, so this is too.
+    """
+    placements = {entry["component"]: entry for entry in system.spec["placements"]}
+    component_by_executable = {
+        entry.get("executableName", entry["component"]): entry["component"]
+        for entry in system.spec["placements"]
+    }
+    expected = {}
+    for instance in resolved_instances(system.spec):
+        component = component_by_executable.get(instance["executable"], instance["executable"])
+        default = COMPONENTS[component]["runtime"]["resource"]["privatePageQuota"]
+        quota = instance.get(
+            "privatePageQuota", placements.get(component, {}).get("privatePageQuota", default)
+        )
+        if quota:
+            expected[instance["name"]] = quota
+    budget = {
+        entry["holder"]: entry["pageQuota"] for entry in derived.get("privateMemoryBudget", [])
+    }
+    if budget != expected:
+        fail(
+            f"{name}: derived privateMemoryBudget {sorted(budget.items())} does not match "
+            f"the declared privatePageQuota of the components it composes "
+            f"{sorted(expected.items())}"
+        )
+    # And the resource object is present exactly when the section has holders:
+    # the builder refuses a budget without the object and encodes nothing from an
+    # object with no holders, so either half alone is a generation that boots
+    # with every declared quota silently denied.
+    objects = {entry["id"] for entry in derived["objects"]}
+    carried = "private-memory-budget" in objects
+    if carried != bool(budget):
+        fail(
+            f"{name}: privateMemoryBudget has {len(budget)} holder(s) but the "
+            f"private-memory-budget resource object is {'present' if carried else 'absent'}"
+        )
+    post_grants = POST_BASELINE_GRANTS.get(name, frozenset())
+    declared_post_grants = sorted(
+        (grant for grant in system.spec["grants"] if grant["name"] in post_grants),
+        key=SORTED_SECTIONS["grants"],
+    )
+    derived_post_grants = sorted(
+        (grant for grant in derived.get("grants", []) if grant["name"] in post_grants),
+        key=SORTED_SECTIONS["grants"],
+    )
+    if {grant["name"] for grant in declared_post_grants} != post_grants:
+        fail(
+            f"{name}: post-baseline grant exemption {sorted(post_grants)} does not "
+            "name exactly the live system declarations"
+        )
+    if derived_post_grants != declared_post_grants:
+        fail(
+            f"{name}: derived post-baseline grants do not match the live system "
+            f"declarations: {first_difference(derived_post_grants, declared_post_grants, 'grants')}"
+        )
+    # The notification sections split off by `POST_BASELINE_SYSTEM_SECTIONS`
+    # get the same independent treatment as the post-baseline grants above:
+    # `derive_manifest` assigns these directly from the system spec, so a
+    # divergence here means the derivation or normalization mutated them, not
+    # a fact the baseline itself could have disagreed with.
+    post_notification_sections = POST_BASELINE_SYSTEM_SECTIONS.get(name, frozenset())
+    if "notificationGrants" in post_notification_sections:
+        declared_notifications = system.spec["notifications"]
+        derived_notifications = derived.get("notificationGrants", [])
+        if derived_notifications != declared_notifications:
+            fail(
+                f"{name}: derived notificationGrants do not match the live system "
+                "declarations: "
+                f"{first_difference(derived_notifications, declared_notifications, 'notificationGrants')}"
+            )
+    if "notificationBindings" in post_notification_sections:
+        declared_bindings = system.spec["notificationBindings"]
+        derived_bindings = derived.get("notificationBindings", [])
+        if derived_bindings != declared_bindings:
+            fail(
+                f"{name}: derived notificationBindings do not match the live system "
+                "declarations: "
+                f"{first_difference(derived_bindings, declared_bindings, 'notificationBindings')}"
+            )
+    # Instance fields split off by `POST_BASELINE_INSTANCE_FIELDS` are checked
+    # against the live system declaration by holder. Omitting a field is a
+    # different statement from assigning its default, so compare only the
+    # exempted keys and preserve absence on both sides.
+    post_instance_fields = POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset())
+    if post_instance_fields:
+        declared_instances = {
+            instance["name"]: {
+                field: instance[field] for field in post_instance_fields if field in instance
+            }
+            for instance in resolved_instances(system.spec)
+        }
+        derived_instances = {
+            instance["name"]: {
+                field: instance[field] for field in post_instance_fields if field in instance
+            }
+            for instance in derived.get("instances", [])
+        }
+        if derived_instances != declared_instances:
+            fail(
+                f"{name}: derived post-baseline instance fields do not match the live "
+                "system declarations: "
+                f"{first_difference(derived_instances, declared_instances, 'instances')}"
+            )
+    # B91: every pin the derivation emits carries the reason its system spec
+    # declared, and that reason is what the derived manifest itself implies. The
+    # builder's own predicate is reused rather than restated, so this gate cannot
+    # disagree with the product build about which label is correct.
+    BUILDER.validate_slot_reasons(source, f"{name} derived manifest")
+
+
+def first_difference(left: object, right: object, label: str) -> str:
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            return f"{label}: {len(left)} entries vs {len(right)}"
+        for index, (a, b) in enumerate(zip(left, right, strict=True)):
+            if a != b:
+                return first_difference(a, b, f"{label}[{index}]")
+    if isinstance(left, dict) and isinstance(right, dict):
+        for key in sorted(set(left) | set(right)):
+            if left.get(key) != right.get(key):
+                return first_difference(left.get(key), right.get(key), f"{label}.{key}")
+    return f"{label}: {left!r} != {right!r}"
+
+
+CATALOGUE = interface_catalogue()
+COMPONENTS = {entry.name: entry.spec for entry in admit_specs(catalogue=CATALOGUE)}
+
+paths = system_paths()
+if not paths:
+    fail("no system specs declared")
+if {path.stem for path in paths} != set(DERIVED_FIXTURES):
+    fail(
+        f"system specs {sorted(path.stem for path in paths)} do not match the declared "
+        f"derivation table {sorted(DERIVED_FIXTURES)}"
+    )
+
+prefetch_systems(paths)
+systems = {}
+for path in paths:
+    try:
+        systems[path.stem] = compile_system(path, components=COMPONENTS)
+    except SystemSpecError as error:
+        fail(f"{path.name}: {error}")
+
+identities = {entry.identity for entry in systems.values()}
+if len(identities) != len(systems):
+    fail("two system specs computed the same identity")
+
+# Every retired-kind entry must cover at least one real grant, asserted BEFORE
+# any baseline comparison. Ordering matters for diagnosis: the divergence check
+# below raises first, and an engineer who mistyped or emptied this set would be
+# pointed at the frozen fixture and tempted to re-bless it — the one action the
+# exemption exists to avoid. Per-kind rather than per-set, so a set that covers
+# three grants through one entry cannot let a second entry skip nothing.
+RETIRED_KINDS_COVERED = {
+    grant["capabilityKind"]
+    for name in sorted(systems)
+    for grant in strip_retired_kinds(load_baseline(DERIVED_FIXTURES[name]))[1]
+}
+if RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED:
+    fail(
+        "no frozen baseline declares a grant in "
+        f"{sorted(RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED)}, so those "
+        "RETIRED_CAPABILITY_KINDS entries cover nothing and must be removed"
+    )
+
+# 1. Each system derives the fixture it replaces.
+for name, system in sorted(systems.items()):
+    # The pre-CP1 hand-authored fixture, frozen under
+    # `contracts/system-spec/v1/baselines/`. Comparing against the *committed*
+    # fixture would be circular now that the fixture is this generator's own
+    # output: it would assert the generator agrees with itself. The baseline is
+    # what the derivation has to reproduce, and it never changes again.
+    fixture = load_baseline(DERIVED_FIXTURES[name])
+    derived = normalized(derive_manifest(system))
+    # Grants whose capability kind the contract has retired are lifted out
+    # before the dead-binding strip, so the two exemptions stay separable: one
+    # is text that never named a grant, the other named a grant in a vocabulary
+    # that no longer exists.
+    without_retired, retired_grants = strip_retired_kinds(fixture)
+    check_retired_kinds()
+    committed = normalized(strip_dead_bindings(without_retired))
+    # Sections the baseline predates are lifted out and asserted separately: it
+    # was frozen before they existed, so it has no opinion to compare against.
+    derived, _added = split_post_baseline(derived, name)
+    committed, _ = split_post_baseline(committed, name)
+    if derived != committed:
+        fail(
+            f"{name}: derived manifest diverges from {DERIVED_FIXTURES[name]}: "
+            f"{first_difference(derived, committed, 'manifest')}"
+        )
+    # One derivation, passed twice: normalized for the budget comparison, and
+    # unnormalized because `validate_slot_reasons` needs unresolved slots to tell
+    # an omitted pin from an allocated one.
+    source_manifest = derive_manifest(system)
+    check_post_baseline(name, normalized(source_manifest), system, source_manifest)
+    # And the removal above must be exactly the dead bindings and the
+    # retired-kind ones, never a live grant in a live kind: comparing against
+    # the unmodified fixture must fail for those reasons alone.
+    untouched = normalized(fixture)
+    if untouched != committed:
+        retired_names = {grant["name"] for grant in retired_grants}
+        removed = {
+            (instance["name"], binding["grant"])
+            for instance in fixture["instances"]
+            for binding in instance["bindings"]
+        } - {
+            (instance["name"], binding["grant"])
+            for instance in committed["instances"]
+            for binding in instance["bindings"]
+        }
+        unexplained = {
+            entry
+            for entry in removed
+            if entry not in KNOWN_DEAD_BINDINGS and entry[1] not in retired_names
+        }
+        if unexplained:
+            fail(
+                f"{name}: stripped a binding that is neither declared dead nor "
+                f"retired-kind: {sorted(unexplained)}"
+            )
+        grants = {grant["name"] for grant in fixture["grants"]}
+        live = [entry for entry in removed if entry[1] in grants and entry[1] not in retired_names]
+        if live:
+            fail(f"{name}: a stripped binding names a real grant: {sorted(live)}")
+
+    # Every surviving binding must keep the exact slot the *unstripped* fixture
+    # resolved for it.
+    #
+    # This is the check whose absence let a real defect through. Removing the
+    # four dead bindings frees the slots they occupied, and
+    # `assign_declared_slots` then hands those numbers to the next binding in
+    # grant-name order: `generation-manager`'s rollback/select/stage bindings
+    # silently moved 2->1, 3->2, 4->3. The comparison above could not see it,
+    # because it strips first and resolves second, so both sides shifted
+    # together. Resolving the untouched fixture independently is what makes the
+    # slot a checked fact rather than a coincidence, and the system spec pins
+    # those three numbers to hold it.
+    resolved_fixture = BUILDER.assign_declared_slots(copy.deepcopy(fixture))
+    original_slots = {
+        (instance["name"], binding["grant"]): binding["slot"]
+        for instance in resolved_fixture["instances"]
+        for binding in instance["bindings"]
+    }
+    derived_slots = {
+        (instance["name"], binding["grant"]): binding["slot"]
+        for instance in derived["instances"]
+        for binding in instance["bindings"]
+    }
+    moved = {
+        key: (original_slots[key], slot)
+        for key, slot in derived_slots.items()
+        if key in original_slots and original_slots[key] != slot
+    }
+    if moved:
+        fail(
+            f"{name}: derivation moved capability slot(s) the committed fixture pinned: "
+            + ", ".join(
+                f"{holder}/{grant} {was}->{now}"
+                for (holder, grant), (was, now) in sorted(moved.items())
+            )
+            + "; pin them in the system spec"
+        )
+
+# 1b. Byte-level drift. The committed fixtures are now this generator's output,
+#     so regenerating them must reproduce the committed bytes exactly — the same
+#     `--check` discipline every other generated artifact in this repository is
+#     held to. Without this, the semantic comparison above would be trivially
+#     true against a fixture nobody could reproduce, and the fixtures would drift
+#     back into hand-edited text one edit at a time.
+for name, system in sorted(systems.items()):
+    fixture = derived_manifest_path(DERIVED_FIXTURES[name])
+    rendered = zti(derive_manifest(system)) + "\n"
+    if fixture.read_text(encoding="utf-8") != rendered:
+        fail(
+            f"{DERIVED_FIXTURES[name]} is stale: regenerate it with "
+            f"python3 scripts/generate/generate-generation-from-spec.py"
+        )
+
+# 2. The derivation is a function of its inputs alone.
+for name, system in sorted(systems.items()):
+    if normalized(derive_manifest(system)) != normalized(derive_manifest(system)):
+        fail(f"{name}: two derivations of one system spec disagree")
+
+# 3. Every derived manifest is a real `contracts/generation-manifest/v1` record: written
+#    out, it decodes under the generation schema. A derivation that produced a
+#    shape the manifest contract rejects would pass every check above.
+with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary:
+    root = Path(temporary)
+    environment = os.environ.copy()
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    for name, system in sorted(systems.items()):
+        path = root / f"{name}.zti"
+        path.write_text(zti(derive_manifest(system)) + "\n", encoding="utf-8")
+        process = subprocess.run(
+            [str(binary()), "json", str(path)],
+            cwd=ROOT,
+            check=False,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if process.returncode != 0:
+            fail(f"{name}: derived manifest is not valid Zutai: {process.stderr.strip()}")
+
+    # 4. Named refusals. Each mutation is applied to a compiled system and must
+    #    be refused by the rule it names, with the unmutated baseline admitted
+    #    first so no arm can pass by tripping an unrelated guard (B67).
+    baseline = systems["sel4-channel"]
+
+    def write_system(directory: Path, spec: dict) -> Path:
+        path = directory / f"{spec['name']}.zti"
+        path.write_text(zti(spec) + "\n", encoding="utf-8")
+        return path
+
+    def source() -> dict:
+        return copy.deepcopy(baseline.spec)
+
+    arms = root / "arms"
+    arms.mkdir()
+    compile_system(write_system(arms, source()), components=COMPONENTS)
+
+    def rejected(label: str, mutate) -> None:
+        spec = source()
+        mutate(spec)
+        try:
+            compile_system(write_system(arms, spec), components=COMPONENTS)
+        except SystemSpecError:
+            return
+        fail(f"{label} was accepted")
+
+    def undeclared_component(spec: dict) -> None:
+        spec["components"] = sorted(spec["components"] + ["no-such-component"])
+
+    def unknown_target(spec: dict) -> None:
+        spec["targetRequirement"] = "aarch64-imaginary"
+
+    def negative_slot_pin(spec: dict) -> None:
+        spec["slotPins"] = [
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": -1,
+                "reason": "componentAbi",
+            }
+        ]
+
+    def grant_to_unadmitted(spec: dict) -> None:
+        spec["grants"][0]["target"] = "dango"
+
+    def unknown_capability_kind(spec: dict) -> None:
+        spec["grants"][0]["capabilityKind"] = "pciFunction"
+
+    def rights_outside_kind(spec: dict) -> None:
+        # A *live* right the first grant's kind forbids. That grant is
+        # `dango-output`, an `endpoint`, and `directoryRead` is valid vocabulary
+        # on another kind — so the refusal is `validate_capability_rights`
+        # rejecting a right for this kind. Naming a retired right would be
+        # refused as unknown vocabulary before that check ran, leaving this rule
+        # uncovered (B90).
+        spec["grants"][0]["rights"] = ["directoryRead"]
+
+    def stale_slot_pin(spec: dict) -> None:
+        spec["slotPins"] = [
+            {
+                "holder": "console",
+                "grant": "no-such-grant",
+                "slot": 3,
+                "reason": "componentAbi",
+            }
+        ]
+
+    def duplicate_slot_pin(spec: dict) -> None:
+        spec["slotPins"] = [
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": 4,
+                "reason": "componentAbi",
+            },
+            {
+                "holder": "init",
+                "grant": "init-console",
+                "slot": 4,
+                "reason": "componentAbi",
+            },
+        ]
+
+    def unknown_slot_pin_reason(spec: dict) -> None:
+        # B91: the reason vocabulary is closed. A pin claiming a reason outside
+        # it cannot be checked against the manifest at all, so it is refused
+        # here rather than reaching the generation builder.
+        spec["slotPins"] = [
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": 4,
+                "reason": "becauseISaidSo",
+            }
+        ]
+
+    def bootstrap_not_init(spec: dict) -> None:
+        spec["bootstrapInstance"] = "console"
+
+    def bootstrap_unadmitted(spec: dict) -> None:
+        spec["bootstrapInstance"] = "dango"
+
+    def duplicate_grant_name(spec: dict) -> None:
+        spec["grants"].append(copy.deepcopy(spec["grants"][0]))
+
+    def commands_without_executables(spec: dict) -> None:
+        # A command profile in a system granting no executable authority: the
+        # profile advertises commands nothing in this generation can launch.
+        spec["commandBindings"] = [{"component": "console", "commands": ["init"]}]
+        spec["grants"] = [
+            grant for grant in spec["grants"] if grant["capabilityKind"] != "executable"
+        ]
+        spec["slotPins"] = []
+
+    def state_owner_unadmitted(spec: dict) -> None:
+        spec["state"] = [
+            {"name": "orphan", "owner": "dango", "policy": "preserve", "schemaVersion": 1}
+        ]
+
+    def unknown_state_policy(spec: dict) -> None:
+        spec["state"] = [
+            {"name": "orphan", "owner": "console", "policy": "forever", "schemaVersion": 1}
+        ]
+
+    def unsorted_components(spec: dict) -> None:
+        spec["components"] = list(reversed(spec["components"]))
+
+    def over_bounded_slot_pins(spec: dict) -> None:
+        # One more pin than the contract's `maxSlotPins` admits. Every pin names
+        # a real binding, so only the bound can refuse this.
+        spec["slotPins"] = [
+            {
+                "holder": "init",
+                "grant": "dango-output",
+                "slot": index,
+                "reason": "componentAbi",
+            }
+            for index in range(CONTRACT.MAX_SLOT_PINS + 1)
+        ]
+
+    def over_bounded_text(spec: dict) -> None:
+        spec["acceptanceCriteria"] = "x" * (CONTRACT.MAX_TEXT_BYTES + 1)
+
+    def duplicate_state_name(spec: dict) -> None:
+        spec["state"] = [
+            {"name": "twice", "owner": "console", "policy": "preserve", "schemaVersion": 1},
+            {"name": "twice", "owner": "init", "policy": "preserve", "schemaVersion": 1},
+        ]
+
+    def dependency_unadmitted(spec: dict) -> None:
+        # A component whose declared dependency the system does not admit.
+        #
+        # `bootstrapInstance` must stay an admitted init component or the
+        # bootstrap rules fire first and this arm proves nothing — which is what
+        # it did before, in both directions. So `init` stays, and `dango` is
+        # added instead: its component spec depends on `console`, which this
+        # mutation removes, leaving the dependency rule as the only reason to
+        # refuse. Verified by neutralizing that rule and observing the arm
+        # falsely pass.
+        spec["components"] = sorted(
+            name for name in spec["components"] + ["dango"] if name != "console"
+        )
+        spec["placements"] = [
+            entry for entry in spec["placements"] if entry["component"] != "console"
+        ]
+        spec["grants"] = []
+        spec["slotPins"] = []
+
+    def interface_without_graph(spec: dict) -> None:
+        # A component declaring route roles, in a system with no fabric graph.
+        #
+        # `fabric-publisher` depends on `fabric-service`, so adding it alone was
+        # refused by the dependency rule rather than the graph rule. Admitting
+        # both, and clearing the dependency that would fire first, leaves the
+        # missing graph as the only reason to refuse.
+        spec["components"] = sorted(spec["components"] + ["fabric-publisher", "fabric-service"])
+        spec["placements"] = spec["placements"] + [
+            {"component": "fabric-publisher", "owner": "init"},
+            {"component": "fabric-service", "owner": "init"},
+        ]
+        spec["placements"].sort(key=lambda entry: entry["component"])
+
+    refusals = 0
+    for label, mutate in (
+        ("a component no component spec declares", undeclared_component),
+        ("a target profile the table does not name", unknown_target),
+        ("a negative slot pin", negative_slot_pin),
+        ("a grant naming an unadmitted target", grant_to_unadmitted),
+        ("a grant with an unknown capability kind", unknown_capability_kind),
+        ("a grant carrying rights its kind forbids", rights_outside_kind),
+        ("a slot pin for a binding the grants do not produce", stale_slot_pin),
+        ("two slot pins on one holder slot", duplicate_slot_pin),
+        ("a slot pin whose reason is outside the vocabulary", unknown_slot_pin_reason),
+        ("a bootstrap instance that is not an init component", bootstrap_not_init),
+        ("a bootstrap instance the system does not admit", bootstrap_unadmitted),
+        ("a duplicate grant name", duplicate_grant_name),
+        ("commands with no executable authority anywhere", commands_without_executables),
+        ("a state binding owned by an unadmitted component", state_owner_unadmitted),
+        ("an unknown state policy", unknown_state_policy),
+        ("an unsorted component list", unsorted_components),
+        ("more slot pins than the declared bound", over_bounded_slot_pins),
+        ("text beyond the declared byte bound", over_bounded_text),
+        ("a duplicate state binding name", duplicate_state_name),
+        ("a dependency the system does not admit", dependency_unadmitted),
+        ("a route role declared with no fabric graph", interface_without_graph),
+    ):
+        rejected(label, mutate)
+        refusals += 1
+
+print(
+    f"system spec derivation: {len(systems)} systems compiled and "
+    f"{len(DERIVED_FIXTURES)} generation manifests derived semantically identical to "
+    f"their committed fixtures; {refusals} named mutations refused"
+)

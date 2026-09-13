@@ -1,0 +1,34 @@
+Command: just sel4_visibility_check
+Date: 2026-08-08
+Exit: 0
+
+Pinned build:
+Built seL4 generation a67ae0268ac413abf4b4979fc4b7de4d4c7312bd64457899ec6021046c6e3b44 target=aarch64-sel4-qemu-virt
+Built boot-store.bin (33554432 bytes)
+Image: build/slime-sel4-visibility.elf, identity variant "visibility"
+Machine: virt,virtualization=on / cortex-a53 / 1 cpu / 2048M
+
+Terminal result:
+transcript: 25 markers observed across 7 causal chains; 12 view records and 2 distinct traces; six spawned tasks exited cleanly
+seL4 visibility plane check: three callers received different bounded views from their exact grants, an ungranted caller inferred nothing, telemetry reached its subscriber only through the declared proxy, and proxy death produced a route event while the unrelated route stayed live
+
+Enforced beyond the chains:
+- the composition emits exactly 12 serialized [fabric-view] records
+- exactly 2 [fabric-trace] records, and they differ from each other
+  (one relay, one loss; identical traces would mean the loss carried the
+  relay's event)
+- the admission marker carries interpositions=1, so the profile's declared
+  chain survived into the admitted graph
+- spawn order is exactly
+  fabric-service, fabric-publisher, fabric-subscriber, fabric-intruder,
+  fabric-publisher-b, fabric-subscriber-b
+- every spawned child has exit statuses [0], derived from the root's own
+  spawn records
+- no component reported a failure inside the composition window
+
+Scoping note:
+Every count above is taken from the transcript up to `[init] visibility plane
+complete`. The root launches one unconfigured instance of each component from
+the generation (P5.2); on this plane those are slower than the composition and
+fail after init has already exited. Counting the whole transcript would make the
+record totals depend on how far QEMU ran past the last marker.

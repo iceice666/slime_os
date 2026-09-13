@@ -1,0 +1,170 @@
+{
+  formatVersion = 1;
+  name = "sel4-scheduling-class";
+  generation = 43;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "scheduling-class";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "scheduling-class-probe";
+    "supervision-child";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sched-burner";
+      executable = "scheduling-class-probe";
+    };
+    {
+      name = "sched-controller";
+      executable = "scheduling-class-probe";
+    };
+    {
+      name = "sched-denied";
+      executable = "scheduling-class-probe";
+    };
+    {
+      name = "sched-foreground";
+      executable = "scheduling-class-probe";
+    };
+    {
+      name = "sched-promotable";
+      executable = "supervision-child";
+      owner = "sched-controller";
+      autostart = false;
+      health = "optional";
+      dependencies = [
+        "sched-controller";
+      ];
+    };
+  ];
+  grants = [
+    {
+      name = "sched-promotable-executable";
+      capabilityKind = "executable";
+      source = "sched-controller";
+      target = "supervision-child";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "sched-controller";
+      grant = "sched-promotable-executable";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "sched-foreground-tick";
+      source = "init";
+      target = "sched-foreground";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "sched-foreground-tick";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "sched-foreground-tick";
+      holder = "sched-foreground";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    {
+      holder = "sched-foreground";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "sched-foreground-tick";
+      timerQuota = 2;
+      timerUse = true;
+    };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  schedulingClass = {
+    bands = [
+      {
+        class = "foreground";
+        priority = 200;
+      };
+      {
+        class = "normal";
+        priority = 150;
+      };
+      {
+        class = "bestEffort";
+        priority = 100;
+      };
+    ];
+    instances = [
+      {
+        class = "foreground";
+        instance = "sched-foreground";
+      };
+      {
+        class = "bestEffort";
+        instance = "sched-burner";
+      };
+      {
+        class = "normal";
+        instance = "sched-controller";
+      };
+      {
+        class = "bestEffort";
+        instance = "sched-promotable";
+      };
+    ];
+    promotions = [
+      {
+        ceiling = "normal";
+        holder = "sched-controller";
+        subject = "sched-promotable";
+      };
+    ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -1,0 +1,163 @@
+# Slime OS Agent Guide
+
+## Scope
+
+These instructions apply to the entire repository.
+
+## Project state
+
+Slime OS is a QEMU-verified Rust `no_std` userspace graph on upstream seL4,
+with `slime-root` owning dynamic mechanism and generated Zutai contracts owning
+every persisted or cross-process format. Treat Framework laptop bring-up,
+physical NVMe qualification, rollbackable production generations, and
+daily-driver hardware support as unfinished unless code and tests prove otherwise.
+
+## Code map: start here, do not broad-search
+
+Route work by ownership before searching for a symbol. Read the named module root first; use LSP symbols/references from there when available, and only then grep the exact symbol. Do not scan `deps/`, `target/`, `devlog/`, `roadmap/`, or `.tasks/` for implementation symbols unless the task specifically concerns them.
+
+### Execution path
+
+1. `scripts/build/build-sel4.py` pins and builds seL4, the root task, its child fixture, and the loader image.
+2. `slime-root/src/main.rs` admits the embedded generation, creates the initial capability graph, launches components, supervises faults, and owns bounded kernel-object allocation.
+3. Components enter through `components/<lifecycle>/<component>/src/main.rs` — one crate per component (CP3), grouped under `system/`, `services/`, `applications/`, or `testkit/` — with shared helpers in `components/lib` and build-time support in `components/build-support`; their syscall surface is `components/runtime/src/syscall.rs`, with the native transport in `components/runtime/src/syscall/sel4_transport.rs` and authoritative operations in `slime-root/src/ipc.rs` plus the owning mechanism module.
+
+### Task-to-file index
+
+| Change | Canonical starting point | Follow-on files |
+| --- | --- | --- |
+| Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`, generation grants in `contracts/generation-manifest/v1/compositions/sel4-*.zti` |
+| Native endpoint IPC, message bounds, endpoint lifetime | `slime-root/src/peer_endpoint.rs` | `slime-root/src/{ipc,notification}.rs`, `components/runtime/src/syscall/sel4_transport.rs` |
+| Tasks, spawn, supervision, termination, reclamation | `slime-root/src/task.rs` | `slime-root/src/{main,child_vspace,fault,supervision}.rs` |
+| Syscall argument validation and rights gates | `slime-root/src/ipc.rs` | owner modules in `slime-root/src/`, wrappers in `components/runtime/src/syscall.rs` |
+| seL4 object allocation and VSpace construction | `slime-root/src/object_allocator.rs` | `slime-root/src/{child_vspace,buffer_adapter}.rs` |
+| Shared-buffer allocation, mapping, loan, accounting | `slime-root/src/shared_buffer.rs` | `slime-root/src/{buffer_adapter,transfer_window,ipc}.rs` |
+| Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, manifest fixtures below |
+| Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
+| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation-manifest/v1/compositions/sel4-*.zti`, `components/build-support/src/lib.rs` |
+| Component image format/loading | `contracts/component/v1/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs` |
+| Userspace component behavior | `components/<lifecycle>/<component>/src/main.rs` | shared helpers in `components/lib/src/*.rs`; the crate's own `components/<lifecycle>/<component>/Cargo.toml` |
+| Userspace syscall ABI | `components/runtime/src/syscall.rs` | seL4 transport in `components/runtime/src/syscall/sel4_transport.rs`, root implementation in `slime-root/src/ipc.rs` |
+| IPC/service protocol semantics | `contracts/<protocol>/v1/schema.zt` | generated Rust in `components/proto/src/<protocol>.rs`; validators in `components/proto/src/lib.rs` |
+| Boot/persistence contract decoder | `boot-contracts/src/<contract>.rs` | generated constants/layouts in `boot-contracts/src/generated/` |
+| Fabric schemas, graph authority, stream framing | `contracts/interface-schema/v1/`, `contracts/fabric-graph/v1/`, `contracts/fabric-stream/v1/` | `boot-contracts/src/fabric_graph.rs`, `components/services/fabric-service/src/main.rs` |
+| Block/storage transport and services | `components/services/virtio-blk-driver/src/main.rs` | ring adapter `components/lib/src/block_io.rs`, per-ring rights `contracts/block-authority/v1/schema.zt` and `boot-contracts/src/block_authority.rs`, raw device authority `slime-root/src/{device,io_resource}.rs`; qualification probes in `components/testkit/`. The boot selector's pre-admission reader is `slime-root/src/boot_selector_block.rs`, compiled only into `slime_boot_selector` images |
+| Generation management, rollback, recovery | `components/services/sel4-generation-manager/src/main.rs` | matching rollback/recovery/transfer probes in `components/testkit/`, all reaching storage over the userspace driver's IO0 rings |
+| Architecture, traps, interrupts, platform boot | `sel4/config/qemu-arm-virt.cmake` | `slime-root/src/{fault,platform_timer}.rs`, `scripts/build/build-sel4.py` |
+| Host build/check orchestration | `Justfile` target | implementation in `scripts/{build,check,generate,lib}/` |
+| Root behavioral regression | `slime-root/src/<module>.rs` tests | run `just test_sel4_root` and the matching `just sel4_*_check` |
+| Protocol validation regression | `components/proto/tests/<protocol>.rs` | generated protocol module and schema |
+| Adding a component | new `components/{system,services,applications,testkit}/<name>/` crate | the matching `Cargo.toml` workspace member glob plus its `[profile.release.package]` stanza, a `contracts/component-spec/v1/components/` record, and a generation-manifest entry; `just component_crate_split_check` gates the shape |
+
+### Generated-code rule
+
+Files beginning with `@generated` and files under `boot-contracts/src/generated/` are outputs, not sources. Change the matching `contracts/.../schema.zt` or `gen_rust.zt`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen`. `components/build-support` separately generates the build-time command tables from `contracts/generation-manifest/v1/fixtures/valid.zti` into each consuming crate's `OUT_DIR`, and copies the per-plane fabric profile the host builder renders.
+
+### Navigation traps
+
+- `slime-root/src/lib.rs` exposes the mechanism modules host tests compile; the product binary in `slime-root/src/main.rs` links those same modules.
+- A component's capability slot layout is established by grants in the matching `contracts/generation-manifest/v1/compositions/sel4-*.zti` and generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority.
+- `scripts/check/` contains end-to-end QEMU assertions and expected serial markers; it is verification code, not the implementation of the behavior it checks.
+
+## Commands
+
+Use the Justfile targets from the repository root:
+
+- `just run` — boot the current seL4 QEMU product image.
+- `just test` — run the root/product behavioral aggregate.
+- `just generation_check` — build and validate the deterministic seL4 generation.
+- `just contracts_check` — validate generation manifest contracts.
+- `just sel4_root_boot_check` — root admission, allocator, timer, fault isolation, cleanup, and ready path.
+- `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
+- `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
+- `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
+- `just sel4_fabric_aggregate_check` — C8.15's parent close: both aggregate schedules booted twice over one composition, with byte-identical semantic traces.
+- `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
+- `just devlog_check` — validate devlog structure, front matter (the exact eight fields, in order, no duplicates or extras), gates, and links including their `#fragment` anchors, and that every work-item reference is a UUID the store has. Reads the tree only, so it needs no MyQue binary.
+- `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity of the frozen backlog index in `roadmap/00-backlog.md`, whose headings are validated one section at a time because `B29` and `B30` are each carried twice.
+- `just tasks_list` / `just tasks_next` / `just tasks_graph` — the work-item store's generated views. Never authoritative; `.tasks/items/` is.
+- `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
+- `just lint_all` — run clippy with warnings denied for components, boot-contracts, and seL4 product crates.
+- `just deny` — dependency advisories, bans, licenses, and source pinning.
+- `just machete` — unused-dependency scan of workspace crates.
+- `just miri` — UB check of host-testable crates.
+- `just test_host` — host-side unit tests for boot-contracts and slime-proto.
+- `just test_sel4_root` — `slime-root`'s 211 host unit tests across 19 modules, with the count asserted (B23); requires the installed seL4 prefix.
+- `just ruff` — Python lint for `scripts/`.
+- `just typos` — spell-check sources and docs.
+
+## Work items, backlog, and roadmap
+
+`.tasks/items/` is the canonical record of work-item identity, state, hierarchy, and dependencies, managed by [MyQue](https://github.com/mozufu/myque). Canonical identity is the UUID a work item's filename carries. Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: they are optional, they may change, and no checker, devlog reference, dependency edge, or generated view may resolve through them. Do not allocate an id by scanning for the next number, and do not create a persistent relationship using a human key — use `myque` to create and mutate items, which allocates a UUIDv7 locally and writes relationships as UUIDs.
+
+Backlog defects are the items tagged `backlog`. Resolve, defer, or block every open one before starting a new track milestone; a green verification suite is a precondition for milestone work, not a milestone itself. `deferred` means postponed by decision and `blocked` means waiting on something outside this repository — both satisfy the rule, `open` and `active` do not. `just tasks_check` enforces that ordering and validates the store, and `just tasks_next` lists what is actionable. Create an item with `myque new "<title>" --kind bug --tag backlog`, which allocates the UUID; close it with `myque close`, which records the closure date, and record the exit condition that was *observed* in the item's body — a milestone closes on observed evidence, never on implementation status alone.
+
+`roadmap/00-backlog.md` is a *frozen* index over the pre-cutover items: a `### B<N> — <title>` heading, the devlog entry holding the investigation, and the UUID carrying the state. It exists because 75 devlog entries link into it and 8 of those links are anchored at a heading, so never reword or renumber a landed one, and never restate a problem statement, exit condition, or status there — the item owns all three. It is not the backlog and not a destination for new work: a new defect is a `backlog`-tagged item plus, where warranted, a devlog entry, and nothing requires a heading here. `just tasks_check` holds the landed headings honest — every one carries a UUID the store still has, and the set does not shrink — while `just devlog_check` validates the heading fragments inbound links name. Neither checks an item's state from this file: a frozen index is a route into the store, never a constraint on it, so a legitimately reopened item is `just tasks_check`'s backlog-first question and not the index's.
+
+`roadmap/` is readable architectural documentation and carries no tracker semantics: its headings allocate no identity, and completion, state, hierarchy, and dependencies are the store's. There is no mechanism, supported or otherwise, by which editing `roadmap/` creates or mutates a work item; the data flows one way, from the store into views and documentation.
+
+## Development log
+
+`devlog/` is the curated, chronological record of investigations, regressions, design decisions, and verification results. Record an entry whenever you complete a roadmap milestone or land a non-trivial feature, make a design or architecture decision, fix a non-trivial regression, root-cause a defect, or run a verification campaign.
+
+Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `index.md` written from `devlog/TEMPLATE.md`, with focused reports, raw transcripts, and other evidence as siblings in that folder — a folder even when there is no evidence yet, so later evidence never moves the entry. Front matter declares `Date`, `Kind` (`Defect`/`Change`/`Audit`/`Decision`, which selects the required sections), `Status`, `Scope`, `Work items`, `Gates`, `Trigger`, and `Baseline` in that order; `Work items` names canonical work-item UUIDs — only UUIDs resolve, a key is a display alias — and `Gates` names real Justfile targets. Register the entry in `devlog/README.md`, whose index carries keys in its own display column, and follow its evidence rules — prefer exact `just` targets and observed results, label inherited evidence and unobserved conclusions, and never rewrite a raw log; corrections are appended under `## Corrections`, never edited into the frozen body. Run `just devlog_check` after touching `devlog/`. Work-item state is the store's; devlog entries explain how conclusions were reached. When a backlog item or milestone closes, its devlog entry is the record of how it closed, and the `roadmap/` side keeps only the rationale plus a link to that entry. A resolved backlog item or completed milestone with no devlog link is incomplete: either write the entry or leave the full text in place and say why no entry exists.
+
+Devlog entries correspond to logical events, not commits. Before merge, follow-up commits that continue the same logical change update its curated entry in place; a distinct investigation, defect, decision, or independently meaningful change gets a new entry even in the same PR. After merge, preserve the landed entry: append factual corrections under `## Corrections`, and create a new entry for subsequent implementation or investigation work. Raw evidence is immutable. The one exception is a repository-format migration of the front matter's machine fields, which re-expresses the same reference in a new form and asserts nothing new; `devlog/README.md` states its bounds. Prose is never migrated — a landed entry may keep describing an architecture the repository has since replaced.
+
+## Documentation ownership
+
+A comment should state what must remain true, not argue that the author was right.
+
+Keep implementation comments for correctness or safety invariants not evident
+from types or code, ownership and ordering requirements, ABI constraints,
+capability or security boundaries, platform constraints, and why an apparently
+simpler local implementation would violate a current invariant. Do not put
+investigation history, failed approaches, reviewer findings, mutation campaigns,
+historical alternatives, speculative designs, verification results, or narration
+of the code in implementation comments.
+
+Place local invariants beside the implementation, stable subsystem rationale in
+the owning `docs/` or contract documentation, investigation and evidence in
+`devlog/`, and review guidance in the PR description. Prefer one to three precise
+sentences over defensive paragraphs. PR descriptions state the change, claim,
+risk, review surface, and verification; they do not duplicate devlogs.
+
+## Development rules
+
+- **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, and boot records — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
+- Prefer small, direct changes over new abstractions.
+- Keep mechanism in `slime-root`; component policy belongs in userspace components.
+- Preserve the capability/component/generation model. Do not add ambient authority, global executable paths, or implicit environment assumptions.
+- Do not treat framebuffer output alone as milestone completion.
+- Do not claim physical-machine support without an observed removable-media Framework boot that does not write internal NVMe.
+- Keep generation data deterministic, versioned, bounded, and explicitly validated.
+
+## Verification code discipline
+
+Do not create a new `scripts/check/check-*.py` merely because a change adds an
+invariant or roadmap gate. Identify the verification mechanism that owns the
+invariant, extend its checker when one exists, and add a case or module when
+execution and evidence collection are shared. Add a top-level checker only for a
+genuinely new mechanism or independently reusable boundary, such as a different
+execution environment, distinct input/output protocol, stable subsystem boundary
+with multiple checks, independent reuse, or materially different semantics.
+
+Roadmap items, backlog IDs, compositions, individual regressions, and individual
+QEMU planes do not by themselves justify top-level checker executables. Public
+`just` targets remain narrow and descriptive; several targets may invoke one
+checker with different cases.
+
+For seL4 planes, converge repeated mechanisms toward a shared
+`scripts/check/check-sel4-plane.py` entry point with focused modules under
+`scripts/check/sel4/`. The shared runner should own QEMU invocation, transcript
+collection, marker ordering, common failures, and common control or mutation
+machinery. Plane modules should own concrete expectations for boot, lifecycle,
+fabric, IO, storage, and similar domains. Extract only observed repetition; do
+not build a generic class-heavy test framework, and keep existing public gates.
+
+## Verification
+
+- For root or userspace behavior changes, run the narrowest seL4 QEMU path that exercises the changed behavior.
+- For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
+- For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing.
+- For documentation-only changes, state that no runtime tests were run.

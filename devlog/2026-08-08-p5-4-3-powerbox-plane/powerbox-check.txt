@@ -1,0 +1,50 @@
+Command: just sel4_powerbox_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-powerbox.elf (generation 32) on the pinned qemu-arm-virt
+profile. No disk: M6.6 is a capability handoff, not storage.
+
+Observed (composition only; the root also launches unconfigured copies):
+[init] powerbox chooser spawned
+[init] powerbox probe spawned
+[powerbox-probe] manifest directory absent
+[powerbox] chooser ready
+[powerbox] request kind=file purpose=Open the selected note [Enter=select Escape=cancel]
+[powerbox-provenance] event=1 gesture=select kind=file path=note rights=0x00080004 purpose=Open the selected note
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=1
+[powerbox-probe] selected single object received
+[powerbox] derive closure denied
+[powerbox-probe] derive closure enforced
+[powerbox] request kind=file purpose=Cancel this selection [Enter=select Escape=cancel]
+[powerbox] selection cancelled
+[powerbox] chooser complete
+[powerbox-probe] cancellation minted nothing
+[powerbox-probe] done
+[init] powerbox plane complete
+
+Terminal result:
+transcript: 11 markers observed; exactly one capability crossed on selection with rights 0x80004, a widening request was denied, and a cancellation minted nothing
+seL4 powerbox plane check: a selection gesture granted one otherwise unreachable object capability, scoped and narrowed, with a provenance record; a widening request was denied, the transferred view could not be derived past its scope, and a cancellation minted nothing
+
+Enforced beyond the ordered markers:
+- exactly ONE capability crossed the powerbox channel across all three requests.
+  Three are made — select, widen, cancel — and only the first may carry one. A
+  chooser that answered the widening request with a mint, or minted on
+  cancellation, shows more than one; the probe's own assertions cannot
+  distinguish "denied" from "granted and discarded".
+- the provenance record's rights are checked for `directoryWrite` (1 << 20),
+  which the chooser does not hold. Observed 0x80004 = directoryRead | transfer,
+  exactly what the request declared.
+- exactly one requester completed the scenario.
+
+The authority claim:
+`[powerbox-probe] manifest directory absent` is the arm that makes the rest
+meaningful. The requester's generation grants it *one* RPC endpoint; it verifies
+it holds no directory before asking for anything, so the capability it later
+inspects can only have come from the chooser's mint. Both instances of the
+component reach that arm — it is true of the root-launched copy too — which is
+why the gate asserts it by presence rather than by position.
+
+Both components are the oracle's, unmodified: `powerbox-chooser.rs` and
+`powerbox-probe.rs` are shared with `just powerbox_check`.

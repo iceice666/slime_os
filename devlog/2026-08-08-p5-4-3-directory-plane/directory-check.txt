@@ -1,0 +1,63 @@
+Command: just sel4_directory_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-directory.elf (generation 28) on the pinned qemu-arm-virt
+profile. No disk: this plane is about capability state, not storage.
+
+Observed:
+[sel4-directory-probe] idle without a run token
+SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=directory
+[init] directory probe spawned
+SLIME_GRAPH directory inspected task=2 slot=1 namespace=0 scope=-
+[sel4-directory-probe] unscoped view of an empty namespace
+[sel4-directory-probe] inspect outside the rights set refused
+SLIME_GRAPH directory committed task=2 namespace=0 root=a1a1a1a1
+SLIME_GRAPH directory inspected task=2 slot=1 namespace=0 scope=-
+[sel4-directory-probe] root committed and visible
+SLIME_GRAPH directory commit stale task=2 namespace=0
+SLIME_GRAPH directory inspected task=2 slot=1 namespace=0 scope=-
+[sel4-directory-probe] stale commit refused
+SLIME_GRAPH directory derived task=2 from=1 to=2 namespace=0 scope=docs rights=0x780000
+SLIME_GRAPH directory inspected task=2 slot=2 namespace=0 scope=docs
+[sel4-directory-probe] derived a scoped view
+SLIME_GRAPH directory derived task=2 from=2 to=3 namespace=0 scope=docs/notes rights=0x480000
+SLIME_GRAPH directory inspected task=2 slot=3 namespace=0 scope=docs/notes
+[sel4-directory-probe] scopes compose forward
+[sel4-directory-probe] escaping paths refused
+[sel4-directory-probe] widening derivation refused
+SLIME_GRAPH directory derived task=2 from=1 to=4 namespace=0 scope=opaque rights=0x80000
+[sel4-directory-probe] derivation without the right refused
+SLIME_GRAPH directory commit refused task=2 slot=2 namespace=0 reason=scoped scope=docs
+SLIME_GRAPH directory inspected task=2 slot=1 namespace=0 scope=-
+[sel4-directory-probe] scoped commit refused
+[sel4-directory-probe] read-only commit refused
+SLIME_GRAPH directory committed task=2 namespace=0 root=b2b2b2b2
+SLIME_GRAPH directory inspected task=2 slot=2 namespace=0 scope=docs
+[sel4-directory-probe] the namespace is shared across views
+[sel4-directory-probe] directory plane complete
+
+Terminal result:
+transcript: 17 markers observed; the root recorded 2 commits, 1 stale refusal, 1 scoped-commit refusals, and derivations ['docs', 'docs/notes', 'opaque']
+seL4 directory plane check: a component held one unscoped directory capability, derived narrower views that cannot escape or widen, was refused a stale commit and a scoped one, and saw its commits through every view of the shared namespace
+
+Enforced beyond the ordered markers, against the ROOT's own records rather than
+the component's claims:
+- exactly 2 commits succeeded, in one namespace, installing distinct roots. A
+  mechanism that accepted the stale commit would record 3, and the probe's own
+  assertions could not distinguish "refused" from "accepted but reported
+  refused".
+- exactly 1 stale commit was refused.
+- at least one scoped commit was refused with reason=scoped.
+- the derivations the mechanism actually performed are named and checked:
+  docs, docs/notes, opaque.
+- exactly one instance ran the scenario.
+
+Rights masks observed on the derivations (0x780000 = all four directory rights,
+0x480000 = read|derive, 0x80000 = read alone) show the narrowing is real: the
+`opaque` view carries read only, and its attempt to derive a child is refused.
+
+No disk is attached. That is itself the finding: the oracle's three directory
+operations touch no device, no physical memory, and no privileged register —
+they are pure capability state with an atomic transition, which is why they are
+root MECHANISM while a directory's *contents* stay in userspace.

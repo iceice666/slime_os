@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "io-link-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Drives ordered LinkDevice conformance, readiness, reset, restart, stale-epoch, and exact charge-reclamation scenarios.";
+  implementation = {
+    provider = "workspace";
+    binary = "io-link-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 2;
+      extraThreads = 0;
+      bufferBytePages = 16;
+      bufferCount = 16;
+      mappingCount = 16;
+      loanCount = 16;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the io_link_check gate boots the sel4-io-link composition";
+    expectedResult = "all ordered duplex, bounds, coalescing, reset, restart, and stale-completion checks pass";
+    passFailCriteria = "[io-link-probe] io link plane complete";
+    requiredTestEnvironment = "io_link_check";
+  };
+}

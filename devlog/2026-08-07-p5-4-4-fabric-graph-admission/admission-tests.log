@@ -1,0 +1,4 @@
+test generation::tests::a_satisfiable_fabric_graph_is_admitted ... ok
+test generation::tests::a_self_contradicting_graph_is_refused_within_every_ceiling ... ok
+test generation::tests::no_graph_exceeding_a_ceiling_is_admitted ... ok
+test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

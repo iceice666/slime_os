@@ -1,0 +1,4 @@
+[layout] path=init slots=2 max=64
+[layout] 1 executable supervision-child 0x1000c
+[layout] 2 executable sysinfo 0x10008
+[layout] end

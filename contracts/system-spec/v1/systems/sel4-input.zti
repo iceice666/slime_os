@@ -1,0 +1,160 @@
+{
+  formatVersion = 1;
+  name = "sel4-input";
+  generation = 31;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "input";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "sel4-input-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sel4-input-probe";
+      executable = "sel4-input-probe";
+      autostart = false;
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "sel4-input-probe-idle";
+      executable = "sel4-input-probe";
+      owner = "root";
+      dependencies = [
+        "init";
+      ];
+    };
+  ];
+  grants = [
+    {
+      name = "init-sel4-input-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-input-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "input-probe-source";
+      capabilityKind = "input";
+      source = "sel4-input-probe";
+      target = "sel4-input-probe";
+      rights = [
+        "inputRead";
+      ];
+      transferable = false;
+    };
+    {
+      name = "input-probe-idle-source";
+      capabilityKind = "input";
+      source = "sel4-input-probe-idle";
+      target = "sel4-input-probe-idle";
+      rights = [
+        "inputRead";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-input-probe-run-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sel4-input-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-input-probe-idle-token";
+      capabilityKind = "endpoint";
+      source = "sel4-input-probe-idle";
+      target = "sel4-input-probe-idle";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sel4-input-probe";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sel4-input-probe-run-token";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-input-probe";
+      grant = "input-probe-source";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-input-probe";
+      grant = "sel4-input-probe-run-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-input-probe-idle";
+      grant = "input-probe-idle-source";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-input-probe-idle";
+      grant = "sel4-input-probe-idle-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

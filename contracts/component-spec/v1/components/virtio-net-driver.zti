@@ -1,0 +1,69 @@
+{
+  formatVersion = 1;
+  name = "virtio-net-driver";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Supervised userspace virtio-net driver exposing one bounded duplex LinkDevice over separate IO0 transmit and receive queues.";
+  implementation = {
+    provider = "workspace";
+    binary = "virtio-net-driver";
+    contentHash = "";
+  };
+  provides = [
+    "device";
+    "dmaAccount";
+    "interruptSource";
+    "mmioRegion";
+  ];
+  requires = [
+    "device";
+    "dmaAccount";
+    "endpoint";
+    "interruptSource";
+    "mmioRegion";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 8;
+      loanCount = 16;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the io_link_check gate boots the sel4-io-link composition with a deterministic QEMU socket backend";
+    expectedResult = "the driver negotiates virtio-net, drains duplex queues, resets every request, and returns every IO1 charge on restart";
+    passFailCriteria = "[virtio-net-driver] restart reclaimed dma=0 requests=0 leases=0 mmio=1 irq=1";
+    requiredTestEnvironment = "io_link_check";
+  };
+}

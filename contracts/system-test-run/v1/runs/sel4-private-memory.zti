@@ -1,0 +1,16 @@
+{
+  formatVersion = 1;
+  name = "sel4-private-memory";
+  imageClosureIdentity = "de960e6704121630b969e2700d4aa2018d938f659b4c3ab7321b5eebc713111e";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

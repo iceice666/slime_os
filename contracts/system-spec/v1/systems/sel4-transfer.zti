@@ -1,0 +1,500 @@
+{
+  formatVersion = 1;
+  name = "sel4-transfer";
+  generation = 33;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "transfer";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "sel4-transfer-probe";
+    "virtio-blk-driver";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 1;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "sel4-transfer-probe";
+      executable = "sel4-transfer-probe";
+      autostart = false;
+      dependencies = [
+        "init";
+      ];
+      bufferBytePages = 20;
+      bufferCount = 4;
+      mappingCount = 4;
+      loanCount = 4;
+    };
+    {
+      name = "sel4-transfer-probe-idle";
+      executable = "sel4-transfer-probe";
+      owner = "root";
+      dependencies = [
+        "init";
+      ];
+    };
+    {
+      name = "virtio-blk-receiver";
+      executable = "virtio-blk-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+    {
+      name = "virtio-blk-source";
+      executable = "virtio-blk-driver";
+      bufferBytePages = 0;
+      bufferCount = 0;
+    };
+  ];
+  grants = [
+    {
+      name = "init-sel4-transfer-probe";
+      capabilityKind = "executable";
+      source = "init";
+      target = "sel4-transfer-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-init-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "init";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-probe-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      source = "init";
+      target = "sel4-transfer-probe";
+      rights = [
+        "bufferCreate";
+      ];
+      transferable = true;
+    };
+    {
+      name = "transfer-receiver-peer";
+      capabilityKind = "endpoint";
+      source = "sel4-transfer-probe";
+      target = "virtio-blk-receiver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "transfer-receiver-device";
+      capabilityKind = "device";
+      source = "virtio-blk-receiver";
+      target = "virtio-blk-receiver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-receiver-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-blk-receiver";
+      target = "virtio-blk-receiver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-receiver-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-blk-receiver";
+      target = "virtio-blk-receiver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-receiver-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-blk-receiver";
+      target = "virtio-blk-receiver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-source-peer";
+      capabilityKind = "endpoint";
+      source = "sel4-transfer-probe";
+      target = "virtio-blk-source";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
+    };
+    {
+      name = "transfer-source-device";
+      capabilityKind = "device";
+      source = "virtio-blk-source";
+      target = "virtio-blk-source";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-source-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-blk-source";
+      target = "virtio-blk-source";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-source-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-blk-source";
+      target = "virtio-blk-source";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "transfer-source-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-blk-source";
+      target = "virtio-blk-source";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-transfer-probe-run-token";
+      capabilityKind = "endpoint";
+      source = "init";
+      target = "sel4-transfer-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "sel4-transfer-probe-idle-token";
+      capabilityKind = "endpoint";
+      source = "sel4-transfer-probe-idle";
+      target = "sel4-transfer-probe-idle";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "init";
+      grant = "init-sel4-transfer-probe";
+      slot = 1;
+      reason = "bootLayout";
+    };
+    {
+      holder = "init";
+      grant = "sel4-transfer-probe-run-token";
+      slot = 2;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "init";
+      grant = "transfer-init-buffer-factory";
+      slot = 4;
+      reason = "bootLayout";
+    };
+    {
+      holder = "sel4-transfer-probe";
+      grant = "sel4-transfer-probe-run-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "sel4-transfer-probe";
+      grant = "transfer-probe-buffer-factory";
+      slot = 3;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-transfer-probe";
+      grant = "transfer-receiver-peer";
+      slot = 8;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-transfer-probe";
+      grant = "transfer-source-peer";
+      slot = 9;
+      reason = "encodedLayout";
+    };
+    {
+      holder = "sel4-transfer-probe-idle";
+      grant = "sel4-transfer-probe-idle-token";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-receiver";
+      grant = "transfer-receiver-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-receiver";
+      grant = "transfer-receiver-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-receiver";
+      grant = "transfer-receiver-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-receiver";
+      grant = "transfer-receiver-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-receiver";
+      grant = "transfer-receiver-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-source";
+      grant = "transfer-source-peer";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-source";
+      grant = "transfer-source-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-source";
+      grant = "transfer-source-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-source";
+      grant = "transfer-source-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-blk-source";
+      grant = "transfer-source-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "transfer-receiver-request-ready";
+      source = "sel4-transfer-probe";
+      target = "virtio-blk-receiver";
+    };
+    {
+      name = "transfer-receiver-completion-ready";
+      source = "virtio-blk-receiver";
+      target = "sel4-transfer-probe";
+    };
+    {
+      name = "transfer-receiver-state-changed";
+      source = "virtio-blk-receiver";
+      target = "sel4-transfer-probe";
+    };
+    {
+      name = "transfer-source-request-ready";
+      source = "sel4-transfer-probe";
+      target = "virtio-blk-source";
+    };
+    {
+      name = "transfer-source-completion-ready";
+      source = "virtio-blk-source";
+      target = "sel4-transfer-probe";
+    };
+    {
+      name = "transfer-source-state-changed";
+      source = "virtio-blk-source";
+      target = "sel4-transfer-probe";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "transfer-receiver-request-ready";
+      holder = "sel4-transfer-probe";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "transfer-receiver-request-ready";
+      holder = "virtio-blk-receiver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "transfer-receiver-completion-ready";
+      holder = "virtio-blk-receiver";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "transfer-receiver-completion-ready";
+      holder = "sel4-transfer-probe";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "transfer-receiver-state-changed";
+      holder = "virtio-blk-receiver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "transfer-receiver-state-changed";
+      holder = "sel4-transfer-probe";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "transfer-source-request-ready";
+      holder = "sel4-transfer-probe";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "transfer-source-request-ready";
+      holder = "virtio-blk-source";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "transfer-source-completion-ready";
+      holder = "virtio-blk-source";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "transfer-source-completion-ready";
+      holder = "sel4-transfer-probe";
+      role = "wait";
+      slot = 4;
+    };
+    {
+      grant = "transfer-source-state-changed";
+      holder = "virtio-blk-source";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "transfer-source-state-changed";
+      holder = "sel4-transfer-probe";
+      role = "wait";
+      slot = 5;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      bufferLoans = 4;
+      device = 0;
+      dmaMappings = 3;
+      dmaPages = 12;
+      holder = "virtio-blk-receiver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 8;
+    };
+    {
+      bufferLoans = 4;
+      device = 1;
+      dmaMappings = 3;
+      dmaPages = 12;
+      holder = "virtio-blk-source";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 8;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [
+    {
+      device = 0;
+      holder = "sel4-transfer-probe";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      ring = 0;
+      sectorLimit = 2048;
+    };
+    {
+      device = 1;
+      holder = "sel4-transfer-probe";
+      rights = [
+        "blockRead";
+      ];
+      ring = 0;
+      sectorLimit = 2048;
+    };
+  ];
+  blockRingAuthorityObject = true;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

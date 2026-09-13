@@ -1,0 +1,343 @@
+-- Raspberry Pi 5 ROS 2 two-node demo acceptance contract, version 2 (RP0).
+--
+-- This is a host-side activation contract. It fixes the exact physical target,
+-- ROS profile, transport profile, workload, resource ceilings, authority
+-- inventory, evidence trace, and operator markers that later implementation
+-- milestones must satisfy.
+--
+-- Format 2 exists because format 1 fixed one transport family into the
+-- contract's own shape: a `DdsProfile` record with `rtpsVersion`,
+-- `writerEntityId`, and `requiredSubmessages` fields made DDSI-RTPS a property
+-- of the contract rather than a value it carries. A userspace transport must be
+-- replaceable without a new contract version, so this format names the
+-- transport through a closed discriminator and one optional profile record per
+-- admitted family. Exactly one profile is present, and it is the one
+-- `transport` names; the rest are absent. Swapping transports is then a change
+-- of generation data, not a schema migration.
+--
+-- Zenoh and DDSI-RTPS are both admitted families. Format 2's fixture selects
+-- Zenoh; the DDSI-RTPS shape is retained in full because R1's peer target may
+-- name either, and a family that cannot be expressed cannot be compared.
+--
+-- Payload serialization is deliberately shared rather than per-transport:
+-- `rmw_zenoh_cpp` puts classic CDR on the wire through
+-- `rosidl_typesupport_fastrtps_cpp` exactly as `rmw_fastrtps_cpp` does
+-- (`rmw_zenoh_cpp/src/detail/cdr.cpp` forces `CdrVersion::DDS_CDR`), so the
+-- representation, the ROSIDL importer, and the golden byte fixtures do not
+-- belong to the transport choice at all.
+
+BoardProfile :: type {
+  id : Text;
+  model : Text;
+  acceptedRevisionCodes : List Text;
+  soc : Text;
+  architecture : Text;
+  abi : Text;
+  pageProfile : Text;
+  firmwareId : Text;
+  bootFlow : Text;
+  kernelPath : Text;
+  configPath : Text;
+  deviceTreePath : Text;
+  mediaKind : Text;
+  mediaLayout : Text;
+  memoryMapSource : Text;
+  interruptController : Text;
+  genericTimer : Text;
+  serialPath : Text;
+  serialBaud : Int;
+  requiredDevices : List Text;
+};
+
+-- The ROS-facing boundary, independent of which transport carries it.
+--
+-- `distribution` is the distribution whose middleware tier admits the selected
+-- transport, not the newest one: REP-2000 lists `rmw_zenoh_cpp` Tier 1 under
+-- Kilted Kaiju and Rolling, and does not list it in the Jazzy Jalisco
+-- middleware table at all.
+--
+-- `representation` is here rather than in a transport profile because both
+-- admitted families carry the same classic CDR bytes.
+RosProfile :: type {
+  id : Text;
+  distribution : Text;
+  nodeRoute : Text;
+  apiSubset : List Text;
+  rmwBoundary : Text;
+  transportRuntime : Text;
+  representation : Text;
+  endianness : Text;
+  securityEnabled : Bool;
+};
+
+-- One exact datagram or stream destination. Named `Endpoint` rather than
+-- `Locator` because "locator" is DDSI-RTPS vocabulary and this record now
+-- serves both families: a Zenoh session endpoint is a transport locator string
+-- in the same (protocol, address, port) shape.
+Endpoint :: type {
+  name : Text;
+  protocol : Text;
+  address : Text;
+  port : Int;
+  direction : Text;
+};
+
+-- Requested/offered QoS, in the vocabulary both families share. Neither
+-- family's own encoding appears here: `rmw_zenoh` renders these same axes into
+-- a liveliness-token substring, and DDSI-RTPS renders them into a parameter
+-- list, but the admitted policy is one set of values either way.
+QosProfile :: type {
+  history : Text;
+  historyDepth : Int;
+  reliability : Text;
+  durability : Text;
+  liveliness : Text;
+  deadlineNs : Int;
+  lifespanNs : Int;
+  leaseNs : Int;
+};
+
+-- The bounded Zenoh subset (`transport = "zenoh"`).
+--
+-- `protocolVersion` is the byte Zenoh's INIT carries and negotiates:
+-- `commons/zenoh-protocol/src/lib.rs` defines `pub const VERSION: u8 = 0x09`,
+-- and a responder that does not support the proposed version answers CLOSE
+-- (UNSUPPORTED) rather than downgrading. Freezing it makes an upstream bump a
+-- visible contract change instead of a silent handshake failure.
+--
+-- `sessionMessages` and `declarationMessages` are the exact wire surface this
+-- profile admits, from the Zenoh 1.0.0 specification's session establishment
+-- and network-message definitions. Anything absent is unimplemented and must
+-- fail closed rather than be tolerated.
+--
+-- `keyexprFormat` records how `dataKeyexpr` is composed, and `dataKeyexpr` is
+-- the exact string. Both are present on purpose: the format is what a reviewer
+-- checks a future topic against, and the literal is what the gate compares.
+-- The composition is `rmw_zenoh_cpp`'s own
+-- (`liveliness::TopicInfo::TopicInfo`), so a peer built to this contract
+-- addresses the same Zenoh resource an `rmw_zenoh` peer does.
+--
+-- `typeNameOnWire` is the DDS-mangled spelling `_create_type_name` produces,
+-- which is not the ROS slash form. `typeHash` is the RIHS01 hash the same
+-- keyexpr embeds.
+--
+-- `discoveryMode` is static: R0 declares both ends in the generation and runs
+-- no discovery at all. rmw_zenoh's own graph discovery uses liveliness tokens
+-- relayed by a router's gossip (its README states multicast scouting is off by
+-- default), and neither a router nor ambient multicast is admissible here.
+-- `livelinessTokens` records that this profile publishes none.
+--
+-- `attachmentBytes` is the fixed per-message attachment length: `rmw_zenoh`
+-- serializes `sequence_number`, `source_timestamp`, and a 16-byte GID through
+-- `zenoh::ext::Serializer`, whose integers are fixed-width little-endian and
+-- whose fixed-size arrays still carry a LEB128 length prefix, giving
+-- 8 + 8 + 1 + 16 = 33 bytes with no container header.
+ZenohProfile :: type {
+  id : Text;
+  protocolVersion : Int;
+  sessionMode : Text;
+  linkProtocol : Text;
+  batchLengthBytes : Int;
+  maxBatchBytes : Int;
+  sessionMessages : List Text;
+  declarationMessages : List Text;
+  routerRequired : Bool;
+  multicastScouting : Bool;
+  gossipScouting : Bool;
+  discoveryMode : Text;
+  livelinessTokens : Bool;
+  domainId : Int;
+  keyexprFormat : Text;
+  dataKeyexpr : Text;
+  typeNameOnWire : Text;
+  typeHash : Text;
+  attachmentFields : List Text;
+  attachmentBytes : Int;
+  endpoints : List Endpoint;
+  qos : QosProfile;
+  teardown : Text;
+};
+
+-- The bounded DDSI-RTPS subset (`transport = "ddsi-rtps"`). Retained in full so
+-- R1 can name a Fast DDS or Cyclone DDS peer target without a format 3.
+DdsiRtpsProfile :: type {
+  id : Text;
+  rtpsVersion : Text;
+  domainId : Int;
+  discoveryMode : Text;
+  publisherParticipantGuidPrefix : Text;
+  subscriberParticipantGuidPrefix : Text;
+  writerEntityId : Text;
+  readerEntityId : Text;
+  requiredSubmessages : List Text;
+  heartbeatPeriodNs : Int;
+  ackTimeoutNs : Int;
+  retryLimit : Int;
+  fragmentSizeBytes : Int;
+  endpoints : List Endpoint;
+  qos : QosProfile;
+  teardown : Text;
+};
+
+NodeProfile :: type {
+  component : Text;
+  name : Text;
+  namespace : Text;
+  role : Text;
+};
+
+MessageField :: type {
+  name : Text;
+  kind : Text;
+  bound : Int;
+};
+
+-- `typeHashInput` is the exact UTF-8 text RIHS01 hashes: the flow-style
+-- document `rcl_type_description_to_hashable_json` emits, with no trailing
+-- newline. It is frozen alongside the hash because the hash alone is not
+-- checkable -- REP-2011 was never merged, so `ros2/rcl`'s implementation is the
+-- only specification, and recording the input is what lets an independent
+-- implementation prove it agrees rather than copy a literal.
+MessageType :: type {
+  rosName : Text;
+  typeIdentity : Text;
+  typeHash : Text;
+  typeHashInput : Text;
+  idl : Text;
+  fields : List MessageField;
+  maxSerializedBytes : Int;
+};
+
+-- One expected sample: its sequence, its value, and the exact CDR bytes it
+-- serializes to. The bytes are part of the contract because the demo's whole
+-- claim is that a real ROS 2 wire representation crossed the boundary.
+ExpectedSample :: type {
+  sequence : Int;
+  value : Int;
+  cdrHex : Text;
+};
+
+Workload :: type {
+  publisher : NodeProfile;
+  subscriber : NodeProfile;
+  topic : Text;
+  message : MessageType;
+  publishCount : Int;
+  publishPeriodNs : Int;
+  samples : List ExpectedSample;
+  expectedSubscriberLine : Text;
+};
+
+ResourceBounds :: type {
+  maxTextBytes : Int;
+  maxSequenceItems : Int;
+  maxMessageBytes : Int;
+  maxPayloadBytes : Int;
+  maxTransportMessageBytes : Int;
+  maxAttachmentBytes : Int;
+  maxKeyexprBytes : Int;
+  maxFragmentBytes : Int;
+  maxFragmentsPerSample : Int;
+  maxQueueDepth : Int;
+  maxHistoryDepth : Int;
+  maxSessions : Int;
+  maxPublishers : Int;
+  maxSubscribers : Int;
+  maxOutstandingSamples : Int;
+  maxRetries : Int;
+  maxTraceRecords : Int;
+  maxTraceRecordBytes : Int;
+  maxTraceBytes : Int;
+  maxSerialLineBytes : Int;
+  maxLogBytes : Int;
+  maxCapabilityGrants : Int;
+};
+
+CapabilityGrant :: type {
+  holder : Text;
+  kind : Text;
+  object : Text;
+  rights : List Text;
+};
+
+TraceContract :: type {
+  id : Text;
+  version : Int;
+  recordKinds : List Text;
+  requiredSuccessSequence : List Text;
+};
+
+-- `malformedWire` and `malformedPayload` replace format 1's `malformedRtps` and
+-- `malformedXcdr`: the failure classes are transport-framing and payload
+-- decoding, which every admitted family has, while the old names could only
+-- describe one of them.
+OperatorMarkers :: type {
+  success : Text;
+  denial : Text;
+  timeout : Text;
+  wrongBoard : Text;
+  wrongTarget : Text;
+  wrongTransport : Text;
+  malformedWire : Text;
+  malformedPayload : Text;
+  malformedGeneration : Text;
+};
+
+-- `transport` is the discriminator. It names which of the optional profile
+-- records is present; a reader that does not recognize the value rejects the
+-- contract rather than falling back to a default family.
+DemoContract :: type {
+  formatVersion : Int;
+  id : Text;
+  targetProfile : Text;
+  board : BoardProfile;
+  ros : RosProfile;
+  transport : Text;
+  zenoh? : ZenohProfile;
+  ddsiRtps? : DdsiRtpsProfile;
+  workload : Workload;
+  bounds : ResourceBounds;
+  capabilities : List CapabilityGrant;
+  trace : TraceContract;
+  markers : OperatorMarkers;
+};
+
+FromData @BoardProfile :: derive
+FromData @RosProfile :: derive
+FromData @Endpoint :: derive
+FromData @QosProfile :: derive
+FromData @ZenohProfile :: derive
+FromData @DdsiRtpsProfile :: derive
+FromData @NodeProfile :: derive
+FromData @MessageField :: derive
+FromData @MessageType :: derive
+FromData @ExpectedSample :: derive
+FromData @Workload :: derive
+FromData @ResourceBounds :: derive
+FromData @CapabilityGrant :: derive
+FromData @TraceContract :: derive
+FromData @OperatorMarkers :: derive
+FromData @DemoContract :: derive
+
+decodeDemoContract :: Data -> Validation DecodeIssue DemoContract
+= data => decode data;
+
+{
+  BoardProfile =;
+  RosProfile =;
+  Endpoint =;
+  QosProfile =;
+  ZenohProfile =;
+  DdsiRtpsProfile =;
+  NodeProfile =;
+  MessageField =;
+  MessageType =;
+  ExpectedSample =;
+  Workload =;
+  ResourceBounds =;
+  CapabilityGrant =;
+  TraceContract =;
+  OperatorMarkers =;
+  DemoContract =;
+  decodeDemoContract =;
+}

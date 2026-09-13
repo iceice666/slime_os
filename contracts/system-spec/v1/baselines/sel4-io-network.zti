@@ -1,0 +1,330 @@
+{
+  bootAction  =  "wait-set";
+  bootstrapInstance  =  "init";
+  formatVersion  =  1;
+  generation  =  53;
+  target  =  "aarch64-sel4-qemu-virt";
+  interfaceSchemas  =  [
+  ];
+  sharedBufferBudget  =  [
+  ];
+  networkDestinations  =  [
+    {
+      holder = "io-network-probe";
+      transport = "tcp";
+      addressKind = "dns";
+      address = "echo.test";
+      port = 4242;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      queueDepth = 4;
+      byteBudget = 4096;
+      timerBudget = 2;
+      retryLimit = 2;
+      reconnectLimit = 1;
+      socketLimit = 2;
+      listenerLimit = 0;
+      dnsRecordLimit = 1;
+    };
+    {
+      holder = "io-network-probe";
+      transport = "udp";
+      addressKind = "dns";
+      address = "echo.test";
+      port = 5353;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      queueDepth = 4;
+      byteBudget = 4096;
+      timerBudget = 1;
+      retryLimit = 1;
+      reconnectLimit = 1;
+      socketLimit = 2;
+      listenerLimit = 0;
+      dnsRecordLimit = 1;
+    };
+    {
+      holder = "io-network-intruder";
+      transport = "tcp";
+      addressKind = "dns";
+      address = "send-only.test";
+      port = 6000;
+      rights = [
+        "send";
+      ];
+      queueDepth = 2;
+      byteBudget = 1024;
+      timerBudget = 0;
+      retryLimit = 0;
+      reconnectLimit = 0;
+      socketLimit = 1;
+      listenerLimit = 0;
+      dnsRecordLimit = 0;
+    };
+    {
+      holder = "io-network-intruder";
+      transport = "tcp";
+      addressKind = "dns";
+      address = "recv-only.test";
+      port = 6001;
+      rights = [
+        "connect";
+        "recv";
+      ];
+      queueDepth = 2;
+      byteBudget = 1024;
+      timerBudget = 0;
+      retryLimit = 0;
+      reconnectLimit = 0;
+      socketLimit = 1;
+      listenerLimit = 0;
+      dnsRecordLimit = 0;
+    };
+    {
+      holder = "io-network-intruder";
+      transport = "tcp";
+      addressKind = "dns";
+      address = "send-path.test";
+      port = 6002;
+      rights = [
+        "connect";
+        "send";
+      ];
+      queueDepth = 2;
+      byteBudget = 1024;
+      timerBudget = 0;
+      retryLimit = 0;
+      reconnectLimit = 0;
+      socketLimit = 1;
+      listenerLimit = 0;
+      dnsRecordLimit = 0;
+    };
+  ];
+  executables  =  [
+    {
+      commandProfile = [
+      ];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [
+      ];
+      name = "network-service";
+      object = "sha256:network-service";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [
+      ];
+      name = "io-network-probe";
+      object = "sha256:io-network-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [
+      ];
+      name = "io-network-intruder";
+      object = "sha256:io-network-intruder";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [
+      ];
+      name = "io-link-loopback";
+      object = "sha256:io-link-loopback";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  grants  =  [
+    {
+      name = "network-probe-service";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "io-network-probe";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      name = "network-intruder-service";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "io-network-intruder";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      name = "network-service-link-device";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "io-link-loopback";
+      transferable = false;
+    };
+  ];
+  mintedBindings = [
+  ];
+  state = [
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "network-service";
+      "io-network-probe";
+      "io-network-intruder";
+      "io-link-loopback";
+    ];
+  };
+  bootProfiles = [
+  ];
+  instances  =  [
+    {
+      autostart = true;
+      bindings = [
+      ];
+      dependencies = [
+      ];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "network-probe-service";
+          slot = 0;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "network-intruder-service";
+        };
+        {
+          grant = "network-service-link-device";
+        };
+      ];
+      dependencies = [
+      ];
+      executable = "network-service";
+      health = "required";
+      name = "network-service";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "network-probe-service";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+      ];
+      executable = "io-network-probe";
+      health = "required";
+      name = "io-network-probe";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "network-intruder-service";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+      ];
+      executable = "io-network-intruder";
+      health = "required";
+      name = "io-network-intruder";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "network-service-link-device";
+        };
+      ];
+      dependencies = [
+      ];
+      executable = "io-link-loopback";
+      health = "required";
+      name = "io-link-loopback";
+      owner = "root";
+    };
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:network-service";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-network-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-network-intruder";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:io-link-loopback";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "network-destinations";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "wait-set";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+}

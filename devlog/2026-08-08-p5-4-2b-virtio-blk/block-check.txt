@@ -1,0 +1,44 @@
+Command: just sel4_device_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-graph.elf on the pinned qemu-arm-virt profile, plus
+  -drive if=none,id=slimedisk,format=raw,file=<tmp>/device-plane.img
+  -device virtio-blk-device,drive=slimedisk
+
+The fixture image is 1 MiB with "SLIMEDSK" written at sector 0.
+
+Observed:
+SLIME_ROOT devices untypeds=35
+SLIME_ROOT virtio transport=0xa003e00 version=1 device=2 vendor=0x554d4551
+SLIME_ROOT virtio irq bound transport=0xa003e00 irq=79 badge=0x2
+SLIME_ROOT block dma queue=0x60001000 buffer=0x60002000
+SLIME_ROOT block ready transport=0xa003e00 sectors=2048
+SLIME_ROOT block read lba=0 bytes=512 head=534c494d
+SLIME_ROOT block wrote lba=1 flushed=1 verified=1
+SLIME_ROOT virtio probed granules=4 slots=32 found=1
+
+Terminal result:
+transcript: 8 markers observed; the root mapped 32 virtio-mmio register banks out of device untyped memory, identified the attached block device, and moved sectors through it in both directions
+seL4 device plane check: the root retyped a granule out of BootInfo device untyped memory, mapped it non-cacheably into its own VSpace, brought up the attached virtio block device, and read, wrote, flushed, and verified a sector through DMA
+
+What each value proves:
+- queue=0x60001000 buffer=0x60002000
+  Guest-physical addresses of two ordinary-RAM granules. Only the allocator can
+  know these; before P5.4.2a it discarded them. They are what the virtqueue
+  descriptors carry.
+- sectors=2048
+  1 MiB / 512, read out of the device's config space after DRIVER_OK. A
+  handshake that failed reports nothing here.
+- head=534c494d
+  "SLIM", the first four bytes of the fixture's own signature, arriving through
+  DMA into a buffer the device wrote. A driver that completed a request without
+  moving data reports zeroes.
+- wrote lba=1 flushed=1 verified=1
+  The other DMA direction, a completed FLUSH, and a read-back compared byte for
+  byte against what was written.
+
+Durability, checked on the host after the boot:
+  sector0: b'SLIMEDSK'   (the fixture's)
+  sector1: b'SLIMEWR1'   (the driver's)
+The write reached the image file, not just the device's cache.

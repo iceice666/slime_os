@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "io-block-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves BlockDevice v2 read, write, flush, and geometry against observed replies, same-boot byte readback, queue identity, and five refusal arms.";
+  implementation = {
+    provider = "workspace";
+    binary = "io-block-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "endpoint";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 10;
+      bufferCount = 2;
+      mappingCount = 2;
+      loanCount = 2;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/block/v2";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "io_block_check boots generation 51 against a writable and a read-only virtio-blk device";
+    expectedResult = "every observed operation and refusal count matches what the probe performed, and the written sector reaches the backing image";
+    passFailCriteria = "[io-block-probe] io block plane complete";
+    requiredTestEnvironment = "io_block_check";
+  };
+}

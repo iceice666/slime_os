@@ -1,0 +1,57 @@
+Command: just sel4_transfer_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-transfer.elf (generation 33) with TWO disks — a
+writable receiver (happy fixture) and a read-only source (transfer fixture,
+carrying the manifest above the object store's record area).
+
+Observed:
+SLIME_ROOT block ready transport=0xa003e00 sectors=2048
+SLIME_ROOT block ready transport=0xa003c00 sectors=2048
+[sel4-transfer-probe] idle without a run token
+SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=block
+SLIME_GRAPH declared placed task=0 child=2 slot=2 kind=block
+[init] transfer probe spawned
+SLIME_GRAPH block refused task=2 op=2 class=rights
+[sel4-transfer-probe] the source device refuses writes
+[sel4-transfer-probe] receiver holds a known-good root
+[sel4-transfer-probe] manifest objects=1 states=1
+[sel4-transfer-probe] tampered manifest refused
+[sel4-transfer-probe] closure verified objects=1 of=1
+[sel4-transfer-probe] state travels entries=1 read-only=1
+[sel4-transfer-probe] staged seq=2 pending=1 release=1
+[sel4-transfer-probe] promoted seq=3 pending=0 release=5
+[sel4-transfer-probe] transfer plane complete
+[init] transfer plane complete
+
+Terminal result:
+transcript: 12 markers observed; both devices came up from one shared granule, the read-only source refused a write, a tampered manifest failed its digest, and the transferred generation staged pending before health confirmation promoted it
+seL4 transfer plane check: a generation crossed from a read-only source device to a writable receiver — manifest digest, object closure, and travel policy all verified before any write — staged pending without disturbing the known-good root, and was promoted only on health confirmation, leaving the source byte-identical
+
+Enforced beyond the ordered markers:
+- BOTH devices reached `SLIME_ROOT block ready`. B29 was that only one did, so a
+  regression there leaves this plane with no source to read.
+- the root recorded `block refused task=2 op=2 class=rights` — the write the
+  probe attempted on its read-only source, refused by the capability rather
+  than by the component's restraint.
+- the SOURCE image is byte-identical after the boot, compared from the host.
+  That is M6.7's central claim, and it is sharper here than the milestone's
+  wording: the source is *granted*, read-only, and the component reached it
+  repeatedly and wanted to write it.
+- the RECEIVER changed, and only in its BootState slots: the GPT, the object
+  store region, and everything past the slots are compared byte for byte. A run
+  that wrote nothing fails too — "no snapshot committed" is not a pass.
+- exactly one instance ran the scenario.
+
+Both devices come up from ONE granule:
+  SLIME_ROOT block ready transport=0xa003e00 sectors=2048
+  SLIME_ROOT block ready transport=0xa003c00 sectors=2048
+Those addresses are 0x200 apart, inside the page at 0xa003000. The root maps it
+once and hands the second driver a borrowed view at its own offset.
+
+Two capabilities, two rights masks:
+  SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=block   (receiver, rw)
+  SLIME_GRAPH declared placed task=0 child=2 slot=2 kind=block   (source, ro)
+Placement now intersects each grant's OWN rights rather than the component's
+union — before that fix the source came out writable and accepted the write.

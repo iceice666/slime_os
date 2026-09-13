@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-visibility";
+  imageClosureIdentity = "3465ae5b223bdf9621d4290442a52fd9e56a03c4fc1faaf676abf196cc0e0a77";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

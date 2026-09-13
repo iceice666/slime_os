@@ -1,0 +1,62 @@
+{
+  formatVersion = 1;
+  name = "robot-clock";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "C9.6's bounded simulated-time source: advances simulated time only after the controller releases a declared barrier, so a deadline elapses deterministically.";
+  implementation = {
+    provider = "workspace";
+    binary = "robot-clock";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the robot_runtime_check gate boots a generation declaring robot-clock";
+    expectedResult = "simulated time advances only after the controller's barrier releases it, producing the deadline this plane observes";
+    passFailCriteria = "[robot-clock] advanced now_ns=";
+    requiredTestEnvironment = "robot_runtime_check";
+  };
+}

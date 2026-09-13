@@ -1,0 +1,146 @@
+name: Slime environment
+description: >
+  Make this repository's Nix dev shell available, so a workflow step runs the
+  same `just` target against the same tool versions a developer does.
+
+  The caller must run `actions/checkout` first: a local action is resolved from
+  the checked-out tree, so this action cannot check out the tree it lives in.
+inputs:
+  build-cache-key:
+    description: Partition for persistent Cargo build outputs; empty uses the caller job.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Single-user install, no daemon. The store is restored below rather than
+    # rebuilt, so the dev shell's closure is fetched once per lockfile.
+    - uses: nixbuild/nix-quick-install-action@v35
+      with:
+        nix_conf: |
+          keep-env-derivations = true
+          keep-outputs = true
+
+    # `~/.rustup` and `~/.cargo` ride along with the store. The dev shell's
+    # hook installs both pinned toolchains on first entry, and the seL4 build
+    # is deliberately `--offline`, so without these every job re-downloads two
+    # nightlies and then fails to resolve a dependency.
+    - uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: >-
+          slime-${{ runner.os }}-${{ runner.arch }}-${{
+            hashFiles('flake.lock', 'flake.nix', 'sel4/pins.toml',
+                      'rust-toolchain.toml', '**/Cargo.lock')
+          }}
+        restore-prefixes-first-match: slime-${{ runner.os }}-${{ runner.arch }}-
+        gc-max-store-size-linux: 5G
+        paths: |
+          ~/.rustup
+          ~/.cargo/registry
+          ~/.cargo/git
+    # Cargo owns invalidation for Rust sources and declared build-script inputs.
+    # Keep the restore boundary stricter for inputs outside Cargo's fingerprints:
+    # the exact submodule gitlinks, seL4 configuration/pins, target definitions,
+    # linker scripts, lockfiles, and both pinned Rust toolchains. The final SHA
+    # makes saves immutable; the matching prefix lets a later source revision
+    # restore compatible intermediates and lets Cargo rebuild what changed.
+    - name: Identify build-cache submodules
+      id: build-cache-submodules
+      shell: bash
+      run: |
+        set -euo pipefail
+        gitlinks="$({
+          git rev-parse HEAD:deps/zutai
+          git rev-parse HEAD:deps/sel4
+          git rev-parse HEAD:deps/rust-sel4
+          git rev-parse HEAD:deps/rust-sel4-bcm2712-rpi5
+          git rev-parse HEAD:deps/rust-sel4-cv1800b-duo
+        } | git hash-object --stdin)"
+        echo "gitlinks=$gitlinks" >> "$GITHUB_OUTPUT"
+
+    - name: Restore persistent Cargo build outputs
+      uses: actions/cache@v4
+      with:
+        path: |
+          deps/zutai/target
+          target/components
+          build/sel4-cargo
+        key: >-
+          slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-${{
+            hashFiles('flake.lock', 'flake.nix', 'rust-toolchain.toml',
+                      'deps/zutai/.cargo/config.toml',
+                      'deps/rust-sel4/rust-toolchain.toml',
+                      'deps/rust-sel4/.cargo/config.toml',
+                      'sel4/pins.toml', 'sel4/config/*.cmake',
+                      'components/**/*.ld', '**/Cargo.lock')
+          }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-${{ github.sha }}
+        restore-keys: >-
+          slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-${{
+            hashFiles('flake.lock', 'flake.nix', 'rust-toolchain.toml',
+                      'deps/zutai/.cargo/config.toml',
+                      'deps/rust-sel4/rust-toolchain.toml',
+                      'deps/rust-sel4/.cargo/config.toml',
+                      'sel4/pins.toml', 'sel4/config/*.cmake',
+                      'components/**/*.ld', '**/Cargo.lock')
+          }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-
+
+    # Realize the shell and run its toolchain hook once, so a later step's
+    # failure is the gate's failure rather than an environment download.
+    - name: Enter the dev shell
+      shell: bash
+      run: nix develop --command just --version
+
+    # `build-sel4.py` builds every crate `--locked --offline`, deliberately: a
+    # build that may reach the network is not the pinned build the observed
+    # prefix hashes describe. Populating the cargo cache is therefore the
+    # environment's job.
+    - name: Fetch pinned crates
+      shell: bash
+      run: |
+        set -euo pipefail
+        toolchain="$(nix develop --command python3 -c \
+          "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
+        # Our own workspaces, each with its own lockfile, because `cargo
+        # fetch` resolves one manifest at a time: the two top-level
+        # workspaces, the shared base rust-sel4 checkout, and one per patched
+        # physical platform's independent loader submodule
+        # (`sel4/pins.toml`'s `[rust_sel4_<platform>]` tables).
+        for manifest in \
+          Cargo.toml \
+          slime-root/child/Cargo.toml \
+          deps/rust-sel4/Cargo.toml \
+          deps/rust-sel4-bcm2712-rpi5/Cargo.toml \
+          deps/rust-sel4-cv1800b-duo/Cargo.toml \
+        ; do
+          echo "::group::cargo fetch $manifest"
+          nix develop --command cargo fetch --locked --manifest-path "$manifest"
+          RUSTUP_TOOLCHAIN="$toolchain" \
+            nix develop --command cargo fetch --locked --manifest-path "$manifest"
+          echo "::endgroup::"
+        done
+        # And the standard library's own workspace, which is the one that
+        # actually broke: `-Z build-std` compiles `sysroot` from `rust-src`,
+        # and that workspace pulls crates.io dependencies of its own
+        # (`unwinding`, `compiler_builtins`, ...) which no manifest above
+        # names. Fetching only our lockfiles left the child build resolving
+        # `unwinding` offline against an empty cache.
+        for tc in "$toolchain" ""; do
+          sysroot="$(RUSTUP_TOOLCHAIN="$tc" nix develop --command rustc --print sysroot | tail -1)"
+          library="$sysroot/lib/rustlib/src/rust/library"
+          # Absent unless `rust-src` is installed for that toolchain; the dev
+          # shell's hook installs it for both, so a miss is worth reporting
+          # rather than skipping silently.
+          if [ ! -f "$library/Cargo.toml" ]; then
+            echo "no rust-src library workspace at $library" >&2
+            exit 1
+          fi
+          echo "::group::cargo fetch rust-src (${tc:-default})"
+          RUSTUP_TOOLCHAIN="$tc" \
+            nix develop --command cargo fetch --locked --manifest-path "$library/Cargo.toml"
+          echo "::endgroup::"
+        done

@@ -1,0 +1,8 @@
+[layout] path=init slots=6 max=64
+[layout] 1 executable fabric-call-client 0x1000c
+[layout] 2 executable fabric-call-client-b 0x1000c
+[layout] 3 executable fabric-call-server 0x1000c
+[layout] 4 executable fabric-call-time 0x10008
+[layout] 5 executable fabric-service 0x1000c
+[layout] 7 shared-buffer-factory - 0x1000000
+[layout] end

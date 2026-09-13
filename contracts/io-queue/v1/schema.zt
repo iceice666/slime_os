@@ -1,0 +1,385 @@
+-- Slime OS I/O queue, identity, and buffer-lease contract, version 1 (IO0).
+--
+-- This is the substrate every userspace driver shares, and the reason it is one
+-- contract rather than one per device class is stated in the roadmap as a rule:
+-- *share I/O mechanisms, not device semantics*. What is generic is the shape of
+-- an asynchronous request -- who asked, under which driver incarnation, which
+-- bytes it may touch, and what terminal answer it received. What is specific --
+-- a block LBA, an Ethernet frame, a USB setup packet -- stays in its own
+-- protocol schema and travels through this envelope as opaque payload bytes.
+--
+-- Three things are declared here and nowhere else:
+--
+--   * The **queue envelope**. A submission ring and a completion ring share one
+--     header, because a driver and its client must agree about capacity and
+--     epoch in one atomically-readable place. Positions are absolute sequence
+--     numbers, not indices: a reader that falls behind learns *how far* by
+--     subtraction, and a wrapped slot whose sequence is older than expected is
+--     a detectable fault rather than a sample silently mistaken for new.
+--
+--   * The **buffer slice**. A wire descriptor names a shared-buffer identity, a
+--     lease identity, an offset, a length, and a direction -- and nothing else.
+--     No physical address, no IOVA. This is the boundary that keeps
+--     `SharedBuffer` authority (CPU visibility) separate from DMA authority
+--     (device visibility): a slice says *which bytes*, an IO1 DMA mapping says
+--     *whether a device may reach them*.
+--
+--   * The **identities**. `RequestId` and `DriverEpoch` are independent. A
+--     request identity is unique only within an epoch, and an epoch advances on
+--     restart, reset, disconnect, or generation transition. That is what makes
+--     a late completion from a dead driver instance rejectable rather than
+--     ambiguous: it carries an epoch nobody is serving.
+--
+-- The request lifecycle is `Queued -> InFlight -> Complete | Cancelled | Reset
+-- | PeerDead`. Every terminal transition is single-assignment, so cancellation
+-- is an observable *result* rather than best-effort disappearance, and a lease
+-- is released exactly once.
+--
+-- Logical records and concrete packed little-endian layouts live together. The
+-- renderer reflects each record, checks field order against its layout, and
+-- writes the Rust binding fragment consumed by slime-proto.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+
+-- The shared header occupies the first two cache lines of the queue mapping;
+-- the submission slots follow it, then the completion slots.
+--
+-- Two lines rather than one, and the split is load-bearing: every field a
+-- client writes lives in the first line and every field the driver writes lives
+-- in the second. A single 64-byte header would put `submit_head` and
+-- `complete_head` on one line, so each side's position update would invalidate
+-- the other's copy on every request -- false sharing on the hottest word in the
+-- substrate. The static descriptor shares the client's line because it is
+-- written once at provisioning and read-only afterwards.
+queueHeaderLen :: Int = 128;
+
+-- A submission slot carries the envelope plus a bounded protocol payload. 128
+-- bytes: 72 for identity, lifecycle, and the buffer slice, 56 for the owning
+-- protocol's own request record. A request needing more than 56 bytes of
+-- control detail carries it in the buffer it already leased.
+requestSlotLen :: Int = 128;
+
+-- A completion slot needs no slice: it answers a request that already named
+-- one. 64 bytes, of which 24 are the protocol's own reply record.
+completionSlotLen :: Int = 64;
+
+requestPayloadBytes :: Int = 56;
+completionPayloadBytes :: Int = 24;
+
+-- Slots per ring, fixed at provisioning. A power of two so a sequence maps to a
+-- slot by masking, and so `head - tail` is the occupancy without a separate
+-- count that could disagree with the positions. Both rings of one queue carry
+-- the same count: a completion ring smaller than its submission ring could
+-- strand a terminal answer, and a request whose terminal state cannot be
+-- delivered is exactly the leak this contract exists to prevent.
+minQueueSlots :: Int = 2;
+maxQueueSlots :: Int = 256;
+
+-- Outstanding requests one queue may hold, bounding the lease table a driver
+-- must keep. Equal to the maximum ring depth: a request is outstanding only
+-- while it occupies a submission slot whose completion has not been consumed.
+maxOutstanding :: Int = 256;
+
+-- Little-endian `IOQH`, `IOQR`, `IOQC`. A reader tells the header from a
+-- submission slot from a completion slot by magic, for the same reason the
+-- fabric ring does: one mapping carries all three, and a reader that guessed by
+-- offset would be trusting the writer's arithmetic.
+queueMagic :: Int = 1213486921;
+requestMagic :: Int = 1381259081;
+completionMagic :: Int = 1129270601;
+
+-- Driver lifecycle, in the queue rather than in root bookkeeping. `active` is
+-- the steady state. `resetting` means the driver is settling every outstanding
+-- request before advancing its epoch, so a client must stop submitting but may
+-- still drain terminal answers. `dead` is written by the root when the driver's
+-- task is reclaimed without resetting, so a client blocked on a dead peer
+-- learns it from the mapping rather than from a root round trip.
+driverActive :: Int = 0;
+driverResetting :: Int = 1;
+driverDead :: Int = 2;
+
+-- Slot occupancy. `claimed` is the intermediate state that makes a torn write
+-- unobservable: a reader advances past `claimed` only when it becomes `ready`.
+slotEmpty :: Int = 0;
+slotClaimed :: Int = 1;
+slotReady :: Int = 2;
+
+-- The request lifecycle. `queued` and `inFlight` are transient; the remaining
+-- four are terminal and single-assignment. They are distinct because the
+-- caller's correct response differs: a `complete` request delivered data, a
+-- `cancelled` one was withdrawn and touched nothing further, a `reset` one was
+-- settled by the driver's own recovery, and a `peerDead` one was settled by the
+-- root because no driver remained to answer it.
+stateQueued :: Int = 1;
+stateInFlight :: Int = 2;
+stateComplete :: Int = 3;
+stateCancelled :: Int = 4;
+stateReset :: Int = 5;
+statePeerDead :: Int = 6;
+
+-- Completion status. `ok` means the protocol payload carries the answer;
+-- everything else means the envelope refused before or during the protocol's
+-- own handling, and the protocol payload is not meaningful.
+--
+-- These are substrate refusals only. A device-level failure -- a bad sector, a
+-- link down, a stalled endpoint -- is `deviceError` here and its detail lives in
+-- the owning protocol's completion payload, because the substrate has no
+-- vocabulary for what went wrong inside a device it does not parse.
+statusOk :: Int = 0;
+statusCancelled :: Int = 1;
+statusReset :: Int = 2;
+statusPeerDead :: Int = 3;
+statusMalformed :: Int = 4;
+statusBadSlice :: Int = 5;
+statusBadEpoch :: Int = 6;
+statusBadRights :: Int = 7;
+statusExhausted :: Int = 8;
+statusDeviceError :: Int = 9;
+statusUnsupported :: Int = 10;
+
+-- Access direction of one buffer slice, from the *device's* point of view,
+-- because that is the direction an IO1 DMA mapping must be scoped to.
+-- `deviceRead` means the device reads client-written bytes (a block write, a
+-- frame transmit); `deviceWrite` means the device writes bytes the client will
+-- read (a block read, a frame receive). `none` is a control request touching no
+-- buffer, and its slice must be entirely zero.
+directionNone :: Int = 0;
+directionDeviceRead :: Int = 1;
+directionDeviceWrite :: Int = 2;
+knownDirections :: Int = 3;
+
+-- Request flags. `cancelRequested` is set by the client on a *previously
+-- submitted* request's tracking state, not on the wire slot; the wire flag is
+-- `fenced`, which asks the driver to complete every earlier request before
+-- starting this one.
+flagFenced :: Int = 1;
+knownRequestFlags :: Int = 1;
+
+-- Completion flags. `epochEnded` tells a client draining terminal answers that
+-- no further completion will arrive under this epoch, which is how a reset
+-- reaches quiescence without a timeout.
+flagEpochEnded :: Int = 1;
+knownCompletionFlags :: Int = 1;
+
+-- Notification badge bits. A badge is OR-ed into the notification word, so
+-- these must be disjoint single bits whose meaning survives coalescing: each
+-- says "drain this ring", never "here is one event". Draining after one wake is
+-- what makes coalescing lossless.
+badgeRequestReady :: Int = 1;
+badgeCompletionReady :: Int = 2;
+badgeDriverStateChanged :: Int = 4;
+knownBadgeBits :: Int = 7;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+-- The queue header, in two single-writer halves.
+--
+-- Every field has exactly one writer, which is what makes the claimed/ready
+-- handshake sufficient without a lock. The *client* owns `submit_head` (it
+-- produces requests) and `complete_tail` (it consumes answers); the *driver*
+-- owns `complete_head` (it produces answers), `submit_tail` (it consumes
+-- requests), `epoch`, and `driver_state`. The descriptor fields are written
+-- once at provisioning and read-only afterwards, so they sit with the client
+-- half rather than needing a line of their own.
+--
+-- The field order below is therefore not cosmetic: it is what places the two
+-- writers on separate 64-byte lines. Padding is explicit rather than implied by
+-- the length constant, so the renderer's layout sum proves the split instead of
+-- the comment merely asserting it.
+QueueHeader :: type {
+  magic : Int;
+  version : Int;
+  slot_count : Int;
+  request_slot_len : Int;
+  completion_slot_len : Int;
+  client_reserved : Int;
+  submit_head : Int;
+  complete_tail : Int;
+  client_padding : Int;
+  driver_state : Int;
+  driver_reserved : Int;
+  epoch : Int;
+  complete_head : Int;
+  submit_tail : Int;
+  driver_padding : Int;
+};
+
+-- One buffer slice, declared standalone so the substrate can validate a
+-- descriptor without a surrounding request. `buffer` is a C7 shared-buffer
+-- identity and `lease` the lease that retains it; both are required non-zero
+-- whenever `direction` is not `none`, because bytes a device may touch must be
+-- attributable to a lease that can be settled exactly once.
+BufferSlice :: type {
+  buffer : Int;
+  lease : Int;
+  offset : Int;
+  length : Int;
+  direction : Int;
+  reserved : Int;
+};
+
+-- One submission slot. `request_id` is unique within `epoch` and never zero, so
+-- a zeroed slot cannot be mistaken for request zero.
+RequestSlot :: type {
+  magic : Int;
+  state : Int;
+  flags : Int;
+  payload_len : Int;
+  request_id : Int;
+  epoch : Int;
+  slice_buffer : Int;
+  slice_lease : Int;
+  slice_offset : Int;
+  slice_length : Int;
+  slice_direction : Int;
+  slice_reserved : Int;
+  payload : Int;
+};
+
+-- One completion slot. `request_id` and `epoch` echo the request being
+-- answered; `transferred` is the byte count the operation actually moved within
+-- the request's slice, which a protocol reads rather than re-deriving.
+CompletionSlot :: type {
+  magic : Int;
+  status : Int;
+  flags : Int;
+  payload_len : Int;
+  request_id : Int;
+  epoch : Int;
+  transferred : Int;
+  payload : Int;
+};
+
+headerSchema ::= schema QueueHeader;
+sliceSchema ::= schema BufferSlice;
+requestSchema ::= schema RequestSlot;
+completionSchema ::= schema CompletionSlot;
+
+-- Client-written line: 24 descriptor bytes, 16 position bytes, 24 pad = 64.
+-- Driver-written line: 8 state bytes, 24 position/epoch bytes, 32 pad = 64.
+headerLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "slot_count"; width = 4; signed = false; byteArray = false; };
+  { name = "request_slot_len"; width = 4; signed = false; byteArray = false; };
+  { name = "completion_slot_len"; width = 4; signed = false; byteArray = false; };
+  { name = "client_reserved"; width = 4; signed = false; byteArray = true; };
+  { name = "submit_head"; width = 8; signed = false; byteArray = false; };
+  { name = "complete_tail"; width = 8; signed = false; byteArray = false; };
+  { name = "client_padding"; width = 24; signed = false; byteArray = true; };
+  { name = "driver_state"; width = 4; signed = false; byteArray = false; };
+  { name = "driver_reserved"; width = 4; signed = false; byteArray = true; };
+  { name = "epoch"; width = 8; signed = false; byteArray = false; };
+  { name = "complete_head"; width = 8; signed = false; byteArray = false; };
+  { name = "submit_tail"; width = 8; signed = false; byteArray = false; };
+  { name = "driver_padding"; width = 32; signed = false; byteArray = true; };
+};
+
+sliceLayout :: List WireField = {
+  { name = "buffer"; width = 8; signed = false; byteArray = false; };
+  { name = "lease"; width = 8; signed = false; byteArray = false; };
+  { name = "offset"; width = 8; signed = false; byteArray = false; };
+  { name = "length"; width = 8; signed = false; byteArray = false; };
+  { name = "direction"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = true; };
+};
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "state"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "request_id"; width = 8; signed = false; byteArray = false; };
+  { name = "epoch"; width = 8; signed = false; byteArray = false; };
+  { name = "slice_buffer"; width = 8; signed = false; byteArray = false; };
+  { name = "slice_lease"; width = 8; signed = false; byteArray = false; };
+  { name = "slice_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "slice_length"; width = 8; signed = false; byteArray = false; };
+  { name = "slice_direction"; width = 4; signed = false; byteArray = false; };
+  { name = "slice_reserved"; width = 4; signed = false; byteArray = true; };
+  { name = "payload"; width = 56; signed = false; byteArray = true; };
+};
+
+completionLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "request_id"; width = 8; signed = false; byteArray = false; };
+  { name = "epoch"; width = 8; signed = false; byteArray = false; };
+  { name = "transferred"; width = 8; signed = false; byteArray = false; };
+  { name = "payload"; width = 24; signed = false; byteArray = true; };
+};
+
+format ::= {
+  formatVersion =;
+  queueHeaderLen =;
+  requestSlotLen =;
+  completionSlotLen =;
+  requestPayloadBytes =;
+  completionPayloadBytes =;
+  minQueueSlots =;
+  maxQueueSlots =;
+  maxOutstanding =;
+  queueMagic =;
+  requestMagic =;
+  completionMagic =;
+  driverActive =;
+  driverResetting =;
+  driverDead =;
+  slotEmpty =;
+  slotClaimed =;
+  slotReady =;
+  stateQueued =;
+  stateInFlight =;
+  stateComplete =;
+  stateCancelled =;
+  stateReset =;
+  statePeerDead =;
+  statusOk =;
+  statusCancelled =;
+  statusReset =;
+  statusPeerDead =;
+  statusMalformed =;
+  statusBadSlice =;
+  statusBadEpoch =;
+  statusBadRights =;
+  statusExhausted =;
+  statusDeviceError =;
+  statusUnsupported =;
+  directionNone =;
+  directionDeviceRead =;
+  directionDeviceWrite =;
+  knownDirections =;
+  flagFenced =;
+  knownRequestFlags =;
+  flagEpochEnded =;
+  knownCompletionFlags =;
+  badgeRequestReady =;
+  badgeCompletionReady =;
+  badgeDriverStateChanged =;
+  knownBadgeBits =;
+  headerFields = headerSchema.fields ?? {;};
+  sliceFields = sliceSchema.fields ?? {;};
+  requestFields = requestSchema.fields ?? {;};
+  completionFields = completionSchema.fields ?? {;};
+  headerLayout =;
+  sliceLayout =;
+  requestLayout =;
+  completionLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_IO_QUEUE_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/io_queue.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

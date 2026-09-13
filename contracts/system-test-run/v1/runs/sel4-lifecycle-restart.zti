@@ -1,0 +1,16 @@
+{
+  formatVersion = 1;
+  name = "sel4-lifecycle-restart";
+  imageClosureIdentity = "0e31674db81ca5b6370fca4db7888361a6f990409f8be5a241e16de34bd75477";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 300;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_ROOT FATAL";
+  ];
+}

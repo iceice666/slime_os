@@ -1,0 +1,168 @@
+{
+  bootAction = "private-memory";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-memory-probe";
+      object = "sha256:private-memory-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-heap-probe";
+      object = "sha256:private-heap-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 40;
+  grants = [
+    {
+      name = "both-planes-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "private-heap-both";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "private-memory-probe";
+      health = "optional";
+      name = "private-memory-granted";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "private-memory-probe";
+      health = "optional";
+      name = "private-memory-denied";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "private-heap-probe";
+      health = "optional";
+      name = "private-heap-granted";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "private-heap-probe";
+      health = "optional";
+      name = "private-heap-denied";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "both-planes-shared-buffer-factory";
+          slot = 1;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "private-heap-probe";
+      health = "optional";
+      name = "private-heap-both";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-heap-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "private-memory-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [
+    {
+      holder = "private-memory-granted";
+      pageQuota = 3;
+    };
+    {
+      holder = "private-heap-granted";
+      pageQuota = 24;
+    };
+    {
+      holder = "private-heap-both";
+      pageQuota = 24;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 1;
+      holder = "private-heap-both";
+      loanCount = 0;
+      mappingCount = 1;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

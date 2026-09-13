@@ -1,0 +1,8 @@
+=== fault injection: each guard neutered in turn ===
+(cargo test --all-features --lib store_disk; 'caught' = suite failed)
+
+recorded_partition != partition_sectors              caught
+superblock.sequence == u64::MAX                      caught
+superblock.object_count as usize > MAX_OBJECTS       caught
+crc32(&sector[..SUPERBLOCK_CRC32_OFFSET]) != stored_crc caught
+superblock.append_lba < RECORD_AREA_START            caught

@@ -1,0 +1,62 @@
+{
+  formatVersion = 1;
+  name = "sample-worker";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "A two-thread native-endpoint loopback worker: a low-priority worker sends across a declared endpoint to its own main thread, proving per-thread scheduling.";
+  implementation = {
+    provider = "workspace";
+    binary = "sample-worker";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 1;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_sample_check gate boots a generation declaring sample-worker";
+    expectedResult = "both declared threads run, exchange one native message, and the worker thread is scheduled below the main thread without starving it";
+    passFailCriteria = "[sample-worker] main thread running";
+    requiredTestEnvironment = "sel4_sample_check";
+  };
+}

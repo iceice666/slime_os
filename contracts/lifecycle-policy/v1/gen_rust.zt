@@ -1,0 +1,171 @@
+-- Schema-reflected Python + Rust renderer for lifecycle-policy/v1.
+
+refl ::= import stdlib.reflect;
+n ::= import stdlib.num;
+t ::= import stdlib.text;
+w ::= import wire.python;
+r ::= import wire.rust;
+
+StateName :: type { name : Text; id : Int; manifest : Text; };
+CauseName :: type { name : Text; id : Int; manifest : Text; };
+
+Format :: type {
+  formatVersion : Int;
+  headerBytes : Int;
+  transitionBytes : Int;
+  restartBytes : Int;
+  dependencyBytes : Int;
+  parameterBytes : Int;
+  maxTransitions : Int;
+  maxInstances : Int;
+  maxDependencies : Int;
+  maxParameterGrants : Int;
+  maxRestartAttempts : Int;
+  maxBackoffNs : Int;
+  backoffFactorScale : Int;
+  maxBackoffFactor : Int;
+  undeclaredStateId : Int;
+  undeclaredCauseId : Int;
+  parameterRead : Int;
+  parameterWrite : Int;
+  stateNames : List StateName;
+  causeNames : List CauseName;
+  headerFields : List refl.SchemaField;
+  transitionFields : List refl.SchemaField;
+  restartFields : List refl.SchemaField;
+  dependencyFields : List refl.SchemaField;
+  parameterFields : List refl.SchemaField;
+  headerLayout : List w.WireField;
+  transitionLayout : List w.WireField;
+  restartLayout : List w.WireField;
+  dependencyLayout : List w.WireField;
+  parameterLayout : List w.WireField;
+};
+
+records :: Format -> List w.WireRecord = format => {
+  { pythonName = "LIFECYCLE_POLICY_HEADER"; constPrefix = "LIFECYCLE_POLICY"; size = format.headerBytes; trailingPadding = 0; fields = format.headerFields; layout = format.headerLayout; };
+  { pythonName = "LIFECYCLE_TRANSITION"; constPrefix = "LIFECYCLE_TRANSITION"; size = format.transitionBytes; trailingPadding = 0; fields = format.transitionFields; layout = format.transitionLayout; };
+  { pythonName = "LIFECYCLE_RESTART"; constPrefix = "LIFECYCLE_RESTART"; size = format.restartBytes; trailingPadding = 0; fields = format.restartFields; layout = format.restartLayout; };
+  { pythonName = "LIFECYCLE_DEPENDENCY"; constPrefix = "LIFECYCLE_DEPENDENCY"; size = format.dependencyBytes; trailingPadding = 0; fields = format.dependencyFields; layout = format.dependencyLayout; };
+  { pythonName = "LIFECYCLE_PARAMETER_GRANT"; constPrefix = "LIFECYCLE_PARAMETER_GRANT"; size = format.parameterBytes; trailingPadding = 0; fields = format.parameterFields; layout = format.parameterLayout; };
+};
+
+-- `LIFECYCLE_STATE_ID_BY_MANIFEST_NAME` and its cause twin are the builder's
+-- whole vocabulary, rendered from the same lists the Rust constants come from,
+-- so the manifest spelling a `.zti` writes and the id both readers compare
+-- cannot be two hand-synchronized tables.
+pythonStateIds :: List StateName -> Text
+  = names => match names {
+    | {;} => "";
+    | { entry; ...rest } => w.join {
+      "    \""; entry.manifest; "\": "; n.toText entry.id; ",\n";
+      pythonStateIds rest;
+    };
+  };
+
+pythonStateConsts :: List StateName -> Text
+  = names => match names {
+    | {;} => "";
+    | { entry; ...rest } => w.join {
+      "LIFECYCLE_STATE_"; entry.name; " = "; n.toText entry.id; "\n";
+      pythonStateConsts rest;
+    };
+  };
+
+rustStateConsts :: List StateName -> Text
+  = names => match names {
+    | {;} => "";
+    | { entry; ...rest } => r.join {
+      r.u32Const (t.join "" { "STATE_"; entry.name; }) entry.id;
+      rustStateConsts rest;
+    };
+  };
+
+pythonCauseIds :: List CauseName -> Text
+  = names => match names {
+    | {;} => "";
+    | { entry; ...rest } => w.join {
+      "    \""; entry.manifest; "\": "; n.toText entry.id; ",\n";
+      pythonCauseIds rest;
+    };
+  };
+
+pythonCauseConsts :: List CauseName -> Text
+  = names => match names {
+    | {;} => "";
+    | { entry; ...rest } => w.join {
+      "LIFECYCLE_CAUSE_"; entry.name; " = "; n.toText entry.id; "\n";
+      pythonCauseConsts rest;
+    };
+  };
+
+rustCauseConsts :: List CauseName -> Text
+  = names => match names {
+    | {;} => "";
+    | { entry; ...rest } => r.join {
+      r.u32Const (t.join "" { "CAUSE_"; entry.name; }) entry.id;
+      rustCauseConsts rest;
+    };
+  };
+
+pythonBindings :: Format -> Text = format => w.join {
+  "LIFECYCLE_POLICY_MAGIC = b\"SLIMELC\\0\"\n";
+  "LIFECYCLE_POLICY_VERSION = "; n.toText format.formatVersion; "\n";
+  "LIFECYCLE_POLICY_HEADER_BYTES = "; n.toText format.headerBytes; "\n";
+  "LIFECYCLE_TRANSITION_BYTES = "; n.toText format.transitionBytes; "\n";
+  "LIFECYCLE_RESTART_BYTES = "; n.toText format.restartBytes; "\n";
+  "LIFECYCLE_DEPENDENCY_BYTES = "; n.toText format.dependencyBytes; "\n";
+  "LIFECYCLE_PARAMETER_GRANT_BYTES = "; n.toText format.parameterBytes; "\n";
+  "LIFECYCLE_POLICY_MAX_TRANSITIONS = "; n.toText format.maxTransitions; "\n";
+  "LIFECYCLE_POLICY_MAX_INSTANCES = "; n.toText format.maxInstances; "\n";
+  "LIFECYCLE_POLICY_MAX_DEPENDENCIES = "; n.toText format.maxDependencies; "\n";
+  "LIFECYCLE_POLICY_MAX_PARAMETER_GRANTS = "; n.toText format.maxParameterGrants; "\n";
+  "LIFECYCLE_POLICY_MAX_RESTART_ATTEMPTS = "; n.toText format.maxRestartAttempts; "\n";
+  "LIFECYCLE_POLICY_MAX_BACKOFF_NS = "; n.toText format.maxBackoffNs; "\n";
+  "LIFECYCLE_POLICY_BACKOFF_FACTOR_SCALE = "; n.toText format.backoffFactorScale; "\n";
+  "LIFECYCLE_POLICY_MAX_BACKOFF_FACTOR = "; n.toText format.maxBackoffFactor; "\n";
+  "LIFECYCLE_POLICY_UNDECLARED_STATE_ID = "; n.toText format.undeclaredStateId; "\n";
+  "LIFECYCLE_POLICY_UNDECLARED_CAUSE_ID = "; n.toText format.undeclaredCauseId; "\n";
+  "LIFECYCLE_PARAMETER_READ = "; n.toText format.parameterRead; "\n";
+  "LIFECYCLE_PARAMETER_WRITE = "; n.toText format.parameterWrite; "\n";
+  pythonStateConsts format.stateNames;
+  pythonCauseConsts format.causeNames;
+  "LIFECYCLE_STATE_ID_BY_MANIFEST_NAME = {\n";
+  pythonStateIds format.stateNames;
+  "}\n";
+  "LIFECYCLE_CAUSE_ID_BY_MANIFEST_NAME = {\n";
+  pythonCauseIds format.causeNames;
+  "}\n";
+  w.renderRecords (records format);
+};
+
+rustBindings :: Format -> Text = format => r.join {
+  "// @generated by contracts/lifecycle-policy/v1/gen_rust.zt; do not edit.\n";
+  "// Source contract: contracts/lifecycle-policy/v1/schema.zt\n\n";
+  r.u32Const "FORMAT_VERSION" format.formatVersion;
+  r.usizeConst "HEADER_BYTES" format.headerBytes;
+  r.usizeConst "TRANSITION_BYTES" format.transitionBytes;
+  r.usizeConst "RESTART_BYTES" format.restartBytes;
+  r.usizeConst "DEPENDENCY_BYTES" format.dependencyBytes;
+  r.usizeConst "PARAMETER_BYTES" format.parameterBytes;
+  r.usizeConst "MAX_TRANSITIONS" format.maxTransitions;
+  r.usizeConst "MAX_INSTANCES" format.maxInstances;
+  r.usizeConst "MAX_DEPENDENCIES" format.maxDependencies;
+  r.usizeConst "MAX_PARAMETER_GRANTS" format.maxParameterGrants;
+  r.u32Const "MAX_RESTART_ATTEMPTS" format.maxRestartAttempts;
+  r.u64Const "MAX_BACKOFF_NS" format.maxBackoffNs;
+  r.u32Const "BACKOFF_FACTOR_SCALE" format.backoffFactorScale;
+  r.u32Const "MAX_BACKOFF_FACTOR" format.maxBackoffFactor;
+  r.u32Const "UNDECLARED_STATE_ID" format.undeclaredStateId;
+  r.u32Const "UNDECLARED_CAUSE_ID" format.undeclaredCauseId;
+  r.u32Const "PARAMETER_READ" format.parameterRead;
+  r.u32Const "PARAMETER_WRITE" format.parameterWrite;
+  rustStateConsts format.stateNames;
+  rustCauseConsts format.causeNames;
+};
+
+render :: Format -> { python : Text; rust : Text; }
+  = format => if w.recordsValid (records format)
+    then { python = pythonBindings format; rust = rustBindings format; }
+    else { python = "INVALID_LIFECYCLE_POLICY_SCHEMA"; rust = "INVALID_LIFECYCLE_POLICY_SCHEMA"; };
+{ render =; }

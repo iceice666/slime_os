@@ -1,0 +1,82 @@
+-- Slime OS system test-run contract, version 1 (CP11).
+--
+-- Execution-only inputs live here so a marker oracle, timeout, disk image, or
+-- injected runtime device event cannot alter the image closure it exercises.
+Fixture :: type {
+  name : Text;
+  path : Text;
+  identity : Text;
+  writable : Bool;
+};
+
+FaultControl :: type {
+  kind : Text;
+  target : Text;
+  value : Text;
+};
+
+SystemTestRun :: type {
+  formatVersion : Int;
+  name : Text;
+  imageClosureIdentity : Text;
+  executionKind : Text;
+  executionProfile : Text;
+  disks : List Fixture;
+  networks : List Fixture;
+  devices : List Fixture;
+  faultControls : List FaultControl;
+  timeoutSeconds : Int;
+  markerContractIdentity : Text;
+  forbiddenOutcomes : List Text;
+};
+
+FromData @Fixture :: derive
+FromData @FaultControl :: derive
+FromData @SystemTestRun :: derive
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-system-test-run-v1:";
+executionEmulator :: Text = "emulator";
+executionBoard :: Text = "board";
+faultPeerDeath :: Text = "peer-death";
+faultDevice :: Text = "device";
+faultCorruption :: Text = "corruption";
+faultDelay :: Text = "delay";
+
+maxSourceBytes :: Int = 131072;
+maxNormalizedBytes :: Int = 131072;
+maxNameBytes :: Int = 96;
+maxPathBytes :: Int = 256;
+maxTextBytes :: Int = 256;
+maxDigestBytes :: Int = 64;
+maxFixtures :: Int = 16;
+maxFaultControls :: Int = 16;
+maxForbiddenOutcomes :: Int = 32;
+maxTimeoutSeconds :: Int = 3600;
+
+decodeSystemTestRun :: Data -> Validation DecodeIssue SystemTestRun
+  = data => decode data;
+{
+  Fixture =;
+  FaultControl =;
+  SystemTestRun =;
+  decodeSystemTestRun =;
+  formatVersion =;
+  identityDomain =;
+  executionEmulator =;
+  executionBoard =;
+  faultPeerDeath =;
+  faultDevice =;
+  faultCorruption =;
+  faultDelay =;
+  maxSourceBytes =;
+  maxNormalizedBytes =;
+  maxNameBytes =;
+  maxPathBytes =;
+  maxTextBytes =;
+  maxDigestBytes =;
+  maxFixtures =;
+  maxFaultControls =;
+  maxForbiddenOutcomes =;
+  maxTimeoutSeconds =;
+}

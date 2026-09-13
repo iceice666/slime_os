@@ -1,0 +1,20 @@
+workers: 4 MemAvailable 8866 MiB
+identity-lite serial: rc=0 wall=66.6s entries=0 contracts/ modified=0
+identity-lite cold: rc=0 wall=69.0s entries=282 contracts/ modified=0
+identity-lite warm: rc=0 wall=0.1s entries=282 contracts/ modified=0
+identity-lite: serial == cold == warm (141 rows)
+unwritable store, component compile: rc=0 wall=0.1s entries=0 contracts/ modified=0
+check-system-spec.py cold (systems + arms): rc=0 wall=388.0s entries=402 contracts/ modified=0
+check-system-spec.py warm: rc=0 wall=1.1s entries=402 contracts/ modified=0
+generate-generation-from-spec.py --check warm: rc=0 wall=0.3s entries=402 contracts/ modified=0
+check-system-image-scenario.py (prefetch added): rc=1 wall=0.5s entries=406 contracts/ modified=0
+  File "/space/slime_os-zutai/scripts/lib/system_image_closure.py", line 141, in _fail
+    raise SystemImageClosureError(message)
+system_image_closure.SystemImageClosureError: loader.implementation: identity mismatch for deps/rust-sel4
+refusal: generate --check after bootAttempts edit (expect rc 1): rc=1 wall=9.1s entries=408 contracts/ modified=1
+stale derived generation fixture(s): contracts/generation-manifest/v1/compositions/sel4-channel.zti; run python3 scripts/generate/generate-generation-from-spec.py
+refusal: check-system-spec.py after edit (expect rc 1): rc=1 wall=0.6s entries=408 contracts/ modified=1
+system spec check: sel4-channel: derived manifest diverges from sel4-channel.zti: manifest.health.bootAttempts: 4 != 3
+just system_spec_check warm: rc=0 wall=157.9s entries=509 contracts/ modified=0
+just devlog_check: rc=0 wall=0.3s entries=509 contracts/ modified=0
+just tasks_check: rc=0 wall=0.1s entries=509 contracts/ modified=0

@@ -1,0 +1,432 @@
+-- Slime OS native fabric-graph resource, version 1 (C8.2).
+--
+-- A generation resource object that fixes every native interface, graph edge,
+-- direction, QoS policy, visibility grant, interposition hop, and resource
+-- ceiling of one fabric instance. Embedded as a KIND_RESOURCE object in a
+-- generation and authenticated by the generation's existing per-object digest
+-- table; it adds no ad-hoc record fields to the generation header.
+--
+-- Route authority is the exact tuple (route name, full interface identity,
+-- contract kind, component identity, direction). The first three fold into
+-- `route_identity`; the whole tuple folds into a participant's
+-- `grant_identity`. A name, a type string, or a graph observation grants
+-- nothing: only a grant identity present in this table is authority.
+--
+-- Logical records and concrete packed little-endian layouts live together.
+-- The renderer reflects every record, checks field order against its layout,
+-- derives struct.Struct format strings and offsets, and writes the Python and
+-- Rust binding fragments consumed by the boot binding assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 3;
+headerBytes :: Int = 164;
+schemaEntryBytes :: Int = 48;
+routeEntryBytes :: Int = 48;
+participantEntryBytes :: Int = 128;
+interpositionEntryBytes :: Int = 40;
+
+-- Admitted-set ceilings. `maxSchemas` matches the C8.1 admitted interface set.
+--
+-- `maxIngressSources` is the wake sources one fabric participant may register.
+-- C8.7 uses the ninth for the replacement-authenticated operation participant;
+-- a fabric that cannot register every live wake source would have to poll. It is
+-- the single declaration of that ceiling: `slime-root`'s admission imports it
+-- through `boot_contracts::fabric_graph::MAX_INGRESS_SOURCES`, and
+-- `build-generation.py` emits the same value as `FABRIC_MAX_INGRESS_SOURCES` for
+-- the workers to size themselves against (B66). The name predates the seL4
+-- cutover, when it matched the retired kernel's `SYS_WAIT` source bound; the
+-- number is now a property of this fabric rather than of any kernel call.
+maxSchemas :: Int = 64;
+maxRoutes :: Int = 32;
+maxParticipants :: Int = 32;
+maxInterpositionHops :: Int = 16;
+maxIngressSources :: Int = 9;
+
+-- Structural ceilings on the *declared* per-graph limits. A generation names
+-- its own limits, but never above these: the format itself must stay bounded
+-- so a decoder can size every table before reading untrusted counts.
+limitSampleBytes :: Int = 1048576;
+limitQueueDepth :: Int = 64;
+limitHistoryDepth :: Int = 64;
+limitEventDepth :: Int = 64;
+limitRetainedSamples :: Int = 64;
+limitRetries :: Int = 16;
+limitInFlight :: Int = 32;
+limitCapabilitySlots :: Int = 64;
+limitBuffers :: Int = 32;
+
+-- Trace-sink bounds, pinned to `contracts/fabric-trace/v1`'s `maxTraceDepth`,
+-- `terminalReserve`, and `overflowSaturate`. The trace sink's own contract owns
+-- those numbers; a graph header carries a per-generation `trace_depth` and
+-- `trace_overflow`, so this format needs the ceiling to refuse a graph no sink
+-- could honour. `scripts/build/build-generation.py` asserts the two contracts
+-- agree, so a divergence fails the build rather than a boot.
+limitTraceDepth :: Int = 64;
+traceTerminalReserve :: Int = 2;
+traceOverflowSaturate :: Int = 1;
+
+-- Fabric-owned sample frames, the one capacity a broker must size statically.
+--
+-- Not a per-generation limit: a frame table sized to `maxParticipants *
+-- limitHistoryDepth` would be two orders of magnitude larger than any declared
+-- graph needs, on a component stack that cannot hold it. Declared here rather
+-- than in the builder so the broker's array and the builder's
+-- "subscriber history exceeds the frame table" refusal read one number, and so
+-- a broker built out of tree can size itself without that builder (B70).
+frameCapacity :: Int = 32;
+
+-- Stream participants of one direction a broker sizes storage for.
+--
+-- Distinct from `maxParticipants`, which bounds the resource's participant
+-- *table* across every route and contract kind. A stream broker holds one ring
+-- record per publisher and per subscriber, each carrying a `limitHistoryDepth`
+-- history of about 1.5 KiB, so two arrays at the table bound would need half a
+-- megabyte on a 16 KiB component stack. This is the per-direction ceiling those
+-- two arrays are sized from, and the builder checks each graph's `publishers`
+-- and `subscribers` against it, so a broker's fixed arrays and the graphs it
+-- may be handed agree by construction rather than by a number a build script
+-- rendered per plane (B70).
+--
+-- `clients` and `servers` are deliberately *not* bounded by this: a
+-- request/response broker keeps one small record per in-flight call, not a
+-- history per client, so its storage does not scale with the declared client
+-- count and `sel4-matrix.zti` legitimately declares seven.
+maxRoleParticipants :: Int = 4;
+
+-- The inline control-message bound. Pinned to `slime-root/src/ipc.rs`'s
+-- `MAX_MESSAGE_BYTES` and to `contracts/sample-descriptor/v1` `descriptorLen`; a
+-- sample larger than this must travel as a C7 shared-buffer loan, so a graph
+-- admitting one needs a page budget. `slime_root::generation::
+-- fabric_graph_is_satisfiable` re-checks the agreement at admission, so a graph
+-- that drifts from the root's bound is refused at boot rather than accepted.
+controlMessageBytes :: Int = 64;
+channelQueueDepth :: Int = 16;
+
+-- Root shared-buffer table ceilings, pinned so the builder can reject an
+-- over-declared page, mapping, or loan budget instead of emitting a graph the
+-- root refuses at boot. They mirror `slime-root/src/shared_buffer.rs`'s
+-- `MAX_TOTAL_PAGES`/`MAX_SHARED_BUFFERS`/`MAX_MAPPINGS`/`MAX_LOANS`, which
+-- `fabric_graph_is_satisfiable` passes to `FabricGraph::validate_against`.
+kernelTotalPages :: Int = 256;
+kernelSharedBuffers :: Int = 32;
+kernelMappings :: Int = 64;
+kernelLoans :: Int = 64;
+
+-- Sentinel `next_hop` / `interposition_head`: no chain, or chain terminates.
+interpositionNone :: Int = 4294967295;
+
+contractKindStream :: Int = 1;
+contractKindCall :: Int = 2;
+contractKindOperation :: Int = 3;
+
+directionPublish :: Int = 1;
+directionSubscribe :: Int = 2;
+directionClient :: Int = 3;
+directionServer :: Int = 4;
+
+visibilityPrivate :: Int = 1;
+visibilityGraph :: Int = 2;
+
+reliabilityBestEffort :: Int = 1;
+reliabilityReliable :: Int = 2;
+
+durabilityVolatile :: Int = 1;
+durabilityRetained :: Int = 2;
+
+livelinessAutomatic :: Int = 1;
+livelinessManual :: Int = 2;
+
+routeDomain :: Text = "slime-fabric-route-v1:";
+grantDomain :: Text = "slime-fabric-grant-v1:";
+componentDomain :: Text = "slime-fabric-component-v1:";
+
+-- Runtime header-query ids. Frozen individually: component images pass one of
+-- these numbers to `CAPABILITY GRAPH QUERY`, so declaration order must never
+-- silently re-mean an existing id.
+QueryField :: type { rust : Text; field : Text; id : Int; };
+
+query :: Text -> Text -> Int -> QueryField = rust field id => { rust = rust; field = field; id = id; };
+
+queryFields :: List QueryField = {
+  query "SCHEMA_COUNT" "schema_count" 1;
+  query "ROUTE_COUNT" "route_count" 2;
+  query "PARTICIPANT_COUNT" "participant_count" 3;
+  query "INTERPOSITION_COUNT" "interposition_count" 4;
+  query "MAX_ROUTES" "max_routes" 5;
+  query "MAX_INGRESS_SOURCES" "max_ingress_sources" 6;
+  query "MAX_PUBLISHERS" "max_publishers" 7;
+  query "MAX_SUBSCRIBERS" "max_subscribers" 8;
+  query "MAX_CLIENTS" "max_clients" 9;
+  query "MAX_SERVERS" "max_servers" 10;
+  query "MAX_SAMPLE_BYTES" "max_sample_bytes" 11;
+  query "MAX_QUEUE_DEPTH" "max_queue_depth" 12;
+  query "MAX_HISTORY_DEPTH" "max_history_depth" 13;
+  query "MAX_EVENT_DEPTH" "max_event_depth" 14;
+  query "MAX_RETAINED_SAMPLES" "max_retained_samples" 15;
+  query "MAX_RETRIES" "max_retries" 16;
+  query "MAX_IN_FLIGHT_CALLS" "max_in_flight_calls" 17;
+  query "MAX_IN_FLIGHT_OPERATIONS" "max_in_flight_operations" 18;
+  query "MAX_BUFFER_PAGES" "max_buffer_pages" 19;
+  query "MAX_BUFFERS" "max_buffers" 20;
+  query "MAX_MAPPINGS" "max_mappings" 21;
+  query "MAX_LOANS" "max_loans" 22;
+  query "MAX_CAPABILITY_SLOTS" "max_capability_slots" 23;
+  query "TRACE_DEPTH" "trace_depth" 24;
+  query "TRACE_OVERFLOW" "trace_overflow" 25;
+};
+
+-- Graph-limit query ids. These are a strict subset of `queryFields`: only
+-- declared resource ceilings belong here. Runtime consumers use the generated
+-- `RuntimeLimits` loader rather than compiling a second copy of these values.
+limitQueryFields :: List QueryField = {
+  query "MAX_PUBLISHERS" "max_publishers" 7;
+  query "MAX_SUBSCRIBERS" "max_subscribers" 8;
+  query "MAX_SAMPLE_BYTES" "max_sample_bytes" 11;
+  query "MAX_EVENT_DEPTH" "max_event_depth" 14;
+  query "MAX_RETAINED_SAMPLES" "max_retained_samples" 15;
+  query "MAX_RETRIES" "max_retries" 16;
+  query "MAX_IN_FLIGHT_CALLS" "max_in_flight_calls" 17;
+  query "MAX_IN_FLIGHT_OPERATIONS" "max_in_flight_operations" 18;
+  query "MAX_BUFFER_PAGES" "max_buffer_pages" 19;
+  query "MAX_BUFFERS" "max_buffers" 20;
+  query "MAX_CAPABILITY_SLOTS" "max_capability_slots" 23;
+  query "TRACE_DEPTH" "trace_depth" 24;
+  query "TRACE_OVERFLOW" "trace_overflow" 25;
+};
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+GraphHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  total_len : Int;
+  schema_count : Int;
+  route_count : Int;
+  participant_count : Int;
+  interposition_count : Int;
+  reserved : Int;
+  fabric_component_identity : Int;
+  max_routes : Int;
+  max_ingress_sources : Int;
+  max_publishers : Int;
+  max_subscribers : Int;
+  max_clients : Int;
+  max_servers : Int;
+  max_sample_bytes : Int;
+  max_queue_depth : Int;
+  max_history_depth : Int;
+  max_event_depth : Int;
+  max_retained_samples : Int;
+  max_retries : Int;
+  max_in_flight_calls : Int;
+  max_in_flight_operations : Int;
+  max_buffer_pages : Int;
+  max_buffers : Int;
+  max_mappings : Int;
+  max_loans : Int;
+  max_capability_slots : Int;
+  trace_depth : Int;
+  trace_overflow : Int;
+};
+
+SchemaEntry :: type {
+  identity : Int;
+  type_tag : Int;
+  contract_kind : Int;
+  max_encoded_bytes : Int;
+};
+
+RouteEntry :: type {
+  route_identity : Int;
+  schema_index : Int;
+  contract_kind : Int;
+  participant_count : Int;
+  reserved : Int;
+};
+
+ParticipantEntry :: type {
+  grant_identity : Int;
+  component_identity : Int;
+  route_index : Int;
+  direction : Int;
+  visibility : Int;
+  interposition_head : Int;
+  qos_deadline_ns : Int;
+  qos_lifespan_ns : Int;
+  qos_lease_ns : Int;
+  qos_history_depth : Int;
+  qos_retained_depth : Int;
+  qos_reliability : Int;
+  qos_durability : Int;
+  qos_liveliness : Int;
+  reserved : Int;
+};
+
+InterpositionEntry :: type {
+  component_identity : Int;
+  next_hop : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema GraphHeader;
+schemaEntrySchema ::= schema SchemaEntry;
+routeEntrySchema ::= schema RouteEntry;
+participantEntrySchema ::= schema ParticipantEntry;
+interpositionEntrySchema ::= schema InterpositionEntry;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+  { name = "schema_count"; width = 4; signed = false; byteArray = false; };
+  { name = "route_count"; width = 4; signed = false; byteArray = false; };
+  { name = "participant_count"; width = 4; signed = false; byteArray = false; };
+  { name = "interposition_count"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+  { name = "fabric_component_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "max_routes"; width = 4; signed = false; byteArray = false; };
+  { name = "max_ingress_sources"; width = 4; signed = false; byteArray = false; };
+  { name = "max_publishers"; width = 4; signed = false; byteArray = false; };
+  { name = "max_subscribers"; width = 4; signed = false; byteArray = false; };
+  { name = "max_clients"; width = 4; signed = false; byteArray = false; };
+  { name = "max_servers"; width = 4; signed = false; byteArray = false; };
+  { name = "max_sample_bytes"; width = 4; signed = false; byteArray = false; };
+  { name = "max_queue_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "max_history_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "max_event_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "max_retained_samples"; width = 4; signed = false; byteArray = false; };
+  { name = "max_retries"; width = 4; signed = false; byteArray = false; };
+  { name = "max_in_flight_calls"; width = 4; signed = false; byteArray = false; };
+  { name = "max_in_flight_operations"; width = 4; signed = false; byteArray = false; };
+  { name = "max_buffer_pages"; width = 4; signed = false; byteArray = false; };
+  { name = "max_buffers"; width = 4; signed = false; byteArray = false; };
+  { name = "max_mappings"; width = 4; signed = false; byteArray = false; };
+  { name = "max_loans"; width = 4; signed = false; byteArray = false; };
+  { name = "max_capability_slots"; width = 4; signed = false; byteArray = false; };
+  { name = "trace_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "trace_overflow"; width = 4; signed = false; byteArray = false; };
+};
+
+schemaEntryLayout :: List WireField = {
+  { name = "identity"; width = 32; signed = false; byteArray = true; };
+  { name = "type_tag"; width = 8; signed = false; byteArray = false; };
+  { name = "contract_kind"; width = 4; signed = false; byteArray = false; };
+  { name = "max_encoded_bytes"; width = 4; signed = false; byteArray = false; };
+};
+
+routeEntryLayout :: List WireField = {
+  { name = "route_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "schema_index"; width = 4; signed = false; byteArray = false; };
+  { name = "contract_kind"; width = 4; signed = false; byteArray = false; };
+  { name = "participant_count"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+participantEntryLayout :: List WireField = {
+  { name = "grant_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "component_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "route_index"; width = 4; signed = false; byteArray = false; };
+  { name = "direction"; width = 4; signed = false; byteArray = false; };
+  { name = "visibility"; width = 4; signed = false; byteArray = false; };
+  { name = "interposition_head"; width = 4; signed = false; byteArray = false; };
+  { name = "qos_deadline_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "qos_lifespan_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "qos_lease_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "qos_history_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "qos_retained_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "qos_reliability"; width = 1; signed = false; byteArray = false; };
+  { name = "qos_durability"; width = 1; signed = false; byteArray = false; };
+  { name = "qos_liveliness"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 1; signed = false; byteArray = false; };
+};
+
+interpositionEntryLayout :: List WireField = {
+  { name = "component_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "next_hop"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =;
+  headerBytes =;
+  schemaEntryBytes =;
+  routeEntryBytes =;
+  participantEntryBytes =;
+  interpositionEntryBytes =;
+  maxSchemas =;
+  maxRoutes =;
+  maxParticipants =;
+  maxInterpositionHops =;
+  maxIngressSources =;
+  limitSampleBytes =;
+  limitQueueDepth =;
+  limitHistoryDepth =;
+  limitEventDepth =;
+  limitRetainedSamples =;
+  limitRetries =;
+  limitInFlight =;
+  limitBuffers =;
+  limitCapabilitySlots =;
+  limitTraceDepth =;
+  traceTerminalReserve =;
+  traceOverflowSaturate =;
+  frameCapacity =;
+  maxRoleParticipants =;
+  controlMessageBytes =;
+  channelQueueDepth =;
+  kernelTotalPages =;
+  kernelSharedBuffers =;
+  kernelMappings =;
+  kernelLoans =;
+  interpositionNone =;
+  contractKindStream =;
+  contractKindCall =;
+  contractKindOperation =;
+  directionPublish =;
+  directionSubscribe =;
+  directionClient =;
+  directionServer =;
+  visibilityPrivate =;
+  visibilityGraph =;
+  reliabilityBestEffort =;
+  reliabilityReliable =;
+  durabilityVolatile =;
+  durabilityRetained =;
+  livelinessAutomatic =;
+  livelinessManual =;
+  routeDomain =;
+  grantDomain =;
+  componentDomain =;
+  queryFields =;
+  limitQueryFields =;
+  headerFields = headerSchema.fields ?? {;};
+  schemaEntryFields = schemaEntrySchema.fields ?? {;};
+  routeEntryFields = routeEntrySchema.fields ?? {;};
+  participantEntryFields = participantEntrySchema.fields ?? {;};
+  interpositionEntryFields = interpositionEntrySchema.fields ?? {;};
+  headerLayout =;
+  schemaEntryLayout =;
+  routeEntryLayout =;
+  participantEntryLayout =;
+  interpositionEntryLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/fabric_graph.py"; };
+    rustPath := t.join "" { root; "/fabric_graph.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

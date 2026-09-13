@@ -1,0 +1,36 @@
+/* Slime OS component link script (contracts/component/v2).
+ *
+ * Every component links at the fixed component load base declared by its target
+ * profile (`componentBase` in contracts/target-profile/v1); each component runs
+ * in its own address space, so one fixed base serves all of them and no
+ * relocation or PIC is ever needed. The image converter in
+ * scripts/build/build-generation.py re-bases segments to offsets relative to this
+ * base and asserts the base matches. The seL4 product profile uses no linker
+ * script at all: it carries a whole ELF loaded at its own link addresses.
+ *
+ * --build-id=none (passed by the builder) keeps the link deterministic:
+ * identical input objects produce byte-identical ELFs.
+ */
+OUTPUT_FORMAT(elf64-littleaarch64)
+OUTPUT_ARCH(aarch64)
+ENTRY(_start)
+
+SECTIONS
+{
+    . = 0x400000;
+    .text : { *(.text) *(.text.*) }
+    . = ALIGN(4096);
+    .rodata : { *(.rodata) *(.rodata.*) }
+    . = ALIGN(4096);
+    .data : { *(.data) *(.data.*) }
+    . = ALIGN(4096);
+    .bss : { *(.bss) *(.bss.*) *(COMMON) }
+    /* This script serves the retired bare-metal AArch64 target only. Native
+     * seL4 components use rust-lld's default layout, and `slime-rt` rounds its
+     * `_end` address up to the configured granule before locating the IPC
+     * buffer and startup transfer window. Keep `_end` page-aligned here for the
+     * legacy loader's fixed layout; it is not the seL4 invariant. */
+    . = ALIGN(4096);
+    _end = .;
+    /DISCARD/ : { *(.note*) *(.comment) *(.eh_frame) *(.eh_frame_hdr) }
+}

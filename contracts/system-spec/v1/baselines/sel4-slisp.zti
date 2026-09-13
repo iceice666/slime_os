@@ -1,0 +1,70 @@
+{
+  bootAction = "slisp";
+  bootstrapInstance = "slisp";
+  executables = [
+    {
+      commandProfile = [];
+      name = "slisp";
+      object = "sha256:slisp";
+      role = "init";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 43;
+  grants = [
+    {
+      name = "slisp-input";
+      capabilityKind = "input";
+      rights = [
+        "inputRead";
+      ];
+      source = "slisp";
+      target = "slisp";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "slisp";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "slisp-input";
+          slot = 1;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "slisp";
+      health = "required";
+      name = "slisp";
+      owner = "root";
+    };
+  ];
+  interfaceSchemas = [];
+  mintedBindings = [];
+  notificationBindings = [];
+  notificationGrants = [];
+  objects = [
+    {
+      id = "sha256:slisp";
+      kind = "bootstrap";
+      size = 131072;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

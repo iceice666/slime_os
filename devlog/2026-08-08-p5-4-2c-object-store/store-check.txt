@@ -1,0 +1,67 @@
+Command: just sel4_store_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-store.elf (generation 24) on the pinned qemu-arm-virt
+profile, against fixtures from scripts/build/build-store-fixture.py.
+
+Scenario 1 — happy (both GPT copies agree, newest superblock valid):
+[sel4-store-probe] idle without a run token
+SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=block
+[init] store probe spawned
+[sel4-store-probe] partition first=40 last=2014 recovery=none
+[sel4-store-probe] opened seq=2 objects=1
+[sel4-store-probe] seeded object verified
+[sel4-store-probe] unknown hash refused
+[sel4-store-probe] appended seq=3 objects=2
+[sel4-store-probe] duplicate content deduplicated
+[sel4-store-probe] reopened seq=3 objects=2
+[sel4-store-probe] scrub verified every object
+[sel4-store-probe] oversized payload refused
+[sel4-store-probe] heap used=72332 capacity=262144
+[sel4-store-probe] store plane complete
+[init] store plane complete
+
+Scenario 2 — superblock-newest-damaged (slot A fails its CRC):
+[sel4-store-probe] opened seq=1 objects=0
+
+Terminal result:
+happy: 15 markers observed; GPT validated, store opened at sequence 2, object retrieved by content hash, append committed at sequence 3 and durable across a re-open, scrub verified every payload, heap 72332/262144 bytes
+image: the GPT is unchanged and the commit wrote exactly the older superblock slot, so the previously committed root survived
+superblock-newest-damaged: the store fell back to sequence 1 and saw none of the newer root's objects
+seL4 store plane check: a component validated a GPT, opened a content-addressed object store, retrieved and verified an object by hash, appended a durable commit preserving the previous root, and fell back to the older root when the newest superblock was damaged — with M5.4 policy entirely in userspace
+
+Enforced beyond the ordered markers:
+- exactly one instance ran the scenario. Two would race on the append.
+- the heap footprint must leave headroom against the declared bound, so a
+  component that outgrew it fails before the allocation that would return null.
+- the image is compared before and after: the GPT and protective MBR must be
+  byte-identical, and exactly ONE superblock slot may change — the older one.
+  A commit that wrote the active slot would pass every serial marker and lose
+  the previously committed root at an interruption.
+- the fallback scenario must NOT emit `seeded object verified`. Falling back to
+  the older root while keeping the newer index would otherwise pass.
+- the fallback disk is hashed before and after; the scenario reads only.
+
+Scenario 3 — interrupted-append (valid-magic truncated record past the
+committed append point): the full happy transcript, unchanged. The committed
+`append_lba` excludes the partial record, so the index does not carry it.
+
+Scenario 4 — gpt-conflict (both copies valid, disagreeing disk identity):
+[sel4-store-probe] gpt error=conflicting-copies
+[sel4-store-probe] store plane refused
+
+Scenario 5 — superblock-both-damaged (neither root decodes):
+[sel4-store-probe] store error=no-valid-superblock
+[sel4-store-probe] store plane refused
+
+Both refusals exit 0 and leave the disk byte-identical (hashed before and
+after). The gate pins *which* class each fixture produces and rejects a panic or
+fault standing in for a refusal — verified by feeding `check_refusal` a wrong
+class and a panic, both of which it rejected.
+
+Why the second scenario exists:
+A store that ignored superblock CRCs entirely passes every `happy` assertion.
+M5.4 requires an older valid root to be *preserved and used*, not merely for a
+damaged slot to be detected, so the redundancy claim needs a damaged copy to be
+observable at all.

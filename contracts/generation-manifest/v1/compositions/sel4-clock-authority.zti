@@ -1,0 +1,192 @@
+{
+  bootAction = "clock-authority";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "clock-authority-probe";
+      object = "sha256:clock-authority-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 41;
+  grants = [];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "clock-denied";
+      "clock-monotonic";
+      "clock-simulated-advancer";
+      "clock-simulated-reader";
+      "clock-timer";
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-denied";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-monotonic";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-simulated-advancer";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-simulated-reader";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "clock-authority-probe";
+      health = "required";
+      name = "clock-timer";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "clock-authority";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:clock-authority-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  notificationGrants = [
+    {
+      name = "clock-simulated-reader-ready";
+      source = "clock-simulated-reader";
+      target = "clock-simulated-advancer";
+    };
+    {
+      name = "clock-timer-expiry";
+      source = "init";
+      target = "clock-timer";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "clock-timer-expiry";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "clock-simulated-reader-ready";
+      holder = "clock-simulated-reader";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "clock-simulated-reader-ready";
+      holder = "clock-simulated-advancer";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "clock-timer-expiry";
+      holder = "clock-timer";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  clockAuthority = [
+    {
+      holder = "clock-monotonic";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerQuota = 0;
+      timerUse = false;
+    };
+    {
+      holder = "clock-timer";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 9;
+      timerNotification = "clock-timer-expiry";
+      timerQuota = 2;
+      timerUse = true;
+    };
+    {
+      holder = "clock-simulated-reader";
+      monotonicRead = false;
+      simulatedAdvance = false;
+      simulatedRead = true;
+      timerQuota = 0;
+      timerUse = false;
+    };
+    {
+      holder = "clock-simulated-advancer";
+      monotonicRead = false;
+      simulatedAdvance = true;
+      simulatedRead = false;
+      timerQuota = 0;
+      timerUse = false;
+    };
+  ];
+}

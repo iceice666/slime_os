@@ -1,0 +1,27 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling serde_derive v1.0.229
+   Compiling prettyplease v0.2.37
+   Compiling pest_generator v2.8.8
+   Compiling bindgen v0.72.1
+   Compiling pest_derive v2.8.8
+   Compiling serde v1.0.229
+   Compiling sel4-config-types v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4/config/types)
+   Compiling sel4-config-data v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4/config/data)
+   Compiling sel4-config v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4/config)
+   Compiling sel4-config-macros v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4/config/macros)
+   Compiling sel4-sys v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4/sys)
+   Compiling sel4 v0.1.0 (/Users/iceice666/code/slime_os/deps/rust-sel4/crates/sel4)
+   Compiling slime-root v0.1.0 (/Users/iceice666/code/slime_os/slime-root)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/slime_root-287616b0a7ca0dc6)
+
+running 102 tests
+....................................................................................... 87/102
+...............
+test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+slime-root host tests: 102/102 across 13 modules

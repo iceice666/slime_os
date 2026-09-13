@@ -1,0 +1,110 @@
+-- Slime OS composition inventory contract, version 1 (CP12).
+--
+-- CP12's closed inventory: every `contracts/generation-manifest/v1/compositions/*.zti`
+-- appears exactly once, saying whether it is generator output derived from a
+-- `contracts/system-spec/v1` source or still hand-authored, and — when it is
+-- still hand-authored — which closed reason defers it.
+--
+-- The point of the record is that "which compositions are migrated" stops being
+-- a fact spread across a Python table, a directory listing, and a roadmap
+-- paragraph. `scripts/check/check-composition-inventory.py` refuses an entry
+-- that disagrees with any of those: a composition file with no row, a row
+-- naming no composition, a `derived` row whose system spec or frozen baseline
+-- is missing, a `derived` row absent from the generator's own derivation table,
+-- a `handAuthored` row that the generator does in fact derive, and an
+-- `owningGate` that is not a real Justfile recipe.
+--
+-- This is not a wire format. Nothing serializes an inventory; it is host-side
+-- migration state, bounded and validated on the same terms every other
+-- `contracts/` record is.
+
+-- Why a composition is not yet derived. Closed, because a free-text reason is
+-- one nobody can act on and one no gate can retire.
+--
+--   `multiInstanceExecutable`         -- the composition spawns one executable
+--                                        under more than one instance name, or
+--                                        an instance's dependency names another
+--                                        instance of the same executable. The
+--                                        CP1 model maps one component spec to
+--                                        one instance, so this needs an
+--                                        instance record distinct from the
+--                                        executable it runs.
+--   `executableNameCollision`         -- the composition's executable name is
+--                                        already some other component spec's
+--                                        implementation binary, so a spec
+--                                        carrying that name would resolve two
+--                                        specs to one implementation.
+--   `routeNameVariance`               -- the composition gives a component a
+--                                        fabric route role under a route name
+--                                        its component spec's `interfaces` list
+--                                        does not declare, because another
+--                                        composition already fixed that list to
+--                                        a different route name.
+--   `unpinnedExternalImplementation`  -- the composition's implementation has no
+--                                        committed content identity to pin: it
+--                                        is built from source by a helper script
+--                                        at gate time rather than admitted as a
+--                                        content-addressed artifact.
+deferralMultiInstanceExecutable :: Text = "multiInstanceExecutable";
+deferralExecutableNameCollision :: Text = "executableNameCollision";
+deferralRouteNameVariance :: Text = "routeNameVariance";
+deferralUnpinnedExternalImplementation :: Text = "unpinnedExternalImplementation";
+
+stateDerived :: Text = "derived";
+stateHandAuthored :: Text = "handAuthored";
+
+-- One composition.
+--
+-- `systemSpec` and `baseline` are repository-relative paths and are non-empty
+-- exactly when `state` is `derived`: a derived composition has a reviewed
+-- source and a frozen pre-migration copy to be checked against, and a
+-- hand-authored one has neither. `deferralReason` is the mirror image —
+-- non-empty exactly when `state` is `handAuthored`.
+--
+-- `owningGate` is required of both, because a composition nothing boots is
+-- unverified whether or not it is derived.
+CompositionEntry :: type {
+  composition : Text;
+  state : Text;
+  systemSpec : Text;
+  baseline : Text;
+  owningGate : Text;
+  deferralReason : Text;
+};
+
+CompositionInventory :: type {
+  formatVersion : Int;
+  entries : List CompositionEntry;
+};
+
+FromData @CompositionEntry :: derive
+FromData @CompositionInventory :: derive
+
+formatVersion :: Int = 1;
+identityDomain :: Text = "slime-composition-inventory-v1:";
+
+maxSourceBytes :: Int = 65536;
+maxEntries :: Int = 96;
+maxNameBytes :: Int = 64;
+maxPathBytes :: Int = 256;
+
+decodeCompositionInventory :: Data -> Validation DecodeIssue CompositionInventory
+  = data => decode data;
+
+{
+  CompositionEntry =;
+  CompositionInventory =;
+  decodeCompositionInventory =;
+  formatVersion =;
+  identityDomain =;
+  maxSourceBytes =;
+  maxEntries =;
+  maxNameBytes =;
+  maxPathBytes =;
+  stateDerived =;
+  stateHandAuthored =;
+  deferralMultiInstanceExecutable =;
+  deferralExecutableNameCollision =;
+  deferralRouteNameVariance =;
+  deferralUnpinnedExternalImplementation =;
+}

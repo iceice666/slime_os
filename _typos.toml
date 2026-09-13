@@ -1,0 +1,63 @@
+# Spell-check config — `just typos`.
+
+[files]
+extend-exclude = [
+    "deps/",
+    "target/",
+    ".direnv/",
+    # Raw captures are frozen evidence; never edit them for spelling. The
+    # devlog format admits `.log` and `.jsonl` siblings alongside
+    # `transcript.txt`, and a serial capture carries the vendor firmware's own
+    # words -- including its misspellings and names this dictionary would
+    # "correct" (`Synopsys`).
+    "devlog/*/transcript.txt",
+    "devlog/*/*.txt",
+    "devlog/*/*.log",
+    "devlog/*/*.jsonl",
+]
+
+[default.extend-words]
+# QEMU's `passt` network backend and the Synopsys IP vendor, named as written.
+passt = "passt"
+synopsys = "synopsys"
+Synopsys = "Synopsys"
+# x86 Interrupt Stack Table
+ist = "ist"
+# ELF relocation-with-addend sections (.rela.dyn, SHT_RELA)
+rela = "rela"
+# High Definition Audio
+hda = "hda"
+# ACPI OEM table id fixture, deliberately 8 bytes
+inventry = "inventry"
+# Common hex bytes in fixtures. `daa` occurs inside the upstream
+# `sensor_msgs/msg/PointCloud2` RIHS01 digest the RPi5 contract gate validates
+# its type-hash implementation against; the digest is copied from `ros2/rcl` and
+# cannot be reworded.
+ba = "ba"
+daa = "daa"
+# Git short hashes cited in devlog entries; `caf` occurs inside `e4caf6c`, which
+# is an identity and cannot be reworded.
+caf = "caf"
+# "mis" prefix in identifiers
+mis = "mis"
+ot = "ot"
+nd = "nd"
+scap = "scap"
+ded = "ded"
+bui = "bui"
+# AArch64 translation-table field name from the Arm architecture.
+Indx = "Indx"
+# Standard 16550 UART transmit-register and line-status names.
+THR = "THR"
+THRE = "THRE"
+# Fragment of "pre-empted" (seL4's own spelling of "preempted"), which the
+# tokenizer splits at the hyphen; occurs verbatim in a vendored seL4 header
+# under `contracts/system-image-closure/v1/inputs/sel4-prefix/` and in devlog
+# prose citing it.
+empted = "empted"
+
+[default.extend-identifiers]
+# `ser2net`, the serial-over-TCP bridge a remote board console is reached
+# through. Accepted as a whole identifier rather than by adding `ser` to the
+# word list, which would suppress a real misspelling everywhere else.
+ser2net = "ser2net"

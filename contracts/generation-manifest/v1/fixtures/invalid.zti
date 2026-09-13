@@ -1,0 +1,17 @@
+{
+  formatVersion = "one";
+  generation = 1;
+  target = "x86_64-qemu-virtio";
+  bootAction = "product";
+  bootstrapInstance = "init";
+  mintedBindings = [];
+  objects = [];
+  executables = [];
+  instances = [];
+  grants = [];
+  state = [];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [];
+  };
+}

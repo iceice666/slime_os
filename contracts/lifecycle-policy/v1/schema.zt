@@ -1,0 +1,348 @@
+-- Slime OS lifecycle policy, version 1 (C9.4).
+--
+-- A generation resource object that declares four things together, because none
+-- of them is a policy on its own: the admitted lifecycle transition graph, the
+-- per-instance restart bound and backoff, the health dependencies that gate a
+-- start, and the parameter-state authority that says who may read or write whose
+-- parameters.
+--
+-- What this contract is *not* is a restart mechanism. `slime-root` observes a
+-- termination, records a single-assignment terminal state, reclaims, and — with
+-- C9.4 — answers what a generation declares about the dead instance and refuses
+-- a transition the generation does not admit. It does not decide that something
+-- should run again. Attempt bounds, backoff instants, health dependencies, and
+-- the order restarts happen in are executed by a component holding declared
+-- supervision authority, which is why every field here is *declared* data that
+-- both the root and that supervisor read rather than root-internal state.
+--
+-- Three shapes in this contract are load-bearing rather than tidy:
+--
+-- * **A transition graph, not a state list.** `ComponentSpec.lifecycle` is a
+--   `List Text` validated for canonical order on the host and dropped by
+--   generation derivation, so nothing at runtime could refuse a transition. Here
+--   an edge is a record: `(from, to)` over the closed C9.4 state vocabulary,
+--   ascending and duplicate-free, and a transition no edge admits is refused by
+--   the root rather than by convention. `initialState` is declared rather than
+--   assumed so a composition cannot leave the graph's entry ambiguous.
+--
+-- * **An attempt bound is a terminal condition, not a counter to watch.** The
+--   root holds the attempt count per declared instance across task lifetimes,
+--   because `TaskId` is never reused and a per-task counter would reset on the
+--   very event it is supposed to bound. When the bound is spent the instance
+--   enters its declared terminal state and further restart admission is refused,
+--   which is what "exhausting the attempt bound leaves the graph in a declared
+--   terminal state rather than restarting forever" means.
+--
+-- * **Backoff is a delay against C9.1's clock, not a spin count.** `backoffNs`
+--   and `backoffFactor` are counter-tick delays the supervisor arms a real timer
+--   for and the root independently refuses a restart before, so a supervisor
+--   that skips its own wait is refused by the mechanism rather than trusted.
+--   Both readers resolve the same declared number, so "backoff is observed
+--   against a clock" is a property of the generation rather than of the
+--   supervisor's loop.
+--
+-- Parameter authority is a separate table over the same identities, and it is
+-- what makes parameter state an *authority* rather than a schema: an instance
+-- holding no entry can neither read nor write any parameter, its own included,
+-- and a refusal for absent authority is distinguishable from a missing key
+-- because the two answers come from different checks.
+--
+-- Logical records and concrete packed little-endian layouts live together. The
+-- renderer reflects every record, checks field order against its layout, and
+-- writes the Python and Rust binding fragments consumed by the boot binding
+-- assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+headerBytes :: Int = 40;
+transitionBytes :: Int = 16;
+restartBytes :: Int = 64;
+dependencyBytes :: Int = 72;
+parameterBytes :: Int = 72;
+
+-- One edge per admitted `(from, to)` pair. Eight states admit 56 ordered pairs;
+-- a graph naming every one of them has declared no policy, so the ceiling sits
+-- above what a real composition needs and below the complete relation.
+maxTransitions :: Int = 48;
+-- `contracts/generation/v5`'s admitted instance ceiling, for the reason
+-- `scheduling-class/v1` pins the same number: a resource naming more instances
+-- than a generation can admit could never be fully installed.
+maxInstances :: Int = 48;
+-- One dependency edge is one (dependent, dependency) pair. Bounded well below
+-- `maxInstances` squared: a composition where every component's start waits on
+-- every other has declared a boot order, not a health policy.
+maxDependencies :: Int = 32;
+-- One parameter-authority edge is one (holder, subject) pair, including the
+-- reflexive edge a component needs to reach its *own* parameters.
+maxParameterGrants :: Int = 48;
+
+-- The declared restart-attempt ceiling. A bound this high is already a
+-- supervision bug rather than a policy, and it keeps the root's per-instance
+-- counter inside one byte of meaning.
+maxRestartAttempts :: Int = 16;
+-- The declared backoff ceiling, in counter ticks. The gate's own plane arms real
+-- timers against this, so an unbounded delay would be a watchdog failure rather
+-- than an observation.
+maxBackoffNs :: Int = 60000000000;
+-- The multiplicative growth per attempt, scaled by 256 so a manifest can declare
+-- 1.5x without a float crossing a wire. `256` is 1x — flat backoff.
+backoffFactorScale :: Int = 256;
+maxBackoffFactor :: Int = 4096;
+
+-- The closed lifecycle-state vocabulary. `id` is an ABI: a component compiled
+-- against an older generation names the same number, so ids are pinned
+-- individually rather than derived from declaration order. `manifest` is the
+-- spelling a `.zti` writes; `name` is the constant suffix both bindings emit.
+--
+-- These are exactly `contracts/component-spec/v1`'s eight lifecycle states, in
+-- its canonical order, and that is deliberate: C9.4's deliverable is to *promote*
+-- that declarative list into an admitted graph, so a second vocabulary would
+-- make the promotion a rewrite. The host contract keeps owning which states a
+-- component *declares*; this one owns which transitions a generation *admits*.
+StateName :: type { name : Text; id : Int; manifest : Text; };
+
+state :: Text -> Int -> Text -> StateName
+  = name id manifest => { name = name; id = id; manifest = manifest; };
+
+stateNames :: List StateName = {
+  state "INITIALIZE" 1 "Initialize";
+  state "CONFIGURE" 2 "Configure";
+  state "START" 3 "Start";
+  state "READY" 4 "Ready";
+  state "RUNNING" 5 "Running";
+  state "DEGRADED" 6 "Degraded";
+  state "STOP" 7 "Stop";
+  state "ERROR" 8 "Error";
+};
+
+-- The id reported for an instance this resource does not name, and for a state
+-- no transition has reached. Declared here so both bindings agree, and
+-- deliberately outside `stateNames`: it is an answer, never a declaration. An
+-- instance the policy omits has no lifecycle state at all — not `Initialize`,
+-- because claiming the first state of a graph the instance is not in would make
+-- a transition *to* `Initialize` look like a no-op.
+undeclaredStateId :: Int = 0;
+
+-- Why a task ended, as the terminal cause a restart policy branches on. This is
+-- the vocabulary C9.4's first required check needs — "killed by fault, by exit,
+-- and by declared unhealthiness each restart under its declared policy, and the
+-- three are distinguishable" — so the three causes are declared data that both
+-- the root's record and the supervisor's decision name by the same number.
+--
+-- Exactly three, and the absence of `timeout` and `peerLoss` is deliberate. Both
+-- existed in `slime-root/src/fault.rs` as terminal states with no constructor and
+-- no test, and C9.4's deliverable was to give them production callers *or* delete
+-- them. There is no timeout mechanism in the root, and a native seL4 Endpoint has
+-- no closed-peer signal — which is why `IpcError` carries no `PeerDead` either
+-- (B76) — so neither cause can be produced. Declaring an id for a cause no
+-- mechanism records would let a manifest write `causes = ["timeout"]`, pass the
+-- builder and the decoder, and then refuse every death at runtime with
+-- `UnadmittedCause`: a declared policy that silently never fires, which is the
+-- shape B71 and B76 closed. Both were therefore deleted from `fault.rs` rather
+-- than given ids here, and a future timeout or peer-death mechanism adds its
+-- cause in the same change that makes it reachable.
+CauseName :: type { name : Text; id : Int; manifest : Text; };
+
+cause :: Text -> Int -> Text -> CauseName
+  = name id manifest => { name = name; id = id; manifest = manifest; };
+
+causeNames :: List CauseName = {
+  cause "EXIT" 1 "exit";
+  cause "FAULT" 2 "fault";
+  cause "UNHEALTHY" 3 "unhealthy";
+};
+
+-- The cause reported for a task that has not ended. Outside `causeNames` for
+-- `undeclaredStateId`'s reason: "still running" is an answer, never a
+-- declaration.
+undeclaredCauseId :: Int = 0;
+
+-- The parameter-authority bits. Read and write are independent because the
+-- asymmetry is the whole point: a supervisor that must observe a component's
+-- configuration to decide a restart does not thereby get to change it.
+parameterRead :: Int = 1;
+parameterWrite :: Int = 2;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+LifecyclePolicyHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  initial_state : Int;
+  terminal_state : Int;
+  transition_count : Int;
+  restart_count : Int;
+  dependency_count : Int;
+  parameter_count : Int;
+  total_len : Int;
+};
+
+-- One admitted lifecycle edge.
+--
+-- Directed, and the direction is authority: `Running -> Degraded` admitting
+-- `Degraded -> Running` would make every declared degradation silently
+-- recoverable. A composition that wants recovery declares both edges.
+LifecycleTransition :: type {
+  from_state : Int;
+  to_state : Int;
+  reserved : Int;
+};
+
+-- One instance's restart policy.
+--
+-- `attempts` is the total number of *restarts* admitted, not launches: zero
+-- means an instance that dies is never restarted, which is a real policy and the
+-- pre-C9.4 behaviour. `causes` is the bitmask of terminal causes this policy
+-- restarts on, so a component restarted on a fault but not on a clean exit is
+-- one entry rather than two tables.
+--
+-- `backoff_ns` is the delay before the first restart and `backoff_factor` scales
+-- it per attempt (by `backoffFactorScale`), so attempt *n* waits
+-- `backoff_ns * (backoff_factor / 256)^n`, saturating at `maxBackoffNs`. The
+-- root computes that from these two declared numbers rather than trusting the
+-- supervisor's own arithmetic, which is what makes "backoff is observed against
+-- C9.1's clock, not a spin count" checkable.
+--
+-- `terminal_state` on the header rather than per-instance: exhaustion is one
+-- graph-wide answer, and letting each instance name a different terminal state
+-- would make "the graph is in a declared terminal state" unobservable in one
+-- marker.
+LifecycleRestart :: type {
+  subject_identity : Int;
+  attempts : Int;
+  causes : Int;
+  backoff_ns : Int;
+  backoff_factor : Int;
+  reserved : Int;
+};
+
+-- One health dependency: `subject_identity` is not started while
+-- `dependency_identity` is not in `required_state`.
+--
+-- The required state is per-edge rather than a fixed `Ready`, because a
+-- dependent that needs its dependency merely *launched* and one that needs it
+-- *serving* are different policies, and collapsing them would make the weaker
+-- one wait for evidence it does not need.
+LifecycleDependency :: type {
+  subject_identity : Int;
+  dependency_identity : Int;
+  required_state : Int;
+  reserved : Int;
+};
+
+-- One parameter-state authority edge: `holder_identity` may read and/or write
+-- `subject_identity`'s parameters, per `authority_flags`.
+--
+-- A component reaching its *own* parameters needs an edge where holder and
+-- subject are equal, and unlike `scheduling-class/v1`'s promotion table that
+-- reflexive edge is admitted rather than refused. The two contracts differ
+-- because the authorities differ: promotion is inherently over another
+-- component's class, whereas a component owning its own configuration is the
+-- ordinary case, and denying it would leave parameter state readable only by
+-- third parties.
+LifecycleParameterGrant :: type {
+  holder_identity : Int;
+  subject_identity : Int;
+  authority_flags : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema LifecyclePolicyHeader;
+transitionSchema ::= schema LifecycleTransition;
+restartSchema ::= schema LifecycleRestart;
+dependencySchema ::= schema LifecycleDependency;
+parameterSchema ::= schema LifecycleParameterGrant;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "initial_state"; width = 2; signed = false; byteArray = false; };
+  { name = "terminal_state"; width = 2; signed = false; byteArray = false; };
+  { name = "transition_count"; width = 2; signed = false; byteArray = false; };
+  { name = "restart_count"; width = 2; signed = false; byteArray = false; };
+  { name = "dependency_count"; width = 2; signed = false; byteArray = false; };
+  { name = "parameter_count"; width = 2; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+};
+
+transitionLayout :: List WireField = {
+  { name = "from_state"; width = 4; signed = false; byteArray = false; };
+  { name = "to_state"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 8; signed = false; byteArray = false; };
+};
+
+restartLayout :: List WireField = {
+  { name = "subject_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "attempts"; width = 4; signed = false; byteArray = false; };
+  { name = "causes"; width = 4; signed = false; byteArray = false; };
+  { name = "backoff_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "backoff_factor"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 12; signed = false; byteArray = true; };
+};
+
+dependencyLayout :: List WireField = {
+  { name = "subject_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "dependency_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "required_state"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+parameterLayout :: List WireField = {
+  { name = "holder_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "subject_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "authority_flags"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =;
+  headerBytes =;
+  transitionBytes =;
+  restartBytes =;
+  dependencyBytes =;
+  parameterBytes =;
+  maxTransitions =;
+  maxInstances =;
+  maxDependencies =;
+  maxParameterGrants =;
+  maxRestartAttempts =;
+  maxBackoffNs =;
+  backoffFactorScale =;
+  maxBackoffFactor =;
+  undeclaredStateId =;
+  undeclaredCauseId =;
+  parameterRead =;
+  parameterWrite =;
+  stateNames =;
+  causeNames =;
+  headerFields = headerSchema.fields ?? {;};
+  transitionFields = transitionSchema.fields ?? {;};
+  restartFields = restartSchema.fields ?? {;};
+  dependencyFields = dependencySchema.fields ?? {;};
+  parameterFields = parameterSchema.fields ?? {;};
+  headerLayout =;
+  transitionLayout =;
+  restartLayout =;
+  dependencyLayout =;
+  parameterLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/lifecycle_policy.py"; };
+    rustPath := t.join "" { root; "/lifecycle_policy.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

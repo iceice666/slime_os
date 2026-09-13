@@ -1,0 +1,387 @@
+-- A bounded model of the IO0 request/epoch/lease contract: the substrate rules
+-- `contracts/io-queue/v1/schema.zt` states in prose and
+-- `components/proto/src/io_queue_ring.rs` implements as cursor discipline.
+--
+-- What this models, and what it deliberately does not. The generated codec and
+-- its structural validators already decide *layout*: magics, slot lengths,
+-- reserved bytes, power-of-two ring depth, offset/length overflow. Host tests
+-- (`components/proto/tests/io_queue.rs`) pin those, and a model would only
+-- restate them. What no gate decides is the *reachability* question: over every
+-- interleaving of client submit/drain, driver take/complete, cancellation,
+-- reset, peer death, and epoch advance, can a request reach two terminal
+-- states, can a lease be released twice or never, can a ring overwrite an
+-- unconsumed entry, can a request outlive the epoch that admitted it. Those are
+-- properties of the whole transition system, and QEMU gates observe one
+-- schedule each.
+--
+-- Abstraction: one queue, one client, one driver. A ring is a bounded FIFO of
+-- capacity `slots`, not a slot array over sequence numbers -- the concrete
+-- absolute-sequence encoding is what `valid_queue_header` and
+-- `queue_slot_index` already check, and modelling it would add unbounded
+-- integers for no property. Occupancy is derived: a request holds a submission
+-- slot until its completion is *consumed*, which is the invariant
+-- `io_queue_ring.rs` names as spanning both halves.
+--
+-- Three request identities against two slots is the minimum that makes
+-- backpressure non-vacuous: two fill the ring and the third must be refused.
+-- Two epochs are the minimum that distinguishes "fresh epoch" from "epoch
+-- nobody is serving".
+--
+-- `terminalWrites` and `releases` are counters rather than booleans on purpose.
+-- The honest transition guards make a second terminal write and a second lease
+-- release unreachable, so a boolean would record the guard rather than the
+-- property. Counting lets the corresponding mutation exhibit the violation as
+-- state evidence, the same technique `capability-rights.zt` uses for
+-- `installedAtTarget`.
+--
+-- Stale-completion *refusal* is not a separate property here, and that is a
+-- deliberate honesty note rather than an omission. A driver refuses a
+-- completion whose epoch is not the one it serves; but under the honest rules
+-- every live request already carries the current epoch, which is exactly
+-- `NoLiveRequestAcrossEpoch`. Stating refusal separately would be vacuous. The
+-- non-vacuous claim is that no request survives the epoch boundary at all, and
+-- `resetWithoutSettling` is the mutation that breaks it.
+--
+-- `terminal` is `nextFor` producing nothing, so deadlock is unrepresentable by
+-- construction and `leadsTo` carries real content: from any state holding a
+-- live request, every maximal path reaches quiescence with no lease held. That
+-- is IO0's no-leak rule as a liveness property, which no safety predicate can
+-- express.
+
+l ::= import stdlib.list;
+
+ReqId :: type { #r1; #r2; #r3; };
+Phase :: type { #absent; #queued; #inFlight; #settled; };
+Status :: type { #pending; #ok; #cancelled; #reset; #peerDead; };
+DriverState :: type { #active; #resetting; #dead; };
+
+Req :: type {
+  id : ReqId;
+  -- The epoch that admitted this request, not the epoch now current.
+  epoch : Int;
+  phase : Phase;
+  status : Status;
+  leaseHeld : Bool;
+  -- The client consumed the completion. Until then the request still occupies
+  -- its submission slot.
+  drained : Bool;
+  terminalWrites : Int;
+  releases : Int;
+};
+State :: type {
+  driver : DriverState;
+  epoch : Int;
+  -- Zero before the first advance; otherwise the epoch this one replaced.
+  previousEpoch : Int;
+  requests : List Req;
+};
+Transition :: type { action : Text; state : State; };
+Safety :: type { name : Text; holds : State -> Bool; };
+Reachability :: type { name : Text; reached : State -> Bool; };
+Liveness :: type { name : Text; premise : State -> Bool; consequence : State -> Bool; };
+Model :: type {
+  initial : List State;
+  next : State -> List Transition;
+  safety : List Safety;
+  reachability : List Reachability;
+  terminal : State -> Bool;
+  leadsTo : List Liveness;
+};
+Expectation :: type { #safe; #violates : { property : Text; }; };
+Scenario :: type { name : Text; model : Model; expect : Expectation; };
+Faults :: type {
+  -- Submit ignores ring capacity, overwriting an unconsumed entry.
+  overwriteWhenFull : Bool;
+  -- Complete ignores the single-assignment guard on an already-settled request.
+  doubleSettle : Bool;
+  -- Drain releases a lease it already released.
+  doubleRelease : Bool;
+  -- The client releases a lease while the device still owns the bytes.
+  releaseWhileInFlight : Bool;
+  -- Restart reuses the epoch it is replacing.
+  epochReuse : Bool;
+  -- Restart advances the epoch without settling outstanding requests.
+  resetWithoutSettling : Bool;
+};
+
+slots :: Int = 2;
+maxEpoch :: Int = 2;
+reqIds :: List ReqId = { #r1; #r2; #r3; };
+
+absentReq :: ReqId -> Req
+  = id => {
+      id =;
+      epoch = 0;
+      phase = #absent;
+      status = #pending;
+      leaseHeld = false;
+      drained = false;
+      terminalWrites = 0;
+      releases = 0;
+    };
+freshTable :: List Req = l.map absentReq reqIds;
+
+live :: Req -> Bool
+  = r => r.phase == #queued || r.phase == #inFlight;
+-- A request holds a submission slot from admission until its completion is
+-- consumed, which is why both rings carry the same depth.
+occupies :: Req -> Bool
+  = r => not (r.phase == #absent) && not r.drained;
+awaitingDrain :: Req -> Bool
+  = r => r.phase == #settled && not r.drained;
+submissionOccupancy :: State -> Int
+  = s => l.countBy occupies s.requests;
+completionOccupancy :: State -> Int
+  = s => l.countBy awaitingDrain s.requests;
+retired :: Req -> Bool
+  = r => r.phase == #absent || r.drained;
+quiescent :: State -> Bool
+  = s => l.all retired s.requests;
+
+replaceIf :: ReqId -> (Req -> Req) -> Req -> Req
+  = id update r => if r.id == id then update r else r;
+replaceReq :: ReqId -> (Req -> Req) -> List Req -> List Req
+  = id update rs => l.map (replaceIf id update) rs;
+withRequests :: State -> List Req -> State
+  = s rs => s with { requests = rs; };
+step :: Text -> State -> Transition
+  = action state => { action =; state =; };
+updateOne :: Text -> State -> ReqId -> (Req -> Req) -> List Transition
+  = action s id update => l.singleton (step action (withRequests s (replaceReq id update s.requests)));
+
+submitOne :: Faults -> State -> Req -> List Transition
+  = f s r => cond {
+      not (s.driver == #active) => l.empty ();
+      not (r.phase == #absent) => l.empty ();
+      submissionOccupancy s >= slots && not f.overwriteWhenFull => l.empty ();
+      _ => updateOne "submit" s r.id (\q. q with { phase = #queued; epoch = s.epoch; leaseHeld = true; });
+    };
+
+takeOne :: State -> Req -> List Transition
+  = s r => cond {
+      s.driver == #dead => l.empty ();
+      not (r.phase == #queued) => l.empty ();
+      _ => updateOne "take" s r.id (\q. q with { phase = #inFlight; });
+    };
+
+completeEligible :: Faults -> Req -> Bool
+  = f r => r.phase == #inFlight || (f.doubleSettle && r.phase == #settled && not r.drained);
+completeOne :: Faults -> State -> Req -> List Transition
+  = f s r => cond {
+      not (s.driver == #active) => l.empty ();
+      not (completeEligible f r) => l.empty ();
+      _ => updateOne "complete" s r.id (\q. q with {
+          phase = #settled;
+          status = #ok;
+          terminalWrites = q.terminalWrites + 1;
+        });
+    };
+
+cancelOne :: State -> Req -> List Transition
+  = s r => cond {
+      s.driver == #dead => l.empty ();
+      not (live r) => l.empty ();
+      _ => updateOne "cancel" s r.id (\q. q with {
+          phase = #settled;
+          status = #cancelled;
+          terminalWrites = q.terminalWrites + 1;
+        });
+    };
+
+drainEligible :: Faults -> Req -> Bool
+  = f r => awaitingDrain r || (f.doubleRelease && r.drained);
+drainOne :: Faults -> State -> Req -> List Transition
+  = f s r => if not (drainEligible f r) then l.empty () else
+      updateOne "drain" s r.id (\q. q with {
+        drained = true;
+        leaseHeld = false;
+        releases = q.releases + 1;
+      });
+
+releaseEarlyOne :: Faults -> State -> Req -> List Transition
+  = f s r => cond {
+      not f.releaseWhileInFlight => l.empty ();
+      not (live r) => l.empty ();
+      not r.leaseHeld => l.empty ();
+      _ => updateOne "release-early" s r.id (\q. q with { leaseHeld = false; });
+    };
+
+beginReset :: State -> List Transition
+  = s => if not (s.driver == #active) then l.empty () else
+      l.singleton (step "begin-reset" (s with { driver = #resetting; }));
+
+settleLive :: Status -> Req -> Req
+  = status r => if live r then r with {
+      phase = #settled;
+      status =;
+      terminalWrites = r.terminalWrites + 1;
+    } else r;
+
+settleReset :: State -> List Transition
+  = s => cond {
+      not (s.driver == #resetting) => l.empty ();
+      not (l.any live s.requests) => l.empty ();
+      _ => l.singleton (step "settle-reset" (withRequests s (l.map (settleLive #reset) s.requests)));
+    };
+
+markDead :: State -> List Transition
+  = s => if s.driver == #dead then l.empty () else
+      l.singleton (step "peer-dead" ((withRequests s (l.map (settleLive #peerDead) s.requests)) with { driver = #dead; }));
+
+-- Reclamation is total: the honest guard requires quiescence, so every identity
+-- returns to `#absent` and no lease survives the boundary. Under
+-- `resetWithoutSettling` a live request is carried instead, which is what makes
+-- the epoch property observable rather than structural.
+advanceEpoch :: Faults -> State -> List Transition
+  = f s => cond {
+      not (s.driver == #resetting) => l.empty ();
+      s.epoch >= maxEpoch => l.empty ();
+      not (quiescent s) && not f.resetWithoutSettling => l.empty ();
+      _ => l.singleton (step "advance-epoch" {
+          driver = #active;
+          epoch = if f.epochReuse then s.epoch else s.epoch + 1;
+          previousEpoch = s.epoch;
+          requests = l.map (\r. if live r then r else absentReq r.id) s.requests;
+        });
+    };
+
+perRequest :: Faults -> State -> Req -> List Transition
+  = f s r => l.flatten {
+      submitOne f s r;
+      takeOne s r;
+      completeOne f s r;
+      cancelOne s r;
+      drainOne f s r;
+      releaseEarlyOne f s r;
+    };
+nextFor :: Faults -> State -> List Transition
+  = f s => l.flatten {
+      l.flatten (l.map (perRequest f s) s.requests);
+      beginReset s;
+      settleReset s;
+      markDead s;
+      advanceEpoch f s;
+    };
+terminalFor :: Faults -> State -> Bool
+  = f s => l.length (nextFor f s) == 0;
+
+ringNeverOverwrites :: State -> Bool
+  = s => submissionOccupancy s <= slots && completionOccupancy s <= slots;
+settledOnce :: Req -> Bool
+  = r => r.terminalWrites <= 1;
+singleTerminalAssignment :: State -> Bool
+  = s => l.all settledOnce s.requests;
+releasedOnce :: Req -> Bool
+  = r => r.releases <= 1;
+leaseReleasedAtMostOnce :: State -> Bool
+  = s => l.all releasedOnce s.requests;
+holdsWhileLive :: Req -> Bool
+  = r => not (live r) || r.leaseHeld;
+leaseHeldUntilTerminal :: State -> Bool
+  = s => l.all holdsWhileLive s.requests;
+drainReleasedExactlyOnce :: Req -> Bool
+  = r => not r.drained || (not r.leaseHeld && r.releases == 1);
+leaseSettledOnDrain :: State -> Bool
+  = s => l.all drainReleasedExactlyOnce s.requests;
+withinEpoch :: Int -> Req -> Bool
+  = epoch r => retired r || r.epoch == epoch;
+noLiveRequestAcrossEpoch :: State -> Bool
+  = s => l.all (withinEpoch s.epoch) s.requests;
+epochStrictlyAdvances :: State -> Bool
+  = s => s.previousEpoch == 0 || s.epoch > s.previousEpoch;
+
+fullRing :: State -> Bool
+  = s => submissionOccupancy s == slots;
+drainedAs :: Status -> Req -> Bool
+  = status r => r.status == status && r.drained;
+drainedWith :: Status -> State -> Bool
+  = status s => l.any (drainedAs status) s.requests;
+freshEpoch :: State -> Bool
+  = s => s.epoch == maxEpoch;
+noLease :: Req -> Bool
+  = r => not r.leaseHeld;
+fullyReclaimed :: State -> Bool
+  = s => s.epoch == maxEpoch && quiescent s && l.all noLease s.requests;
+
+anyLive :: State -> Bool
+  = s => l.any live s.requests;
+nothingLeaked :: State -> Bool
+  = s => not (l.any live s.requests) && l.all noLease s.requests;
+
+initial :: State = {
+  driver = #active;
+  epoch = 1;
+  previousEpoch = 0;
+  requests = freshTable;
+};
+
+noFaults :: Faults = {
+  overwriteWhenFull = false;
+  doubleSettle = false;
+  doubleRelease = false;
+  releaseWhileInFlight = false;
+  epochReuse = false;
+  resetWithoutSettling = false;
+};
+
+queueModel :: Faults -> Model
+  = f => {
+      initial = { initial; };
+      next = nextFor f;
+      terminal = terminalFor f;
+      safety = {
+        { name = "RingNeverOverwrites"; holds = ringNeverOverwrites; };
+        { name = "SingleTerminalAssignment"; holds = singleTerminalAssignment; };
+        { name = "LeaseReleasedAtMostOnce"; holds = leaseReleasedAtMostOnce; };
+        { name = "LeaseHeldUntilTerminal"; holds = leaseHeldUntilTerminal; };
+        { name = "LeaseSettledOnDrain"; holds = leaseSettledOnDrain; };
+        { name = "NoLiveRequestAcrossEpoch"; holds = noLiveRequestAcrossEpoch; };
+        { name = "EpochStrictlyAdvances"; holds = epochStrictlyAdvances; };
+      };
+      reachability = {
+        { name = "full-ring"; reached = fullRing; };
+        { name = "cancel-settled"; reached = drainedWith #cancelled; };
+        { name = "reset-settled"; reached = drainedWith #reset; };
+        { name = "peer-dead-settled"; reached = drainedWith #peerDead; };
+        { name = "fresh-epoch"; reached = freshEpoch; };
+        { name = "fully-reclaimed"; reached = fullyReclaimed; };
+      };
+      leadsTo = {
+        { name = "EveryLiveRequestSettlesAndReleases"; premise = anyLive; consequence = nothingLeaked; };
+      };
+    };
+
+scenarios :: List Scenario = {
+  { name = "main"; model = queueModel noFaults; expect = #safe; };
+  {
+    name = "overwrite-when-full";
+    model = queueModel (noFaults with { overwriteWhenFull = true; });
+    expect = #violates { property = "RingNeverOverwrites"; };
+  };
+  {
+    name = "double-settle";
+    model = queueModel (noFaults with { doubleSettle = true; });
+    expect = #violates { property = "SingleTerminalAssignment"; };
+  };
+  {
+    name = "double-release";
+    model = queueModel (noFaults with { doubleRelease = true; });
+    expect = #violates { property = "LeaseReleasedAtMostOnce"; };
+  };
+  {
+    name = "release-while-in-flight";
+    model = queueModel (noFaults with { releaseWhileInFlight = true; });
+    expect = #violates { property = "LeaseHeldUntilTerminal"; };
+  };
+  {
+    name = "epoch-reuse";
+    model = queueModel (noFaults with { epochReuse = true; });
+    expect = #violates { property = "EpochStrictlyAdvances"; };
+  };
+  {
+    name = "reset-without-settling";
+    model = queueModel (noFaults with { resetWithoutSettling = true; });
+    expect = #violates { property = "NoLiveRequestAcrossEpoch"; };
+  };
+};
+{ scenarios =; }

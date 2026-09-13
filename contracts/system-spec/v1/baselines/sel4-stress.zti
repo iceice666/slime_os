@@ -1,0 +1,277 @@
+{
+  bootAction = "stress";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "supervision-child";
+      object = "sha256:supervision-child";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "stress-00";
+      "stress-01";
+      "stress-02";
+      "stress-03";
+      "stress-04";
+      "stress-05";
+      "stress-06";
+      "stress-07";
+      "stress-08";
+      "stress-09";
+      "stress-10";
+      "stress-11";
+      "stress-12";
+      "stress-13";
+      "stress-14";
+      "stress-15";
+      "stress-16";
+      "stress-17";
+      "stress-18";
+      "stress-19";
+      "stress-20";
+      "stress-21";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-00";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-01";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-02";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-03";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-04";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-05";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-06";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-07";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-08";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-09";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-10";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-11";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-12";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-13";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-14";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-15";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-16";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-17";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-18";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-19";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-20";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "supervision-child";
+      health = "required";
+      name = "stress-21";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:supervision-child";
+      kind = "component";
+      size = 65536;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

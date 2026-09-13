@@ -1,0 +1,66 @@
+{
+  formatVersion = 1;
+  name = "io-network-intruder";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Proves exact address, port, name, transport, rights-mask, and cross-holder capability attempts all fail closed.";
+  implementation =  {
+    provider = "workspace";
+    binary = "io-network-intruder";
+    contentHash = "";
+  };
+  provides = [
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+    "network-service";
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_network_check boots sel4-io-network";
+    expectedResult = "every exact-authority, cross-holder, and rights-mask attempt is refused with a structured denial";
+    passFailCriteria = "[io-network-intruder] structured denials=14 shutdown=1";
+    requiredTestEnvironment = "io_network_check";
+  };
+}

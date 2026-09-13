@@ -1,0 +1,7 @@
+build exit 0 started=2026-09-11T06:42:34Z finished=2026-09-11T06:43:17Z
+run 1 exit 0 started=2026-09-11T06:43:17Z finished=2026-09-11T06:45:00Z
+run 2 exit 0 started=2026-09-11T06:45:00Z finished=2026-09-11T06:45:24Z
+run 3 exit 0 started=2026-09-11T06:45:24Z finished=2026-09-11T06:45:48Z
+run 4 exit 0 started=2026-09-11T06:45:48Z finished=2026-09-11T06:46:10Z
+run 5 exit 0 started=2026-09-11T06:46:10Z finished=2026-09-11T06:46:34Z
+campaign done

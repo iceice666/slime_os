@@ -1,0 +1,12 @@
+test component_image::tests::a_file_range_past_the_payload_is_refused ... ok
+test component_image::tests::a_footprint_past_the_image_ceiling_is_refused ... ok
+test component_image::tests::a_malformed_single_segment_is_refused ... ok
+test component_image::tests::a_record_shorter_than_the_contract_is_refused ... ok
+test component_image::tests::a_well_formed_segment_table_is_admitted ... ok
+test component_image::tests::a_writable_executable_segment_is_refused ... ok
+test component_image::tests::a_zero_fill_tail_is_not_a_malformed_range ... ok
+test component_image::tests::an_entry_outside_every_executable_segment_is_refused ... ok
+test component_image::tests::undefined_segment_flags_are_refused ... ok
+test component_image::tests::unsorted_and_overlapping_ranges_are_refused ... ok
+test component_image::tests::zero_and_excess_segment_counts_are_refused ... ok
+test result: ok. 108 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

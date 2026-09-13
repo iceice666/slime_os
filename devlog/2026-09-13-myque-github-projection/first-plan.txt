@@ -1,0 +1,18 @@
+Command: nix run github:mozufu/myque-gh/c1da385362d1eca3dc1bdf52b4c499e68d3007a4#myque-gh -- plan --store . --repo iceice666/slime_os --ref f0e3e198a01ede4929a08ef21ec375d201872db1 --issue-author 'github-actions[bot]' --project 'tag = github' --source-repo iceice666/slime_os --source-branch main
+Exit: 0
+
+fetching github input 'github:mozufu/myque-gh/c1da385362d1eca3dc1bdf52b4c499e68d3007a4'
+Target: iceice666/slime_os
+Source: f0e3e198a01ede4929a08ef21ec375d201872db1 (committed snapshot; uncommitted edits excluded)
++ label myque:kind:epic
++ label myque:kind:milestone
++ label myque:kind:task
++ label myque:state:active
++ label myque:state:open
++ label myque:tag:architecture
++ label myque:tag:github
++ label myque:tag:io
++ issue 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 IO10
++ issue 01a08ff0-0bae-741e-9318-331fdafe0b96 IO11
++ issue 01a09a60-86bf-7646-b782-e23fc7230249 01a09a60
+~ issue 01a08ff0-0bae-741e-9318-331fdafe0b96 IO11 parent 01a08ff0-0b99-7315-99b0-7e7f340fa6f9

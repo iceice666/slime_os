@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "supervision-child";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "A child that starts and ends, holding no channel, used to cross task-lifetime record bounds without exhausting an unrelated table first.";
+  implementation = {
+    provider = "workspace";
+    binary = "supervision-child";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [
+    "init";
+  ];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_supervision_check gate boots a generation declaring supervision-child";
+    expectedResult = "the loop child starts, ends, and its termination record is reclaimed once no live handle names it";
+    passFailCriteria = "supervision-child";
+    requiredTestEnvironment = "sel4_supervision_check";
+  };
+}

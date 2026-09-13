@@ -1,0 +1,184 @@
+{
+  bootAction = "powerbox";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 2;
+    };
+    {
+      commandProfile = [];
+      name = "powerbox-chooser";
+      object = "sha256:powerbox-chooser";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "powerbox-probe";
+      object = "sha256:powerbox-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 32;
+  grants = [
+    {
+      name = "init-powerbox-chooser";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "powerbox-chooser";
+      transferable = false;
+    };
+    {
+      name = "init-powerbox-probe";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "powerbox-probe";
+      transferable = false;
+    };
+    {
+      name = "powerbox-a-root";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+        "directoryDerive";
+      ];
+      source = "powerbox-chooser";
+      target = "powerbox-chooser";
+      transferable = true;
+    };
+    {
+      name = "powerbox-b-input";
+      capabilityKind = "input";
+      rights = [
+        "inputRead";
+      ];
+      source = "powerbox-chooser";
+      target = "powerbox-chooser";
+      transferable = false;
+    };
+    {
+      name = "powerbox-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "powerbox-probe";
+      target = "powerbox-chooser";
+      transferable = true;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-powerbox-chooser";
+          slot = 1;
+          slotReason = "bootLayout";
+        };
+        {
+          grant = "init-powerbox-probe";
+          slot = 2;
+          slotReason = "bootLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "powerbox-a-root";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "powerbox-b-input";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "powerbox-rpc";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "powerbox-chooser";
+      health = "optional";
+      name = "powerbox-chooser";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "powerbox-rpc";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "powerbox-probe";
+      health = "optional";
+      name = "powerbox-probe";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:powerbox-chooser";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:powerbox-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

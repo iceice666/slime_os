@@ -1,0 +1,13 @@
+schema ::= import "schema.zt";
+env ::= import stdlib.env;
+load ::= import stdlib.load;
+
+main :: { env : Env; load : Load; }
+-> Validation DecodeIssue schema.DemoContract
+! { * env.GetEffects; * load.ZtiEffects; }
+= caps => [
+  path := env.get caps.env "SLIME_RPI5_ROS2_DEMO_CONTRACT_PATH" ?? "";
+  schema.decodeDemoContract (load.zti caps.load path)
+];
+
+main

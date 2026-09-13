@@ -1,0 +1,184 @@
+name: Publish component SDK
+
+# Manual only: this workflow pushes a signed, immutable release to the
+# canonical iceice666/slime_os-component_sdk repository from the m3air
+# release runner, so it must never run from a pull_request or an ordinary
+# push.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SDK release version (MAJOR.MINOR.PATCH)"
+        required: true
+        type: string
+      profiles:
+        description: "Target profiles to publish"
+        required: true
+        type: choice
+        options:
+          - qemu-only
+          - qemu+rpi5
+        default: qemu+rpi5
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-sdk-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # `workflow_dispatch` can be triggered from any branch, and the
+  # publisher records `github.sha` as the release's `sourceCommit`. A commit
+  # that is not on `main` can be rebased away, and the recorded source would
+  # then never regenerate its own release -- which is the single reason the
+  # record carries a commit at all. CP7's deliverable says "an exact protected
+  # slime_os commit"; this job is where "protected" is enforced rather than
+  # assumed.
+  #
+  # Runs first and alone so a wrong ref costs seconds, not the prefix build.
+  guard:
+    name: Refuse a source commit that is not on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # `fetch-depth: 0` so ancestry is decidable: a shallow clone cannot
+      # answer whether this commit is contained in `main`.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require the dispatch ref and the commit to be main
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "refusing: dispatched from ${{ github.ref }}, not refs/heads/main" >&2
+            exit 1
+          fi
+          git fetch --quiet origin main
+          # Ref name alone is not enough: it is checked above for a clear
+          # message, and containment is what actually makes the commit
+          # reproducible for CP7's reverse-drift check.
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "refusing: ${{ github.sha }} is not contained in origin/main" >&2
+            exit 1
+          fi
+          echo "source commit ${{ github.sha }} is on origin/main"
+
+  # Builds the seL4 prefixes the release records. Runs on the free, arm64
+  # GitHub-hosted runner rather than m3air: m3air has no Nix or cross
+  # toolchain installed, and provisioning one there is out of scope for a
+  # release runner that only needs to hold the SDK signing and push keys.
+  build-prefixes:
+    name: Build prefixes, verify the version, and run the SDK gates
+    needs: guard
+    runs-on: ubuntu-24.04-arm
+    # Was 30 with the prefix builds alone. The two SDK gates below publish to
+    # a local stand-in repository and boot the QEMU component graph, so the
+    # bound covers their observed cost rather than only the kernel builds.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/slime-env
+      - run: nix develop --command just sel4_qemu_image_check
+      - if: ${{ inputs.profiles == 'qemu+rpi5' }}
+        run: nix develop --command just sel4_rpi5_image_check
+
+      # The operator's `version` input is checked against the computed
+      # change class *here*, on an ordinary runner, rather than by
+      # `admit_version_change` after the release job already holds the
+      # credentials. An understated version used to cost a full prefix build
+      # before anyone learned it was wrong.
+      #
+      # This also reads the hosted release, which nothing else in the
+      # repository does; see the open follow-up in
+      # devlog/2026-08-26-cp7-hosted-publication-hardening/index.md.
+      - name: Verify the requested version against the hosted release
+        env:
+          PROFILE_FLAGS: >-
+            ${{ inputs.profiles == 'qemu+rpi5' && '--profile aarch64-sel4-qemu-virt --profile aarch64-rpi5' || '--profile aarch64-sel4-qemu-virt' }}
+        run: |
+          set -euo pipefail
+          nix develop --command python3 scripts/check/check-component-sdk-preflight.py \
+            $PROFILE_FLAGS \
+            --require-version "${{ inputs.version }}"
+
+      # CP7's deliverable is to "publish only from an exact protected
+      # slime_os commit *after CP6 and the existing external-component gates
+      # pass*". Those gates were never wired into this workflow, so that
+      # clause rested on the operator remembering to run them. Both are run
+      # here, before any credential is reachable: export determinism and the
+      # release lifecycle (idempotence, immutable tags, reverse drift).
+      - run: nix develop --command just component_sdk_export_check
+      - run: nix develop --command just component_sdk_release_check
+      - run: nix develop --command just component_sdk_system_image_check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sel4-prefixes
+          path: |
+            build/sel4-prefix
+            build/sel4-rpi5-prefix
+          if-no-files-found: warn
+          retention-days: 1
+
+  # The only job that touches the release credentials. Gated by the
+  # "release" environment's required reviewer in addition to
+  # workflow_dispatch's existing write-access restriction.
+  publish:
+    name: Publish and verify
+    # `guard` is named explicitly as well as transitively through
+    # `build-prefixes`, and the `if` re-asserts the ref on the job that
+    # actually holds the keys. Defence in depth: a later edit that reorders or
+    # drops a dependency should not silently reopen publication from an
+    # arbitrary branch.
+    needs: [guard, build-prefixes]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: [self-hosted, m3air]
+    environment: release
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v4
+        with:
+          name: sel4-prefixes
+          path: build
+      - name: Publish the SDK release
+        env:
+          GIT_SSH_COMMAND: >-
+            ssh -i /Users/iceice666/.config/slime-release/sdk-push-ed25519
+            -o IdentitiesOnly=yes
+          PROFILE_FLAGS: >-
+            ${{ inputs.profiles == 'qemu+rpi5' && '--profile aarch64-sel4-qemu-virt --profile aarch64-rpi5' || '--profile aarch64-sel4-qemu-virt' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/build/publish-component-sdk.py \
+            --version "${{ inputs.version }}" \
+            --source-commit "${{ github.sha }}" \
+            --sdk-url git@github.com-slime-sdk-release:iceice666/slime_os-component_sdk.git \
+            --sdk-repository https://github.com/iceice666/slime_os-component_sdk \
+            --branch generated \
+            $PROFILE_FLAGS \
+            --signing-key /Users/iceice666/.config/slime-release/sdk-tag-ed25519 \
+            --push
+      - name: Verify the publication outcome
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/sdk-verify
+          git clone --quiet --branch generated \
+            https://github.com/iceice666/slime_os-component_sdk /tmp/sdk-verify
+          cd /tmp/sdk-verify
+          git fetch --quiet --tags
+          latest_tag="$(git describe --tags --abbrev=0)"
+          echo "latest hosted tag: $latest_tag"
+          git \
+            -c gpg.format=ssh \
+            -c gpg.ssh.allowedSignersFile=/Users/iceice666/.config/slime-release/allowed-signers \
+            verify-tag "$latest_tag"
+          rm -rf /tmp/sdk-verify

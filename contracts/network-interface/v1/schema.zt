@@ -1,0 +1,81 @@
+-- Slime OS network interface declaration, version 1 (IO11).
+--
+-- One entry per holder: the IPv4 address and prefix the holder's stack
+-- configures on its link, the gateway it routes off-link traffic to (all
+-- zero for none), and the MAC it presents. The format has no lease,
+-- discovery, or negotiation field: what a component's stack answers to is
+-- generation data, like the destinations it may reach, and it is read only by
+-- the generation's declared network service.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+headerBytes :: Int = 32;
+entryBytes :: Int = 48;
+maxInterfaces :: Int = 8;
+ipv4Bytes :: Int = 4;
+macBytes :: Int = 6;
+-- A prefix shorter than 8 or longer than 30 leaves no honest peer on a
+-- declared link: below 8 the declaration is a whole class-A and above 30 the
+-- subnet has no room for a distinct gateway and peer.
+minPrefixLen :: Int = 8;
+maxPrefixLen :: Int = 30;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+InterfaceHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  interface_count : Int;
+  total_len : Int;
+};
+
+InterfaceEntry :: type {
+  holder_identity : Int;
+  address : Int;
+  gateway : Int;
+  mac : Int;
+  prefix_len : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema InterfaceHeader;
+entrySchema ::= schema InterfaceEntry;
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "interface_count"; width = 4; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+};
+entryLayout :: List WireField = {
+  { name = "holder_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "address"; width = 4; signed = false; byteArray = true; };
+  { name = "gateway"; width = 4; signed = false; byteArray = true; };
+  { name = "mac"; width = 6; signed = false; byteArray = true; };
+  { name = "prefix_len"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 1; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =; headerBytes =; entryBytes =; maxInterfaces =;
+  ipv4Bytes =; macBytes =; minPrefixLen =; maxPrefixLen =;
+  headerFields = headerSchema.fields ?? {;}; entryFields = entrySchema.fields ?? {;};
+  headerLayout =; entryLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    fs.writeAll caps.write (t.join "" { root; "/network_interface.py"; }) bindings.python;
+    fs.writeAll caps.write (t.join "" { root; "/network_interface.rs"; }) bindings.rust
+  ];
+
+main

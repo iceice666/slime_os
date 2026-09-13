@@ -1,0 +1,13 @@
+schema ::= import "schema.zt";
+env ::= import stdlib.env;
+load ::= import stdlib.load;
+
+main :: { env : Env; load : Load; }
+  -> Validation DecodeIssue schema.SystemTestRun
+  ! { * env.GetEffects; * load.ZtiEffects; }
+  = caps => [
+    path := env.get caps.env "SLIME_SYSTEM_TEST_RUN_PATH" ?? "";
+    schema.decodeSystemTestRun (load.zti caps.load path)
+  ];
+
+main

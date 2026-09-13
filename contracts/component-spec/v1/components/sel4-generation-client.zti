@@ -1,0 +1,61 @@
+{
+  formatVersion = 1;
+  name = "sel4-generation-client";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "Issues staged generation-management requests \u2014 list, inspect, stage, select, rollback \u2014 against the generation manager over its declared endpoint.";
+  implementation = {
+    provider = "workspace";
+    binary = "sel4-generation-client";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_generation_check gate boots a generation declaring sel4-generation-client";
+    expectedResult = "every declared generation command is served and an undeclared one is refused";
+    passFailCriteria = "[init] generation client spawned";
+    requiredTestEnvironment = "sel4_generation_check";
+  };
+}

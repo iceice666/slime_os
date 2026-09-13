@@ -1,0 +1,9 @@
+{
+  formatVersion = 1;
+  name = "slime_generation_v5_rights";
+  compilerCompatibility = "0.1.0";
+  modules = [
+    { name = "rights"; path = "rights.zt"; };
+  ];
+  dependencies = [];
+}

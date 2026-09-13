@@ -1,0 +1,187 @@
+-- Slime OS fabric stream framing, version 2: the shared ring (B46).
+--
+-- v1 framed three fixed 64-byte messages that crossed a root-owned logical
+-- channel. Every sample went userspace -> root -> userspace, and `slime-root`
+-- re-proved atomicity, bounded queueing, and blocking that seL4 Endpoints and
+-- Notifications already supply. v2 removes the root from the data path: a
+-- publisher and its subscribers share one bounded ring in a shared buffer, and
+-- a Notification badge says only *that* something changed.
+--
+-- What is on the wire is therefore split in two, and the split is the point:
+--
+--   * The **ring** carries samples. It is memory, not messages, so a sample
+--     costs one copy into the ring rather than a copy in and a copy out. The
+--     header's `head`/`tail` are the whole protocol; a reader that trusts
+--     neither can still bound its own work, because the capacity is fixed at
+--     provisioning and the slot count is a power of two.
+--
+--   * The **badge** carries availability and credit. A Notification word is a
+--     bitfield, not a queue: signalling twice before a wait is one wake, which
+--     is exactly right for "the ring changed" and exactly wrong for "here is a
+--     sample". Nothing that must not be coalesced travels this way.
+--
+-- Peer death, which v1 handled through root bookkeeping, is a ring field:
+-- `producer_state` is written once by the publisher and read by every
+-- subscriber, so a reader learns the route ended without asking the root.
+--
+-- Logical records and concrete packed little-endian layouts live together. The
+-- renderer reflects each record, checks field order against its layout, and
+-- writes the Rust binding fragment consumed by slime-proto.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 2;
+
+-- The ring header occupies the first cache-line-sized region of the shared
+-- buffer; slots follow it. 64 bytes so a header field and a slot never share a
+-- line, which matters once a publisher writes `head` while a subscriber reads
+-- `tail`.
+ringHeaderLen :: Int = 64;
+ringSlotLen :: Int = 64;
+
+-- Payload bytes carried inline in one slot. Larger samples travel as a C7.6
+-- `SampleDescriptor` naming a receiver-bound loan, exactly as in v1: the ring
+-- bounds a slot, not a sample.
+maxInlineBytes :: Int = 32;
+
+-- Slots per ring, fixed at provisioning. A power of two so a sequence number
+-- maps to a slot by masking rather than division, and so `head - tail` is the
+-- occupancy without a separate count that could disagree with the indices.
+minRingSlots :: Int = 2;
+maxRingSlots :: Int = 256;
+
+-- Little-endian `SRNG` and `SSLT`. A reader tells a ring header from a slot by
+-- magic for the same reason v1's records did: one mapping carries both, and a
+-- reader that guessed by offset would be trusting the writer's arithmetic.
+ringMagic :: Int = 1196250195;
+slotMagic :: Int = 1414743379;
+
+-- Producer lifecycle, in the ring rather than in root bookkeeping. `active` is
+-- the steady state; `finished` is a clean end of publication, the v1
+-- `flagLast`; `dead` is set by the root when the publisher's task is reclaimed
+-- without finishing. A subscriber distinguishes them because "no more samples
+-- are coming" and "the peer died mid-stream" call for different handling, and
+-- v1 could only report the second by way of a channel error.
+producerActive :: Int = 0;
+producerFinished :: Int = 1;
+producerDead :: Int = 2;
+
+-- Slot state. A slot is `empty`, being written (`claimed`), or `ready`. The
+-- intermediate state is what makes a torn write impossible to observe: a
+-- reader advances past `claimed` only when it becomes `ready`, so a publisher
+-- preempted mid-copy never exposes a partial sample.
+slotEmpty :: Int = 0;
+slotClaimed :: Int = 1;
+slotReady :: Int = 2;
+
+-- Notification badge bits. A badge is OR-ed into the notification word, so
+-- these must be disjoint single bits and their meaning must survive
+-- coalescing: each says "check the ring", never "here is one event".
+badgeSampleReady :: Int = 1;
+badgeCreditReturned :: Int = 2;
+badgeProducerEnded :: Int = 4;
+knownBadgeBits :: Int = 7;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+-- The ring header. One writer for `head` (the publisher) and one for `tail`
+-- per subscriber, which is why a multi-subscriber route provisions one ring
+-- each rather than sharing `tail`.
+RingHeader :: type {
+  magic : Int;
+  version : Int;
+  slot_count : Int;
+  slot_len : Int;
+  head : Int;
+  tail : Int;
+  type_identity : Int;
+  producer_state : Int;
+  lost : Int;
+  reserved : Int;
+};
+
+-- One ring slot. `sequence` is absolute, not an index: a subscriber that falls
+-- behind learns how far by comparing sequences, and a wrapped slot whose
+-- sequence is older than expected is a drop the reader can count rather than a
+-- sample it silently mistakes for a new one.
+RingSlot :: type {
+  magic : Int;
+  state : Int;
+  flags : Int;
+  payload_len : Int;
+  sequence : Int;
+  type_identity : Int;
+  payload : Int;
+};
+
+-- The last sample of a bounded publication, as in v1. Carried on the slot
+-- rather than only in `producer_state` so a subscriber sees it in the same
+-- read that delivers the final sample.
+flagLast :: Int = 1;
+knownSlotFlags :: Int = 1;
+
+headerSchema ::= schema RingHeader;
+slotSchema ::= schema RingSlot;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "slot_count"; width = 4; signed = false; byteArray = false; };
+  { name = "slot_len"; width = 4; signed = false; byteArray = false; };
+  { name = "head"; width = 8; signed = false; byteArray = false; };
+  { name = "tail"; width = 8; signed = false; byteArray = false; };
+  { name = "type_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "producer_state"; width = 4; signed = false; byteArray = false; };
+  { name = "lost"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 16; signed = false; byteArray = true; };
+};
+
+slotLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "state"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "sequence"; width = 8; signed = false; byteArray = false; };
+  { name = "type_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "payload"; width = 32; signed = false; byteArray = true; };
+};
+
+format ::= {
+  formatVersion =;
+  ringHeaderLen =;
+  ringSlotLen =;
+  maxInlineBytes =;
+  minRingSlots =;
+  maxRingSlots =;
+  ringMagic =;
+  slotMagic =;
+  producerActive =;
+  producerFinished =;
+  producerDead =;
+  slotEmpty =;
+  slotClaimed =;
+  slotReady =;
+  badgeSampleReady =;
+  badgeCreditReturned =;
+  badgeProducerEnded =;
+  knownBadgeBits =;
+  flagLast =;
+  knownSlotFlags =;
+  headerFields = headerSchema.fields ?? {;};
+  slotFields = slotSchema.fields ?? {;};
+  headerLayout =;
+  slotLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_FABRIC_STREAM_V2_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/fabric_ring.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

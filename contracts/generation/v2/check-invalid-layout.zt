@@ -1,0 +1,27 @@
+gen ::= import "gen_rust.zt";
+refl ::= import stdlib.reflect;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+Header :: type { magic : Int; };
+Record :: type { value : Int; };
+headerSchema ::= schema Header;
+recordSchema ::= schema Record;
+
+one :: List WireField = {
+  { name = "wrong_name"; width = 8; signed = false; byteArray = true; };
+};
+scalar :: List WireField = {
+  { name = "value"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = 2; headerLen = 48; objectLen = 4; componentLen = 4; dependencyLen = 4; grantLen = 4; stateLen = 4; healthLen = 4;
+  maxGenerationBytes = 1; maxObjects = 1; maxComponents = 1; maxGrants = 1; maxStates = 1; maxDependencies = 1; maxHealthComponents = 1;
+  maxStringBytes = 1; maxStringTableBytes = 1; maxObjectPayloadBytes = 1;
+  headerFields = headerSchema.fields ?? {;}; objectFields = recordSchema.fields ?? {;}; componentFields = recordSchema.fields ?? {;};
+  dependencyFields = recordSchema.fields ?? {;}; grantFields = recordSchema.fields ?? {;}; stateFields = recordSchema.fields ?? {;}; healthFields = recordSchema.fields ?? {;};
+  headerLayout = one; objectLayout = scalar; componentLayout = scalar; dependencyLayout = scalar; grantLayout = scalar; stateLayout = scalar; healthLayout = scalar;
+};
+
+(gen.render format).python

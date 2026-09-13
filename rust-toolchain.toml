@@ -1,0 +1,13 @@
+[toolchain]
+# Host-side contracts and components use this workspace toolchain. The seL4
+# root task, child, and loader use the rust-sel4 pin in `sel4/pins.toml`,
+# selected per invocation through `RUSTUP_TOOLCHAIN`.
+channel = "nightly-2026-05-26"
+# Host protocol tests still use x86_64-unknown-none. The seL4 JSON targets come
+# from the pinned rust-sel4 submodule.
+# Keep this list in sync with `rustTargets` in flake.nix.
+targets = [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none",
+]
+components = ["clippy", "rustfmt", "llvm-tools-preview", "rust-src", "miri"]

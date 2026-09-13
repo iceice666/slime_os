@@ -1,0 +1,25 @@
+{
+  formatVersion = 1;
+  name = "TelemetryStream";
+  kind = "stream";
+  roles = [
+    { role = "item"; typeName = "TelemetrySample"; };
+  ];
+  types = [
+    {
+      name = "TelemetrySample";
+      fields = [
+        { name = "sequence"; kind = "scalar"; width = 8; signed = false; bound = 0; typeName = ""; };
+        { name = "frame"; kind = "record"; width = 0; signed = false; bound = 0; typeName = "FrameId"; };
+        { name = "readings"; kind = "sequence"; width = 4; signed = true; bound = 8; typeName = ""; };
+        { name = "label"; kind = "bytes"; width = 0; signed = false; bound = 16; typeName = ""; };
+      ];
+    };
+    {
+      name = "FrameId";
+      fields = [
+        { name = "value"; kind = "scalar"; width = 4; signed = false; bound = 0; typeName = ""; };
+      ];
+    };
+  ];
+}

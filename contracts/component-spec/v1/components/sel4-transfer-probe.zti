@@ -1,0 +1,62 @@
+{
+  formatVersion = 1;
+  name = "sel4-transfer-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "init";
+  purpose = "Streams a bounded generation transfer over its declared block rings and verifies the received image against its recorded identity.";
+  implementation = {
+    provider = "workspace";
+    binary = "sel4-transfer-probe";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+    "sharedBufferFactory";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "optional";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_transfer_check gate boots a generation declaring sel4-transfer-probe";
+    expectedResult = "the transferred image matches its declared identity and a corrupted transfer is refused";
+    passFailCriteria = "[init] transfer plane complete";
+    requiredTestEnvironment = "sel4_transfer_check";
+  };
+}

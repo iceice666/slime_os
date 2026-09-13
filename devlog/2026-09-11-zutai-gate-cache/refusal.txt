@@ -1,0 +1,15 @@
+edit: bootAttempts 3 -> 4 in contracts/system-spec/v1/systems/sel4-channel.zti; cache warm (302 entries)
+
+$ python3 scripts/generate/generate-generation-from-spec.py --check
+rc=1 wall=12.6s
+stale derived generation fixture(s): contracts/generation-manifest/v1/compositions/sel4-channel.zti; run python3 scripts/generate/generate-generation-from-spec.py
+
+$ python3 scripts/check/check-system-spec.py
+rc=1 wall=2.7s
+system spec check: sel4-channel: derived manifest diverges from sel4-channel.zti: manifest.health.bootAttempts: 4 != 3
+
+$ python3 scripts/check/check-system-image-closure.py
+rc=1 wall=0.3s
+    raise SystemImageClosureError(message)
+system_image_closure.SystemImageClosureError: systemSpec: identity mismatch for contracts/system-spec/v1/systems/sel4-channel.zti
+entries after: 306

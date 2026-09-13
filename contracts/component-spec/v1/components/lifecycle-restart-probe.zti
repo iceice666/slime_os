@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "lifecycle-restart-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Drives C9.4 lifecycle transitions, bounded restarts with backoff, health-gated starts, and parameter authority as supervisor, worker, graph, and denied roles.";
+  implementation = {
+    provider = "workspace";
+    binary = "lifecycle-restart-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "executable";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 8;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the lifecycle_restart_check gate boots a generation declaring lifecycle-restart-probe";
+    expectedResult = "restarts stay within the declared bound with backoff observed, and an undeclared transition is refused";
+    passFailCriteria = "[lifecycle-worker] faulting";
+    requiredTestEnvironment = "lifecycle_restart_check";
+  };
+}

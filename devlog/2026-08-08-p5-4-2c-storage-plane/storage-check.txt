@@ -1,0 +1,44 @@
+Command: just sel4_storage_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-storage.elf (generation 23) on the pinned qemu-arm-virt
+profile, plus a 1 MiB image signed "SLIMEDSK" at sector 0.
+
+Observed:
+[sel4-storage-probe] idle without a run token
+SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=block
+[init] storage probe spawned
+SLIME_GRAPH block served task=2 op=1 lba=0 status=0 sectors=1
+[sel4-storage-probe] sector 0 verified
+SLIME_GRAPH block served task=2 op=2 lba=1 status=0 sectors=1
+SLIME_GRAPH block served task=2 op=3 lba=0 status=0 sectors=0
+SLIME_GRAPH block served task=2 op=1 lba=1 status=0 sectors=1
+[sel4-storage-probe] write flushed and verified
+SLIME_GRAPH block failed task=2 op=1 lba=1099511627776 OutOfBounds { capacity: 2048 }
+[sel4-storage-probe] out-of-range refused
+[sel4-storage-probe] malformed refused
+[sel4-storage-probe] ungranted slot refused
+[sel4-storage-probe] storage plane complete
+[init] storage plane complete
+
+Terminal result:
+transcript: 10 markers observed; a component read, wrote, flushed, and verified a sector through a granted block capability, and three refusal arms held
+image: sector 0 still holds b'SLIMEDSK' and sector 1 holds b'SLIMEWR1', so the flushed write is durable
+seL4 storage plane check: a userspace component read, wrote, flushed, and verified sectors on a real device through a capability its generation granted, three refusal arms held, and the write survived to the image
+
+Enforced beyond the ordered markers:
+- exactly one instance ran the scenario. Two would mean the run-token
+  discrimination failed and both copies raced on the scratch sector.
+- the root's own `block served` records corroborate a successful read, write,
+  and flush, so the component's claims are not only self-reported.
+- the host-side image check runs after the boot: a flush the device
+  acknowledged but never honoured passes every in-boot assertion and fails
+  there.
+
+The two instances:
+The root launches every component the generation declares (P5.2), so two copies
+of `sel4-storage-probe` run and *both* hold the block capability — a generation
+grant names a component, not a task. What distinguishes them is a run token only
+`init` hands to the instance it spawns. The gate asserts the unconfigured copy
+parks, so every arm above is the spawned instance's.
