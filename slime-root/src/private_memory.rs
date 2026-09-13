@@ -34,8 +34,9 @@
 //!   run can occupy the same slot directly. The task arena reserves the larger
 //!   of the all-base-page and mixed-allocation constructions.
 //! * **Growth is all-or-nothing.** A failure unwinds only this attempt's
-//!   in-flight allocations: frames are unmapped, typed records become reusable,
-//!   and backing extents, committed mappings, and reusable leaf mappings remain owned.
+//!   in-flight allocations: frames are unmapped and become reusable, while a
+//!   newly mapped leaf table remains bound to its original span for retry.
+//!   Backing extents and existing committed mappings remain owned.
 //! * **Pages are user/read-write/execute-never, always.** No growth path can
 //!   derive an executable mapping, so W^X holds by construction.
 //! * **Allocation policy is userspace's.** The root tracks a page count and
@@ -50,17 +51,8 @@ use crate::object_allocator::{
     AllocError, ObjectAllocator, PrivateAllocation, PrivateObjectKind, TaskArenaId,
 };
 
-/// Canonical profile name embedded in this root image.
-#[cfg(target_arch = "x86_64")]
-const DEFAULT_IMAGE_TARGET: &str = "x86_64-qemu-virtio";
-#[cfg(target_arch = "riscv64")]
-const DEFAULT_IMAGE_TARGET: &str = "riscv64-qemu-virt";
-#[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
-const DEFAULT_IMAGE_TARGET: &str = "";
-pub const IMAGE_TARGET_NAME: &str = match option_env!("SLIME_TARGET_PROFILE") {
-    Some(name) => name,
-    None => DEFAULT_IMAGE_TARGET,
-};
+/// Target profile embedded into this root image by `build.rs`.
+pub const IMAGE_TARGET_NAME: &str = env!("SLIME_TARGET_PROFILE");
 
 const IMAGE_CAPACITY: (usize, usize) =
     boot_contracts::private_memory_budget::capacity_for(IMAGE_TARGET_NAME);
@@ -117,9 +109,9 @@ pub enum GrowError {
     },
     /// A frame could not be retyped or mapped. The attempt's own objects are
     /// unwound but retained: frames are unmapped and their typed records become
-    /// reusable, mapped leaf tables stay mapped, and no backing extent is
-    /// revoked, so `allocated` pages of this attempt remain owned by the task
-    /// and available to its retry.
+    /// reusable, while a mapped leaf table remains owned by its original span
+    /// and unavailable to another span. No backing extent is revoked, so
+    /// `allocated` pages of this attempt remain owned by the task for retry.
     Frames { allocated: usize, error: AllocError },
 }
 
@@ -483,8 +475,8 @@ impl Table {
         let mut large_frames = 0;
         let mut base_frames = 0;
         // Each 2 MiB span has its own leaf table when base pages are used.
-        // Failed growth retains mapped tables for retry, and large-frame spans
-        // may precede them, so presence must be tracked independently of count.
+        // Failed growth retains a mapped table bound to that span for retry,
+        // and large-frame spans may precede it, so presence is tracked by span.
         let mut span = previous / LARGE_FRAME_PAGES;
         let mut leaf_available = region.has_leaf_table(span);
         while pages_backed < delta {

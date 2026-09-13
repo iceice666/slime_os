@@ -137,3 +137,47 @@ qemu-riscv-virt` run also passed: ordinary probe `paddr=0x13f8fe000 bytes=4096
 beyond_legacy=0 verified=1`, followed by the ordered root-boot verdict. Final
 `just devlog_check`, `just tasks_check`, and `just typos` passed; the closure and
 run identity checks were repeated after the code and formatting settled.
+
+### 2026-09-13 PR 34 reviewer corrections
+
+The [PR review](https://github.com/iceice666/slime_os/pull/34#discussion_r3998326279)
+identified three additional defects in the capacity qualification:
+
+- The ordinary-memory probe applied QEMU ARM's legacy RAM end to RPi5.
+  It now selects that bound only for `aarch64-sel4-qemu-virt`; other profiles
+  still probe their highest ordinary granule without asserting a legacy bound.
+- The 60 MiB heap vector used `set_len` on uninitialized storage. Successful
+  reservation is now followed by safe full initialization with `resize` before
+  page-marker writes and validation.
+- A leaf table retained after a failed growth remained in the allocator's
+  generic reusable pool despite still mapping its original virtual span.
+  Unwind now retains mapped leaf tables as non-reusable arena-owned records;
+  the region bitmap reuses that mapping only within its original span.
+  Unmapped tables from a failed map and unwound frames remain reusable.
+
+The new host regression fails the first base-frame retype after mapping a leaf,
+retries within that span, then grows into the next span and requires a distinct
+leaf capability and mapping address. It checks page/transaction accounting and
+region reclamation. The pinned root test count is now 240. The PR's portability
+CI also rejected obsolete architecture-inferred target defaults; private memory
+now consumes the same build-supplied `SLIME_TARGET_PROFILE` as root startup.
+Closure identities and their dependent run records were regenerated.
+
+Direct verification of these corrections:
+
+| Command/scenario | Observed result |
+|---|---|
+| `just test_sel4_root` | 240/240 passed, including retained-leaf failure/retry/later-span regression |
+| `just private_memory_check` | Passed: 24 markers in 7 chains, three AArch64 image cases and one RV64 case; 16384-page ceiling and 60 MiB heap capacity/refusal checks |
+| `just sel4_root_boot_check` | Passed; ordinary probe `paddr=0xbf8f0000 bytes=4096 beyond_legacy=1 verified=1` |
+| `python3 scripts/check/check-sel4-root-boot.py --platform qemu-riscv-virt` | Passed; ordinary probe `paddr=0x13f8fe000 bytes=4096 beyond_legacy=0 verified=1` |
+| `just sel4_rpi5_image_check` | Passed; built image identity names `bcm2712-rpi5` and `aarch64-rpi5`; no physical boot performed |
+| Temporary Rust smoke harness using the exact target-selection block extracted from `main.rs` | Passed: QEMU ARM selects its legacy bound; RPi5, H1V1, both RISC-V profiles, and an unqualified profile select none |
+| `just sel4_gate_control_check` | Passed: 48 gates, 1945 transcript/layout mutations, 8 identity cases, 4 runtime cases |
+| Closure generator `--check`, `just system_test_run_check` | Passed: 59 closure/negative records current; 50 run records validated |
+| `just fmt_check_all`, `just lint_all`, `just x86_portability_check`, `just ruff`, `just typos`, `just tasks_check` | Passed; portability checks 228 neutral Rust files |
+
+These observations do not qualify a physical RPi5 boot or close the outstanding
+raised-capacity reuse campaign. The earlier uninitialized-vector run is not
+evidence of defined capacity-probe execution; the corrected QEMU reruns above
+replace it for that claim.

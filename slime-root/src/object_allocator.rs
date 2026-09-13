@@ -2391,24 +2391,31 @@ impl ObjectAllocator {
             let slot = record.allocation.slot();
             let kind = record.allocation.private_kind();
             let size_bits = record.allocation.size_bits();
-            let mapped = if kind == PrivateObjectKind::LeafTable {
-                true
-            } else {
+            if kind != PrivateObjectKind::LeafTable {
                 kernel
                     .unmap_frame(sel4::cap::UnspecifiedPage::from_bits(slot as _))
                     .map_err(|error| AllocError::ArenaCleanup { slot, error })?;
-                false
-            };
+            }
             self.arenas[id.index()].in_flight_head = next;
             if kind == PrivateObjectKind::Granule {
                 self.arenas[id.index()].in_flight_granules -= 1;
             }
             let record = &mut self.allocations[position];
             record.next_state = PRIVATE_STATE_NONE;
-            record
-                .allocation
-                .set_private_state(kind, size_bits, true, mapped);
-            self.push_reusable(id, position)?;
+            // A mapped leaf names one fixed VSpace span. Retain it as committed
+            // ownership for that span rather than publishing it to the
+            // kind-wide reusable pool, where another span could acquire the
+            // same still-mapped capability and incorrectly skip `map_leaf`.
+            let reusable = kind != PrivateObjectKind::LeafTable;
+            record.allocation.set_private_state(
+                kind,
+                size_bits,
+                reusable,
+                kind == PrivateObjectKind::LeafTable,
+            );
+            if reusable {
+                self.push_reusable(id, position)?;
+            }
         }
     }
 
@@ -4041,6 +4048,127 @@ mod tests {
                         .count(),
                     1
                 );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_retained_mapped_leaf_stays_bound_to_its_span_across_retry_and_later_growth() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let (mut allocator, arena) = setup_private_growth_fixture_for(513);
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 513);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel {
+                    // Retype and map the first span's leaf, then fail the first
+                    // base-frame retype before any page can commit.
+                    fail_retype_at: Some(2),
+                    ..RecordingPrivateKernel::default()
+                };
+
+                assert!(
+                    table
+                        .grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            1,
+                            &mut kernel,
+                        )
+                        .is_err()
+                );
+                assert_eq!((region.pages(), region.leaf_tables()), (0, 1));
+                assert_eq!(table.total_pages(), 0);
+                assert_eq!(table.grants(), 0);
+                assert_eq!(
+                    allocator.arenas[arena.index()].in_flight_head,
+                    PRIVATE_STATE_NONE
+                );
+                assert_eq!(
+                    allocator.arenas[arena.index()].reusable_heads
+                        [PrivateObjectKind::LeafTable as usize],
+                    PRIVATE_STATE_NONE,
+                    "the mapped leaf must not enter the cross-span reusable pool"
+                );
+                let first_leaf = kernel
+                    .requests
+                    .iter()
+                    .find_map(|request| match request {
+                        KernelRequest::MapLeaf { slot, vaddr } => Some((*slot, *vaddr)),
+                        _ => None,
+                    })
+                    .unwrap();
+
+                kernel.fail_retype_at = None;
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        1,
+                        &mut kernel,
+                    ),
+                    Ok(0)
+                );
+                assert_eq!((region.pages(), region.leaf_tables()), (1, 1));
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
+                        .count(),
+                    1,
+                    "retry in the original span must use its retained mapping"
+                );
+
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        512,
+                        &mut kernel,
+                    ),
+                    Ok(1)
+                );
+                let leaves: Vec<_> = kernel
+                    .requests
+                    .iter()
+                    .filter_map(|request| match request {
+                        KernelRequest::MapLeaf { slot, vaddr } => Some((*slot, *vaddr)),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(leaves.len(), 2);
+                assert_eq!(leaves[0], first_leaf);
+                assert_ne!(leaves[1].0, first_leaf.0);
+                assert_eq!(leaves[1].1, region.base() + 512 * GRANULE_BYTES);
+                assert_eq!(
+                    (region.pages(), region.base_frames(), region.leaf_tables()),
+                    (513, 513, 2)
+                );
+                assert_eq!(
+                    (table.total_pages(), table.grown_pages(), table.grants()),
+                    (513, 513, 2)
+                );
+                assert_eq!(
+                    allocator.arenas[arena.index()].in_flight_head,
+                    PRIVATE_STATE_NONE
+                );
+                assert_eq!(allocator.arenas[arena.index()].in_flight_granules, 0);
+                assert_eq!(table.reclaim(&mut region), 513);
+                assert_eq!(
+                    (region.pages(), region.base_frames(), region.leaf_tables()),
+                    (0, 0, 0)
+                );
+                assert_eq!((table.total_pages(), table.reclaimed_pages()), (0, 513));
             })
             .unwrap()
             .join()

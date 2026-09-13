@@ -282,7 +282,7 @@ fn granted() -> ! {
         slime_rt::debug_write(b"[private-heap-probe:granted] FAIL 60 MiB payload refused\n");
         slime_rt::exit(1)
     }
-    unsafe { payload.set_len(PAYLOAD) };
+    payload.resize(PAYLOAD, 0);
     for page in 0..PAYLOAD / 4096 {
         payload[page * 4096] = page as u8;
     }

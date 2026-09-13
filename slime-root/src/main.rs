@@ -822,21 +822,13 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT ordinary ranges={ordinary_ranges} bytes={ordinary_bytes} end={:#x}",
         allocator.ordinary_physical_end(),
     );
-    // Highest physical address the platform's *previous* kernel window
-    // reached, so `beyond_legacy` is a real claim rather than a tautology.
-    // Each value is that platform's own prior description, not a shared
-    // constant: AArch64 QEMU `virt` places DRAM at 0x4000_0000 and the retired
-    // 1024 MiB platform therefore ended at 0x8000_0000, while RISC-V `virt`
-    // places DRAM at 0x8000_0000 — where an ARM-derived bound would be below
-    // every RV64 ordinary address and assert nothing. A platform with no
-    // superseded window declares none and the probe reports
-    // `beyond_legacy=0` rather than pretending to have crossed one.
-    #[cfg(all(target_arch = "aarch64", not(slime_ns02201_h1v1)))]
-    const LEGACY_PLATFORM_RAM_END: Option<usize> = Some(0x8000_0000);
-    #[cfg(target_arch = "riscv64")]
-    const LEGACY_PLATFORM_RAM_END: Option<usize> = None;
-    #[cfg(all(target_arch = "aarch64", slime_ns02201_h1v1))]
-    const LEGACY_PLATFORM_RAM_END: Option<usize> = None;
+    // Only QEMU ARM has a superseded ordinary-memory window to exceed.
+    // Other target profiles still probe their highest ordinary granule without
+    // asserting that their RAM reaches a QEMU-specific physical address.
+    let legacy_platform_ram_end = match TARGET_PROFILE {
+        "aarch64-sel4-qemu-virt" => Some(0x8000_0000),
+        _ => None,
+    };
     let probe_addr = ptr::addr_of!(ORDINARY_PROBE_PAGE) as usize;
     if let Err(error) = ScratchPage::claim(bootinfo, probe_addr) {
         fatal!("ordinary memory probe scratch unavailable: {error:?}")
@@ -849,7 +841,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Some(paddr) => paddr,
         None => fatal!("ordinary memory probe lost physical provenance"),
     };
-    let beyond_legacy = match LEGACY_PLATFORM_RAM_END {
+    let beyond_legacy = match legacy_platform_ram_end {
         Some(legacy_end) => {
             if probe_paddr < legacy_end {
                 fatal!(
