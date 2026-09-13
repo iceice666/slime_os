@@ -1238,29 +1238,20 @@ pub fn recording_declares_deterministic(generation: &Generation<'_>, instance: u
     policy.is_deterministic(&recording_policy::instance_identity(record.name))
 }
 
-/// Whether this root can honour a declared private-memory budget (C10.2).
+/// Whether the admitted generation target can honour its private-memory budget.
 ///
-/// Separated from the generation walk for the same reason
-/// [`fabric_graph_is_satisfiable`] is: the interesting content is *which
-/// ceilings* are passed, and those are this root's own. The predicate itself is
-/// `boot_contracts`, shared with the builder, so the two can disagree only
-/// where their mechanisms genuinely differ.
-///
-/// Both arms matter and they are independent. A quota above the per-task
-/// reservation could never be reached, because the window's address space is
-/// sized for the reservation and the base cannot move. A budget whose quotas
-/// sum past the root-wide ceiling is *individually* satisfiable and still
-/// impossible to honour in full, which is B8's defect shape: without this the
-/// declaration degrades into first-come-first-served and a late-growing
-/// component is refused a quota the generation promised it.
+/// Capacity is selected from the authenticated generation target, while the
+/// image-target equality is enforced by the existing target admission path.
 pub fn private_memory_budget_is_satisfiable(
     budget: &PrivateMemoryBudget<'_>,
+    target: &str,
 ) -> Result<(), GenerationError> {
+    if target != crate::private_memory::IMAGE_TARGET_NAME {
+        return Err(GenerationError::UnsatisfiablePrivateMemoryBudget);
+    }
+    let (region_pages, total_pages) = boot_contracts::private_memory_budget::capacity_for(target);
     budget
-        .validate_against(
-            crate::private_memory::MAX_REGION_PAGES as u32,
-            crate::private_memory::MAX_TOTAL_PAGES as u32,
-        )
+        .validate_against(region_pages as u32, total_pages as u32)
         .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)
 }
 
@@ -1284,7 +1275,7 @@ fn private_memory_budget_admission(
         return Ok(None);
     };
     let budget = budget.map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
-    private_memory_budget_is_satisfiable(&budget)?;
+    private_memory_budget_is_satisfiable(&budget, generation.target)?;
     Ok(Some(budget.holder_count()))
 }
 
@@ -2376,7 +2367,10 @@ mod tests {
     fn a_satisfiable_private_memory_budget_is_admitted() {
         let bytes = budget_with(&[(0x11, crate::private_memory::MAX_REGION_PAGES as u32)]);
         let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
-        assert_eq!(private_memory_budget_is_satisfiable(&budget), Ok(()));
+        assert_eq!(
+            private_memory_budget_is_satisfiable(&budget, crate::private_memory::IMAGE_TARGET_NAME),
+            Ok(())
+        );
     }
 
     /// A quota above the per-task reservation is refused: the window's address
@@ -2389,7 +2383,7 @@ mod tests {
         let bytes = budget_with(&[(0x11, crate::private_memory::MAX_REGION_PAGES as u32 + 1)]);
         let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
         assert_eq!(
-            private_memory_budget_is_satisfiable(&budget),
+            private_memory_budget_is_satisfiable(&budget, crate::private_memory::IMAGE_TARGET_NAME),
             Err(GenerationError::UnsatisfiablePrivateMemoryBudget)
         );
     }
@@ -2410,7 +2404,10 @@ mod tests {
             .collect();
         let bytes = budget_with(&holders);
         let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
-        assert_eq!(private_memory_budget_is_satisfiable(&budget), Ok(()));
+        assert_eq!(
+            private_memory_budget_is_satisfiable(&budget, crate::private_memory::IMAGE_TARGET_NAME),
+            Ok(())
+        );
         // One more holder at the same ceiling passes every per-holder bound and
         // still cannot be honoured in full.
         let holders: alloc::vec::Vec<(u8, u32)> = (1..=fits as u8 + 1)
@@ -2419,7 +2416,17 @@ mod tests {
         let bytes = budget_with(&holders);
         let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
         assert_eq!(
-            private_memory_budget_is_satisfiable(&budget),
+            private_memory_budget_is_satisfiable(&budget, crate::private_memory::IMAGE_TARGET_NAME),
+            Err(GenerationError::UnsatisfiablePrivateMemoryBudget)
+        );
+    }
+
+    #[test]
+    fn a_budget_for_a_different_generation_target_is_refused() {
+        let bytes = budget_with(&[(0x11, 512)]);
+        let budget = PrivateMemoryBudget::decode(&bytes).expect("well-formed budget");
+        assert_eq!(
+            private_memory_budget_is_satisfiable(&budget, "riscv64-sel4-milkv-duo"),
             Err(GenerationError::UnsatisfiablePrivateMemoryBudget)
         );
     }

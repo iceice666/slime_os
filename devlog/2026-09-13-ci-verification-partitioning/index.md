@@ -55,6 +55,10 @@ CI now partitions the full generation inventory across four jobs, executes contr
 | `just sel4_gate_control_check` | Passed | Direct |
 | `just ruff`, `just fmt_check_all typos` | Passed | Direct |
 
+The PR #35 merge of `main` at `7075b074` preserved the upstream private-memory implementation and its 240-test root count alongside the CI split. Conflicts were confined to 105 generated identity records and the devlog index: both index additions were retained, and all closure/test-run identities were regenerated from the combined sources rather than selected from either parent. Direct merge verification passed closure freshness (59 records), test-run correspondence (50 records), closure ownership, QEMU rollback with seven durable transitions, `just test_sel4_root` (240/240), `just lint_all`, shard controls, actionlint, ruff, formatting, spelling and devlog checks. The earlier complete Miri result above predates this merge; Miri was not repeated for this identity-only conflict resolution.
+
+All four `just generation_v5_check <index> 4` invocations were also rerun on the merged tree: all 41 manifests built and encoded SLIMEG5 version 5, including the upstream private-memory composition.
+
 The initial rollback smoke run correctly refused the stale `just-recipes` closure identity. The existing closure generator updated 59 positive/negative records; the dependent system-test-run gate then exposed stale closure references, which its existing bless command regenerated. These were generated-data updates, not admission bypasses.
 
 Independent review identified the closure regeneration requirement and a missing exact-length check on generation headers. The final checker rejects every truncated header length from zero through eleven bytes; its controls exercise real file reads. Controls run only in their dedicated CI step, not repeatedly on the expensive build path. The cache key no longer names a nonexistent Zutai toolchain file and includes nested component linker scripts conservatively.

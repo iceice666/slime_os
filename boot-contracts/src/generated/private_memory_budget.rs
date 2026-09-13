@@ -5,5 +5,26 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const HEADER_BYTES: usize = 32;
 pub const ENTRY_BYTES: usize = 36;
 pub const MAX_HOLDERS: usize = 32;
-pub const ROOT_REGION_PAGES: usize = 512;
-pub const ROOT_TOTAL_PAGES: usize = 2048;
+pub const DEFAULT_REGION_PAGES: usize = 512;
+pub const DEFAULT_TOTAL_PAGES: usize = 2048;
+pub const CAPACITY_PROFILE_COUNT: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapacityProfile {
+    pub target: &'static str,
+    pub region_pages: usize,
+    pub total_pages: usize,
+}
+
+pub const CAPACITY_PROFILES: [CapacityProfile; CAPACITY_PROFILE_COUNT] = [
+    CapacityProfile {
+        target: "aarch64-sel4-qemu-virt",
+        region_pages: 16384,
+        total_pages: 32768,
+    },
+    CapacityProfile {
+        target: "riscv64-sel4-qemu-virt",
+        region_pages: 16384,
+        total_pages: 32768,
+    },
+];

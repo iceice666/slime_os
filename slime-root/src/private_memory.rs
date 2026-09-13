@@ -34,8 +34,9 @@
 //!   run can occupy the same slot directly. The task arena reserves the larger
 //!   of the all-base-page and mixed-allocation constructions.
 //! * **Growth is all-or-nothing.** A failure unwinds only this attempt's
-//!   in-flight allocations: frames are unmapped, typed records become reusable,
-//!   and backing extents, committed mappings, and reusable leaf mappings remain owned.
+//!   in-flight allocations: frames are unmapped and become reusable, while a
+//!   newly mapped leaf table remains bound to its original span for retry.
+//!   Backing extents and existing committed mappings remain owned.
 //! * **Pages are user/read-write/execute-never, always.** No growth path can
 //!   derive an executable mapping, so W^X holds by construction.
 //! * **Allocation policy is userspace's.** The root tracks a page count and
@@ -50,44 +51,27 @@ use crate::object_allocator::{
     AllocError, ObjectAllocator, PrivateAllocation, PrivateObjectKind, TaskArenaId,
 };
 
-/// Pages one task's private region may ever hold.
-///
-/// This is the *reservation*, and therefore the hard structural ceiling: the
-/// window's address space and its translation tables are sized for it when the
-/// child VSpace is built (`child_vspace::private_window`), so no declared quota
-/// can exceed it and a growth past it fails rather than relocating the base.
-///
-/// 512 pages is 2 MiB, exactly one large-frame span on both supported
-/// architectures, so a full aligned reservation has one block-mapping shape.
-pub const MAX_REGION_PAGES: usize = 512;
+/// Target profile embedded into this root image by `build.rs`.
+pub const IMAGE_TARGET_NAME: &str = env!("SLIME_TARGET_PROFILE");
 
-/// Pages every live private region may hold together.
-///
-/// Distinct from [`MAX_REGION_PAGES`] on purpose: that one says a single task
-/// fits, this one says every task fits *at once*. Without it, `MAX_TASKS`
-/// components each at their own ceiling would be admitted one at a time and
-/// then exhaust the untyped pool the root also serves devices and shared
-/// buffers from.
-///
-/// 2048 pages is 8 MiB — four tasks at the full per-task reservation, and far
-/// more than any current composition's declared quotas sum to. It is checked
-/// against the frame allocator's own exhaustion rather than trusted: a growth
-/// that passes this ceiling and still cannot retype fails on frames instead.
-pub const MAX_TOTAL_PAGES: usize = 2048;
+const IMAGE_CAPACITY: (usize, usize) =
+    boot_contracts::private_memory_budget::capacity_for(IMAGE_TARGET_NAME);
 
-// The contract publishes both ceilings so `build-generation.py` can refuse an
-// over-declared or over-committed budget on the build side (C10.2). Pinned
-// here rather than trusted: if the two ever drift, the builder would reject
-// budgets this root would honour, or admit ones it would not — and the
-// disagreement would surface as a runtime refusal against a quota the
-// generation promised. A compile-time assert makes it a build failure instead.
+/// Pages one task's private region may ever hold in this target-qualified image.
+pub const MAX_REGION_PAGES: usize = IMAGE_CAPACITY.0;
+
+/// Pages every live private region may hold together in this image.
+pub const MAX_TOTAL_PAGES: usize = IMAGE_CAPACITY.1;
+const MAX_REGION_SPANS: usize = MAX_REGION_PAGES.div_ceil(LARGE_FRAME_PAGES);
+const LEAF_SPAN_WORDS: usize = MAX_REGION_SPANS.div_ceil(usize::BITS as usize);
+
 const _: () = assert!(
-    MAX_REGION_PAGES == boot_contracts::private_memory_budget::ROOT_REGION_PAGES,
-    "private-memory reservation drifted from contracts/private-memory-budget/v1"
+    MAX_REGION_PAGES == boot_contracts::private_memory_budget::capacity_for(IMAGE_TARGET_NAME).0,
+    "private-memory reservation drifted from the image target's contract row"
 );
 const _: () = assert!(
-    MAX_TOTAL_PAGES == boot_contracts::private_memory_budget::ROOT_TOTAL_PAGES,
-    "private-memory root ceiling drifted from contracts/private-memory-budget/v1"
+    MAX_TOTAL_PAGES == boot_contracts::private_memory_budget::capacity_for(IMAGE_TARGET_NAME).1,
+    "private-memory total ceiling drifted from the image target's contract row"
 );
 
 /// Why a growth was refused.
@@ -125,9 +109,9 @@ pub enum GrowError {
     },
     /// A frame could not be retyped or mapped. The attempt's own objects are
     /// unwound but retained: frames are unmapped and their typed records become
-    /// reusable, mapped leaf tables stay mapped, and no backing extent is
-    /// revoked, so `allocated` pages of this attempt remain owned by the task
-    /// and available to its retry.
+    /// reusable, while a mapped leaf table remains owned by its original span
+    /// and unavailable to another span. No backing extent is revoked, so
+    /// `allocated` pages of this attempt remain owned by the task for retry.
     Frames { allocated: usize, error: AllocError },
 }
 
@@ -135,9 +119,9 @@ pub enum GrowError {
 /// much of it is currently backed.
 ///
 /// `Copy`, because [`crate::task::Task`] is: the whole per-task record is a
-/// fixed-size value the table stores inline, so the region cannot hold a
-/// heap-backed structure. It does not need one — the root tracks a count, and
-/// the frames themselves are owned by the task's arena.
+/// fixed-size value the table stores inline. Leaf-table ownership is a bounded
+/// bitmap because large-frame spans and base-page spans may be interleaved, and
+/// failed transactions retain mapped tables for retry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Region {
     base: usize,
@@ -147,6 +131,7 @@ pub struct Region {
     large_frames: usize,
     base_frames: usize,
     leaf_tables: usize,
+    leaf_spans: [usize; LEAF_SPAN_WORDS],
 }
 
 impl Region {
@@ -164,6 +149,7 @@ impl Region {
         large_frames: 0,
         base_frames: 0,
         leaf_tables: 0,
+        leaf_spans: [0; LEAF_SPAN_WORDS],
     };
 
     /// A region reserved at `base`, with `quota` pages of growth authorized.
@@ -188,6 +174,7 @@ impl Region {
             large_frames: 0,
             base_frames: 0,
             leaf_tables: 0,
+            leaf_spans: [0; LEAF_SPAN_WORDS],
         }
     }
 
@@ -214,6 +201,23 @@ impl Region {
 
     pub const fn leaf_tables(self) -> usize {
         self.leaf_tables
+    }
+
+    const fn has_leaf_table(self, span: usize) -> bool {
+        let word = span / usize::BITS as usize;
+        let bit = span % usize::BITS as usize;
+        word < LEAF_SPAN_WORDS && self.leaf_spans[word] & (1usize << bit) != 0
+    }
+
+    fn mark_leaf_table(&mut self, span: usize) {
+        let word = span / usize::BITS as usize;
+        let bit = span % usize::BITS as usize;
+        debug_assert!(word < LEAF_SPAN_WORDS);
+        let mask = 1usize << bit;
+        if self.leaf_spans[word] & mask == 0 {
+            self.leaf_spans[word] |= mask;
+            self.leaf_tables += 1;
+        }
     }
 
     /// Bytes of address space the window spans, backed or not.
@@ -470,21 +474,36 @@ impl Table {
         let mut pages_backed = 0;
         let mut large_frames = 0;
         let mut base_frames = 0;
-        let mut leaf_available = region.leaf_tables != 0;
+        // Each 2 MiB span has its own leaf table when base pages are used.
+        // Failed growth retains a mapped table bound to that span for retry,
+        // and large-frame spans may precede it, so presence is tracked by span.
+        let mut span = previous / LARGE_FRAME_PAGES;
+        let mut leaf_available = region.has_leaf_table(span);
         while pages_backed < delta {
             let page = previous + pages_backed;
+            if page != previous && page.is_multiple_of(LARGE_FRAME_PAGES) {
+                span = page / LARGE_FRAME_PAGES;
+                leaf_available = region.has_leaf_table(span);
+            }
             let vaddr = region.base + page * GRANULE_SIZE;
             let remaining = delta - pages_backed;
             let large = !leaf_available
                 && vaddr.is_multiple_of(LARGE_FRAME_BYTES)
                 && remaining >= LARGE_FRAME_PAGES;
             let result = if large {
-                back_large(allocator, arena, vspace, vaddr, kernel)
+                back_large(
+                    allocator,
+                    arena,
+                    vspace,
+                    vaddr,
+                    previous == 0 && delta == region.quota,
+                    kernel,
+                )
             } else {
                 if !leaf_available {
-                    match back_leaf_table(allocator, arena, vspace, region.base, kernel) {
+                    match back_leaf_table(allocator, arena, vspace, vaddr, kernel) {
                         Ok(table) => {
-                            region.leaf_tables = 1;
+                            region.mark_leaf_table(span);
                             if let Err(error) =
                                 allocator.mark_private_in_flight(arena, table.allocation, true)
                             {
@@ -569,6 +588,7 @@ impl Table {
         region.large_frames = 0;
         region.base_frames = 0;
         region.leaf_tables = 0;
+        region.leaf_spans = [0; LEAF_SPAN_WORDS];
         self.total_pages = self.total_pages.saturating_sub(pages);
         self.reclaimed_pages += pages;
         pages
@@ -650,6 +670,8 @@ fn back_large<K: PrivateMemoryKernel>(
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     vaddr: usize,
+    #[cfg_attr(not(slime_private_fail_large_map), allow(unused_variables))]
+    first_of_full_window: bool,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let size_bits = LARGE_FRAME_TYPE.bits();
@@ -660,8 +682,17 @@ fn back_large<K: PrivateMemoryKernel>(
         kernel,
     )?;
     let frame = allocation.cap().cast::<sel4::cap_type::UnspecifiedPage>();
+    // Injected on the *first* large frame of a growth that starts at the window
+    // base and asks for the whole quota — the aligned full-window request whose
+    // conversion to base pages this arm exists to prove. Scoped that narrowly
+    // because the injection is a one-shot: once any holder with a multi-span
+    // quota takes a large frame, an unscoped flag lands on whichever growth the
+    // scheduler ran first, and the case under test never sees its failure.
     #[cfg(slime_private_fail_large_map)]
-    if !allocation.mapped() && crate::object_allocator::take_forced_private_large_map_failure() {
+    if first_of_full_window
+        && !allocation.mapped()
+        && crate::object_allocator::take_forced_private_large_map_failure()
+    {
         allocator.reset_private_in(arena, allocation)?;
         return Err(AllocError::Retype {
             size_bits,
@@ -854,9 +885,11 @@ mod tests {
         // A failed initial growth may retain its mapped leaf without charging a
         // page. Teardown must clear that translation state without inventing a
         // grant or reclamation.
-        region.leaf_tables = 1;
+        region.mark_leaf_table(1);
+        assert!(region.has_leaf_table(1));
         assert_eq!(table.reclaim(&mut region), 0);
         assert_eq!(region.leaf_tables(), 0);
+        assert!(!region.has_leaf_table(1));
         assert_eq!(table.total_pages(), 0);
         assert_eq!(table.grown_pages(), 5);
         assert_eq!(table.reclaimed_pages(), 5);

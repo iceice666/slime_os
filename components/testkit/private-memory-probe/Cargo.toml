@@ -13,6 +13,7 @@ test = false
 
 [dependencies]
 slime-rt = { path = "../../runtime" }
+boot-contracts = { path = "../../../boot-contracts" }
 
 [build-dependencies]
 slime-build-support = { path = "../../build-support" }

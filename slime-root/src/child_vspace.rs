@@ -26,7 +26,9 @@ pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType
 #[cfg(target_arch = "riscv64")]
 pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType::MegaPage;
 pub(crate) const LARGE_FRAME_BYTES: usize = LARGE_FRAME_TYPE.bytes();
-pub(crate) const LARGE_FRAME_PAGES: usize = LARGE_FRAME_BYTES / GRANULE_SIZE;
+/// Base pages one large frame spans. Public because the product binary's
+/// rollback fixture sizes its retry against exactly one span.
+pub const LARGE_FRAME_PAGES: usize = LARGE_FRAME_BYTES / GRANULE_SIZE;
 
 /// Pages one child image footprint may span, including the IPC buffer and
 /// startup transfer-window pages. A larger payload fails closed rather than
@@ -947,20 +949,18 @@ mod tests {
     }
 
     #[test]
-    fn worker_pair_expands_translation_table_plan() {
-        // Chosen so the second thread's pair is what crosses the boundary: with
-        // one thread the guarded window base lands exactly on a span, with two
-        // it is pushed into the next one. A footprint whose two counts happened
-        // to align identically would assert nothing (C10.1 made that possible,
-        // because the window is itself a whole span wide).
+    fn worker_pair_stays_inside_the_target_qualified_window_plan() {
         let footprint = 0x1000..0x1fd000;
-        let table_span = 2 * 1024 * 1024;
-        assert_eq!(PRIVATE_WINDOW_BYTES, table_span);
         let one_thread = thread_mapped_span(&footprint, 1).unwrap();
         let two_threads = thread_mapped_span(&footprint, 2).unwrap();
-
-        assert_eq!(coarsen(&one_thread, table_span), 0..2 * table_span);
-        assert_eq!(coarsen(&two_threads, table_span), 0..3 * table_span);
+        assert_eq!(one_thread.end % PRIVATE_WINDOW_BYTES, 0);
+        assert_eq!(two_threads.end % PRIVATE_WINDOW_BYTES, 0);
+        assert!(one_thread.end <= two_threads.end);
+        assert!(two_threads.end <= CHILD_ADDRESS_CEILING);
+        assert_eq!(
+            two_threads.end - private_window(&footprint, 2).unwrap().start,
+            PRIVATE_WINDOW_BYTES
+        );
     }
 
     #[test]

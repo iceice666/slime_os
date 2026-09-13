@@ -2994,7 +2994,7 @@ def build_sel4_generation(
     # drift a build failure instead of a boot failure.
     declared_private_memory = manifest.get("privateMemoryBudget") or []
     if "private-memory-budget" in object_ids:
-        validated_private_memory_quotas(declared_private_memory)
+        validated_private_memory_quotas(declared_private_memory, manifest["target"])
         payloads["private-memory-budget"] = build_private_memory_budget(declared_private_memory)
     elif declared_private_memory:
         # A quota nothing carries is a promise the generation cannot keep: the

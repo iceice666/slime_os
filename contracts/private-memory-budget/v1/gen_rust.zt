@@ -7,6 +7,8 @@ n ::= import stdlib.num;
 w ::= import wire.python;
 r ::= import wire.rust;
 
+CapacityProfile :: type { target : Text; regionPages : Int; totalPages : Int; };
+
 Format :: type {
   formatVersion : Int;
   headerBytes : Int;
@@ -14,6 +16,7 @@ Format :: type {
   maxHolders : Int;
   regionPages : Int;
   totalPages : Int;
+  capacityProfiles : List CapacityProfile;
   headerFields : List refl.SchemaField;
   entryFields : List refl.SchemaField;
   headerLayout : List w.WireField;
@@ -25,14 +28,43 @@ records :: Format -> List w.WireRecord = format => {
   { pythonName = "PRIVATE_MEMORY_BUDGET_ENTRY"; constPrefix = "PRIVATE_MEMORY_BUDGET_ENTRY"; size = format.entryBytes; trailingPadding = 0; fields = format.entryFields; layout = format.entryLayout; };
 };
 
+countProfiles :: List CapacityProfile -> Int
+  = values => match values {
+    | {;} => 0;
+    | { _; ...rest } => 1 + countProfiles rest;
+  };
+
+profilesRust :: List CapacityProfile -> Text
+  = values => match values {
+    | {;} => "";
+    | { profile; ...rest } => r.join {
+      "    CapacityProfile { target: \""; profile.target; "\", region_pages: ";
+      n.toText profile.regionPages; ", total_pages: "; n.toText profile.totalPages; " },\n";
+      profilesRust rest;
+    };
+  };
+
+profilesPython :: List CapacityProfile -> Text
+  = values => match values {
+    | {;} => "";
+    | { profile; ...rest } => r.join {
+      "    \""; profile.target; "\": ("; n.toText profile.regionPages; ", ";
+      n.toText profile.totalPages; "),\n";
+      profilesPython rest;
+    };
+  };
+
 pythonBindings :: Format -> Text = format => w.join {
   "PRIVATE_MEMORY_BUDGET_MAGIC = b\"SLIMEPM\\0\"\n";
   "PRIVATE_MEMORY_BUDGET_VERSION = "; n.toText format.formatVersion; "\n";
   "PRIVATE_MEMORY_BUDGET_HEADER_BYTES = "; n.toText format.headerBytes; "\n";
   "PRIVATE_MEMORY_BUDGET_ENTRY_BYTES = "; n.toText format.entryBytes; "\n";
   "MAX_PRIVATE_MEMORY_BUDGET_HOLDERS = "; n.toText format.maxHolders; "\n";
-  "PRIVATE_MEMORY_ROOT_REGION_PAGES = "; n.toText format.regionPages; "\n";
-  "PRIVATE_MEMORY_ROOT_TOTAL_PAGES = "; n.toText format.totalPages; "\n";
+  "PRIVATE_MEMORY_DEFAULT_REGION_PAGES = "; n.toText format.regionPages; "\n";
+  "PRIVATE_MEMORY_DEFAULT_TOTAL_PAGES = "; n.toText format.totalPages; "\n";
+  "PRIVATE_MEMORY_CAPACITY_PROFILES: dict[str, tuple[int, int]] = {\n";
+  profilesPython format.capacityProfiles;
+  "}\n";
   w.renderRecords (records format);
 };
 
@@ -46,8 +78,18 @@ rustBindings :: Format -> Text = format => r.join {
   r.usizeConst "HEADER_BYTES" format.headerBytes;
   r.usizeConst "ENTRY_BYTES" format.entryBytes;
   r.usizeConst "MAX_HOLDERS" format.maxHolders;
-  r.usizeConst "ROOT_REGION_PAGES" format.regionPages;
-  r.usizeConst "ROOT_TOTAL_PAGES" format.totalPages;
+  r.usizeConst "DEFAULT_REGION_PAGES" format.regionPages;
+  r.usizeConst "DEFAULT_TOTAL_PAGES" format.totalPages;
+  r.usizeConst "CAPACITY_PROFILE_COUNT" (countProfiles format.capacityProfiles);
+  "\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n";
+  "pub struct CapacityProfile {\n";
+  "    pub target: &'static str,\n";
+  "    pub region_pages: usize,\n";
+  "    pub total_pages: usize,\n";
+  "}\n\n";
+  "pub const CAPACITY_PROFILES: [CapacityProfile; CAPACITY_PROFILE_COUNT] = [\n";
+  profilesRust format.capacityProfiles;
+  "];\n";
 };
 
 render :: Format -> { python : Text; rust : Text; }

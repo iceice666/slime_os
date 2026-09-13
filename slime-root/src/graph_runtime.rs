@@ -762,8 +762,14 @@ pub(super) fn launch_instance_graph(
 
     #[cfg(slime_private_fail_large_map)]
     {
-        const PAGES_256_MIB: usize = 256 * 1024 * 1024 / child_vspace::GRANULE_SIZE;
-        const HOLDERS: usize = 4;
+        // The qualification the *admitted* envelope supports, not a larger one
+        // the planner can merely represent. The per-holder figure is the
+        // target's declared region ceiling and the holder count is what the
+        // aggregate ceiling admits at that size, so `fit` answers a question
+        // about resources rather than about an unqualified claim. MEM-1G
+        // raises the contract row; this report follows it.
+        const PAGES_PER_HOLDER: usize = private_memory::MAX_REGION_PAGES;
+        const HOLDERS: usize = private_memory::MAX_TOTAL_PAGES / PAGES_PER_HOLDER;
         const ROOT_STACK_BYTES: usize = 1024 * 1024;
         const ROOT_HEAP_BYTES: usize = 512 * 1024;
         let exemplar_instance = (0..generation.instance_count()).find(|index| {
@@ -781,7 +787,7 @@ pub(super) fn launch_instance_graph(
         else {
             fatal!("SLIME_MEM FAIL capacity exemplar backing unavailable")
         };
-        let Some(plan) = object_allocator::plan_task_backing(PAGES_256_MIB) else {
+        let Some(plan) = object_allocator::plan_task_backing(PAGES_PER_HOLDER) else {
             fatal!("SLIME_MEM FAIL capacity arithmetic overflow")
         };
         let capacity = object_allocator::TaskBackingCapacity {
@@ -805,7 +811,7 @@ pub(super) fn launch_instance_graph(
         let private_cslots = plan.required_cslots * HOLDERS;
         let private_reserved = plan.reserved_bytes * HOLDERS;
         sel4::debug_println!(
-            "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
+            "SLIME_MEM qualification scope=staged-graph-plus-admitted-holder-clones holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
             capacity.holders,
             plan.private_pages,
             private_allocations,
@@ -949,6 +955,32 @@ pub(super) fn launch_instance_graph(
                 .get(launched_instance.task)
                 .map_or(0, |task| task.private_memory.base()),
         );
+        let installed = tasks
+            .get(launched_instance.task)
+            .map_or(0, |task| task.private_memory.quota());
+        if installed != 0 {
+            let Some(plan) = object_allocator::plan_task_backing(installed) else {
+                fatal!(
+                    "SLIME_MEM FAIL accounting overflow task={}",
+                    launched_instance.task.0
+                )
+            };
+            sel4::debug_println!(
+                "SLIME_MEM accounting task={} instance={} reservation={} reserved={} payload={} tables={} alignment={} frames_large={} frames_base={} descriptors={} extents={} cslots={}",
+                launched_instance.task.0,
+                instance.name,
+                installed * crate::child_vspace::GRANULE_SIZE,
+                plan.reserved_bytes,
+                plan.payload_bytes,
+                plan.page_table_bytes,
+                plan.alignment_waste,
+                plan.data_extents,
+                plan.private_pages,
+                plan.allocation_descriptors,
+                plan.extent_descriptors,
+                plan.required_cslots,
+            );
+        }
     }
     sel4::debug_println!(
         "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",

@@ -29,6 +29,36 @@ use crate::sha256::Sha256;
 pub const MAGIC: [u8; 8] = *b"SLIMEPM\0";
 include!("generated/private_memory_budget.rs");
 pub const MAX_BYTES: usize = HEADER_BYTES + MAX_HOLDERS * ENTRY_BYTES;
+/// Resolve the private-memory capacity qualified for `target`.
+///
+/// Unknown targets retain the conservative defaults. The byte comparison keeps
+/// this usable by `no_std` image configuration without allocation.
+pub const fn capacity_for(target: &str) -> (usize, usize) {
+    let mut index = 0;
+    while index < CAPACITY_PROFILE_COUNT {
+        let profile = CAPACITY_PROFILES[index];
+        if str_eq(target, profile.target) {
+            return (profile.region_pages, profile.total_pages);
+        }
+        index += 1;
+    }
+    (DEFAULT_REGION_PAGES, DEFAULT_TOTAL_PAGES)
+}
+
+const fn str_eq(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
@@ -241,6 +271,23 @@ mod tests {
             bytes.extend_from_slice(&holder.page_quota.to_le_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn target_capacity_hits_exact_names_and_defaults_unknown_targets() {
+        assert_eq!(capacity_for("aarch64-sel4-qemu-virt"), (16_384, 32_768));
+        assert_eq!(capacity_for("riscv64-sel4-qemu-virt"), (16_384, 32_768));
+        assert_eq!(capacity_for("aarch64-rpi5"), (512, 2_048));
+        assert_eq!(capacity_for("aarch64-sel4-qemu-virt-extra"), (512, 2_048));
+    }
+
+    #[test]
+    fn capacity_profile_target_names_are_unique() {
+        for (index, profile) in CAPACITY_PROFILES.iter().enumerate() {
+            for other in CAPACITY_PROFILES.iter().skip(index + 1) {
+                assert_ne!(profile.target, other.target);
+            }
+        }
     }
 
     #[test]
