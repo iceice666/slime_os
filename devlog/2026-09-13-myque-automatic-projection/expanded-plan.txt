@@ -1,0 +1,89 @@
+Target: iceice666/slime_os
+Source: d86f0d88d069265f3df39942ee2957377029ccb7 (committed snapshot; uncommitted edits excluded)
++ label myque:kind:bug
++ label myque:kind:followup
++ label myque:state:blocked
++ label myque:state:deferred
++ label myque:state:done
++ label myque:tag:authority
++ label myque:tag:backlog
++ label myque:tag:core-runtime
++ label myque:tag:followup
++ label myque:tag:foreign-workloads
++ label myque:tag:foundations
++ label myque:tag:hardware
++ label myque:tag:memory-capacity
++ label myque:tag:native-development
++ label myque:tag:ros2
++ label myque:tag:rpi5
++ issue 019fdcf3-e800-7590-95a1-37b6d4950732 P5.4.2
++ issue 01a00b4d-2400-7987-93d6-19201c397dff R0
++ issue 01a02f59-a800-78b6-9398-6b22bfbc6fdd P4
++ issue 01a0724c-5400-7019-a587-694c834f91cc RP4
++ issue 01a0724c-5400-7041-845e-0c72a1abc5ca H8
++ issue 01a0724c-5400-70c8-9990-21edd1694e5f H4
++ issue 01a0724c-5400-71d4-90e2-4c8aec57bcfa F3
++ issue 01a0724c-5400-7206-ae86-ad13584c8530 R1
++ issue 01a0724c-5400-7208-b5a1-7008c0e2bdc3 P5
++ issue 01a0724c-5400-7268-9cda-aa973c8aad8c F2
++ issue 01a0724c-5400-7292-9637-0d6619da7998 H14
++ issue 01a0724c-5400-72f4-998b-6d7b21b59e0e RP6
++ issue 01a0724c-5400-72f6-acf7-533fa7cee24d A1
++ issue 01a0724c-5400-7321-ac99-8f66ea7449f1 H1
++ issue 01a0724c-5400-751f-8152-27b6f86dc4a3 D2
++ issue 01a0724c-5400-7560-8d84-b28b5874c5cb A2
++ issue 01a0724c-5400-759c-87c8-1a01568dc4ae F1
++ issue 01a0724c-5400-75bc-a3a6-4b94817cd072 D5
++ issue 01a0724c-5400-75c5-a5ae-775dfb500018 X1
++ issue 01a0724c-5400-75c7-a9c8-ba5cf6299ccc H11
++ issue 01a0724c-5400-75d8-b84d-a0695ac0e37a X2
++ issue 01a0724c-5400-75db-8908-dffc253181e4 RP8
++ issue 01a0724c-5400-75e6-803a-7a56bd28c492 RP7
++ issue 01a0724c-5400-7631-b9e8-2693dc193808 M5
++ issue 01a0724c-5400-7657-bc19-21fc5966c06e H6
++ issue 01a0724c-5400-76b9-a691-989205b9a2a4 D3
++ issue 01a0724c-5400-775d-b38f-554e8866a0a6 H10
++ issue 01a0724c-5400-7785-9ced-a0614c181d04 F4
++ issue 01a0724c-5400-779c-95da-a68d71ff1c98 A5
++ issue 01a0724c-5400-77a7-97d7-fa136b9bd2d6 H2
++ issue 01a0724c-5400-77c2-aacc-d53341d05706 H3
++ issue 01a0724c-5400-77c5-ac41-9997b462ad22 H13
++ issue 01a0724c-5400-78f5-ba28-f7a44ba8fc8a D4
++ issue 01a0724c-5400-7962-9db5-a80b86e09774 A4
++ issue 01a0724c-5400-7b69-a969-d043a7d0d4f8 H12
++ issue 01a0724c-5400-7b6b-ad3a-f388c30d5ed1 RP5
++ issue 01a0724c-5400-7b73-bbbd-f26208c72fd2 H9
++ issue 01a0724c-5400-7c20-ad5f-a24c78c5d4c1 F5
++ issue 01a0724c-5400-7c5d-afc5-5db1b8bb202e A3
++ issue 01a0724c-5400-7cb4-ab51-0bcb23a882b5 RP3
++ issue 01a0724c-5400-7cc4-81bb-5d534577d4c0 D6
++ issue 01a0724c-5400-7d48-8f10-a5383e7c21d9 P5.4
++ issue 01a0724c-5400-7d8f-bfb2-e4d5f18ac1f4 D7
++ issue 01a0724c-5400-7dac-b4e7-2c9f4634f555 D1
++ issue 01a0724c-5400-7dd3-9741-a8b35e872e9a R2
++ issue 01a0724c-5400-7df1-82f3-9055b5aa7bce H5
++ issue 01a0724c-5400-7e51-91a6-3529f25f3389 M5.7
++ issue 01a0724c-5400-7ebc-9473-29e1c82f4e6a R3
++ issue 01a0724c-5400-7f2d-9715-3cdda8633619 H7
++ issue 01a07a2c-9c4f-7ca0-8417-aba2b48ce16b MEM-CAPACITY
++ issue 01a07a2d-00a1-727c-a548-130a4475f5bb MEM-1G
++ issue 01a07bac-83ad-7cfe-be0e-b589e74af74f P6.PWM
++ issue 01a07bac-acf5-7574-b0f5-d80c0fde6cd9 IO8
++ issue 01a07bac-cbe6-7051-9da4-d2a1d223dfee P6.D
++ issue 01a08ac5-1496-7988-a11a-bb5a3744456c P6.MAV
++ issue 01a08ac5-14ba-7d23-a751-b06678692de9 IO9
++ issue 01a08ac5-14d4-74b7-88dd-af653b077edd P6.E
++ issue 01a08fa2-ffe1-7b90-a842-b2b22166b9fa B94
++ issue 01a08ff0-0bee-73ea-9596-27d3940695cc P6.F
++ issue 01a0915e-d8a1-722b-91e4-cb3ec57c6632 01a0915e
+~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 title
+~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 body
+~ issue 019fdcf3-e800-7590-95a1-37b6d4950732 P5.4.2 parent 01a0724c-5400-7d48-8f10-a5383e7c21d9
+~ issue 01a0724c-5400-7d48-8f10-a5383e7c21d9 P5.4 parent 01a0724c-5400-7208-b5a1-7008c0e2bdc3
+~ issue 01a0724c-5400-7e51-91a6-3529f25f3389 M5.7 parent 01a0724c-5400-7631-b9e8-2693dc193808
+~ issue 01a07a2d-00a1-727c-a548-130a4475f5bb MEM-1G parent 01a07a2c-9c4f-7ca0-8417-aba2b48ce16b
+~ issue 01a07bac-acf5-7574-b0f5-d80c0fde6cd9 IO8 parent 01a07bac-83ad-7cfe-be0e-b589e74af74f
+~ issue 01a07bac-cbe6-7051-9da4-d2a1d223dfee P6.D parent 01a07bac-83ad-7cfe-be0e-b589e74af74f
+~ issue 01a08ac5-14ba-7d23-a751-b06678692de9 IO9 parent 01a08ac5-1496-7988-a11a-bb5a3744456c
+~ issue 01a08ac5-14d4-74b7-88dd-af653b077edd P6.E parent 01a08ac5-1496-7988-a11a-bb5a3744456c
+~ issue 01a08ff0-0bee-73ea-9596-27d3940695cc P6.F parent 01a08ff0-0b99-7315-99b0-7e7f340fa6f9
