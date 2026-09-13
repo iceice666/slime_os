@@ -277,8 +277,14 @@ fn denied(initial: PrivateMemory) -> ! {
     slime_rt::exit(0)
 }
 
-/// The exact public reservation and one 2 MiB frame on both supported ISAs.
-const MAX_PROBE_PAGES: usize = 512;
+/// This probe's composition-declared 64 MiB workload. The target profile may
+/// admit wider holders (MEM-1G), but this component must exercise exactly the
+/// quota granted to `private-memory-granted` rather than consume that envelope.
+const MAX_PROBE_PAGES: usize = 64 * 1024 * 1024 / 4096;
+const _: () = assert!(
+    MAX_PROBE_PAGES
+        <= boot_contracts::private_memory_budget::capacity_for("aarch64-sel4-qemu-virt").0
+);
 
 fn report(reason: &[u8], pages: usize) {
     slime_rt::debug_write(b"[private-memory-probe] ");

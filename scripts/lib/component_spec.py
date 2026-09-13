@@ -29,7 +29,11 @@ from types import ModuleType
 
 import component_spec_contract as default_contract
 from component_paths import COMPONENT_CRATE_ROOTS
-from boot_contracts import COMPONENT_MAX_STACK_BYTES, PRIVATE_MEMORY_ROOT_REGION_PAGES
+from boot_contracts import (
+    COMPONENT_MAX_STACK_BYTES,
+    PRIVATE_MEMORY_CAPACITY_PROFILES,
+    PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
+)
 from harness import CHECK_SCRIPTS, ROOT, load_script
 from zutai_cli import ZutaiError, evaluate
 from just_metadata import recipes as just_recipes
@@ -836,14 +840,13 @@ _MAX_EXTRA_THREADS = 1
 # is the manifest's own `sharedBufferBudget`, which the gate compares against
 # field by field.
 _MAX_TOTAL_PAGES = 256
-# C10.4's per-task private-memory reservation, published by
-# `contracts/private-memory-budget/v1` and pinned against `slime-root`'s own
-# `MAX_REGION_PAGES` by a compile-time assert there. The *per-holder* ceiling is
-# the manifest's `privateMemoryBudget`; this is the structural bound no holder's
-# declaration may exceed, because the window's address space is sized for it
-# when the child VSpace is built and a growth past it is refused rather than
-# relocated.
-_MAX_PRIVATE_REGION_PAGES = PRIVATE_MEMORY_ROOT_REGION_PAGES
+# A component reference spec is target-neutral. Bound its declaration by the
+# widest qualified row; composition validation applies the selected target's
+# smaller envelope before generation.
+_MAX_PRIVATE_REGION_PAGES = max(
+    (region for region, _total in PRIVATE_MEMORY_CAPACITY_PROFILES.values()),
+    default=PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
+)
 # The QoS value sets, read from the builder's `FABRIC_RELIABILITY`,
 # `FABRIC_DURABILITY`, and `FABRIC_LIVELINESS` maps. Those are the tables a
 # manifest's `FabricParticipant` is admitted against, so consuming them is what

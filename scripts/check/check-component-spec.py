@@ -36,7 +36,10 @@ from component_spec import (
     interface_catalogue,
     workspace_binaries,
 )
-from boot_contracts import PRIVATE_MEMORY_ROOT_REGION_PAGES
+from boot_contracts import (
+    PRIVATE_MEMORY_CAPACITY_PROFILES,
+    PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
+)
 from harness import GENERATION_FIXTURES, ROOT, load_script
 from zutai_cli import STDLIB, binary
 
@@ -648,8 +651,12 @@ with tempfile.TemporaryDirectory(prefix="slime-component-spec-check-") as tempor
     def overlarge_private_quota(spec: dict) -> None:
         # One page past the root's per-task reservation. The window's address
         # space is sized for that reservation when the child VSpace is built, so
-        # a spec declaring more describes a region no root will grant.
-        spec["runtime"]["resource"]["privatePageQuota"] = PRIVATE_MEMORY_ROOT_REGION_PAGES + 1
+        # Target-neutral component specs admit the widest qualified declaration.
+        maximum = max(
+            (region for region, _total in PRIVATE_MEMORY_CAPACITY_PROFILES.values()),
+            default=PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
+        )
+        spec["runtime"]["resource"]["privatePageQuota"] = maximum + 1
 
     def undeclared_device(spec: dict) -> None:
         # A live device kind this component declares in neither `provides` nor

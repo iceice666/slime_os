@@ -72,6 +72,9 @@ machine = "virt,virtualization=on"
 cpu = "cortex-a53"
 cpus = 1
 memory_mib = 2048
+# QEMU `virt`'s generated DTB places the DRAM node at 1 GiB; seL4's
+# `overlay-reserve-vm-memory.dts` reserves the first 512 MiB from that node.
+dram_base = "0x40000000"
 root_cnode_size_bits = 19
 qemu_version = "11.0.1"
 # `slime-root`'s timer phase programs the EL1 physical timer directly from
@@ -97,6 +100,9 @@ machine = "virt"
 cpu = "rv64"
 cpus = 1
 memory_mib = 3072
+# QEMU RISC-V `virt` places DRAM at 2 GiB; the installed platform description
+# starts usable memory after the loader/OpenSBI reservation but keeps this end.
+dram_base = "0x80000000"
 root_cnode_size_bits = 19
 qemu_version = "11.0.1"
 firmware = "rust-sel4 kernel loader with embedded OpenSBI"

@@ -467,6 +467,11 @@ static mut PRODUCT_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// frames mapped simultaneously.
 static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]) }; 2];
 
+/// Root-image page reclaimed as the temporary mapping for the high ordinary
+/// memory probe. It is distinct from every standing or loader scratch window,
+/// so mapping the probe cannot displace a live frame.
+static mut ORDINARY_PROBE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
 /// A second root-image page, whose virtual address becomes the standing window
 /// for one device's MMIO register bank (P5.4.2a).
 ///
@@ -667,8 +672,17 @@ const SHARED_QUOTA: HolderQuota = HolderQuota {
 /// one.
 const PRIVATE_QUOTA_PAGES: usize = 4;
 
+/// Pages the incremental-rollback fixture retries after its injected failure.
+///
+/// One large-frame span, not the target's whole region ceiling. What this
+/// fixture proves is that a failure partway through a growth preserves the
+/// pages already committed and that the retry reaches the same quota over the
+/// same base — a property of one span's worth of pages, which the embedded
+/// child touches byte by byte. Scaling it with a raised region ceiling would
+/// make the fixture walk 64 MiB of guest memory to assert nothing further, and
+/// the child's own growth request is this same constant.
 #[cfg(slime_private_fail_second_allocation)]
-const PRIVATE_RETRY_QUOTA_PAGES: usize = private_memory::MAX_REGION_PAGES;
+const PRIVATE_RETRY_QUOTA_PAGES: usize = child_vspace::LARGE_FRAME_PAGES;
 
 /// Pages the phases must still hold when the clean-exit fixture reports.
 #[cfg(not(slime_private_fail_second_allocation))]
@@ -792,6 +806,85 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     }
     sel4::debug_println!(
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
+    );
+    let mut ordinary_ranges = 0usize;
+    let mut ordinary_bytes = 0usize;
+    for (index, range) in allocator.ordinary_ranges().enumerate() {
+        sel4::debug_println!(
+            "SLIME_ROOT ordinary range={index} paddr={:#x} bytes={}",
+            range.paddr,
+            range.bytes,
+        );
+        ordinary_ranges += 1;
+        ordinary_bytes = ordinary_bytes.saturating_add(range.bytes);
+    }
+    sel4::debug_println!(
+        "SLIME_ROOT ordinary ranges={ordinary_ranges} bytes={ordinary_bytes} end={:#x}",
+        allocator.ordinary_physical_end(),
+    );
+    // Only QEMU ARM has a superseded ordinary-memory window to exceed.
+    // Other target profiles still probe their highest ordinary granule without
+    // asserting that their RAM reaches a QEMU-specific physical address.
+    let legacy_platform_ram_end = match TARGET_PROFILE {
+        "aarch64-sel4-qemu-virt" => Some(0x8000_0000),
+        _ => None,
+    };
+    let probe_addr = ptr::addr_of!(ORDINARY_PROBE_PAGE) as usize;
+    if let Err(error) = ScratchPage::claim(bootinfo, probe_addr) {
+        fatal!("ordinary memory probe scratch unavailable: {error:?}")
+    }
+    let probe_slot = match allocator.allocate_last_ordinary_granule() {
+        Ok(slot) => slot,
+        Err(error) => fatal!("ordinary memory probe allocation failed: {error:?}"),
+    };
+    let probe_paddr = match allocator.physical_address_of(probe_slot.index()) {
+        Some(paddr) => paddr,
+        None => fatal!("ordinary memory probe lost physical provenance"),
+    };
+    let beyond_legacy = match legacy_platform_ram_end {
+        Some(legacy_end) => {
+            if probe_paddr < legacy_end {
+                fatal!(
+                    "ordinary memory probe did not reach added RAM: paddr={probe_paddr:#x} legacy_end={legacy_end:#x}"
+                )
+            }
+            1
+        }
+        None => 0,
+    };
+    let probe_frame = probe_slot.cap();
+    if let Err(error) = probe_frame.frame_map(
+        sel4::init_thread::slot::VSPACE.cap(),
+        probe_addr,
+        sel4::CapRights::read_write(),
+        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+    ) {
+        fatal!("ordinary memory probe map failed: {error:?}")
+    }
+    const ORDINARY_PROBE_SENTINEL: u64 = 0x534c_494d_454d_454d;
+    // SAFETY: `probe_addr` names the one mapped writable granule above and the
+    // root task is single-threaded during startup, so no alias accesses it.
+    unsafe { (probe_addr as *mut u64).write_volatile(ORDINARY_PROBE_SENTINEL) };
+    // SAFETY: the same live mapping remains in place and is readable.
+    let observed = unsafe { (probe_addr as *const u64).read_volatile() };
+    if observed != ORDINARY_PROBE_SENTINEL {
+        fatal!(
+            "ordinary memory probe readback failed: observed={observed:#x} expected={ORDINARY_PROBE_SENTINEL:#x}"
+        )
+    }
+    if let Err(error) = probe_frame.frame_unmap() {
+        fatal!("ordinary memory probe unmap failed: {error:?}")
+    }
+    if let Err(error) = sel4::init_thread::slot::CNODE
+        .cap()
+        .absolute_cptr(probe_frame)
+        .delete()
+    {
+        fatal!("ordinary memory probe capability delete failed: {error:?}")
+    }
+    allocator.release_slot(probe_slot.index());
+    sel4::debug_println!(
+        "SLIME_ROOT ordinary probe paddr={probe_paddr:#x} bytes={GRANULE_SIZE} beyond_legacy={beyond_legacy} verified=1"
     );
 
     // The clock-gate (0x2_f002_0000) and watchdog (0x2_f006_0000) granules

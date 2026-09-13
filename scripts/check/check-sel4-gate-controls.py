@@ -37,11 +37,11 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_io_link_plane", "check/check-sel4-io-link-plane.py", 28),
     ("sel4_io_driver_authority_plane", "check/check-sel4-io-driver-authority-plane.py", 16),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 2),
-    ("sel4_root_boot", "check/check-sel4-root-boot.py", 56),
+    ("sel4_root_boot", "check/check-sel4-root-boot.py", 59),
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 23),
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 24),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -120,6 +120,11 @@ def literal_for(pattern: str) -> str:
     text = re.sub(r"\[0-9a-fx\]\+", "0x10", text)
     text = re.sub(r"\[0-9a-f\]\+", "abc123", text)
     text = re.sub(r"\[\^ \]\+", "value", text)
+    # An enumerated digit class such as `[01]`: a marker whose field is a small
+    # closed set rather than an open-ended number. Matched before the ranged
+    # classes below because those all contain a hyphen and cannot collide, and
+    # the first member is as valid an instantiation as any other.
+    text = re.sub(r"\[(\d+)\]", lambda m: m.group(1)[0], text)
     # `[1-9]\d*` and friends: a non-zero digit followed by optional digits.
     text = re.sub(r"\[1-9\]\\d\*", "7", text)
     text = re.sub(r"\[1-9\]", "7", text)
@@ -364,6 +369,123 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
         evaluated += 1
 
     return evaluated + len(failures)
+
+
+def check_root_memory_runtime_control() -> int:
+    """A larger launcher alone cannot manufacture kernel-visible high RAM.
+
+    Driven against `check_ordinary_memory`, which is where the claim lives: the
+    marker table can only say the fields are well-formed, while the validator
+    is what ties the summary to the enumerated ranges, the probe to the highest
+    granule-capable range, and `beyond_legacy` to the platform's own superseded
+    window. Each mutation below is a way a `-m`-only change or a regressed
+    validator would read as success.
+    """
+    gate = load_script("sel4_root_boot_memory_control", "check/check-sel4-root-boot.py")
+    # An ARM inventory in the shape the kernel publishes: ascending ranges with
+    # real page-sized/aligned frame-capable extents plus a final sub-page tail.
+    # The addresses are the observed qemu-arm-virt ones.
+    ranges = (
+        (0x6000_0000, 16 * 4096),
+        (0x8000_0000, 131072 * 4096),
+        (0xBF94_8000, 2 * 4096),
+        (0xBF94_BF00, 256),
+    )
+
+    def inventory(
+        entries: tuple[tuple[int, int], ...],
+        probe_paddr: int = 0xBF94_8000,
+        probe_bytes: int = 4096,
+        beyond_legacy: int = 1,
+    ) -> str:
+        records = [
+            f"SLIME_ROOT ordinary range={index} paddr={paddr:#x} bytes={size}"
+            for index, (paddr, size) in enumerate(entries)
+        ]
+        records.append(
+            f"SLIME_ROOT ordinary ranges={len(entries)} "
+            f"bytes={sum(size for _, size in entries)} "
+            f"end={max(paddr + size for paddr, size in entries):#x}"
+        )
+        records.append(
+            f"SLIME_ROOT ordinary probe paddr={probe_paddr:#x} bytes={probe_bytes} "
+            f"beyond_legacy={beyond_legacy} verified=1"
+        )
+        return "\n".join(records) + "\n"
+
+    baseline = inventory(ranges)
+
+    def rejects_inventory(transcript: str, platform: str = "qemu-arm-virt") -> bool:
+        try:
+            gate.check_ordinary_memory(transcript, platform)
+        except SystemExit:
+            return True
+        return False
+
+    if rejects_inventory(baseline):
+        fail("sel4_root_boot: rejected its synthesized ordinary-memory baseline")
+    mutations = (
+        (
+            "a probe that never left the range the superseded platform contained",
+            inventory(ranges, probe_paddr=0x6000_0000),
+        ),
+        (
+            "a probe reporting it stayed inside the legacy window",
+            inventory(ranges, beyond_legacy=0),
+        ),
+        (
+            "a zero-byte probe placed in the inventory's sub-page tail",
+            inventory(ranges, probe_paddr=0xBF94_BF00, probe_bytes=0),
+        ),
+        (
+            "a page-sized probe with a misaligned physical address",
+            inventory(ranges, probe_paddr=0xBF94_8001),
+        ),
+        (
+            "an aligned page-sized probe extending past its selected range",
+            inventory(
+                (*ranges[:2], (0xBF94_8000, 6144), ranges[3]),
+                probe_paddr=0xBF94_9000,
+            ),
+        ),
+        (
+            "a summary claiming an end no enumerated range reaches",
+            baseline.replace("end=0xbf94c000", "end=0x100000000"),
+        ),
+        (
+            "a summary byte total that does not sum its ranges",
+            baseline.replace(
+                f"bytes={sum(size for _, size in ranges)} end=", "bytes=2147483648 end="
+            ),
+        ),
+        (
+            "a summary counting ranges the transcript never enumerated",
+            baseline.replace(f"ranges={len(ranges)} ", "ranges=34 "),
+        ),
+        (
+            "the whole inventory deleted while the probe line remains",
+            "\n".join(
+                line for line in baseline.splitlines() if "ordinary range=" not in line
+            )
+            + "\n",
+        ),
+    )
+    for description, mutated in mutations:
+        if not rejects_inventory(mutated):
+            fail(f"sel4_root_boot: accepted {description}")
+    # The same evidence read as RISC-V, whose DRAM base *is* the ARM legacy end:
+    # a platform with no superseded window must not be credited with crossing
+    # one, or `beyond_legacy` would be true by arithmetic rather than by RAM.
+    if not rejects_inventory(baseline, "qemu-riscv-virt"):
+        fail(
+            "sel4_root_boot: credited qemu-riscv-virt with passing a superseded "
+            "window it never had"
+        )
+    print(
+        "seL4 gate control check: root memory evidence rejected "
+        f"{len(mutations) + 1} launcher-only and inventory mutations"
+    )
+    return len(mutations) + 1
 
 
 def check_layout_gate() -> int:
@@ -675,12 +797,12 @@ def check_private_memory_capacity_controls() -> int:
     profile = {"memory_mib": 2048}
     section = "control"
     qualification = (
-        "SLIME_MEM qualification scope=staged-graph-plus-four-probe-clones holders=4 "
-        "pages=65536 private_allocations=263168 private_extents=1028 private_cslots=264196 "
-        "private_reserved=1075838976 payload=1073741824 tables=2097152 alignment=0 "
-        "static_allocations=8 static_reserved=16384 required_allocations=263200 "
-        "required_extents=1028 required_cslots=264228 required_reserved=1075904512 "
-        "allocation_capacity=266000 allocations_available=265000 extent_capacity=1072 "
+        "SLIME_MEM qualification scope=staged-graph-plus-admitted-holder-clones holders=2 "
+        "pages=16384 private_allocations=32896 private_extents=130 private_cslots=33026 "
+        "private_reserved=134479872 payload=134217728 tables=262144 alignment=0 "
+        "static_allocations=8 static_reserved=16384 required_allocations=32912 "
+        "required_extents=130 required_cslots=33042 required_reserved=134512640 "
+        "allocation_capacity=288416 allocations_available=280000 extent_capacity=1072 "
         "extents_available=1050 cslots_available=500000 ordinary_available=2013265920 "
         "ordinary_layout=1 root_image=8388608 root_metadata=1048576 root_stack=1048576 "
         "root_heap=524288 fit=1"
@@ -690,21 +812,21 @@ def check_private_memory_capacity_controls() -> int:
         ("capacity false refusal", qualification[:-1] + "0"),
         (
             "capacity missing static descriptors",
-            qualification.replace("required_allocations=263200", "required_allocations=263168"),
+            qualification.replace("required_allocations=32912", "required_allocations=32896"),
         ),
         (
             "capacity missing static RAM",
-            qualification.replace("required_reserved=1075904512", "required_reserved=1075838976"),
+            qualification.replace("required_reserved=134512640", "required_reserved=134479872"),
         ),
         (
             "capacity ignores impossible ordinary layout",
             qualification.replace("ordinary_layout=1", "ordinary_layout=0")[:-1] + "1",
         ),
-        ("capacity allocation exhaustion", qualification.replace("allocations_available=265000", "allocations_available=263199")),
-        ("capacity extent exhaustion", qualification.replace("extents_available=1050", "extents_available=1027")),
-        ("capacity slot exhaustion", qualification.replace("cslots_available=500000", "cslots_available=264227")),
-        ("capacity ordinary exhaustion", qualification.replace("ordinary_available=2013265920", "ordinary_available=1075904511")),
-        ("capacity small tables", qualification.replace("allocation_capacity=266000 allocations_available=265000", "allocation_capacity=4096 allocations_available=3000")),
+        ("capacity allocation exhaustion", qualification.replace("allocations_available=280000", "allocations_available=32911")),
+        ("capacity extent exhaustion", qualification.replace("extents_available=1050", "extents_available=129")),
+        ("capacity slot exhaustion", qualification.replace("cslots_available=500000", "cslots_available=33041")),
+        ("capacity ordinary exhaustion", qualification.replace("ordinary_available=2013265920", "ordinary_available=134512639")),
+        ("capacity small tables", qualification.replace("allocation_capacity=288416 allocations_available=280000", "allocation_capacity=4096 allocations_available=3000")),
         ("capacity duplicate report", qualification + "\n" + qualification),
         (
             "capacity missing static field",
@@ -720,22 +842,27 @@ def check_private_memory_capacity_controls() -> int:
             ),
         )
     conversion_lines = [
-        "SLIME_MEM refused task=5 delta=512 cause=frames detail=Frames { allocated: 0, error: Retype }",
-        "SLIME_MEM grown task=5 delta=1 previous=0 pages=1 base=0x400000 quota=512 total=1 large_frames=0 base_frames=1 leaf_tables=1",
-        "SLIME_MEM grown task=5 delta=511 previous=1 pages=512 base=0x400000 quota=512 total=512 large_frames=0 base_frames=512 leaf_tables=1",
-        "[private-memory-probe] granted pages=512 base=0x400000 zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
+        "SLIME_MEM refused task=5 delta=16384 cause=frames detail=Frames { allocated: 0, error: Retype }",
+        "SLIME_MEM grown task=5 delta=1 previous=0 pages=1 base=0x400000 quota=16384 total=1 large_frames=0 base_frames=1 leaf_tables=1",
+        "SLIME_MEM grown task=5 delta=16383 previous=1 pages=16384 base=0x400000 quota=16384 total=16384 large_frames=31 base_frames=512 leaf_tables=1",
+        "[private-memory-probe] granted pages=16384 base=0x400000 zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
     ]
     conversion = "\n".join(conversion_lines)
     gate.check_large_map_retry(conversion)
     conversion_mutations = (
         ("conversion missing first page", "\n".join(conversion_lines[:1] + conversion_lines[2:])),
-        ("conversion used large frame", conversion.replace("base_frames=512", "base_frames=0")),
-        ("conversion changed task", conversion.replace("task=5 delta=511", "task=6 delta=511")),
-        ("conversion changed base", conversion.replace("previous=1 pages=512 base=0x400000", "previous=1 pages=512 base=0x600000")),
+        ("conversion reported no base pages", conversion.replace("base_frames=512", "base_frames=0")),
+        ("conversion demoted every span", conversion.replace("large_frames=31 ", "large_frames=0 ")),
+        ("conversion changed task", conversion.replace("task=5 delta=16383", "task=6 delta=16383")),
+        ("conversion changed base", conversion.replace("previous=1 pages=16384 base=0x400000", "previous=1 pages=16384 base=0x600000")),
         ("conversion wrong order", "\n".join([conversion_lines[0], conversion_lines[2], conversion_lines[1], conversion_lines[3]])),
     )
     for description, transcript in conversion_mutations:
-        require_rejection(description, "large-map failure", lambda transcript=transcript: gate.check_large_map_retry(transcript))
+        require_rejection(
+            description,
+            "large-map",
+            lambda transcript=transcript: gate.check_large_map_retry(transcript),
+        )
 
 
     rollback_lines = [
@@ -768,7 +895,58 @@ def check_private_memory_capacity_controls() -> int:
             "private rollback:",
             lambda transcript=transcript: gate.check_incremental_rollback(transcript),
         )
-    return len(capacity_mutations) + len(rollback_mutations) + len(conversion_mutations)
+    quota_lines = [
+        "SLIME_MEM quota task=3 instance=private-heap-granted declared=15872 "
+        "installed=15872 base=0x4000000",
+        "[private-heap-probe:granted] capacity payload=62914560 overhead=16 "
+        "backed=63008768 pages=15383 touched=1",
+        "SLIME_MEM refused task=3 delta=1001 cause=quota "
+        "detail=QuotaExceeded { pages: 15383, delta: 1001, quota: 15872 }",
+    ]
+    quota_refusal = "\n".join(quota_lines)
+    declared = {"private-heap-granted": 15872}
+    gate.check_heap_refusal_is_the_declared_quota(
+        quota_refusal, declared, "qemu-arm-virt"
+    )
+    quota_mutations = (
+        (
+            "heap quota refusal names reservation instead",
+            quota_refusal.replace(
+                "cause=quota detail=QuotaExceeded",
+                "cause=reservation detail=ReservationExceeded",
+            ),
+        ),
+        (
+            "heap quota refusal names a different quota",
+            quota_refusal.replace("quota: 15872", "quota: 16384"),
+        ),
+        (
+            "heap quota refusal request stops short of the reservation",
+            quota_refusal.replace("delta=1001", "delta=1000"),
+        ),
+        (
+            "heap quota installation differs from the declaration",
+            quota_refusal.replace("installed=15872", "installed=16384"),
+        ),
+        (
+            "heap quota refusal is attributed to a different task",
+            quota_refusal.replace("refused task=3", "refused task=4"),
+        ),
+    )
+    for description, transcript in quota_mutations:
+        require_rejection(
+            description,
+            "private-heap-granted:",
+            lambda transcript=transcript: gate.check_heap_refusal_is_the_declared_quota(
+                transcript, declared, "qemu-arm-virt"
+            ),
+        )
+    return (
+        len(capacity_mutations)
+        + len(rollback_mutations)
+        + len(conversion_mutations)
+        + len(quota_mutations)
+    )
 
 
 
@@ -778,6 +956,7 @@ def main() -> None:
     total = 0
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
+    total += check_root_memory_runtime_control()
     total += check_layout_gate()
     total += check_private_memory_capacity_controls()
     with tempfile.TemporaryDirectory(prefix="slime-sel4-gate-controls-") as temporary:

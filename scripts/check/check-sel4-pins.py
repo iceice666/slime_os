@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
+import tempfile
+
+import yaml
 from pathlib import Path
 from typing import NoReturn
 
@@ -375,6 +379,42 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
         fail("unsupported RISC-V loader target pin")
 
 
+def qemu_dtb_parameters() -> dict[str, tuple[str, ...]]:
+    build_script = require_file(
+        ROOT / "scripts" / "build" / "build-sel4.py", "seL4 image build script"
+    )
+    try:
+        module = ast.parse(build_script.read_text(encoding="utf-8"), filename=str(build_script))
+    except (OSError, SyntaxError) as error:
+        fail(f"cannot parse {build_script.relative_to(ROOT)}: {error}")
+    for node in module.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "QEMU_DTB_PARAMETERS"
+            for target in node.targets
+        ):
+            try:
+                value = ast.literal_eval(node.value)
+            except (TypeError, ValueError) as error:
+                fail(f"QEMU_DTB_PARAMETERS must be a literal machine/CPU table: {error}")
+            if not isinstance(value, dict):
+                fail("QEMU_DTB_PARAMETERS must be a dictionary")
+            return value
+    fail("scripts/build/build-sel4.py is missing QEMU_DTB_PARAMETERS")
+
+
+def check_qemu_dtb_parameters() -> None:
+    parameters = qemu_dtb_parameters()
+    for platform in ("qemu-arm-virt", "qemu-riscv-virt"):
+        value = parameters.get(platform)
+        if not isinstance(value, tuple) or len(value) != 3 or not all(
+            isinstance(item, str) and item for item in value
+        ):
+            fail(
+                f"QEMU_DTB_PARAMETERS[{platform!r}] must contain only executable, "
+                "machine, and CPU; RAM comes exclusively from pins.toml memory_mib"
+            )
+
+
 def check_profile(pins: dict[str, object]) -> None:
     arm = table(pins, "qemu_arm_virt")
     arm_expected = expected_cmake_values(arm, "qemu_arm_virt")
@@ -422,6 +462,8 @@ def check_profile(pins: dict[str, object]) -> None:
         or integer(riscv, "memory_mib", "qemu_riscv_virt") != 3072
     ):
         fail("qemu-riscv-virt QEMU shape must be one CPU and 3072 MiB")
+
+    check_qemu_dtb_parameters()
 
     duo = table(pins, "cv1800b_duo")
     duo_expected = expected_cmake_values(duo, "cv1800b_duo")
@@ -836,6 +878,77 @@ def check_qemu_version(pins: dict[str, object]) -> None:
             fail(f"{executable} version is {match.group(1)}, expected {expected}")
 
 
+def parse_pinned_address(value: str, section: str, key: str) -> int:
+    try:
+        address = int(value, 0)
+    except ValueError:
+        fail(f"sel4/pins.toml [{section}].{key} must be a base-prefixed integer")
+    if address < 0:
+        fail(f"sel4/pins.toml [{section}].{key} must be non-negative")
+    return address
+
+
+def check_platform_memory_window(
+    pins: dict[str, object], platform: str, platform_info: Path
+) -> None:
+    section = {"qemu-arm-virt": "qemu_arm_virt", "qemu-riscv-virt": "qemu_riscv_virt"}.get(
+        platform
+    )
+    if section is None:
+        return
+    profile = table(pins, section)
+    dram_base = parse_pinned_address(text(profile, "dram_base", section), section, "dram_base")
+    memory_mib = integer(profile, "memory_mib", section)
+    expected_end = dram_base + memory_mib * 1024 * 1024
+    require_file(platform_info, "installed seL4 platform description")
+    try:
+        document = yaml.safe_load(platform_info.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        fail(f"cannot parse {platform_info.relative_to(ROOT)}: {error}")
+    memory = document.get("memory") if isinstance(document, dict) else None
+    if not isinstance(memory, list) or not memory:
+        fail(f"{platform_info.relative_to(ROOT)} has no non-empty memory range list")
+    ends: list[int] = []
+    for index, entry in enumerate(memory):
+        if not isinstance(entry, dict):
+            fail(f"{platform_info.relative_to(ROOT)} memory range {index} is not a table")
+        start = entry.get("start")
+        end = entry.get("end")
+        if not isinstance(start, int) or not isinstance(end, int) or start >= end:
+            fail(f"{platform_info.relative_to(ROOT)} memory range {index} is invalid")
+        ends.append(end)
+    actual_end = max(ends)
+    if actual_end != expected_end:
+        fail(
+            f"{platform_info.relative_to(ROOT)} memory window ends at {actual_end:#x}, "
+            f"but [{section}] pins DRAM end {expected_end:#x} "
+            f"({dram_base:#x} + {memory_mib} MiB)"
+        )
+
+
+def check_memory_window_negative_control(pins: dict[str, object]) -> None:
+    # This is a source-pin control, so it must not depend on whatever an older
+    # build happened to leave in the installed prefix. A stale installed prefix
+    # is exactly what the subsequent build is meant to replace.
+    with tempfile.TemporaryDirectory(prefix=".sel4-pin-window-control-", dir=ROOT) as directory:
+        stale = Path(directory) / "platform_gen.yaml"
+        stale.write_text(
+            yaml.safe_dump(
+                {"memory": [{"start": 0x40000000, "end": 0x80000000}]},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        try:
+            check_platform_memory_window(pins, "qemu-arm-virt", stale)
+        except SystemExit as error:
+            if "memory window ends at 0x80000000" not in str(error):
+                raise
+        else:
+            fail("stale 1024 MiB platform window negative control was accepted")
+    print("seL4 pin check: stale 1024 MiB platform window rejected")
+
+
 def check_prefix(pins: dict[str, object], platform: str) -> None:
     prefix, section = PREFIX_PATHS[platform]
     observed = table(pins, section)
@@ -862,6 +975,7 @@ def check_prefix(pins: dict[str, object], platform: str) -> None:
                 f"{path.relative_to(ROOT)} SHA-256 is {actual}, expected {expected}; "
                 f"rebuild with `{rebuild}` or inspect toolchain drift"
             )
+    check_platform_memory_window(pins, platform, files["platform_info_sha256"])
 
 
 def main() -> None:
@@ -893,6 +1007,10 @@ def main() -> None:
     if not arguments.skip_host_tools:
         check_rustup_policy(pins)
         check_qemu_version(pins)
+    # Installed artifacts are intentionally inspected only in the explicit
+    # post-build --prefix path below. The normal source precheck must allow a
+    # stale prefix to reach the rebuild that replaces it.
+    check_memory_window_negative_control(pins)
     if arguments.prefix:
         check_prefix(pins, arguments.platform)
     print("seL4 pin check: exact source, toolchain, target, config, and host pins verified")

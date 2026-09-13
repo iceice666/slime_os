@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from boot_contracts import PRIVATE_MEMORY_CAPACITY_PROFILES  # noqa: E402
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from harness import (
@@ -82,6 +83,10 @@ RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
 PLATFORMS = {
     "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
     "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
+}
+TARGET_PROFILES = {
+    "qemu-arm-virt": "aarch64-sel4-qemu-virt",
+    "qemu-riscv-virt": "riscv64-sel4-qemu-virt",
 }
 
 # Causal chains rather than one flat sequence, on B55/B68's rule: a required
@@ -129,12 +134,19 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         # The granted probe's own sequence: it is refused only after reaching
         # its ceiling, and it reports only after the refusal.
+        #
+        # `cause=reservation` because this holder's declared quota *is* the
+        # target's whole region reservation, and `Region::admit` tests the
+        # reservation first — an affordable-but-impossible request is malformed
+        # rather than merely unaffordable. The quota cause is exercised by
+        # `private-heap-granted`, whose declared ceiling sits below the
+        # reservation; between the two holders both refusal arms are reached.
         "the granted holder reached its declared ceiling and was then refused",
         (
-            r"SLIME_MEM grown task=\d+ delta=512 previous=0 pages=512 "
-            r"base=0x[0-9a-f]+ quota=512 total=\d+ large_frames=1 base_frames=0 leaf_tables=0",
+            r"SLIME_MEM grown task=\d+ delta=16384 previous=0 pages=16384 "
+            r"base=0x[0-9a-f]+ quota=16384 total=\d+ large_frames=32 base_frames=0 leaf_tables=0",
             r"SLIME_MEM refused task=\d+ delta=1 cause=reservation "
-            r"detail=ReservationExceeded \{ pages: (\d+), delta: 1, reservation: (\d+) \}",
+            r"detail=ReservationExceeded \{ pages: 16384, delta: 1, reservation: 16384 \}",
             r"\[private-memory-probe\] granted pages=(\d+) base=0x[0-9a-f]+ "
             r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=0",
         ),
@@ -143,26 +155,34 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # The omitted probe's own sequence, independent of the granted one's.
         "the omitted holder was refused its first page by the reservation",
         (
-            r"SLIME_MEM refused task=\d+ delta=512 cause=reservation "
-            r"detail=ReservationExceeded \{ pages: 0, delta: 512, reservation: 0 \}",
+            r"SLIME_MEM refused task=\d+ delta=16384 cause=reservation "
+            r"detail=ReservationExceeded \{ pages: 0, delta: 16384, reservation: 0 \}",
             r"\[private-memory-probe\] denied pages=0 base=0x0 refused=1",
         ),
     ),
     (
-        # C10.3's granted holder: the self-check enters its reuse phase, reports,
-        # then the deliberate over-allocation is refused and the component
-        # survives to report again. Causal within the chain — the refusal cannot
-        # precede the check that established the heap works.
+        # then a raw growth request covering exactly the unbacked reservation is
+        # refused by the holder quota, and the component survives to report.
+        # Causal within the chain — the refusal cannot precede the check that
+        # established the heap works.
         #
         # The reuse boundary is a required marker as well as the window
         # `check_growth_was_batched_and_reused` measures growth in, so a probe
         # that stopped emitting it fails here rather than silently making that
         # window empty and its assertion vacuous.
+        #
+        # MEM-64M's runtime-heap case sits between them: 60 MiB of payload held
+        # through ordinary collections, with the allocator's own overhead and
+        # the pages the root backed reported separately rather than as one
+        # total. `check_heap_capacity_is_within_the_declared_quota` joins those
+        # to the declared ceiling, which the component cannot read itself.
         "the granted holder allocated through ordinary collections, then hit its ceiling",
         (
             r"\[private-heap-probe:granted\] private-heap reuse phase begins",
             r"\[private-heap-probe:granted\] private-heap quota live pages=(\d+) "
             r"growths=(\d+) reuse_growths=0 leaked=0",
+            r"\[private-heap-probe:granted\] capacity payload=62914560 overhead=\d+ "
+            r"backed=\d+ pages=\d+ touched=1",
             r"SLIME_MEM refused task=\d+ delta=[1-9]\d* cause=quota "
             r"detail=QuotaExceeded \{ pages: (\d+), delta: \d+, quota: (\d+) \}",
             r"\[private-heap-probe:granted\] granted pages=(\d+) growths=(\d+) refused=1 reused=1",
@@ -381,7 +401,11 @@ def boot(
             process.kill()
             process.wait()
     if timed_out:
-        fail("QEMU timed out")
+        markers = [line for line in lines if "SLIME_" in line]
+        fail(
+            f"QEMU timed out; markers: {' | '.join(markers[-80:])}; "
+            f"tail: {' | '.join(lines[-20:])}"
+        )
     return "\n".join(lines)
 
 def build_named_image(name: str) -> Path:
@@ -396,25 +420,57 @@ def build_named_image(name: str) -> Path:
 
 
 def check_large_map_retry(transcript: str) -> None:
+    """A failed large mapping converts its reserved backing to base pages.
+
+    The injection is scoped to the first large frame of an aligned full-window
+    growth, so the refusal reports `allocated: 0` — nothing of this attempt was
+    committed — and the retry reaches the same quota through base pages over the
+    same window base. Quotas come from the fixture rather than being literals,
+    because the declared ceiling is target-qualified and moves with the
+    contract's capacity row.
+    """
     refused = re.findall(
-        r"SLIME_MEM refused task=\d+ delta=512 cause=frames detail=Frames \{ allocated: 0,",
+        r"SLIME_MEM refused task=(\d+) delta=(\d+) cause=frames "
+        r"detail=Frames \{ allocated: 0,",
         transcript,
     )
     if len(refused) != 1:
         fail(f"large-map case recorded {len(refused)} injected refusal(s), expected one")
+    task, quota = refused[0][0], int(refused[0][1])
+    # The retry converts only the *failed span*: one page installs the leaf
+    # table the block mapping had made impossible, the rest of that 2 MiB span
+    # fills with base pages, and every later span still takes a large frame.
+    # Segmentation is what makes that possible — before it, one failed mapping
+    # demoted the whole window.
     conversion = re.search(
-        r"SLIME_MEM grown task=(?P<task>\d+) delta=1 previous=0 pages=1 "
-        r"base=(?P<base>0x[0-9a-f]+) quota=512 total=\d+ large_frames=0 base_frames=1 leaf_tables=1",
+        rf"SLIME_MEM grown task={task} delta=1 previous=0 pages=1 "
+        rf"base=(?P<base>0x[0-9a-f]+) quota={quota} total=\d+ "
+        r"large_frames=0 base_frames=1 leaf_tables=1",
         transcript,
     )
-    if conversion is None or re.search(
-        rf"SLIME_MEM grown task={conversion.group('task')} delta=511 previous=1 pages=512 "
-        rf"base={conversion.group('base')} quota=512 total=\d+ large_frames=0 base_frames=512 leaf_tables=1",
-        transcript[conversion.end():],
-    ) is None:
+    if conversion is None:
         fail("large-map failure did not convert its reserved backing to base pages")
+    completion = re.search(
+        rf"SLIME_MEM grown task={task} delta={quota - 1} previous=1 pages={quota} "
+        rf"base={conversion.group('base')} quota={quota} total=\d+ "
+        r"large_frames=(?P<large>\d+) base_frames=(?P<base_pages>\d+) leaf_tables=\d+",
+        transcript[conversion.end() :],
+    )
+    if completion is None:
+        fail("large-map retry did not reach the declared quota after converting")
+    spans = quota // 512
+    if int(completion.group("large")) != spans - 1:
+        fail(
+            f"large-map retry used {completion.group('large')} large frame(s), "
+            f"expected {spans - 1}: only the failed span demotes"
+        )
+    if int(completion.group("base_pages")) != 512:
+        fail(
+            f"large-map retry used {completion.group('base_pages')} base page(s), "
+            "expected exactly one 2 MiB span's worth"
+        )
     report = re.search(
-        r"\[private-memory-probe\] granted pages=512 base=0x[0-9a-f]+ "
+        rf"\[private-memory-probe\] granted pages={quota} base={conversion.group('base')} "
         r"zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=1",
         transcript,
     )
@@ -704,10 +760,29 @@ def check_growth_was_batched_and_reused(transcript: str, declared: dict[str, int
     )
     if report is None:
         fail(f"{holder}: the startup self-check did not report")
-    if len(served) != int(report.group(2)):
+    # Scoped to the self-check's own window. MEM-64M's capacity case runs
+    # *after* the report and legitimately grows the region to hold 60 MiB, so
+    # comparing the component's self-check counters against every growth in the
+    # transcript would charge it for a later phase it never claimed to cover.
+    # The capacity phase has its own evidence in
+    # `check_heap_capacity_is_within_the_declared_quota`.
+    self_check = [
+        int(delta)
+        for delta in re.findall(
+            rf"SLIME_MEM grown task={task} delta=([1-9]\d*) ",
+            transcript[: report.end()],
+        )
+    ]
+    if len(self_check) != int(report.group(2)):
         fail(
-            f"{holder}: the root served {len(served)} growth(s) but the component "
-            f"counted {report.group(2)}; the two accounts must agree"
+            f"{holder}: the root served {len(self_check)} growth(s) before the "
+            f"self-check reported but the component counted {report.group(2)}; "
+            "the two accounts must agree"
+        )
+    if sum(self_check) != int(report.group(1)):
+        fail(
+            f"{holder}: the root served {sum(self_check)} page(s) but the component "
+            f"reports {report.group(1)} backed"
         )
     # Reuse, asserted against the root's own records rather than the component's
     # `reuse_growths` field: that field is produced by the allocator under test,
@@ -722,21 +797,130 @@ def check_growth_was_batched_and_reused(transcript: str, declared: dict[str, int
             f"{holder}: the root served {during} more page(s) during the reuse "
             "phase, so freed memory was not handed out again"
         )
-    # Past the report is the deliberate over-ceiling request, which must be
-    # refused rather than served.
+    # Past the capacity report is the deliberate over-ceiling request, which
+    # must be refused rather than served.
+    capacity = re.search(
+        r"\[private-heap-probe:granted\] capacity payload=\d+ overhead=\d+ "
+        r"backed=\d+ pages=\d+ touched=1",
+        transcript,
+    )
+    if capacity is None:
+        fail(f"{holder}: the runtime-heap capacity phase did not report")
     late = re.findall(
         rf"SLIME_MEM grown task={task} delta=([1-9]\d*) ",
-        transcript[report.end() :],
+        transcript[capacity.end() :],
     )
     if late:
         fail(
-            f"{holder}: the root served {late} more page(s) after the self-check, "
-            "so the over-ceiling request was satisfied rather than refused"
+            f"{holder}: the root served {late} more page(s) after the capacity "
+            "phase, so the over-ceiling request was satisfied rather than refused"
         )
-    if sum(served) != int(report.group(1)):
+
+
+def check_heap_capacity_is_within_the_declared_quota(
+    transcript: str, declared: dict[str, int]
+) -> None:
+    """MEM-64M: the 60 MiB runtime-heap payload, its overhead, and its capacity.
+
+    The milestone requires a separate ordinary runtime-heap case holding 60 MiB
+    of payload within the declared quota, with payload, allocator overhead, and
+    remaining capacity reported separately. The component can only state what it
+    observes — it has no quota query — so the quota half comes from the root's
+    own `SLIME_MEM quota declared=` record and is joined here. That join is the
+    point: a holder reporting 60 MiB of payload proves nothing about a *bound*
+    unless the bound it fits inside is the one the generation declared.
+    """
+    holder = "private-heap-granted"
+    quota_pages = declared[holder]
+    report = re.search(
+        r"\[private-heap-probe:granted\] capacity payload=(\d+) overhead=(\d+) "
+        r"backed=(\d+) pages=(\d+) touched=1",
+        transcript,
+    )
+    if report is None:
+        fail(f"{holder}: no runtime-heap capacity report")
+    payload, overhead, backed, pages = (int(report.group(index)) for index in range(1, 5))
+    if payload != 60 * 1024 * 1024:
+        fail(f"{holder}: payload is {payload} bytes, expected exactly 60 MiB")
+    if backed != pages * 4096:
+        fail(f"{holder}: backed {backed} bytes disagrees with {pages} page(s)")
+    if pages > quota_pages:
         fail(
-            f"{holder}: the root served {sum(served)} page(s) but the component "
-            f"reports {report.group(1)} backed"
+            f"{holder}: holds {pages} page(s) against a declared quota of "
+            f"{quota_pages}, so the ceiling did not bind"
+        )
+    if payload + overhead > pages * 4096:
+        fail(
+            f"{holder}: payload plus overhead ({payload + overhead}) exceeds the "
+            f"{pages * 4096} bytes the root actually backed"
+        )
+    # The payload must genuinely need most of the quota, or "60 MiB inside the
+    # ceiling" would hold for a ceiling of any size and qualify nothing.
+    if pages * 4096 * 2 < quota_pages * 4096:
+        fail(
+            f"{holder}: 60 MiB of payload occupies {pages} of {quota_pages} "
+            "declared page(s), so the case does not exercise the raised ceiling"
+        )
+
+
+def check_heap_refusal_is_the_declared_quota(
+    transcript: str, declared: dict[str, int], platform: str
+) -> None:
+    """The heap holder crosses its declared quota without crossing its reservation."""
+    holder = "private-heap-granted"
+    quota = declared[holder]
+    target = TARGET_PROFILES[platform]
+    reservation = PRIVATE_MEMORY_CAPACITY_PROFILES[target][0]
+    if quota >= reservation:
+        fail(
+            f"{holder}: declared quota {quota} must be below its {reservation}-page "
+            "reservation for the quota refusal to be distinguishable"
+        )
+    installed = re.search(
+        rf"SLIME_MEM quota task=(\d+) instance={holder} "
+        rf"declared={quota} installed={quota} base=0x[0-9a-f]+",
+        transcript,
+    )
+    if installed is None:
+        fail(f"{holder}: no exact declared/installed quota record for {quota} pages")
+    refusal = re.search(
+        rf"SLIME_MEM refused task={installed.group(1)} delta=(\d+) cause=quota "
+        r"detail=QuotaExceeded \{ pages: (\d+), delta: (\d+), quota: (\d+) \}",
+        transcript,
+    )
+    if refusal is None:
+        fail(f"{holder}: no cause=quota/QuotaExceeded refusal from its own task")
+    delta, pages, detail_delta, detail_quota = (
+        int(refusal.group(index)) for index in range(1, 5)
+    )
+    if delta != detail_delta:
+        fail(f"{holder}: refusal delta={delta} but detail delta={detail_delta}")
+    if detail_quota != quota:
+        fail(
+            f"{holder}: refusal names quota {detail_quota}, but the fixture declares {quota}"
+        )
+    capacity = re.search(
+        r"\[private-heap-probe:granted\] capacity payload=\d+ overhead=\d+ "
+        r"backed=\d+ pages=(\d+) touched=1",
+        transcript,
+    )
+    if capacity is None:
+        fail(f"{holder}: no backed-page measurement before its quota refusal")
+    if pages != int(capacity.group(1)):
+        fail(
+            f"{holder}: refusal began at {pages} pages, but the allocator reported "
+            f"{capacity.group(1)} backed before the request"
+        )
+    if pages > quota:
+        fail(f"{holder}: refusal began at {pages} pages above declared quota {quota}")
+    if pages + delta <= quota:
+        fail(
+            f"{holder}: request to {pages + delta} pages does not cross declared quota {quota}"
+        )
+    if pages + delta != reservation:
+        fail(
+            f"{holder}: refusal request covers {pages}+{delta} pages, expected exactly "
+            f"the {reservation}-page reservation"
         )
 
 
@@ -858,17 +1042,21 @@ def check_segmented_capacity_report(
         if value > 2**64 - 1:
             fail(prefix + f"{name} exceeds u64")
         values[name] = value
-    if report.group("scope") != "staged-graph-plus-four-probe-clones":
+    if report.group("scope") != "staged-graph-plus-admitted-holder-clones":
         fail(prefix + "scope mismatch")
+    # The envelope the contract actually admits for this target: 16384 pages
+    # (64 MiB) per holder, and the two holders the 32768-page (128 MiB)
+    # aggregate admits at that size. These are the numbers MEM-64M qualifies;
+    # a larger claim belongs to the milestone that runs its workload.
     expected_private = {
-        "holders": 4,
-        "pages": 65_536,
-        "private_allocations": 263_168,
-        "private_extents": 1_028,
-        "private_cslots": 264_196,
-        "private_reserved": 1_075_838_976,
-        "payload": 1_073_741_824,
-        "tables": 2_097_152,
+        "holders": 2,
+        "pages": 16_384,
+        "private_allocations": 32_896,
+        "private_extents": 130,
+        "private_cslots": 33_026,
+        "private_reserved": 134_479_872,
+        "payload": 134_217_728,
+        "tables": 262_144,
         "alignment": 0,
     }
     for name, expected in expected_private.items():
@@ -891,7 +1079,7 @@ def check_segmented_capacity_report(
         if values[name] != expected:
             fail(prefix + f"{name}={values[name]}, expected {expected}")
     if values["allocation_capacity"] < values["required_allocations"] or values["extent_capacity"] < values["required_extents"]:
-        fail(prefix + "platform descriptor tables cannot represent the four holders")
+        fail(prefix + "platform descriptor tables cannot represent the admitted holders")
     if not 0 <= values["allocations_available"] < values["allocation_capacity"]:
         fail(prefix + "allocations_available does not reflect staged graph use")
     if not 0 <= values["extents_available"] < values["extent_capacity"]:
@@ -910,7 +1098,7 @@ def check_segmented_capacity_report(
     if values["fit"] != int(all(comparisons)):
         fail(prefix + "fit disagrees with required-versus-available resources")
     if values["fit"] != 1:
-        fail(prefix + "four holders do not fit the live platform resources")
+        fail(prefix + "admitted holders do not fit the live platform resources")
     platform_bytes = profile_integer(profile, "memory_mib", fail, section) * 1024 * 1024
     # This milestone qualifies the fixed 2 GiB platform, not a larger profile.
     # Live ordinary availability already excludes the root image (including its
@@ -951,6 +1139,8 @@ def main() -> None:
     check_measured_ceiling(transcript, declared)
     check_only_declared_pages_were_charged(transcript, declared)
     check_growth_was_batched_and_reused(transcript, declared)
+    check_heap_capacity_is_within_the_declared_quota(transcript, declared)
+    check_heap_refusal_is_the_declared_quota(transcript, declared, arguments.platform)
     check_the_two_planes_are_independent(transcript, declared)
     if arguments.platform == CLOSURE_PLATFORM:
         large_map = boot(

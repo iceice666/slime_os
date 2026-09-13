@@ -1530,6 +1530,20 @@ whole-extent frame; no duplicate quota backing is needed. The
 [recycled-backing evidence](../devlog/2026-09-11-mem-arenas-recycled-backing/index.md)
 records the four-holder sizing and unchanged public-quota execution boundary.
 
+A published ceiling is a promise the root must honour in full, so it is declared
+per target-profile name rather than globally: the QEMU profiles carry the
+qualified envelope while every physical target resolves to the conservative
+default, because a board's 12-bit root CNode cannot hold the descriptor tables a
+larger holder needs and no board has run the workload. The
+[target-qualified capacity evidence](../devlog/2026-09-13-mem-64m-target-qualified-capacity/index.md)
+records the 64 MiB envelope on both QEMU architectures, and the
+[ordinary-memory inventory](../devlog/2026-09-13-mem-platform-ordinary-inventory/index.md)
+records why per-range kernel evidence, not a launcher argument, is what qualifies
+a memory platform. The 256 MiB per-holder and 1 GiB aggregate envelope is
+deliberately not published: its arithmetic fits the measured ARM window, but the
+resident workload has not been observed, and the raise belongs to the milestone
+that runs it.
+
 Large-frame support precedes scalable accounting; those mechanisms precede
 the first raised budget. The platform branch can proceed independently and
 joins the mechanism branch for aggregate qualification. The epic's dependency
