@@ -1,0 +1,911 @@
+project / apply	UNKNOWN STEP	﻿2026-09-13T11:26:07.3573808Z Current runner version: '2.337.0'
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3600919Z ##[group]Runner Image Provisioner
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3601886Z Hosted Compute Agent
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3602576Z Version: 20260828.587
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3603253Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3603974Z Build Date: 2026-08-28T16:44:25Z
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3604718Z Worker ID: {cfb312fc-155a-42ff-9b36-caa34d341c74}
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3605436Z Azure Region: westus
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3606255Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3608030Z ##[group]Operating System
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3608735Z Ubuntu
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3609381Z 24.04.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3609895Z LTS
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3610423Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3611036Z ##[group]Runner Image
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3611640Z Image: ubuntu-24.04
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3612233Z Version: 20260907.300.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3613557Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3615183Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3616465Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3617971Z ##[group]GITHUB_TOKEN Permissions
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3620405Z Checks: read
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3621087Z Contents: read
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3621681Z Issues: write
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3622219Z Metadata: read
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3623239Z PullRequests: read
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3623853Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3626355Z Secret source: Actions
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3627410Z Cache mode: write
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3628227Z Prepare workflow directory
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.3988843Z Prepare all required actions
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.4040991Z Getting action download info
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.7600608Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+project / apply	UNKNOWN STEP	2026-09-13T11:26:07.9014095Z Download action repository 'nixbuild/nix-quick-install-action@v35' (SHA:9f63be77f412a248c9d9a65a4c82cf066cdf8f0c)
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2890225Z Uses: mozufu/myque-gh/.github/workflows/reconcile.yml@c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2894923Z ##[group] Inputs
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2895453Z   branch: main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2896144Z   project: tag = github
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2896738Z   myque-gh-ref: c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2897400Z   issue-authors: github-actions[bot]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2897929Z   store: .
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2898365Z   source-repo: iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2898898Z   source-branch: main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2899362Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.2899808Z Complete job name: project / apply
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3709558Z ##[group]Run actions/checkout@v7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3710456Z with:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3710875Z   ref: main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3711284Z   fetch-depth: 0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3711747Z   repository: iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3715394Z   token: ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3716066Z   ssh-strict: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3716535Z   ssh-user: git
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3716971Z   persist-credentials: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3717460Z   clean: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3717912Z   sparse-checkout-cone-mode: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3718430Z   fetch-tags: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3718869Z   show-progress: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3719319Z   lfs: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3719730Z   submodules: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3720181Z   set-safe-directory: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3720684Z   allow-unsafe-pr-checkout: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.3721510Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.4838170Z Syncing repository: iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.4841383Z ##[group]Getting Git version info
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.4842705Z Working directory is '/home/runner/work/slime_os/slime_os'
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.4844716Z [command]/usr/bin/git version
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.4966612Z git version 2.55.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.5005478Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.5019166Z Temporarily overriding HOME='/home/runner/work/_temp/9b33377c-7e39-4025-bdaf-7df4a02bb7bb' before making global git config changes
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.5027712Z Adding repository directory to the temporary git global config as a safe directory
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.5029561Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/slime_os/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.5077270Z Deleting the contents of '/home/runner/work/slime_os/slime_os'
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.5082603Z ##[group]Determining repository object format
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7369035Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7379439Z ##[group]Initializing the repository
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7380266Z [command]/usr/bin/git init /home/runner/work/slime_os/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7523835Z hint: Using 'master' as the name for the initial branch. This default branch name
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7530160Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7532004Z hint: to use in all of your new repositories, which will suppress this warning,
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7533501Z hint: call:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7534336Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7535322Z hint: 	git config --global init.defaultBranch <name>
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7536994Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7538139Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7539872Z hint: 'development'. The just-created branch can be renamed via this command:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7541299Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7542048Z hint: 	git branch -m <name>
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7542877Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7543954Z hint: Disable this message with "git config set advice.defaultBranchName false"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7550800Z Initialized empty Git repository in /home/runner/work/slime_os/slime_os/.git/
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7562143Z [command]/usr/bin/git remote add origin https://github.com/iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7639352Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7640679Z ##[group]Disabling automatic garbage collection
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7644653Z [command]/usr/bin/git config --local gc.auto 0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7687786Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7688973Z ##[group]Setting up auth
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7689860Z Removing SSH command configuration
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7696151Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.7744393Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8119769Z Removing HTTP extra header
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8126257Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8170162Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8409576Z Removing includeIf entries pointing to credentials config files
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8414123Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8457125Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8710965Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8814786Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/slime_os/slime_os/.git.path /home/runner/work/_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8858755Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/slime_os/slime_os/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8901806Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8943153Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8980298Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8981578Z ##[group]Fetching the repository
+project / apply	UNKNOWN STEP	2026-09-13T11:26:08.8989606Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8715296Z From https://github.com/iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8717945Z  * [new branch]        ci/accelerate-verification -> origin/ci/accelerate-verification
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8720597Z  * [new branch]        ci/myque-github-projection -> origin/ci/myque-github-projection
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8723080Z  * [new branch]        feat/nt98690-pwm-probe -> origin/feat/nt98690-pwm-probe
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8725383Z  * [new branch]        feat/sel4-kernel-cutover -> origin/feat/sel4-kernel-cutover
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8727857Z  * [new branch]        main                   -> origin/main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8729969Z  * [new branch]        pr/nt98690-h1v1-lane   -> origin/pr/nt98690-h1v1-lane
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8732550Z  * [new branch]        roadmap/amd64-sel4-bringup -> origin/roadmap/amd64-sel4-bringup
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8735020Z  * [new tag]           0.0.1                  -> 0.0.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8739375Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8741271Z ##[group]Determining the checkout info
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8743104Z [command]/usr/bin/git branch --list --remote origin/main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8771966Z   origin/main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8777231Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8780466Z [command]/usr/bin/git sparse-checkout disable
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8837242Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8876845Z ##[group]Checking out the ref
+project / apply	UNKNOWN STEP	2026-09-13T11:26:10.8879869Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.0968894Z Switched to a new branch 'main'
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.0972512Z branch 'main' set up to track 'origin/main'.
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.0992244Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1048448Z [command]/usr/bin/git log -1 --format=%H
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1083570Z ab82f20997ba0bafecdd3546e8b9f2a212daef1e
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1382654Z ##[group]Run actions/checkout@v7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1383150Z with:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1383543Z   repository: mozufu/myque-gh
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1384026Z   ref: c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1384527Z   path: .myque-gh-projector
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1387464Z   token: ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1387878Z   ssh-strict: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1388274Z   ssh-user: git
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1388663Z   persist-credentials: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1389073Z   clean: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1389463Z   sparse-checkout-cone-mode: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1389912Z   fetch-depth: 1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1390316Z   fetch-tags: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1390704Z   show-progress: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1391086Z   lfs: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1391446Z   submodules: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1391833Z   set-safe-directory: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1392268Z   allow-unsafe-pr-checkout: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.1392706Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2292461Z Syncing repository: mozufu/myque-gh
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2300338Z ##[group]Getting Git version info
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2301951Z Working directory is '/home/runner/work/slime_os/slime_os/.myque-gh-projector'
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2343996Z [command]/usr/bin/git version
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2399652Z git version 2.55.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2423388Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2433537Z Temporarily overriding HOME='/home/runner/work/_temp/ccf436bb-b341-49d9-883d-0bbee8df0c33' before making global git config changes
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2434882Z Adding repository directory to the temporary git global config as a safe directory
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2439915Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/slime_os/slime_os/.myque-gh-projector
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2472784Z ##[group]Determining repository object format
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2474775Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2476329Z ##[group]Initializing the repository
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2480640Z [command]/usr/bin/git init /home/runner/work/slime_os/slime_os/.myque-gh-projector
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2538815Z hint: Using 'master' as the name for the initial branch. This default branch name
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2540630Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2542159Z hint: to use in all of your new repositories, which will suppress this warning,
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2543475Z hint: call:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2544325Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2545299Z hint: 	git config --global init.defaultBranch <name>
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2546640Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2547980Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2549586Z hint: 'development'. The just-created branch can be renamed via this command:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2550866Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2551776Z hint: 	git branch -m <name>
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2552738Z hint:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2553902Z hint: Disable this message with "git config set advice.defaultBranchName false"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2555649Z Initialized empty Git repository in /home/runner/work/slime_os/slime_os/.myque-gh-projector/.git/
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2561297Z [command]/usr/bin/git remote add origin https://github.com/mozufu/myque-gh
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2594112Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2595142Z ##[group]Disabling automatic garbage collection
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2597603Z [command]/usr/bin/git config --local gc.auto 0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2628935Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2630010Z ##[group]Setting up auth
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2630773Z Removing SSH command configuration
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2635192Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2668180Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2912474Z Removing HTTP extra header
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2939545Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.2974224Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3254821Z Removing includeIf entries pointing to credentials config files
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3257404Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3300063Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3556802Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3598047Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git.path /home/runner/work/_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3630431Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3663717Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.myque-gh-projector/.git.path /github/runner_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3698942Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.myque-gh-projector/.git/worktrees/*.path /github/runner_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3729851Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3731104Z ##[group]Fetching the repository
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.3737070Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7758907Z From https://github.com/mozufu/myque-gh
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7760239Z  * branch            c1da385362d1eca3dc1bdf52b4c499e68d3007a4 -> FETCH_HEAD
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7770086Z [command]/usr/bin/git rev-parse --verify --quiet c1da385362d1eca3dc1bdf52b4c499e68d3007a4^{object}
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7802920Z c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7813213Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7813939Z ##[group]Determining the checkout info
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7814710Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7816731Z [command]/usr/bin/git sparse-checkout disable
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7869416Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7907852Z ##[group]Checking out the ref
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7913548Z [command]/usr/bin/git checkout --progress --force c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7979207Z Note: switching to 'c1da385362d1eca3dc1bdf52b4c499e68d3007a4'.
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7979842Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7980258Z You are in 'detached HEAD' state. You can look around, make experimental
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7981105Z changes and commit them, and you can discard any commits you make in this
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7981937Z state without impacting any branches by switching back to a branch.
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7982427Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7982742Z If you want to create a new branch to retain commits you create, you may
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7983424Z do so (now or later) by using -c with the switch command. Example:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7983712Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7983837Z   git switch -c <new-branch-name>
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7984120Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7984253Z Or undo this operation with:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7984419Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7984513Z   git switch -
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7984673Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7984891Z Turn off this advice by setting config variable advice.detachedHead to false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7985214Z 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7986169Z HEAD is now at c1da385 feat(repo/workflow): expose source link inputs
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.7988906Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8037367Z [command]/usr/bin/git log -1 --format=%H
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8069342Z c1da385362d1eca3dc1bdf52b4c499e68d3007a4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8264267Z ##[group]Run nixbuild/nix-quick-install-action@v35
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8264657Z with:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8264861Z   nix_version: 2.34.7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8267718Z   github_access_token: ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8267986Z   nix_on_tmpfs: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8268227Z   enable_kvm: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8268430Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8354803Z ##[start-action display=Install Nix in single-user mode;id=__nixbuild_nix-quick-install-action.__run]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8395549Z ##[group]Run /home/runner/work/_actions/nixbuild/nix-quick-install-action/v35/nix-quick-install.sh
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8396579Z ^[[36;1m/home/runner/work/_actions/nixbuild/nix-quick-install-action/v35/nix-quick-install.sh^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8438669Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8439043Z env:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8439415Z   RELEASE_FILE: /home/runner/work/_actions/nixbuild/nix-quick-install-action/v35/RELEASE
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8439930Z   NIX_VERSION: 2.34.7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8440150Z   NIX_CONF: 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8440341Z   NIX_ARCHIVES_URL: 
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8440557Z   NIX_ON_TMPFS: false
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8443064Z   GITHUB_ACCESS_TOKEN: ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8443333Z   ENABLE_KVM: true
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8443543Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8640782Z KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.8972544Z Enabled KVM
+project / apply	UNKNOWN STEP	2026-09-13T11:26:11.9079671Z Fetching nix archives from https://github.com/nixbuild/nix-quick-install-action/releases/download/v35/nix-2.34.7-x86_64-linux.tar.zstd
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5264386Z installing 'nix-2.34.7'
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5349791Z building '/nix/store/50vjg8jbwhlahg3ndgfwwp9s20vxm93q-user-environment.drv'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5482151Z ##[end-action id=__nixbuild_nix-quick-install-action.__run;outcome=success;conclusion=success;duration_ms=712]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5524976Z ##[group]Run author_args=()
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5525304Z ^[[36;1mauthor_args=()^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5525602Z ^[[36;1mwhile IFS= read -r author || [ -n "$author" ]; do^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5526363Z ^[[36;1m  author="${author%$'\r'}"^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5526647Z ^[[36;1m  [ -z "$author" ] && continue^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5526952Z ^[[36;1m  author_args+=(--issue-author "$author")^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5527268Z ^[[36;1mdone <<< "$MYQUE_GH_ISSUE_AUTHORS"^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5527579Z ^[[36;1mif [ "${#author_args[@]}" -eq 0 ]; then^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5528007Z ^[[36;1m  echo "issue-authors must contain at least one trusted login" >&2^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5528391Z ^[[36;1m  exit 2^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5528594Z ^[[36;1mfi^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5528776Z ^[[36;1m^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5528965Z ^[[36;1msource_args=()^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5529227Z ^[[36;1mif [ -n "$MYQUE_GH_SOURCE_REPO" ]; then^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5529624Z ^[[36;1m  source_args+=(--source-repo "$MYQUE_GH_SOURCE_REPO")^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5529953Z ^[[36;1mfi^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5530176Z ^[[36;1mif [ -n "$MYQUE_GH_SOURCE_BRANCH" ]; then^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5530547Z ^[[36;1m  source_args+=(--source-branch "$MYQUE_GH_SOURCE_BRANCH")^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5530880Z ^[[36;1mfi^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5531054Z ^[[36;1m^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5531320Z ^[[36;1mnix run path:.myque-gh-projector#myque-gh -- apply \^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5531718Z ^[[36;1m  --store "$GITHUB_WORKSPACE/$MYQUE_GH_STORE" \^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5532050Z ^[[36;1m  --repo "$MYQUE_GH_REPO" \^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5532346Z ^[[36;1m  --ref "refs/heads/$MYQUE_GH_BRANCH" \^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5532639Z ^[[36;1m  "${author_args[@]}" \^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5532885Z ^[[36;1m  "${source_args[@]}" \^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5533139Z ^[[36;1m  --project "$MYQUE_GH_PROJECT"^[[0m
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5575068Z shell: /usr/bin/bash -e {0}
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5575323Z env:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5575645Z   NIX_PROFILES: /nix/var/nix/profiles/default /home/runner/.nix-profile
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5576406Z   NIX_USER_PROFILE_DIR: /nix/var/nix/profiles/per-user/runner
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5576810Z   NIX_SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5579364Z   GH_TOKEN: ***
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5579588Z   MYQUE_GH_BRANCH: main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5579828Z   MYQUE_GH_PROJECT: tag = github
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5580085Z   MYQUE_GH_REPO: iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5580333Z   MYQUE_GH_STORE: .
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5580568Z   MYQUE_GH_ISSUE_AUTHORS: github-actions[bot]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5580891Z   MYQUE_GH_SOURCE_REPO: iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5581173Z   MYQUE_GH_SOURCE_BRANCH: main
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.5581406Z ##[endgroup]
+project / apply	UNKNOWN STEP	2026-09-13T11:26:12.6252219Z copying path '/nix/store/i2wrp0fbhvysy6bcanmwn6smd3jw938f-source' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:22.5222339Z unpacking 'github:mozufu/myque/b37ce24c6541d7bf3581e890b5df29c782701cd5?narHash=sha256-9HVaPCwp7CZbHtwZmeZg9ywb9miK/tgzglNUcCj8Qww%3D' into the Git cache...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6946754Z these 5 derivations will be built:
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6947738Z   /nix/store/f6f2plq509agndkjhcbqgirndkvm2rkn-haskell-generic-builder-test-wrapper.sh.drv
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6948847Z   /nix/store/zkhnhx3lkby9lwlb73njkg89vhbn8707-remove-references-to.drv
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6949687Z   /nix/store/yidc3l6d3c4xs20s2xnx3vnfa2r2isqq-myque-0.1.0.0.drv
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6950479Z   /nix/store/hp4p9chkbmb8b5ln4ic4qc75q67bwn2c-myque-gh-0.1.0.0.drv
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6951268Z   /nix/store/5hrr2rpgnrllsli0183y4zak4xa5pk8z-myque-gh-bin.drv
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6952366Z these 261 paths will be fetched (671.2 MiB download, 4.0 GiB unpacked):
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6953153Z   /nix/store/bn8s42cz56jna6g77r19p0ah0brj37ma-HUnit-1.6.2.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6953881Z   /nix/store/wgh100f93zrrvp2mkg6wwmjy3zr5jkja-HUnit-1.6.2.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6954605Z   /nix/store/zd4jp01fixvqhf91wn49ngzldv5c1m30-OneTuple-0.4.2.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6955651Z   /nix/store/87652xrvx41djvfbwk9sqkrfjn4aymki-OneTuple-0.4.2.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6956683Z   /nix/store/im732jmmvdknfvclcj5cqwgh3rka226k-QuickCheck-2.15.0.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6957500Z   /nix/store/xf62v86ylzcqb8yqm351kvi9h1haxm11-QuickCheck-2.15.0.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6958282Z   /nix/store/lm2vkbjznlswh1vkfl3pxz1b7hvca1h4-StateVar-1.2.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6959023Z   /nix/store/i2g4j020wjyylbc1f9ffh1p9fyhm4167-StateVar-1.2.2-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6959722Z   /nix/store/frljwrcd9gl19l5ybmwqn19wjzphiy0i-acl-2.4.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6960404Z   /nix/store/dpwdh4r9r20xj1zipp0myap9jpsllpvq-aeson-2.2.4.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6961144Z   /nix/store/zdxhz3q2rkwhz2iypm5115gh1ga1plk0-aeson-2.2.4.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6961902Z   /nix/store/d2bqjc8myjwxfdzb92004735rn5f6h1a-ansi-terminal-1.1.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6962720Z   /nix/store/l7nkcndvycm884c7cchdgn2h4d9shljc-ansi-terminal-1.1.5-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6963625Z   /nix/store/hp8hbmav7kx6lzv69q07b1xa04vb1xnw-ansi-terminal-types-1.1.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6964551Z   /nix/store/m72cqy0lk3ka8nm808fkh997jhbh2igx-ansi-terminal-types-1.1.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6965366Z   /nix/store/kqdnc6ah8qapr6fv5y6a6vc22qyrcd1l-assoc-1.1.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6966243Z   /nix/store/f70zx97y5sijqsblhp6dnfmyk4g7hr8h-assoc-1.1.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6966931Z   /nix/store/9ylxc4bgw68zr5p1273lbw3n7cgwj3c8-async-2.2.6
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6967618Z   /nix/store/slhk7bnxsi2kps9926cryrzl72q1rhid-async-2.2.6-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6968303Z   /nix/store/q1w855dvrm32p15r256k4c9srlr8z5b5-attr-2.6.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6968759Z   /nix/store/3qjxdg00hhyf61b35k0zd1ip2sj89lwq-base-orphans-0.9.4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6969231Z   /nix/store/pdhn5xhgpi7xj0mng87szicr6hcmyn7i-base-orphans-0.9.4-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6969657Z   /nix/store/axl12yr00f105bjqvj628f5f0s6r0cnp-bash-5.3p9
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6970198Z   /nix/store/yisa2lg79zcvgk4ck4yr6r0lz6j63hs3-bash-interactive-5.3p9
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6970965Z   /nix/store/xjqkwdn4mh6qb6lyybwrljyxyqiz9yd2-bifunctors-5.6.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6971795Z   /nix/store/27jws7pkq5wjdrvr0z2zch2h7y340mdj-bifunctors-5.6.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6972417Z   /nix/store/63wdfxcylc7rzym8iwhv84yppg8gj3vv-binutils-2.46
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6973010Z   /nix/store/g4fbgh99yml0wr57798brfl64iwdbpd2-binutils-2.46-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6973880Z   /nix/store/la0zcwbbm1jazcjqf80m49xfyj14k4b3-binutils-wrapper-2.46
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6974871Z   /nix/store/8xq69dyynsbzb5ryr8x5l55h60hb3jaf-brotli-1.2.0-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6975542Z   /nix/store/h5fj8jq0n0aal756qac3b24lc1zjnqjw-bzip2-1.0.8
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6976515Z   /nix/store/kk9ka2nhq5vr4yaanz865kryj88gbiik-bzip2-1.0.8-bin
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6977259Z   /nix/store/q594bxk43y22jc5f6ry6f6q4s0cjspnr-call-stack-0.4.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6978043Z   /nix/store/vvci60xdrg522d1bz1r71mpglk37vgrl-call-stack-0.4.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6978824Z   /nix/store/7dz3cf3xrg7vra5al8l0fa8w88apzlwd-character-ps-0.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6979597Z   /nix/store/zhya0ha2nh91yfxqy9yb4rq9d5c8g27j-character-ps-0.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6980409Z   /nix/store/fb1y5r0mwspk0fpgzj47i9dm5mhac4lj-colour-2.3.7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6981159Z   /nix/store/y13ryz98xmrwrkhmgs4p9mw0872w2vk1-colour-2.3.7-data
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6981946Z   /nix/store/pkx3gchzy2cf6pvrg798cn898sh6ylpq-colour-2.3.7-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6982705Z   /nix/store/mhpglzg9jw3igy7n8j66apyidl1b46i8-comonad-5.0.10
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6983485Z   /nix/store/v2g9a456rggl0d8pga7vcgpjzp194vyj-comonad-5.0.10-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6984291Z   /nix/store/5nkb55w911wjdnj8l25i7bcp6zpwia7r-contravariant-1.5.6
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6985097Z   /nix/store/svi872l09c5xlxw4p2p0s96hgszlwv6p-contravariant-1.5.6-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6995631Z   /nix/store/61685rbaxmpigwi3z23i33sv3jyfl70q-coreutils-9.11
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6996591Z   /nix/store/cjxc4x3cnlzlcdrsi92k5i7pkn78ixnz-curl-8.21.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6997906Z   /nix/store/g0pk51zrvr83z4plh129f2gyg23qkwvd-data-fix-0.3.4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6998679Z   /nix/store/jm9gbkssfbnfch6r503688nhadxyb62j-data-fix-0.3.4-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.6999660Z   /nix/store/qqlrkblzhy8mkrrgz5d1vaxn14v98d0r-die-hook
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7006816Z   /nix/store/1cnqsbklqng87a7hx5w3adz42n2y70pi-diffutils-3.12
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7007778Z   /nix/store/09kqd520vylnrzxnr82ilbizh2j3l5c5-distributive-0.6.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7008645Z   /nix/store/rhv5nddavjwxs0642np28ib05iib8slf-distributive-0.6.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7013747Z   /nix/store/6i8w4nqcrjnfkqnlmz33sr3x4vj4xkp9-dlist-1.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7014492Z   /nix/store/zxsf8imbgfq1sikr49lfw6nfcclmah7c-dlist-1.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7017824Z   /nix/store/ic92a2fgk4fmgm1sh9grdrz6mia9may1-dns-root-data-2025-04-14
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7018676Z   /nix/store/w7lk3nmxl2mx9jabpc0achg7ar3iagdv-ed-1.22.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7019404Z   /nix/store/y5frzqd1lyw30x5jwa2gczqhl5as49qf-elfutils-0.194
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7020197Z   /nix/store/zjlqrb8ffg3idjaxh88ih3nx9ma5xryp-elfutils-0.194-bin
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7021007Z   /nix/store/pxc3804g4z81fnzv8pn165h7sv3y110x-elfutils-0.194-dev
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7021885Z   /nix/store/53s7nxi6k9ij09si7rr7qjcvr1jc257j-expand-response-params
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7022769Z   /nix/store/x99x6r4wr8bm9s4k2363xrl8n3palbv2-expat-2.8.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7023442Z   /nix/store/3wbppfzpwj9kwkfrx9bkg99fbmr49p9q-file-5.47
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7024219Z   /nix/store/cifcgp7jj8mysa5yg8nayqxq3x6hzd33-filelock-0.1.1.9
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7025053Z   /nix/store/8s00jhka4606a4qf7dkmlnyvnccqkvjf-filelock-0.1.1.9-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7026138Z   /nix/store/n82li8za1mykdpj921c0v4f7dr7f6vba-findutils-4.10.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7026724Z   /nix/store/l048yqk8sv2lpz14ww39bqc3vzcmlz6m-gawk-5.4.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7027109Z   /nix/store/6hjng4hd5c688hjgdcyb1rzfjz220srh-gcc-15.2.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7027496Z   /nix/store/3b7njvjfc2w5lhj1jklrsw4lq7nwypri-gcc-15.2.0-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7027923Z   /nix/store/yf2c1gngi2dqvgni1rgvnixxc0d8di02-gcc-15.2.0-libgcc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7028372Z   /nix/store/hbsz2ngi9ixbhd9na1xagh2yc8qnmj7y-gcc-wrapper-15.2.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7028822Z   /nix/store/qzymnjpi1lzx6si3h6kxp914l8lz3qgz-gdbm-1.26-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7029242Z   /nix/store/3jdbra59k1zvb2ml8wc0xiwy2f10x8m4-gettext-1.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7029637Z   /nix/store/lmnakv2iy4b8m8saqvwkxywyd76yvypl-gh-2.100.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7030014Z   /nix/store/4zsff2pwbclb5j3fag61sbll3bqc2bck-ghc-9.10.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7030506Z   /nix/store/6wvibaqgrisg3vq7nqc8nxk72637isd4-ghc-9.10.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7030901Z   /nix/store/5vpcfsdx1lcnlb2y4k7xyc74shp5qwbh-git-2.54.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7031283Z   /nix/store/f75m9zdibi7g2f5xwdvb7qkhacdb66ji-git-2.54.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7031706Z   /nix/store/rkiwrqh8g6gs5rws4bf1s3mrdcs15gm9-glibc-2.42-84
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7032127Z   /nix/store/389a70m1z11xiz1b5b4gawz1z7w085rh-glibc-2.42-84-bin
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7032547Z   /nix/store/rlrznkmvs6jyp5kgq5jv2wqam83jv1r7-glibc-2.42-84-dev
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7032994Z   /nix/store/nddr3am6d2agv1argddnnrmw31v8a01j-glibc-locales-2.42-84
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7033427Z   /nix/store/n22dkvywg4pb1jpb77mvkdw9cpzkfcpb-gmp-6.3.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7033838Z   /nix/store/0kbdz7lqam74236c5lc6sm0fkvmypifv-gmp-with-cxx-6.3.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7034288Z   /nix/store/mldlrh14scy9avywnpalp1v8vxivq9k0-gmp-with-cxx-6.3.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7034743Z   /nix/store/976h6js4sd4z1b2fp1s3q63lcvhm0kyd-gmp-with-cxx-6.3.0-dev
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7035218Z   /nix/store/finpdyscmk3xzcvrp6yxhxkwa6xqnwdp-gnu-config-2024-01-01
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7035660Z   /nix/store/x3mmarawk8qkqf3257aidf7cljax6mc8-gnugrep-3.12
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7036603Z   /nix/store/jrf0jzrrgiqxhk2kzc7qvc9qpivm86ns-gnumake-4.4.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7037317Z   /nix/store/cwr0fxlfy7jzfxwz2wyhd30a3bzw7vx1-gnused-4.10
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7038165Z   /nix/store/plpn1m2r90invcrdw48kdrl65q379sq2-gnutar-1.35
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7039008Z   /nix/store/5c9ivvmkpdg8c7y7hnynxrsccl236a8x-gnutls-3.8.13
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7039802Z   /nix/store/4fp03lf9dal1jcpa5fr3ayjq7ff1bkji-gzip-1.14
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7040671Z   /nix/store/sc3g3lbsz43128zbg6qha9almb3zvdd1-hashable-1.5.1.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7041576Z   /nix/store/w0svlbk07hbzivyjy0i2lknib0jr9bf2-hashable-1.5.1.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7042496Z   /nix/store/ra6hs30d2mn3ar8p70hpw16dxljhnawc-haskell-lexer-1.2.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7043093Z   /nix/store/cgq10sg3rg6x617mqikns42rv9a4s5jb-haskell-lexer-1.2.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7043676Z   /nix/store/id07ldglfppl96nbyl72kwfbvq1i0i7l-hscolour-1.25
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7044124Z   /nix/store/ldgq00kchif3gqc131p506ac74cz7jx1-hspec-2.11.17
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7044544Z   /nix/store/b9gwjsjwc95dm9f8hk0a95qqldpzp6vx-hspec-2.11.17-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7044986Z   /nix/store/jmn6gs3mwwyznrbga51rl7q4q7q0cyny-hspec-core-2.11.17
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7045453Z   /nix/store/dw8cmkwah7gf3gf3mf86svjq1d4s537g-hspec-core-2.11.17-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7046331Z   /nix/store/kfl4k40cb0pvgh43hb430fkab8lbqgvj-hspec-discover-2.11.17
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7046838Z   /nix/store/id72c2qrwjllf288q8qnpp8ps9y2i59g-hspec-discover-2.11.17-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7047353Z   /nix/store/0knkpwxcpvzvwcq13dc70xsnnrs3796a-hspec-expectations-0.8.4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7047885Z   /nix/store/k1knhi020hhj5mdgrp4dyvf5pfs53jqg-hspec-expectations-0.8.4-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7048375Z   /nix/store/dby6q9025zc8yr79gz4g6skdgddzdchw-iana-etc-20251215
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7048850Z   /nix/store/bmf6ic2ngf2yi30i0ci6bwixbc2pvz5l-indexed-traversable-0.1.4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7049385Z   /nix/store/wrwvdicwxjrqkqrdx5mhhkw425m5aqvq-indexed-traversable-0.1.4-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7049974Z   /nix/store/anzav01a0hsqnx9qlzwj67v6x8q5f03n-indexed-traversable-instances-0.1.2.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7050680Z   /nix/store/5kraiyarh6qjs9kivlivnir1km29pmf2-indexed-traversable-instances-0.1.2.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7051266Z   /nix/store/1g01xryvqw10a3kicciyc189q9m6zl6b-integer-conversion-0.1.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7051780Z   /nix/store/bsdq6bba7lkrmi72ssksl2vgndv8h9iv-integer-conversion-0.1.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7052300Z   /nix/store/zl9ylw62p5l25gwyrswlmxk6hbx91ysm-integer-logarithms-1.0.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7052810Z   /nix/store/hmfa8wfwx535xfi28anqnaxikqcdxzvf-integer-logarithms-1.0.5-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7053259Z   /nix/store/qq5xqq26g23xp1w38208595305m9vfn8-isl-0.20
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7053628Z   /nix/store/20mr5gacgcc6zrxgmxnlbiy27y0h50w5-json-c-0.18
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7054045Z   /nix/store/48lbchbfr5wv0bjn82c3dp2shzff9dl8-keyutils-1.6.3-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7054469Z   /nix/store/4y2f1gr8wdm0a7gxrwwsrw817jl6g9j5-krb5-1.22.2-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7054901Z   /nix/store/3nf6r9s0wd9jwpy036wygsch97wir1xp-libarchive-3.8.9-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7055341Z   /nix/store/kgmry3yifiziqmamn88gdsv1jpkba753-libevent-2.1.13
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7056100Z   /nix/store/ws9r38pminy9z70n2dvpz4p4v7vfy90v-libffi-3.8.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7056535Z   /nix/store/nxw8i0014ny1v588nziq9yax64gdkn3h-libffi-3.8.0-dev
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7056955Z   /nix/store/xidgjdv05b8yz6w6qrhk4mmjxm4l2zjf-libidn2-2.3.8
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7057389Z   /nix/store/fjqfznpczbz8n5m961fwyj1k2rnc243r-libmicrohttpd-1.0.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7057813Z   /nix/store/9ncd81d1p1rpk2ik6iz50vjb29204hz9-libmpc-1.4.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7058210Z   /nix/store/kny04dy30q964wnsh8wzkrrvgl0gyacx-libpsl-0.21.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7058622Z   /nix/store/hmnxl4bvz7cjakbwbay26sc6c4rk1xnr-libssh2-1.11.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7059031Z   /nix/store/mc2i2gxbs2hgmndi76r5z8lg0hvfn6ac-libtasn1-4.21.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7059455Z   /nix/store/fp6wnyklwzdncp0nvhdy9d5fnir0mjq5-libunistring-1.4.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7059891Z   /nix/store/ka5dyx2ammky5biplc2fmfdlqk1s4rka-libxcrypt-4.5.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7060299Z   /nix/store/a86nzh8cmsrgvqv22by83x2fr2d1ximy-libxml2-2.15.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7060729Z   /nix/store/dmpn2sl84sqf9fskr16qwp4pbs5nm729-linux-headers-6.18.7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7061312Z   /nix/store/2nlcvqyhi3lpb28zwpbilp7sa76fq2wr-lndir-1.0.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7061702Z   /nix/store/4h1an4wxr2hgvlz4xs253a1xzygzrrfx-mailcap-2.1.54
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7062155Z   /nix/store/bpjwzx5qrfcpfnnl18nj6xxx6mpm5bqm-make-shell-wrapper-hook
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7062608Z   /nix/store/jq1i9l9wb2783bcg1k1jsjip5q10qi7f-mpdecimal-4.0.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7062998Z   /nix/store/fnfzxz5x42p8wqp852kn6mskijqljphk-mpfr-4.2.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7063496Z   /nix/store/iyzdbzddvnpgvax38yf8x12aaiydq54d-ncurses-6.6
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7063907Z   /nix/store/9jymhlwscjjj2djh9gzqhgnqgk5n2kp7-ncurses-6.6-dev
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7064326Z   /nix/store/sf7gi6cimjskcgzxrcqcklgh0w8jrjal-ncurses-6.6-man
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7064736Z   /nix/store/yf3hn3f26awvriklbigz4cyjp67mwxgf-nettle-3.10.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7065168Z   /nix/store/rhxk52ml0jrhhgggypdq4i732qmxhcly-network-uri-2.6.4.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7065633Z   /nix/store/56aarxsh06i48s7nhzl9sz678cwm2ika-network-uri-2.6.4.2-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7066326Z   /nix/store/63419mxzsh0mv078xypi7knadl1mx7p4-nghttp2-1.69.0-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7066754Z   /nix/store/p66pcf4rnx9xgs4spdbmh58hsr8ch8x9-nghttp3-1.15.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7067155Z   /nix/store/ax38nz0yvfh6m8ws70zhgl1a5b7b066s-ngtcp2-1.22.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7067551Z   /nix/store/4lgw1mzn1060gqikx0d9mrzkiyb7xzi0-numactl-2.0.18
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7067970Z   /nix/store/adm2in6a2ipzdwqv77jmad1lqpqwk3lj-numactl-2.0.18-dev
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7068392Z   /nix/store/p26kxyf1s61k1fbfiv1r7fk36mkaj4jp-openssl-3.6.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7068859Z   /nix/store/fc3a9k3nrifx8cb7lyhn00pwwz7ac529-optparse-applicative-0.18.1.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7069425Z   /nix/store/3fn6lagqg118zbl0mdqjzq2qldjgnlf4-optparse-applicative-0.18.1.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7069941Z   /nix/store/zmwmglqbbc4vn3ljrd0znca15kmikbmr-p11-kit-0.26.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7070349Z   /nix/store/cfw0pgnnldg564qgz12nb60wbnq7rmc6-patch-2.8
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7070760Z   /nix/store/igij6pvja1yvldp3w5ydlpswqzwsr8s6-patchelf-0.15.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7071173Z   /nix/store/h80h3ffln9pmxs272b0agqn5bdpyzbk1-pcre2-10.46
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7071549Z   /nix/store/w8mnw9h158ikd0cw5wjs9mhvqihbzbr4-perl-5.42.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7071999Z   /nix/store/kwdjd3fkilyx1a42kbdhs7r92xk5i5jd-perl5.42.0-Authen-SASL-2.1900
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7072502Z   /nix/store/yxpdpb95lwz6aavkb05v96w07avp4a3c-perl5.42.0-CGI-4.59
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7072988Z   /nix/store/4469i8ff7prnfvs389p2g1a9z7qslpsb-perl5.42.0-CGI-Fast-2.16
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7073471Z   /nix/store/acxwlvdsg35m55zllf9r6fchilk623wb-perl5.42.0-Clone-0.46
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7073964Z   /nix/store/n838b8xwr7p77h6ypf00k5fch2f4z101-perl5.42.0-Crypt-URandom-0.55
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7074490Z   /nix/store/szvmaxvk3zkvx4xb6vi35ndwnlgkrbcc-perl5.42.0-Digest-HMAC-1.05
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7075016Z   /nix/store/dw28jg358r54rarklclkynqpxgi2nv7g-perl5.42.0-Encode-Locale-1.05
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7075497Z   /nix/store/15m0m4jygzvm0a2h165h40y4352lj23n-perl5.42.0-FCGI-0.82
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7076328Z   /nix/store/0skr5gxnrh4ax1apa6iba41nifj9smkp-perl5.42.0-FCGI-ProcManager-0.28
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7076887Z   /nix/store/y7zfyl203m6bzc9xgzqkd6w5hdirdjzh-perl5.42.0-File-Listing-6.16
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7077408Z   /nix/store/wg8wg2f2rsiyny4fa01x3djicy20qq9s-perl5.42.0-HTML-Parser-3.81
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7077919Z   /nix/store/mmlhby803k9vsa02nf02mkmcfb4gikb9-perl5.42.0-HTML-TagCloud-0.38
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7078435Z   /nix/store/w7s8k0r6rap9fjgx16gaz59688mbad1j-perl5.42.0-HTML-Tagset-3.20
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7078975Z   /nix/store/nxkfsrlfmvmpcj8xd0xaykmz3qi6llfx-perl5.42.0-HTTP-CookieJar-0.014
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7079515Z   /nix/store/a2x0hn0ijf955fizbmbni5zbsgpv1gl5-perl5.42.0-HTTP-Cookies-6.10
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7080024Z   /nix/store/af16vpdq64rggjp9w9q2jsi15mv09yw0-perl5.42.0-HTTP-Daemon-6.17
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7080520Z   /nix/store/mc5hl9rhrams258zcr6zwn3b9fi2nqzg-perl5.42.0-HTTP-Date-6.06
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7081027Z   /nix/store/mp4v6fsdvxm8pa13lwns5q7ngw3wp8a3-perl5.42.0-HTTP-Message-6.45
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7081545Z   /nix/store/r8173y57q7rcl75m12zzgirdzwa65py8-perl5.42.0-HTTP-Negotiate-6.01
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7082198Z   /nix/store/a2b0yja1aghslawr1akxlc39hrlxdg7c-perl5.42.0-IO-HTML-1.004
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7082713Z   /nix/store/7mdp3k9h1akb35bv2f98gmm0nbnfnh3z-perl5.42.0-IO-Socket-SSL-2.083
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7083239Z   /nix/store/ixf45p64058dc27ibay917g3qpl5xjix-perl5.42.0-LWP-MediaTypes-6.04
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7104027Z   /nix/store/xl6ipn4rwbzkqwf0sa8fbxp1pxv9z2sm-perl5.42.0-Mozilla-CA-20230821
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7104831Z   /nix/store/plx2zwxvraja537n6nijaz428727gymz-perl5.42.0-Net-HTTP-6.23
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7105390Z   /nix/store/z0vxgvmkajlc6fd580a23j3mfaxjzcf4-perl5.42.0-Net-SMTP-SSL-1.04
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7106187Z   /nix/store/qd833n3f9ywq0a03736adpjlxa6yigsa-perl5.42.0-Net-SSLeay-1.92
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7106714Z   /nix/store/q7vkknsdmgwdl4azpd4175zr76k6nm17-perl5.42.0-TermReadKey-2.38
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7107276Z   /nix/store/hanvcd6n35hk4y5p747xxxpji105y7xc-perl5.42.0-Test-Fatal-0.017
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7107814Z   /nix/store/inlpwz7gwr1rab60snwj6w5rh963wj2q-perl5.42.0-Test-Needs-0.002010
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7108417Z   /nix/store/ygm832ld7xriny26c213wzkjgbynhmvx-perl5.42.0-Test-RequiresInternet-0.05
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7108983Z   /nix/store/akyaiwwdcx5fgjrpd7i9nqbym7ndgh9j-perl5.42.0-TimeDate-2.33
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7109515Z   /nix/store/p6bi1lxc52xwxjsszwz02wgww3hmca2k-perl5.42.0-Try-Tiny-0.31
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7109996Z   /nix/store/bpajylz4pnr9j0x3jkh5xjgr8360l1b4-perl5.42.0-URI-5.21
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7110493Z   /nix/store/v9hdakk9yk7zd8nq56ah8ify13mzn562-perl5.42.0-WWW-RobotRules-6.02
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7110994Z   /nix/store/3kfmw6ad2cykbvw9djimngh23218l7a4-perl5.42.0-libnet-3.15
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7111480Z   /nix/store/3rfpa810ni2sfiv185rbssc7rnj9gcvk-perl5.42.0-libwww-perl-6.72
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7111963Z   /nix/store/h8vzgx49gjvgfsz515m75xavym2jv73d-prettyprinter-1.7.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7112425Z   /nix/store/136h4lzc384c6ij6rpmryqvsay43z69r-prettyprinter-1.7.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7112960Z   /nix/store/3gm85bd3pkr0244fmbgj1a6fywm61j65-prettyprinter-ansi-terminal-1.1.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7113566Z   /nix/store/ilzzl748pwcklqvlfid4bfpa6q4dsvmg-prettyprinter-ansi-terminal-1.1.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7114105Z   /nix/store/ybhh2fsq43zwa9qw6g2zpsc23scbga59-primitive-0.9.1.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7114572Z   /nix/store/jj55jcgam5h6c5xlli3xj06a5m9hpwmj-primitive-0.9.1.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7115132Z   /nix/store/9h5k98byybph3lmgwbxxnhhxi2a3laah-publicsuffix-list-0-unstable-2026-05-13
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7115681Z   /nix/store/h3l4z7p6wny3phbckwwhy1i2g52pdnj4-python3-3.13.15
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7116505Z   /nix/store/kn69jm0imnmjd56ay25r3x1kc87a1644-quickcheck-io-0.2.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7116975Z   /nix/store/54xdp1b0c3l5pqypnd0gw1f594rqzqkh-quickcheck-io-0.2.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7117429Z   /nix/store/bvpbf488hc7mmcbdi9db46sjdz21im8v-random-1.2.1.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7117847Z   /nix/store/d0x8586gk0d82a8x77daxskyj3av8lbh-random-1.2.1.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7118270Z   /nix/store/2c5pv97v3mzjcdy6vwvx0ssnl388n8dh-readline-8.3p3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7118692Z   /nix/store/jvv66nwx7jr52k41r4r6q52gcq2gav7r-scientific-0.3.8.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7119144Z   /nix/store/1j856rdhkq822j06c198snh1l1pdwvsy-scientific-0.3.8.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7119591Z   /nix/store/14cryi0ndmyfxri184qv19vhcg9xrq04-semialign-1.3.1.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7120033Z   /nix/store/6f6wymp59xf195ds5hwmq5rqw0sfy45s-semialign-1.3.1.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7120497Z   /nix/store/8jw4y7fjnjwlavzlcx5a5l0rd6mli540-semigroupoids-6.0.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7120958Z   /nix/store/f6xxb6lc4dii6n9xi65lmf1rr71biv0b-semigroupoids-6.0.2-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7121458Z   /nix/store/y9kiwiydc4gk90vg4hmfac7i66bvsjv9-setup-debug-info-dirs-hook
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7121939Z   /nix/store/395j0y36wmlrjlxi3rs49m3mx2vpbsy0-splitmix-0.1.3.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7122386Z   /nix/store/0z6calrrivjzysh9r7nqn2jwk5qpfwl9-splitmix-0.1.3.2-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7122827Z   /nix/store/pzjyfhk4dgmm5wgma0y1m272ly2vb9gw-sqlite-3.51.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7123260Z   /nix/store/99v98l4khhp1yib367g1bxgx8frmp9hs-stdenv-linux
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7123819Z   /nix/store/fbrmzbsak0m5kx8is8i71igsnwmhxs9q-stdenv-linux
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7124221Z   /nix/store/vf34zrncdcckbfg9iipvjfd3w8m56cps-strict-0.5.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7124629Z   /nix/store/f349hdh9yc6v5lipy5dpysvyw0r0qvx7-strict-0.5.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7125041Z   /nix/store/b95m9diwf0aymbggm0nmhb2zklgbav15-tagged-0.8.9
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7125636Z   /nix/store/93ph3qmzkpflnily9np2vv21ymswdw0b-tagged-0.8.9-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7126560Z   /nix/store/hqgwkdxaim9raj901avfnfrizyy676l3-tasty-1.5.4
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7127253Z   /nix/store/xsyr3x938s1f85psqrlz8sp8078ld7q8-tasty-1.5.4-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7127974Z   /nix/store/djkg5rhjl5ycaj3lk1g9v6kqi0y8b44z-temporary-1.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7128700Z   /nix/store/9h7mc5s4h6amlf0y125wdmai3k9qjd1b-temporary-1.3-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7129475Z   /nix/store/9a35av9r0inh0pdf37qhp9lzcbmg0k6k-text-iso8601-0.1.1.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7130300Z   /nix/store/94ld6whd6yshn8dx1scwnq3m4j5w2273-text-iso8601-0.1.1.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7130822Z   /nix/store/lmcvmxbb75yq3qrfmlcydjrxipjr4drv-text-short-0.1.6.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7131287Z   /nix/store/xn6pxg0648hdaiyyfzzd0bc669d2jcyi-text-short-0.1.6.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7131757Z   /nix/store/s9hs13dzmwzf6dk5ik0jyq20yyil66zm-th-abstraction-0.7.2.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7132244Z   /nix/store/w599ga5np8s961yq4ys34jjzjj1iiiqa-th-abstraction-0.7.2.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7132813Z   /nix/store/2s0bbvxdjlk1xd9q7wh1dmjygw8c1y15-th-compat-0.1.7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7133585Z   /nix/store/xms2ri5ashg7l5j1f3h9wihi86j6fzrk-th-compat-0.1.7-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7134316Z   /nix/store/9ilbxjpp0a3zrq5fb92nf1yri96jhgyg-these-1.2.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7135013Z   /nix/store/qpfvm5rxgpngic8zqp955jkzy9nva046-these-1.2.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7135946Z   /nix/store/cgr51mdjcz7yjv9hfglqd2rg4rrsfni1-time-compat-1.9.9
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7136751Z   /nix/store/qfs8fcjfl6w8yn5z94nxhj6d0v4wl7x1-time-compat-1.9.9-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7137609Z   /nix/store/s72plcpz6dj1h31myp6xrc2qh4hzn1kd-transformers-compat-0.7.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7138548Z   /nix/store/wr5r6njq2bp4zgf5b9pvfk149dn851rp-transformers-compat-0.7.2-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7139437Z   /nix/store/x2jzr6hwlwq0x01h3blckhwsaib1gksi-typed-process-0.2.13.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7139944Z   /nix/store/zbkl644kav5bi698z79is971dndxkrd4-typed-process-0.2.13.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7140399Z   /nix/store/whnzhhywhswb2ch34rdsppwir53817zb-tzdata-2026c
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7140822Z   /nix/store/586h1kbpfxq4av4c4kmmva2ifnww9gqs-unbound-1.26.0-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7141452Z   /nix/store/c6jy49b3z9zivm5wly7ps09nybm9g4b0-unliftio-core-0.2.1.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7141947Z   /nix/store/lf7hmln49y0lacrcvxhmbl05m3sfd6pg-unliftio-core-0.2.1.0-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7142816Z   /nix/store/ndy31wf0wnvg1aw5pgz1cw8fidpzgd8f-unordered-containers-0.2.20.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7143855Z   /nix/store/f4pzyf651h3xbzfb7s7v5mmiff5zwsaq-unordered-containers-0.2.20.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7144964Z   /nix/store/glpgfn5wqqvbq02jk18sdm3qxq41k2d5-update-autotools-gnu-config-scripts-hook
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7146302Z   /nix/store/dhd6pn549sfkyqdbv55s1xb9a0jva8w9-util-linux-minimal-2.42.2-lib
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7147242Z   /nix/store/ckli5l8f8bd6hykiyy0pzbimchp4k6a5-uuid-types-1.0.6.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7148096Z   /nix/store/x7rskx4svs7vyghdl8blb2li52s5vi1i-uuid-types-1.0.6.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7148970Z   /nix/store/csfyfqah8nbjqwmjixr0d9rr5b2cdf27-vector-0.13.2.0
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7149777Z   /nix/store/fhm7ghafjw660j1ipklf99q07apg2bfi-vector-stream-0.1.0.1
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7150721Z   /nix/store/zdb9cvip11j9nf8wrmszh28j3h4jpdqa-vector-stream-0.1.0.1-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7151592Z   /nix/store/a3hkkkhkmafzmn3wnickn2d32kqkxiw5-witherable-0.5
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7152449Z   /nix/store/imakq1h1hqnax15z1nldqcr212gpigqn-witherable-0.5-doc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7153304Z   /nix/store/rdw0n35z6xhipyiq6sc8qv0mg7vrldaj-xgcc-15.2.0-libgcc
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7154024Z   /nix/store/yyl2a2i8fpnip00fqpw613znhxpqn3vy-xz-5.8.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7154666Z   /nix/store/8373r1712mm8arv96fxznzsxm7bdvqm4-xz-5.8.3-bin
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7155574Z   /nix/store/yq335q9gkpbpm9z7vzfcfngydldpj6q4-zlib-1.3.2
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7156511Z   /nix/store/lwqk6ks4jssnqbgk4pnif1syam2f25m6-zlib-ng-2.3.3
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7157200Z   /nix/store/cwrzplb333jy04vyv5k3x80jkmc42sy8-zstd-1.5.7
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7158451Z copying path '/nix/store/qqlrkblzhy8mkrrgz5d1vaxn14v98d0r-die-hook' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7159980Z copying path '/nix/store/dby6q9025zc8yr79gz4g6skdgddzdchw-iana-etc-20251215' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7161119Z copying path '/nix/store/f75m9zdibi7g2f5xwdvb7qkhacdb66ji-git-2.54.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7162595Z copying path '/nix/store/4h1an4wxr2hgvlz4xs253a1xzygzrrfx-mailcap-2.1.54' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7175045Z copying path '/nix/store/mmlhby803k9vsa02nf02mkmcfb4gikb9-perl5.42.0-HTML-TagCloud-0.38' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7177737Z copying path '/nix/store/szvmaxvk3zkvx4xb6vi35ndwnlgkrbcc-perl5.42.0-Digest-HMAC-1.05' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7186905Z copying path '/nix/store/0skr5gxnrh4ax1apa6iba41nifj9smkp-perl5.42.0-FCGI-ProcManager-0.28' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7208045Z copying path '/nix/store/whnzhhywhswb2ch34rdsppwir53817zb-tzdata-2026c' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7210515Z copying path '/nix/store/yf2c1gngi2dqvgni1rgvnixxc0d8di02-gcc-15.2.0-libgcc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7211410Z copying path '/nix/store/finpdyscmk3xzcvrp6yxhxkwa6xqnwdp-gnu-config-2024-01-01' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7214675Z copying path '/nix/store/bpajylz4pnr9j0x3jkh5xjgr8360l1b4-perl5.42.0-URI-5.21' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7217889Z copying path '/nix/store/3kfmw6ad2cykbvw9djimngh23218l7a4-perl5.42.0-libnet-3.15' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7218956Z copying path '/nix/store/dw28jg358r54rarklclkynqpxgi2nv7g-perl5.42.0-Encode-Locale-1.05' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7238685Z copying path '/nix/store/w7s8k0r6rap9fjgx16gaz59688mbad1j-perl5.42.0-HTML-Tagset-3.20' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7257361Z copying path '/nix/store/a2b0yja1aghslawr1akxlc39hrlxdg7c-perl5.42.0-IO-HTML-1.004' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7287451Z copying path '/nix/store/ixf45p64058dc27ibay917g3qpl5xjix-perl5.42.0-LWP-MediaTypes-6.04' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7599480Z copying path '/nix/store/y13ryz98xmrwrkhmgs4p9mw0872w2vk1-colour-2.3.7-data' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7620348Z copying path '/nix/store/ic92a2fgk4fmgm1sh9grdrz6mia9may1-dns-root-data-2025-04-14' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7622072Z copying path '/nix/store/dmpn2sl84sqf9fskr16qwp4pbs5nm729-linux-headers-6.18.7' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7623906Z copying path '/nix/store/ygm832ld7xriny26c213wzkjgbynhmvx-perl5.42.0-Test-RequiresInternet-0.05' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7626340Z copying path '/nix/store/9h5k98byybph3lmgwbxxnhhxi2a3laah-publicsuffix-list-0-unstable-2026-05-13' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7628239Z copying path '/nix/store/y9kiwiydc4gk90vg4hmfac7i66bvsjv9-setup-debug-info-dirs-hook' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7629988Z copying path '/nix/store/sf7gi6cimjskcgzxrcqcklgh0w8jrjal-ncurses-6.6-man' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7631798Z copying path '/nix/store/xl6ipn4rwbzkqwf0sa8fbxp1pxv9z2sm-perl5.42.0-Mozilla-CA-20230821' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7633514Z copying path '/nix/store/nddr3am6d2agv1argddnnrmw31v8a01j-glibc-locales-2.42-84' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7635146Z copying path '/nix/store/p6bi1lxc52xwxjsszwz02wgww3hmca2k-perl5.42.0-Try-Tiny-0.31' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7637665Z copying path '/nix/store/inlpwz7gwr1rab60snwj6w5rh963wj2q-perl5.42.0-Test-Needs-0.002010' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7639530Z copying path '/nix/store/rdw0n35z6xhipyiq6sc8qv0mg7vrldaj-xgcc-15.2.0-libgcc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7641314Z copying path '/nix/store/fp6wnyklwzdncp0nvhdy9d5fnir0mjq5-libunistring-1.4.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7643425Z copying path '/nix/store/akyaiwwdcx5fgjrpd7i9nqbym7ndgh9j-perl5.42.0-TimeDate-2.33' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7712641Z copying path '/nix/store/v9hdakk9yk7zd8nq56ah8ify13mzn562-perl5.42.0-WWW-RobotRules-6.02' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7772155Z copying path '/nix/store/plx2zwxvraja537n6nijaz428727gymz-perl5.42.0-Net-HTTP-6.23' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7820576Z copying path '/nix/store/glpgfn5wqqvbq02jk18sdm3qxq41k2d5-update-autotools-gnu-config-scripts-hook' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7822785Z copying path '/nix/store/mc5hl9rhrams258zcr6zwn3b9fi2nqzg-perl5.42.0-HTTP-Date-6.06' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7827330Z copying path '/nix/store/hanvcd6n35hk4y5p747xxxpji105y7xc-perl5.42.0-Test-Fatal-0.017' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.7937215Z copying path '/nix/store/xidgjdv05b8yz6w6qrhk4mmjxm4l2zjf-libidn2-2.3.8' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.8349341Z copying path '/nix/store/rkiwrqh8g6gs5rws4bf1s3mrdcs15gm9-glibc-2.42-84' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.8667474Z copying path '/nix/store/y7zfyl203m6bzc9xgzqkd6w5hdirdjzh-perl5.42.0-File-Listing-6.16' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.8697172Z copying path '/nix/store/nxkfsrlfmvmpcj8xd0xaykmz3qi6llfx-perl5.42.0-HTTP-CookieJar-0.014' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9942643Z copying path '/nix/store/frljwrcd9gl19l5ybmwqn19wjzphiy0i-acl-2.4.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9950780Z copying path '/nix/store/q1w855dvrm32p15r256k4c9srlr8z5b5-attr-2.6.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9954422Z copying path '/nix/store/axl12yr00f105bjqvj628f5f0s6r0cnp-bash-5.3p9' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9956729Z copying path '/nix/store/h5fj8jq0n0aal756qac3b24lc1zjnqjw-bzip2-1.0.8' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9958119Z copying path '/nix/store/w7lk3nmxl2mx9jabpc0achg7ar3iagdv-ed-1.22.5' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9959858Z copying path '/nix/store/8xq69dyynsbzb5ryr8x5l55h60hb3jaf-brotli-1.2.0-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9961737Z copying path '/nix/store/53s7nxi6k9ij09si7rr7qjcvr1jc257j-expand-response-params' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9963538Z copying path '/nix/store/x99x6r4wr8bm9s4k2363xrl8n3palbv2-expat-2.8.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9965160Z copying path '/nix/store/l048yqk8sv2lpz14ww39bqc3vzcmlz6m-gawk-5.4.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9967120Z copying path '/nix/store/3b7njvjfc2w5lhj1jklrsw4lq7nwypri-gcc-15.2.0-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9968905Z copying path '/nix/store/qzymnjpi1lzx6si3h6kxp914l8lz3qgz-gdbm-1.26-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9970647Z copying path '/nix/store/389a70m1z11xiz1b5b4gawz1z7w085rh-glibc-2.42-84-bin' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9972361Z copying path '/nix/store/n22dkvywg4pb1jpb77mvkdw9cpzkfcpb-gmp-6.3.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9975425Z copying path '/nix/store/jrf0jzrrgiqxhk2kzc7qvc9qpivm86ns-gnumake-4.4.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:23.9978800Z copying path '/nix/store/cwr0fxlfy7jzfxwz2wyhd30a3bzw7vx1-gnused-4.10' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0030772Z copying path '/nix/store/20mr5gacgcc6zrxgmxnlbiy27y0h50w5-json-c-0.18' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0042913Z copying path '/nix/store/plpn1m2r90invcrdw48kdrl65q379sq2-gnutar-1.35' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0093712Z copying path '/nix/store/kk9ka2nhq5vr4yaanz865kryj88gbiik-bzip2-1.0.8-bin' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0103380Z copying path '/nix/store/48lbchbfr5wv0bjn82c3dp2shzff9dl8-keyutils-1.6.3-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0105268Z copying path '/nix/store/kgmry3yifiziqmamn88gdsv1jpkba753-libevent-2.1.13' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0136708Z copying path '/nix/store/ws9r38pminy9z70n2dvpz4p4v7vfy90v-libffi-3.8.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0157476Z copying path '/nix/store/kny04dy30q964wnsh8wzkrrvgl0gyacx-libpsl-0.21.5' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0350024Z copying path '/nix/store/4fp03lf9dal1jcpa5fr3ayjq7ff1bkji-gzip-1.14' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0381161Z copying path '/nix/store/lmnakv2iy4b8m8saqvwkxywyd76yvypl-gh-2.100.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0383301Z copying path '/nix/store/mc2i2gxbs2hgmndi76r5z8lg0hvfn6ac-libtasn1-4.21.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0385142Z copying path '/nix/store/ka5dyx2ammky5biplc2fmfdlqk1s4rka-libxcrypt-4.5.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0387018Z copying path '/nix/store/qq5xqq26g23xp1w38208595305m9vfn8-isl-0.20' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0452576Z copying path '/nix/store/nxw8i0014ny1v588nziq9yax64gdkn3h-libffi-3.8.0-dev' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0507172Z copying path '/nix/store/bpjwzx5qrfcpfnnl18nj6xxx6mpm5bqm-make-shell-wrapper-hook' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0536974Z copying path '/nix/store/a86nzh8cmsrgvqv22by83x2fr2d1ximy-libxml2-2.15.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0560567Z copying path '/nix/store/jq1i9l9wb2783bcg1k1jsjip5q10qi7f-mpdecimal-4.0.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0630356Z copying path '/nix/store/2nlcvqyhi3lpb28zwpbilp7sa76fq2wr-lndir-1.0.5' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0686896Z copying path '/nix/store/rlrznkmvs6jyp5kgq5jv2wqam83jv1r7-glibc-2.42-84-dev' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0777740Z copying path '/nix/store/fnfzxz5x42p8wqp852kn6mskijqljphk-mpfr-4.2.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0779493Z copying path '/nix/store/iyzdbzddvnpgvax38yf8x12aaiydq54d-ncurses-6.6' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0781226Z copying path '/nix/store/63419mxzsh0mv078xypi7knadl1mx7p4-nghttp2-1.69.0-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0782921Z copying path '/nix/store/p66pcf4rnx9xgs4spdbmh58hsr8ch8x9-nghttp3-1.15.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0784492Z copying path '/nix/store/p26kxyf1s61k1fbfiv1r7fk36mkaj4jp-openssl-3.6.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0786291Z copying path '/nix/store/zmwmglqbbc4vn3ljrd0znca15kmikbmr-p11-kit-0.26.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0788052Z copying path '/nix/store/cfw0pgnnldg564qgz12nb60wbnq7rmc6-patch-2.8' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0789736Z copying path '/nix/store/h80h3ffln9pmxs272b0agqn5bdpyzbk1-pcre2-10.46' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0791480Z copying path '/nix/store/acxwlvdsg35m55zllf9r6fchilk623wb-perl5.42.0-Clone-0.46' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0814284Z copying path '/nix/store/n838b8xwr7p77h6ypf00k5fch2f4z101-perl5.42.0-Crypt-URandom-0.55' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0816429Z copying path '/nix/store/15m0m4jygzvm0a2h165h40y4352lj23n-perl5.42.0-FCGI-0.82' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0818312Z copying path '/nix/store/q7vkknsdmgwdl4azpd4175zr76k6nm17-perl5.42.0-TermReadKey-2.38' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0876725Z copying path '/nix/store/3jdbra59k1zvb2ml8wc0xiwy2f10x8m4-gettext-1.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0910904Z copying path '/nix/store/mldlrh14scy9avywnpalp1v8vxivq9k0-gmp-with-cxx-6.3.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0927056Z copying path '/nix/store/0kbdz7lqam74236c5lc6sm0fkvmypifv-gmp-with-cxx-6.3.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0965065Z copying path '/nix/store/4lgw1mzn1060gqikx0d9mrzkiyb7xzi0-numactl-2.0.18' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.0967447Z copying path '/nix/store/9ncd81d1p1rpk2ik6iz50vjb29204hz9-libmpc-1.4.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1167334Z copying path '/nix/store/igij6pvja1yvldp3w5ydlpswqzwsr8s6-patchelf-0.15.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1217239Z copying path '/nix/store/dhd6pn549sfkyqdbv55s1xb9a0jva8w9-util-linux-minimal-2.42.2-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1317515Z copying path '/nix/store/mp4v6fsdvxm8pa13lwns5q7ngw3wp8a3-perl5.42.0-HTTP-Message-6.45' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1331711Z copying path '/nix/store/yyl2a2i8fpnip00fqpw613znhxpqn3vy-xz-5.8.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1429111Z copying path '/nix/store/kwdjd3fkilyx1a42kbdhs7r92xk5i5jd-perl5.42.0-Authen-SASL-2.1900' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1476917Z copying path '/nix/store/x3mmarawk8qkqf3257aidf7cljax6mc8-gnugrep-3.12' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1548418Z copying path '/nix/store/adm2in6a2ipzdwqv77jmad1lqpqwk3lj-numactl-2.0.18-dev' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1572257Z copying path '/nix/store/yq335q9gkpbpm9z7vzfcfngydldpj6q4-zlib-1.3.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1587019Z copying path '/nix/store/976h6js4sd4z1b2fp1s3q63lcvhm0kyd-gmp-with-cxx-6.3.0-dev' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1657196Z copying path '/nix/store/61685rbaxmpigwi3z23i33sv3jyfl70q-coreutils-9.11' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1659562Z copying path '/nix/store/yf3hn3f26awvriklbigz4cyjp67mwxgf-nettle-3.10.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1727604Z copying path '/nix/store/cwrzplb333jy04vyv5k3x80jkmc42sy8-zstd-1.5.7' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1786894Z copying path '/nix/store/lwqk6ks4jssnqbgk4pnif1syam2f25m6-zlib-ng-2.3.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1807408Z copying path '/nix/store/8373r1712mm8arv96fxznzsxm7bdvqm4-xz-5.8.3-bin' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1867194Z copying path '/nix/store/3wbppfzpwj9kwkfrx9bkg99fbmr49p9q-file-5.47' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1909035Z copying path '/nix/store/g4fbgh99yml0wr57798brfl64iwdbpd2-binutils-2.46-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.1997344Z copying path '/nix/store/6hjng4hd5c688hjgdcyb1rzfjz220srh-gcc-15.2.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2041295Z copying path '/nix/store/pzjyfhk4dgmm5wgma0y1m272ly2vb9gw-sqlite-3.51.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2082344Z copying path '/nix/store/ax38nz0yvfh6m8ws70zhgl1a5b7b066s-ngtcp2-1.22.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2147995Z copying path '/nix/store/4y2f1gr8wdm0a7gxrwwsrw817jl6g9j5-krb5-1.22.2-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2167132Z copying path '/nix/store/hmnxl4bvz7cjakbwbay26sc6c4rk1xnr-libssh2-1.11.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2168988Z copying path '/nix/store/qd833n3f9ywq0a03736adpjlxa6yigsa-perl5.42.0-Net-SSLeay-1.92' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2225112Z copying path '/nix/store/3nf6r9s0wd9jwpy036wygsch97wir1xp-libarchive-3.8.9-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2268246Z copying path '/nix/store/1cnqsbklqng87a7hx5w3adz42n2y70pi-diffutils-3.12' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2347115Z copying path '/nix/store/n82li8za1mykdpj921c0v4f7dr7f6vba-findutils-4.10.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2469806Z copying path '/nix/store/63wdfxcylc7rzym8iwhv84yppg8gj3vv-binutils-2.46' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2534546Z copying path '/nix/store/w8mnw9h158ikd0cw5wjs9mhvqihbzbr4-perl-5.42.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2577024Z copying path '/nix/store/wg8wg2f2rsiyny4fa01x3djicy20qq9s-perl5.42.0-HTML-Parser-3.81' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2590705Z copying path '/nix/store/a2x0hn0ijf955fizbmbni5zbsgpv1gl5-perl5.42.0-HTTP-Cookies-6.10' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2695226Z copying path '/nix/store/af16vpdq64rggjp9w9q2jsi15mv09yw0-perl5.42.0-HTTP-Daemon-6.17' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.2730018Z copying path '/nix/store/r8173y57q7rcl75m12zzgirdzwa65py8-perl5.42.0-HTTP-Negotiate-6.01' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.3121223Z copying path '/nix/store/586h1kbpfxq4av4c4kmmva2ifnww9gqs-unbound-1.26.0-lib' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.3207437Z copying path '/nix/store/cjxc4x3cnlzlcdrsi92k5i7pkn78ixnz-curl-8.21.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.3282419Z copying path '/nix/store/fbrmzbsak0m5kx8is8i71igsnwmhxs9q-stdenv-linux' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.3379663Z copying path '/nix/store/7mdp3k9h1akb35bv2f98gmm0nbnfnh3z-perl5.42.0-IO-Socket-SSL-2.083' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.3738707Z copying path '/nix/store/5c9ivvmkpdg8c7y7hnynxrsccl236a8x-gnutls-3.8.13' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.3757317Z copying path '/nix/store/yxpdpb95lwz6aavkb05v96w07avp4a3c-perl5.42.0-CGI-4.59' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.4754191Z building '/nix/store/f6f2plq509agndkjhcbqgirndkvm2rkn-haskell-generic-builder-test-wrapper.sh.drv'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.4774569Z copying path '/nix/store/y5frzqd1lyw30x5jwa2gczqhl5as49qf-elfutils-0.194' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.4867456Z copying path '/nix/store/z0vxgvmkajlc6fd580a23j3mfaxjzcf4-perl5.42.0-Net-SMTP-SSL-1.04' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.4886997Z copying path '/nix/store/4469i8ff7prnfvs389p2g1a9z7qslpsb-perl5.42.0-CGI-Fast-2.16' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.5027298Z copying path '/nix/store/9jymhlwscjjj2djh9gzqhgnqgk5n2kp7-ncurses-6.6-dev' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.5057353Z copying path '/nix/store/2c5pv97v3mzjcdy6vwvx0ssnl388n8dh-readline-8.3p3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.5798497Z copying path '/nix/store/yisa2lg79zcvgk4ck4yr6r0lz6j63hs3-bash-interactive-5.3p9' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.5864743Z copying path '/nix/store/h3l4z7p6wny3phbckwwhy1i2g52pdnj4-python3-3.13.15' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.5927315Z building '/nix/store/zkhnhx3lkby9lwlb73njkg89vhbn8707-remove-references-to.drv'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.6063198Z copying path '/nix/store/fjqfznpczbz8n5m961fwyj1k2rnc243r-libmicrohttpd-1.0.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.6074630Z copying path '/nix/store/id07ldglfppl96nbyl72kwfbvq1i0i7l-hscolour-1.25' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.6767817Z copying path '/nix/store/la0zcwbbm1jazcjqf80m49xfyj14k4b3-binutils-wrapper-2.46' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.7081508Z copying path '/nix/store/zjlqrb8ffg3idjaxh88ih3nx9ma5xryp-elfutils-0.194-bin' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.7407530Z copying path '/nix/store/6wvibaqgrisg3vq7nqc8nxk72637isd4-ghc-9.10.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:24.8101698Z copying path '/nix/store/pxc3804g4z81fnzv8pn165h7sv3y110x-elfutils-0.194-dev' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:25.0367474Z copying path '/nix/store/3rfpa810ni2sfiv185rbssc7rnj9gcvk-perl5.42.0-libwww-perl-6.72' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:25.8896848Z copying path '/nix/store/5vpcfsdx1lcnlb2y4k7xyc74shp5qwbh-git-2.54.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:25.9567805Z copying path '/nix/store/hbsz2ngi9ixbhd9na1xagh2yc8qnmj7y-gcc-wrapper-15.2.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:25.9668612Z copying path '/nix/store/99v98l4khhp1yib367g1bxgx8frmp9hs-stdenv-linux' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3107879Z copying path '/nix/store/87652xrvx41djvfbwk9sqkrfjn4aymki-OneTuple-0.4.2.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3120215Z copying path '/nix/store/i2g4j020wjyylbc1f9ffh1p9fyhm4167-StateVar-1.2.2-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3121240Z copying path '/nix/store/f70zx97y5sijqsblhp6dnfmyk4g7hr8h-assoc-1.1.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3122147Z copying path '/nix/store/vvci60xdrg522d1bz1r71mpglk37vgrl-call-stack-0.4.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3123018Z copying path '/nix/store/8s00jhka4606a4qf7dkmlnyvnccqkvjf-filelock-0.1.1.9-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3123891Z copying path '/nix/store/pdhn5xhgpi7xj0mng87szicr6hcmyn7i-base-orphans-0.9.4-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3124794Z copying path '/nix/store/zhya0ha2nh91yfxqy9yb4rq9d5c8g27j-character-ps-0.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3125637Z copying path '/nix/store/pkx3gchzy2cf6pvrg798cn898sh6ylpq-colour-2.3.7-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3126872Z copying path '/nix/store/4zsff2pwbclb5j3fag61sbll3bqc2bck-ghc-9.10.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3128708Z copying path '/nix/store/zxsf8imbgfq1sikr49lfw6nfcclmah7c-dlist-1.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3130179Z copying path '/nix/store/w0svlbk07hbzivyjy0i2lknib0jr9bf2-hashable-1.5.1.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3131720Z copying path '/nix/store/cgq10sg3rg6x617mqikns42rv9a4s5jb-haskell-lexer-1.2.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3133331Z copying path '/nix/store/hmfa8wfwx535xfi28anqnaxikqcdxzvf-integer-logarithms-1.0.5-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3135040Z copying path '/nix/store/wrwvdicwxjrqkqrdx5mhhkw425m5aqvq-indexed-traversable-0.1.4-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3136922Z copying path '/nix/store/id72c2qrwjllf288q8qnpp8ps9y2i59g-hspec-discover-2.11.17-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3138460Z copying path '/nix/store/136h4lzc384c6ij6rpmryqvsay43z69r-prettyprinter-1.7.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3181510Z copying path '/nix/store/jj55jcgam5h6c5xlli3xj06a5m9hpwmj-primitive-0.9.1.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3182439Z copying path '/nix/store/0z6calrrivjzysh9r7nqn2jwk5qpfwl9-splitmix-0.1.3.2-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3762542Z copying path '/nix/store/wgh100f93zrrvp2mkg6wwmjy3zr5jkja-HUnit-1.6.2.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3914552Z copying path '/nix/store/svi872l09c5xlxw4p2p0s96hgszlwv6p-contravariant-1.5.6-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3916833Z copying path '/nix/store/93ph3qmzkpflnily9np2vv21ymswdw0b-tagged-0.8.9-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3919428Z copying path '/nix/store/m72cqy0lk3ka8nm808fkh997jhbh2igx-ansi-terminal-types-1.1.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3948958Z copying path '/nix/store/jm9gbkssfbnfch6r503688nhadxyb62j-data-fix-0.3.4-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3997372Z copying path '/nix/store/xn6pxg0648hdaiyyfzzd0bc669d2jcyi-text-short-0.1.6.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.3999101Z copying path '/nix/store/qfs8fcjfl6w8yn5z94nxhj6d0v4wl7x1-time-compat-1.9.9-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4047049Z copying path '/nix/store/w599ga5np8s961yq4ys34jjzjj1iiiqa-th-abstraction-0.7.2.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4086993Z copying path '/nix/store/wr5r6njq2bp4zgf5b9pvfk149dn851rp-transformers-compat-0.7.2-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4088999Z copying path '/nix/store/xms2ri5ashg7l5j1f3h9wihi86j6fzrk-th-compat-0.1.7-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4122424Z copying path '/nix/store/lf7hmln49y0lacrcvxhmbl05m3sfd6pg-unliftio-core-0.2.1.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4124107Z copying path '/nix/store/qpfvm5rxgpngic8zqp955jkzy9nva046-these-1.2.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4126303Z copying path '/nix/store/f4pzyf651h3xbzfb7s7v5mmiff5zwsaq-unordered-containers-0.2.20.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4130725Z copying path '/nix/store/zdb9cvip11j9nf8wrmszh28j3h4jpdqa-vector-stream-0.1.0.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4132550Z copying path '/nix/store/d0x8586gk0d82a8x77daxskyj3av8lbh-random-1.2.1.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4247780Z copying path '/nix/store/k1knhi020hhj5mdgrp4dyvf5pfs53jqg-hspec-expectations-0.8.4-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4296973Z copying path '/nix/store/56aarxsh06i48s7nhzl9sz678cwm2ika-network-uri-2.6.4.2-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4817510Z copying path '/nix/store/l7nkcndvycm884c7cchdgn2h4d9shljc-ansi-terminal-1.1.5-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4876979Z copying path '/nix/store/rhv5nddavjwxs0642np28ib05iib8slf-distributive-0.6.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4932669Z copying path '/nix/store/bsdq6bba7lkrmi72ssksl2vgndv8h9iv-integer-conversion-0.1.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4949857Z copying path '/nix/store/1j856rdhkq822j06c198snh1l1pdwvsy-scientific-0.3.8.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4951736Z copying path '/nix/store/xf62v86ylzcqb8yqm351kvi9h1haxm11-QuickCheck-2.15.0.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4953346Z copying path '/nix/store/9h7mc5s4h6amlf0y125wdmai3k9qjd1b-temporary-1.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.4955028Z copying path '/nix/store/x7rskx4svs7vyghdl8blb2li52s5vi1i-uuid-types-1.0.6.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5018112Z copying path '/nix/store/f349hdh9yc6v5lipy5dpysvyw0r0qvx7-strict-0.5.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5075349Z copying path '/nix/store/slhk7bnxsi2kps9926cryrzl72q1rhid-async-2.2.6-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5078407Z copying path '/nix/store/5kraiyarh6qjs9kivlivnir1km29pmf2-indexed-traversable-instances-0.1.2.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5234369Z copying path '/nix/store/ilzzl748pwcklqvlfid4bfpa6q4dsvmg-prettyprinter-ansi-terminal-1.1.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5274676Z copying path '/nix/store/v2g9a456rggl0d8pga7vcgpjzp194vyj-comonad-5.0.10-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5327259Z copying path '/nix/store/94ld6whd6yshn8dx1scwnq3m4j5w2273-text-iso8601-0.1.1.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5337154Z copying path '/nix/store/zbkl644kav5bi698z79is971dndxkrd4-typed-process-0.2.13.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5338669Z copying path '/nix/store/imakq1h1hqnax15z1nldqcr212gpigqn-witherable-0.5-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5847115Z copying path '/nix/store/3fn6lagqg118zbl0mdqjzq2qldjgnlf4-optparse-applicative-0.18.1.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5861261Z copying path '/nix/store/54xdp1b0c3l5pqypnd0gw1f594rqzqkh-quickcheck-io-0.2.0-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5871891Z copying path '/nix/store/27jws7pkq5wjdrvr0z2zch2h7y340mdj-bifunctors-5.6.3-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.5912317Z copying path '/nix/store/dw8cmkwah7gf3gf3mf86svjq1d4s537g-hspec-core-2.11.17-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.6010798Z copying path '/nix/store/f6xxb6lc4dii6n9xi65lmf1rr71biv0b-semigroupoids-6.0.2-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.6062119Z copying path '/nix/store/xsyr3x938s1f85psqrlz8sp8078ld7q8-tasty-1.5.4-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.6197291Z copying path '/nix/store/b9gwjsjwc95dm9f8hk0a95qqldpzp6vx-hspec-2.11.17-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.6210794Z copying path '/nix/store/6f6wymp59xf195ds5hwmq5rqw0sfy45s-semialign-1.3.1.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:27.6290673Z copying path '/nix/store/zdxhz3q2rkwhz2iypm5115gh1ga1plk0-aeson-2.2.4.1-doc' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4117880Z copying path '/nix/store/zd4jp01fixvqhf91wn49ngzldv5c1m30-OneTuple-0.4.2.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4119481Z copying path '/nix/store/lm2vkbjznlswh1vkfl3pxz1b7hvca1h4-StateVar-1.2.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4121026Z copying path '/nix/store/kqdnc6ah8qapr6fv5y6a6vc22qyrcd1l-assoc-1.1.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4122442Z copying path '/nix/store/3qjxdg00hhyf61b35k0zd1ip2sj89lwq-base-orphans-0.9.4' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4124073Z copying path '/nix/store/q594bxk43y22jc5f6ry6f6q4s0cjspnr-call-stack-0.4.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4129502Z copying path '/nix/store/7dz3cf3xrg7vra5al8l0fa8w88apzlwd-character-ps-0.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4130603Z copying path '/nix/store/fb1y5r0mwspk0fpgzj47i9dm5mhac4lj-colour-2.3.7' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4131499Z copying path '/nix/store/6i8w4nqcrjnfkqnlmz33sr3x4vj4xkp9-dlist-1.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4132373Z copying path '/nix/store/cifcgp7jj8mysa5yg8nayqxq3x6hzd33-filelock-0.1.1.9' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4133257Z copying path '/nix/store/ra6hs30d2mn3ar8p70hpw16dxljhnawc-haskell-lexer-1.2.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4134115Z copying path '/nix/store/sc3g3lbsz43128zbg6qha9almb3zvdd1-hashable-1.5.1.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4134998Z copying path '/nix/store/kfl4k40cb0pvgh43hb430fkab8lbqgvj-hspec-discover-2.11.17' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4136291Z copying path '/nix/store/bmf6ic2ngf2yi30i0ci6bwixbc2pvz5l-indexed-traversable-0.1.4' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4137842Z copying path '/nix/store/zl9ylw62p5l25gwyrswlmxk6hbx91ysm-integer-logarithms-1.0.5' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4138697Z copying path '/nix/store/h8vzgx49gjvgfsz515m75xavym2jv73d-prettyprinter-1.7.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4139501Z copying path '/nix/store/ybhh2fsq43zwa9qw6g2zpsc23scbga59-primitive-0.9.1.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4404561Z copying path '/nix/store/b95m9diwf0aymbggm0nmhb2zklgbav15-tagged-0.8.9' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4467336Z copying path '/nix/store/395j0y36wmlrjlxi3rs49m3mx2vpbsy0-splitmix-0.1.3.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4608302Z copying path '/nix/store/s9hs13dzmwzf6dk5ik0jyq20yyil66zm-th-abstraction-0.7.2.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4642495Z copying path '/nix/store/bn8s42cz56jna6g77r19p0ah0brj37ma-HUnit-1.6.2.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4644422Z copying path '/nix/store/5nkb55w911wjdnj8l25i7bcp6zpwia7r-contravariant-1.5.6' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4646473Z copying path '/nix/store/2s0bbvxdjlk1xd9q7wh1dmjygw8c1y15-th-compat-0.1.7' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4647886Z copying path '/nix/store/c6jy49b3z9zivm5wly7ps09nybm9g4b0-unliftio-core-0.2.1.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4648939Z copying path '/nix/store/s72plcpz6dj1h31myp6xrc2qh4hzn1kd-transformers-compat-0.7.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.4649976Z copying path '/nix/store/fhm7ghafjw660j1ipklf99q07apg2bfi-vector-stream-0.1.0.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.5347488Z copying path '/nix/store/lmcvmxbb75yq3qrfmlcydjrxipjr4drv-text-short-0.1.6.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.5349048Z copying path '/nix/store/g0pk51zrvr83z4plh129f2gyg23qkwvd-data-fix-0.3.4' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6817433Z copying path '/nix/store/9ilbxjpp0a3zrq5fb92nf1yri96jhgyg-these-1.2.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6875092Z copying path '/nix/store/ndy31wf0wnvg1aw5pgz1cw8fidpzgd8f-unordered-containers-0.2.20.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6916999Z copying path '/nix/store/bvpbf488hc7mmcbdi9db46sjdz21im8v-random-1.2.1.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6959146Z copying path '/nix/store/cgr51mdjcz7yjv9hfglqd2rg4rrsfni1-time-compat-1.9.9' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6978304Z copying path '/nix/store/09kqd520vylnrzxnr82ilbizh2j3l5c5-distributive-0.6.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6980421Z copying path '/nix/store/rhxk52ml0jrhhgggypdq4i732qmxhcly-network-uri-2.6.4.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6982075Z copying path '/nix/store/hp8hbmav7kx6lzv69q07b1xa04vb1xnw-ansi-terminal-types-1.1.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.6983719Z copying path '/nix/store/0knkpwxcpvzvwcq13dc70xsnnrs3796a-hspec-expectations-0.8.4' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.7857281Z copying path '/nix/store/mhpglzg9jw3igy7n8j66apyidl1b46i8-comonad-5.0.10' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8094684Z copying path '/nix/store/vf34zrncdcckbfg9iipvjfd3w8m56cps-strict-0.5.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8119066Z copying path '/nix/store/d2bqjc8myjwxfdzb92004735rn5f6h1a-ansi-terminal-1.1.5' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8150994Z copying path '/nix/store/im732jmmvdknfvclcj5cqwgh3rka226k-QuickCheck-2.15.0.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8155399Z copying path '/nix/store/ckli5l8f8bd6hykiyy0pzbimchp4k6a5-uuid-types-1.0.6.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8157401Z copying path '/nix/store/djkg5rhjl5ycaj3lk1g9v6kqi0y8b44z-temporary-1.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8196535Z copying path '/nix/store/1g01xryvqw10a3kicciyc189q9m6zl6b-integer-conversion-0.1.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8215720Z copying path '/nix/store/9ylxc4bgw68zr5p1273lbw3n7cgwj3c8-async-2.2.6' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8229682Z copying path '/nix/store/jvv66nwx7jr52k41r4r6q52gcq2gav7r-scientific-0.3.8.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8304586Z copying path '/nix/store/xjqkwdn4mh6qb6lyybwrljyxyqiz9yd2-bifunctors-5.6.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8357544Z copying path '/nix/store/3gm85bd3pkr0244fmbgj1a6fywm61j65-prettyprinter-ansi-terminal-1.1.3' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8409937Z copying path '/nix/store/9a35av9r0inh0pdf37qhp9lzcbmg0k6k-text-iso8601-0.1.1.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8547826Z copying path '/nix/store/fc3a9k3nrifx8cb7lyhn00pwwz7ac529-optparse-applicative-0.18.1.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8615474Z copying path '/nix/store/x2jzr6hwlwq0x01h3blckhwsaib1gksi-typed-process-0.2.13.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.8948152Z copying path '/nix/store/8jw4y7fjnjwlavzlcx5a5l0rd6mli540-semigroupoids-6.0.2' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.9064264Z copying path '/nix/store/hqgwkdxaim9raj901avfnfrizyy676l3-tasty-1.5.4' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.9119300Z copying path '/nix/store/kn69jm0imnmjd56ay25r3x1kc87a1644-quickcheck-io-0.2.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.9328058Z copying path '/nix/store/jmn6gs3mwwyznrbga51rl7q4q7q0cyny-hspec-core-2.11.17' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:31.9600276Z copying path '/nix/store/csfyfqah8nbjqwmjixr0d9rr5b2cdf27-vector-0.13.2.0' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:32.0051796Z copying path '/nix/store/ldgq00kchif3gqc131p506ac74cz7jx1-hspec-2.11.17' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:32.0539818Z building '/nix/store/yidc3l6d3c4xs20s2xnx3vnfa2r2isqq-myque-0.1.0.0.drv'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:32.1920457Z copying path '/nix/store/anzav01a0hsqnx9qlzwj67v6x8q5f03n-indexed-traversable-instances-0.1.2.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:32.1981913Z copying path '/nix/store/14cryi0ndmyfxri184qv19vhcg9xrq04-semialign-1.3.1.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:32.1983541Z copying path '/nix/store/a3hkkkhkmafzmn3wnickn2d32kqkxiw5-witherable-0.5' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:26:32.2186751Z copying path '/nix/store/dpwdh4r9r20xj1zipp0myap9jpsllpvq-aeson-2.2.4.1' from 'https://cache.nixos.org'...
+project / apply	UNKNOWN STEP	2026-09-13T11:27:08.9126349Z building '/nix/store/hp4p9chkbmb8b5ln4ic4qc75q67bwn2c-myque-gh-0.1.0.0.drv'...
+project / apply	UNKNOWN STEP	2026-09-13T11:27:30.3472499Z building '/nix/store/5hrr2rpgnrllsli0183y4zak4xa5pk8z-myque-gh-bin.drv'...
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.5218156Z Target: iceice666/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.5219290Z Source: ab82f20997ba0bafecdd3546e8b9f2a212daef1e (committed snapshot; uncommitted edits excluded)
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.5220232Z ~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 title
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.5220956Z ~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 body
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.5221485Z ~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 state
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.5344969Z Post job cleanup.
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6201043Z [command]/usr/bin/git version
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6249519Z git version 2.55.0
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6303331Z Temporarily overriding HOME='/home/runner/work/_temp/4e2f9257-5070-402b-8603-172299ba6b56' before making global git config changes
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6304388Z Adding repository directory to the temporary git global config as a safe directory
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6309594Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/slime_os/slime_os/.myque-gh-projector
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6346592Z Removing SSH command configuration
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6354308Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6392350Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6654681Z Removing HTTP extra header
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6661061Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6704158Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6968924Z Removing includeIf entries pointing to credentials config files
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.6976769Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7017241Z includeif.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7018211Z includeif.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7019222Z includeif.gitdir:/github/workspace/.myque-gh-projector/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7020324Z includeif.gitdir:/github/workspace/.myque-gh-projector/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7038046Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7066118Z /home/runner/work/_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7079456Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-854898f4\-0492\-4a0f\-8914\-533ab6d416dc\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7124488Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7157592Z /home/runner/work/_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7182775Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/slime_os/slime_os/.myque-gh-projector/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-854898f4\-0492\-4a0f\-8914\-533ab6d416dc\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7228494Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.myque-gh-projector/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7261122Z /github/runner_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7271440Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.myque-gh-projector/.git.path \/github\/runner_temp\/git\-credentials\-854898f4\-0492\-4a0f\-8914\-533ab6d416dc\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7316276Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.myque-gh-projector/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7351024Z /github/runner_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7366732Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.myque-gh-projector/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-854898f4\-0492\-4a0f\-8914\-533ab6d416dc\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7411502Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7670901Z Removing credentials config '/home/runner/work/_temp/git-credentials-854898f4-0492-4a0f-8914-533ab6d416dc.config'
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.7891483Z Post job cleanup.
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8794269Z [command]/usr/bin/git version
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8844985Z git version 2.55.0
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8895121Z Temporarily overriding HOME='/home/runner/work/_temp/015bd5ff-1518-4c03-bd59-36ef1af8dc31' before making global git config changes
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8896658Z Adding repository directory to the temporary git global config as a safe directory
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8902377Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/slime_os/slime_os
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8939823Z Removing SSH command configuration
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8946791Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.8987465Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9272044Z Removing HTTP extra header
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9278752Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9338270Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9609587Z Removing includeIf entries pointing to credentials config files
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9621870Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9656935Z includeif.gitdir:/home/runner/work/slime_os/slime_os/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9665641Z includeif.gitdir:/home/runner/work/slime_os/slime_os/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9667127Z includeif.gitdir:/github/workspace/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9668204Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9669904Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/slime_os/slime_os/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9699898Z /home/runner/work/_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9713083Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/slime_os/slime_os/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-cab9b555\-5f81\-4a65\-9680\-f12a760d65ea\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9759215Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/slime_os/slime_os/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9791077Z /home/runner/work/_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9802182Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/slime_os/slime_os/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-cab9b555\-5f81\-4a65\-9680\-f12a760d65ea\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9849358Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9878877Z /github/runner_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9886606Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-cab9b555\-5f81\-4a65\-9680\-f12a760d65ea\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9924599Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9952253Z /github/runner_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:42.9961777Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-cab9b555\-5f81\-4a65\-9680\-f12a760d65ea\.config
+project / apply	UNKNOWN STEP	2026-09-13T11:27:43.0000162Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+project / apply	UNKNOWN STEP	2026-09-13T11:27:43.0236906Z Removing credentials config '/home/runner/work/_temp/git-credentials-cab9b555-5f81-4a65-9680-f12a760d65ea.config'
+project / apply	UNKNOWN STEP	2026-09-13T11:27:43.0396537Z Cleaning up orphan processes

@@ -1,0 +1,5 @@
+Target: iceice666/slime_os
+Source: ab82f20997ba0bafecdd3546e8b9f2a212daef1e (committed snapshot; uncommitted edits excluded)
+~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 title
+~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 body
+~ issue #41 01a09a60-86bf-7646-b782-e23fc7230249 state
