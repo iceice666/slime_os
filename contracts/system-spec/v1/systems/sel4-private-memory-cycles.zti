@@ -40,7 +40,6 @@
       source = "init";
       target = "private-cycle-probe";
       rights = [
-        "send";
         "recv";
       ];
       transferable = false;

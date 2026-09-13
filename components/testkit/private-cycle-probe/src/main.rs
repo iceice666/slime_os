@@ -103,60 +103,92 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0)
     }
     slime_rt::debug_write(b"fault\n");
-    // A write one page *past* the declared window rather than to a null
-    // pointer. Both are unmapped, but a null dereference is undefined behaviour
-    // the optimizer may assume unreachable; this address is derived from a base
-    // the root chose at runtime, so the store cannot be folded away, and it is
-    // exactly the page `Region::admit` refuses.
-    //
-    // The store does trap -- the "did not trap" report below never appears --
-    // but this configuration reports it as `access: Execute status: 0`, the
-    // same shape `reclamation-fault`'s own deliberate write produces. The
-    // gate therefore asserts `kind=VirtualMemory` and leaves the access open.
-    let unmapped = region.base + CYCLE_PAGES * 4096;
-    // SAFETY: never mapped. The root reserves exactly `CYCLE_PAGES` pages at
-    // `region.base`, and the private window's reservation ends there, so this
-    // address is outside every mapping this task holds. The fault it raises is
-    // the point: MEM-64M requires immediate reuse after a deliberate fault with
-    // the whole quota committed.
-    unsafe { (unmapped as *mut u64).write_volatile(stamp(cycle)) }
+    fault_past_window(region.base + CYCLE_PAGES * 4096, stamp(cycle));
     // Unreachable: seL4 delivers the fault on the faulting instruction. Kept so
     // the arm cannot fall through into a clean exit and report a fault it never
     // raised.
     report_fail(cycle, b"deliberate fault did not trap", CYCLE_PAGES)
 }
 
-/// Read every page as zero, stamp it, then read every stamp back.
+/// Store `value` at `address` through inline assembly, to fault deliberately.
+///
+/// Inline assembly rather than a `write_volatile` through a pointer known to be
+/// unmapped. Volatile access still requires a valid pointer, so the Rust store
+/// was undefined behaviour: it happened to trap in this build, but an optimizer
+/// or toolchain change may delete or transform it, and the ten-fault half of
+/// MEM-64M's clause would then silently stop being exercised. An `asm!` block
+/// is opaque to the optimizer, so the instruction reaching the CPU is the one
+/// written here.
+///
+/// The address is one page past the declared window: exactly what
+/// `Region::admit` refuses, and derived from a base the root chose at runtime.
+///
+/// The store does trap -- the caller's "did not trap" report never appears --
+/// but this configuration reports it as `access: Execute status: 0`, the same
+/// shape `reclamation-fault`'s own deliberate write produces. The gate
+/// therefore asserts `kind=VirtualMemory` and leaves the access open.
+fn fault_past_window(address: usize, value: u64) {
+    // SAFETY: both blocks issue one store of a general-purpose register to
+    // `address`, which is never mapped in this task's VSpace -- the root
+    // reserves exactly `CYCLE_PAGES` pages at the window base and the
+    // reservation ends there. Faulting is the intent, and `nostack` holds
+    // because neither block touches the stack.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!(
+            "str {value}, [{address}]",
+            address = in(reg) address,
+            value = in(reg) value,
+            options(nostack),
+        )
+    }
+    #[cfg(target_arch = "riscv64")]
+    // SAFETY: as above.
+    unsafe {
+        core::arch::asm!(
+            "sd {value}, 0({address})",
+            address = in(reg) address,
+            value = in(reg) value,
+            options(nostack),
+        )
+    }
+}
+
+/// Read every word as zero, stamp every word, then read every stamp back.
+///
+/// Every word of all 16384 pages, not one word per page. A page-sampling
+/// version of this loop reported `zeroed=1 verified=1` while leaving 4088 of
+/// each page's 4096 bytes untested, so stale data anywhere outside the first
+/// word would have closed the milestone's no-stale-data condition without ever
+/// being read.
 ///
 /// Three passes rather than one fused loop, and the order is the assertion: a
-/// root that re-served a live page would fail the first pass, one that mapped
-/// two logical pages onto the same frame would fail the third, and fusing the
-/// write into the first pass would let an aliased page satisfy its own
-/// read-back. The stamp mixes the page index for the same reason.
+/// root that re-served a live page fails the first pass, one that mapped two
+/// logical pages onto the same frame fails the third, and fusing the write into
+/// the first pass would let an aliased page satisfy its own read-back. The
+/// stamp mixes the word's own index for the same reason.
 fn touch(cycle: u64, region: &PrivateMemory) {
     let base = region.base as *mut u64;
     let stamp = stamp(cycle);
-    for page in 0..CYCLE_PAGES {
+    let words = CYCLE_PAGES * WORDS_PER_PAGE;
+    for word in 0..words {
         // SAFETY: the root admitted and mapped exactly `CYCLE_PAGES` pages
-        // read-write at `region.base` for this task, and the offset stays
-        // inside the page selected by the loop.
-        let fresh = unsafe { base.add(page * WORDS_PER_PAGE).read_volatile() };
+        // read-write at `region.base`, so every index below `words` is inside
+        // the region.
+        let fresh = unsafe { base.add(word).read_volatile() };
         if fresh != 0 {
-            report_fail(cycle, b"a served page was not zero", page);
+            report_fail(cycle, b"a served word was not zero", word);
         }
     }
-    for page in 0..CYCLE_PAGES {
+    for word in 0..words {
         // SAFETY: as above; the same admitted, mapped, writable region.
-        unsafe {
-            base.add(page * WORDS_PER_PAGE)
-                .write_volatile(stamp ^ page as u64)
-        }
+        unsafe { base.add(word).write_volatile(stamp ^ word as u64) }
     }
-    for page in 0..CYCLE_PAGES {
+    for word in 0..words {
         // SAFETY: as above.
-        let written = unsafe { base.add(page * WORDS_PER_PAGE).read_volatile() };
-        if written != stamp ^ page as u64 {
-            report_fail(cycle, b"a stamped page did not read back", page);
+        let written = unsafe { base.add(word).read_volatile() };
+        if written != stamp ^ word as u64 {
+            report_fail(cycle, b"a stamped word did not read back", word);
         }
     }
 }

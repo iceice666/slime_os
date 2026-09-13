@@ -35,7 +35,6 @@
       name = "private-cycle-token";
       capabilityKind = "endpoint";
       rights = [
-        "send";
         "recv";
       ];
       source = "init";

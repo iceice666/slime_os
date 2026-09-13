@@ -4,9 +4,9 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-private-memory-cycles.zti";
     kind = "file";
-    identity = "6ecf6876eaff68ee705fa690e8413ebc9339956178beb7cc1d1c7939dc307400";
+    identity = "5fa68371e8a089b5be5f707a6b73b41cb7936ccd816e9049808cb299f399b013";
   };
-  systemIdentity = "68a45e6037eca32a79ccf224b675cbedbbaa391361a0ea447c1fc3988f02a1ef";
+  systemIdentity = "63fd69a633410d5872b91708691a06b4fd092525e88db5cf12c58047847c4177";
   implementations = [
     {
       component = "init";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/testkit/private-cycle-probe";
         kind = "tree";
-        identity = "e31d1768dd881fb5433a92959588375ebd64428ac03ed70102ad29ca38494c66";
+        identity = "652239ec77b2eac457d9331638e454294c00eb86a3aa80c8b55bade6b330559f";
       };
       identity = "abc0381d4eb66f10a6d1685d53ea3b86f3e40096dab1a5492637a76f0c9a213a";
       buildProfile = "default";
@@ -138,7 +138,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "f6b61fee9194cd756f083e9eded8ef1fa1bf3642553a59699e881976d23f3614";
+        identity = "ead58079985325eac898d359fadbc438ae4705fb530344d5e53ce1ec20704ca8";
       };
     };
     {

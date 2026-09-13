@@ -69,6 +69,7 @@ IMAGES_WITHOUT_CLOSURE = {
     "slime-sel4-graph.elf": "check-sel4-component-graph.py's --no-build reads this fixed legacy path only for check-external-component-admission.py's mixed-source generation",
     "slime-sel4-generation-qemu-riscv-virt.elf": "the RV64 arm of the generation plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-private-memory-qemu-riscv-virt.elf": "MEM-LARGE adds the RV64 execution arm before CP15 migrates its image build to closure identity",
+    "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf": "the RV64 arm of MEM-64M's reuse cycles; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-rollback-qemu-riscv-virt.elf": "the RV64 arm of the rollback plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-qemu-riscv-virt.elf": "the RV64 arm of the product root-boot aggregate; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
 }

@@ -80,10 +80,14 @@ LARGE_MAP_CLOSURE = "sel4-private-memory-fail-large-map"
 CLOSURE_PLATFORM = "qemu-arm-virt"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
-# MEM-64M's reuse arm. Closure-backed and AArch64 only: the clause it qualifies
-# names no architecture, and the milestone's two-architecture requirement is the
-# grow-to-ceiling condition the default arm already observes on both.
+# MEM-64M's reuse arm, on both QEMU architectures: the milestone requires both
+# to carry this workload, and an architecture-specific reclamation path can
+# regress while the other stays green. AArch64 builds through the closure; RV64
+# re-targets the same composition through the legacy plane flag, exactly as the
+# ceiling arm's RV64 case does, because a closure's platform follows its system
+# spec's `targetRequirement` and every spec declares aarch64.
 CYCLES_CLOSURE = "sel4-private-memory-cycles"
+CYCLES_RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf"
 CYCLES_FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory-cycles.zti"
 # Holder lives the arm requires. Its declared ceiling is read from the fixture
 # rather than restated, so a composition that lowered the quota fails instead of
@@ -662,11 +666,10 @@ def check_reuse_cycles(transcript: str, declared_pages: int) -> None:
     them.
 
     The drift check reads the root's `reclaim census`, whose three resource
-    figures are taken from the allocator's watermarks rather than from the
-    counters the reclamation path maintains. That distinction is B9's lesson
-    and the reason this arm can fail: B9's leak had every root-maintained tally
-    agreeing with every other one while thirteen frames per spawn were never
-    returned. A census read from the same bookkeeping would have agreed too.
+    figures come from the allocator's own watermarks rather than from the
+    counters the reclamation path maintains. That is what lets this arm fail at
+    all: a leak can leave every root-maintained tally agreeing with every other
+    one, so a census read from the same bookkeeping would agree too.
     """
     prefix = "reuse cycles: "
     reports = re.findall(
@@ -1393,8 +1396,35 @@ def check_segmented_capacity_report(
     if values["stack"] != 1_048_576 or values["heap"] != 524_288:
         fail(prefix + "root stack or heap diagnostic changed")
 
-def run_cycles_arm() -> None:
-    """MEM-64M's reuse clause on its own composition.
+def build_cycles_image(platform: str) -> Path:
+    """The cycles image for `platform`: closure on AArch64, plane flag on RV64."""
+    if platform == CLOSURE_PLATFORM:
+        return build_named_image(CYCLES_CLOSURE)
+    command = [
+        sys.executable,
+        str(BUILD_SCRIPT),
+        "--skip-pin-check",
+        "--private-memory-cycles-plane",
+        "--platform",
+        platform,
+    ]
+    print(f"[build] {' '.join(command)}", flush=True)
+    try:
+        process = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        fail(f"cannot build the RV64 private-memory-cycles image: {error}")
+    if process.returncode != 0:
+        fail(
+            "RV64 private-memory-cycles image build failed with exit status "
+            f"{process.returncode}"
+        )
+    if not CYCLES_RV64_IMAGE.is_file():
+        fail(f"missing packaged image {CYCLES_RV64_IMAGE}")
+    return CYCLES_RV64_IMAGE
+
+
+def run_cycles_arm(platform: str) -> None:
+    """MEM-64M's reuse clause on its own composition, on one architecture.
 
     A separate composition rather than a fourth instance on the ceiling plane,
     and that is forced rather than chosen: the private-memory budget's
@@ -1406,13 +1436,13 @@ def run_cycles_arm() -> None:
     quota = declared.get("private-cycle-probe")
     if quota is None:
         fail("the cycles fixture declares no quota for private-cycle-probe")
-    section, qemu_binary = PLATFORMS[CLOSURE_PLATFORM]
+    section, qemu_binary = PLATFORMS[platform]
     profile = load_qemu_profile(fail, PINS, section)
     transcript = boot(
         profile,
         section=section,
         qemu_binary=qemu_binary,
-        image=build_named_image(CYCLES_CLOSURE),
+        image=build_cycles_image(platform),
     )
     check_markers(transcript, CYCLE_CHAINS)
     check_declared_is_installed(transcript, declared)
@@ -1420,10 +1450,10 @@ def run_cycles_arm() -> None:
     print(
         "seL4 private-memory plane check: "
         f"{marker_count(CYCLE_CHAINS)} markers across {len(CYCLE_CHAINS)} causal "
-        f"chains and 1 image case on {CLOSURE_PLATFORM}; the declared quota "
+        f"chains and 1 image case on {platform}; the declared quota "
         f"({quota} page(s)) was reclaimed and re-served {CYCLE_COUNT} times over "
         f"{CYCLE_COUNT // 2} clean exits and {CYCLE_COUNT // 2} deliberate faults, "
-        "every served page zero, with no drift in reusable slots, untyped bytes, "
+        "every served word zero, with no drift in reusable slots, untyped bytes, "
         "or live objects"
     )
 
@@ -1444,9 +1474,7 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     if arguments.arm == "cycles":
-        if arguments.platform != CLOSURE_PLATFORM:
-            fail(f"the cycles arm is closure-backed and runs only on {CLOSURE_PLATFORM}")
-        run_cycles_arm()
+        run_cycles_arm(arguments.platform)
         return
     declared = declared_quotas()
     section, qemu_binary = PLATFORMS[arguments.platform]
