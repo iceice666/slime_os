@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-replay";
-  imageClosureIdentity = "e1ad10e5fca8912c09e2e395f0d1fc4bfa8aaef790ea2a1bd0f0445a9e9c8e53";
+  imageClosureIdentity = "e26094d5025a6e4088992011150e1e6b211d8f2fa15c2a7dce6f7b5dec6868a5";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [
