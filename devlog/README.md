@@ -443,3 +443,4 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-13 | [Partition CI verification without dropping gates](2026-09-13-ci-verification-partitioning/index.md) | Change | Monitoring | none |
 | 2026-09-13 | [MEM-PLATFORM: the kernel's own memory window becomes observable, and a probe reaches past the retired one](2026-09-13-mem-platform-ordinary-inventory/index.md) | Change | Verified | MEM-PLATFORM |
 | 2026-09-13 | [MEM-64M: private capacity becomes target-qualified, the runtime path segments, and 1 GiB is refused for a named reason](2026-09-13-mem-64m-target-qualified-capacity/index.md) | Change | Verified | MEM-64M |
+| 2026-09-13 | [MEM-64M: a 64 MiB private working set, reclaimed and re-served twenty times](2026-09-13-mem-64m-private-reuse-cycles/index.md) | Change | Verified | MEM-64M |

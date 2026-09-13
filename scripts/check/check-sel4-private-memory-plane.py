@@ -80,6 +80,19 @@ LARGE_MAP_CLOSURE = "sel4-private-memory-fail-large-map"
 CLOSURE_PLATFORM = "qemu-arm-virt"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
+# MEM-64M's reuse arm, on both QEMU architectures: the milestone requires both
+# to carry this workload, and an architecture-specific reclamation path can
+# regress while the other stays green. AArch64 builds through the closure; RV64
+# re-targets the same composition through the legacy plane flag, exactly as the
+# ceiling arm's RV64 case does, because a closure's platform follows its system
+# spec's `targetRequirement` and every spec declares aarch64.
+CYCLES_CLOSURE = "sel4-private-memory-cycles"
+CYCLES_RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf"
+CYCLES_FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory-cycles.zti"
+# Holder lives the arm requires. Its declared ceiling is read from the fixture
+# rather than restated, so a composition that lowered the quota fails instead of
+# qualifying a smaller working set.
+CYCLE_COUNT = 20
 PLATFORMS = {
     "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
     "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
@@ -103,7 +116,7 @@ TARGET_PROFILES = {
 # as the regex, so an inverted table would make `just sel4_gate_control_check`
 # mutate the prose instead of the markers and its pinned count would guard
 # nothing.
-CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+CEILING_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         # The root resolves the budget once and installs every declared
         # instance's ceiling before any of them run, so these are genuinely
@@ -229,6 +242,90 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+# MEM-64M's reuse clause. Four chains rather than twenty copies of one: the
+# causal contract is what a *cycle* promises, and the count is an aggregate
+# property `check_reuse_cycles` measures over the whole transcript. Twenty
+# inlined copies would also be twenty times the synthetic transcript
+# `sel4_gate_control_check` mutates, for no coverage the count check does not
+# already give.
+#
+# Between chains the order is not asserted: init serializes the cycles, so the
+# first exit precedes the first fault by construction, but pinning that here
+# would restate init's loop rather than the root's promise.
+CYCLE_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        # One incarnation end to end. Causal and load-bearing in this order:
+        # the ceiling is installed before the growth can be admitted, the
+        # growth precedes the touch the report summarizes, and the report
+        # cannot follow the exit that ends the task.
+        #
+        # `previous=0` is the reuse assertion inside the growth marker: a root
+        # that re-served a dead holder's committed pages would start this
+        # incarnation above zero. `large_frames=32` is the second: reclaimed
+        # backing must come back as 2 MiB frames, not degrade into base pages
+        # once the first holder has returned them.
+        "a cycle installed its declared ceiling, grew into it, and reported a zeroed region",
+        (
+            r"SLIME_MEM quota task=\d+ instance=private-cycle-probe "
+            r"declared=16384 installed=16384 base=0x[0-9a-f]+",
+            r"SLIME_MEM grown task=\d+ delta=16384 previous=0 pages=16384 "
+            r"base=0x[0-9a-f]+ quota=16384 total=16384 large_frames=32 base_frames=0 "
+            r"leaf_tables=0",
+            r"\[private-cycle-probe\] cycle=\d+ pages=16384 base=0x[0-9a-f]+ "
+            r"stamp=0x[0-9a-f]+ zeroed=1 verified=1 end=exit",
+            r"SLIME_GRAPH component exit task=\d+ status=0",
+            r"SLIME_ROOT reclaim census task=\d+ slots=\d+ bytes=\d+ live_objects=\d+ "
+            r"extent_reuses=\d+",
+        ),
+    ),
+    (
+        # The fault path's own sequence. Separate from the exit chain because
+        # the two are different reclamation routes in the root
+        # (`services.rs` reaches `reclaim_dead_task` from the fault arm and the
+        # exit arm independently), and the milestone requires immediate reuse
+        # after either.
+        #
+        # `kind=VirtualMemory` is pinned but the access is deliberately not.
+        # Pinning `VirtualMemory` is what distinguishes a holder that died on a
+        # memory access from one that died of a syscall or user exception, which
+        # a pattern ending at `kind=` accepts. The access is left open because
+        # this configuration does not characterize it: the store demonstrably
+        # traps -- the probe's own "did not trap" line never appears -- yet the
+        # root reports `access: Execute status: 0`, and the pre-existing
+        # `reclamation-fault` probe reports exactly the same shape for its own
+        # deliberate write. That decode question is `fault.rs`'s, not this
+        # arm's, and asserting `Write` here would pin behaviour the platform
+        # does not produce.
+        "a cycle that ended by deliberate fault was reclaimed and censused",
+        (
+            r"\[private-cycle-probe\] cycle=\d+ pages=16384 base=0x[0-9a-f]+ "
+            r"stamp=0x[0-9a-f]+ zeroed=1 verified=1 end=fault",
+            r"SLIME_GRAPH component fault task=\d+ kind=VirtualMemory \{ access: \w+, "
+            r"status: \d+ \} address=Some\(\d+\)",
+            r"SLIME_ROOT reclaim census task=\d+ slots=\d+ bytes=\d+ live_objects=\d+ "
+            r"extent_reuses=\d+",
+        ),
+    ),
+    (
+        # Init's own tally, so a plane that silently ran fewer cycles fails
+        # here rather than passing a count check that measured what it found.
+        "init drove both termination paths to the declared cycle count",
+        (r"\[init\] private memory cycles exits=10 faults=10",),
+    ),
+    (
+        "the cycles plane ran to completion with no declared instance failing",
+        (
+            r"\[init\] private memory cycles plane complete",
+            r"SLIME_GRAPH HEALTHY generation=\d+ required=\d+ live=\d+ completed=\d+ failed=0",
+        ),
+    ),
+)
+
+# The union, for `sel4_gate_control_check`'s coverage count only. Each arm
+# matches its own chains; a transcript from one arm does not carry the other's
+# markers, so matching the union would fail every run.
+CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = CEILING_CHAINS + CYCLE_CHAINS
+
 EXPECTED_UNORDERED: tuple[str, ...] = (
     r"\[private-memory-probe\] query pages=0 base=0x[0-9a-f]+",
 )
@@ -254,6 +351,15 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # happened rather than only that a marker is absent.
     r"\[private-heap-probe:(?:granted|denied|both)\] private-heap exhausted",
     r"\[private-heap-probe:(?:granted|denied|both)\] private-heap failed",
+    # The cycles arm's own failures. The probe's `FAIL` line names which
+    # invariant broke and in which incarnation, so it is vetoed rather than
+    # left to surface as a missing report; a reclaim that came back incomplete
+    # is the root admitting it could not return what a dead holder held, which
+    # is exactly the drift this arm exists to detect.
+    r"\[private-cycle-probe\] FAIL",
+    r"\[init\] private memory cycles plane fail",
+    r"SLIME_GRAPH task reclaim incomplete task=\d+",
+    r"SLIME_GRAPH holder reclaim incomplete task=\d+",
 )
 
 
@@ -261,8 +367,8 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 private-memory plane check: {message}")
 
 
-def declared_quotas() -> dict[str, int]:
-    """The ceilings `sel4-private-memory.zti` declares, read from the fixture.
+def declared_quotas(fixture: Path = FIXTURE) -> dict[str, int]:
+    """The ceilings the arm's own composition declares, read from that fixture.
 
     Read rather than restated: the gate's whole assertion is that the
     generation's declaration is the live ceiling, and a copy of the number in
@@ -273,7 +379,7 @@ def declared_quotas() -> dict[str, int]:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
-        [str(binary()), "json", str(FIXTURE)],
+        [str(binary()), "json", str(fixture)],
         cwd=ROOT,
         env=environment,
         check=False,
@@ -525,19 +631,197 @@ def check_incremental_rollback(transcript: str) -> None:
     if len(bases) != 1 or 0 in bases:
         fail(prefix + "task1 retry bases differ or are zero")
 
-def check_markers(transcript: str) -> None:
+def check_markers(
+    transcript: str, chains: tuple[tuple[str, tuple[str, ...]], ...] = CEILING_CHAINS
+) -> None:
     # The shared helper rather than a local loop, on B63's rule: every other
     # plane gate's chain matching, failure vetoing, and out-of-order reporting
     # lives here, and a private reimplementation is a second copy that can drift
     # from the one `sel4_gate_control_check` drives.
+    #
+    # The arm's own chains, not the module's union: each arm boots its own
+    # image, so a transcript carries one arm's markers and matching the union
+    # would fail every real run. The union exists for the meta-gate's coverage
+    # count, which synthesizes a transcript containing every marker.
+    declared = list(chains)
+    if chains is CEILING_CHAINS:
+        declared.extend(("order-independent marker", (pattern,)) for pattern in EXPECTED_UNORDERED)
     match_marker_contract(
         transcript,
-        chains_from_gate(sys.modules[__name__]),
+        declared,
         FAILURE_MARKERS,
         fail,
     )
     if re.search(r"SLIME_MEM (?:capacity|qualification)", transcript):
         fail("normal private-memory transcript contains workload qualification")
+
+
+def check_reuse_cycles(transcript: str, declared_pages: int) -> None:
+    """MEM-64M's reuse clause: twenty 64 MiB lives, no drift, no stale bytes.
+
+    The chains above establish what one cycle promises. This establishes the
+    aggregate the milestone actually requires, which no per-cycle marker can:
+    that the count is twenty, that both termination paths occur, and that the
+    allocator's own watermarks come back to the same values after every one of
+    them.
+
+    The drift check reads the root's `reclaim census`, whose three resource
+    figures come from the allocator's own watermarks rather than from the
+    counters the reclamation path maintains. That is what lets this arm fail at
+    all: a leak can leave every root-maintained tally agreeing with every other
+    one, so a census read from the same bookkeeping would agree too.
+    """
+    prefix = "reuse cycles: "
+    reports = re.findall(
+        r"\[private-cycle-probe\] cycle=(\d+) pages=(\d+) base=0x([0-9a-f]+) "
+        r"stamp=0x([0-9a-f]+) zeroed=1 verified=1 end=(exit|fault)",
+        transcript,
+    )
+    if len(reports) != CYCLE_COUNT:
+        fail(prefix + f"{len(reports)} incarnation(s) reported, expected {CYCLE_COUNT}")
+    cycles = [int(cycle) for cycle, *_ in reports]
+    if cycles != list(range(CYCLE_COUNT)):
+        fail(prefix + f"incarnations ran out of order or repeated: {cycles}")
+    for cycle, pages, _base, _stamp, end in reports:
+        if int(pages) != declared_pages:
+            fail(prefix + f"cycle {cycle} grew {pages} page(s), expected {declared_pages}")
+        # The path is a property of the cycle number, so a probe that ended
+        # every life the same way fails here rather than satisfying the count.
+        expected_end = "exit" if int(cycle) % 2 == 0 else "fault"
+        if end != expected_end:
+            fail(prefix + f"cycle {cycle} ended by {end}, expected {expected_end}")
+    # Distinct stamps: a page carried from one life into the next would satisfy
+    # a non-zero test, so the stamp identifies *which* life wrote it. Equal
+    # stamps would make the zero test above unable to tell reuse from leak.
+    stamps = {stamp for _c, _p, _b, stamp, _e in reports}
+    if len(stamps) != CYCLE_COUNT:
+        fail(prefix + f"{len(stamps)} distinct stamp(s) across {CYCLE_COUNT} incarnations")
+    # One region, reused. The base is the holder's declared window, so every
+    # incarnation must be served at the same address: a moving base would mean
+    # the root was handing out fresh address space rather than reclaiming.
+    bases = {base for _c, _p, base, _s, _e in reports}
+    if len(bases) != 1:
+        fail(prefix + f"incarnations were served {len(bases)} distinct bases: {sorted(bases)}")
+
+    exits = len(re.findall(r"SLIME_GRAPH component exit task=\d+ status=0", transcript))
+    # Every fault is a memory fault. Counting the `VirtualMemory` form against
+    # the *total* refuses a run where nine holders died on a memory access and
+    # one died of a syscall or user exception -- which is the distinction this
+    # arm can make. The access field is not asserted: see `CYCLE_CHAINS`, where
+    # the observed decode and the reason it is left open are recorded.
+    faults = len(re.findall(r"SLIME_GRAPH component fault task=\d+ kind=", transcript))
+    memory_faults = re.findall(
+        r"SLIME_GRAPH component fault task=\d+ kind=VirtualMemory "
+        r"\{ access: \w+, status: \d+ \} address=Some\((\d+)\)",
+        transcript,
+    )
+    # Init exits too, so its own clean exit is the one beyond the ten cycles.
+    if exits != CYCLE_COUNT // 2 + 1:
+        fail(prefix + f"{exits} clean exit(s), expected {CYCLE_COUNT // 2} cycles plus init")
+    if faults != CYCLE_COUNT // 2:
+        fail(prefix + f"{faults} fault(s), expected {CYCLE_COUNT // 2}")
+    if len(memory_faults) != faults:
+        fail(
+            prefix + f"{len(memory_faults)} of {faults} fault(s) were memory faults; "
+            "the rest ended some other way"
+        )
+    # Each faulting holder reached its own report first, so the fault followed a
+    # fully committed quota rather than killing the task during construction.
+    # That is the property the milestone's clause needs -- reuse *after* a
+    # deliberate fault with the whole working set live -- and it is established
+    # by the per-cycle reports above being twenty, ten of them `end=fault`.
+    faulting_reports = sum(1 for *_rest, end in reports if end == "fault")
+    if faulting_reports != faults:
+        fail(
+            prefix + f"{faulting_reports} holder(s) reported a committed quota before "
+            f"faulting, against {faults} fault(s)"
+        )
+
+    census = re.findall(
+        r"SLIME_ROOT reclaim census task=(\d+) slots=(\d+) bytes=(\d+) "
+        r"live_objects=(\d+) extent_reuses=(\d+)",
+        transcript,
+    )
+    # Init's own exit is reclaimed too, so its census record is the extra one
+    # and it is *not* a cycle: it returns a task that never held a private
+    # quota, so its figures legitimately differ. Dropping the last record rather
+    # than filtering by task id keeps that explicit — init exits after the loop,
+    # which the `exits=10 faults=10` marker preceding it establishes.
+    if len(census) != CYCLE_COUNT + 1:
+        fail(
+            prefix + f"{len(census)} reclamation census record(s), expected "
+            f"{CYCLE_COUNT} cycles plus init"
+        )
+    census = census[:CYCLE_COUNT]
+    # The first cycle is the baseline: it ran against an allocator no holder had
+    # yet returned anything to, so its remaining figures are what every later
+    # reclamation must restore. Exact equality rather than a tolerance — a
+    # bounded root that returns all but one slot per cycle is still a root whose
+    # capacity falls with uptime.
+    _, base_slots, base_bytes, base_objects, _ = census[0]
+    for index, (task, slots, byte_count, objects, _reuses) in enumerate(census[1:], start=1):
+        if slots != base_slots:
+            fail(
+                prefix + f"cycle {index} (task {task}) left {slots} slot(s) remaining "
+                f"against {base_slots} after the first: reclaimed CSlots are not returned"
+            )
+        if byte_count != base_bytes:
+            fail(
+                prefix + f"cycle {index} (task {task}) left {byte_count} untyped byte(s) "
+                f"remaining against {base_bytes} after the first: backing is not returned"
+            )
+        if objects != base_objects:
+            fail(
+                prefix + f"cycle {index} (task {task}) left {objects} live object(s) "
+                f"against {base_objects} after the first: kernel objects are not returned"
+            )
+    # Retention is proved by reuse dominating fresh records, the same reading
+    # `check-sel4-reclamation-plane.py` established: `release_task_arena`
+    # deactivates an extent record so `provision_extent` can re-retype into it,
+    # so the free count deliberately does not return and a collapse in reuse is
+    # what a retention regression looks like.
+    reuses = [int(reuse) for *_rest, reuse in census]
+    if reuses != sorted(reuses):
+        fail(prefix + f"extent reuse count decreased across cycles: {reuses}")
+    if reuses[-1] <= reuses[0]:
+        fail(
+            prefix + f"extent reuses did not grow across {CYCLE_COUNT} cycles "
+            f"({reuses[0]} -> {reuses[-1]}): released backing is not being reused"
+        )
+    # Every incarnation's growth started from an empty region and took the large
+    # frames the first one did. Counted rather than only chained, so a run where
+    # nineteen cycles degraded to base pages fails here.
+    grown = re.findall(
+        rf"SLIME_MEM grown task=\d+ delta={declared_pages} previous=0 pages={declared_pages} "
+        r"base=0x[0-9a-f]+ quota=\d+ total=\d+ large_frames=(\d+) base_frames=(\d+) "
+        r"leaf_tables=(\d+)",
+        transcript,
+    )
+    if len(grown) != CYCLE_COUNT:
+        fail(prefix + f"{len(grown)} full growth(s) from an empty region, expected {CYCLE_COUNT}")
+    shapes = set(grown)
+    if len(shapes) != 1:
+        fail(prefix + f"growths took {len(shapes)} distinct backing shapes: {sorted(shapes)}")
+    large, base_frames, leaf_tables = grown[0]
+    if (int(large), int(base_frames), int(leaf_tables)) != (declared_pages // 512, 0, 0):
+        fail(
+            prefix + f"a reused growth was backed by large_frames={large} "
+            f"base_frames={base_frames} leaf_tables={leaf_tables}"
+        )
+    # No private page survives the last holder, and released backing is still
+    # held for reuse: the terminal accounting's own two fields, on the
+    # reclamation gate's reading of them.
+    terminal = re.search(
+        r"SLIME_ROOT allocator live_slots=\d+ free_slots=\d+ live_objects=\d+ live_bytes=\d+ "
+        r"mapped_ram=(\d+) reusable_ram=(\d+) reusable_private_ram=(\d+) ",
+        transcript,
+    )
+    if terminal is None:
+        fail(prefix + "the root reported no terminal allocator accounting")
+    if terminal.group(1) != "0":
+        fail(prefix + f"private mapped RAM survived every holder: {terminal.group(1)}")
+    if int(terminal.group(3)) == 0:
+        fail(prefix + "no private-backing extent was retained for reuse")
 
 
 def check_declared_is_installed(transcript: str, declared: dict[str, int]) -> None:
@@ -1112,8 +1396,76 @@ def check_segmented_capacity_report(
     if values["stack"] != 1_048_576 or values["heap"] != 524_288:
         fail(prefix + "root stack or heap diagnostic changed")
 
+def build_cycles_image(platform: str) -> Path:
+    """The cycles image for `platform`: closure on AArch64, plane flag on RV64."""
+    if platform == CLOSURE_PLATFORM:
+        return build_named_image(CYCLES_CLOSURE)
+    command = [
+        sys.executable,
+        str(BUILD_SCRIPT),
+        "--skip-pin-check",
+        "--private-memory-cycles-plane",
+        "--platform",
+        platform,
+    ]
+    print(f"[build] {' '.join(command)}", flush=True)
+    try:
+        process = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        fail(f"cannot build the RV64 private-memory-cycles image: {error}")
+    if process.returncode != 0:
+        fail(
+            "RV64 private-memory-cycles image build failed with exit status "
+            f"{process.returncode}"
+        )
+    if not CYCLES_RV64_IMAGE.is_file():
+        fail(f"missing packaged image {CYCLES_RV64_IMAGE}")
+    return CYCLES_RV64_IMAGE
+
+
+def run_cycles_arm(platform: str) -> None:
+    """MEM-64M's reuse clause on its own composition, on one architecture.
+
+    A separate composition rather than a fourth instance on the ceiling plane,
+    and that is forced rather than chosen: the private-memory budget's
+    aggregate rule sums *declared* quotas, and `sel4-private-memory` already
+    declares 32280 of the target's 32768-page ceiling. A 16384-page holder
+    beside them is refused at admission, before any component runs.
+    """
+    declared = declared_quotas(CYCLES_FIXTURE)
+    quota = declared.get("private-cycle-probe")
+    if quota is None:
+        fail("the cycles fixture declares no quota for private-cycle-probe")
+    section, qemu_binary = PLATFORMS[platform]
+    profile = load_qemu_profile(fail, PINS, section)
+    transcript = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image=build_cycles_image(platform),
+    )
+    check_markers(transcript, CYCLE_CHAINS)
+    check_declared_is_installed(transcript, declared)
+    check_reuse_cycles(transcript, quota)
+    print(
+        "seL4 private-memory plane check: "
+        f"{marker_count(CYCLE_CHAINS)} markers across {len(CYCLE_CHAINS)} causal "
+        f"chains and 1 image case on {platform}; the declared quota "
+        f"({quota} page(s)) was reclaimed and re-served {CYCLE_COUNT} times over "
+        f"{CYCLE_COUNT // 2} clean exits and {CYCLE_COUNT // 2} deliberate faults, "
+        "every served word zero, with no drift in reusable slots, untyped bytes, "
+        "or live objects"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
+    parser.add_argument(
+        "--arm",
+        choices=("ceiling", "cycles"),
+        default="ceiling",
+        help="which qualification to run: the declared ceiling or MEM-64M's reuse cycles",
+    )
     parser.add_argument(
         "--platform",
         choices=sorted(PLATFORMS),
@@ -1121,6 +1473,9 @@ def main() -> None:
         help="the pinned QEMU profile and image to build and boot",
     )
     arguments = parser.parse_args()
+    if arguments.arm == "cycles":
+        run_cycles_arm(arguments.platform)
+        return
     declared = declared_quotas()
     section, qemu_binary = PLATFORMS[arguments.platform]
     build_image(arguments.platform)
@@ -1166,10 +1521,18 @@ def main() -> None:
         )
         check_incremental_rollback(rollback)
     cases = 3 if arguments.platform == CLOSURE_PLATFORM else 1
+    # This arm's own markers, not the module's union: the union exists for
+    # `sel4_gate_control_check`'s coverage pin, and reporting it here would
+    # claim the cycles arm's evidence for a run that never booted its image.
+    ceiling_chains = chains_from_gate(sys.modules[__name__])[: len(CEILING_CHAINS)]
+    ceiling_chains += tuple(
+        ("order-independent marker", (pattern,)) for pattern in EXPECTED_UNORDERED
+    )
     print(
         "seL4 private-memory plane check: "
-        f"{marker_count(chains_from_gate(sys.modules[__name__]))} markers across "
-        f"{len(CHAINS)} causal chains and {cases} image case(s) on {arguments.platform}; "
+        f"{marker_count(ceiling_chains)} markers across "
+        f"{len(ceiling_chains)} causal chains and {cases} image case(s) on "
+        f"{arguments.platform}; "
         f"the declared quota ({declared['private-memory-granted']} page(s)) is the "
         "measured ceiling, worker RPC remained exactly-once, a worker's own growth "
         "was adjudicated against its task's region, failed large-map backing "

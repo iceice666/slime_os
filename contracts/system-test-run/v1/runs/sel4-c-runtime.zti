@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-c-runtime";
-  imageClosureIdentity = "64290562c1e9d389f3f0b6122e4d40d0937998ba5cc4c96eb51613b1bdbe906b";
+  imageClosureIdentity = "f12032504affc21d2cedbd77db5ef633fec20a97e9fadbe0392df53774d1a6e1";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

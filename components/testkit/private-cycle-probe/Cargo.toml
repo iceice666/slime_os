@@ -1,0 +1,22 @@
+[package]
+name = "slime-component-private-cycle-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+build = "build.rs"
+
+[[bin]]
+name = "private-cycle-probe"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+slime-rt = { path = "../../runtime" }
+boot-contracts = { path = "../../../boot-contracts" }
+
+[build-dependencies]
+slime-build-support = { path = "../../build-support" }
+
+[lints]
+workspace = true

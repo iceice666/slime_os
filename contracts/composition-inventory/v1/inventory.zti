@@ -193,6 +193,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory.zti";
     };
     {
+      baseline = "contracts/system-spec/v1/baselines/sel4-private-memory-cycles.zti";
+      composition = "sel4-private-memory-cycles";
+      deferralReason = "";
+      owningGate = "private_memory_cycles_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-cycles.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-qos.zti";
       composition = "sel4-qos";
       deferralReason = "";

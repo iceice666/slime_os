@@ -206,16 +206,25 @@ DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
 PRIVATE_MEMORY_IMAGE = BUILD_ROOT / "slime-sel4-private-memory.elf"
 PRIVATE_MEMORY_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory.identity.json"
+PRIVATE_CYCLES_IMAGE = BUILD_ROOT / "slime-sel4-private-memory-cycles.elf"
+PRIVATE_CYCLES_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory-cycles.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`. Every other plane now
-# builds by closure identity (`scripts/lib/closure_image.py`); these eight
+# builds by closure identity (`scripts/lib/closure_image.py`); these nine
 # remain because a legacy or SDK gate still selects them directly.
 FIXTURE_VARIANT = "fixture"
 GRAPH_VARIANT = "graph"
 SAMPLE_VARIANT = "sample"
 DEMO_VARIANT = "demo"
 PRIVATE_MEMORY_VARIANT = "private-memory"
+# MEM-64M's reuse clause. Carried as a legacy variant for one reason: its
+# closure is AArch64, because a closure's platform follows its system spec's
+# `targetRequirement` and every spec declares aarch64. The milestone requires
+# both QEMU architectures, and re-targeting a composition through
+# `SLIME_TARGET_PROFILE` is the only path that reaches RV64 today -- the same
+# one the private-memory ceiling arm already uses.
+PRIVATE_CYCLES_VARIANT = "private-memory-cycles"
 
 # B40 child-CSpace mutations, one per failure mode the capability-layout gate
 # asserts the audit refuses.
@@ -238,6 +247,7 @@ VARIANT_MANIFESTS = {
     GENERATION_VARIANT: "sel4-generation",
     BOOT_SELECTION_VARIANT: "sel4",
     PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
+    PRIVATE_CYCLES_VARIANT: "sel4-private-memory-cycles",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -248,6 +258,7 @@ VARIANT_TARGET_DIRS = {
     GENERATION_VARIANT: "root-generation",
     BOOT_SELECTION_VARIANT: "root-boot-selection",
     PRIVATE_MEMORY_VARIANT: "root-private-memory",
+    PRIVATE_CYCLES_VARIANT: "root-private-memory-cycles",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -258,6 +269,7 @@ VARIANT_IMAGES = {
     GENERATION_VARIANT: (GENERATION_IMAGE, GENERATION_MANIFEST),
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
     PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
+    PRIVATE_CYCLES_VARIANT: (PRIVATE_CYCLES_IMAGE, PRIVATE_CYCLES_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -1318,6 +1330,14 @@ def main() -> None:
         help="embed the private-memory generation, writing a separate image",
     )
     parser.add_argument(
+        "--private-memory-cycles-plane",
+        action="store_true",
+        help=(
+            "embed MEM-64M's private-memory reuse-cycle generation, writing a "
+            "separate image"
+        ),
+    )
+    parser.add_argument(
         "--component-spec-root",
         type=Path,
         help="load component specifications from this directory",
@@ -1354,6 +1374,7 @@ def main() -> None:
             (GENERATION_VARIANT, arguments.generation_plane),
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
             (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
+            (PRIVATE_CYCLES_VARIANT, arguments.private_memory_cycles_plane),
         )
         if chosen
     ]

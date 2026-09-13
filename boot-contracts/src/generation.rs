@@ -220,6 +220,10 @@ pub enum BootAction {
     CRuntime = 37,
     /// Minimal pure S-expression language core implemented outside Rust.
     Slisp = 38,
+    /// MEM-64M's reuse clause: one declared 64 MiB holder relaunched until the
+    /// root has reclaimed and re-served that quota twenty times, half of the
+    /// incarnations ending by exit and half by a deliberate fault.
+    PrivateMemoryCycles = 39,
 }
 
 impl BootAction {
@@ -279,6 +283,7 @@ impl BootAction {
         Self::RobotRuntime,
         Self::CRuntime,
         Self::Slisp,
+        Self::PrivateMemoryCycles,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -329,6 +334,7 @@ impl BootAction {
                 Self::RobotRuntime => Self::RobotRuntime.id(),
                 Self::CRuntime => Self::CRuntime.id(),
                 Self::Slisp => Self::Slisp.id(),
+                Self::PrivateMemoryCycles => Self::PrivateMemoryCycles.id(),
             };
             declared == id
         })
@@ -365,6 +371,7 @@ impl BootAction {
             "traffic" => Self::Traffic,
             "demo" => Self::Demo,
             "private-memory" => Self::PrivateMemory,
+            "private-memory-cycles" => Self::PrivateMemoryCycles,
             "clock-authority" => Self::ClockAuthority,
             "wait-set" => Self::WaitSet,
             "scheduling-class" => Self::SchedulingClass,
@@ -2963,7 +2970,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 37] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 38] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -3001,6 +3008,7 @@ mod tests {
         (BootAction::RobotRuntime, 36),
         (BootAction::CRuntime, 37),
         (BootAction::Slisp, 38),
+        (BootAction::PrivateMemoryCycles, 39),
     ];
 
     #[test]

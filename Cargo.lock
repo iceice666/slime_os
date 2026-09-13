@@ -1169,6 +1169,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-private-cycle-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-private-heap-probe"
 version = "0.1.0"
 dependencies = [
