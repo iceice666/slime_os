@@ -242,6 +242,11 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-nvt-pwm-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-io-link-probe]
 opt-level = "s"
 codegen-units = 1

@@ -13,6 +13,7 @@ pub mod fabric_visibility;
 #[cfg(feature = "component-runtime")]
 pub mod generation_composition;
 pub mod link_frames;
+pub mod nvt_pwm;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
 pub mod tick_clock;

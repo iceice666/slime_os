@@ -144,13 +144,33 @@ fn main(startup_arg: u32) {
         .supervision_slot;
 
     if startup_arg == boot_contracts::generation::BootAction::Product.id() {
+        // A product generation that declares the pwm driver (`sel4-pwm`)
+        // launches it before Slisp, whose `(pwm ...)` endpoint it serves; the
+        // plain product graph declares no such executable and launches none.
+        let component_pwm = slime_rt::resolve_binding(b"executable:nvt-pwm-driver")
+            .ok()
+            .map(|executable| {
+                slime_rt::spawn(executable, &[])
+                    .unwrap_or_else(|_| slime_rt::exit(1))
+                    .supervision_slot
+            });
         let slisp_executable =
             slime_rt::resolve_binding(b"executable:slisp").unwrap_or_else(|_| slime_rt::exit(1));
         let component_slisp = slime_rt::spawn(slisp_executable, &[])
             .unwrap_or_else(|_| slime_rt::exit(1))
             .supervision_slot;
         slime_rt::debug_write(b"[init] product services resident\n");
-        supervise_resident(&[component_console, component_spawn_service, component_slisp]);
+        match component_pwm {
+            Some(component_pwm) => supervise_resident(&[
+                component_console,
+                component_spawn_service,
+                component_pwm,
+                component_slisp,
+            ]),
+            None => {
+                supervise_resident(&[component_console, component_spawn_service, component_slisp])
+            }
+        }
     }
 
     let shutdown = slime_proto::spawn::WireSpawnRequest {

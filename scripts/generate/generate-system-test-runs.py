@@ -73,6 +73,9 @@ EXTRA_RUNS: dict[str, tuple[str, str, str]] = {
 # execution profile)`; the image resolves through the closure, so there is no
 # literal path to name.
 EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    # IO8: the product-graph checker's second arm boots the product graph
+    # plus the pwm driver (`just sel4_pwm_graph_check`).
+    "sel4-component-graph": (("sel4-pwm", "sel4-pwm", "qemu-arm-virt"),),
     "sel4-private-memory": (
         (
             "sel4-private-memory-fail-large-map",

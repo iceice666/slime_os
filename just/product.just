@@ -38,6 +38,13 @@ sel4_stress_check: sel4_pin_check
 sel4_component_graph_check: sel4_pin_check
     python3 scripts/check/check-sel4-component-graph.py
 
+# IO8: the product graph plus the pwm driver, on QEMU where no PWM block
+# exists: the driver binds nothing, stays resident, and answers Slisp's
+# `(pwm 0 1600)` with no-device while the graph stays healthy.
+[group('product')]
+sel4_pwm_graph_check: sel4_pin_check
+    python3 scripts/check/check-sel4-component-graph.py --composition sel4-pwm
+
 # Use fresh QEMU boots for rollback and wrong-target negative controls.
 [group('product')]
 sel4_demo_check: sel4_pin_check

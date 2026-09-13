@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <slime/pwm_servo.h>
+
 #include "slisp.h"
 
 typedef struct {
@@ -77,5 +79,44 @@ int main(void)
         }
     }
     puts("Slisp effects: spawn selection passed");
+    {
+        char output[128];
+        SlispEffect effect;
+        /* `(pwm 0 1600)` as `components/proto/tests/pwm_servo.rs` pins it. */
+        static const uint8_t pinned[SLIME_PWM_SERVO_REQUEST_LEN] = {
+            'P', 'W', 'M', 'S', 1, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x4e, 0, 0,
+            0x40, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        };
+        uint8_t encoded[SLIME_PWM_SERVO_REQUEST_LEN];
+        SlimePwmServoRequest request = { 0 };
+        if (slisp_session_prepare("(pwm 0 1600)", &effect, output, sizeof(output)) != SLISP_OK
+            || effect.kind != SLISP_EFFECT_PWM || effect.channel != 0 || effect.pulse_us != 1600
+            || effect.period_us != 20000
+            || slisp_session_prepare("(pwm 1 1500 4000)", &effect, output, sizeof(output))
+                != SLISP_OK
+            || effect.kind != SLISP_EFFECT_PWM || effect.channel != 1 || effect.pulse_us != 1500
+            || effect.period_us != 4000
+            || slisp_session_prepare("(pwm 0)", &effect, output, sizeof(output)) != SLISP_ERR_ARITY
+            || slisp_session_prepare("(pwm 0 1 2 3)", &effect, output, sizeof(output))
+                != SLISP_ERR_ARITY
+            || slisp_session_prepare("(pwm x 1600)", &effect, output, sizeof(output))
+                != SLISP_ERR_TYPE
+            || slisp_session_prepare("(pwm 0 -1)", &effect, output, sizeof(output))
+                != SLISP_ERR_TYPE
+            || slisp_session_prepare("(+ 1 2)", &effect, output, sizeof(output)) != SLISP_OK
+            || effect.kind != SLISP_EFFECT_NONE) {
+            fputs("pwm effect selection failed\n", stderr);
+            return 1;
+        }
+        request.channel = 0;
+        request.period_us = 20000;
+        request.pulse_us = 1600;
+        slime_pwm_servo_request_encode(&request, encoded);
+        if (memcmp(encoded, pinned, sizeof(pinned)) != 0) {
+            fputs("pwm request encoding drifted from the pinned vector\n", stderr);
+            return 1;
+        }
+    }
+    puts("Slisp effects: pwm selection and the pinned request vector passed");
     return 0;
 }

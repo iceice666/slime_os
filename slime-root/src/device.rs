@@ -81,6 +81,10 @@ pub enum DeviceError {
     Map(sel4::Error),
     /// An interrupt invocation failed: acquisition, binding, or acknowledgement.
     Irq(sel4::Error),
+    /// No standing region of the inventory is mapped at that address.
+    NoRegion,
+    /// The inventory's interrupt slot is out of range or already holds a handle.
+    IrqSlot,
 }
 
 fn uncached_attributes() -> sel4::VmAttributes {
@@ -681,6 +685,198 @@ impl DmaPage {
 /// once. This bounds raw device authority; only the boot-selector build turns
 /// an ordinal into a root-owned block driver.
 pub const MAX_IO_DEVICES: usize = 2;
+
+/// Register banks an inventory can hold standing mappings for: the widest
+/// platform scan (eight virtio-mmio granules) bounds it, and a declared device
+/// occupies one.
+pub const MAX_AUTHORITY_REGIONS: usize = 8;
+
+/// One device userspace may be granted: the inventory region holding its
+/// registers and the byte offset of its first register within that granule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorityDevice {
+    pub region: usize,
+    pub offset: usize,
+}
+
+/// The devices userspace drivers may be granted, with the standing root
+/// mappings and interrupt handles behind them. A boot fills it one way only:
+/// the platform scan of the virtio-mmio window, or a single region the
+/// generation's platform declares. Its device ordinals are the budget's
+/// `device` field, so the order they are pushed in is the order a
+/// composition names.
+pub struct AuthorityInventory {
+    regions: [Option<DeviceRegion>; MAX_AUTHORITY_REGIONS],
+    devices: [Option<AuthorityDevice>; MAX_IO_DEVICES],
+    irqs: [Option<DeviceIrq>; MAX_AUTHORITY_REGIONS],
+    len: usize,
+}
+
+impl Default for AuthorityInventory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AuthorityInventory {
+    pub const fn new() -> Self {
+        Self {
+            regions: [const { None }; MAX_AUTHORITY_REGIONS],
+            devices: [None; MAX_IO_DEVICES],
+            irqs: [const { None }; MAX_AUTHORITY_REGIONS],
+            len: 0,
+        }
+    }
+    /// A device the generation declares rather than one the root discovers:
+    /// the pre-carved region is device 0 at offset 0, and nothing else is
+    /// inventoried, so a budget naming any other ordinal binds no device.
+    pub fn declared(region: DeviceRegion) -> Self {
+        let mut inventory = Self::new();
+        inventory.regions[0] = Some(region);
+        inventory.devices[0] = Some(AuthorityDevice {
+            region: 0,
+            offset: 0,
+        });
+        inventory.len = 1;
+        inventory
+    }
+    /// Hold `region` at `index`. Refused, returning the region, when the index
+    /// is out of range or already holds one: a standing mapping is never
+    /// silently replaced.
+    pub fn install_region(
+        &mut self,
+        index: usize,
+        region: DeviceRegion,
+    ) -> Result<(), DeviceRegion> {
+        match self.regions.get_mut(index) {
+            Some(slot @ None) => {
+                *slot = Some(region);
+                Ok(())
+            }
+            _ => Err(region),
+        }
+    }
+    /// Append a device at the next ordinal. `false` when the ceiling is
+    /// reached or the device names a region this inventory does not hold.
+    pub fn push_device(&mut self, device: AuthorityDevice) -> bool {
+        if self.len >= MAX_IO_DEVICES || self.region(device.region).is_none() {
+            return false;
+        }
+        self.devices[self.len] = Some(device);
+        self.len += 1;
+        true
+    }
+    /// The inventoried devices, for the platform to put into its stable order.
+    pub fn devices_mut(&mut self) -> &mut [Option<AuthorityDevice>] {
+        &mut self.devices[..self.len]
+    }
+    pub fn device(&self, index: usize) -> Option<AuthorityDevice> {
+        self.devices.get(index).copied().flatten()
+    }
+    pub fn region(&self, index: usize) -> Option<&DeviceRegion> {
+        self.regions.get(index)?.as_ref()
+    }
+    pub fn region_mut(&mut self, index: usize) -> Option<&mut DeviceRegion> {
+        self.regions.get_mut(index)?.as_mut()
+    }
+    pub fn unmap_region_at(&mut self, base: usize) -> Result<(), DeviceError> {
+        self.regions
+            .iter_mut()
+            .flatten()
+            .find(|region| region.mapped_base() == base)
+            .ok_or(DeviceError::NoRegion)?
+            .unmap()
+    }
+    pub fn take_irq(&mut self, index: usize) -> Option<DeviceIrq> {
+        self.irqs.get_mut(index)?.take()
+    }
+    pub fn irq(&self, index: usize) -> Option<&DeviceIrq> {
+        self.irqs.get(index)?.as_ref()
+    }
+    pub fn put_irq(&mut self, index: usize, irq: DeviceIrq) -> Result<(), DeviceError> {
+        let slot = self.irqs.get_mut(index).ok_or(DeviceError::IrqSlot)?;
+        if slot.is_some() {
+            return Err(DeviceError::IrqSlot);
+        }
+        *slot = Some(irq);
+        Ok(())
+    }
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    /// A region that maps nothing: the inventory never dereferences one.
+    fn region(paddr: usize) -> DeviceRegion {
+        DeviceRegion {
+            base: 0x1000,
+            paddr,
+            frame: sel4::cap::Granule::from_bits(0),
+        }
+    }
+
+    #[test]
+    fn a_declared_region_is_device_zero_at_offset_zero_and_nothing_else() {
+        let inventory = AuthorityInventory::declared(region(0x2_f012_0000));
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(
+            inventory.device(0),
+            Some(AuthorityDevice {
+                region: 0,
+                offset: 0
+            })
+        );
+        assert_eq!(
+            inventory.region(0).map(DeviceRegion::paddr),
+            Some(0x2_f012_0000)
+        );
+        assert_eq!(inventory.device(1), None);
+        assert!(inventory.region(1).is_none());
+        assert!(inventory.irq(0).is_none());
+    }
+
+    #[test]
+    fn devices_are_pushed_in_order_against_held_regions_and_the_ceiling() {
+        let mut inventory = AuthorityInventory::new();
+        assert!(inventory.is_empty());
+        assert!(inventory.install_region(0, region(0xa00_0000)).is_ok());
+        assert!(inventory.install_region(0, region(0xa00_1000)).is_err());
+        assert!(
+            inventory
+                .install_region(MAX_AUTHORITY_REGIONS, region(0))
+                .is_err()
+        );
+        assert!(!inventory.push_device(AuthorityDevice {
+            region: 1,
+            offset: 0
+        }));
+        assert!(inventory.push_device(AuthorityDevice {
+            region: 0,
+            offset: 0x200
+        }));
+        assert!(inventory.push_device(AuthorityDevice {
+            region: 0,
+            offset: 0
+        }));
+        assert!(!inventory.push_device(AuthorityDevice {
+            region: 0,
+            offset: 0x400
+        }));
+        assert_eq!(inventory.len(), MAX_IO_DEVICES);
+        inventory
+            .devices_mut()
+            .sort_unstable_by_key(|entry| entry.map_or(0, |d| d.offset));
+        assert_eq!(inventory.device(0).map(|d| d.offset), Some(0));
+        assert_eq!(inventory.device(1).map(|d| d.offset), Some(0x200));
+    }
+}
 
 #[cfg(slime_boot_selector)]
 pub const MAX_BLOCK_DEVICES: usize = MAX_IO_DEVICES;

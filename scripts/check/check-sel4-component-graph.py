@@ -30,7 +30,7 @@ import threading
 import time
 import tomllib
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
@@ -172,6 +172,174 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
 EXPECTED_UNORDERED: tuple[str, ...] = ()
 
+# IO8: the product graph plus `nvt-pwm-driver`, on QEMU, where no PWM block
+# exists. Init launches the driver before Slisp (slot 10, task 3), the root
+# installs its declared device quota, the driver binds nothing and stays
+# resident, and Slisp's `(pwm 0 1600)` reaches it and comes back refused.
+# The task numbers and endpoint slots are the ones the root printed on the
+# frozen transcript in `devlog/2026-09-13-io8-pwm-servo/`.
+PWM_TERMINAL_MARKER = TERMINAL_MARKER
+PWM_REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        "generation admitted",
+        r"SLIME_ROOT generation admitted number=55 executables=7 instances=7 grants=\d+ ",
+    ),
+    ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
+    (
+        "all catalogue payloads are native ELF images",
+        r"SLIME_ROOT graph admitted executables=7 instances=7 slimecm=0 elf=7 unrecognized=0",
+    ),
+    (
+        "the generation declares no private-memory budget",
+        r"SLIME_MEM budget holders=0 declared=0",
+    ),
+    (
+        "only root-owned init was staged",
+        r"SLIME_GRAPH staged task=0 instance=init executable=init grants=7 bindings=7 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+",
+    ),
+    (
+        "the executable catalogue remained available to spawn",
+        r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=7 slimecm=0 wrong_target=0 unrecognized=0",
+    ),
+    ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
+    ("init began the declared graph", r"\[init\] launching component graph"),
+    (
+        "init authorized console through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0",
+    ),
+    (
+        "console received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=1 slot=33 side=both",
+    ),
+    (
+        "init spawned console as instance task 1",
+        r"SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized spawn-service through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3",
+    ),
+    (
+        "spawn-service received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
+    ),
+    (
+        "init spawned spawn-service as instance task 2",
+        r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1",
+    ),
+    (
+        "init authorized the pwm driver through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=10 component=nvt-pwm-driver grants=0",
+    ),
+    (
+        "the pwm driver received Slisp's declared endpoint",
+        r"SLIME_GRAPH native endpoint task=3 slot=33 side=both",
+    ),
+    (
+        "the root installed the pwm driver's declared device quota",
+        r"SLIME_IO quota task=3 instance=nvt-pwm-driver devices=0 shared_granule=0",
+    ),
+    (
+        "init spawned the pwm driver as instance task 3",
+        r"SLIME_GRAPH spawned task=0 child=3 component=nvt-pwm-driver grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized Slisp through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0",
+    ),
+    (
+        "Slisp received its three declared service endpoints",
+        r"SLIME_GRAPH native endpoint task=4 slot=33 side=both",
+    ),
+    (
+        "Slisp received its second declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=4 slot=36 side=both",
+    ),
+    (
+        "Slisp received its third declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=4 slot=35 side=both",
+    ),
+    (
+        "init spawned Slisp as instance task 4",
+        r"SLIME_GRAPH spawned task=0 child=4 component=slisp grants=0 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "the supervisor certified the live graph",
+        r"SLIME_GRAPH healthy generation=55 instances=[0-9a-f]{16} required=5 live=5 idle=5 failed=0",
+    ),
+    ("init kept the product graph resident", r"\[init\] product services resident"),
+    ("the product identified the Slisp shell", r"Slisp"),
+    ("Slisp displayed its prompt", r"slisp> "),
+    ("Slisp entered resident input wait", INPUT_WAIT_MARKER),
+    ("Slisp received uninterrupted QEMU serial input", r"\(\+ 1 1\)\n=> 2"),
+    (
+        "Slisp carried the pwm request to the driver",
+        r"\(pwm 0 1600\)\n\[nvt-pwm-driver\] request ch=0 period_us=20000 pulse_us=1600",
+    ),
+    ("the driver refused for want of a device and Slisp reported it", r"! pwm no-device"),
+    ("Slisp requested sysinfo through spawn-service", r"sysinfo\n\[spawn-service\] request"),
+    ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
+    ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
+    (
+        "spawn-service collected detached supervision",
+        r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
+    ),
+    ("Slisp reported the accepted spawn", PWM_TERMINAL_MARKER),
+)
+# The driver reports its bind on its own schedule, before or after Slisp's
+# startup lines.
+PWM_EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"\[nvt-pwm-driver\] device absent, refusing requests",
+)
+
+
+class Composition(NamedTuple):
+    closure: str
+    fixture: Path
+    required: tuple[tuple[str, str], ...]
+    unordered: tuple[str, ...]
+    commands: tuple[str, ...]
+    terminal: str
+    summary: str
+
+
+COMPOSITIONS: dict[str, Composition] = {
+    "sel4": Composition(
+        closure="sel4",
+        fixture=FIXTURE,
+        required=REQUIRED_MARKERS,
+        unordered=EXPECTED_UNORDERED,
+        commands=("(+ 1 1)\n", "sysinfo\n"),
+        terminal=TERMINAL_MARKER,
+        summary=(
+            "seL4 component graph check: init launched console, spawn-service, and "
+            "Slisp with generation-declared authority; QEMU serial input evaluated "
+            "and launched sysinfo through its declared context endpoint; all four "
+            "required resident instances remained live"
+        ),
+    ),
+    "sel4-pwm": Composition(
+        closure="sel4-pwm",
+        fixture=GENERATION_COMPOSITIONS / "sel4-pwm.zti",
+        required=PWM_REQUIRED_MARKERS,
+        unordered=PWM_EXPECTED_UNORDERED,
+        commands=("(+ 1 1)\n", "(pwm 0 1600)\n", "sysinfo\n"),
+        terminal=PWM_TERMINAL_MARKER,
+        summary=(
+            "seL4 pwm graph check: init launched the pwm driver before Slisp with "
+            "its declared device quota; on QEMU the driver bound no device and stayed "
+            "resident; Slisp's (pwm 0 1600) reached it and came back no-device; "
+            "sysinfo still launched and all five required resident instances "
+            "remained live"
+        ),
+    ),
+}
+# Both arms for the gate control, which mutates every marker of each.
+CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("required marker sequence", tuple(pattern for _, pattern in REQUIRED_MARKERS)),
+    ("pwm marker sequence", tuple(pattern for _, pattern in PWM_REQUIRED_MARKERS)),
+) + tuple(("order-independent marker", (pattern,)) for pattern in PWM_EXPECTED_UNORDERED)
+
 # B50 is a repository-wide cutover. Guard every surviving implementation source
 # that could reintroduce the universal dispatcher or product-plane selection;
 # generated outputs, historical contracts, docs, and negative-test selectors
@@ -261,12 +429,12 @@ def generator_module(name: str):
     return module
 
 
-def check_automatic_binding_slots() -> None:
+def check_automatic_binding_slots(fixture: Path) -> None:
     """Omitted product bindings must resolve to the frozen layout."""
     environment = dict(os.environ)
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
-        [str(binary()), "json", str(FIXTURE)],
+        [str(binary()), "json", str(fixture)],
         cwd=ROOT,
         env=environment,
         check=False,
@@ -275,11 +443,11 @@ def check_automatic_binding_slots() -> None:
         stderr=subprocess.PIPE,
     )
     if process.returncode:
-        fail(f"cannot decode {FIXTURE.relative_to(ROOT)}: {process.stderr.strip()}")
+        fail(f"cannot decode {fixture.relative_to(ROOT)}: {process.stderr.strip()}")
     try:
         manifest = json.loads(process.stdout)
     except json.JSONDecodeError as error:
-        fail(f"cannot parse decoded {FIXTURE.relative_to(ROOT)}: {error}")
+        fail(f"cannot parse decoded {fixture.relative_to(ROOT)}: {error}")
     spawn_service = next(
         (instance for instance in manifest["instances"] if instance["name"] == "spawn-service"),
         None,
@@ -316,10 +484,10 @@ def check_automatic_binding_slots() -> None:
     )
 
 
-def build_image() -> None:
+def build_image(closure: str) -> None:
     global IMAGE
     try:
-        built = build_closure_image(CLOSURE)
+        built = build_closure_image(closure)
     except ClosureImageError as error:
         fail(str(error))
     actual = sha256_file(built.image, fail)
@@ -333,7 +501,7 @@ def build_image() -> None:
 
 
 
-def boot(profile: dict[str, object]) -> str:
+def boot(profile: dict[str, object], composition: Composition) -> str:
     """Boot the image and return the serial transcript.
 
     The root task suspends itself once the graph has drained, so QEMU stays
@@ -362,7 +530,7 @@ def boot(profile: dict[str, object]) -> str:
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
     input_wait = re.compile(INPUT_WAIT_MARKER)
-    terminal = re.compile(TERMINAL_MARKER)
+    terminal = re.compile(composition.terminal)
     failures = re.compile("|".join(FAILURE_MARKERS))
     lines: list[str] = []
     try:
@@ -391,7 +559,7 @@ def boot(profile: dict[str, object]) -> str:
                 break
             if not sent_expression and input_wait.search(line):
                 time.sleep(0.5)
-                for command in ("(+ 1 1)\n", "sysinfo\n"):
+                for command in composition.commands:
                     for character in command:
                         process.stdin.write(character)
                         process.stdin.flush()
@@ -480,14 +648,14 @@ def check_deleted_compatibility_surface() -> None:
     print("repository service surface: compatibility model deleted", flush=True)
 
 
-def check_transcript(transcript: str) -> None:
+def check_transcript(transcript: str, composition: Composition) -> None:
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
         if match is not None:
             report_transcript(transcript)
             fail(f"failure marker in serial transcript: {match.group(0)!r}")
     position = 0
-    for description, pattern in REQUIRED_MARKERS:
+    for description, pattern in composition.required:
         match = re.compile(pattern).search(transcript, position)
         if match is None:
             report_transcript(transcript)
@@ -495,7 +663,7 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
-    for pattern in EXPECTED_UNORDERED:
+    for pattern in composition.unordered:
         if re.search(pattern, transcript) is None:
             report_transcript(transcript)
             fail(f"missing unordered marker: {pattern}")
@@ -512,7 +680,7 @@ def check_transcript(transcript: str) -> None:
         flush=True,
     )
 
-    terminals = re.findall(TERMINAL_MARKER, transcript)
+    terminals = re.findall(composition.terminal, transcript)
     if len(terminals) != 1:
         fail(f"expected exactly one sysinfo completion marker, saw {len(terminals)}")
 
@@ -527,26 +695,40 @@ def main() -> None:
         action="store_true",
         help="boot the already-built image instead of rebuilding it first",
     )
+    parser.add_argument(
+        "--composition",
+        choices=sorted(COMPOSITIONS),
+        default="sel4",
+        help="which product composition to boot: the product graph, or it plus the pwm driver",
+    )
+    parser.add_argument(
+        "--transcript",
+        type=Path,
+        default=None,
+        help="also write the serial transcript to this path, for a devlog entry",
+    )
     arguments = parser.parse_args()
+    composition = COMPOSITIONS[arguments.composition]
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
+    if arguments.no_build and arguments.composition != "sel4":
+        fail("--no-build boots the legacy product image, which is the sel4 composition")
     pins = load_pins()
-    check_automatic_binding_slots()
+    check_automatic_binding_slots(composition.fixture)
     if arguments.no_build:
         IMAGE = LEGACY_IMAGE
     else:
-        build_image()
+        build_image(composition.closure)
     check_deleted_compatibility_surface()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
-    check_transcript(boot(profile))
-    print(
-        "seL4 component graph check: init launched console, spawn-service, and "
-        "Slisp with generation-declared authority; QEMU serial input evaluated "
-        "and launched sysinfo through its declared context endpoint; all four "
-        "required resident instances remained live"
-    )
+    transcript = boot(profile, composition)
+    if arguments.transcript is not None:
+        arguments.transcript.parent.mkdir(parents=True, exist_ok=True)
+        arguments.transcript.write_text(transcript + "\n", encoding="utf-8")
+    check_transcript(transcript, composition)
+    print(composition.summary)
 
 
 if __name__ == "__main__":

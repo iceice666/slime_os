@@ -2,6 +2,7 @@
 #define SLIME_SLISP_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef enum {
     SLISP_OK = 0,
@@ -14,12 +15,18 @@ typedef enum {
 } SlispStatus;
 typedef enum {
     SLISP_EFFECT_NONE = 0,
-    SLISP_EFFECT_SPAWN = 1
+    SLISP_EFFECT_SPAWN = 1,
+    SLISP_EFFECT_PWM = 2
 } SlispEffectKind;
 
+/* `(pwm channel pulse_us)` or `(pwm channel pulse_us period_us)`: the values
+ * are carried as parsed; the driver, not the reader, judges their bounds. */
 typedef struct {
     SlispEffectKind kind;
     char command[17];
+    uint32_t channel;
+    uint32_t pulse_us;
+    uint32_t period_us;
 } SlispEffect;
 
 SlispStatus slisp_run(const char *source, char *output, size_t output_capacity);

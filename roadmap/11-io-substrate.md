@@ -796,6 +796,62 @@ internally, and its slot argument is driver-derived rather than device-derived.
 The virtio-blk driver needs none of this — it is single-outstanding and reads
 only the used *index* — so IO7 is IO3-scoped by fact, not by omission.
 
+## IO8 — Declared-device authority and the pwm-servo protocol
+
+**Status:** Complete 2026-09-13 on QEMU evidence: the `sel4-pwm` composition
+admits, its driver binds no device and stays resident answering
+`STATUS_NO_DEVICE`, Slisp's `(pwm 0 1600)` reaches it and comes back
+`! pwm no-device`, and the graph stays healthy, guarded by
+`just sel4_pwm_graph_check`. The board half is P6.D.
+
+**Depends on:** IO1 for the device, region, and budget mechanism the driver is
+granted through; P6.PWM.A for the bench facts the register model rests on.
+
+### Why this exists
+
+IO1 resolves a driver's hardware only by scanning the virtio-mmio window, so a
+physical block at a fixed address — the NT98690's PWM controller, later its
+Ethernet MAC — could not be granted to a userspace driver at all. IO8 adds the
+other half: an inventory the platform *declares* rather than discovers, and
+the first device-specific protocol that uses it.
+
+### What lands
+
+- `AuthorityInventory::declared(region)` in `slime-root/src/device.rs`: one
+  pre-carved region is device 0 at offset 0, and nothing else is inventoried.
+  The inventory moved from the binary's platform module into the device
+  module so that its shape is host-tested; the platform module keeps only
+  how a scan fills it. The board's root feeds it in P6.D.
+- `contracts/pwm-servo/v1`: a 32-byte request (`channel`, `period_us`,
+  `pulse_us`, no flags) and a 16-byte reply (`status`, `detail` = the period
+  word read back), rendered to `components/proto/src/pwm_servo.rs` and to
+  the C header `components/runtime/include/slime/pwm_servo.h`, with the
+  bounds and the seven statuses generated from the schema.
+- `components/services/nvt-pwm-driver`: slots endpoint 0, device 1, region 2;
+  binds its declared device, maps the block's first page, and refuses to
+  serve when the bind fails or the page's word 0 carries a virtio magic. Each
+  request is admitted in the order channel, period, pulse, each with its own
+  status, before a register is touched; every programmed word is read back;
+  a channel driving above idle with no command for ten seconds is returned to
+  the idle width. Only channels 0–5's words and the shared enable words are
+  written, because the same page holds PWM12, the core-voltage regulator.
+- Slisp `(pwm ch us)` / `(pwm ch us period_us)` over slot 3, an effect beside
+  `spawn`; the host harness pins one 32-byte request vector that
+  `components/proto/tests/pwm_servo.rs` pins from the other side.
+- `contracts/system-spec/v1/systems/sel4-pwm.zti` (generation 55): the
+  product graph plus the driver, with its device, region, endpoint, clock row,
+  and budget; init launches the driver before Slisp when the generation
+  declares it.
+
+### Boundary
+
+QEMU has no PWM block, so the plane proves admission, launch order, the
+declared quota, the refusal path, and the Slisp round trip — never a register
+write. The register model is host-tested against the four widths P6.PWM.A
+observed on the board; the first write to real silicon is P6.D's.
+
+**Evidence:** [`devlog/2026-09-13-io8-pwm-servo/`](../devlog/2026-09-13-io8-pwm-servo/index.md)
+
 ## Consumption by later subsystems
 
 Later milestones reuse the substrate but retain their own semantics:

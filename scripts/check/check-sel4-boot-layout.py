@@ -130,6 +130,11 @@ PLANES: tuple[tuple[str, str], ...] = (
     # else: every participant including both brokers is root-autostart, and the
     # one spawn in the plane is the supervisor's over the controller it restarts.
     ("sel4-robot-runtime", "slime-sel4-robot-runtime.elf"),
+    # IO8. The product graph plus the pwm driver: init holds one more
+    # executable, the driver its endpoint, device, and region, and slisp the
+    # driver's endpoint at slot 3. QEMU has no PWM block, so this gate is also
+    # where the plane's boot is observed at all.
+    ("sel4-pwm", "slime-sel4-pwm.elf"),
 )
 
 

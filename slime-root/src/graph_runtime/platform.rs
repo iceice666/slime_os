@@ -1,63 +1,8 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AuthorityDevice {
-    pub(crate) region: usize,
-    pub(crate) offset: usize,
-}
-
-pub(crate) struct AuthorityInventory {
-    regions: [Option<device::DeviceRegion>; VIRTIO_MMIO_GRANULES],
-    devices: [Option<AuthorityDevice>; device::MAX_IO_DEVICES],
-    irqs: [Option<device::DeviceIrq>; VIRTIO_MMIO_GRANULES],
-    len: usize,
-}
-
-impl AuthorityInventory {
-    pub const fn new() -> Self {
-        Self {
-            regions: [const { None }; VIRTIO_MMIO_GRANULES],
-            devices: [None; device::MAX_IO_DEVICES],
-            irqs: [const { None }; VIRTIO_MMIO_GRANULES],
-            len: 0,
-        }
-    }
-    pub fn device(&self, index: usize) -> Option<AuthorityDevice> {
-        self.devices.get(index).copied().flatten()
-    }
-    pub fn region(&self, index: usize) -> Option<&device::DeviceRegion> {
-        self.regions.get(index)?.as_ref()
-    }
-    pub fn region_mut(&mut self, index: usize) -> Option<&mut device::DeviceRegion> {
-        self.regions.get_mut(index)?.as_mut()
-    }
-    pub fn unmap_region_at(&mut self, base: usize) -> Result<(), ()> {
-        self.regions
-            .iter_mut()
-            .flatten()
-            .find(|region| region.mapped_base() == base)
-            .ok_or(())?
-            .unmap()
-            .map_err(|_| ())
-    }
-    pub fn take_irq(&mut self, index: usize) -> Option<device::DeviceIrq> {
-        self.irqs.get_mut(index)?.take()
-    }
-    pub fn irq(&self, index: usize) -> Option<&device::DeviceIrq> {
-        self.irqs.get(index)?.as_ref()
-    }
-    pub fn put_irq(&mut self, index: usize, irq: device::DeviceIrq) -> Result<(), ()> {
-        let slot = self.irqs.get_mut(index).ok_or(())?;
-        if slot.is_some() {
-            return Err(());
-        }
-        *slot = Some(irq);
-        Ok(())
-    }
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-}
+/// The inventory is the device module's, so its shape is host-tested; this
+/// module owns only how a platform fills it.
+pub(crate) use slime_root::device::{AuthorityDevice, AuthorityInventory};
 
 #[cfg(not(slime_boot_selector))]
 /// Inventory attached transports without consuming them into the legacy root
@@ -105,25 +50,26 @@ pub(crate) fn probe_authority_devices(
         let Ok(region) = region.remap(sel4::init_thread::slot::VSPACE.cap(), standing_base) else {
             break;
         };
-        inventory.regions[granule_index] = Some(region);
+        if inventory.install_region(granule_index, region).is_err() {
+            break;
+        }
         for offset in attached.into_iter().flatten() {
-            if inventory.len < device::MAX_IO_DEVICES {
-                inventory.devices[inventory.len] = Some(AuthorityDevice {
-                    region: granule_index,
-                    offset,
-                });
-                inventory.len += 1;
-            }
+            // Past the ordinal ceiling the transport stays mapped but is not a
+            // device any budget can name.
+            let _ = inventory.push_device(AuthorityDevice {
+                region: granule_index,
+                offset,
+            });
         }
     }
     // QEMU assigns command-line devices from the highest transport down, so
     // reverse physical order is the operator-visible stable device order.
-    inventory.devices[..inventory.len].sort_unstable_by_key(|entry| {
+    inventory.devices_mut().sort_unstable_by_key(|entry| {
         core::cmp::Reverse(entry.map_or(0, |d| d.region * GRANULE_SIZE + d.offset))
     });
     sel4::debug_println!(
         "SLIME_ROOT io authority inventory devices={} mode=userspace",
-        inventory.len
+        inventory.len()
     );
     inventory
 }

@@ -1,10 +1,12 @@
 #include <slime/component_runtime.h>
+#include <slime/pwm_servo.h>
 #include <slime/spawn.h>
 
 #include "slisp.h"
 
 #define INPUT_SLOT 1U
 #define SPAWN_SERVICE_SLOT 2U
+#define PWM_SLOT 3U
 #define LINE_BYTES 128U
 
 static size_t text_len(const char *text)
@@ -54,6 +56,65 @@ static int spawn_command(const char *command)
         && reply.status == 0;
 }
 
+static void write_number(uint32_t value)
+{
+    char digits[10];
+    size_t index = sizeof(digits);
+    if (value == 0) {
+        digits[--index] = '0';
+    }
+    while (value != 0) {
+        digits[--index] = (char)('0' + value % 10U);
+        value /= 10U;
+    }
+    write_bytes((const uint8_t *)&digits[index], sizeof(digits) - index);
+}
+
+static const char *pwm_status_name(int32_t status)
+{
+    switch (status) {
+    case SLIME_PWM_SERVO_STATUS_OK:
+        return "ok";
+    case SLIME_PWM_SERVO_STATUS_BAD_CHANNEL:
+        return "bad-channel";
+    case SLIME_PWM_SERVO_STATUS_BAD_PERIOD:
+        return "bad-period";
+    case SLIME_PWM_SERVO_STATUS_BAD_PULSE:
+        return "bad-pulse";
+    case SLIME_PWM_SERVO_STATUS_NO_DEVICE:
+        return "no-device";
+    case SLIME_PWM_SERVO_STATUS_DEVICE_ERROR:
+        return "device-error";
+    case SLIME_PWM_SERVO_STATUS_MALFORMED:
+        return "malformed";
+    default:
+        return "unknown";
+    }
+}
+
+/* One call to the pwm driver on slot 3. The reply's status is the driver's
+ * word; a transport failure is reported apart from it. */
+static int pwm_command(const SlispEffect *effect, SlimePwmServoReply *reply)
+{
+    uint8_t encoded[SLIME_PWM_SERVO_REQUEST_LEN];
+    uint8_t response[SLIME_PWM_SERVO_REPLY_LEN];
+    SlimePwmServoRequest request = { 0 };
+    int64_t received;
+    request.channel = effect->channel;
+    request.period_us = effect->period_us;
+    request.pulse_us = effect->pulse_us;
+    request.flags = 0;
+    slime_pwm_servo_request_encode(&request, encoded);
+    received = slime_endpoint_exchange(
+        PWM_SLOT,
+        encoded,
+        sizeof(encoded),
+        response,
+        sizeof(response));
+    return received == SLIME_PWM_SERVO_REPLY_LEN
+        && slime_pwm_servo_reply_decode(response, (size_t)received, reply);
+}
+
 static void evaluate_line(char *line)
 {
     char output[128];
@@ -66,6 +127,21 @@ static void evaluate_line(char *line)
             write_text("\n");
         } else {
             write_text("! spawn\n");
+        }
+    } else if (status == SLISP_OK && effect.kind == SLISP_EFFECT_PWM) {
+        SlimePwmServoReply reply;
+        if (!pwm_command(&effect, &reply)) {
+            write_text("! pwm transport\n");
+        } else if (reply.status == SLIME_PWM_SERVO_STATUS_OK) {
+            write_text("=> pwm ");
+            write_number(effect.channel);
+            write_text(" ");
+            write_number(effect.pulse_us);
+            write_text("\n");
+        } else {
+            write_text("! pwm ");
+            write_text(pwm_status_name(reply.status));
+            write_text("\n");
         }
     } else if (status == SLISP_OK) {
         write_text("=> ");

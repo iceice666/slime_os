@@ -193,6 +193,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory.zti";
     };
     {
+      baseline = "contracts/system-spec/v1/baselines/sel4-pwm.zti";
+      composition = "sel4-pwm";
+      deferralReason = "";
+      owningGate = "sel4_pwm_graph_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-pwm.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-qos.zti";
       composition = "sel4-qos";
       deferralReason = "";

@@ -1,0 +1,64 @@
+{
+  formatVersion = 1;
+  name = "nvt-pwm-driver";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Servo PWM on the NT98690 PWM block over one declared device page, serving pwm-servo v1 on its endpoint; resident and refusing when bound no device.";
+  implementation = {
+    provider = "workspace";
+    binary = "nvt-pwm-driver";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "device";
+    "endpoint";
+    "mmioRegion";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+      "device";
+    ];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/pwm-servo/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "sel4_pwm_graph_check boots generation 55 under QEMU, where no PWM block exists, and asks Slisp for (pwm 0 1600)";
+    expectedResult = "the driver binds no device, stays resident, answers the request with STATUS_NO_DEVICE, and the graph stays healthy";
+    passFailCriteria = "[nvt-pwm-driver] device absent, refusing requests";
+    requiredTestEnvironment = "sel4_pwm_graph_check";
+  };
+}
