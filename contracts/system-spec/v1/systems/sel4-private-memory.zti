@@ -37,7 +37,7 @@
     {
       name = "private-heap-granted";
       executable = "private-heap-probe";
-      privatePageQuota = 24;
+      privatePageQuota = 15872;
     };
     {
       name = "private-memory-denied";
@@ -50,7 +50,7 @@
       name = "private-memory-granted";
       executable = "private-memory-probe";
       priority = 149;
-      privatePageQuota = 512;
+      privatePageQuota = 16384;
       extraThreads = 1;
       workerPriority = 150;
     };

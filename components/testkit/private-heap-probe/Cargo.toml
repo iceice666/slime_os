@@ -19,6 +19,7 @@ test = false
 # a plain component compiled alongside this one would link the allocator too.
 # `just component_crate_split_check` pins the grouping.
 slime-rt = { path = "../../runtime", features = ["private-heap"] }
+boot-contracts = { path = "../../../boot-contracts" }
 
 [build-dependencies]
 slime-build-support = { path = "../../build-support" }

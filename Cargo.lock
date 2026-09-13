@@ -1172,6 +1172,7 @@ dependencies = [
 name = "slime-component-private-heap-probe"
 version = "0.1.0"
 dependencies = [
+ "boot-contracts",
  "slime-build-support",
  "slime-rt",
 ]
@@ -1180,6 +1181,7 @@ dependencies = [
 name = "slime-component-private-memory-probe"
 version = "0.1.0"
 dependencies = [
+ "boot-contracts",
  "slime-build-support",
  "slime-rt",
 ]

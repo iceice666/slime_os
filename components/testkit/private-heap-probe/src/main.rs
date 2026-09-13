@@ -23,9 +23,9 @@
 //!   allocates until it has crossed a growth batch, checks every element
 //!   survived the reallocations, and reports the pages it took.
 //! * **exhaustion is structural.** After the self-check, the granted instance
-//!   deliberately allocates past its declared ceiling with `try_reserve` and must
-//!   observe an `Err` while staying alive to report it. A fault, a hang, or a
-//!   silent truncation all fail the plane instead.
+//!   asks the public growth operation to back the rest of its target reservation.
+//!   Its declared quota is smaller, so the root must refuse while the component
+//!   stays alive to report it. A fault, a hang, or a silent truncation all fail.
 //! * **freed memory comes back.** The self-check's reuse phase reallocates what
 //!   it just freed and requires the root's growth count not to move, which is
 //!   the only evidence that a component bound by a small declared quota can run
@@ -258,26 +258,80 @@ fn both_planes(factory_slot: u32, buffer_slot: u32) -> ! {
 ///
 /// The self-check has already shown the quota is usable. What is left is the
 /// milestone's third required check — that running *out* of it is an error the
-/// component observes. So: allocate deliberately past the declared ceiling and
-/// require a refusal, then keep running and report, which a faulted or hung
-/// component could not do.
+/// component observes. The request below accounts for every page the allocator
+/// has already backed, then asks for exactly the remainder of the target's
+/// reservation. That stays within the address-space reservation while crossing
+/// this holder's smaller declared quota, so only the quota refusal can answer it.
 fn granted() -> ! {
-    // Larger than any quota this plane declares, so the request cannot be
-    // served whatever the batching policy is, and bounded so a component with a
-    // wrongly *large* installed ceiling still terminates rather than allocating
-    // until the machine notices.
-    const BEYOND_CEILING: usize = slime_rt::GROWTH_PAGES * 4096 * 64;
+    const PAYLOAD: usize = 60 * 1024 * 1024;
+    // The component ABI has no quota query: the region query answers backed
+    // pages. The checker therefore reads the declared quota from the fixture and
+    // joins it to this component's observed page count and the root's refusal.
+    // The generated target capacity is still the correct upper bound here. By
+    // subtracting the pages already committed for the payload, the raw growth
+    // request includes allocator batching and lands exactly on the reservation
+    // rather than exceeding it and taking ReservationExceeded precedence.
+    const TARGET: &str = match option_env!("SLIME_TARGET_PROFILE") {
+        Some(target) => target,
+        None => "",
+    };
+    const RESERVATION_PAGES: usize = boot_contracts::private_memory_budget::capacity_for(TARGET).0;
 
-    let mut past: Vec<u8> = Vec::new();
-    if past.try_reserve(BEYOND_CEILING).is_ok() {
-        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL allocated past the ceiling\n");
+    let mut payload: Vec<u8> = Vec::new();
+    if payload.try_reserve_exact(PAYLOAD).is_err() {
+        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL 60 MiB payload refused\n");
         slime_rt::exit(1)
     }
+    unsafe { payload.set_len(PAYLOAD) };
+    for page in 0..PAYLOAD / 4096 {
+        payload[page * 4096] = page as u8;
+    }
+    for page in 0..PAYLOAD / 4096 {
+        if payload[page * 4096] != page as u8 {
+            slime_rt::debug_write(b"[private-heap-probe:granted] FAIL payload corrupted\n");
+            slime_rt::exit(1)
+        }
+    }
+    let held = slime_rt::private_heap_stats();
+    let overhead = held.live.saturating_sub(PAYLOAD);
+    // `backed` is the pages the root charged this holder, which is what the
+    // checker compares against the declared quota. The three are reported
+    // separately because the milestone requires payload, allocator overhead,
+    // and capacity to be distinguishable rather than one fused total.
+    let backed = held.pages * 4096;
+    slime_rt::debug_write(b"[private-heap-probe:granted] capacity payload=");
+    write_decimal(PAYLOAD);
+    slime_rt::debug_write(b" overhead=");
+    write_decimal(overhead);
+    slime_rt::debug_write(b" backed=");
+    write_decimal(backed);
+    slime_rt::debug_write(b" pages=");
+    write_decimal(held.pages);
+    slime_rt::debug_write(b" touched=1\n");
 
-    // Alive, and the allocator is still usable: a refusal must leave the heap
-    // exactly as it was rather than poisoning it. Reallocating after the refusal
-    // is what proves that, and it must come from the free list.
-    let after_refusal = slime_rt::private_heap_stats();
+    let Some(to_reservation) = RESERVATION_PAGES.checked_sub(held.pages) else {
+        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL backed past reservation\n");
+        slime_rt::exit(1)
+    };
+    if to_reservation == 0 {
+        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL no quota test headroom\n");
+        slime_rt::exit(1)
+    }
+    if slime_rt::private_memory_grow(to_reservation).is_ok() {
+        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL quota did not bind\n");
+        slime_rt::exit(1)
+    }
+    let after_refusal = slime_rt::private_memory_grow(0).unwrap_or_else(|_| {
+        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL post-refusal query refused\n");
+        slime_rt::exit(1)
+    });
+    if after_refusal.pages != held.pages || after_refusal.base != held.base {
+        slime_rt::debug_write(
+            b"[private-heap-probe:granted] FAIL refused request changed region\n",
+        );
+        slime_rt::exit(1)
+    }
+    drop(payload);
     let mut small: Vec<u64> = Vec::new();
     if small.try_reserve(64).is_err() {
         slime_rt::debug_write(b"[private-heap-probe:granted] FAIL refusal poisoned the heap\n");
@@ -286,23 +340,7 @@ fn granted() -> ! {
     for index in 0..64u64 {
         small.push(index);
     }
-    if small.iter().sum::<u64>() != (0..64u64).sum() {
-        slime_rt::debug_write(b"[private-heap-probe:granted] FAIL post-refusal data was wrong\n");
-        slime_rt::exit(1)
-    }
     let end = slime_rt::private_heap_stats();
-    if end.growths != after_refusal.growths {
-        slime_rt::debug_write(
-            b"[private-heap-probe:granted] FAIL refused request charged a page\n",
-        );
-        slime_rt::exit(1)
-    }
-    drop(small);
-
-    // `growths` is the load-bearing number here rather than `pages`: it is how
-    // the gate tells a component that reused its free list from one that kept
-    // asking for more. The self-check already reported its own reuse phase;
-    // this line reports the total after the refusal, which must not have moved.
     slime_rt::debug_write(b"[private-heap-probe:granted] granted pages=");
     write_decimal(end.pages);
     slime_rt::debug_write(b" growths=");

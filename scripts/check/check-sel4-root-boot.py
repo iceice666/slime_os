@@ -70,6 +70,19 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT allocator slots=[1-9]\d* untypeds=[1-9]\d* bytes=[1-9]\d*",
     ),
     (
+        "kernel admitted an ordinary physical range",
+        r"SLIME_ROOT ordinary range=\d+ paddr=0x[0-9a-f]+ bytes=[1-9]\d*",
+    ),
+    (
+        "kernel ordinary memory inventory reaches its physical end",
+        r"SLIME_ROOT ordinary ranges=[1-9]\d* bytes=[1-9]\d* end=0x[0-9a-f]+",
+    ),
+    (
+        "an ordinary frame from the highest admitted range was mapped and verified",
+        r"SLIME_ROOT ordinary probe paddr=0x[0-9a-f]+ bytes=\d+ "
+        r"beyond_legacy=[01] verified=1",
+    ),
+    (
         "timer source acquired",
         r"SLIME_TIMER acquired irq=(\d+) freq_hz=\d+",
     ),
@@ -594,6 +607,101 @@ def check_transcript(transcript: str, platform: str) -> None:
             f"task reclaim totals disagree: tasks={total} cleanup={cleanup.group(1)} ready={ready.group(1)}"
         )
     check_private_memory_base(transcript)
+    check_ordinary_memory(transcript, platform)
+
+
+# The physical address the platform's superseded kernel window ended at, and
+# therefore the address a capacity probe must pass to prove the raise reached
+# the kernel. AArch64 QEMU `virt` places DRAM at 0x4000_0000, so the retired
+# 1024 MiB platform ended here. RISC-V `virt` never had a superseded window on
+# this lane, and its DRAM base *is* 0x8000_0000 — reusing the ARM bound there
+# would sit below every RV64 ordinary address and assert nothing, so RV64
+# declares none and the root reports `beyond_legacy=0`.
+LEGACY_PLATFORM_RAM_END = {"qemu-arm-virt": 0x8000_0000, "qemu-riscv-virt": None}
+
+
+def check_ordinary_memory(transcript: str, platform: str) -> None:
+    """The ordinary-memory inventory is the kernel's window, not the launcher's.
+
+    A larger `-m` alone moves no marker here: every range comes from BootInfo,
+    which the kernel derives from its own pinned physical description. The
+    summary must agree with the enumerated ranges, and the exact page-sized,
+    page-aligned probe must be fully contained in the highest range capable of
+    holding such a page — which is what a launcher argument cannot manufacture.
+    """
+    ranges = [
+        (int(paddr, 16), int(size))
+        for paddr, size in re.findall(
+            r"SLIME_ROOT ordinary range=\d+ paddr=(0x[0-9a-f]+) bytes=(\d+)", transcript
+        )
+    ]
+    summary = re.search(
+        r"SLIME_ROOT ordinary ranges=(\d+) bytes=(\d+) end=(0x[0-9a-f]+)", transcript
+    )
+    probe = re.search(
+        r"SLIME_ROOT ordinary probe paddr=(0x[0-9a-f]+) bytes=(\d+) "
+        r"beyond_legacy=([01]) verified=1",
+        transcript,
+    )
+    if not ranges or summary is None or probe is None:
+        fail("the ordinary-memory inventory disappeared after marker matching")
+    if int(summary.group(1)) != len(ranges):
+        fail(
+            f"ordinary inventory reports {summary.group(1)} range(s) but enumerated {len(ranges)}"
+        )
+    if int(summary.group(2)) != sum(size for _, size in ranges):
+        fail("ordinary inventory byte total disagrees with the enumerated ranges")
+    expected_end = max(paddr + size for paddr, size in ranges)
+    if int(summary.group(3), 16) != expected_end:
+        fail(
+            f"ordinary inventory end is {summary.group(3)}, "
+            f"expected {expected_end:#x} from the enumerated ranges"
+        )
+    # The root allocates one seL4 base-page granule from the highest range that
+    # can place that complete, aligned object. The inventory's own tail may be
+    # a run of sub-page descriptors the kernel publishes for leftover bytes;
+    # those are ordinary memory, but cannot be retyped into this frame.
+    granule_bytes = 4096
+    probe_paddr = int(probe.group(1), 16)
+    probe_bytes = int(probe.group(2))
+    if probe_bytes != granule_bytes:
+        fail(
+            f"the ordinary probe reports {probe_bytes} bytes, expected exactly "
+            f"one {granule_bytes}-byte frame"
+        )
+    if probe_paddr % granule_bytes != 0:
+        fail(f"the ordinary probe address {probe.group(1)} is not granule-aligned")
+
+    def can_hold_granule(entry: tuple[int, int]) -> bool:
+        paddr, size = entry
+        aligned = (paddr + granule_bytes - 1) & -granule_bytes
+        return aligned + granule_bytes <= paddr + size
+
+    capable = [entry for entry in ranges if can_hold_granule(entry)]
+    if not capable:
+        fail(f"no admitted ordinary range can hold a {granule_bytes}-byte frame")
+    highest = max(capable, key=lambda entry: entry[0])
+    highest_end = highest[0] + highest[1]
+    if probe_paddr < highest[0] or probe_paddr + probe_bytes > highest_end:
+        fail(
+            f"the probe frame {probe.group(1)}..{probe_paddr + probe_bytes:#x} is not "
+            f"fully contained in the highest granule-capable range "
+            f"{highest[0]:#x}..{highest_end:#x}"
+        )
+    legacy_end = LEGACY_PLATFORM_RAM_END[platform]
+    expected_beyond = "0" if legacy_end is None else "1"
+    if probe.group(3) != expected_beyond:
+        fail(
+            f"{platform} reported beyond_legacy={probe.group(3)}, expected {expected_beyond}"
+        )
+    if legacy_end is not None and probe_paddr < legacy_end:
+        fail(
+            f"the probe took {probe.group(1)}, which the superseded "
+            f"{legacy_end:#x} platform already contained"
+        )
+    for line in transcript.splitlines():
+        if line.startswith("SLIME_ROOT ordinary "):
+            print(line)
 
 
 def check_private_memory_base(transcript: str) -> None:

@@ -124,7 +124,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "34a6ba906c7e5adfc0d80fa8a7eccb42475b27613e7217d4f331e2b4eb62b779";
+      identity = "cdf528a1a11eb085eab1516dc1fad78aa8f14a593da9f469c6a80a308fa3cfc2";
     };
     parameters = [];
   };
@@ -143,7 +143,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "3d5279775385931a5412c7da73a2c68c0ad2b2dd856e287b2547fd6e8d1e15ae";
+        identity = "210dcb87725218ec4892441d9d5c157cd974c165a27eda67cad585d1028031a1";
       };
     };
     {
@@ -151,7 +151,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "47d09aea32e7c6bcb01d14a88ce680306b4cc9d13ea4893724565cec5e9ef0c1";
+        identity = "c73f45c1df83d6252b4f7fb2d0f5f51f5d7806a035edcc0498feba894e089998";
       };
     };
     {
@@ -215,7 +215,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "75f7c592f80b348063218e0bd01a9dc4d0ec9812063b49bdbd6b65f5c08d05b0";
+        identity = "ddddd7dc8ce2b09017bc68514deefafd6bf43ed6ee6e8435d6b8ab2b91351b23";
       };
     };
     {

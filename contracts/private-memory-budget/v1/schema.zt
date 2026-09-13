@@ -34,21 +34,27 @@ headerBytes :: Int = 32;
 entryBytes :: Int = 36;
 maxHolders :: Int = 32;
 
--- Root private-memory ceilings, published so the builder can reject an
--- over-declared or over-committed budget instead of emitting a generation the
--- root refuses at boot. They mirror `slime-root/src/private_memory.rs`'s
--- `MAX_REGION_PAGES` and `MAX_TOTAL_PAGES`, which
--- `slime_root::generation::private_memory_budget_is_satisfiable` passes to
--- `PrivateMemoryBudget::validate_against`, and which that module pins against
--- these values with a compile-time assert — so a drift between the two sides is
--- a build failure rather than a boot-time refusal.
---
--- `regionPages` is the per-task reservation: the window's address space and
--- translation tables are sized for it when the child VSpace is built, so it is
--- a structural bound no growth can pass. `totalPages` is what every live region
--- may hold together.
+-- Conservative ceilings apply to any target without an explicit qualification.
+-- A capacity row is keyed by the canonical target-profile name so the builder
+-- and root select the same envelope from the admitted target identity. A row
+-- exists only where a workload of that size has actually been observed on that
+-- target: publishing a ceiling is a promise the root must honour in full, so a
+-- raise belongs to the milestone that ran the evidence, never to the one that
+-- merely intends to.
 regionPages :: Int = 512;
 totalPages :: Int = 2048;
+
+CapacityProfile :: type { target : Text; regionPages : Int; totalPages : Int; };
+
+-- 16384 pages is 64 MiB per holder and 32768 is 128 MiB across every live
+-- region, qualified on both QEMU profiles by `just private_memory_check`.
+-- The physical targets keep the conservative default above: their root CSpace
+-- is the kernel's 12-bit default, which cannot hold the descriptor tables a
+-- 64 MiB holder needs, and no board has run this workload.
+capacityProfiles :: List CapacityProfile = {
+  { target = "aarch64-sel4-qemu-virt"; regionPages = 16384; totalPages = 32768; };
+  { target = "riscv64-sel4-qemu-virt"; regionPages = 16384; totalPages = 32768; };
+};
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
@@ -90,6 +96,7 @@ format ::= {
   maxHolders =;
   regionPages =;
   totalPages =;
+  capacityProfiles =;
   headerFields = headerSchema.fields ?? {;};
   entryFields = entrySchema.fields ?? {;};
   headerLayout =;

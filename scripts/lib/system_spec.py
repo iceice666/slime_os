@@ -42,6 +42,11 @@ import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
 from zutai_cli import ZutaiError, evaluate, prefetch
+from boot_contracts import (
+    PRIVATE_MEMORY_CAPACITY_PROFILES,
+    PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
+    PRIVATE_MEMORY_DEFAULT_TOTAL_PAGES,
+)
 
 CONTRACT_ROOT = ROOT / "contracts" / "system-spec" / "v1"
 CHECKER = CONTRACT_ROOT / "check.zt"
@@ -1127,6 +1132,19 @@ def derive_manifest(system: CompiledSystem) -> dict:
                     "pageQuota": quota["privatePageQuota"],
                 }
             )
+    region_pages, total_pages = PRIVATE_MEMORY_CAPACITY_PROFILES.get(
+        spec["targetRequirement"],
+        (PRIVATE_MEMORY_DEFAULT_REGION_PAGES, PRIVATE_MEMORY_DEFAULT_TOTAL_PAGES),
+    )
+    oversized = [entry["holder"] for entry in private_budget if entry["pageQuota"] > region_pages]
+    if oversized:
+        _fail(
+            f"private memory: target {spec['targetRequirement']!r} cannot admit holders {oversized}"
+        )
+    if sum(entry["pageQuota"] for entry in private_budget) > total_pages:
+        _fail(
+            f"private memory: target {spec['targetRequirement']!r} aggregate exceeds capacity"
+        )
 
     # `fabric-graph`'s presence is strictly derived: the builder refuses a graph
     # without the object and an object without the graph, so there is nothing to

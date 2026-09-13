@@ -293,6 +293,12 @@ def text(entry: dict[str, object], key: str, section: str) -> str:
         fail(f"sel4/pins.toml [{section}].{key} must be non-empty text")
     return value
 
+def integer(entry: dict[str, object], key: str, section: str) -> int:
+    value = entry.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        fail(f"sel4/pins.toml [{section}].{key} must be an integer")
+    return value
+
 
 def require_file(path: Path, description: str) -> Path:
     if not path.is_file():
@@ -631,9 +637,8 @@ QEMU_DTB_PARAMETERS = {
         "qemu-system-aarch64",
         "virt,secure=off,virtualization=on,gic-version=2,dtb-randomness=off",
         "cortex-a53",
-        "2048",
     ),
-    "qemu-riscv-virt": ("qemu-system-riscv64", "virt", "rv64", "3072"),
+    "qemu-riscv-virt": ("qemu-system-riscv64", "virt", "rv64"),
 }
 
 
@@ -653,7 +658,7 @@ def dump_device_tree(platform: Platform) -> Path:
     """
     dtb = platform.build_dir / f"slime-{platform.name}.dtb"
     dtb.parent.mkdir(parents=True, exist_ok=True)
-    qemu, machine, cpu, memory = QEMU_DTB_PARAMETERS[platform.name]
+    qemu, machine, cpu = QEMU_DTB_PARAMETERS[platform.name]
     run(
         [
             require_tool(qemu),
@@ -664,7 +669,7 @@ def dump_device_tree(platform: Platform) -> Path:
             "-smp",
             "1",
             "-m",
-            memory,
+            str(integer(table(load_pins(), platform.pins_section), "memory_mib", platform.pins_section)),
             "-nographic",
             *(["-bios", "none"] if platform.architecture == "riscv64" else []),
         ],

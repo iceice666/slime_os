@@ -85,8 +85,9 @@ from boot_contracts import (
     PRIVATE_MEMORY_BUDGET_HEADER_BYTES,
     PRIVATE_MEMORY_BUDGET_MAGIC,
     PRIVATE_MEMORY_BUDGET_VERSION,
-    PRIVATE_MEMORY_ROOT_REGION_PAGES,
-    PRIVATE_MEMORY_ROOT_TOTAL_PAGES,
+    PRIVATE_MEMORY_CAPACITY_PROFILES,
+    PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
+    PRIVATE_MEMORY_DEFAULT_TOTAL_PAGES,
     RECORDING_POLICY_ENTRY,
     RECORDING_POLICY_ENTRY_BYTES,
     RECORDING_POLICY_FLAG_DETERMINISTIC,
@@ -518,16 +519,12 @@ def build_private_memory_budget(holders: list[dict]) -> bytes:
     return header + b"".join(PRIVATE_MEMORY_BUDGET_ENTRY.pack(*entry) for entry in entries)
 
 
-def validated_private_memory_quotas(holders: list[dict]) -> dict[str, dict]:
-    """Mirror `PrivateMemoryBudget::validate_against` on the build side.
-
-    Both arms, so a manifest error fails the build rather than producing a
-    generation that only fails at boot: the per-holder reservation bound, and
-    B8's aggregate rule that every declared holder must be able to sit at its
-    ceiling simultaneously. The ceilings come from the contract's published
-    `regionPages`/`totalPages`, which `slime-root/src/private_memory.rs` pins
-    against its own constants, so there is one source for both readers.
-    """
+def validated_private_memory_quotas(holders: list[dict], target: str) -> dict[str, dict]:
+    """Mirror target-qualified `PrivateMemoryBudget::validate_against`."""
+    region_pages, total_pages = PRIVATE_MEMORY_CAPACITY_PROFILES.get(
+        target,
+        (PRIVATE_MEMORY_DEFAULT_REGION_PAGES, PRIVATE_MEMORY_DEFAULT_TOTAL_PAGES),
+    )
     if len(holders) > MAX_PRIVATE_MEMORY_BUDGET_HOLDERS:
         fail("private-memory budget exceeds holder bound")
     by_name: dict[str, dict] = {}
@@ -540,13 +537,13 @@ def validated_private_memory_quotas(holders: list[dict]) -> dict[str, dict]:
         if (
             not isinstance(quota, int)
             or isinstance(quota, bool)
-            or not 0 <= quota <= PRIVATE_MEMORY_ROOT_REGION_PAGES
+            or not 0 <= quota <= region_pages
         ):
             fail(f"private-memory budget: invalid pageQuota for {name}")
         total += quota
         by_name[name] = holder
-    if total > PRIVATE_MEMORY_ROOT_TOTAL_PAGES:
-        fail("private-memory budget: aggregate pageQuota exceeds the root ceiling")
+    if total > total_pages:
+        fail("private-memory budget: aggregate pageQuota exceeds the target ceiling")
     return by_name
 
 
