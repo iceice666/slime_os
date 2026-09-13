@@ -8,7 +8,11 @@
 **Purpose:** Define and prove the architecture-neutral mechanisms that let supervised userspace drivers consume explicit hardware authority and expose typed semantic services. The substrate is shared by block, link/network, USB, audio, display, and future accelerator work without collapsing those protocols into a generic device interface.
 
 **Status:** IO0–IO3 and IO5–IO7 complete; IO4 is complete only for its exact-
-destination authority boundary, while its network data plane remains unfinished.
+destination authority boundary. IO11 (2026-09-11) put the first data plane behind
+that boundary: smoltcp inside the service, over the IO3 driver, on the new
+`sel4-io-tcp` plane — ARP, IPv4, ICMP echo reply, and a TCP client byte stream to
+one declared destination, gated by `just io_tcp_check`. Everything else IO4 lists
+as unimplemented still is.
 IO2's root cutover closed 2026-08-29, and IO5, IO6, and IO7 added the track's host verification layers. Each
 implementation slice is observed under QEMU by its own gate — `just
 io_queue_check`, `just io_driver_authority_check`, `just io_block_check`, `just
@@ -42,12 +46,14 @@ What is **not** done, stated plainly so no consumer assumes otherwise:
   `#[cfg(slime_boot_selector)]`, serving the immutable selector's
   pre-admission bootstrap read. Evidence:
   [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
-- **IO4's unimplemented network data plane:** Ethernet framing, ARP, IPv4,
-  ICMP, UDP, TCP, exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC,
-  and the TCP listener/accept data path are not implemented. DHCP, SLAAC, and
-  NDP are not declared by the current contracts, so the earlier claim that
-  they were "declared and refused" and could later land without a contract
-  change is withdrawn.
+- **IO4's network data plane beyond IO11:** UDP, exact-name DNS
+  framing/resolution, IPv6/NDP, DHCP, SLAAC, and the TCP listener/accept data
+  path are not implemented; ICMP is answered for echo only. IO11 covers exactly
+  Ethernet framing, ARP, IPv4, ICMP echo reply, and a TCP client to one exact
+  declared destination on the `sel4-io-tcp` plane. DHCP, SLAAC, and NDP are not
+  declared by the current contracts, so the earlier claim that they were
+  "declared and refused" and could later land without a contract change is
+  withdrawn.
 - **Physical containment.** Every slice is trusted-DMA on QEMU. No IOMMU exists here,
   so no containment claim is made; H4 owns AMD-IOMMU proof and a future Arm milestone
   owns any SMMU proof.
@@ -392,6 +398,13 @@ or listening must treat IO4 as unfinished.
 or backend independence. IO3 separately qualifies virtio-net `LinkDevice`; physical
 link qualification remains H6/H12/RP.
 **Evidence:** [`devlog/2026-08-28-io4-network-service/`](../devlog/2026-08-28-io4-network-service/index.md)
+
+**Data plane, 2026-09-11 (IO11).** The first data plane behind this boundary landed as
+[IO11](#io11--qemu-tcp-client-byte-stream-over-virtio-net) on its own composition,
+`sel4-io-tcp` (generation 54), so generation 53 stays this section's authority-only
+regression with its frozen baseline. IO11 changes nothing above: DNS remains
+authority-only, UDP and listen/accept remain unimplemented, and backend independence is
+still not claimed — one backend, the IO3 virtio-net driver, is exercised.
 
 **Depends on:** IO3, C9 clocks/WaitSets/restart where timers and reconnect use them, and generation/capability introspection.
 
@@ -795,6 +808,104 @@ it writes through `write_descriptor`/`write_u16`, which bounds-check
 internally, and its slot argument is driver-derived rather than device-derived.
 The virtio-blk driver needs none of this — it is single-outstanding and reads
 only the used *index* — so IO7 is IO3-scoped by fact, not by omission.
+
+## IO10 — Network data plane over LinkDevice
+
+**Status:** Open (epic). IO11 is its first milestone; P6.F (Ethernet on the
+NT98690 H1V1: a declared Synopsys EQoS MAC, an uncached-DMA driver serving
+`contracts/link-device/v1` unchanged, and the TCP plane observed on the board)
+is the second and depends on IO8 and IO11. The lane's plan of record is
+[`devlog/2026-09-11-io-tcp-lane/plan.md`](../devlog/2026-09-11-io-tcp-lane/plan.md).
+
+The rule the epic adds to IO4's: **the service owns the stack, the generation
+owns the addresses, and the driver owns nothing above a frame.** The service's
+own IPv4 address, prefix, gateway, and MAC are generation data
+(`contracts/network-interface/v1`, read through `CAPABILITY NETWORK INTERFACE
+READ`), never constants; the tick rate the stack's timers run on is the root's
+(`CLOCK RATE READ`); and client bytes travel in an IO0 queue per client, with
+the existing 56-byte `NetworkRequest` and 24-byte `NetworkCompletion` as
+payloads, so no protocol contract changed to carry them. The pages a client
+lends for that queue are delegated with the contract's `LoanDelegation`
+record, which names the buffer and loan and which of the two kinds they are.
+
+## IO11 — QEMU TCP client byte stream over virtio-net
+
+**Status:** Complete 2026-09-11. `just io_tcp_check` boots generation 54
+(`sel4-io-tcp`: `init`, `virtio-net-driver`, `network-service`, `io-tcp-probe`,
+`io-network-intruder`) under QEMU with a frame-level Python peer on the same UDP
+socket backend the IO3 plane uses, and observes, in order: the service reading
+its declared interface and clock rate, binding the driver over the IO3 loans and
+answering the peer's ARP and five ICMP echo requests; the probe lending the
+service one queue page and two data pages, connecting `10.0.0.2:4242`, sending
+4096 seeded bytes in one request and reading them back byte-identical
+(`stream verified bytes=4096 mismatches=0`), closing; the connect to `10.0.0.2:4243`
+refused by the peer's RST (`status=refused`) and the connect to the undeclared
+`10.0.0.3` denied at the authority boundary with no frame emitted; the
+intruder's fourteen structured denials unchanged from generation 53; the
+service's socket ledger (`tcp sockets opened=2 established=1 reset=1
+bytes-tx=4096 bytes-rx=4096`); the OP_RESET handshake with the driver; and
+`SLIME_GRAPH HEALTHY generation=54`. The peer's ledger cross-checks the serial
+evidence: one flow to the echo port carrying 4096 bytes each way and closed by
+both FINs, one refused attempt, no frame to any undeclared host, none from any
+undeclared MAC. Evidence:
+[`devlog/2026-09-11-io11-link-attach/`](../devlog/2026-09-11-io11-link-attach/index.md)
+(link attachment) and
+[`devlog/2026-09-11-io11-tcp-client/`](../devlog/2026-09-11-io11-tcp-client/index.md)
+(the byte stream).
+
+### Delivered
+
+- **Root, mechanism only:** `CLOCK RATE READ` (label 70) under the existing
+  `monotonicRead` right, and `CAPABILITY NETWORK INTERFACE READ` (label 71)
+  serving the new `contracts/network-interface/v1` resource object, identity-gated
+  to the network service. The generation builder validates the declared
+  interface (unicast MAC, host address inside its prefix, gateway inside or
+  absent).
+- **Service:** smoltcp 0.13 (0BSD; `medium-ethernet`, `proto-ipv4`,
+  `socket-tcp`, `auto-icmp-echo-reply`, no allocator) behind the unchanged
+  authority table. A `phy::Device` over the LinkDevice rings with four receive
+  and four transmit pages, request ids odd on transmit and even on receive
+  because the driver's DMA account is shared. Four TCP sockets with static
+  4 KiB buffers. A connect answers only once the handshake settles: `may_send`
+  is OK, a closed socket is `STATUS_UNREACHABLE` (−5), bounded by a five-second
+  socket timeout. A client's data queue is admitted request by request in the
+  authority order — decode, capability and holder, right, direction and byte
+  budget and page bounds, then queue depth — and nothing touches a socket before
+  every arm passes.
+- **Client:** `io-tcp-probe`, one queue page plus two data pages lent through
+  the transferable service endpoint, with a 64-byte descriptor naming the
+  buffer, the loan, and which of the two it is.
+- **Peer:** `scripts/lib/link_peer.py` answers ARP and ICMP for its own
+  address, echoes on port 4242, refuses 4243 with RST, and keeps a per-frame
+  ledger; `just link_peer_check` tests it on the host.
+
+### Not done, stated plainly
+
+- No UDP, DNS resolution, listen/accept, IPv6, DHCP, or gateway traffic; the
+  declared gateway is decoded and installed as a default route, never exercised.
+- Of the destination row's eight ceilings, `socketLimit`, `byteBudget`, and
+  `queueDepth` are enforced; `timerBudget`, `retryLimit`, and `reconnectLimit`
+  remain decoded only.
+- One backend (virtio-net under QEMU); backend independence is P6.F's claim to
+  make, not this milestone's.
+- A client that dies without the shutdown rendezvous is invisible to the
+  service, which then faults on the page the root reclaimed: no mechanism yet
+  places a supervision capability between root-launched instances
+  (`01a09446-bbf5-7df6-9b22-ba7f65c0ed76`).
+
+### Verification target
+
+```sh
+just io_tcp_check
+```
+
+### Exit condition (observed)
+
+The probe's `stream verified bytes=4096 mismatches=0`, `connect
+dst=10.0.0.2:4243 status=refused`, and `undeclared destination refusals=1`, the
+service's `tcp sockets opened=2 established=1 reset=1 bytes-tx=4096
+bytes-rx=4096`, and the peer ledger's one closed echo flow, one refusal, and zero
+undeclared destinations, all in one `just io_tcp_check` run.
 
 ## Consumption by later subsystems
 

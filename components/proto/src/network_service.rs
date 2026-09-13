@@ -5,7 +5,9 @@ pub const FORMAT_VERSION: u16 = 1;
 pub const REQUEST_BYTES: usize = 56;
 pub const COMPLETION_BYTES: usize = 24;
 pub const MAX_NAME_BYTES: usize = 24;
+pub const DELEGATION_BYTES: usize = 64;
 pub const NETWORK_MAGIC: u32 = 1414745678;
+pub const DELEGATION_MAGIC: u32 = 1145851470;
 pub const OP_CONNECT: u8 = 1;
 pub const OP_SEND: u8 = 2;
 pub const OP_RECV: u8 = 3;
@@ -29,6 +31,15 @@ pub const FLAG_NONBLOCKING: u32 = 1;
 pub const KNOWN_REQUEST_FLAGS: u32 = 1;
 pub const FLAG_END_OF_STREAM: u32 = 1;
 pub const KNOWN_COMPLETION_FLAGS: u32 = 1;
+pub const DELEGATION_QUEUE: u8 = 1;
+pub const DELEGATION_DATA: u8 = 2;
+pub const STATUS_DENIED: i32 = -1;
+pub const STATUS_MALFORMED: i32 = -2;
+pub const STATUS_UNSUPPORTED: i32 = -3;
+pub const STATUS_RESET_BY_PEER: i32 = -4;
+pub const STATUS_UNREACHABLE: i32 = -5;
+pub const SHUTDOWN_CAPABILITY: u64 = 18446744073709551615;
+pub const DATA_QUEUE_SLOTS: usize = 8;
 
 pub const OFF_REQUEST_MAGIC: usize = 0;
 pub const OFF_REQUEST_VERSION: usize = 4;
@@ -194,6 +205,76 @@ impl WireNetworkCompletion {
             .copy_from_slice(&self.flags.to_le_bytes());
         buf[OFF_COMPLETION_CAPABILITY..OFF_COMPLETION_CAPABILITY + 8]
             .copy_from_slice(&self.capability.to_le_bytes());
+        buf
+    }
+}
+
+pub const OFF_DELEGATION_MAGIC: usize = 0;
+pub const OFF_DELEGATION_VERSION: usize = 4;
+pub const OFF_DELEGATION_KIND: usize = 6;
+pub const OFF_DELEGATION_RESERVED: usize = 7;
+pub const OFF_DELEGATION_BUFFER: usize = 8;
+pub const OFF_DELEGATION_LEASE: usize = 16;
+pub const OFF_DELEGATION_PADDING: usize = 24;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireLoanDelegation {
+    pub magic: u32,
+    pub version: u16,
+    pub kind: u8,
+    pub reserved: u8,
+    pub buffer: u64,
+    pub lease: u64,
+    pub padding: [u8; 40],
+}
+
+impl WireLoanDelegation {
+    pub fn decode(buf: &[u8]) -> Option<Self> {
+        if buf.len() < DELEGATION_BYTES {
+            return None;
+        }
+        Some(Self {
+            magic: u32::from_le_bytes(
+                buf[OFF_DELEGATION_MAGIC..OFF_DELEGATION_MAGIC + 4]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            version: u16::from_le_bytes(
+                buf[OFF_DELEGATION_VERSION..OFF_DELEGATION_VERSION + 2]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            kind: buf[OFF_DELEGATION_KIND],
+            reserved: buf[OFF_DELEGATION_RESERVED],
+            buffer: u64::from_le_bytes(
+                buf[OFF_DELEGATION_BUFFER..OFF_DELEGATION_BUFFER + 8]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            lease: u64::from_le_bytes(
+                buf[OFF_DELEGATION_LEASE..OFF_DELEGATION_LEASE + 8]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            padding: buf[OFF_DELEGATION_PADDING..OFF_DELEGATION_PADDING + 40]
+                .try_into()
+                .expect("generated network-service layout"),
+        })
+    }
+
+    pub fn encode(self) -> [u8; DELEGATION_BYTES] {
+        let mut buf = [0u8; DELEGATION_BYTES];
+        buf[OFF_DELEGATION_MAGIC..OFF_DELEGATION_MAGIC + 4]
+            .copy_from_slice(&self.magic.to_le_bytes());
+        buf[OFF_DELEGATION_VERSION..OFF_DELEGATION_VERSION + 2]
+            .copy_from_slice(&self.version.to_le_bytes());
+        buf[OFF_DELEGATION_KIND] = self.kind;
+        buf[OFF_DELEGATION_RESERVED] = self.reserved;
+        buf[OFF_DELEGATION_BUFFER..OFF_DELEGATION_BUFFER + 8]
+            .copy_from_slice(&self.buffer.to_le_bytes());
+        buf[OFF_DELEGATION_LEASE..OFF_DELEGATION_LEASE + 8]
+            .copy_from_slice(&self.lease.to_le_bytes());
+        buf[OFF_DELEGATION_PADDING..OFF_DELEGATION_PADDING + 40].copy_from_slice(&self.padding);
         buf
     }
 }

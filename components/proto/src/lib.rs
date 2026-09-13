@@ -1273,6 +1273,22 @@ pub fn valid_link_reply(reply: &link_device::WireLinkReply) -> bool {
     }
 }
 
+/// Structural validity of a loan delegation: the right magic and version, a
+/// kind this protocol names, and every reserved byte zero. The buffer and
+/// loan identities are the client's claim about the pages it lent; the
+/// receiver claims the authority from the client's endpoint and binds these
+/// numbers to what arrived, so nothing here is trusted beyond its shape.
+pub fn valid_loan_delegation(delegation: &network_service::WireLoanDelegation) -> bool {
+    delegation.magic == network_service::DELEGATION_MAGIC
+        && delegation.version == network_service::FORMAT_VERSION
+        && matches!(
+            delegation.kind,
+            network_service::DELEGATION_QUEUE | network_service::DELEGATION_DATA
+        )
+        && delegation.reserved == 0
+        && delegation.padding.iter().all(|byte| *byte == 0)
+}
+
 /// Structural and operation-specific validity of a NetworkService IO0 request payload.
 pub fn valid_network_request(request: &network_service::WireNetworkRequest) -> bool {
     if request.magic != network_service::NETWORK_MAGIC

@@ -1,4 +1,5 @@
 use super::*;
+use slime_root::generation::peer_instance_for_slot;
 use slime_root::io_resource::LeaseId;
 
 pub(super) fn capability_kind(capability: graph::CapabilityEntry) -> u32 {
@@ -281,22 +282,61 @@ pub(super) fn serve_capability_finalize(
 /// nothing, and it is the installation that would widen the claim. A receiver
 /// with no determinism claim is unaffected, which is every component in every
 /// generation before C9.5.
+/// The task that must have exported what the receiver imports, when the
+/// receiver names the endpoint slot the descriptor arrived on: an import from
+/// any sender is fine for a component with one peer, but a service with
+/// several mutually distrusting clients must not take one client's export on
+/// another's word.
+fn sender_for_slot(
+    generation: &Generation<'_>,
+    launched: &LaunchedInstances,
+    receiver_instance: usize,
+    slot: usize,
+) -> Option<TaskId> {
+    let instance = generation.instance(receiver_instance).ok()?;
+    // The binding table is walked until it refuses an index; that refusal is
+    // the count, without reaching into the decoder's layout.
+    let bindings = (0..).map_while(move |index| {
+        let binding = generation.binding(instance, index).ok()?;
+        Some((binding.grant, binding.slot))
+    });
+    let grant_ends = |index: usize| {
+        let grant = generation.grant(index).ok()?;
+        Some((grant.source, grant.target))
+    };
+    let peer = peer_instance_for_slot(bindings, grant_ends, receiver_instance, slot)?;
+    launched.task_for_instance(peer)
+}
+
 pub(super) fn serve_capability_import(
     allocator: &mut ObjectAllocator,
     tasks: &mut TaskTable<MAX_TASKS>,
     generation: &Generation<'_>,
+    launched: &LaunchedInstances,
     receiver_instance: usize,
     receiver: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
 ) -> Response {
     let id = words[0] as u32;
+    // MR1 is zero for "any sender", else the receiver's endpoint slot plus one:
+    // only an export from that endpoint's peer is claimed. A slot that binds no
+    // instance-to-instance grant, or whose peer is not live, claims nothing.
+    let sender = match words[1] as u32 {
+        0 => None,
+        bound => match sender_for_slot(generation, launched, receiver_instance, bound as usize - 1)
+        {
+            Some(task) => Some(task),
+            None => return Response::error(IpcError::BadCapability),
+        },
+    };
+    let from_sender = |entry: &CapabilityExport| sender.is_none_or(|task| entry.sender == task);
     let exports = unsafe { &mut *ptr::addr_of_mut!(CAPABILITY_EXPORTS) };
     let id = if id == 0 {
         let Some(oldest) = exports
             .entries
             .iter()
             .flatten()
-            .filter(|entry| entry.receiver == receiver && entry.finalized)
+            .filter(|entry| entry.receiver == receiver && entry.finalized && from_sender(entry))
             .map(|entry| entry.id)
             .min()
         else {
@@ -315,7 +355,7 @@ pub(super) fn serve_capability_import(
     else {
         return Response::error(IpcError::BadCapability);
     };
-    if export.receiver != receiver || !export.finalized {
+    if export.receiver != receiver || !export.finalized || !from_sender(&export) {
         return Response::error(IpcError::BadCapability);
     }
     // The C9.5 gate, before the capability reaches the receiver's table. An

@@ -34,6 +34,18 @@ PINS = ROOT / "sel4" / "pins.toml"
 # state before building, so stale input is refused instead of silently changing the image.
 CLOSURE = "sel4-io-network"
 TCP_CLOSURE = "sel4-io-tcp"
+# The probe's streams: the echo port carries one page (the destination's
+# whole byte budget) and then 64 more bytes after the idle hold; the closing
+# port carries 256 bytes and then the peer's FIN.
+STREAM_BYTES = 4096
+IDLE_BYTES = 64
+CLOSING_BYTES = 256
+
+
+def stream_pattern(length: int) -> bytes:
+    """The bytes the probe sends: its `expected(index)` function, restated here
+    so the peer's copy of the stream is compared against the same source."""
+    return bytes((index * 7 + (index >> 8)) & 0xFF for index in range(length))
 IMAGE: Path | None = None
 COMPOSITIONS = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions"
 FIXTURE = COMPOSITIONS / "sel4-io-network.zti"
@@ -92,20 +104,22 @@ AUTHORITY_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "tcp admission",
-        (r"SLIME_ROOT generation admitted number=54 executables=5 instances=5 grants=8 ",),
+        (r"SLIME_ROOT generation admitted number=54 executables=5 instances=5 grants=9 ",),
     ),
     (
         "tcp service",
         (
-            r"\[network-service\] authority destinations=5 rights=connect,send,recv",
-            r"\[network-service\] declared socket_limit=5 listener_limit=0 dns_record_limit=0",
+            r"\[network-service\] authority destinations=6 rights=connect,send,recv",
+            r"\[network-service\] declared socket_limit=6 listener_limit=0 dns_record_limit=0",
             r"\[network-service\] clock rate=[0-9]+",
             r"\[network-service\] interface addr=10\.0\.0\.1/24 gateway=none mac=52:54:00:53:4c:01",
             r"\[network-service\] link query state=up rx provisioned=4",
-            r"\[network-service\] link frames total=[0-9]+ tx=[0-9]+ rx=[0-9]+ arp=[0-9]+ icmp=[0-9]+ tcp=0 other=0",
+            r"\[network-service\] link quiesced sockets=1 aborted=0",
+            r"\[network-service\] link frames total=[0-9]+ tx=[0-9]+ rx=[0-9]+ arp=[0-9]+ icmp=[0-9]+ tcp=[0-9]+ other=0",
             r"\[network-service\] link statistics tx=[0-9]+ rx=[0-9]+",
+            r"\[network-service\] tcp sockets opened=3 established=2 reset=1 bytes-tx=4416 bytes-rx=4416",
             r"\[network-service\] link released",
-            r"\[network-service\] observed requests=22 packets=3 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=1",
+            r"\[network-service\] observed requests=26 packets=5 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=1",
         ),
     ),
     (
@@ -121,9 +135,21 @@ TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "tcp client",
         (
             r"\[io-tcp-probe\] clock rate=[0-9]+",
+            r"\[io-tcp-probe\] connect dst=10\.0\.0\.2:4242 status=ok",
             r"\[io-tcp-probe\] tcp capabilities=1 rights=connect,send,recv",
-            r"\[io-tcp-probe\] held ms=3000",
-            r"\[io-tcp-probe\] closed capabilities=1 shutdown=1",
+            r"\[io-tcp-probe\] sent bytes=4096",
+            r"\[io-tcp-probe\] received bytes=4096 completions=[0-9]+",
+            r"\[io-tcp-probe\] stream verified bytes=4096 mismatches=0",
+            r"\[io-tcp-probe\] connect dst=10\.0\.0\.2:4243 status=refused",
+            r"\[io-tcp-probe\] undeclared destination refusals=1",
+            r"\[io-tcp-probe\] connect dst=10\.0\.0\.2:4244 status=ok",
+            r"\[io-tcp-probe\] closing stream verified bytes=256 mismatches=0",
+            r"\[io-tcp-probe\] end of stream dst=10\.0\.0\.2:4244 echoed bytes=256",
+            r"\[io-tcp-probe\] close dst=10\.0\.0\.2:4244 status=ok",
+            r"\[io-tcp-probe\] held ms=6000 open sockets=1",
+            r"\[io-tcp-probe\] idle stream verified bytes=64 mismatches=0 after ms=6000",
+            r"\[io-tcp-probe\] close dst=10\.0\.0\.2:4242 status=ok",
+            r"\[io-tcp-probe\] closed capabilities=2 shutdown=1",
         ),
     ),
     (
@@ -267,6 +293,8 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
         raise
     ledger = peer.ledger
     print(f"[peer] {ledger.summary()}")
+    if ledger.failure is not None:
+        fail(f"the peer stopped serving: {ledger.failure}")
     guest_mac = bytes.fromhex(mac.replace(":", ""))
     foreign = ledger.foreign_sources(guest_mac)
     if foreign:
@@ -275,12 +303,55 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
         fail("the guest never answered the peer's ARP request for its declared address")
     if ledger.count_received("arp-reply") < 1:
         fail("no ARP reply from the guest")
-    replies = ledger.echo_replies_matching(link_peer.ECHO_IDENTIFIER)
+    replies = ledger.echo_replies_matching(link_peer.ECHO_IDENTIFIER, link_peer.ECHO_PAYLOAD, link_peer.GUEST_IP)
     if replies != list(range(1, link_peer.ECHO_COUNT + 1)):
-        fail(f"echo replies from the guest were {replies}, expected every sequence 1..{link_peer.ECHO_COUNT}")
+        fail(
+            f"echo replies from the guest carrying the request's bytes were {replies}, "
+            f"expected every sequence 1..{link_peer.ECHO_COUNT}"
+        )
+    # An undeclared host on the link would be asked for by ARP before any IPv4
+    # packet could name it, so both tables are checked.
     undeclared = {destination for destination in ledger.ip_destinations() if destination != link_peer.PEER_IP}
+    undeclared |= {target for target in ledger.arp_targets() if target != link_peer.PEER_IP}
     if undeclared:
-        fail(f"the guest addressed IPv4 hosts the composition does not declare: {sorted(undeclared)}")
+        fail(f"the guest addressed hosts the composition does not declare: {sorted(undeclared)}")
+    # The service's own count of frames it transmitted, the driver's count of
+    # frames it completed, and what the peer received are three independent
+    # ledgers of one wire.
+    statistics = re.search(r"\[network-service\] link statistics tx=(\d+) rx=(\d+)", transcript)
+    if statistics is None:
+        fail("the service printed no link statistics")
+    frames = re.search(r"\[network-service\] link frames total=\d+ tx=(\d+) rx=(\d+)", transcript)
+    if frames is None:
+        fail("the service printed no frame counts")
+    if int(statistics.group(1)) != len(ledger.received):
+        fail(f"the driver completed {statistics.group(1)} transmits but the peer received {len(ledger.received)}")
+    if frames.group(1) != statistics.group(1) or frames.group(2) != statistics.group(2):
+        fail(f"the service counted tx={frames.group(1)} rx={frames.group(2)} frames but the driver tx={statistics.group(1)} rx={statistics.group(2)}")
+    # The byte streams, as the peer saw them: one connection to the echo port
+    # carrying the probe's 4096 bytes each way and 64 more after the idle hold,
+    # closed by the guest; one to the closing port carrying 256 bytes each way
+    # and closed by the peer first; one refused attempt on the closed port; and
+    # nothing else.
+    flows = {flow.server_port: flow for flow in peer.tcp.flows.values()}
+    if len(peer.tcp.flows) != 2 or set(flows) != {link_peer.ECHO_PORT, link_peer.CLOSING_PORT}:
+        fail(f"expected one connection to the echo port and one to the closing port, the peer saw {peer.tcp.summary()}")
+    expected_flows = (
+        (link_peer.ECHO_PORT, stream_pattern(STREAM_BYTES) + stream_pattern(IDLE_BYTES), "guest"),
+        (link_peer.CLOSING_PORT, stream_pattern(CLOSING_BYTES), "peer"),
+    )
+    for port, payload, closed_by in expected_flows:
+        flow = flows[port]
+        if flow.received != len(payload) or flow.echoed != len(payload):
+            fail(f"the flow to port {port} carried rx={flow.received} echo={flow.echoed}, expected {len(payload)} each way")
+        if bytes(flow.payload) != payload:
+            fail(f"the bytes the peer received on port {port} are not the probe's seeded stream")
+        if flow.state != "closed":
+            fail(f"the flow to port {port} ended in state {flow.state!r}, expected both FINs acknowledged")
+        if flow.closed_by != closed_by:
+            fail(f"the flow to port {port} was closed first by {flow.closed_by!r}, expected {closed_by!r}")
+    if len(peer.tcp.refused) != 1:
+        fail(f"expected exactly one refused connection attempt, the peer saw {len(peer.tcp.refused)}")
 
 
 def main() -> None:
@@ -311,8 +382,10 @@ def main() -> None:
         run_tcp_arm(image, mac, arguments.transcript)
         print(
             "seL4 I/O tcp plane check: the network service attached to virtio-net, "
-            "answered the peer's ARP and ICMP echo on its declared interface, "
-            "held its client's exact destination, and released the link cleanly"
+            "answered the peer's ARP and ICMP echo on its declared interface, carried "
+            "its client's byte stream to its exact destination and back unchanged, "
+            "refused the closed port and the undeclared host, ended the stream on the peer's "
+            "close, kept an idle connection past the silence bound, and released the link cleanly"
         )
 
 

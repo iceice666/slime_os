@@ -56,7 +56,7 @@ rationale.
 | 15 | [Zutai-defined state migrations](15-zutai-state-migrations.md) | parked | sync |
 | 16 | [Powerbox UI](16-powerbox.md) | parked | lifecycle |
 | 17 | [Per-component energy accounting](17-energy-accounting.md) | parked | hardware |
-| 18 | [Per-destination network authority](18-network-authority.md) | parked | hardware |
+| 18 | [Per-destination network authority](18-network-authority.md) | promoted → IO4, IO11 | — |
 | 19 | [MPK/PKU lightweight compartments](19-mpk-compartments.md) | parked | hardware |
 | 20 | BootState model-implementation conformance | promoted → M5.6c | — |
 | 21 | Signed generation release metadata | promoted → M5.8 | — |

@@ -86,6 +86,9 @@ EXTRA_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 # execution profile)`; the image resolves through the closure, so there is no
 # literal path to name.
 EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    # `check-sel4-io-network-plane.py --arm tcp` boots generation 54 with the
+    # virtio-net device; its default arm boots generation 53 with no device.
+    "sel4-io-network": (("sel4-io-tcp", "sel4-io-tcp", "qemu-arm-virt"),),
     "sel4-private-memory": (
         (
             "sel4-private-memory-fail-large-map",
@@ -131,6 +134,24 @@ def plane_checkers() -> list[_Path]:
         for path in sorted(CHECK_ROOT.glob("check-sel4-*.py"))
         if path.name not in NOT_A_PLANE
     ]
+
+
+# Devices per run, where one checker's arms attach different devices. The
+# textual scan below attributes every `-device` in a checker to every run it
+# emits, which is wrong for a checker whose default arm attaches none: a record
+# is what a reader trusts, so the arm that attaches nothing must say so.
+RUN_DEVICES: dict[str, list[str]] = {
+    "sel4-io-network": [],
+    "sel4-io-tcp": ["virtio-net-device"],
+}
+
+# Network backends per run, on the same grounds: the scan attributes every
+# `-netdev` in a checker to every run it emits, and only the tcp arm attaches
+# the UDP socket backend its host peer speaks through.
+RUN_NETWORKS: dict[str, list[str]] = {
+    "sel4-io-network": [],
+    "sel4-io-tcp": ["socket-udp"],
+}
 
 
 def run_name(path: _Path) -> str:
@@ -240,6 +261,14 @@ def extract(path: _Path) -> dict:
         | set(re.findall(r'"(usb-kbd)"', text))
     )
 
+    # One `-netdev` backend is one attached network, named by its QEMU backend
+    # kind: what the frames cross, not the device they reach (that is a device
+    # above). The socket backend's ports are chosen per run, so the record
+    # names the kind and nothing ephemeral.
+    networks = sorted(
+        {f"socket-{kind}" for kind in re.findall(r'"socket,id=[a-z0-9-]+,(udp|tcp)=', text)}
+    )
+
     # A forbidden outcome is written either as a bare literal or as a regex with
     # a trailing matcher (`r"SLIME_ROOT FATAL .*"`). Matching only the literal
     # form silently reported "forbids nothing" for every plane using the regex
@@ -273,6 +302,7 @@ def extract(path: _Path) -> dict:
     return {
         "timeoutSeconds": timeout,
         "drives": drive_sites,
+        "networks": networks,
         "devices": devices,
         "forbiddenOutcomes": forbidden,
         "faults": faults,
@@ -303,6 +333,24 @@ def render(name: str, closure: str, profile: str, facts: dict) -> str:
         disks = "[\n" + "\n".join(rows) + "\n  ]"
     else:
         disks = "[]"
+
+    # A network is writable: the host peer injects frames into the guest
+    # through it, where a device fixture is only read.
+    networks = ""
+    if facts["networks"]:
+        rows = []
+        for network in facts["networks"]:
+            rows.append(
+                "    {\n"
+                f'      name = "{network}";\n'
+                f'      path = "";\n'
+                f'      identity = "";\n'
+                "      writable = true;\n"
+                "    };"
+            )
+        networks = "[\n" + "\n".join(rows) + "\n  ]"
+    else:
+        networks = "[]"
 
     devices = ""
     if facts["devices"]:
@@ -343,7 +391,7 @@ def render(name: str, closure: str, profile: str, facts: dict) -> str:
         '  executionKind = "emulator";\n'
         f'  executionProfile = "{profile}";\n'
         f"  disks = {disks};\n"
-        "  networks = [];\n"
+        f"  networks = {networks};\n"
         f"  devices = {devices};\n"
         f"  faultControls = {faults};\n"
         f'  timeoutSeconds = {facts["timeoutSeconds"]};\n'
@@ -357,11 +405,16 @@ def outputs() -> dict[_Path, str]:
     emitted: dict[_Path, str] = {}
     for path in plane_checkers():
         for name, closure_name, profile, _image in run_variants(path):
+            facts = extract(path)
+            if name in RUN_DEVICES:
+                facts["devices"] = sorted(RUN_DEVICES[name])
+            if name in RUN_NETWORKS:
+                facts["networks"] = sorted(RUN_NETWORKS[name])
             emitted[RUN_ROOT / f"{name}.zti"] = render(
                 name,
                 closure_identity_for(closure_name) if closure_name else "",
                 profile,
-                extract(path),
+                facts,
             )
     return emitted
 

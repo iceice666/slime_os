@@ -82,6 +82,16 @@
       ];
       source = "io-tcp-probe";
       target = "network-service";
+      transferable = true;
+    };
+    {
+      name = "tcp-probe-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "io-tcp-probe";
       transferable = false;
     };
     {
@@ -167,6 +177,11 @@
         {
           grant = "network-tcp-probe-service";
           slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "tcp-probe-buffer-factory";
+          slot = 1;
           slotReason = "componentAbi";
         };
       ];
@@ -307,11 +322,18 @@
   privateMemoryBudget = [];
   sharedBufferBudget = [
     {
+      bufferCount = 3;
+      bytePages = 3;
+      holder = "io-tcp-probe";
+      loanCount = 3;
+      mappingCount = 3;
+    };
+    {
       bufferCount = 10;
       bytePages = 10;
       holder = "network-service";
       loanCount = 10;
-      mappingCount = 12;
+      mappingCount = 16;
     };
     {
       bufferCount = 0;
@@ -451,6 +473,26 @@
       holder = "io-tcp-probe";
       listenerLimit = 0;
       port = 4242;
+      queueDepth = 4;
+      reconnectLimit = 0;
+      retryLimit = 2;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 4;
+      transport = "tcp";
+    };
+    {
+      address = "10.0.0.2";
+      addressKind = "ipv4";
+      byteBudget = 4096;
+      dnsRecordLimit = 0;
+      holder = "io-tcp-probe";
+      listenerLimit = 0;
+      port = 4244;
       queueDepth = 4;
       reconnectLimit = 0;
       retryLimit = 2;

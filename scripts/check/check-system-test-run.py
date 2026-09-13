@@ -306,6 +306,7 @@ def check_controls(vocabulary: dict[str, set[str]]) -> int:
                     {
                         "timeoutSeconds": value["timeoutSeconds"],
                         "drives": len(value["disks"]),
+                        "networks": [network["name"] for network in value["networks"]],
                         "devices": [device["name"] for device in value["devices"]],
                         "forbiddenOutcomes": value["forbiddenOutcomes"],
                         "faults": [control["kind"] for control in value["faultControls"]],

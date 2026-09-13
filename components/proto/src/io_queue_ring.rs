@@ -93,6 +93,13 @@ pub enum QueueError {
     /// cancellation, reset, or peer death is no longer in the table, so a
     /// completion naming it cannot resurrect it or its lease.
     Unknown,
+    /// The peer's cursor claims more entries than the ring holds.
+    ///
+    /// The client owns `submit_head` and may write anything there; a head more
+    /// than one ring ahead of the tail names entries no slot carries. Nothing
+    /// is consumed, so the caller must refuse the queue rather than retry: a
+    /// driver that chased the cursor would serve one client without bound.
+    Inconsistent,
 }
 
 /// A submitted entry the driver consumed but could not accept.
@@ -264,6 +271,13 @@ impl<'a> Queue<'a> {
         self.slot_count
     }
 
+    /// The mapping itself, which the peer may rewrite at any moment after
+    /// attach. For tests that model such a peer; the product never calls it.
+    #[doc(hidden)]
+    pub fn mapping_mut(&mut self) -> &mut [u8] {
+        self.bytes
+    }
+
     /// Requests submitted but not yet taken by the driver.
     pub fn submitted(&self) -> u64 {
         let header = self.header();
@@ -415,6 +429,16 @@ impl<'a> Queue<'a> {
         if header.submit_head == header.submit_tail {
             return Err(TakeRequestError {
                 error: QueueError::Empty,
+                request_id: 0,
+                epoch: header.epoch,
+            });
+        }
+        // Judged before any slot is read: the distance is the client's claim,
+        // and a claim past the ring's depth (or behind the tail, which wraps)
+        // has no slot behind it to consume.
+        if header.submit_head.wrapping_sub(header.submit_tail) > self.slot_count as u64 {
+            return Err(TakeRequestError {
+                error: QueueError::Inconsistent,
                 request_id: 0,
                 epoch: header.epoch,
             });

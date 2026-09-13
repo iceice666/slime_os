@@ -326,6 +326,43 @@ fn stale_client_publish_cannot_roll_back_driver_submit_tail() {
     );
 }
 
+/// The client owns `submit_head` and may raise it past the ring's depth
+/// through its writable mapping after the driver attached. The driver refuses
+/// such a queue outright and consumes nothing, so a client cannot hold a
+/// driver in a drain loop.
+#[test]
+fn a_submit_head_past_the_ring_depth_is_refused_without_consuming() {
+    let mut bytes = buffer();
+    format(&mut bytes, SLOTS, EPOCH).expect("format");
+    let mut queue = Queue::attach(&mut bytes, SLOTS).expect("attach");
+    let mut out = [0u8; REQUEST_PAYLOAD_BYTES];
+    for head in [SLOTS as u64 + 1, u64::MAX] {
+        queue.mapping_mut()[OFF_HEADER_SUBMIT_HEAD..OFF_HEADER_SUBMIT_HEAD + 8]
+            .copy_from_slice(&head.to_le_bytes());
+        assert_eq!(
+            queue.take_request(&mut out, MAPPED),
+            Err(TakeRequestError {
+                error: QueueError::Inconsistent,
+                request_id: 0,
+                epoch: EPOCH,
+            })
+        );
+        let tail = &queue.mapping_mut()[OFF_HEADER_SUBMIT_TAIL..OFF_HEADER_SUBMIT_TAIL + 8];
+        assert_eq!(u64::from_le_bytes(tail.try_into().expect("tail bytes")), 0);
+    }
+    // A head exactly one ring ahead is a full ring, which is served slot by
+    // slot: the first take consumes an (empty, hence malformed) entry.
+    queue.mapping_mut()[OFF_HEADER_SUBMIT_HEAD..OFF_HEADER_SUBMIT_HEAD + 8]
+        .copy_from_slice(&(SLOTS as u64).to_le_bytes());
+    assert_ne!(
+        queue
+            .take_request(&mut out, MAPPED)
+            .map_err(|error| error.error),
+        Err(QueueError::Inconsistent)
+    );
+    assert_eq!(queue.submitted(), SLOTS as u64 - 1);
+}
+
 #[test]
 fn a_malformed_slice_is_refused_before_it_reaches_the_driver() {
     let mut bytes = buffer();

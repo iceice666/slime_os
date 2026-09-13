@@ -4,7 +4,7 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Opens its one declared TCP destination through the network service, holds the service on its link for the peer, and closes what it opened.";
+  purpose = "Echoes a seeded stream to its declared TCP destination, reads a peer-first close as end of stream, echoes again after an idle hold, and sees the refused arms.";
   implementation =  {
     provider = "workspace";
     binary = "io-tcp-probe";
@@ -14,6 +14,7 @@
   ];
   requires = [
     "endpoint";
+    "sharedBufferFactory";
   ];
   interfaces = [
   ];
@@ -39,10 +40,10 @@
       stackBytes = 16384;
       spawnBudget = 0;
       extraThreads = 0;
-      bufferBytePages = 0;
-      bufferCount = 0;
-      mappingCount = 0;
-      loanCount = 0;
+      bufferBytePages = 3;
+      bufferCount = 3;
+      mappingCount = 3;
+      loanCount = 3;
       privatePageQuota = 0;
     };
     devices = [
@@ -59,8 +60,8 @@
   };
   test =  {
     testCondition = "io_tcp_check boots sel4-io-tcp";
-    expectedResult = "the granted client opens exactly its declared destination, the service answers the peer's ARP and ICMP on the declared interface meanwhile, and the client closes what it opened";
-    passFailCriteria = "[io-tcp-probe] closed capabilities=1 shutdown=1";
+    expectedResult = "the client sends 4096 bytes and reads them back unchanged over its lent queue, sees the closed port refused and the undeclared host denied, reads end of stream where the peer closes first, echoes again after a 6 s idle hold, and closes what it opened";
+    passFailCriteria = "[io-tcp-probe] stream verified bytes=4096 mismatches=0";
     requiredTestEnvironment = "io_tcp_check";
   };
 }

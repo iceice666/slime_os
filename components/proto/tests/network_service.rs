@@ -1,6 +1,6 @@
 use slime_proto::{
-    network_service::{self, WireNetworkCompletion, WireNetworkRequest},
-    valid_network_completion, valid_network_request,
+    network_service::{self, WireLoanDelegation, WireNetworkCompletion, WireNetworkRequest},
+    valid_loan_delegation, valid_network_completion, valid_network_request,
 };
 
 fn dns_request(op: u8, transport: u8, name: &[u8], port: u16) -> WireNetworkRequest {
@@ -128,4 +128,99 @@ fn capability_operations_cannot_spell_a_raw_destination() {
         capability: 7,
         ..completion
     }));
+}
+
+/// A delegation is a distinct record from a request: its own magic, so a
+/// receiver tells the two apart by decoding rather than by length, and a
+/// fixed 64-byte shape with every unnamed byte zero.
+#[test]
+fn a_loan_delegation_round_trips_and_is_told_apart_from_a_request() {
+    let delegation = WireLoanDelegation {
+        magic: network_service::DELEGATION_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        kind: network_service::DELEGATION_DATA,
+        reserved: 0,
+        buffer: 7,
+        lease: 11,
+        padding: [0; 40],
+    };
+    assert!(valid_loan_delegation(&delegation));
+    let encoded = delegation.encode();
+    assert_eq!(encoded.len(), network_service::DELEGATION_BYTES);
+    assert_eq!(WireLoanDelegation::decode(&encoded), Some(delegation));
+    assert!(WireLoanDelegation::decode(&encoded[..63]).is_none());
+    assert_ne!(
+        network_service::DELEGATION_MAGIC,
+        network_service::NETWORK_MAGIC
+    );
+    // A request's bytes never decode as a valid delegation, nor the reverse.
+    let request = dns_request(
+        network_service::OP_CONNECT,
+        network_service::TRANSPORT_TCP,
+        b"api.example",
+        443,
+    );
+    let mut as_delegation = [0u8; network_service::DELEGATION_BYTES];
+    as_delegation[..network_service::REQUEST_BYTES].copy_from_slice(&request.encode());
+    assert!(!valid_loan_delegation(
+        &WireLoanDelegation::decode(&as_delegation).unwrap()
+    ));
+    assert!(!WireNetworkRequest::decode(&encoded).is_some_and(|r| valid_network_request(&r)));
+
+    for mutate in [
+        (|d: &mut WireLoanDelegation| d.magic = network_service::NETWORK_MAGIC) as fn(&mut _),
+        |d| d.version = 2,
+        |d| d.kind = 0,
+        |d| d.kind = 3,
+        |d| d.reserved = 1,
+        |d| d.padding[39] = 1,
+    ] {
+        let mut bad = delegation;
+        mutate(&mut bad);
+        assert!(!valid_loan_delegation(&bad));
+    }
+}
+
+#[test]
+fn the_contract_names_every_status_and_the_shutdown_sentinel() {
+    use slime_proto::io_queue_ring;
+
+    // Zero is success; every refusal is negative and no two share a value.
+    let statuses = [
+        network_service::STATUS_DENIED,
+        network_service::STATUS_MALFORMED,
+        network_service::STATUS_UNSUPPORTED,
+        network_service::STATUS_RESET_BY_PEER,
+        network_service::STATUS_UNREACHABLE,
+    ];
+    for (index, status) in statuses.iter().enumerate() {
+        assert!(*status < 0, "status {status} is not a refusal");
+        assert!(
+            !statuses[index + 1..].contains(status),
+            "status {status} is named twice"
+        );
+        // A refusal carries no capability, and the validator accepts each one
+        // in that shape.
+        let refusal = WireNetworkCompletion {
+            magic: network_service::NETWORK_MAGIC,
+            version: network_service::FORMAT_VERSION,
+            op: network_service::OP_CONNECT,
+            capability_kind: network_service::CAPABILITY_NONE,
+            status_detail: *status,
+            flags: 0,
+            capability: 0,
+        };
+        assert!(valid_network_completion(&refusal));
+        assert!(!valid_network_completion(&WireNetworkCompletion {
+            capability: 1,
+            ..refusal
+        }));
+    }
+    // The shutdown sentinel is the one capability number no mint can reach.
+    assert_eq!(network_service::SHUTDOWN_CAPABILITY, u64::MAX);
+    // The data ring a client lends is formatted and attached at this depth.
+    let mut mapping =
+        vec![0u8; io_queue_ring::mapping_bytes(network_service::DATA_QUEUE_SLOTS).unwrap()];
+    io_queue_ring::format(&mut mapping, network_service::DATA_QUEUE_SLOTS, 1).unwrap();
+    assert!(io_queue_ring::Queue::attach(&mut mapping, network_service::DATA_QUEUE_SLOTS).is_ok());
 }
