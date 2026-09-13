@@ -114,6 +114,7 @@ TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[network-service\] clock rate=[0-9]+",
             r"\[network-service\] interface addr=10\.0\.0\.1/24 gateway=none mac=52:54:00:53:4c:01",
             r"\[network-service\] link query state=up rx provisioned=4",
+            r"\[network-service\] link quiesced sockets=1 aborted=0",
             r"\[network-service\] link frames total=[0-9]+ tx=[0-9]+ rx=[0-9]+ arp=[0-9]+ icmp=[0-9]+ tcp=[0-9]+ other=0",
             r"\[network-service\] link statistics tx=[0-9]+ rx=[0-9]+",
             r"\[network-service\] tcp sockets opened=3 established=2 reset=1 bytes-tx=4416 bytes-rx=4416",

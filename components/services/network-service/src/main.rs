@@ -376,10 +376,63 @@ fn main(_: u32) {
         }
     }
     if let Some(mut stack) = stack {
+        quiesce_sockets(&mut stack, &mut sockets, &mut socket_slots, &mut draining);
         release_stack(&mut stack, &observed);
     }
     report_observed(&observed);
     exit(0)
+}
+
+/// The loop above ends with its last client, whose close still owes the wire
+/// an exchange: the FIN the stack has queued, the peer's answer, and this
+/// side's final ACK. Poll until every draining socket has settled, which is
+/// closed and reaped or in TIME-WAIT with nothing left to send, before the
+/// link is reset from under those frames. A socket that has not settled
+/// within the silence bound is aborted, as an unanswered close is in service,
+/// and its reset leaves with the last poll.
+fn quiesce_sockets(
+    stack: &mut Stack,
+    sockets: &mut SocketSet<'static>,
+    socket_slots: &mut SocketSlots,
+    draining: &mut Draining,
+) {
+    let count = draining.iter().flatten().count();
+    let deadline = stack.now() + Duration::from_millis(SOCKET_TIMEOUT_MS as u64);
+    let mut aborted = 0u32;
+    loop {
+        let mut progress = stack.link.drain();
+        let now = stack.now();
+        progress |=
+            stack.iface.poll(now, &mut stack.link, sockets) == PollResult::SocketStateChanged;
+        progress |= stack.link.replenish();
+        progress |= reap_drained(draining, sockets, socket_slots);
+        let unsettled = draining
+            .iter()
+            .flatten()
+            .filter(|handle| sockets.get::<tcp::Socket>(**handle).state() != tcp::State::TimeWait)
+            .count();
+        if unsettled == 0 {
+            break;
+        }
+        if now >= deadline {
+            for handle in draining.iter().flatten() {
+                let socket = sockets.get_mut::<tcp::Socket>(*handle);
+                if socket.state() != tcp::State::TimeWait {
+                    socket.abort();
+                    aborted += 1;
+                }
+            }
+            let now = stack.now();
+            stack.iface.poll(now, &mut stack.link, sockets);
+            break;
+        }
+        if !progress {
+            yield_now();
+        }
+    }
+    write_number(b"[network-service] link quiesced sockets=", count as u64);
+    write_number(b" aborted=", u64::from(aborted));
+    debug_write(b"\n");
 }
 
 /// A client lends this service one queue page and then its data pages. The
