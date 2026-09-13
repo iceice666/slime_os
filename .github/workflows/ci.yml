@@ -5,10 +5,8 @@ on:
     branches: [main, develop]
   pull_request:
 
-# A superseded run is wasted arm64 capacity, and these gates are long. This
-# cancels on branch pushes too, not just pull requests: without that, a new
-# push queues behind the previous run's slowest job (Miri, ~22 minutes) and
-# creates no jobs at all until it finishes.
+# Superseded runs waste arm64 capacity. Cancel on branch pushes too, not just
+# pull requests, so a newer run can start without waiting for obsolete work.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -72,12 +70,20 @@ jobs:
       - uses: extractions/setup-just@v4
       - run: just test_host
 
-  miri:
-    name: Miri (boot-contracts, slime-proto)
+  miri_packages:
+    name: Miri (${{ matrix.package }})
     runs-on: ubuntu-latest
-    # Observed at 22 minutes on this runner; the bound catches a hang, not a
-    # slow run.
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: boot-contracts
+            recipe: miri_boot_contracts
+            cache-key: boot-contracts
+          - package: slime-proto
+            recipe: miri_proto
+            cache-key: slime-proto
     steps:
       - uses: actions/checkout@v7
         with:
@@ -87,8 +93,18 @@ jobs:
           toolchain: nightly-2026-05-26
           components: miri,rust-src
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri-${{ matrix.cache-key }}
       - uses: extractions/setup-just@v4
-      - run: just miri
+      - run: just ${{ matrix.recipe }}
+
+  miri:
+    name: Miri (boot-contracts, slime-proto)
+    runs-on: ubuntu-latest
+    needs: [miri_packages]
+    if: always()
+    steps:
+      - run: test "${{ needs.miri_packages.result }}" = success
 
   deps:
     name: cargo-deny and machete
@@ -135,6 +151,7 @@ jobs:
       - run: just framework_safety_check
       - run: just devlog_check
       - run: just sel4_gate_control_check
+      - run: python3 scripts/check/check-generation-v5.py --check-controls
 
   work_items:
     name: Canonical work-item store
@@ -251,11 +268,9 @@ jobs:
       - run: nix develop --command just lint_sel4_root
       - run: nix develop --command just test_sel4_root
 
-  sel4_rollback:
-    name: Rollback, release trust, and BootState trace
+  sel4_rollback_runtime:
+    name: Rollback runtime, release trust, and BootState trace
     runs-on: ubuntu-24.04-arm
-    # Observed cold: 28 minutes, most of it real guest time across the
-    # rollback plane's boots plus `release_trust_check`'s own contract pass.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -263,30 +278,95 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/slime-env
       - run: nix develop --command just sel4_qemu_image_check
-      # Both gates depend on `sel4_rollback_check`, which boots the rollback
-      # plane; `release_trust_check` additionally re-runs `contracts_check`.
-      # `just` resolves each dependency once per invocation, so naming the two
-      # leaf gates is what runs the plane, not a third explicit step.
-      - run: nix develop --command just bootstate_trace_check
-      - run: nix develop --command just release_trust_check
+      - run: nix develop --command just bootstate_trace_check release_trust_runtime_check
+
+  sel4_contract_sources:
+    name: Contract sources and component specs
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/slime-env
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command just contracts_source_check component_spec_validation_check
+
+  sel4_generations:
+    name: Generation v5 (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/slime-env
+        with:
+          build-cache-key: generation-${{ matrix.shard }}
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command just generation_v5_check ${{ matrix.shard }} 4
 
   sel4_contracts:
     name: Contracts and component specs
-    runs-on: ubuntu-24.04-arm
-    # `contracts_check` builds all 36 seL4 manifests through the generation
-    # builder, each into its own cargo target directory. Observed cold: 25
-    # minutes.
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    needs: [sel4_contract_sources, sel4_generations]
+    if: always()
     steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-      - uses: ./.github/actions/slime-env
-      # Not an ordinary-runner job, despite the name: `contracts_check` runs
-      # `check-generation-v5.py`, which builds every seL4 manifest and reads
-      # the magic out of the bytes rather than trusting the manifest's declared
-      # `formatVersion`. That build compiles component crates against libsel4,
-      # so it needs the installed prefix and the dev shell's `LIBCLANG_PATH`.
-      - run: nix develop --command just sel4_qemu_image_check
-      - run: nix develop --command just contracts_check
-      - run: nix develop --command just component_spec_check
+      - run: |
+          test "${{ needs.sel4_contract_sources.result }}" = success
+          test "${{ needs.sel4_generations.result }}" = success
+
+  sel4_rollback:
+    name: Rollback, release trust, and BootState trace
+    runs-on: ubuntu-latest
+    needs: [sel4_rollback_runtime, sel4_contract_sources, sel4_generations]
+    if: always()
+    steps:
+      - run: |
+          test "${{ needs.sel4_rollback_runtime.result }}" = success
+          test "${{ needs.sel4_contract_sources.result }}" = success
+          test "${{ needs.sel4_generations.result }}" = success
+
+  CI:
+    name: CI
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - sel4_pins
+      - test_host
+      - miri_packages
+      - miri
+      - deps
+      - scripts
+      - docs_gates
+      - work_items
+      - kani_proofs
+      - sel4_product
+      - sel4_rollback_runtime
+      - sel4_contract_sources
+      - sel4_generations
+      - sel4_contracts
+      - sel4_rollback
+    if: always()
+    steps:
+      - run: |
+          test "${{ needs.lint.result }}" = success
+          test "${{ needs.sel4_pins.result }}" = success
+          test "${{ needs.test_host.result }}" = success
+          test "${{ needs.miri_packages.result }}" = success
+          test "${{ needs.miri.result }}" = success
+          test "${{ needs.deps.result }}" = success
+          test "${{ needs.scripts.result }}" = success
+          test "${{ needs.docs_gates.result }}" = success
+          test "${{ needs.work_items.result }}" = success
+          test "${{ needs.kani_proofs.result }}" = success
+          test "${{ needs.sel4_product.result }}" = success
+          test "${{ needs.sel4_rollback_runtime.result }}" = success
+          test "${{ needs.sel4_contract_sources.result }}" = success
+          test "${{ needs.sel4_generations.result }}" = success
+          test "${{ needs.sel4_contracts.result }}" = success
+          test "${{ needs.sel4_rollback.result }}" = success

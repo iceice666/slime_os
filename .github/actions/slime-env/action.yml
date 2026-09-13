@@ -5,6 +5,12 @@ description: >
 
   The caller must run `actions/checkout` first: a local action is resolved from
   the checked-out tree, so this action cannot check out the tree it lives in.
+inputs:
+  build-cache-key:
+    description: Partition for persistent Cargo build outputs; empty uses the caller job.
+    required: false
+    default: ''
+
 runs:
   using: composite
   steps:
@@ -33,6 +39,56 @@ runs:
           ~/.rustup
           ~/.cargo/registry
           ~/.cargo/git
+    # Cargo owns invalidation for Rust sources and declared build-script inputs.
+    # Keep the restore boundary stricter for inputs outside Cargo's fingerprints:
+    # the exact submodule gitlinks, seL4 configuration/pins, target definitions,
+    # linker scripts, lockfiles, and both pinned Rust toolchains. The final SHA
+    # makes saves immutable; the matching prefix lets a later source revision
+    # restore compatible intermediates and lets Cargo rebuild what changed.
+    - name: Identify build-cache submodules
+      id: build-cache-submodules
+      shell: bash
+      run: |
+        set -euo pipefail
+        gitlinks="$({
+          git rev-parse HEAD:deps/zutai
+          git rev-parse HEAD:deps/sel4
+          git rev-parse HEAD:deps/rust-sel4
+          git rev-parse HEAD:deps/rust-sel4-bcm2712-rpi5
+          git rev-parse HEAD:deps/rust-sel4-cv1800b-duo
+          git rev-parse HEAD:deps/rust-sel4-ns02201-h1v1
+        } | git hash-object --stdin)"
+        echo "gitlinks=$gitlinks" >> "$GITHUB_OUTPUT"
+
+    - name: Restore persistent Cargo build outputs
+      uses: actions/cache@v4
+      with:
+        path: |
+          deps/zutai/target
+          target/components
+          build/sel4-cargo
+        key: >-
+          slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-${{
+            hashFiles('flake.lock', 'flake.nix', 'rust-toolchain.toml',
+                      'deps/zutai/.cargo/config.toml',
+                      'deps/rust-sel4/rust-toolchain.toml',
+                      'deps/rust-sel4/.cargo/config.toml',
+                      'sel4/pins.toml', 'sel4/config/*.cmake',
+                      'components/**/*.ld', '**/Cargo.lock')
+          }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-${{ github.sha }}
+        restore-keys: >-
+          slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-${{
+            hashFiles('flake.lock', 'flake.nix', 'rust-toolchain.toml',
+                      'deps/zutai/.cargo/config.toml',
+                      'deps/rust-sel4/rust-toolchain.toml',
+                      'deps/rust-sel4/.cargo/config.toml',
+                      'sel4/pins.toml', 'sel4/config/*.cmake',
+                      'components/**/*.ld', '**/Cargo.lock')
+          }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-
 
     # Realize the shell and run its toolchain hook once, so a later step's
     # failure is the gate's failure rather than an environment download.

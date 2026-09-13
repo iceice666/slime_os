@@ -23,21 +23,30 @@ bootstate_trace_check: bootstate_model_check sel4_rollback_check
     python3 scripts/check/check-bootstate-trace.py
 
 [group('contracts')]
-release_trust_check: contracts_check sel4_rollback_check
+release_trust_runtime_check: sel4_rollback_check
     python3 scripts/check/check-release-trust.py
 
 [group('contracts')]
-contracts_check: bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check
+release_trust_check: contracts_check release_trust_runtime_check
+
+[group('contracts')]
+contracts_source_check: bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
     python3 scripts/generate/generate-link-device-bindings.py --check
     python3 scripts/generate/generate-network-service-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py
     python3 scripts/check/check-lifecycle-identity.py
-    python3 scripts/check/check-generation-v5.py
     python3 scripts/generate/generate-fabric-ring-bindings.py --check
     python3 scripts/generate/generate-syscall-abi-bindings.py --check
     python3 scripts/generate/generate-component-runtime-abi-bindings.py --check
+
+[group('contracts')]
+generation_v5_check shard_index="0" shard_count="1":
+    python3 scripts/check/check-generation-v5.py --shard-index {{ shard_index }} --shard-count {{ shard_count }}
+
+[group('contracts')]
+contracts_check: contracts_source_check generation_v5_check
 
 [group('contracts')]
 architecture_contract_check: contracts_check
@@ -48,8 +57,11 @@ interface_schema_check: contracts_check
     python3 scripts/check/check-interface-schema.py
 
 [group('contracts')]
-component_spec_check: contracts_check
+component_spec_validation_check:
     python3 scripts/check/check-component-spec.py
+
+[group('contracts')]
+component_spec_check: contracts_check component_spec_validation_check
 
 [group('contracts')]
 system_spec_check: component_spec_check

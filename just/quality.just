@@ -183,14 +183,23 @@ machete:
 
 # Override the components bare-metal default with the actual host target.
 [group('quality')]
-miri:
+miri_boot_contracts:
     #!/usr/bin/env bash
     set -euo pipefail
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cd boot-contracts
     cargo miri test --all-features --target "$host"
-    cd ../components
+
+[group('quality')]
+miri_proto:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    cd components
     cargo miri test --target "$host" -p slime-proto
+
+[group('quality')]
+miri: miri_boot_contracts miri_proto
 
 # Keep Kani proofs separate: `cargo-kani` uses its bundled toolchain.
 [group('quality')]
