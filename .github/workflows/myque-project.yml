@@ -5,6 +5,29 @@ on:
     branches: [main]
     paths:
       - '.tasks/**'
+      - '.github/workflows/myque-project.yml'
+  # This privileged event must never check out or execute the PR head.
+  # The pinned reusable workflow reads canonical main and its own pinned CLI.
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - closed
+      - ready_for_review
+      - converted_to_draft
+      - review_requested
+      - review_request_removed
+  issues:
+    types: [edited, closed, reopened, labeled, unlabeled]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  # Reviews on fork PRs cannot safely supply a write token. Also recover
+  # token-generated events and external checks without contributor dispatch.
+  schedule:
+    - cron: '17,47 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,10 +38,15 @@ permissions:
 
 jobs:
   project:
+    if: >-
+      github.repository == 'iceice666/slime_os' &&
+      (github.event_name != 'issues' ||
+       (github.event.issue.user.login == 'github-actions[bot]' &&
+        startsWith(github.event.issue.body, '<!-- myque:id=')))
     uses: mozufu/myque-gh/.github/workflows/reconcile.yml@c1da385362d1eca3dc1bdf52b4c499e68d3007a4
     with:
       branch: main
-      project: tag = github
+      project: state = open or state = active or state = blocked or state = deferred
       myque-gh-ref: c1da385362d1eca3dc1bdf52b4c499e68d3007a4
       issue-authors: github-actions[bot]
       source-repo: iceice666/slime_os
