@@ -1,0 +1,11 @@
+PASS push: true
+PASS pull_request_target: true
+PASS workflow_run: true
+PASS schedule: true
+PASS workflow_dispatch: true
+PASS managed issue: true
+PASS human spoof: false
+PASS unmanaged bot issue: false
+PASS missing issue body: false
+PASS fork repository: false
+PASS exact CI-completion filter, scheduled fallback, workflow-change trigger, no ordinary fork-review writer.
