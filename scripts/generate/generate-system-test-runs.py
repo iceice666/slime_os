@@ -118,6 +118,7 @@ NOT_A_PLANE = {
     "check-sel4-gate-controls.py",  # asserts other gates reject bad input; boots nothing
     "check-sel4-pins.py",  # host-side pin assertion; boots nothing
     "check-sel4-trace-plane.py",  # analyses a transcript; boots nothing
+    "check-sel4-x86-64-image.py",  # P6.1 admission over built pc99 artifacts; boots nothing
 }
 
 
