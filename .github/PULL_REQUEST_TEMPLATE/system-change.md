@@ -22,20 +22,24 @@
 
 ## Verification
 
-| Evidence | What it establishes |
-|---|---|
-| `just ...` | |
+<!-- Distinguish direct observations, inherited evidence, and inference. Name
+     exact commands/scenarios, scope, tested target/revision/binary identity
+     when relevant, and known limits. -->
+
+| Evidence | What it establishes | Class / scope |
+|---|---|---|
+| `just ...` | | direct |
 
 ## Known limits
 
 -
 
-## Evidence / history
+## Evidence / decisions
 
-- Devlog:
+- Existing evidence or decision:
 - Work item (UUID from `.tasks/items/`):
 
-<!-- This Evidence / history section is not machine parsed. After opening the PR, use:
+<!-- This Evidence / decisions section is not machine parsed. After opening the PR, use:
      nix run github:mozufu/myque-gh/c1da385362d1eca3dc1bdf52b4c499e68d3007a4#myque-gh -- pr link <PR> <ITEM> --store . --repo iceice666/slime_os --ref HEAD --apply
      <ITEM> accepts a human key; UUID remains the canonical machine identity.
      Requires authenticated gh and permission to edit the PR body. The command
@@ -45,5 +49,5 @@
      events. workflow_dispatch is an operational escape hatch, not a contributor
      step.
      Do not use GitHub auto-close keywords for projected Issues. Merging a PR
-     does not complete its item; use myque close only after recording exit
-     evidence and the devlog. -->
+     does not complete its item; use myque close only after recording the
+     observed exit evidence, its identity, scope, and limits in the item. -->

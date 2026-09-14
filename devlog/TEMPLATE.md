@@ -1,3 +1,8 @@
+<!-- Retained historical-entry format. Ordinary changes do not create a
+     devlog. Use this only for an expensive reusable investigation or unusual
+     verification campaign while the H3 archive transition is pending. Current
+     durable decisions use docs/decisions/ instead. -->
+
 # Topic
 
 | Field | Value |
@@ -11,8 +16,9 @@
 | Trigger | Commit, change, or first observed condition |
 | Baseline | Last known-good behavior or invariant |
 
-Delete the sections your **Kind** does not require; keep the remaining ones in
-the order below. Required sections per kind:
+Delete the sections the exceptional entry's **Kind** does not require; keep the
+remaining ones in the order below. Required sections preserve the historical
+corpus format:
 
 | Kind | Required sections |
 |---|---|

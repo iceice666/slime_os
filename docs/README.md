@@ -16,7 +16,7 @@ first-class concepts, current status, and non-goals. Then:
    happens between `just run` and the `SLIME_GRAPH HEALTHY` marker, and how
    the verification gates consume that serial record.
 4. [Your first change](getting-started/04-first-change.md) — the workflow end
-   to end: routing, gates, contracts, devlog.
+   to end: routing, gates, contracts, evidence, and owning documentation.
 5. [Add a component](getting-started/05-add-a-component.md) — create the crate,
    declare it, compose it, grant authority, and prove it under QEMU.
 
@@ -48,6 +48,18 @@ in the same commit as the surface it describes.
   operand packing, reply convention, error model, CSpace layout.
   Label coverage is machine-checked by `just contracts_check`.
 
+## Decisions
+
+- [`decisions/`](decisions/README.md) — important long-lived cross-module
+  choices, including the accepted development-record ownership split. Decision
+  records are not required per PR and carry no work-item state.
+
+## Plans
+
+- [`plans/`](plans/README.md) — unimplemented designs, delivery requirements,
+  and qualification requirements. Plans carry no work-item state; H2 will
+  classify the mixed material currently retained in `roadmap/`.
+
 ## Exploration
 
 - [`directions/`](directions/README.md) — the register of exploratory
@@ -62,7 +74,7 @@ in the same commit as the surface it describes.
 | Rationale, boundaries, sequencing, invariants, release gates | [`roadmap/`](../roadmap/README.md) — architectural documentation, not the plan |
 | Known defects and regressions (open ones come before milestone work) | the `backlog`-tagged items in the store, which own their problem statements; [`roadmap/00-backlog.md`](../roadmap/00-backlog.md) is a frozen index of the pre-cutover ones |
 | How a userspace driver gets device/MMIO/IRQ/DMA authority, and what the IO gates prove | [`roadmap/11-io-substrate.md`](../roadmap/11-io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and the operations in [`syscall-abi.md`](syscall-abi.md) |
-| How a conclusion was reached: investigations, evidence, decisions | [`devlog/`](../devlog/README.md) |
+| How a historical conclusion was reached | [`devlog/`](../devlog/README.md), retained during the archive transition; ordinary changes do not add an entry |
 | Code map and task-to-file index | [`AGENTS.md`](../AGENTS.md) |
 | The schemas every persisted or cross-process format is generated from | `contracts/` |
 | Build, test, and gate commands | `Justfile` (`just --list`) |

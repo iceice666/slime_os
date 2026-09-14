@@ -14,14 +14,19 @@
 
 ## Verification
 
-| Check | Result |
-|---|---|
-| `just ...` | pass |
+<!-- Name exact commands/scenarios, observed result, and evidence class
+     (direct / inherited / inference). For hardware or image claims, name the
+     tested target, revision, and binary identity. State known limits. -->
+
+| Check / scenario | Observed result | Evidence class / scope |
+|---|---|---|
+| `just ...` | pass | direct |
 
 ## Related
 
 <!-- Work item UUID from `.tasks/items/` (an optional human key may follow in
-     parentheses); the UUID is the canonical machine identity. / devlog links. -->
+     parentheses); the UUID is the canonical machine identity. Existing
+     evidence or decision links may follow. Ordinary changes need no devlog. -->
 -
 
 <!-- This Related section is not machine parsed. After opening the PR, use:
@@ -34,5 +39,5 @@
      events. workflow_dispatch is an operational escape hatch, not a contributor
      step.
      Do not use GitHub auto-close keywords for projected Issues. Merging a PR
-     does not complete its item; use myque close only after recording exit
-     evidence and the devlog. -->
+     does not complete its item; use myque close only after recording the
+     observed exit evidence, its identity, scope, and limits in the item. -->

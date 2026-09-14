@@ -228,7 +228,7 @@ This slice defines the minimum useful contracts: userspace entry, address-space 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for GitHub intake, planning-before-implementation,
 PR linking, and evidence-based completion.
 
-Work-item identity, state, hierarchy, and dependencies live in `.tasks/items/`, one Markdown file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque). Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: optional, mutable, and never resolved through by a checker, devlog reference, or dependency edge.
+Work-item identity, state, hierarchy, dependencies, and observed closure evidence live in `.tasks/items/`, one Markdown file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque). Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: optional, mutable, and never resolved through by a checker or dependency edge.
 
 ```sh
 just tasks_list    # every item with its key, kind, and state
@@ -265,8 +265,8 @@ boot-contracts/  Shared Rust boot, generation, storage, recovery, and admission 
 contracts/       Versioned Zutai schemas for every persisted, IPC, and boot format, plus generation fixtures
 scripts/         Host tooling grouped as build/, check/, generate/, and lib/
 tools/           Developer-facing helpers such as LLDB attachment
-roadmap/         Architectural documentation: problem statements, boundaries, sequencing, invariants, and release gates
-devlog/          Curated investigations, regression evidence, decisions, and verification history
+roadmap/         Architectural documentation pending H2 classification: boundaries, sequencing, invariants, plans, and delivered history
+devlog/          Retained historical investigations and evidence pending the verified archive cutover; not required for ordinary changes
 assets/          Boot/runtime assets
 deps/            Pinned seL4, rust-sel4, and Zutai submodules
 .tasks/          Canonical work-item store (`items/`) and the pre-migration roadmap-id map

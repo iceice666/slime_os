@@ -7,7 +7,7 @@
 
 **Purpose:** Qualify the named x86-64 Framework now that the architecture track has established its upstream-seL4 CPU/product boot: inventory the real firmware and buses, bind the common [Native I/O substrate](11-io-substrate.md), implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
 
-**Status:** Active. [P6.6's Framework removable-media CPU boot](07-architecture-portability.md#p76--framework-removable-media-cpu-boot) was observed on 2026-09-13, so H1 is unblocked and is the next open milestone in this track. The previous custom-kernel Framework evidence remains historical, and no Milk-V Duo result changes this status.
+**Status:** Active. [P6.6's Framework removable-media CPU boot](07-architecture-portability.md#p66--framework-removable-media-cpu-boot) was observed on 2026-09-13, so H1 is unblocked and is the next open milestone in this track. The previous custom-kernel Framework evidence remains historical, and no Milk-V Duo result changes this status.
 
 **Dependencies:** [P6](07-architecture-portability.md#p6-x86-64-sel4-qemu-and-framework-cpu-boot), especially P6.6; [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 shared buffers and C9 scheduling/restart authority; and the architecture-neutral [Native I/O substrate](11-io-substrate.md). P6 owns target admission, Multiboot/UEFI media, the root/component path, and the first no-write CPU boot. H owns hardware inventory, Framework bindings, drivers, containment, promotion policy, and physical device evidence.
 
