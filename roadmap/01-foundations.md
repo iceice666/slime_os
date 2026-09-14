@@ -1,5 +1,17 @@
 # Foundations and implemented history (Milestones 1–6)
 
+> **H2 routing — mixed retained source.** Current capability/runtime boundaries
+> are in [architecture](../docs/architecture/README.md), and Framework promotion
+> boundaries are in the [hardware plan](../docs/plans/framework-hardware.md).
+> M5.7's detailed storage-aware boot and NVMe promotion requirements remain owned
+> here where not extracted; they are not historical or waived. M5 storage,
+> BootState/recovery and M6 spawn/filesystem/powerbox/transfer detail remains
+> unextracted source material, not reverified current documentation: use its owning
+> contracts and implementation for current behavior. Delivered/gate narratives,
+> retired-kernel descriptions, status and execution-order prose are retained history.
+> The original “Not authoritative” notice concerns work-item state, not the
+> residual requirements identified here. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

@@ -15,6 +15,20 @@ in `docs/decisions/`, with explicit status and revisit conditions. Keep
 exploratory possibilities that are not committed work in `docs/directions/`.
 Delivery chronology and historical verification results do not belong in a plan.
 
-`roadmap/` currently contains a mixture of these categories. H2 will classify it
-subsystem by subsystem; until then, do not copy its contents here or create a
-second competing specification.
+## Extracted requirements
+
+- [Memory capacity](memory-capacity.md) — target-bound multi-holder capacity
+  and reclamation qualification beyond the existing memory mechanism.
+- [Network data plane](network-data-plane.md) — real TCP bytes over LinkDevice,
+  exact destination authority, and bounded reset/restart behavior.
+- [Framework hardware](framework-hardware.md) — device qualification after
+  CPU boot, IOMMU containment, recovery, and the internal-storage safety boundary.
+- [Authority and trust](authority-and-trust.md) — revocation, secrets,
+  accelerator authority, attestation, and distributed capabilities.
+- [RPi5 ROS 2 demo](rpi5-ros2-demo.md) — bounded middleware interoperability
+  and the exact physical-board evidence boundary.
+
+The [roadmap classification](../../roadmap/README.md) names every retained
+source and any detailed requirements not yet extracted. Those explicitly
+retained sections remain the owner of that detail; extracted subjects use the
+pages above. Delivery chronology stays in place until verified H3 archival.

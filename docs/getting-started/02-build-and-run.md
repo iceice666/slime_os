@@ -74,8 +74,8 @@ You will see the elfloader, then seL4's boot output, then the root task's
 ordered `SLIME_ROOT` / `SLIME_GRAPH` markers as it admits the generation and
 launches the component graph — see the
 [boot walkthrough](03-boot-walkthrough.md) for what each stage means. The
-graph runs to completion and comes to rest; QEMU does not exit on its own.
-Quit with `Ctrl-A x`.
+graph remains resident with Slisp waiting for input; QEMU does not exit on its
+own. Quit with `Ctrl-A x`.
 
 ## Verify
 
@@ -127,11 +127,43 @@ libsel4's generated config at build time. Run `just run` or
 `just sel4_qemu_image_check` once first. Refusal is deliberate: silently
 linting or testing a different configuration would be worse than failing.
 
-**A `sel4_*_check` gate hangs or times out** — the gates boot real QEMU
-processes and wait for ordered markers; a missing marker means the behavior
-regressed, not that the gate is flaky. Read the transcript the failing gate
-prints, and compare against the marker table in its
-`scripts/check/check-sel4-*.py`.
+### A boot appears to hang
+
+First distinguish a resident guest from a failed automated gate. `just run`
+starts QEMU directly and does not wait for a success marker or impose a boot
+deadline; quit it with `Ctrl-A x`. Remaining alive is not itself a failure.
+
+For an automated failure:
+
+1. Identify the failing recipe's owning `scripts/check/check-sel4-*.py` and
+   the image/platform it actually boots. The component-graph checker prints
+   its QEMU command as `[boot] ...`; compare that command with the intended
+   build rather than diagnosing a different image or target.
+2. Read the printed serial transcript tail and compare it with that checker's
+   required markers, failure markers, and terminal condition. Distinguish
+   explicit failure, missing evidence, and out-of-order evidence. A deadline
+   says the required observation did not complete; it does not identify the
+   guest's root cause or establish that rerunning will fix it.
+3. For `just sel4_component_graph_check`, inspect
+   [`check-sel4-component-graph.py`](../../scripts/check/check-sel4-component-graph.py):
+   its 120-second boot session waits for `[slisp] resident input wait`, feeds
+   `(+ 1 1)` and `sysinfo`, then requires both `=> spawned sysinfo` and the
+   root's supervision-collection record. A resident-input marker alone is
+   not a completed check. Its full marker assertions still run after capture.
+4. Inspect the owning runner if capture or shutdown is the issue. This graph
+   checker uses [`sel4_boot.run`](../../scripts/lib/sel4_boot.py), which bounds
+   QEMU with a watchdog, captures combined stdout/stderr, and terminates the
+   process after the marker/input session. It does **not** require the guest
+   to exit. Other checkers may own their own loop and deadline; do not assume
+   this graph checker's terminal condition applies to every gate.
+
+The [July stage-0 investigation](../../devlog/2026-07-24-boot-check-hangs/index.md)
+is historical evidence, not a diagnosis of today's seL4 product. Its reusable
+lesson is to separate a boot fault from a healthy resident workload that the
+host mistakenly expects to exit, and to inspect captured output from a bounded
+run. Its stack/PML4 corruption diagnosis, dango Escape-input workaround, and
+old scheduler `on_idle` exit mechanism must not be applied to the current
+Slisp graph runner.
 
 ## Where things land
 
@@ -151,5 +183,6 @@ prints, and compare against the marker table in its
 - `AGENTS.md` — the code map and the task-to-file index for making a change.
 - `just tasks_list` / `just tasks_next` — what is done, what is open, and what
   is actionable, from the canonical work-item store.
-- [`roadmap/`](../../roadmap/README.md) — the architectural context behind
-  those items: track ownership, boundaries, and sequencing.
+- [Architecture](../architecture/README.md) — current subsystem ownership and
+  invariants; [plans](../plans/README.md) — unfinished requirements; the
+  [roadmap classification](../../roadmap/README.md) names retained detail.

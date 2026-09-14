@@ -1,5 +1,18 @@
 # Core runtime track
 
+> **H2 routing — extracted subsystem ownership.** Read current
+> [IPC/capabilities](../docs/architecture/ipc-and-capabilities.md),
+> [typed fabric](../docs/architecture/typed-data-fabric.md),
+> [time/wait/scheduling/lifecycle](../docs/architecture/runtime-authority.md), and
+> [private memory](../docs/architecture/private-memory.md), plus the
+> [capacity plan](../docs/plans/memory-capacity.md), rather than reconstructing
+> current behavior from C7–C10 delivery order. The original boundaries, status,
+> delivery, gates, measured counts and capacity-run narratives below remain
+> historical source, not a second current specification. Fine-grained C7/C8
+> protocol and C9 admission/recording detail not covered by those pages remains
+> unextracted reference material; owning contracts/source determine current behavior.
+> Work-item exit conditions remain in MyQue. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

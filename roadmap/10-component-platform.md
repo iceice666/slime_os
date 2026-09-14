@@ -1,5 +1,16 @@
 # Component specification and out-of-tree development track
 
+> **H2 routing — current identity boundaries separated from delivery.** Read
+> [component/system/image architecture](../docs/architecture/component-system-image.md)
+> for current spec, generation, closure, executable and test-run ownership.
+> CP0–CP15 delivery, motivating-gap snapshots, counts, gates and migration
+> sequences remain history, not a second current specification. Detailed SDK
+> export/publication, platform-prefix assets, compatibility matrix, consumer
+> upgrade/rollback and scenario rules beyond that page remain unextracted source
+> material; their owning contracts, scripts and SDK documentation determine
+> current behavior. No additional unfinished CP plan is created here.
+> See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

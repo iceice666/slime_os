@@ -246,4 +246,5 @@ does not move the SDK repository, signing keys, or issue history.
 - [Getting started](docs/getting-started/01-orientation.md): how to learn,
   build, run, and change it.
 - [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, MyQue, and change-record rules.
+- [Architecture](docs/architecture/README.md) and [plans](docs/plans/README.md): current subsystem rationale versus unimplemented requirements; [roadmap classification](roadmap/README.md) names unextracted detail and historical sources.
 - [Devlog](devlog/README.md): retained historical investigations and transition policy.

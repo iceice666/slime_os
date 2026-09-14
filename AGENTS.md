@@ -20,6 +20,8 @@ otherwise. A CPU boot qualifies no device.
 
 Route work by ownership before searching for a symbol. Read the named module root first; use LSP symbols/references from there when available, and only then grep the exact symbol. Do not scan `deps/`, `target/`, `devlog/`, `roadmap/`, or `.tasks/` for implementation symbols unless the task specifically concerns them.
 
+For current subsystem rationale, start at [`docs/architecture/`](docs/architecture/README.md), then the owning code or contract below. Unimplemented design and qualification boundaries live in [`docs/plans/`](docs/plans/README.md). [`roadmap/README.md`](roadmap/README.md) classifies retained detail and historical source; do not reconstruct extracted architecture from milestone chronology.
+
 ### Execution path
 
 1. `scripts/build/build-sel4.py` pins and builds seL4, the root task, its child fixture, and the loader image.
@@ -39,7 +41,7 @@ Route work by ownership before searching for a symbol. Read the named module roo
 | Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, manifest fixtures below |
 | Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
 | Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation-manifest/v1/compositions/sel4-*.zti`, `components/build-support/src/lib.rs` |
-| Component image format/loading | `contracts/component/v1/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs` |
+| Component image format/loading | `contracts/component/v2/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs`; v1 is retained format history |
 | Userspace component behavior | `components/<lifecycle>/<component>/src/main.rs` | shared helpers in `components/lib/src/*.rs`; the crate's own `components/<lifecycle>/<component>/Cargo.toml` |
 | Userspace syscall ABI | `components/runtime/src/syscall.rs` | seL4 transport in `components/runtime/src/syscall/sel4_transport.rs`, root implementation in `slime-root/src/ipc.rs` |
 | IPC/service protocol semantics | `contracts/<protocol>/v1/schema.zt` | generated Rust in `components/proto/src/<protocol>.rs`; validators in `components/proto/src/lib.rs` |
@@ -75,7 +77,7 @@ Use the Justfile targets from the repository root:
 - `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
 - `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
 - `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
-- `just sel4_fabric_aggregate_check` — C8.15's parent close: both aggregate schedules booted twice over one composition, with byte-identical semantic traces.
+- `just sel4_fabric_aggregate_check` — both aggregate schedules booted twice over one composition; compares per-participant semantic fields while exempting arrival ordinals and designated poll-sampled high-water counters, not byte-identical serial traces.
 - `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
 - `just devlog_check` — validate the retained devlog corpus, its links and fragments, and maintained documentation links plus canonical work-item references outside the frozen backlog rows. Reads the tree only, so it needs no MyQue binary.
 - `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity and UUID resolution of the frozen backlog index in `roadmap/00-backlog.md`, whose headings are validated one section at a time because `B29` and `B30` are each carried twice.
@@ -103,7 +105,7 @@ Backlog defects are the items tagged `backlog`. Resolve, defer, or block every o
 
 `roadmap/00-backlog.md` is a *frozen* index over the pre-cutover items: a `### B<N> — <title>` heading, the devlog entry holding the investigation, and the UUID carrying the state. It exists because 75 devlog entries link into it and 8 of those links are anchored at a heading, so never reword or renumber a landed one, and never restate a problem statement, exit condition, or status there — the item owns all three. It is not the backlog and not a destination for new work: a new defect is a `backlog`-tagged item plus, where warranted, a devlog entry, and nothing requires a heading here. `just tasks_check` holds the landed headings honest — every one carries a UUID the store still has, and the set does not shrink — while `just devlog_check` validates the heading fragments inbound links name. Neither checks an item's state from this file: a frozen index is a route into the store, never a constraint on it, so a legitimately reopened item is `just tasks_check`'s backlog-first question and not the index's.
 
-`roadmap/` is readable architectural documentation and carries no tracker semantics: its headings allocate no identity, and completion, state, hierarchy, and dependencies are the store's. There is no mechanism, supported or otherwise, by which editing `roadmap/` creates or mutates a work item; the data flows one way, from the store into views and documentation.
+`roadmap/` retains historical source and explicitly identified unextracted requirements until verified archival. Its classification index routes extracted subjects to `docs/architecture/` and `docs/plans/`; update those owners rather than maintaining parallel milestone prose. Roadmap headings allocate no identity, and editing them cannot create or mutate a work item. State, hierarchy, and dependencies belong only to the store.
 
 ## Change records and historical investigations
 

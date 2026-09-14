@@ -1,5 +1,16 @@
 # Platform hardware
 
+> **H2 routing — retained qualification detail.** The
+> [Framework plan](../docs/plans/framework-hardware.md) owns the extracted
+> qualification sequence and safety boundary; current mechanisms are in
+> [targets](../docs/architecture/targets-and-portability.md) and
+> [I/O](../docs/architecture/io-substrate.md). This file remains authoritative for
+> unextracted H1–H14 device-specific deliverables, denial/fault scenarios,
+> physical records and integrated acceptance detail. These requirements are not
+> obsolete and grant no device support. Original status and CPU-boot statements
+> are retained historical context, not today's image qualification or work state.
+> See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

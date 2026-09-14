@@ -37,6 +37,12 @@ below, which have update discipline these pages do not.
 - [Generations](concepts/generations.md) — the atomic, rollbackable unit of
   deployment, including persistent state.
 
+## Architecture
+
+- [Subsystem architecture](architecture/README.md) — current IPC, fabric,
+  time/waiting/lifecycle, private memory, component/image boundaries, target
+  profiles, and userspace I/O, with owning source and qualification limits.
+
 ## Reference
 
 These two files are load-bearing and have update discipline: each must change
@@ -57,8 +63,9 @@ in the same commit as the surface it describes.
 ## Plans
 
 - [`plans/`](plans/README.md) — unimplemented designs, delivery requirements,
-  and qualification requirements. Plans carry no work-item state; H2 will
-  classify the mixed material currently retained in `roadmap/`.
+  and qualification requirements, without work-item state. The
+  [roadmap classification](../roadmap/README.md) identifies retained detail
+  not yet extracted and historical source awaiting verified archival.
 
 ## Exploration
 
@@ -71,9 +78,9 @@ in the same commit as the surface it describes.
 | Looking for | Go to |
 | --- | --- |
 | Work-item state: what is done, open, blocked, deferred | `just tasks_list`, `just tasks_next` over the canonical store in `.tasks/items/` |
-| Rationale, boundaries, sequencing, invariants, release gates | [`roadmap/`](../roadmap/README.md) — architectural documentation, not the plan |
+| Current subsystem ownership and invariants | [`architecture/`](architecture/README.md); unfinished requirements in [`plans/`](plans/README.md); retained detail classified in [`roadmap/`](../roadmap/README.md) |
 | Known defects and regressions (open ones come before milestone work) | the `backlog`-tagged items in the store, which own their problem statements; [`roadmap/00-backlog.md`](../roadmap/00-backlog.md) is a frozen index of the pre-cutover ones |
-| How a userspace driver gets device/MMIO/IRQ/DMA authority, and what the IO gates prove | [`roadmap/11-io-substrate.md`](../roadmap/11-io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and the operations in [`syscall-abi.md`](syscall-abi.md) |
+| How userspace drivers receive device/MMIO/IRQ/DMA authority, and what IO gates prove | [Userspace I/O substrate](architecture/io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and operations in [`syscall-abi.md`](syscall-abi.md) |
 | How a historical conclusion was reached | [`devlog/`](../devlog/README.md), retained during the archive transition; ordinary changes do not add an entry |
 | Code map and task-to-file index | [`AGENTS.md`](../AGENTS.md) |
 | The schemas every persisted or cross-process format is generated from | `contracts/` |

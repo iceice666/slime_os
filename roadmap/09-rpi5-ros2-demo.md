@@ -1,5 +1,15 @@
 # Raspberry Pi 5 ROS 2 two-node demo track
 
+> **H2 routing — extracted demo boundary, retained slice detail.** The
+> [RPi5 demo plan](../docs/plans/rpi5-ros2-demo.md) owns the goal, exclusions,
+> broad sequence and physical-evidence rule; current target/build boundaries are
+> in [targets](../docs/architecture/targets-and-portability.md) and
+> [component/system/image architecture](../docs/architecture/component-system-image.md).
+> Unextracted RP3–RP8 runtime-envelope, trace, fault, repeatability and physical
+> acceptance detail remains authoritative here. RP0–RP2 delivery and original
+> transport-pivot/status/priority prose remain history, not today's board or
+> middleware qualification. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.
