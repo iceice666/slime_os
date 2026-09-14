@@ -477,6 +477,19 @@ pub(super) fn launch_instance_graph(
         admission.wrong_target_images,
         admission.unrecognized_images,
     );
+    // Graph launch is the one phase with no marker between its start and the
+    // readiness record, and it is where the second physical attempt stopped.
+    // Three markers rather than one, because the phases fail for unrelated
+    // reasons: images staged into child VSpaces, endpoints materialized
+    // between them, then the components actually started.
+    //
+    // SAFETY: still the root's only thread; no component runs until below.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = crate::boot_record::render_stage(panel, allocator, "IMAGES STAGED");
+        });
+    }
     let materialized = match peers.materialize(generation, launched_instances, allocator, tasks) {
         Ok(report) => report,
         Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
@@ -487,6 +500,13 @@ pub(super) fn launch_instance_graph(
         materialized.grants,
         materialized.installed,
     );
+    // SAFETY: as above.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = crate::boot_record::render_stage(panel, allocator, "ENDPOINTS WIRED");
+        });
+    }
     let notifications = unsafe { &mut *ptr::addr_of_mut!(NOTIFICATIONS) };
     let mut notification_report = match notifications.materialize(generation, allocator) {
         Ok(report) => report,
@@ -1007,6 +1027,19 @@ pub(super) fn launch_instance_graph(
             scopes: &scopes,
         },
     );
+
+    // The last marker before the service loop, which is where the readiness
+    // record is written. A panel stopping here means the components and the
+    // console dispatcher exist but the graph never reached healthy.
+    //
+    // SAFETY: the console dispatcher is a second thread from here on, but it
+    // never touches the panel; this is still the only renderer.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = crate::boot_record::render_stage(panel, allocator, "COMPONENTS RUNNING");
+        });
+    }
 
     serve_instance_graph(
         generation,

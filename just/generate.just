@@ -77,6 +77,13 @@ powerbox_gen:
 component_sdk_release_gen:
     python3 scripts/generate/generate-component-sdk-release-bindings.py
 
+
+[group('generate')]
+boot_media_gen:
+    python3 scripts/generate/generate-boot-media-bindings.py
+[group('generate')]
+cpu_boot_observation_gen:
+    python3 scripts/generate/generate-cpu-boot-observation-bindings.py
 [group('generate')]
 boot_gen:
     python3 scripts/generate/generate-boot-bindings.py

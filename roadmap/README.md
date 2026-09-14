@@ -11,9 +11,9 @@ boundaries, and sequencing that no work-item body should have to restate.
 
 The current physical execution goal is:
 
-> **Boot upstream seL4 and a verified Slime generation on the named Milk-V Duo, then replay the architecture-neutral root and component evidence through its observed hands-off deployment and serial loop.**
+> **Inventory and qualify the named Framework's actual firmware and devices, now that the x86-64 upstream-seL4 product path boots it from identity-bound removable media without modifying internal storage.**
 
-Milk-V Duo is the current physical bring-up target because it is the only available board with an observed, repeatable USB-NCM deployment and serial evidence path. This is a narrow execution pivot, not a product-equivalence claim: the Raspberry Pi 5 ROS 2 demo and Framework daily-driver releases remain defined and deferred, and Duo evidence cannot satisfy their board-, storage-, DMA-, input-, display-, network-, suspend-, or trust-specific gates.
+The Milk-V Duo architecture lane is complete through P3.F and remains retained evidence. [P6](07-architecture-portability.md#p6-x86-64-sel4-qemu-and-framework-cpu-boot) **closed 2026-09-13**: the named Framework cold-booted the QEMU-proven image twice, rendered its readiness record through the firmware's linear framebuffer, and left the protected region of its internal NVMe byte-identical. [H1](04-platform-hardware.md) is now the active lane. P6 was deliberately narrower than hardware qualification, and that boundary still holds: H1–H14, M5.7, Raspberry Pi 5, and every device-specific gate retain their own evidence requirements, and no device is qualified by a CPU boot.
 
 A milestone is complete only when its exit condition is observed. Compiled code, a custom payload, a passing QEMU run, or evidence from a different physical target cannot close a board-specific milestone.
 
@@ -32,10 +32,10 @@ record that drifts the moment an item closes, which is why there is none.
 | [Core runtime](02-core-runtime.md) | The typed data fabric, robot-runtime authority (clock/timer, wait sets, scheduling class, lifecycle policy, determinism claims), and task-private component memory | Mechanism stays in `slime-root`; policy — supervision decisions, health, QoS — is a userspace component's. Runtime memory is task-private, generation-bounded, never executable, and fully reclaimed |
 | [Component platform](10-component-platform.md) | `component-spec/v1` through `system-spec/v1`: immutable component sources, target-qualified platform prefixes, external artifact admission, compatibility evidence, upgrade, rollback, and closure identity as the reproducible build key | A closure is an identity over declared inputs; the handful of plane gates a closure structurally cannot describe stay outside it |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | The two-node bounded-topic demo contract and its target-qualified build path | Only a physical Raspberry Pi 5 run satisfies its board claim; `aarch64-qemu-virt` evidence is regression coverage, not the demo |
-| [Architecture portability](07-architecture-portability.md) | Target/artifact contracts, the x86 boundary extraction, the seL4 substitution, and the RV64 Duo physical lane | An architecture lane proves capability, fault, wait/wake, reclamation, generation, and rollback parity — not storage, USB, network, display, sensor, or actuator support, and never another board's gate |
+| [Architecture portability](07-architecture-portability.md) | Target/artifact contracts, the x86 boundary extraction, the seL4 substitution, the RV64 Duo physical lane, and P6's x86-64 upstream-seL4 path through one observed Framework removable-media CPU boot | An architecture lane proves capability, fault, wait/wake, reclamation, generation, and rollback parity — not storage, USB, network, display, sensor, or actuator support, and never another board's gate. A CPU boot qualifies no device |
 | [Native I/O substrate](11-io-substrate.md) | Request/epoch/lease/queue semantics, bounded device/MMIO/IRQ/DMA authority with reclamation on death, the userspace virtio-blk and virtio-net drivers, exact-destination networking, and the host models and proofs under them | Trusted DMA on QEMU with no containment claim. IO4's authority boundary is separate from its network data plane, and an unimplemented protocol layer is unclaimed rather than implied |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | The frozen bounded topic wire profile and the authority model beneath it | Wire interoperability grants nothing: names, types, domains, and destinations still need explicit capabilities. Resumes with the robotics demo |
-| [Platform hardware](04-platform-hardware.md) | Framework daily-driver device authority and its inventory/no-write record | Waits on a seL4 Framework image and observed physical evidence, which no Duo or QEMU run supplies |
+| [Platform hardware](04-platform-hardware.md) | Framework daily-driver device authority and its inventory/no-write record | Unblocked by P6.6's observed CPU boot; H1 owns the real ACPI/PCI/APIC/IOMMU/NVMe/input topology, which that boot implies none of |
 | [Foreign workloads](05-foreign-workloads.md) | An optional Linux userspace personality | Only pursued for a selected product workload that needs one |
 | [Authority and trust](06-authority-trust.md) | The trust primitives above capabilities | Each is pulled in by a product or hardware release that needs it, not built speculatively |
 | [Native development](08-native-development.md) | On-device build and live update | Waits on a stable physical product path |
@@ -48,14 +48,15 @@ dependencies; this addition does not change the physical bring-up goal.
 
 ## Physical bring-up sequencing
 
-The P3/P3.E [Architecture portability](07-architecture-portability.md) sequence is complete:
+The completed P3/P3.E Milk-V Duo sequence remains the physical RV64 baseline. The x86-64 sequence is now complete:
 
-1. **RV64 reference profile:** the pinned `riscv64-sel4-qemu-virt` profile replays the architecture-neutral corpus.
-2. **Duo platform risks:** the 63.25 MiB memory fit, PLIC context, and C906 MAEE/page-table behavior are measured and explicit.
-3. **Physical seL4 and generation:** elfloader, upstream seL4, `slime-root`, and the exact `riscv64-sel4-milkv-duo` generation boot on the named board.
-4. **Component and fault evidence:** three sample-plane runs produce byte-identical normalized traces with zero framing errors; a fourth run emits the bounded early-fault diagnostic.
-5. **Recovery:** every boot autonomously cold-resets to vendor Linux.
-6. **Next decision boundary:** choose a product workload only through a new roadmap item; architecture completion does not imply ROS, storage, network, USB, display, sensor, actuator, Raspberry Pi 5, or Framework support.
+1. **P6.1 target contract (complete):** the pc99 seL4 kernel, x86-64 Rust target specifications, QEMU q35 machine facts, and both exact target profiles are pinned, and `just x86_64_sel4_image_check` proves the build is admitted and byte-reproducible.
+2. **P6.2 Multiboot (complete):** pinned QEMU q35/OVMF boots seL4 plus `slime-root` through one GRUB Multiboot2 EFI layout shared by QEMU and removable media, with the firmware, bootloader, module set, and tree digest all pinned.
+3. **P6.3 native execution (complete):** child VSpace, fault decoding, task context, thread pointer, timer, and reclamation run on x86-64.
+4. **P6.4 semantic parity (complete):** the resident product graph and the wait-set, sample, and boot-layout corpus replay under QEMU, with init's resolved capability layout byte-identical to AArch64.
+5. **P6.5 removable image (complete):** one deterministic Framework-target-qualified GPT/FAT32 image contains the P6.4 EFI tree, has no writable product/state partition, and boots its exact raw bytes under pinned QEMU/OVMF.
+6. **P6.6 physical CPU boot (complete, observed 2026-09-13):** the named Framework cold-booted the exact QEMU-proven image twice without input or internal-storage write authority, rendering target, generation, mode, and readiness through the firmware's linear framebuffer — the machine has no serial port — and leaving the protected 16 MiB of internal NVMe byte-identical. Recorded in `evidence/framework-cpu-boot/slime-cpu-boot.observation.json` and judged by `just framework_cpu_boot_check`.
+7. **H1 boundary (active):** inventory and qualify the actual firmware and devices. CPU boot does not imply PCI, DMA, keyboard, NVMe, network, display, or daily-driver support, and P6.6 claims none of them.
 
 
 The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitly defer open defects before opening a new roadmap gate. A green verification suite is a precondition for milestone work, not a milestone itself.
@@ -77,6 +78,7 @@ flowchart TD
     P1["P1 x86 boundary extraction"]
     P2["P2 AArch64 native"]
     P5["P5 seL4 substitution\nproduct path"]
+    P6["P6 x86-64 seL4 + Framework CPU boot"]
     P4["P4 Raspberry Pi 5 qualification"]
     C9["C9 robot runtime authority"]
     C10["C10 private component memory"]
@@ -116,6 +118,7 @@ flowchart TD
     Framework["Framework daily-driver hardware"]
     RV64["P3 RV64 QEMU"]
     Duo["P3.E seL4 on Milk-V Duo"]
+    FrameworkCPU["P6.6 Framework removable-media CPU boot"]
     X1["X1 Linux personality"]
 
     Backlog --> Foundations
@@ -123,6 +126,7 @@ flowchart TD
     Foundations --> P0 --> P1 --> P5
     P1 --> P2
     P5 --> RV64 --> Duo
+    P5 --> P6 --> FrameworkCPU --> Framework
     C8 --> RP0
     P0 --> RP1
     P1 --> RP1
@@ -155,7 +159,7 @@ flowchart TD
     X1 -.->|only if chosen| RP6
     RP8 --> R1 --> R2
     IO4 --> R1
-    Foundations -.->|later| Framework
+    Foundations -.->|storage invariants| Framework
     IO2 -.->|block substrate| Framework
     IO4 -.->|network substrate| Framework
 ```
@@ -206,9 +210,13 @@ Requires P0, P1, and P2. It remains valid architecture evidence for `aarch64-qem
 
 Deferred with the robotics demo unless explicitly reprioritized. R0 proves the minimum topic path; R1/R2 broaden it to external `rmw_zenoh` peers, services, and actions.
 
+### x86-64 Framework CPU/product boot release
+
+**Achieved 2026-09-13** through P6.1–P6.6. It required the QEMU semantic corpus, one deterministic GPT/EFI image booted under OVMF, and two cold boots of that exact image on the named Framework with target-qualified root/component evidence and an unchanged internal-NVMe comparison region — all observed, and recorded in `evidence/framework-cpu-boot/slime-cpu-boot.observation.json`. It claims no device inventory or device support.
+
 ### Framework daily-driver release
 
-Deferred. It still requires Framework H1–H14 plus the common IO slices each H milestone consumes. No Duo architecture, serial, storage, or component evidence satisfies a Framework-specific gate.
+Deferred behind the CPU/product boot release. It still requires H1–H14 plus the common IO slices each H milestone consumes; M5.7 separately gates the storage-aware boot. No P6, Duo, QEMU, or CPU-only evidence satisfies a Framework device gate.
 
 ### Existing-workload release
 
@@ -216,7 +224,7 @@ Deferred unless selected as the implementation route for a future product worklo
 
 ## Verification policy
 
-Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. Architecture changes run the target-specific QEMU gate before any physical board claim. Milk-V Duo promotion requires the P3 RV64 QEMU corpus plus a recorded Duo run with exact image, firmware, generation, memory-placement, and serial evidence. Raspberry Pi 5 and Framework promotion retain their own recorded board and device-authority requirements.
+Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. P6 requires the target-specific QEMU gate before media construction, QEMU boot of the exact raw media before physical use, and the recorded Framework no-write boot before H1. Milk-V Duo, Raspberry Pi 5, and Framework evidence remain target-specific and cannot substitute for one another.
 
 Documentation-only roadmap edits do not run runtime tests; their verification is link, identifier, and content consistency, guarded by `just devlog_check` when devlog entries are added or touched and by `just tasks_check` when the work-item store changes.
 

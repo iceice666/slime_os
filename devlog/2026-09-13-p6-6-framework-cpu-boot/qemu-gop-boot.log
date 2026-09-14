@@ -1,0 +1,674 @@
+qemu-system-x86_64: warning: TCG doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: TCG doesn't support requested feature: CPUID[eax=01h].ECX.tsc-deadline [bit 24]
+qemu-system-x86_64: warning: TCG doesn't support requested feature: CPUID[eax=07h,ecx=00h].EBX.hle [bit 4]
+qemu-system-x86_64: warning: TCG doesn't support requested feature: CPUID[eax=07h,ecx=00h].EBX.invpcid [bit 10]
+qemu-system-x86_64: warning: TCG doesn't support requested feature: CPUID[eax=07h,ecx=00h].EBX.rtm [bit 11]
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[H[J[1;1H[H[J[1;1H    Booting `slime'Booting `slime'
+
+
+
+
+Boot config: debug_port = 0x3f8
+Boot config: disable_iommu = false
+  module #0: start=0x19a1000 end=0x1aa8f40 size=0x107f40 name='slime-root'
+	Physical Memory Region from 0 size a0000 type 1
+	Physical Memory Region from 100000 size 700000 type 1
+Adding physical memory region 0x100000-0x800000
+	Physical Memory Region from 800000 size 8000 type 4
+	Physical Memory Region from 808000 size 3000 type 1
+Adding physical memory region 0x808000-0x80b000
+	Physical Memory Region from 80b000 size 1000 type 4
+	Physical Memory Region from 80c000 size 6000 type 1
+Adding physical memory region 0x80c000-0x812000
+	Physical Memory Region from 812000 size 1000 type 2
+	Physical Memory Region from 813000 size 1000 type 1
+Adding physical memory region 0x813000-0x814000
+	Physical Memory Region from 814000 size ec000 type 4
+	Physical Memory Region from 900000 size 7efed000 type 1
+Adding physical memory region 0x900000-0x7f8ed000
+	Physical Memory Region from 7f8ed000 size 100000 type 2
+	Physical Memory Region from 7f9ed000 size 100000 type 20
+	Physical Memory Region from 7faed000 size 80000 type 2
+	Physical Memory Region from 7fb6d000 size 12000 type 3
+	Physical Memory Region from 7fb7f000 size 80000 type 4
+	Physical Memory Region from 7fbff000 size 2f5000 type 1
+Adding physical memory region 0x7fbff000-0x7fef4000
+	Physical Memory Region from 7fef4000 size 84000 type 2
+	Physical Memory Region from 7ff78000 size 88000 type 4
+	Physical Memory Region from e0000000 size 10000000 type 2
+	Physical Memory Region from ffc00000 size 400000 type 2
+Got framebuffer info in multiboot2. Current video mode is at physical address=80000000 pitch=2400 resolution=800x600@24 type=1
+Detected 1 boot module(s):
+Kernel loaded to: start=0x100000 end=0xa22000 size=0x922000 entry=0x100379
+ACPI: RSDT paddr=0x7fb7d074
+ACPI: RSDT vaddr=0x7fb7d074
+ACPI: FADT paddr=0x7fb79000
+ACPI: FADT vaddr=0x7fb79000
+ACPI: FADT flags=0x84a5
+ACPI: 0 IOMMUs detected
+ACPI: MADT paddr=0x7fb78000
+ACPI: MADT vaddr=0x7fb78000
+ACPI: MADT apic_addr=0xfee00000
+ACPI: MADT flags=0x1
+ACPI: MADT_APIC apic_id=0x0
+ACPI: MADT_IOAPIC ioapic_id=0 ioapic_addr=0xfec00000 gsib=0
+ACPI: MADT_ISO bus=0 source=0 gsi=0x002 flags=0x0
+ACPI: MADT_ISO bus=0 source=5 gsi=0x005 flags=0xd
+ACPI: MADT_ISO bus=0 source=9 gsi=0x009 flags=0xd
+ACPI: MADT_ISO bus=0 source=10 gsi=0x00a flags=0xd
+ACPI: MADT_ISO bus=0 source=11 gsi=0x00b flags=0xd
+ACPI: 1 CPU(s) detected
+ELF-loading userland images from boot modules:
+size=0x3bf000 v_entry=0x296284 v_start=0x200000 v_end=0x5bf000 p_start=0x1aa9000 p_end=0x1e68000
+Moving loaded userland images to final location: from=0x1aa9000 to=0xa22000 size=0x3bf000
+Starting node #0 with APIC ID 0
+Mapping kernel window is done
+Available phys memory regions: 6
+  [100000..800000)
+  [808000..80b000)
+  [80c000..812000)
+  [813000..814000)
+  [900000..7f8ed000)
+  [7fbff000..7fef4000)
+Reserved virt address space regions: 1
+  [ffffff8000100000..ffffff8000de1000)
+Booting all finished, dropped to user space
+SLIME_ROOT allocator slots=3002 untypeds=36 bytes=2135783424
+SLIME_DISPLAY mode=800x600x24 paddr=0x80000000
+SLIME_DISPLAY stage root
+SLIME_TIMER acquired irq=20 freq_hz=10000000
+SLIME_TIMER delivered badge=0x1 polls=38
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=0 end=274061 delta=274061
+SLIME_TIMER OK
+SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta=8192 caps_deleted=2
+SLIME_ROOT plan slots required=555 available=2995
+SLIME_ROOT generation admitted number=1 executables=6 instances=6 grants=11 health=4 bootstrap=1
+SLIME_ROOT fabric graph=absent schemas=0 routes=0 participants=0 interpositions=0
+SLIME_ROOT authority manifest=[14, 0a, 76, 21, f8, 38, 7f, 38, 47, 20, d4, 40, 0d, 77, 45, bd, c4, 0e, 09, 72, f2, f1, dd, b9, 5e, 3c, aa, 08, 2f, 2d, d0, 19]
+SLIME_ROOT graph admitted executables=6 instances=6 slimecm=0 elf=6 unrecognized=0
+SLIME_MEM budget holders=0 declared=0
+SLIME_CLOCK authority holders=0 timer_quota=0
+SLIME_WAIT sources declared=0 resource=0
+SLIME_GRAPH schedule instance=init priority=254 default=254
+SLIME_GRAPH threads instance=init count=1
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+SLIME_GRAPH factory placed task=0 component=init slot=8 kind=shared-buffer-factory
+SLIME_GRAPH staged task=0 instance=init executable=init grants=6 bindings=6 window=0x21f000 frames=32 tables=4 entry=0x2042a0
+SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=6 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH endpoint grant=slisp-console-rpc producer_instance=0 consumer_instance=3
+SLIME_GRAPH endpoint grant=spawn-service-echo-context producer_instance=1 consumer_instance=4
+SLIME_GRAPH endpoint grant=spawn-service-rpc producer_instance=4 consumer_instance=3
+SLIME_GRAPH endpoint grant=spawn-service-sysinfo-context producer_instance=5 consumer_instance=4
+SLIME_GRAPH peer endpoints created=4 grants=4 installed=0
+SLIME_GRAPH notifications created=0 bindings=0
+SLIME_CLOCK authority task=0 instance=init flags=0x0 timers=0 badge=0x0
+[layout] path=init slots=6 max=64
+[layout] 1 executable console 0x10008
+[layout] 5 executable spawn-service 0x10008
+[layout] 6 executable sysinfo 0x10008
+[layout] 7 executable echo-agent 0x10008
+[layout] 8 shared-buffer-factory - 0x1000000
+[layout] 9 executable slisp 0x10008
+[layout] end
+SLIME_GRAPH activated instances=1
+SLIME_TIMER phase=post-graph-start delivered badge=0x1 polls=60
+SLIME_TIMER phase=post-graph-start serviced events=1 programming=Disarm
+SLIME_TIMER phase=post-graph-start advanced start=13379708 end=13594451 delta=214743
+SLIME_TIMER phase=post-graph-start OK
+SLIME_GRAPH quota task=0 instance=init executable=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_MEM quota task=0 instance=init declared=0 installed=0 base=0x0
+SLIME_GRAPH quotas declared=1 budgeted=0 holders=1
+SLIME_ROOT console dispatcher started
+SLIME_ROOT allocator baseline live_slots=55 live_objects=126 live_bytes=741504
+[init] launching component graph
+SLIME_GRAPH spawn preflight executable-ok task-instance=2 slot=1 executable=0 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=2 child=0 name=console
+SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0
+SLIME_GRAPH schedule instance=console priority=254 default=254
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+SLIME_GRAPH quota task=1 instance=console executable=console pages=0 buffers=0 mappings=0 loans=0
+SLIME_MEM quota task=1 instance=console declared=0 installed=0 base=0x0
+SLIME_GRAPH native endpoint task=1 slot=33 side=both
+SLIME_CLOCK authority task=1 instance=console flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=2 supervision_grants=0 buffer_factory_grants=0
+SLIME_GRAPH spawn preflight executable-ok task-instance=2 slot=5 executable=4 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=2 child=4 name=spawn-service
+SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3
+SLIME_GRAPH schedule instance=spawn-service priority=254 default=254
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+SLIME_GRAPH quota task=2 instance=spawn-service executable=spawn-service pages=4 buffers=1 mappings=2 loans=1
+SLIME_MEM quota task=2 instance=spawn-service declared=0 installed=0 base=0x0
+SLIME_GRAPH native endpoint task=2 slot=38 side=both
+SLIME_GRAPH native endpoint task=2 slot=33 side=both
+SLIME_GRAPH native endpoint task=2 slot=36 side=both
+SLIME_CLOCK authority task=2 instance=spawn-service flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=3 supervision_grants=0 buffer_factory_grants=1
+SLIME_GRAPH spawn preflight executable-ok task-instance=2 slot=9 executable=3 rights=0x10008
+SLIME_GRAPH spawn preflight child-ok task-instance=2 child=3 name=slisp
+SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0
+SLIME_GRAPH schedule instance=slisp priority=254 default=254
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807fee9400 "rootserver" @2d3520]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+SLIME_GRAPH quota task=3 instance=slisp executable=slisp pages=0 buffers=0 mappings=0 loans=0
+SLIME_MEM quota task=3 instance=slisp declared=0 installed=0 base=0x0
+SLIME_GRAPH declared placed task=0 child=3 slot=1 kind=input
+SLIME_GRAPH native endpoint task=3 slot=33 side=both
+SLIME_GRAPH native endpoint task=3 slot=35 side=both
+SLIME_CLOCK authority task=3 instance=slisp flags=0x0 timers=0 badge=0x0
+SLIME_GRAPH spawned task=0 child=3 component=slisp grants=0 endpoints=2 notifications=0 handle=4 supervision_grants=0 buffer_factory_grants=0
+SLIME_GRAPH healthy generation=1 instances=0f1929f39bf5fa1f required=4 live=4 idle=4 failed=0
+SLIME_ROOT READY target_profile=x86_64-sel4-framework13-ai300
+SLIME_DISPLAY ready rendered
+[init] product services resident
+Slisp
+slisp>

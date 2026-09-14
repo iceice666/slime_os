@@ -521,6 +521,93 @@ mod tests {
         );
     }
 
+    /// P6.1: every axis that distinguishes the x86-64 seL4 reference must be
+    /// refused before the payload is reachable, and each must report which axis
+    /// differed rather than one generic failure.
+    #[test]
+    fn an_x86_64_sel4_payload_refuses_every_wrong_qualification() {
+        let pc99 = TargetProfile::by_name("x86_64-sel4-qemu-pc99").expect("declared profile");
+        let body = elf_body(pc99, pc99.page_bytes);
+        let image = elf_image(pc99, &body);
+        assert_eq!(admit_elf(&image, pc99), Ok(body.as_slice()));
+
+        // A different architecture entirely.
+        for name in ["aarch64-sel4-qemu-virt", "riscv64-sel4-qemu-virt"] {
+            let other = TargetProfile::by_name(name).expect("declared profile");
+            assert_eq!(
+                admit_elf(&image, other),
+                Err(ComponentTargetError::Target(TargetError::ProfileMismatch)),
+                "{name} accepted an x86-64 seL4 image"
+            );
+        }
+
+        // Same architecture, the retired custom kernel's trap ABI. This is the
+        // collision the profile table exists to prevent: both are x86-64 with
+        // 4 KiB pages, and only the ABI, feature set, and profile id differ.
+        let retired = TargetProfile::legacy().expect("legacy profile");
+        assert_eq!(retired.architecture, pc99.architecture);
+        assert_ne!(retired.abi, pc99.abi);
+        assert_eq!(
+            admit_elf(&image, retired),
+            Err(ComponentTargetError::Target(TargetError::ProfileMismatch))
+        );
+
+        // Same architecture and ABI, different exact machine. P6.6 owns the
+        // physical claim, so a QEMU-qualified executable must not satisfy it.
+        let framework =
+            TargetProfile::by_name("x86_64-sel4-framework13-ai300").expect("declared profile");
+        assert_eq!(framework.abi, pc99.abi);
+        assert_eq!(framework.required_features, pc99.required_features);
+        assert_ne!(framework.id, pc99.id);
+        assert_eq!(
+            admit_elf(&image, framework),
+            Err(ComponentTargetError::Target(TargetError::ProfileMismatch))
+        );
+        // An AArch64 ELF body carrying this profile's own correct header: the
+        // header alone must not admit it, because the ELF's own `e_machine` is
+        // checked against the profile too.
+        let arm = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let mut forged = elf_image(pc99, &elf_body(arm, arm.page_bytes));
+        assert_eq!(
+            admit_elf(&forged, pc99),
+            Err(ComponentTargetError::BadElfIdentity)
+        );
+
+        // Each remaining axis, perturbed one at a time in an otherwise valid
+        // header, so a refusal names the axis rather than a generic mismatch.
+        for (offset, value, expected) in [
+            (
+                wire::OFF_HEADER_ARCHITECTURE,
+                arm.architecture,
+                TargetError::ArchitectureMismatch,
+            ),
+            (wire::OFF_HEADER_ABI, arm.abi, TargetError::AbiMismatch),
+            (
+                wire::OFF_HEADER_PAGE_PROFILE,
+                arm.page_profile,
+                TargetError::PageProfileMismatch,
+            ),
+        ] {
+            forged = elf_image(pc99, &body);
+            forged[offset..][..4].copy_from_slice(&value.to_le_bytes());
+            assert_eq!(
+                admit_elf(&forged, pc99),
+                Err(ComponentTargetError::Target(expected)),
+                "perturbing offset {offset} did not report {expected:?}"
+            );
+        }
+
+        // The feature set is admitted by equality, not containment, so asking
+        // for one extra feature this profile does not provide must fail.
+        forged = elf_image(pc99, &body);
+        let extra = pc99.required_features | crate::target_profile::FEATURE_AARCH64_GICV3;
+        forged[wire::OFF_HEADER_REQUIRED_FEATURES..][..8].copy_from_slice(&extra.to_le_bytes());
+        assert_eq!(
+            admit_elf(&forged, pc99),
+            Err(ComponentTargetError::Target(TargetError::FeatureMismatch))
+        );
+    }
+
     #[test]
     fn a_retained_v1_image_means_x86_not_architecture_neutral() {
         let header = v1_header();

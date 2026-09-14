@@ -402,7 +402,10 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-02 | [Canonical system-image and test-run closures](2026-09-02-cp11-system-image-closure/index.md) | Change | Verified | CP11 |
 | 2026-09-02 | [CP12/CP13/CP14 - composition derivation, the closure builder, and scenario identities](2026-09-02-cp12-composition-derivation/index.md) | Change | Verified | CP12, CP13, CP14 |
 | 2026-09-02 | [Capacity ceilings: what a raise actually costs, and why single-core is now written down](2026-09-02-capacity-ceilings-register/index.md) | Decision | Proposed | none |
+| 2026-09-02 | [P6 returns the active architecture lane to x86-64 seL4](2026-09-02-p6-amd64-sel4-return/index.md) | Decision | Proposed | P6, H1, M5.7 |
+| 2026-09-02 | [P6.1: x86-64 seL4 builds reproducibly and admits nothing else](2026-09-02-p6-1-x86-64-sel4-target/index.md) | Change | Verified | P6.1 |
 | 2026-09-03 | [CP15 - plane gates build by closure identity, and two reproducibility defects it exposed](2026-09-03-cp15-closure-cutover/index.md) | Change | Verified | CP14, CP15 |
+| 2026-09-03 | [P6.2-P6.4: x86-64 seL4 boots, runs the root, and serves the product graph](2026-09-03-p6-2-p6-4-x86-64-boot/index.md) | Change | Verified | P6.2, P6.3, P6.4 |
 | 2026-09-04 | [CP15 - the remaining plane gates unblock, the legacy flag surface deletes, and a keyboard parameter the closure model dropped](2026-09-04-cp15-legacy-deletion/index.md) | Change | Verified | CP12, CP15 |
 | 2026-09-04 | [CP15 - the SDK publication clause: a bootable closure with no `slime_os` checkout](2026-09-04-cp15-sdk-publication/index.md) | Change | Verified | CP15 |
 | 2026-09-04 | [Independent per-platform rust-sel4 loader branches](2026-09-04-rust-sel4-per-platform-loader-branches/index.md) | Change | Verified | none |
@@ -442,3 +445,5 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-13 | [Contributor workflow separated from licensing policy](2026-09-13-contributor-workflow/index.md) | Change | Verified | none |
 | 2026-09-13 | [Device-derived private-memory capacity, not another fixed ceiling](2026-09-13-mem-adaptive-device-capacity/index.md) | Decision | Proposed | MEM-ADAPTIVE |
 | 2026-09-13 | [Enable native GitHub milestone projection](2026-09-13-myque-native-milestones/index.md) | Change | Proposed | none |
+| 2026-09-13 | [P6.5: one raw image becomes the QEMU-proven Framework boot medium](2026-09-13-p6-5-framework-media/index.md) | Change | Verified | P6.5 |
+| 2026-09-13 | [P6.6: Slime OS boots on the Framework, and the boot leaves checkable evidence](2026-09-13-p6-6-framework-cpu-boot/index.md) | Change | Monitoring | P6.6 |

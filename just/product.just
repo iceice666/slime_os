@@ -19,6 +19,60 @@ sel4_root_boot_check: sel4_pin_check
 riscv64_qemu_image_check: sel4_pin_check
     python3 scripts/build/build-sel4.py --platform qemu-riscv-virt --skip-pin-check
 
+# P6.1 builds the admitted x86-64 seL4 kernel, root task, child fixture, and
+# generation for the pinned QEMU pc99 profile, and P6.2 assembles the GRUB
+# Multiboot2 EFI tree that supplies the two ELFs as modules. Deliberately no
+# boot here: `x86_64_sel4_root_boot_check` owns the boot claim.
+[group('product')]
+x86_64_sel4_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform qemu-pc99 --skip-pin-check
+    python3 scripts/check/check-sel4-x86-64-image.py
+
+# P6.2's boot contract and P6.3's native execution slice. One gate because they
+# are one observation: the ordered marker chain only exists if the shared GRUB
+# Multiboot2 layout booted pinned q35/OVMF *and* the root's native x86-64 task,
+# fault, timer, thread-pointer, and reclamation arms all behaved.
+[group('product')]
+x86_64_sel4_root_boot_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py --platform qemu-pc99
+
+# P6.4 replays the architecture-neutral corpus on the pinned x86-64 reference,
+# in the same shape as `riscv64_qemu_check`.
+[group('product')]
+x86_64_qemu_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-wait-set-plane.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-sample-plane.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-component-graph.py --platform qemu-pc99
+    python3 scripts/check/check-sel4-boot-layout.py --platform qemu-pc99
+    python3 scripts/check/check-architecture-portability.py
+
+# P6.5 builds one Framework-target-qualified raw GPT/FAT32 image, validates the
+# identity and removable-writer safety boundary, then boots those exact bytes
+# under the pinned q35/OVMF reference to the resident product graph.
+[group('product')]
+framework_media_check: sel4_pin_check contracts_check
+    python3 scripts/check/check-framework-media.py
+
+[group('product')]
+framework_media_image: sel4_pin_check contracts_check
+    python3 scripts/build/build-framework-media.py
+
+# P6.6 judges a physical Framework CPU boot. `framework_cpu_boot_check` proves
+# the observation validator refuses bad evidence and reports the recorded
+# claim; it cannot manufacture one, because only a power cycle from the medium
+# can. `framework_cpu_boot_prepare` writes the approved image and hashes the
+# protected internal region, and `framework_cpu_boot_verify` re-hashes it and
+# judges the operator's record. QEMU cannot close this gate.
+[group('product')]
+framework_cpu_boot_check: framework_media_check
+    python3 scripts/check/check-framework-cpu-boot.py
+
+[group('product')]
+framework_cpu_boot_prepare device protect: framework_media_check
+    python3 scripts/check/check-framework-cpu-boot.py prepare --device {{device}} --protect {{protect}}
+
+
 [group('product')]
 riscv64_qemu_check: sel4_pin_check
     python3 scripts/check/check-sel4-root-boot.py --platform qemu-riscv-virt

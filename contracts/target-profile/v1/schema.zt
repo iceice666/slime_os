@@ -75,6 +75,11 @@ abis :: List Named = {
   -- register and ELF conventions. Keeping a distinct number is what makes an
   -- AArch64 seL4 component fail admission before any executable byte is mapped.
   { constName = "SLIME_RISCV64_SEL4_V1"; value = 5; };
+  -- P6.1. The x86-64 seL4 userspace ABI. Distinct from `SLIME_X86_64_V1`,
+  -- which names the retired custom kernel's `int 0x80` trap ABI: retained
+  -- rollback-window artifacts still carry that number, and an image built for
+  -- it cannot run under the seL4 transport. See docs/syscall-abi.md.
+  { constName = "SLIME_X86_64_SEL4_V1"; value = 6; };
 };
 
 pageProfiles :: List Named = {
@@ -104,6 +109,10 @@ features :: List Named = {
   -- Sv39 transitions, and `ecall` entry are upstream seL4 mechanism rather than
   -- component-visible features.
   { constName = "RISCV64_SEL4"; value = 128; };
+  -- P6.1. Same separation on x86-64: the IOAPIC, local APIC timer, TSC,
+  -- privilege transitions, and `syscall` entry are upstream seL4 pc99
+  -- mechanism rather than component-visible features.
+  { constName = "X86_64_SEL4"; value = 256; };
 };
 
 profiles :: List Profile = {
@@ -231,6 +240,55 @@ profiles :: List Profile = {
     kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
     componentBaseText = "0x0040_0000";
     cargoTarget = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
+    qemuBinary = "";
+  };
+  {
+    constName = "X86_64_SEL4_QEMU_PC99";
+    name = "x86_64-sel4-qemu-pc99";
+    id = 8;
+    architecture = 1;
+    abi = 6;
+    pageProfile = 1;
+    -- x86-64 baseline plus seL4. The IOAPIC, local APIC, and TSC are absent
+    -- for the same reason GICv2/GICv3 are absent from the AArch64 seL4
+    -- profile: they are seL4's to drive, and admission is equality.
+    requiredFeatures = 257;
+    elfMachine = 62;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    -- Repo-owned rather than one of rust-sel4's `x86_64-sel4-*.json`. Those
+    -- specs pair `-sse,-sse2` with `rustc-abi = softfloat`, and that pair has
+    -- no LLVM lowering for the 128-bit integer arithmetic `ed25519-dalek`
+    -- performs for release-signature verification: the root task fails to
+    -- codegen with `Do not know how to split the result of this operator!`.
+    -- seL4 pc99 saves and restores x87/SSE state per thread (`XSAVE`), so
+    -- hardware float is the correct x86-64 configuration, unlike AArch64 and
+    -- RV64 where the pinned kernels export no FP context.
+    cargoTarget = "sel4/targets/x86_64-sel4-minimal.json";
+    qemuBinary = "qemu-system-x86_64";
+  };
+  {
+    constName = "X86_64_SEL4_FRAMEWORK13_AI300";
+    name = "x86_64-sel4-framework13-ai300";
+    id = 9;
+    architecture = 1;
+    abi = 6;
+    pageProfile = 1;
+    -- Same userspace ABI as the pc99 QEMU reference, but a distinct exact
+    -- platform identity: the Framework Laptop 13's AMD Ryzen AI 300 firmware,
+    -- ACPI/APIC topology, UEFI removable-media handoff, and GOP evidence
+    -- channel are not interchangeable with QEMU q35/OVMF. P6.6 owns the first
+    -- physical observation; nothing here claims one.
+    requiredFeatures = 257;
+    elfMachine = 62;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "sel4/targets/x86_64-sel4-minimal.json";
+    -- No emulator runs this profile.
     qemuBinary = "";
   };
 };

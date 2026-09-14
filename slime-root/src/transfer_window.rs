@@ -633,7 +633,7 @@ fn with_window_mapped_in(
 ) -> Result<(), IpcError> {
     let vspace = sel4::init_thread::slot::VSPACE.cap();
     let rights = sel4::CapRights::read_write();
-    let attributes = sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER;
+    let attributes = crate::vm_attributes::data();
     match buffer {
         Some(buffer) => {
             window

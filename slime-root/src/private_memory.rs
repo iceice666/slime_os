@@ -653,7 +653,7 @@ fn back_page<K: PrivateMemoryKernel>(
             vspace,
             vaddr,
             sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+            crate::vm_attributes::data(),
         )
     {
         allocator.reset_private_in(arena, allocation)?;
@@ -705,7 +705,7 @@ fn back_large<K: PrivateMemoryKernel>(
             vspace,
             vaddr,
             sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+            crate::vm_attributes::data(),
         )
     {
         allocator.reset_private_in(arena, allocation)?;

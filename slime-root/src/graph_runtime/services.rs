@@ -74,6 +74,19 @@ pub(super) fn serve_instance_graph(
         })
         .count();
     let mut completed_required = [false; generation::MAX_ADMITTED_INSTANCES];
+    // The last thing rendered before the loop blocks in `seL4_Recv`. Without
+    // it, a graph whose components never send is indistinguishable on the
+    // panel from one that crashed on entry: both leave `COMPONENTS RUNNING`
+    // as the final line. `SERVING` says the dispatcher reached its receive.
+    //
+    // SAFETY: the console dispatcher is running by now but never renders, so
+    // this is still the only writer, and this runs once before the loop.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = crate::boot_record::render_stage(panel, allocator, "SERVING - AWAITING GRAPH");
+        });
+    }
     while iteration_limit.is_none_or(|limit| iterations < limit) {
         if live == 0 {
             sel4::debug_println!(
@@ -154,6 +167,24 @@ pub(super) fn serve_instance_graph(
                         detail.kind,
                         detail.address,
                     );
+                    // A non-required component faulting does not end the boot,
+                    // but it can leave the graph never certified healthy — and
+                    // on a machine with no serial port the line above is
+                    // invisible, so the panel would simply stop at
+                    // `COMPONENTS RUNNING` with no reason given.
+                    //
+                    // SAFETY: the service loop owns the panel; the console
+                    // dispatcher never renders.
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+                            let _ = crate::boot_record::render_stage(
+                                panel,
+                                allocator,
+                                "COMPONENT FAULTED",
+                            );
+                        });
+                    }
                     detail.kind.reason_code()
                 }
                 Err(error) => {
@@ -161,6 +192,17 @@ pub(super) fn serve_instance_graph(
                         "SLIME_GRAPH fault undecodable task={} error={error:?}",
                         id.0
                     );
+                    // SAFETY: as above.
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+                            let _ = crate::boot_record::render_stage(
+                                panel,
+                                allocator,
+                                "COMPONENT FAULT UNDECODABLE",
+                            );
+                        });
+                    }
                     u64::MAX
                 }
             };
@@ -345,6 +387,23 @@ pub(super) fn serve_instance_graph(
             lifecycle_labels::EXIT => {
                 let status = words[0] as i64;
                 sel4::debug_println!("SLIME_GRAPH component exit task={} status={status}", id.0);
+                // As with faults: a non-required component exiting non-zero
+                // leaves the graph uncertified without ending the boot, and
+                // the line above reaches nothing on a serial-less machine.
+                //
+                // SAFETY: the service loop owns the panel.
+                #[cfg(target_arch = "x86_64")]
+                if status != 0 {
+                    unsafe {
+                        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+                            let _ = crate::boot_record::render_stage(
+                                panel,
+                                allocator,
+                                "COMPONENT EXITED NONZERO",
+                            );
+                        });
+                    }
+                }
                 if status != 0
                     && let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
                     && let Ok(instance) = generation.instance(instance_index)
@@ -1488,11 +1547,40 @@ pub(super) fn serve_instance_graph(
                         live_required,
                         live_required,
                     );
-                    #[cfg(slime_physical_target)]
+                    #[cfg(any(slime_physical_target, slime_framework13_ai300))]
                     sel4::debug_println!(
                         "SLIME_ROOT READY target_profile={}",
                         crate::TARGET_PROFILE
                     );
+                    // The same facts on the panel, for the machine whose only
+                    // channel it is. Rendered after the serial markers so a
+                    // display failure cannot suppress the chain an emulated
+                    // plane reads, and reported rather than fatal: the graph is
+                    // healthy either way, and a root that killed itself over a
+                    // display would be less observable, not more.
+                    // SAFETY: the service loop is the root's only thread here
+                    // and this runs once, on the healthy edge.
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        crate::framebuffer::with_panel(allocator, |panel, allocator| {
+                            let rendered = crate::boot_record::render_ready(
+                                panel,
+                                allocator,
+                                crate::TARGET_PROFILE,
+                                generation.number,
+                                &generation.identity,
+                            )
+                            .and_then(|()| crate::boot_record::render_idle(panel, allocator));
+                            match rendered {
+                                Ok(()) => {
+                                    sel4::debug_println!("SLIME_DISPLAY ready rendered")
+                                }
+                                Err(error) => {
+                                    sel4::debug_println!("SLIME_DISPLAY ready failed {error:?}")
+                                }
+                            }
+                        });
+                    }
                 } else if live_required == 0 {
                     // Emitted after the accounting summary below: the QEMU
                     // gates stop reading at this terminal certification.

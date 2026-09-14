@@ -44,6 +44,10 @@ use std::path::{Path, PathBuf};
 /// what `TARGET` reads as for the native seL4 component profiles.
 pub const AARCH64_SEL4_TARGET: &str = "aarch64-sel4-minimal";
 pub const RISCV64_SEL4_TARGET: &str = "riscv64imac-sel4-minimal";
+/// P6.1's specification is repo-owned (`sel4/targets/`) rather than
+/// rust-sel4's, but its stem is unchanged, so this name is what Cargo reports
+/// for both. See `sel4/targets/README.md`.
+pub const X86_64_SEL4_TARGET: &str = "x86_64-sel4-minimal";
 
 /// Compile-time knobs a gate sets to build a deliberately misbehaving component.
 ///
@@ -81,7 +85,7 @@ pub fn configure() {
     let linker_script = match target.as_str() {
         "x86_64-unknown-none" => Some("component.ld"),
         "aarch64-unknown-none" => Some("component-aarch64.ld"),
-        AARCH64_SEL4_TARGET | RISCV64_SEL4_TARGET => None,
+        AARCH64_SEL4_TARGET | RISCV64_SEL4_TARGET | X86_64_SEL4_TARGET => None,
         other => panic!("unsupported component target {other}"),
     };
     if let Some(linker_script) = linker_script {
@@ -108,7 +112,8 @@ pub fn configure() {
         Err(_)
             if target == "aarch64-unknown-none"
                 || target == AARCH64_SEL4_TARGET
-                || target == RISCV64_SEL4_TARGET =>
+                || target == RISCV64_SEL4_TARGET
+                || target == X86_64_SEL4_TARGET =>
         {
             panic!("SLIME_TARGET_PROFILE is required for native component builds")
         }

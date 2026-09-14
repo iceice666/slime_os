@@ -46,7 +46,7 @@
 //! delay of arbitrary length can still separate the compare condition becoming
 //! true from this task next running.
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 use crate::device::MappedGranule;
 use crate::event::MonotonicInstant;
 use crate::object_allocator::{AllocError, ObjectAllocator};
@@ -59,6 +59,37 @@ pub const TIMER_IRQ: sel4::Word = 30;
 pub const TIMER_IRQ: sel4::Word = 11;
 #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
 pub const TIMER_IRQ: sel4::Word = 17;
+/// The QEMU q35 HPET's first comparator, on IOAPIC pin 20.
+///
+/// x86 pc99 does not export a userspace timer the way the other two profiles
+/// do. seL4 claims the local APIC timer for its own non-MCS tick at boot
+/// (`setIRQState(IRQTimer, irq_timer)` in
+/// `deps/sel4/src/arch/x86/kernel/boot.c`), leaves `EXPORT_PMC_USER` off, and
+/// sets no `CR4.TSD` grant, so there is neither a spare architected comparator
+/// nor a root-readable cycle counter. A monotonic source must therefore come
+/// from a firmware-described device this root task maps and drives itself.
+///
+/// Pin 20 rather than 2, and the choice is load-bearing. q35 advertises this
+/// comparator's routing capability as `0xff0104`, whose set bits are pins 2,
+/// 8, and 16 through 23; only those are legal, and the kernel does not check —
+/// [`hpet_timer0_base_config`]'s 5-bit field accepts any value, so an illegal
+/// pin is programmed silently and simply never delivers.
+///
+/// Of the legal pins, 2 and 8 are shared with legacy devices that are *still
+/// running*: the firmware's MADT remaps ISA IRQ 0 to GSI 2 for the 8254 PIT,
+/// which QEMU leaves enabled unless the HPET is put in legacy-replacement
+/// mode, and pin 8 is the RTC. Routing here to pin 2 makes the root's handler
+/// receive PIT ticks it never armed; each is serviced, finds nothing due,
+/// reprograms, and is immediately followed by the next, so the condition never
+/// settles.
+///
+/// Pin 20 is in the 16-23 range, all of which sits above the legacy ISA pins
+/// and drives no legacy device, so the interrupt this root acknowledges is only
+/// ever the comparator it armed. Legacy replacement mode is deliberately not
+/// used to silence the PIT instead: it would route comparator 0 to pin 0 and
+/// take over the RTC, claiming two devices this milestone does not own.
+#[cfg(target_arch = "x86_64")]
+pub const TIMER_IRQ: sel4::Word = 20;
 
 /// Badge minted onto the notification copy bound to the IRQ handler. The
 /// notification object's own (unbadged, full-rights) capability is used to
@@ -105,7 +136,7 @@ pub struct PhysicalTimerAdapter {
     irq_handler: sel4::cap::IrqHandler,
     /// The unbadged, full-rights notification capability.
     notification: sel4::cap::Notification,
-    #[cfg(target_arch = "riscv64")]
+    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
     registers: Option<MappedGranule>,
 }
 
@@ -143,14 +174,12 @@ impl PhysicalTimerAdapter {
         // asserted for as long as the compare condition holds, exactly like
         // seL4's own generic-timer driver treats it
         // (`deps/sel4/include/drivers/timer/arm_generic.h`).
-        sel4::init_thread::slot::IRQ_CONTROL
-            .cap()
-            .irq_control_get_trigger(
-                TIMER_IRQ,
-                false,
-                &root_cnode.absolute_cptr(irq_handler_slot.cptr()),
-            )
-            .map_err(PlatformTimerSetupError::IrqAcquire)?;
+        crate::irq_control::acquire_handler(
+            TIMER_IRQ,
+            true,
+            &root_cnode.absolute_cptr(irq_handler_slot.cptr()),
+        )
+        .map_err(PlatformTimerSetupError::IrqAcquire)?;
 
         irq_handler_slot
             .cap()
@@ -160,13 +189,16 @@ impl PhysicalTimerAdapter {
         Ok(Self {
             irq_handler: irq_handler_slot.cap(),
             notification: notification_slot.cap(),
-            #[cfg(target_arch = "riscv64")]
+            #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
             registers: None,
         })
     }
 
-    /// Attach the mapped register page for the selected RV64 timer device.
-    #[cfg(target_arch = "riscv64")]
+    /// Attach the mapped register page for a memory-mapped timer device.
+    ///
+    /// Required on the profiles whose monotonic source is a device rather than
+    /// an architected register the kernel grants EL0/U-mode access to.
+    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
     pub fn attach_registers(&mut self, registers: MappedGranule) {
         self.registers = Some(registers);
     }
@@ -207,6 +239,15 @@ impl PhysicalTimerAdapter {
         #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
         {
             1
+        }
+        // The QEMU q35 HPET's fixed 10 MHz main-counter period
+        // (100 ns per tick). A physical machine reports its own period in the
+        // HPET capability register, which P6.3 reads once it drives the
+        // device; this constant is the pinned emulator fact the reference
+        // profile boots against.
+        #[cfg(target_arch = "x86_64")]
+        {
+            10_000_000
         }
     }
 
@@ -265,6 +306,15 @@ impl PlatformTimer for PhysicalTimerAdapter {
                 read_cv1800b_rtc(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
             ))
         }
+        #[cfg(target_arch = "x86_64")]
+        {
+            let registers = self
+                .registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
+            Ok(MonotonicInstant(
+                read_hpet_counter(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
+            ))
+        }
     }
 
     fn program_deadline(&mut self, deadline: MonotonicInstant) -> Result<(), Self::Error> {
@@ -283,6 +333,14 @@ impl PlatformTimer for PhysicalTimerAdapter {
         .ok_or(PlatformTimerAckError::RegisterAccess)?;
         #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
         program_cv1800b_rtc(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+            deadline.0,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        #[cfg(target_arch = "x86_64")]
+        program_hpet(
             self.registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
             deadline.0,
@@ -309,6 +367,13 @@ impl PlatformTimer for PhysicalTimerAdapter {
         )
         .then_some(())
         .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        #[cfg(target_arch = "x86_64")]
+        disarm_hpet(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
         Ok(())
     }
 
@@ -320,6 +385,18 @@ impl PlatformTimer for PhysicalTimerAdapter {
         isb();
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         clear_goldfish_rtc_interrupt(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        // The HPET latches its comparator interrupt in a level-triggered
+        // status register, so the expired condition must be cleared before the
+        // handler ack below or the line re-asserts immediately.
+        // `program_deadline` has already installed the next comparator value,
+        // and clearing status does not disturb it.
+        #[cfg(target_arch = "x86_64")]
+        clear_hpet_interrupt(
             self.registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
         )
@@ -498,6 +575,145 @@ fn read_riscv_time() -> u64 {
 #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
 fn disarm_cv1800b_rtc(registers: MappedGranule) -> bool {
     registers.write32(CV1800B_RTC_ALARM_ENABLE, 0)
+}
+// QEMU q35's HPET, as described by the IA-PC HPET specification. `MappedGranule`
+// exposes 32-bit accesses only, and every register used here is either 32 bits
+// wide or a 64-bit register whose halves may be accessed independently.
+//
+// Only comparator 0 is touched, in 32-bit non-periodic mode: the main counter
+// is read as a low/high pair, and `T0_32MODE` makes the comparator compare
+// only the low half, so a deadline is a 32-bit value and no 64-bit atomic
+// register write is required.
+#[cfg(target_arch = "x86_64")]
+const HPET_GENERAL_CONFIG: usize = 0x010;
+#[cfg(target_arch = "x86_64")]
+const HPET_INTERRUPT_STATUS: usize = 0x020;
+#[cfg(target_arch = "x86_64")]
+const HPET_MAIN_COUNTER_LOW: usize = 0x0f0;
+#[cfg(target_arch = "x86_64")]
+const HPET_MAIN_COUNTER_HIGH: usize = 0x0f4;
+#[cfg(target_arch = "x86_64")]
+const HPET_TIMER0_CONFIG: usize = 0x100;
+#[cfg(target_arch = "x86_64")]
+const HPET_TIMER0_COMPARATOR: usize = 0x108;
+/// `GEN_CONF.ENABLE_CNF`: run the main counter and allow comparator delivery.
+#[cfg(target_arch = "x86_64")]
+const HPET_ENABLE: u32 = 1 << 0;
+/// `Tn_CONF.Tn_INT_TYPE_CNF`: 1 selects level-triggered delivery.
+///
+/// Load-bearing rather than cosmetic. `PhysicalTimerAdapter::acquire` claims
+/// this interrupt as level-triggered, and `acknowledge_timer_irq` clears the
+/// latched `GINTR_STA` bit before acknowledging the handler. Both are only
+/// correct for a level-triggered source: left edge-triggered, the status bit is
+/// never set, so the write-1-to-clear would be a no-op against a condition the
+/// hardware already dropped.
+#[cfg(target_arch = "x86_64")]
+const HPET_T0_LEVEL_TRIGGERED: u32 = 1 << 1;
+/// `Tn_CONF.Tn_INT_ENB_CNF`: allow this comparator to raise its interrupt.
+#[cfg(target_arch = "x86_64")]
+const HPET_T0_INTERRUPT_ENABLE: u32 = 1 << 2;
+/// `Tn_CONF.Tn_32MODE_CNF`: compare against the low 32 bits of the counter.
+#[cfg(target_arch = "x86_64")]
+const HPET_T0_32BIT_MODE: u32 = 1 << 8;
+/// `Tn_CONF.Tn_INT_ROUTE_CNF`, a 5-bit IOAPIC input number at bit 9.
+///
+/// Programming it is what makes the interrupt arrive where the root claimed a
+/// handler. `GEN_CONF.LEG_RT_CNF` is deliberately left clear — legacy
+/// replacement routing would send comparator 0 to PIC IRQ 0, and this profile
+/// builds the kernel with `IRQ_PIC` off — so with this field zero the device
+/// would instead drive IOAPIC input 0 while the root waits on the pin
+/// [`TIMER_IRQ`] names. That mismatch delivers no interrupt at all.
+#[cfg(target_arch = "x86_64")]
+const HPET_T0_ROUTE_SHIFT: u32 = 9;
+#[cfg(target_arch = "x86_64")]
+const HPET_T0_ROUTE_MASK: u32 = 0x1f << HPET_T0_ROUTE_SHIFT;
+
+#[cfg(target_arch = "x86_64")]
+fn read_hpet_counter(registers: MappedGranule) -> Option<u64> {
+    // The counter is 64 bits behind a 32-bit access port, so a naive
+    // low-then-high pair can straddle a low-half rollover. Re-read the high
+    // half and retry when it moved; at 10 MHz the low half wraps roughly every
+    // seven minutes, so one retry is always enough in practice and the bound
+    // keeps a stopped counter from looping.
+    (0..3).find_map(|_| {
+        let high = registers.read32(HPET_MAIN_COUNTER_HIGH)?;
+        let low = registers.read32(HPET_MAIN_COUNTER_LOW)?;
+        (registers.read32(HPET_MAIN_COUNTER_HIGH)? == high)
+            .then(|| u64::from(low) | (u64::from(high) << 32))
+    })
+}
+
+/// Comparator 0's configuration for this profile, without interrupt delivery.
+///
+/// One place so `program_hpet` and `disarm_hpet` cannot disagree about the
+/// route or the trigger mode: the two differ only in whether delivery is
+/// enabled, and a disarm that dropped the route would silently misdeliver the
+/// next armed deadline.
+#[cfg(target_arch = "x86_64")]
+fn hpet_timer0_base_config() -> Option<u32> {
+    let route = (TIMER_IRQ as u32) << HPET_T0_ROUTE_SHIFT;
+    if route & !HPET_T0_ROUTE_MASK != 0 {
+        return None;
+    }
+    Some(HPET_T0_32BIT_MODE | HPET_T0_LEVEL_TRIGGERED | route)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn program_hpet(registers: MappedGranule, deadline: u64) -> bool {
+    let Some(base) = hpet_timer0_base_config() else {
+        return false;
+    };
+    // Configure, then arm, then clear, then enable — in that order.
+    //
+    // The route and trigger mode must be in place before delivery is enabled,
+    // or the first expiry can be delivered on the wrong input. The latched
+    // status must be cleared before delivery is enabled for a separate reason:
+    // `GINTR_STA` accumulates comparator expiries whether or not delivery is
+    // enabled, so a deadline that elapsed while the comparator was disarmed
+    // leaves its bit set. Enabling delivery with that bit set asserts the line
+    // immediately, and the root then services an expiry for a deadline it has
+    // already retired: each such wake finds nothing due, reprograms, and
+    // re-asserts, so the condition does not settle on its own.
+    //
+    // Clearing after writing the comparator rather than before is what makes
+    // this sound: writing either register re-arms the device against the value
+    // then present, so a clear that preceded the comparator write could be
+    // followed by a fresh latch from the stale deadline.
+    //
+    // 32-bit comparator mode, so only the low half of the deadline is
+    // compared. Truncating is correct rather than lossy: the caller's deadline
+    // came from `monotonic_now`, and a deadline beyond the low half's range
+    // would already exceed the wrap this mode inherently has.
+    registers.write32(HPET_TIMER0_CONFIG, base)
+        && registers.write32(HPET_TIMER0_COMPARATOR, deadline as u32)
+        && clear_hpet_interrupt(registers)
+        && registers.write32(HPET_TIMER0_CONFIG, base | HPET_T0_INTERRUPT_ENABLE)
+        && registers.write32(HPET_GENERAL_CONFIG, HPET_ENABLE)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn disarm_hpet(registers: MappedGranule) -> bool {
+    // Leave the main counter running: `monotonic_now` must keep working with
+    // no deadline installed, so only comparator delivery is disabled. The
+    // route and trigger mode are preserved for the same reason they are
+    // programmed at all — the next `program_hpet` must not have to reinstate
+    // them before the comparator can fire on the claimed input.
+    //
+    // The status clear here is best-effort tidiness, not the invariant: the
+    // retained comparator value can latch again at any point after this
+    // returns, so what actually prevents a spurious delivery is
+    // `program_hpet` clearing immediately before it enables the line.
+    let Some(base) = hpet_timer0_base_config() else {
+        return false;
+    };
+    registers.write32(HPET_TIMER0_CONFIG, base) && clear_hpet_interrupt(registers)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn clear_hpet_interrupt(registers: MappedGranule) -> bool {
+    // `GINTR_STA` is write-1-to-clear per bit, so writing the comparator-0 bit
+    // clears exactly that latched status and leaves every other bit alone.
+    registers.write32(HPET_INTERRUPT_STATUS, 1 << 0)
 }
 
 /// Reads the EL1 physical counter (`CNTPCT_EL0`), the free-running clock the

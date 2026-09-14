@@ -345,7 +345,7 @@ impl<'a> BufferAdapter<'a> {
                 vspace,
                 first_vaddr,
                 sel4::CapRights::read_write(),
-                sel4::VmAttributes::default() | sel4::VmAttributes::EXECUTE_NEVER,
+                crate::vm_attributes::data(),
             )
             .map_err(|error| BufferAdapterError::Map {
                 vaddr: first_vaddr,
@@ -356,7 +356,7 @@ impl<'a> BufferAdapter<'a> {
                 vspace,
                 second_vaddr,
                 sel4::CapRights::read_write(),
-                sel4::VmAttributes::default() | sel4::VmAttributes::EXECUTE_NEVER,
+                crate::vm_attributes::data(),
             )
             .map_err(|error| BufferAdapterError::Map {
                 vaddr: second_vaddr,
@@ -531,7 +531,7 @@ impl<'a> BufferAdapter<'a> {
                 vspace_cap,
                 vaddr,
                 cap_rights.clone(),
-                sel4::VmAttributes::default() | sel4::VmAttributes::EXECUTE_NEVER,
+                crate::vm_attributes::data(),
             ) {
                 Ok(()) => break,
                 // Reserve the alias record before attempting the alias map. If

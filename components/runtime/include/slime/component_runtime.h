@@ -18,6 +18,25 @@ typedef struct {
     uint8_t pressed;
 } SlimeInputEvent;
 
+/* The instruction to execute inside a terminal spin.
+ *
+ * A hint, not a mechanism: nothing depends on it beyond not burning the core
+ * while the root task observes the component's state and tears it down.
+ * Selected explicitly per architecture rather than defaulting to one, because
+ * a mnemonic that does not exist on the target is an assembler error rather
+ * than a portable no-op — which is exactly how the previous `#else` reached
+ * an x86-64 build with AArch64's `yield`.
+ */
+#if defined(CONFIG_ARCH_RISCV64)
+#define SLIME_SPIN_HINT "nop"
+#elif defined(CONFIG_ARCH_X86_64)
+#define SLIME_SPIN_HINT "pause"
+#elif defined(CONFIG_ARCH_AARCH64)
+#define SLIME_SPIN_HINT "yield"
+#else
+#error "no spin hint selected for this architecture"
+#endif
+
 /* Implemented by each component. Returning is a clean lifecycle exit. */
 void slime_component_main(uint32_t startup_arg);
 
