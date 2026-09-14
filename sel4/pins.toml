@@ -12,7 +12,7 @@ schema = 1
 # linear framebuffer, and the Framework 13 has no serial port, so without this
 # tag P6's only evidence channel does not exist. It touches
 # `src/arch/x86/multiboot.S` alone, so no AArch64 or RISC-V artifact moves.
-repository = "https://github.com/iceice666/seL4.git"
+repository = "https://git.justaslime.dev/iceice666/sel4.git"
 release = "16.0.0"
 commit = "fea36b20f5b410288631c9cf1c6b090a4beac88e"
 
@@ -34,7 +34,7 @@ commit = "fea36b20f5b410288631c9cf1c6b090a4beac88e"
 # through a second `call`, so the root faults on its first `movaps`. Both are
 # on the shared path by nature; neither is a loader patch, so neither belongs
 # in a per-platform table.
-repository = "https://github.com/iceice666/rust-sel4.git"
+repository = "https://git.justaslime.dev/iceice666/rust-sel4.git"
 release = "v5.0.0"
 commit = "14d98403c1dd95fd97109919e13466f0ecb37c01"
 toolchain = "nightly-2026-04-04"
@@ -71,7 +71,7 @@ riscv64_loader_target = "riscv64imac-unknown-none-elf"
 # from there instead of the shared base.
 [rust_sel4_bcm2712_rpi5]
 # UART10 loader path for the Raspberry Pi 5's dedicated debug header.
-repository = "https://github.com/iceice666/rust-sel4.git"
+repository = "https://git.justaslime.dev/iceice666/rust-sel4.git"
 branch = "slime/bcm2712-loader-platform"
 commit = "1ef65fb100051a54c74eecc03050fa48ac0dec69"
 
@@ -79,7 +79,7 @@ commit = "1ef65fb100051a54c74eecc03050fa48ac0dec69"
 # Single-hart start (the Duo's OpenSBI 0.9 exposes no HSM extension, so the
 # generic RISC-V loader would panic before printing), MAEE table encoding,
 # and the RISC-V page-table accessed/dirty-bit fix the board's MMU requires.
-repository = "https://github.com/iceice666/rust-sel4.git"
+repository = "https://git.justaslime.dev/iceice666/rust-sel4.git"
 branch = "slime-cv1800b-duo"
 commit = "6885bfd155f2405e2eb6176e1a1065e1cab34680"
 

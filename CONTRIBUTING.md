@@ -224,8 +224,9 @@ SDK publication and MyQue's GitHub issue projection remain in
 the dedicated signing runner, not ordinary CI. The projector no longer
 subscribes to the removed GitHub `CI` completion event; its existing scheduled
 reconciliation still handles external checks on GitHub. It does not project
-issues to the new forge. This CI migration does not move the SDK repository,
-signing keys, issue history, or submodules.
+issues to the new forge. The seL4 and rust-sel4 source repositories and all
+four matching submodules now resolve from `git.justaslime.dev`; this migration
+does not move the SDK repository, signing keys, or issue history.
 
 ## Further reading
 

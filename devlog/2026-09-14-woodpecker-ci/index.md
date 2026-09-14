@@ -28,7 +28,7 @@ Woodpecker run or Linux container build was observed.
 | Environment | Versioned Nix image, pinned repository shells, per-job command timeouts | Product builds still use the declared toolchains and locked offline dependencies |
 | Preparation | Fetch five manifest closures under both toolchains and both rust-src workspaces | Offline build-std does not depend on an accidentally warm cache |
 | GitHub integration | Remove general CI and its projector completion subscription; keep release and projection workflows | CI jobs receive no release signing or issue-writing credentials |
-| Local origin | Fetch and push URL changed to `ssh://git@git.justaslime.dev:2222/iceice666/slime_os.git` | No push, remote connection test, or submodule URL change |
+| Repository migration | Local `origin`, seL4, and rust-sel4 fetch and push sources moved to `git.justaslime.dev` | Every mirrored ref and pinned commit remains byte-identical |
 
 ## Regression guards
 
@@ -43,6 +43,7 @@ Woodpecker run or Linux container build was observed.
 | Command/scenario | Result | Evidence class |
 |---|---|---|
 | Woodpecker CLI 3.16.0 strict lint | All four workflow files valid | Direct |
+| seL4 and rust-sel4 mirror comparison | Source and target `ls-remote` outputs are byte-identical: 57 and 10 refs respectively | Direct |
 | In-memory matrix expansion and original-workflow comparison | 17 jobs; all 21 original Just recipes and direct checks retained; four shard arguments and trigger parity checked; expanded shell commands parse | Direct |
 | `bash scripts/ci/prepare-sel4.sh` | Exit 0 in the existing development environment; real locked dependency fetches completed | Direct |
 | `bash -n scripts/ci/prepare-sel4.sh` and ShellCheck 0.11.0 | Exit 0 | Direct |
@@ -81,6 +82,9 @@ Woodpecker run or Linux container build was observed.
   existing repository using its existing release runner.
 
 ## Artifacts and provenance
+
+- Mirrored sources: [seL4](https://git.justaslime.dev/iceice666/sel4) and
+  [rust-sel4](https://git.justaslime.dev/iceice666/rust-sel4).
 
 - Workflows: [host](../../.woodpecker/host.yml),
   [Kani](../../.woodpecker/kani.yml), [seL4](../../.woodpecker/sel4.yml),
