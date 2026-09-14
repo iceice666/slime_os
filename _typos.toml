@@ -48,7 +48,7 @@ bui = "bui"
 # AArch64 translation-table field name from the Arm architecture.
 Indx = "Indx"
 # The Framework's firmware vendor, exactly as its DMI reports it
-# (`/sys/class/dmi/id/bios_vendor`). P7.6's observation record pins the
+# (`/sys/class/dmi/id/bios_vendor`). P6.6's observation record pins the
 # firmware vendor to what the machine actually said, so this string cannot be
 # reworded.
 INSYDE = "INSYDE"

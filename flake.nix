@@ -83,7 +83,7 @@
           # RISC-V toolchain, pinned by an absolute wrapper path for the same
           # reproducibility reason as AArch64.
           riscvCrossCC = pkgs.pkgsCross.riscv64.stdenv.cc;
-          # P7.1's pc99 kernel. `pkgsCross.gnu64` is the x86-64 GNU/Linux
+          # P6.1's pc99 kernel. `pkgsCross.gnu64` is the x86-64 GNU/Linux
           # toolchain: on `x86_64-linux` it resolves to the native wrapper and
           # on the AArch64 hosts to a cross wrapper, which is the same shape
           # difference `crossCC` documents above and is equally harmless
@@ -91,16 +91,29 @@
           # `X86_64_COMPILER_PREFIX` is one exact store path rather than
           # whatever `gcc` the shell's `PATH` happens to resolve.
           x86CC = pkgs.pkgsCross.gnu64.stdenv.cc;
-          # P7.2's boot inputs. Neither is built from this repository, and both
+          # P6.2's boot inputs. Neither is built from this repository, and both
           # decide what "it booted" means, so each is named by absolute store
           # path in `sel4/pins.toml` rather than resolved from `PATH`.
+          #
+          # Present only on `x86_64-linux`, which is the only host that can run
+          # a pc99 image and therefore the only one that can produce a pc99
+          # boot claim. Two separate reasons, both structural rather than
+          # convenience: `grub2_efi` refuses to evaluate off x86 at all, so
+          # naming it unconditionally makes the *whole* dev shell unbuildable on
+          # an AArch64 host -- including for the AArch64 gates, which need
+          # nothing from it -- and nixpkgs builds a different derivation for
+          # these on another architecture, so a cross reference would make the
+          # pinned digests vary by build host instead of fixing them.
+          # `check-sel4-pins.py` verifies them exactly on x86 and states why it
+          # cannot elsewhere.
           #
           # `grub2_efi` is the EFI-format build: `grub-mkimage -O x86_64-efi`
           # needs `lib/grub/x86_64-efi`, which the BIOS-format package does not
           # install. The image is built standalone from a pinned module list,
           # so nothing is loaded from the boot medium at run time.
-          ovmfFirmware = pkgs.OVMF.fd;
-          grubEfi = pkgs.grub2_efi;
+          pc99BootHost = system == "x86_64-linux";
+          ovmfFirmware = if pc99BootHost then pkgs.OVMF.fd else null;
+          grubEfi = if pc99BootHost then pkgs.grub2_efi else null;
           # The seL4 build drives host Python generators (bitfield, invocation,
           # hardware/DTS) through a bare `python3`.
           sel4Python = pkgs.python3.withPackages (ps: [
@@ -142,11 +155,14 @@
                 riscvCrossCC
                 x86CC
                 sel4Python
-                # P7.2 assembles the EFI file tree with `grub-mkimage` and, for
-                # P7.5's raw medium, writes FAT32 with mtools rather than
-                # requiring a privileged loopback mount.
-                grubEfi
                 mtools
+              ]
+              # P6.2 assembles the EFI file tree with `grub-mkimage` and, for
+              # P6.5's raw medium, writes FAT32 with mtools rather than
+              # requiring a privileged loopback mount. `grub-mkimage` is x86-only
+              # here; the AArch64 and RISC-V gates need none of it.
+              ++ nixpkgs.lib.optionals pc99BootHost [
+                grubEfi
               ]
               ++ [
                 # `just tasks_check` and the `tasks_*` views.
@@ -174,7 +190,7 @@
             # compiler driver and the same assembler (B21).
             CROSS_COMPILER_PREFIX = "${crossCC}/bin/${crossCC.targetPrefix}";
             RISCV64_CROSS_COMPILER_PREFIX = "${riscvCrossCC}/bin/${riscvCrossCC.targetPrefix}";
-            # P7.1's pc99 kernel. Unlike AArch64 and RISC-V this is not a cross
+            # P6.1's pc99 kernel. Unlike AArch64 and RISC-V this is not a cross
             # toolchain — an x86-64 seL4 kernel is built by an ordinary
             # ELF-targeting x86-64 GCC — but it is exported by absolute store
             # path for exactly the same reason: `[observed_prefix_qemu_pc99]`
@@ -182,11 +198,14 @@
             # the ambient `PATH` resolves first.
             X86_64_COMPILER_PREFIX = "${x86CC}/bin/${x86CC.targetPrefix}";
 
-            # P7.2's boot contract. `[qemu_pc99_boot]` pins these artifacts'
+            # P6.2's boot contract. `[qemu_pc99_boot]` pins these artifacts'
             # hashes, so the build and the boot gate must read the same exact
             # firmware and bootloader rather than whichever the host provides.
-            SLIME_OVMF_DIR = "${ovmfFirmware}/FV";
-            SLIME_GRUB_PREFIX = "${grubEfi}";
+            # Empty off x86, where neither artifact exists in this shell:
+            # `check-sel4-pins.py` treats an unset value as "not verified here"
+            # and says so, rather than verifying whatever is installed.
+            SLIME_OVMF_DIR = if pc99BootHost then "${ovmfFirmware}/FV" else "";
+            SLIME_GRUB_PREFIX = if pc99BootHost then "${grubEfi}" else "";
 
             # Freestanding C components use Clang's target driver and LLD.
             # Do not inherit mkShell's ambient CC: on Linux it is GCC, which

@@ -164,7 +164,7 @@ lint_sel4_root clippy_flags='-D warnings':
             --target-dir "../build/sel4-cargo/lint-components-$group" "${build_std[@]}" -- {{ clippy_flags }}
     done <<< "$groups"
 
-# P7.1's x86-64 arms. A separate recipe rather than a parameter on the one
+# P6.1's x86-64 arms. A separate recipe rather than a parameter on the one
 # above: this platform's prefix, target specifications, and child artifact path
 # all differ, and it lints code paths `lint_sel4_root` never compiles — the
 # `#[cfg(target_arch = "x86_64")]` arms in the root, the HPET timer driver, and
@@ -317,7 +317,7 @@ test_sel4_root:
     # The count is pinned so a silently dropped or unregistered `#[test]` fails
     # the gate rather than passing as a smaller run; raise it in the same change
     # that adds a test. This run compiles for AArch64, so it counts only the
-    # modules that exist there: P7's `framebuffer` and `boot_record` are gated
+    # modules that exist there: P6's `framebuffer` and `boot_record` are gated
     # to x86-64 because the boot framebuffer is reached through an x86 extra-
     # BootInfo record, and their tests are covered by the x86-64 planes instead.
     expected=243

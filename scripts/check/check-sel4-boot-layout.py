@@ -137,7 +137,7 @@ PLANES: tuple[tuple[str, str], ...] = (
     ("sel4-robot-runtime", "slime-sel4-robot-runtime.elf"),
 )
 
-# The subset P7.4 replays on x86-64: the resident product graph plus the two
+# The subset P6.4 replays on x86-64: the resident product graph plus the two
 # corpus planes that milestone builds for this platform. Deliberately not the
 # whole table — a plane whose generation this platform does not build would
 # fail here for a build reason rather than a layout one, and the planes it does

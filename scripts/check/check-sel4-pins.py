@@ -16,6 +16,7 @@ import tempfile
 
 import yaml
 from pathlib import Path
+from platform import machine as host_machine
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
@@ -951,6 +952,15 @@ def check_pc99_boot_inputs(pins: dict[str, object]) -> None:
     Skipped when the development shell has not exported the store paths: the
     same gate runs on hosts that only validate sources, and inventing a
     fallback path would verify whichever firmware happened to be installed.
+
+    Skipped on non-x86 hosts as well. These are x86 artifacts, and nixpkgs
+    builds a different derivation for them on another architecture -- an
+    AArch64 host's `OVMF.fd` is AAVMF and installs no `OVMF_CODE.fd` at all --
+    so the pinned digests describe what an `x86_64-linux` shell provides.
+    That host is also the only one that can run a pc99 image, so nothing
+    verified here is load-bearing elsewhere; pinning the cross-built firmware
+    instead would make these hashes vary by build host, which is the opposite
+    of what pinning them is for.
     """
     boot_pins = table(pins, "qemu_pc99_boot")
     firmware = os.environ.get("SLIME_OVMF_DIR")
@@ -959,6 +969,12 @@ def check_pc99_boot_inputs(pins: dict[str, object]) -> None:
         print(
             "seL4 pin check: SLIME_OVMF_DIR/SLIME_GRUB_PREFIX unset; pc99 boot "
             "inputs not verified (enter `nix develop` to check them)"
+        )
+        return
+    if host_machine() not in ("x86_64", "amd64"):
+        print(
+            f"seL4 pin check: {host_machine()} host; pc99 firmware and "
+            "bootloader pins describe an x86_64-linux shell and are not verified here"
         )
         return
     for key, filename in (
