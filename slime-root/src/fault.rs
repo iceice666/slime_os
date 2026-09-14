@@ -253,6 +253,19 @@ fn normalize_vm_access(fault: &sel4::sys::seL4_Fault_VMFault) -> AccessKind {
             _ => AccessKind::Unknown,
         }
     }
+    // seL4's x86 `handleVMFault` puts the CPU's raw page-fault error code in
+    // the FSR field (`deps/sel4/src/arch/x86/kernel/vspace.c`). Bit 1 is
+    // write-not-read; bit 4 (instruction fetch) is already handled by the
+    // `PrefetchFault` check above, which seL4 sets for `X86InstructionFault`.
+    #[cfg(target_arch = "x86_64")]
+    {
+        const WRITE_NOT_READ: sel4::Word = 1 << 1;
+        if sel4::Word::from(fault.get_FSR()) & WRITE_NOT_READ == 0 {
+            AccessKind::Read
+        } else {
+            AccessKind::Write
+        }
+    }
 }
 
 /// How a supervised task ended.

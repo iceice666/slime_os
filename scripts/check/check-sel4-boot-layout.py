@@ -41,20 +41,25 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
 import subprocess
 import sys
 import threading
-import tomllib
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
-from harness import profile_text, profile_integer  # noqa: E402
+from harness import load_qemu_profile, profile_integer, profile_text, qemu_kernel_arguments  # noqa: E402
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths,
+    boot_command,
+    verify_identity,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
 
@@ -132,53 +137,84 @@ PLANES: tuple[tuple[str, str], ...] = (
     ("sel4-robot-runtime", "slime-sel4-robot-runtime.elf"),
 )
 
+# The subset P7.4 replays on x86-64: the resident product graph plus the two
+# corpus planes that milestone builds for this platform. Deliberately not the
+# whole table — a plane whose generation this platform does not build would
+# fail here for a build reason rather than a layout one, and the planes it does
+# not yet build are owned by later milestones.
+#
+# Each fixture is architecture-qualified (`x86_64/<stem>.layout`) and recorded
+# separately even though the observed x86-64 blocks are currently byte-identical
+# to the AArch64 ones. That identity is the *result* this gate exists to
+# observe — init's resolved capability layout is architecture-neutral — not a
+# reason to share one file. Blessing both architectures into one name would let
+# whichever ran last overwrite the other's evidence, and a future divergence
+# would then be invisible rather than a failure.
+X86_64_PLANES: frozenset[str] = frozenset({"sel4", "sel4-sample", "sel4-wait-set"})
+
 
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 boot layout check: {message}")
 
 
-def load_pins() -> dict[str, object]:
-    if not PINS_PATH.is_file():
-        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
-    try:
-        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
-    profile = pins.get("qemu_arm_virt")
-    if not isinstance(profile, dict):
-        fail("sel4/pins.toml is missing [qemu_arm_virt]")
-    return profile
+PC99_FLAGS = {
+    "sel4": "--component-graph",
+    "sel4-sample": "--sample-plane",
+    "sel4-wait-set": "--wait-set-plane",
+}
 
 
-def build(name: str) -> Path:
-    """Build one plane's image by closure identity."""
+def build(name: str, platform: str) -> Path:
+    """Build by closure identity on main's lane and directly for Multiboot2 pc99."""
+    if platform == "qemu-pc99":
+        # pc99 has no loader image, so closure packaging cannot yet represent it.
+        command = [
+            sys.executable,
+            str(BUILD_SCRIPT),
+            PC99_FLAGS[name],
+            "--platform",
+            platform,
+            "--skip-pin-check",
+        ]
+        process = subprocess.run(command, cwd=ROOT, check=False)
+        if process.returncode != 0:
+            fail(f"image build failed for {PC99_FLAGS[name]}")
+        return artifact_paths(Path(dict(PLANES)[name]).stem, platform)[0]
     try:
         return build_closure_image(name).image
     except ClosureImageError as error:
         fail(str(error))
 
 
-def capture(name: str, image: Path, profile: dict[str, object]) -> str:
+def capture(name: str, image: Path, platform: str, manifest_path: Path) -> str:
     """Boot one image and return its `[layout]` block."""
-    qemu = shutil.which("qemu-system-aarch64")
-    if qemu is None:
-        fail("qemu-system-aarch64 is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail),
-        "-cpu",
-        profile_text(profile, "cpu", fail),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        "-kernel",
-        str(image),
-    ]
+    if platform == "qemu-pc99":
+        manifest = verify_identity(
+            manifest_path,
+            platform=platform,
+            variant=None,
+            image_path=image,
+            fail=fail,
+        )
+        command = boot_command(manifest, platform=platform, image_path=image, fail=fail)
+    else:
+        section, qemu_binary = PLATFORMS[platform]
+        profile = load_qemu_profile(fail, PINS_PATH, section)
+        command = [
+            qemu_binary,
+            "-machine",
+            profile_text(profile, "machine", fail, section),
+            "-cpu",
+            profile_text(profile, "cpu", fail, section),
+            "-smp",
+            str(profile_integer(profile, "cpus", fail, section)),
+            "-m",
+            f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
+            "-nographic",
+            "-serial",
+            "mon:stdio",
+            *qemu_kernel_arguments(qemu_binary, image, fail),
+        ]
     lines: list[str] = []
     try:
         process = subprocess.Popen(
@@ -276,23 +312,48 @@ def main() -> None:
         action="store_true",
         help="boot the already-built images instead of rebuilding each first",
     )
+    parser.add_argument(
+        "--platform",
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
+        help="the pinned QEMU profile whose layouts are frozen",
+    )
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    profile = load_pins()
+
+    # AArch64 keeps the original flat fixture names so its frozen evidence is
+    # untouched; every other architecture records under its own directory.
+    fixtures = FIXTURES if arguments.platform == "qemu-arm-virt" else FIXTURES / "x86_64"
+    planes = [
+        plane
+        for plane in PLANES
+        if arguments.platform == "qemu-arm-virt" or plane[0] in X86_64_PLANES
+    ]
+    if not planes:
+        fail(f"no boot-layout planes are declared for {arguments.platform}")
 
     failures: list[str] = []
-    for name, image_name in PLANES:
-        built = None
-        if not arguments.no_build:
-            built = build(name)
-        image = built if built is not None else ROOT / "build" / image_name
-        if not image.is_file():
-            fail(f"{name}: missing image {image.relative_to(ROOT)}")
-        observed = capture(name, image, profile)
+    for name, image_name in planes:
+        if arguments.no_build:
+            image, manifest_path = artifact_paths(Path(image_name).stem, arguments.platform)
+        else:
+            image = build(name, arguments.platform)
+            manifest_path = artifact_paths(Path(image_name).stem, arguments.platform)[1]
+        # The Multiboot2 route packages no single image: the bootloader supplies
+        # the kernel and root task as separate modules from the EFI tree, and
+        # `verify_identity` recomputes that tree's digests instead. Requiring a
+        # packaged ELF here would fail a boot route that correctly has none.
+        if arguments.platform == "qemu-pc99":
+            if not manifest_path.is_file():
+                fail(f"{name}: missing identity manifest for {arguments.platform}")
+        elif not image.is_file():
+            fail(f"{name}: missing image for {arguments.platform}")
+        observed = capture(name, image, arguments.platform, manifest_path)
         check_shape(name, observed)
-        fixture = FIXTURES / f"{name}.layout"
+        fixtures.mkdir(parents=True, exist_ok=True)
+        fixture = fixtures / f"{name}.layout"
         if arguments.bless:
             fixture.write_text(observed)
             print(f"blessed {name}: {len(observed.splitlines()) - 2} slots")
@@ -321,7 +382,7 @@ def main() -> None:
     if arguments.bless:
         print("seL4 boot layout check: blessed")
         return
-    print(f"seL4 boot layout check: {len(PLANES)} plane layouts match their fixtures")
+    print(f"seL4 boot layout check: {len(planes)} plane layouts match their fixtures")
 
 
 if __name__ == "__main__":

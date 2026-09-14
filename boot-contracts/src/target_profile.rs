@@ -88,12 +88,21 @@ impl TargetProfile {
     }
     /// Resolve the exact profile this binary was built to execute.
     ///
-    /// AArch64 has multiple profiles on one Cargo target, so its build must set
-    /// `SLIME_TARGET_PROFILE`. Single-profile architectures have a fail-closed
-    /// default, while an explicit name must still match the compiled ISA.
+    /// AArch64 and x86-64 each have multiple profiles on one architecture, so
+    /// their builds must set `SLIME_TARGET_PROFILE`. Single-profile
+    /// architectures have a fail-closed default, while an explicit name must
+    /// still match the compiled ISA.
+    ///
+    /// x86-64 deliberately has no default. It once defaulted to
+    /// `x86_64-qemu-virtio`, which is the retired custom kernel's trap-ABI
+    /// identity retained only for decoding rollback-window artifacts (P0). Now
+    /// that P6.1 admits `x86_64-sel4-qemu-pc99` and the named Framework
+    /// profile, an unset environment variable would qualify a new seL4
+    /// executable against the retired ABI and admit it nowhere useful, so an
+    /// empty name fails as an unknown profile instead.
     pub fn current() -> Result<&'static Self, TargetError> {
         #[cfg(target_arch = "x86_64")]
-        let default_name = "x86_64-qemu-virtio";
+        let default_name = "";
         #[cfg(target_arch = "aarch64")]
         let default_name = "";
         #[cfg(target_arch = "riscv64")]

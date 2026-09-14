@@ -1,0 +1,25 @@
+QEMU q35/OVMF panel capture of the P6.6 media, decoded against the font table.
+
+Mode 800x600 24 bpp; PPM sha256 d07046f00533f9d88d82ff0d28bcc1533278560ea7361d871de72052439fd749
+Whole-panel purity: 0 pixels are neither black nor white (0 required).
+
+Every pixel of the panel is written, not just the glyph cells: each line
+clears its full screen rows, the first line clears the top margin, and the
+terminal line clears every row below the record. A real panel arrives
+holding the bootloader's console output; a QEMU framebuffer starts black,
+so this purity count is the only emulated check that can speak to it.
+
+  SLIME OS - ROOT RUNNING
+  TIMER MAPPED - AWAITING TICK
+  TIMER TICKING
+  GENERATION ADMITTED
+  IMAGES STAGED
+  ENDPOINTS WIRED
+  COMPONENTS RUNNING
+  SERVING - AWAITING GRAPH
+  SLIME OS
+  TARGET X86_64-SEL4-FRAMEWORK13-AI300
+  GENERATION 1 ID 0F1929F39BF5FA1F
+  DISPLAY 800X600X24
+  ROOT READY
+  IDLE - SAFE TO POWER OFF

@@ -9,6 +9,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_BUNDLE_IDENTITY");
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
     println!("cargo:rerun-if-env-changed=SLIME_QEMU_KEYBOARD");
+    println!("cargo:rerun-if-env-changed=SLIME_PC99_COM1_PORT");
     println!("cargo:rerun-if-env-changed=SLIME_PRODUCT_UART_PADDR");
     println!("cargo:rerun-if-env-changed=SLIME_PRODUCT_TEST_TERMINATOR");
     println!("cargo:rerun-if-env-changed=SLIME_DUO_EARLY_FAULT");
@@ -25,9 +26,11 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_rights)");
     println!("cargo::rustc-check-cfg=cfg(slime_root_fixture)");
     println!("cargo::rustc-check-cfg=cfg(slime_qemu_keyboard)");
+    println!("cargo::rustc-check-cfg=cfg(slime_pc99_com1)");
     println!("cargo::rustc-check-cfg=cfg(slime_product_uart)");
     println!("cargo::rustc-check-cfg=cfg(slime_product_test_terminator)");
     println!("cargo::rustc-check-cfg=cfg(slime_cv1800b_duo)");
+    println!("cargo::rustc-check-cfg=cfg(slime_framework13_ai300)");
     println!("cargo::rustc-check-cfg=cfg(slime_duo_early_fault)");
     println!("cargo::rustc-check-cfg=cfg(slime_physical_target)");
     let target_profile = std::env::var("SLIME_TARGET_PROFILE")
@@ -49,6 +52,9 @@ fn main() {
             .expect("SLIME_DUO_TIMEBASE_HZ must be a positive integer");
         assert!(frequency > 0, "SLIME_DUO_TIMEBASE_HZ must be positive");
         println!("cargo:rustc-env=SLIME_DUO_TIMEBASE_HZ={frequency}");
+    }
+    if target_profile == "x86_64-sel4-framework13-ai300" {
+        println!("cargo::rustc-cfg=slime_framework13_ai300");
     }
     if let Ok(uart_paddr) = std::env::var("SLIME_PRODUCT_UART_PADDR") {
         if !physical_target {
@@ -88,6 +94,18 @@ fn main() {
     }
     if std::env::var("SLIME_QEMU_KEYBOARD").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=slime_qemu_keyboard");
+    }
+    if let Ok(port) = std::env::var("SLIME_PC99_COM1_PORT") {
+        if target_profile != "x86_64-sel4-qemu-pc99" {
+            panic!("SLIME_PC99_COM1_PORT is valid only for the pc99 profile");
+        }
+        let value = port
+            .strip_prefix("0x")
+            .and_then(|value| u16::from_str_radix(value, 16).ok())
+            .expect("SLIME_PC99_COM1_PORT must be nonzero hexadecimal");
+        assert!(value != 0, "SLIME_PC99_COM1_PORT must be nonzero");
+        println!("cargo::rustc-cfg=slime_pc99_com1");
+        println!("cargo:rustc-env=SLIME_PC99_COM1_PORT={port}");
     }
     if std::env::var("SLIME_BOOT_SELECTOR").as_deref() != Ok("1")
         && let Ok(path) = std::env::var("SLIME_GENERATION")

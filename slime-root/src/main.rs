@@ -30,11 +30,15 @@
 // test result evidence about the root the seL4 image boots.
 #[cfg(slime_boot_selector)]
 use slime_root::boot_selector;
+// The panel is P6.6's only readiness channel on a machine with no serial port,
+// and the record it carries is reached through an x86 extra-BootInfo entry.
+#[cfg(target_arch = "x86_64")]
+use slime_root::{boot_record, framebuffer};
 use slime_root::{
     buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
     generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
-    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, timer,
-    transfer_window, wait_set,
+    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, thread_abi,
+    timer, transfer_window, vm_attributes, wait_set,
 };
 
 use core::ptr;
@@ -106,9 +110,29 @@ enum LoanLifecycleRequest {
 
 /// Report an unrecoverable startup condition and park the root task. Every
 /// fallible step returns a typed error that ends up here; nothing panics.
+///
+/// The report goes to both channels. Serial is what every emulated plane
+/// reads; the panel is the *only* channel a physical Framework has, and a
+/// fatal reaching serial alone is a silent stop there — the condition that
+/// made the first physical boot attempt uninterpretable. The panel carries a
+/// fixed label rather than the formatted message: formatting needs a
+/// heap-free writer this macro cannot assume at every one of its 126 sites,
+/// and the label already tells an operator with no serial port that the root
+/// died rather than hung.
 macro_rules! fatal {
     ($($arg:tt)*) => {{
         sel4::debug_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: the fatal path is terminal and single-threaded — the root
+        // suspends on the next line — so this cannot overlap another render.
+        //
+        // `unused_unsafe` is allowed because `fatal!` expands both inside and
+        // outside `unsafe` blocks across the root, and the macro cannot know
+        // which; the block is required at the outside sites.
+        #[allow(unused_unsafe)]
+        unsafe {
+            framebuffer::report_fatal("ROOT FATAL - BOOT ABANDONED");
+        }
         sel4::init_thread::suspend_self()
     }};
 }
@@ -371,7 +395,7 @@ fn request_duo_test_reset() -> ! {
     }
 }
 
-#[cfg(slime_product_uart)]
+#[cfg(any(slime_product_uart, slime_pc99_com1))]
 const fn const_parse_hex_usize(value: &str) -> usize {
     let bytes = value.as_bytes();
     assert!(
@@ -435,9 +459,22 @@ static mut ORDINARY_PROBE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// holds the device.
 static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for the selected RV64 platform's userspace timer registers.
-#[cfg(target_arch = "riscv64")]
+/// Standing window for the platform's memory-mapped timer registers, on the
+/// profiles whose monotonic source is a device rather than an architected
+/// register the kernel grants userspace access to.
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Scratch window the boot framebuffer's granules are mapped through in turn.
+///
+/// One page rather than a standing mapping of the whole mode: a panel-sized
+/// linear framebuffer is megabytes, the root writes it once from top to
+/// bottom, and `DeviceRegion::unmap` exists so one claimed root-image page can
+/// walk a region larger than a granule. It is its own page rather than
+/// `DEVICE_PAGE` or the loader's, because the walk runs while those hold their
+/// own mappings.
+#[cfg(target_arch = "x86_64")]
+static mut FRAMEBUFFER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the CV1800B RTC control granule used to reset the board
 /// after an autonomous physical proof completes. It must be mapped before the
@@ -472,24 +509,53 @@ static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
 const TIMER_PADDR: usize = 0x0010_1000;
 #[cfg(all(target_arch = "riscv64", slime_cv1800b_duo))]
 const TIMER_PADDR: usize = 0x0502_6000;
+/// The IA-PC HPET's architectural base address on QEMU q35.
+///
+/// A pinned machine fact, not discovery: firmware reports it in the ACPI HPET
+/// table, and P6 reads no ACPI (H1 owns the real inventory). This is the
+/// address that machine's HPET is fixed at, and a machine whose firmware
+/// relocates it is a different platform profile.
+#[cfg(target_arch = "x86_64")]
+const TIMER_PADDR: usize = 0xfed0_0000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
 
 #[cfg(slime_product_uart)]
 const PRODUCT_UART_PADDR: usize = const_parse_hex_usize(env!("SLIME_PRODUCT_UART_PADDR"));
+/// pc99's COM1 base I/O port, supplied by the build from `[qemu_pc99].serial`
+/// so the emulator fact and the compiled-in port cannot disagree.
+///
+/// Narrowed with a compile-time bound rather than an `as` cast: x86 I/O ports
+/// are 16 bits, and a truncating cast would turn an out-of-range pin into a
+/// plausible-looking port instead of a build failure.
+#[cfg(slime_pc99_com1)]
+const PC99_COM1_PORT: u16 = {
+    let port = const_parse_hex_usize(env!("SLIME_PC99_COM1_PORT"));
+    assert!(port <= u16::MAX as usize, "I/O port must fit in 16 bits");
+    port as u16
+};
 /// QEMU virt's architecture-specific virtio-mmio transport window.
 ///
 /// These are pinned machine facts, not discovery. The generation's userspace
 /// driver owns device semantics; root uses the constants only for the bounded
 /// bootstrap inventory and IRQ-capability handoff.
+///
+/// QEMU q35 has no virtio-mmio window at all: virtio devices there are PCI
+/// functions behind an ACPI-described host bridge. P6 explicitly does not
+/// enumerate PCI or enable bus mastering — that is H2's — so this profile
+/// declares an empty transport range and its bootstrap inventory finds no
+/// devices. The range is stated as zero granules rather than omitted so the
+/// scan is a real bounded loop over nothing instead of a separate code path.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_BASE: usize = 0;
 /// Bytes between consecutive transports.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 const VIRTIO_MMIO_STRIDE: usize = 0x1000;
 const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
 /// Number of transport granules to scan.
@@ -497,11 +563,16 @@ const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
 const VIRTIO_MMIO_GRANULES: usize = 4;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_GRANULES: usize = 8;
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_GRANULES: usize = 0;
 /// Interrupt number of the first transport in seL4's IRQ namespace.
 #[cfg(target_arch = "aarch64")]
 const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
 #[cfg(target_arch = "riscv64")]
 const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
+/// Unreachable on this profile: no transport exists to derive an IRQ for.
+#[cfg(target_arch = "x86_64")]
+const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 0;
 /// Badge the device notification carries, distinct from the timer's.
 const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
 
@@ -691,7 +762,14 @@ static mut OBJECT_ALLOCATOR: ObjectAllocator = ObjectAllocator::empty();
 /// a read-only mapping, one branch into an execute-never page. A third fault
 /// from the clean-exit fixture is not part of the contract and is treated as a
 /// real failure.
+///
+/// x86-64 expects only the first: seL4 exposes no execute-never frame
+/// attribute there, so a data page is executable and the branch probe cannot
+/// fault. See `slime_root::vm_attributes`.
+#[cfg(not(target_arch = "x86_64"))]
 const SHARED_EXPECTED_PROBES: usize = 2;
+#[cfg(target_arch = "x86_64")]
+const SHARED_EXPECTED_PROBES: usize = 1;
 
 /// What the root observed while supervising the clean-exit fixture's
 /// shared-buffer phase.
@@ -795,7 +873,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         sel4::init_thread::slot::VSPACE.cap(),
         probe_addr,
         sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        vm_attributes::data(),
     ) {
         fatal!("ordinary memory probe map failed: {error:?}")
     }
@@ -825,9 +903,77 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT ordinary probe paddr={probe_paddr:#x} bytes={GRANULE_SIZE} beyond_legacy={beyond_legacy} verified=1"
     );
 
-    #[cfg(all(any(slime_qemu_keyboard, slime_product_uart), not(slime_root_fixture)))]
+    // ---- display phase ----
+    // Claimed before the input and timer phases, which is the earliest point
+    // the allocator can retype a device frame. A machine with no serial port
+    // has no other channel, so a root that renders only at readiness leaves
+    // the panel showing whatever the bootloader last printed — which is
+    // indistinguishable from the bootloader itself having hung. Each phase
+    // past this point reports as it passes, so the last line on the panel
+    // names the furthest point the boot reached.
+    //
+    // Ordered ahead of the timer deliberately: the framebuffer is a PCI BAR
+    // low in the physical map and the HPET is at `0xfed00000`, so claiming the
+    // panel first keeps both device-untyped walks ascending.
+    //
+    // Absent is not fatal. Every emulated plane other than the media gate
+    // boots through a route that negotiates no mode, and those planes assert
+    // the serial chain; failing here would turn a text-mode boot into a dead
+    // root instead of an unobserved panel.
+    #[cfg(target_arch = "x86_64")]
+    match framebuffer::describe(bootinfo) {
+        Ok(info) => {
+            let address = ptr::addr_of!(FRAMEBUFFER_PAGE) as usize;
+            if let Err(error) = ScratchPage::claim(bootinfo, address) {
+                fatal!("framebuffer page unavailable: {error:?}")
+            }
+            sel4::debug_println!(
+                "SLIME_DISPLAY mode={}x{}x{} paddr={:#x}",
+                info.width(),
+                info.height(),
+                info.bits_per_pixel(),
+                info.physical_address(),
+            );
+            let framebuffer = framebuffer::Framebuffer::claim(
+                info,
+                sel4::init_thread::slot::VSPACE.cap(),
+                address,
+            );
+            // Installed into the root's single panel slot rather than held
+            // here: `fatal!` renders through it from 126 sites that hold no
+            // display handle, and the readiness record is written from the
+            // service loop, which has no reason to know about displays.
+            //
+            // SAFETY: root startup is single-threaded and this runs once; the
+            // allocator pointer names the root's own `static` storage, which
+            // is initialized above and lives for the whole boot.
+            unsafe { framebuffer::install_panel(framebuffer, allocator) };
+            // The first thing on the panel is proof the root is executing at
+            // all, which is exactly what a boot that stops in the bootloader
+            // cannot produce.
+            //
+            // SAFETY: as above — single-threaded startup, no reentrancy.
+            unsafe {
+                framebuffer::with_panel(allocator, |panel, allocator| {
+                    match boot_record::render_stage(panel, allocator, "SLIME OS - ROOT RUNNING") {
+                        Ok(()) => sel4::debug_println!("SLIME_DISPLAY stage root"),
+                        Err(error) => sel4::debug_println!("SLIME_DISPLAY stage failed {error:?}"),
+                    }
+                });
+            }
+        }
+        Err(error) => sel4::debug_println!("SLIME_DISPLAY absent {error:?}"),
+    }
+    // ---- end display phase ----
+
+    #[cfg(all(
+        any(slime_qemu_keyboard, slime_product_uart, slime_pc99_com1),
+        not(slime_root_fixture)
+    ))]
     let product_input = {
+        #[cfg(any(slime_qemu_keyboard, slime_product_uart))]
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
+        #[cfg(any(slime_qemu_keyboard, slime_product_uart))]
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
             fatal!("product input page unavailable: {error:?}")
         }
@@ -863,6 +1009,43 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 device::TerminalReceiver::DwApb(device::DwApbInput::new(registers)),
             )
         };
+        // pc99 legacy serial is behind I/O ports rather than a mapped page, so
+        // this arm claims a capability over the COM1 port range instead of a
+        // device frame.
+        #[cfg(slime_pc99_com1)]
+        let (paddr, receiver) = {
+            let port_slot = match allocator.reserve_slot::<sel4::cap_type::IOPort>() {
+                Ok(slot) => slot,
+                Err(error) => fatal!("COM1 port slot unavailable: {error:?}"),
+            };
+            let first = PC99_COM1_PORT;
+            // The 16550's eight registers, no wider: `IOPortControl` will issue
+            // any span, and a wider one would hand the root authority over
+            // neighbouring legacy devices it does not drive.
+            //
+            // Checked rather than wrapped: a pinned base near the top of the
+            // port space would otherwise wrap to a reversed range, and a range
+            // whose end precedes its start is authority over nothing that
+            // nonetheless issues successfully.
+            let Some(last) = first.checked_add(7) else {
+                fatal!("COM1 port base {first:#x} leaves no room for the 16550's eight registers")
+            };
+            let root_cnode = sel4::init_thread::slot::CNODE.cap();
+            if let Err(error) = sel4::init_thread::slot::IO_PORT_CONTROL
+                .cap()
+                .ioport_control_issue(
+                    first.into(),
+                    last.into(),
+                    &root_cnode.absolute_cptr(port_slot.cptr()),
+                )
+            {
+                fatal!("COM1 port authority refused: {error:?}")
+            }
+            (
+                usize::from(first),
+                device::TerminalReceiver::Com1(device::Com1Input::new(port_slot.cap(), first)),
+            )
+        };
         sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
         let input = device::TerminalInput::new(receiver);
         #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
@@ -870,7 +1053,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Some(input)
     };
     #[cfg(all(
-        not(any(slime_qemu_keyboard, slime_product_uart)),
+        not(any(slime_qemu_keyboard, slime_product_uart, slime_pc99_com1)),
         not(slime_root_fixture)
     ))]
     let product_input: Option<device::TerminalInput> = None;
@@ -930,12 +1113,49 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         }
         timer_adapter.attach_registers(registers);
     }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let timer_addr = ptr::addr_of!(TIMER_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, timer_addr) {
+            fatal!("timer page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            timer_addr,
+            TIMER_PADDR,
+        ) {
+            Ok(region) => region.granule(),
+            Err(error) => fatal!("timer registers unavailable: {error:?}"),
+        };
+        timer_adapter.attach_registers(registers);
+    }
     sel4::debug_println!(
         "SLIME_TIMER acquired irq={TIMER_IRQ} freq_hz={}",
         timer_adapter.frequency_hz(),
     );
 
+    // Two markers around `prove_timer`, not one. It blocks until a real timer
+    // interrupt arrives, so on a machine whose timer this profile has assumed
+    // rather than observed it is the most likely place for the boot to stop
+    // forever. `TIMER MAPPED` without `TIMER TICKING` says the registers were
+    // reachable but no interrupt was delivered, which is a different defect
+    // from a mapping that failed.
+    // SAFETY: single-threaded startup; no component runs yet.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = boot_record::render_stage(panel, allocator, "TIMER MAPPED - AWAITING TICK");
+        });
+    }
     prove_timer(&mut timer_adapter, "startup");
+    // SAFETY: as above.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = boot_record::render_stage(panel, allocator, "TIMER TICKING");
+        });
+    }
     #[cfg(slime_duo_early_fault)]
     run_duo_early_fault_control(&mut timer_adapter, reset_registers);
     if let Err(error) = timer_adapter.bind_to(sel4::init_thread::slot::TCB.cap()) {
@@ -1065,6 +1285,15 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         admission.health,
         admission.bootstrap_objects,
     );
+    // The last stage before components launch, so a panel stopping here says
+    // the generation was admitted but the graph did not come up.
+    // SAFETY: single-threaded startup; no component runs yet.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        framebuffer::with_panel(allocator, |panel, allocator| {
+            let _ = boot_record::render_stage(panel, allocator, "GENERATION ADMITTED");
+        });
+    }
     // C8.2: the declared fabric graph, checked against this root's own ceilings
     // before any component launches. `absent` for the generations that declare
     // none; `admitted` is the wiring being observable, which no unit test over

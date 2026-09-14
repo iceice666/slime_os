@@ -25,6 +25,10 @@ const _: () = assert!(GRANULE_SIZE == boot_contracts::component_runtime_abi::GRA
 pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType::LargePage;
 #[cfg(target_arch = "riscv64")]
 pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType::MegaPage;
+// x86-64 names its 2 MiB frame `LargePage` as AArch64 does (`seL4_LargePageBits`
+// is 21), so private backing spans the same page count on both.
+#[cfg(target_arch = "x86_64")]
+pub(crate) const LARGE_FRAME_TYPE: sel4::FrameObjectType = sel4::FrameObjectType::LargePage;
 pub(crate) const LARGE_FRAME_BYTES: usize = LARGE_FRAME_TYPE.bytes();
 /// Base pages one large frame spans. Public because the product binary's
 /// rollback fixture sizes its retry against exactly one span.
@@ -118,11 +122,12 @@ impl<'a> ChildImage<'a> {
     /// Parse and validate a payload against this root task's compiled ISA.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, ImageError> {
         let file = ElfFile64::<Endianness>::parse(bytes).map_err(|_| ImageError::NotElf)?;
-        let expected = if cfg!(target_arch = "riscv64") {
-            Architecture::Riscv64
-        } else {
-            Architecture::Aarch64
-        };
+        #[cfg(target_arch = "aarch64")]
+        let expected = Architecture::Aarch64;
+        #[cfg(target_arch = "riscv64")]
+        let expected = Architecture::Riscv64;
+        #[cfg(target_arch = "x86_64")]
+        let expected = Architecture::X86_64;
         if file.architecture() != expected || !file.is_little_endian() {
             return Err(ImageError::WrongTarget);
         }
@@ -160,11 +165,14 @@ impl<'a> ChildImage<'a> {
     pub fn worker(&self) -> Option<WorkerImage> {
         let entry = self.symbol(WORKER_ENTRY_SYMBOL)?;
         let (stack_base, stack_size) = self.symbol_with_size(WORKER_STACK_SYMBOL)?;
+        let top = usize::try_from(stack_base + stack_size).ok()?;
         Some(WorkerImage {
             entry,
-            // Both supported ABIs require a 16-byte stack alignment at public
-            // interfaces; the symbol's own alignment only guarantees its base.
-            stack_top: (stack_base + stack_size) & !0xf,
+            // The kernel enters this thread by writing PC and SP, so what the
+            // callee's ABI requires there is not the symbol's own alignment;
+            // `thread_abi` owns that difference for every directly started
+            // thread.
+            stack_top: crate::thread_abi::initial_stack_pointer(top) as u64,
         })
     }
 
@@ -456,7 +464,7 @@ fn map_thread_pages(
             vspace,
             ipc_buffer_addr,
             sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+            crate::vm_attributes::data(),
         )
         .map_err(|error| VSpaceError::FrameMap {
             vaddr: ipc_buffer_addr,
@@ -479,7 +487,7 @@ fn map_thread_pages(
             vspace,
             transfer_window_addr,
             sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+            crate::vm_attributes::data(),
         )
         .map_err(|error| VSpaceError::FrameMap {
             vaddr: transfer_window_addr,
@@ -653,7 +661,29 @@ fn unify_instruction_page(frame: sel4::cap::Granule, flags: u8) -> Result<(), VS
         }
     }
     #[cfg(target_arch = "riscv64")]
-    let _ = (frame, flags);
+    {
+        let _ = frame;
+        if flags & FLAG_EXEC != 0 {
+            // The root wrote the executable bytes itself; order those stores before
+            // instruction fetch on this hart. RISC-V seL4 exposes no page-cache
+            // maintenance invocation because the architecture is coherent here.
+            unsafe {
+                core::arch::asm!("fence.i", options(nostack));
+            }
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let _ = (frame, flags);
+        // x86-64 keeps its instruction cache coherent with stores in hardware
+        // and seL4 exposes no page-cache maintenance invocation here, so the
+        // writes this root already performed are visible to the child's first
+        // fetch. The child has not run yet and its TCB is configured after
+        // this point, so no speculative fetch of the old contents can be
+        // outstanding either.
+    }
+    #[cfg(target_arch = "aarch64")]
+    let _ = frame;
     Ok(())
 }
 
@@ -822,14 +852,14 @@ fn page_rights(flags: u8) -> sel4::CapRights {
         .build()
 }
 
-/// Executability is the architecture's `EXECUTE_NEVER` VM attribute, while
-/// `VmAttributes::DEFAULT` permits execution. Data and stack pages therefore
-/// set it explicitly; only a `PF_X` segment stays executable.
+/// Executability follows the segment's `PF_X` flag. Whether a non-executable
+/// mapping is enforced by the page tables is architecture-dependent; see
+/// `crate::vm_attributes`.
 fn page_attributes(flags: u8) -> sel4::VmAttributes {
     if flags & FLAG_EXEC != 0 {
-        sel4::VmAttributes::DEFAULT
+        crate::vm_attributes::executable()
     } else {
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER
+        crate::vm_attributes::data()
     }
 }
 

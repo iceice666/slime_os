@@ -92,6 +92,14 @@ fn uncached_attributes() -> sel4::VmAttributes {
     {
         sel4::VmAttributes::NONE
     }
+    // seL4's x86 attribute word is a cache-policy selector rather than a
+    // permission mask: `seL4_X86_Default_VMAttributes` is zero and each policy
+    // is a distinct value, so uncached MMIO is `CACHE_DISABLED` outright and
+    // not the default with a bit cleared.
+    #[cfg(target_arch = "x86_64")]
+    {
+        sel4::VmAttributes::CACHE_DISABLED
+    }
 }
 
 impl DeviceRegion {
@@ -147,10 +155,25 @@ impl DeviceRegion {
         base: usize,
         paddr: usize,
     ) -> Result<Self, DeviceError> {
-        let frame = allocator
+        Self::map_tracked(allocator, vspace, base, paddr).map(|(region, _)| region)
+    }
+
+    /// As [`Self::map`], also returning the root CSlot index the frame took.
+    ///
+    /// Needed only by a caller that will [`Self::discard`] the granule: a
+    /// `Granule` capability does not carry its own index, so a scanning walk
+    /// has to remember it to return it.
+    pub fn map_tracked(
+        allocator: &mut ObjectAllocator,
+        vspace: sel4::cap::VSpace,
+        base: usize,
+        paddr: usize,
+    ) -> Result<(Self, usize), DeviceError> {
+        let slot = allocator
             .allocate_device_frame(paddr)
-            .map_err(DeviceError::Allocate)?
-            .cap();
+            .map_err(DeviceError::Allocate)?;
+        let index = slot.index();
+        let frame = slot.cap();
         frame
             .frame_map(
                 vspace,
@@ -161,7 +184,7 @@ impl DeviceRegion {
                 uncached_attributes(),
             )
             .map_err(DeviceError::Map)?;
-        Ok(Self { base, paddr, frame })
+        Ok((Self { base, paddr, frame }, index))
     }
 
     pub fn physical_address(&self) -> usize {
@@ -202,6 +225,43 @@ impl DeviceRegion {
         Ok(())
     }
 
+    /// Unmap this granule, delete its frame capability, and return its CSlot.
+    ///
+    /// [`Self::unmap`] deliberately keeps the capability, because a *bound
+    /// device* stays bound for the boot and its register bank is read again.
+    /// A region merely *scanned* once — a framebuffer written top to bottom —
+    /// has the opposite lifetime: retaining a capability per granule spends a
+    /// root CSlot and a physical-provenance record per 4 KiB, and the
+    /// provenance table is sized for the live DMA-capable population rather
+    /// than for a display. A panel-sized walk exhausts it, and the root then
+    /// fails to allocate for reasons that have nothing to do with the graph.
+    ///
+    /// `slot` is the index the allocator returned for this frame. It is passed
+    /// rather than derived because a `Granule` capability does not carry its
+    /// own root-CSpace index.
+    ///
+    /// The frame is deleted before the slot is released, which is the order
+    /// [`ObjectAllocator::release_slot`] requires: the pool tracks
+    /// availability rather than occupancy, so returning an index that still
+    /// holds a capability makes the next allocation of it fail `DeleteFirst`.
+    ///
+    /// [`ObjectAllocator::release_slot`]: crate::object_allocator::ObjectAllocator::release_slot
+    pub fn discard(
+        mut self,
+        allocator: &mut ObjectAllocator,
+        slot: usize,
+    ) -> Result<(), DeviceError> {
+        self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        self.base = 0;
+        sel4::init_thread::slot::CNODE
+            .cap()
+            .absolute_cptr(self.frame)
+            .delete()
+            .map_err(DeviceError::Map)?;
+        allocator.release_slot(slot);
+        Ok(())
+    }
+
     /// Read one 32-bit register at `offset` bytes into the bank.
     ///
     /// `None` for an offset that would read past the mapped granule, so a
@@ -239,13 +299,25 @@ pub const QEMU_PL011_PADDR: usize = 0x0900_0000;
 pub enum TerminalReceiver {
     Pl011(Pl011Input),
     DwApb(DwApbInput),
+    #[cfg(target_arch = "x86_64")]
+    Com1(Com1Input),
 }
 
 impl TerminalReceiver {
-    fn poll_byte(&self) -> Option<u8> {
+    fn poll_byte(&self, buffer: &mut sel4::IpcBuffer) -> Option<u8> {
         match self {
-            Self::Pl011(receiver) => receiver.poll_byte(),
-            Self::DwApb(receiver) => receiver.poll_byte(),
+            // Memory-mapped receivers read through a mapped page and reach the
+            // kernel not at all, so the buffer is unused on their arms.
+            Self::Pl011(receiver) => {
+                let _ = &buffer;
+                receiver.poll_byte()
+            }
+            Self::DwApb(receiver) => {
+                let _ = &buffer;
+                receiver.poll_byte()
+            }
+            #[cfg(target_arch = "x86_64")]
+            Self::Com1(receiver) => receiver.poll_byte(buffer),
         }
     }
 }
@@ -273,8 +345,8 @@ impl TerminalInput {
         self
     }
 
-    pub fn poll_byte(&self) -> Option<u8> {
-        let byte = self.receiver.poll_byte()?;
+    pub fn poll_byte(&self, buffer: &mut sel4::IpcBuffer) -> Option<u8> {
+        let byte = self.receiver.poll_byte(buffer)?;
         if let Some((terminator, trigger)) = self.test_terminator
             && byte == terminator
         {
@@ -353,6 +425,66 @@ impl DwApbInput {
         }
         let data = self.registers.read32(Self::RECEIVE_BUFFER)?;
         Some(data as u8)
+    }
+}
+
+/// Polling receive half of the pc99 COM1 16550A, over an I/O-port capability.
+///
+/// The same register layout as the DW APB adapter above, at a stride of one
+/// byte and reached through `in` rather than a load: x86 legacy serial is not
+/// memory-mapped, so the root holds a capability over the port range instead of
+/// a mapped page. Firmware and seL4's own debug console have already configured
+/// the line; this adapter only observes RX state and consumes one byte, leaving
+/// the shared TX path untouched.
+///
+/// A refused invocation is reported as an empty FIFO rather than escalated. The
+/// capability is issued once at startup and the port is fixed, so the only way
+/// to reach that arm is a kernel-side refusal, and turning a transient refusal
+/// into a fatal would take down a resident graph over one dropped keystroke.
+#[cfg(target_arch = "x86_64")]
+pub struct Com1Input {
+    ports: sel4::cap::IOPort,
+    base: u16,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl Com1Input {
+    const RECEIVE_BUFFER: u16 = 0;
+    const LINE_STATUS: u16 = 5;
+    const DATA_READY: u8 = 1 << 0;
+    /// Overrun, parity, framing, and break, as the 16550 line-status register
+    /// reports them. A byte arriving with any of these set is consumed and
+    /// refused rather than turned into shell input.
+    const DATA_ERRORS: u8 = 0x1e;
+
+    pub const fn new(ports: sel4::cap::IOPort, base: u16) -> Self {
+        Self { ports, base }
+    }
+
+    pub fn poll_byte(&self, buffer: &mut sel4::IpcBuffer) -> Option<u8> {
+        // Every invocation names this thread's own buffer: the console
+        // dispatcher never calls `set_ipc_buffer`, so borrowing the crate's
+        // ambient buffer here would panic rather than read a key.
+        let status = self
+            .ports
+            .with(&mut *buffer)
+            .ioport_in8(self.base + Self::LINE_STATUS)
+            .ok()?;
+        if status & Self::DATA_READY == 0 {
+            return None;
+        }
+        // Consume the byte before judging it: a framing or parity error still
+        // occupies the FIFO, so returning without reading would wedge the port
+        // on the first bad byte instead of skipping it.
+        let data = self
+            .ports
+            .with(&mut *buffer)
+            .ioport_in8(self.base + Self::RECEIVE_BUFFER)
+            .ok()?;
+        if status & Self::DATA_ERRORS != 0 {
+            return None;
+        }
+        Some(data)
     }
 }
 
@@ -458,14 +590,12 @@ impl DeviceIrq {
                 badge,
             )
             .map_err(DeviceError::Irq)?;
-        sel4::init_thread::slot::IRQ_CONTROL
-            .cap()
-            .irq_control_get_trigger(
-                irq,
-                !level_triggered,
-                &root_cnode.absolute_cptr(irq_handler_slot.cptr()),
-            )
-            .map_err(DeviceError::Irq)?;
+        crate::irq_control::acquire_handler(
+            irq,
+            level_triggered,
+            &root_cnode.absolute_cptr(irq_handler_slot.cptr()),
+        )
+        .map_err(DeviceError::Irq)?;
         irq_handler_slot
             .cap()
             .irq_handler_set_notification(signal_slot.cap())

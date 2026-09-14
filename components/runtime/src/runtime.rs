@@ -126,6 +126,14 @@ pub fn thread_index() -> usize {
     unsafe {
         core::arch::asm!("mv {base}, tp", base = out(reg) base, options(nomem, nostack));
     }
+    // No dedicated thread-pointer register exists here, so the root writes the
+    // index into `fs_base`, which seL4 saves and restores per thread. Reading
+    // it back without a syscall requires `CR4.FSGSBASE`, which the pinned
+    // kernel configuration sets (`KernelFSGSBase "inst"`).
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("rdfsbase {base}", base = out(reg) base, options(nomem, nostack, preserves_flags));
+    }
     // A value outside the table means the root set something this runtime does
     // not model; treating it as the main thread would let two threads share a
     // window, so refuse instead.

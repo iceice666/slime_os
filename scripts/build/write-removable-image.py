@@ -7,6 +7,14 @@ import hashlib
 import os
 import stat
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+import boot_media_contract as media_contract  # noqa: E402
+from framework_media import validate_image  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[2]
 
 CHUNK_SIZE = 1024 * 1024
 
@@ -180,7 +188,12 @@ def write_image(image: Path, device: Path) -> None:
     try:
         with image.open("rb") as src, device.open("r+b", buffering=0) as dst:
             while chunk := src.read(CHUNK_SIZE):
-                dst.write(chunk)
+                offset = 0
+                while offset < len(chunk):
+                    count = dst.write(chunk[offset:])
+                    if count is None or count <= 0:
+                        fail(f"short write: wrote {written + offset} of {total} bytes")
+                    offset += count
                 written += len(chunk)
             dst.flush()
             os.fsync(dst.fileno())
@@ -190,10 +203,27 @@ def write_image(image: Path, device: Path) -> None:
         fail(f"short write: wrote {written} of {total} bytes")
 
 
+def verify_written_image(image: Path, device: Path) -> str:
+    expected = file_sha256(image)
+    drop_device_cache(device, image.stat().st_size)
+    actual = block_sha256(device, image.stat().st_size)
+    if actual != expected:
+        fail(f"verification failed: image sha256 {expected}, device sha256 {actual}")
+    return actual
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Safely write a Slime OS boot image to removable media.")
     parser.add_argument("image", type=Path)
     parser.add_argument("device", type=Path)
+    parser.add_argument(
+        "--identity",
+        type=Path,
+        help=(
+            "boot-media identity record (defaults to the record beside the "
+            f"image: {media_contract.RECORD_FILE_NAME})"
+        ),
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the destructive removable-disk write")
     parser.add_argument(
         "--dry-run",
@@ -204,6 +234,8 @@ def main() -> None:
 
     if not args.image.is_file():
         fail(f"image not found: {args.image}")
+    identity = args.identity or args.image.with_name(media_contract.RECORD_FILE_NAME)
+    validate_image(args.image.resolve(), identity.resolve(), fail=fail)
     name = block_name(args.device)
     device = assert_safe_disk(name, args.yes, confirm=not args.dry_run)
     if args.image.stat().st_size > int(read_sys(sysfs_block(name) / "size")) * 512:
@@ -215,12 +247,16 @@ def main() -> None:
         )
         return
 
-    expected = file_sha256(args.image)
+    # Confirmation is a scheduling boundary: a device may be remounted,
+    # replaced, or become read-only while the operator answers. Re-resolve and
+    # revalidate immediately before opening it for write.
+    if block_name(args.device) != name:
+        fail("removable target changed after confirmation")
+    device = assert_safe_disk(name, True, confirm=False)
+    if args.image.stat().st_size > int(read_sys(sysfs_block(name) / "size")) * 512:
+        fail(f"image is larger than target device: {args.image} -> {device}")
     write_image(args.image, device)
-    drop_device_cache(device, args.image.stat().st_size)
-    actual = block_sha256(device, args.image.stat().st_size)
-    if actual != expected:
-        fail(f"verification failed: image sha256 {expected}, device sha256 {actual}")
+    actual = verify_written_image(args.image, device)
     print(f"Wrote {args.image} to {device} ({args.image.stat().st_size} bytes, sha256:{actual})")
 
 

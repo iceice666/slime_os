@@ -6,11 +6,15 @@ These instructions apply to the entire repository.
 
 ## Project state
 
-Slime OS is a QEMU-verified Rust `no_std` userspace graph on upstream seL4,
-with `slime-root` owning dynamic mechanism and generated Zutai contracts owning
-every persisted or cross-process format. Treat Framework laptop bring-up,
-physical NVMe qualification, rollbackable production generations, and
-daily-driver hardware support as unfinished unless code and tests prove otherwise.
+Slime OS is a Rust `no_std` userspace graph on upstream seL4, with `slime-root`
+owning dynamic mechanism and generated Zutai contracts owning every persisted
+or cross-process format. It is QEMU-verified across every plane, and since
+2026-09-13 one named physical machine boots it from removable media: a
+Framework 13 (AMD Ryzen AI 300, x86-64, P6), without writing internal storage.
+That is a CPU and product boot path only: treat physical NVMe qualification,
+device support of every kind, rollbackable production generations, and
+daily-driver hardware support as unfinished unless code and tests prove
+otherwise. A CPU boot qualifies no device.
 
 ## Code map: start here, do not broad-search
 
@@ -76,13 +80,18 @@ Use the Justfile targets from the repository root:
 - `just devlog_check` — validate devlog structure, front matter (the exact eight fields, in order, no duplicates or extras), gates, and links including their `#fragment` anchors, and that every work-item reference is a UUID the store has. Reads the tree only, so it needs no MyQue binary.
 - `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity of the frozen backlog index in `roadmap/00-backlog.md`, whose headings are validated one section at a time because `B29` and `B30` are each carried twice.
 - `just tasks_list` / `just tasks_next` / `just tasks_graph` — the work-item store's generated views. Never authoritative; `.tasks/items/` is.
+- `just x86_64_sel4_image_check` — P6.1's x86-64 admission: exact target profiles, pinned pc99 kernel/toolchain inputs, and a byte-identical rebuild, with no boot claim.
+- `just x86_64_sel4_root_boot_check` — P6.3's root, component runtime, child loader, fault, thread-context, and timer markers on pc99.
+- `just x86_64_qemu_check` — P6.4's corpus on pc99: root boot, wait-set, sample, product graph, boot layouts, and portability.
+- `just framework_media_check` — P6.5's deterministic raw GPT/FAT32 image: byte-identical rebuild, malformed/drifted/unsafe-target refusals, and a boot of the exact raw bytes under pinned q35/OVMF.
+- `just framework_cpu_boot_check` — P6.6's physical claim. Proves the observation validator refuses forged evidence, then reports the recorded boot from `evidence/framework-cpu-boot/`. It cannot manufacture an observation: `framework_cpu_boot_prepare` writes the image and hashes the protected internal region, the cold boots are an operator's power cycle, and `check-framework-cpu-boot.py verify` re-hashes and judges. QEMU cannot close it.
 - `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
 - `just lint_all` — run clippy with warnings denied for components, boot-contracts, and seL4 product crates.
 - `just deny` — dependency advisories, bans, licenses, and source pinning.
 - `just machete` — unused-dependency scan of workspace crates.
 - `just miri` — UB check of host-testable crates.
 - `just test_host` — host-side unit tests for boot-contracts and slime-proto.
-- `just test_sel4_root` — `slime-root`'s 211 host unit tests across 19 modules, with the count asserted (B23); requires the installed seL4 prefix.
+- `just test_sel4_root` — `slime-root`'s 243 host unit tests across 21 modules, with the count asserted (B23); requires the installed seL4 prefix.
 - `just ruff` — Python lint for `scripts/`.
 - `just typos` — spell-check sources and docs.
 

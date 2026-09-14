@@ -129,7 +129,13 @@ impl ScriptedInput {
     /// The next key for `task`. Finite non-empty scripts end with Escape so
     /// their test session terminates deterministically; an attached UART is a
     /// live queue and remains empty as `WouldBlock`.
-    fn next_event(&mut self, task: TaskId) -> Option<u64> {
+    ///
+    /// `buffer` is this thread's own IPC buffer, named rather than taken from
+    /// crate state for the same reason every other invocation on this thread
+    /// names it: the console dispatcher never calls `set_ipc_buffer`, so a
+    /// receiver that reaches the kernel — the pc99 I/O-port one does — has no
+    /// ambient buffer to borrow and would panic instead of reading a key.
+    fn next_event(&mut self, task: TaskId, buffer: &mut sel4::IpcBuffer) -> Option<u64> {
         let cursor = self.cursors.get_mut(task.0 as usize)?;
         if !self.bytes.is_empty() {
             return match self.bytes.get(*cursor).copied() {
@@ -142,7 +148,7 @@ impl ScriptedInput {
         }
         self.terminal
             .as_ref()?
-            .poll_byte()
+            .poll_byte(buffer)
             .map(normalize_terminal_byte)
             .map(encode_key)
     }
@@ -223,7 +229,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
                 buffer,
             ),
             ipc::ConsoleKind::InputRead => {
-                pending = Some(serve_input_read(tasks, input, id, &message.mrs));
+                pending = Some(serve_input_read(tasks, input, id, &message.mrs, buffer));
             }
             ipc::ConsoleKind::DirectoryInspect => {
                 pending = Some(crate::directory::serve_directory_inspect(
@@ -318,6 +324,7 @@ fn serve_input_read<const TASKS: usize>(
     input: &mut ScriptedInput,
     id: TaskId,
     words: &[sel4::Word],
+    buffer: &mut sel4::IpcBuffer,
 ) -> Response {
     let Some(table) = tasks.authority(id) else {
         return Response::error(IpcError::BadCapability);
@@ -325,7 +332,7 @@ fn serve_input_read<const TASKS: usize>(
     if table.resolve_input(words[0] as u32).is_err() {
         return Response::error(IpcError::BadCapability);
     }
-    match input.next_event(id) {
+    match input.next_event(id, buffer) {
         Some(event) => Response::success(0, event),
         None => Response::error(IpcError::WouldBlock),
     }

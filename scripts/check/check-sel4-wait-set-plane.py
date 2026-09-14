@@ -7,38 +7,39 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
-from harness import (
-    GENERATION_COMPOSITIONS,
-    load_qemu_profile,
-    profile_integer,
-    profile_text,
-    qemu_kernel_arguments,
-    sha256_file,
-)  # noqa: E402
+from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths as platform_artifact_paths,
+    boot_command,
+    run as run_boot,
+    verify_identity,
+)
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-wait-set.zti"
 # The closure identity names the build's inputs and is re-resolved from repository
 # state before the build, so stale input is refused instead of silently changing the image.
 CLOSURE = "sel4-wait-set"
 IMAGE: Path | None = None
-PLATFORMS = {
-    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
-}
+IMAGE_VARIANT = "wait-set"
 TIMEOUT = 240
+
+
+def artifact_paths(platform: str) -> tuple[Path, Path]:
+    return platform_artifact_paths("slime-sel4-wait-set", platform)
 
 
 
@@ -126,8 +127,22 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 wait-set plane check: {message}")
 
 
-def build_image() -> None:
+def build_image(platform: str, image_path: Path) -> None:
     global IMAGE
+    if platform == "qemu-pc99":
+        # pc99's Multiboot2 media has no loader image, so it remains on the
+        # legacy builder until closure packaging supports that boot route.
+        command = [
+            sys.executable,
+            str(BUILD_SCRIPT),
+            "--wait-set-plane",
+            "--platform",
+            platform,
+        ]
+        process = subprocess.run(command, cwd=ROOT, check=False)
+        if process.returncode != 0:
+            fail("image build failed")
+        return
     try:
         built = build_closure_image(CLOSURE)
     except ClosureImageError as error:
@@ -141,65 +156,16 @@ def build_image() -> None:
         )
 
 
-def boot(
-    profile: dict[str, object],
-    *,
-    section: str,
-    qemu_binary: str,
-    image_path: Path,
-) -> str:
-    qemu = shutil.which(qemu_binary)
-    if qemu is None:
-        fail(f"{qemu_binary} is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail, section),
-        "-cpu",
-        profile_text(profile, "cpu", fail, section),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail, section)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        *qemu_kernel_arguments(qemu_binary, image_path, fail),
-    ]
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
+    return run_boot(
+        boot_command(manifest, platform=platform, image_path=image_path, fail=fail),
+        terminal=re.compile(
+            r"SLIME_GRAPH HEALTHY generation=42 required=4 live=0 completed=4 failed=0"
+            r"|SLIME_ROOT FATAL|SLIME_WAIT FAIL|\[wait-set\] FAIL"
+        ),
+        timeout=TIMEOUT,
+        fail=fail,
     )
-    watchdog = threading.Timer(TIMEOUT, process.kill)
-    watchdog.start()
-    lines: list[str] = []
-    terminal = re.compile(
-        r"SLIME_GRAPH HEALTHY generation=42 required=4 live=0 completed=4 failed=0"
-        r"|SLIME_ROOT FATAL|SLIME_WAIT FAIL|\[wait-set\] FAIL"
-    )
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
-            if terminal.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    if timed_out:
-        fail("QEMU timed out")
-    return "\n".join(lines)
 
 
 def fixture_manifest() -> dict[str, object]:
@@ -355,17 +321,21 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     check_fixture_shape()
-    section, qemu_binary = PLATFORMS[arguments.platform]
-    build_image()
-    assert IMAGE is not None
-    image_path = IMAGE
-    profile = load_qemu_profile(fail, PINS, section)
-    transcript = boot(
-        profile,
-        section=section,
-        qemu_binary=qemu_binary,
-        image_path=image_path,
-    )
+    image_path, manifest_path = artifact_paths(arguments.platform)
+    build_image(arguments.platform, image_path)
+    if arguments.platform == "qemu-pc99":
+        manifest = verify_identity(
+            manifest_path,
+            platform=arguments.platform,
+            variant=IMAGE_VARIANT,
+            image_path=image_path,
+            fail=fail,
+        )
+    else:
+        assert IMAGE is not None
+        image_path = IMAGE
+        manifest = {}
+    transcript = boot(manifest, arguments.platform, image_path)
     match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
     for pattern in EXPECTED_UNORDERED:
         if re.search(pattern, transcript) is None:

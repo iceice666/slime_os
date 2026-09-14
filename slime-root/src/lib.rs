@@ -50,6 +50,10 @@ extern crate alloc;
 pub mod boot_selector;
 #[cfg(slime_boot_selector)]
 pub mod boot_selector_block;
+// The boot framebuffer is reached through an x86 extra-BootInfo record, so the
+// renderer and the record it draws exist only where that record can.
+#[cfg(target_arch = "x86_64")]
+pub mod boot_record;
 pub mod buffer_adapter;
 pub mod child_vspace;
 pub mod clock;
@@ -59,10 +63,15 @@ pub mod device;
 pub mod directory;
 pub mod event;
 pub mod fault;
+#[cfg(target_arch = "x86_64")]
+pub mod framebuffer;
 pub mod generation;
+#[cfg(target_arch = "x86_64")]
+pub mod glyph_font;
 pub mod graph;
 pub mod io_resource;
 pub mod ipc;
+pub mod irq_control;
 pub mod launched;
 pub mod lifecycle;
 pub mod notification;
@@ -74,6 +83,8 @@ pub mod scheduling;
 pub mod shared_buffer;
 pub mod supervision;
 pub mod task;
+pub mod thread_abi;
 pub mod timer;
 pub mod transfer_window;
+pub mod vm_attributes;
 pub mod wait_set;

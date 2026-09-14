@@ -79,6 +79,14 @@ COMPONENT_SDK_RELEASE_CONTRACT = ROOT / "contracts" / "component-sdk-release" / 
 COMPONENT_SDK_RELEASE_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-component-sdk-release-bindings.py"
 )
+BOOT_MEDIA_CONTRACT = ROOT / "contracts" / "boot-media" / "v1"
+BOOT_MEDIA_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-boot-media-bindings.py"
+)
+CPU_BOOT_OBSERVATION_CONTRACT = ROOT / "contracts" / "cpu-boot-observation" / "v1"
+CPU_BOOT_OBSERVATION_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-cpu-boot-observation-bindings.py"
+)
 SYSTEM_IMAGE_CLOSURE_CONTRACT = ROOT / "contracts" / "system-image-closure" / "v2"
 SYSTEM_IMAGE_CLOSURE_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-system-image-closure-bindings.py"
@@ -227,6 +235,18 @@ run("check", str(POWERBOX_CONTRACT / "schema.zt"))
 run("check", str(POWERBOX_CONTRACT / "gen_rust.zt"))
 subprocess.run(
     [sys.executable, str(POWERBOX_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+run("check", str(BOOT_MEDIA_CONTRACT / "schema.zt"))
+subprocess.run(
+    [sys.executable, str(BOOT_MEDIA_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+run("check", str(CPU_BOOT_OBSERVATION_CONTRACT / "schema.zt"))
+subprocess.run(
+    [sys.executable, str(CPU_BOOT_OBSERVATION_BINDING_GENERATOR), "--check"],
     cwd=ROOT,
     check=True,
 )

@@ -23,7 +23,6 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import NoReturn
 
@@ -31,28 +30,66 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from component_paths import source_path  # noqa: E402
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
-from harness import (
+from harness import (  # noqa: E402
     GENERATION_COMPOSITIONS,
     load_qemu_profile,
     profile_integer,
     profile_text,
     qemu_kernel_arguments,
     sha256_file,
-)  # noqa: E402
+)
+from sel4_boot import (  # noqa: E402
+    PLATFORMS,
+    artifact_paths as platform_artifact_paths,
+    boot_command,
+    run as run_boot,
+    verify_identity,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-sample.zti"
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 # CP15: the closure identity names the build's inputs and is re-resolved from
 # repository state before the build, so a stale input is refused rather than
 # silently producing a different image.
 CLOSURE = "sel4-sample"
 IMAGE: Path | None = None
-PLATFORMS = {
-    "qemu-arm-virt": ("qemu_arm_virt", "qemu-system-aarch64"),
-    "qemu-riscv-virt": ("qemu_riscv_virt", "qemu-system-riscv64"),
-}
+IMAGE_VARIANT = "sample"
 
+
+def artifact_paths(platform: str) -> tuple[Path, Path]:
+    return platform_artifact_paths("slime-sel4-sample", platform)
+
+
+def build_image(platform: str, image_path: Path) -> Path | None:
+    global IMAGE
+    if platform == "qemu-pc99":
+        # pc99's Multiboot2 media has no loader image, so it remains on the
+        # legacy builder until closure packaging supports that boot route.
+        command = [
+            sys.executable,
+            str(BUILD_SCRIPT),
+            "--sample-plane",
+            "--platform",
+            platform,
+        ]
+        process = subprocess.run(command, cwd=ROOT, check=False)
+        if process.returncode != 0:
+            fail(f"seL4 image build failed with exit status {process.returncode}")
+        return None
+    try:
+        built = build_closure_image(CLOSURE)
+    except ClosureImageError as error:
+        fail(str(error))
+    IMAGE = built.image
+    actual = sha256_file(IMAGE, fail)
+    if actual != built.digest():
+        fail(
+            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{built.digest()}; the image changed after it was built"
+        )
+    return built.output / "image.identity.json"
 
 
 BOOT_TIMEOUT_SECONDS = 180
@@ -355,93 +392,46 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 sample plane check: {message}")
 
 
-def build_image() -> None:
-    global IMAGE
-    try:
-        built = build_closure_image(CLOSURE)
-    except ClosureImageError as error:
-        fail(str(error))
-    IMAGE = built.image
-    actual = sha256_file(IMAGE, fail)
-    if actual != built.digest():
-        fail(
-            f"{IMAGE} SHA-256 is {actual}, but the build result records "
-            f"{built.digest()}; the image changed after it was built"
-        )
+def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict[str, object]:
+    return verify_identity(
+        manifest_path,
+        platform=platform,
+        variant=IMAGE_VARIANT,
+        image_path=image_path,
+        fail=fail,
+    )
 
 
-def boot(
-    profile: dict[str, object],
-    *,
-    section: str,
-    qemu_binary: str,
-    image_path: Path,
-) -> str:
-    """Boot the image and return the serial transcript.
-
-    The root task suspends itself once the graph has drained, so QEMU stays
-    alive afterwards and waiting for an exit would always time out. Serial
-    output is read line by line and the guest is killed as soon as the terminal
-    or any failure marker appears.
-    """
-    qemu = shutil.which(qemu_binary)
-    if qemu is None:
-        fail(f"{qemu_binary} is not on PATH")
-    command = [
-        qemu,
-        "-machine",
-        profile_text(profile, "machine", fail, section),
-        "-cpu",
-        profile_text(profile, "cpu", fail, section),
-        "-smp",
-        str(profile_integer(profile, "cpus", fail, section)),
-        "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
-        "-nographic",
-        "-serial",
-        "mon:stdio",
-        *qemu_kernel_arguments(qemu_binary, image_path, fail),
-    ]
-    print(f"[boot] {' '.join(command)}", flush=True)
-    terminal = re.compile(REQUIRED_MARKERS[-1][1])
-    failures = re.compile("|".join(FAILURE_MARKERS))
-    lines: list[str] = []
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except OSError as error:
-        fail(f"cannot run QEMU: {error}")
-    # A wedged guest emits nothing, so the deadline cannot live in the read
-    # loop; a watchdog kills QEMU, which closes the pipe and ends the loop.
-    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
-    watchdog.start()
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
-            if terminal.search(line) or failures.search(line):
-                break
-    finally:
-        timed_out = not watchdog.is_alive()
-        watchdog.cancel()
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-    transcript = "\n".join(lines)
-    if timed_out and terminal.search(transcript) is None:
-        report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
-    return transcript
+def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
+    if platform == "qemu-pc99":
+        command = boot_command(manifest, platform=platform, image_path=image_path, fail=fail)
+    else:
+        section, qemu_binary = PLATFORMS[platform]
+        profile = load_qemu_profile(fail, PINS_PATH, section)
+        qemu = shutil.which(qemu_binary)
+        if qemu is None:
+            fail(f"{qemu_binary} is not on PATH")
+        command = [
+            qemu,
+            "-machine",
+            profile_text(profile, "machine", fail, section),
+            "-cpu",
+            profile_text(profile, "cpu", fail, section),
+            "-smp",
+            str(profile_integer(profile, "cpus", fail, section)),
+            "-m",
+            f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
+            "-nographic",
+            "-serial",
+            "mon:stdio",
+            *qemu_kernel_arguments(qemu_binary, image_path, fail),
+        ]
+    return run_boot(
+        command,
+        terminal=re.compile(REQUIRED_MARKERS[-1][1] + "|" + "|".join(FAILURE_MARKERS)),
+        timeout=BOOT_TIMEOUT_SECONDS,
+        fail=fail,
+    )
 
 
 def report_transcript(transcript: str) -> None:
@@ -608,20 +598,19 @@ def main() -> None:
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    section, qemu_binary = PLATFORMS[arguments.platform]
-    image_path = IMAGE
-    profile = load_qemu_profile(fail, PINS_PATH, section)
-    if not arguments.no_build:
-        build_image()
+    image_path, manifest_path = artifact_paths(arguments.platform)
+    if arguments.platform == "qemu-pc99":
+        if not arguments.no_build:
+            build_image(arguments.platform, image_path)
+        manifest = check_manifest(image_path, manifest_path, arguments.platform)
+    else:
+        if not arguments.no_build:
+            build_image(arguments.platform, image_path)
+        if IMAGE is None:
+            fail("--no-build is unsupported for closure-built platforms")
         image_path = IMAGE
-    check_transcript(
-        boot(
-            profile,
-            section=section,
-            qemu_binary=qemu_binary,
-            image_path=image_path,
-        )
-    )
+        manifest = {}
+    check_transcript(boot(manifest, arguments.platform, image_path))
     print(
         "seL4 sample plane check: the unmodified sample-lender and sample-receiver "
         "exchanged and returned a payload larger than the control-message bound over "
