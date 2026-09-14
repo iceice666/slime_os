@@ -1,0 +1,12 @@
+when:
+  event:
+    - manual
+labels:
+  platform: linux/arm64
+  hostname: m3air
+steps:
+  m3air-smoke:
+    image: alpine:3.22
+    commands:
+      - test "$(uname -m)" = aarch64
+      - wget -qO- https://example.com >/dev/null
