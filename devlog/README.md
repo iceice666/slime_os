@@ -447,3 +447,5 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-13 | [Enable native GitHub milestone projection](2026-09-13-myque-native-milestones/index.md) | Change | Proposed | none |
 | 2026-09-13 | [P6.5: one raw image becomes the QEMU-proven Framework boot medium](2026-09-13-p6-5-framework-media/index.md) | Change | Verified | P6.5 |
 | 2026-09-13 | [P6.6: Slime OS boots on the Framework, and the boot leaves checkable evidence](2026-09-13-p6-6-framework-cpu-boot/index.md) | Change | Monitoring | P6.6 |
+| 2026-09-14 | [Every closure-built plane failed after #61 moved the rust-sel4 pin](2026-09-14-closures-stale-after-rust-sel4-pin/index.md) | Defect | Fixed | none |
+| 2026-09-14 | [Two source gates refused the tree after #61: the run-record generator and the closure aggregate](2026-09-14-source-gates-after-61/index.md) | Defect | Fixed | none |
