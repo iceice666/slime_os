@@ -65,10 +65,11 @@ Issues by milestone. Until real child work exists, a milestone may be empty.
 
 | Surface | Owns |
 |---|---|
-| `.tasks/items/<UUID>.md` | Problem, scope, state, exit conditions, hierarchy, dependencies |
+| `.tasks/items/<UUID>.md` | Problem, scope, state, exit conditions, hierarchy, dependencies, and observed closure evidence |
 | GitHub | Intake, collaboration, reviews, projected work |
-| PR | Reviewable change, claim, risk, verification summary |
-| `devlog/` | How a conclusion was reached; evidence and history |
+| PR | Reviewable change, claim, risk, verification, limits, and related canonical work |
+| Owning docs/contracts | Current architecture, behavior, procedures, and limitations |
+| `devlog/` | Retained historical investigations and evidence; optional exceptional investigations during the archive transition |
 
 UUIDs are canonical identities. Optional human keys are mutable display aliases,
 not persistent references. Generated lists and `roadmap/` are not state stores.
@@ -111,8 +112,12 @@ These guides own the tutorials; this document owns the contribution workflow.
 - Use versioned Zutai schemas for cross-process, persistence, and boot formats.
   Change the canonical schema/generator and regenerate outputs together;
   never hand-edit generated bindings.
-- Keep comments about current invariants, stable rationale in owning docs,
-  and investigations and verification evidence in devlog.
+- Keep comments for current invariants beside the implementation and stable
+  rationale in owning docs.
+  Put long-lived cross-module choices in `docs/decisions/`, unfinished designs
+  and qualification requirements in `docs/plans/`, and exploration in
+  `docs/directions/`. Expensive reusable investigations or unusual verification
+  campaigns may use the retained devlog while the history archive is pending.
 
 ## Pull requests
 
@@ -126,8 +131,9 @@ authority/security changes, and substantial documentation or policy changes.
 
 Use the existing [change](.github/PULL_REQUEST_TEMPLATE/change.md) or
 [system-change](.github/PULL_REQUEST_TEMPLATE/system-change.md) template. State
-what changed, the claim, risks/invariants, review surface, verification, and
-canonical related work. Link evidence instead of duplicating the devlog.
+what changed, the claim, risks/invariants, review surface, exact verification,
+evidence class, target or image identity when relevant, known limits, and
+canonical related work. Link existing evidence instead of duplicating it.
 
 ### Machine-linking with myque-gh
 
@@ -157,11 +163,16 @@ association belongs to `myque-gh`.
 ### Verification
 
 Run the narrowest gate covering the changed behavior and the checks required
-by [AGENTS.md](AGENTS.md). Record exact commands, observed results, and limits;
-separate inherited evidence from your own runs. Documentation-only PRs state
-that no runtime tests were run. Update devlog for non-trivial changes as its
-[policy](devlog/README.md) requires, then run `just devlog_check` and
-`just tasks_check` when applicable; `just typos` covers documentation spelling.
+by [AGENTS.md](AGENTS.md). Record exact commands, observed results, evidence
+class, scope, target or image identity when relevant, and limits; separate
+direct observations from inherited evidence and label unobserved conclusions
+as inference. Documentation-only PRs state that no runtime tests were run.
+Ordinary changes do not require a devlog entry. Run `just devlog_check` when
+editing getting-started guides, PR templates, policy, roadmap, decision, plan,
+or direction documents; when adding or changing a `devlog/` path reference in
+any Markdown or Python file; or when an exceptional investigation adds or
+corrects a retained devlog entry during the archive transition. Run
+`just tasks_check` when applicable and `just typos` for documentation.
 
 ## Review and completion
 
@@ -171,7 +182,8 @@ hardware evidence, failure/refusal evidence, repeated reliability runs, CI,
 or other item-specific observations. QEMU output does not prove hardware
 support, and a green unrelated gate does not satisfy an exit condition.
 
-Record observed evidence and the devlog link in the item. Only then run:
+Record the observed exit evidence, its scope, identity, and limits in the item.
+Only then run:
 
 ```sh
 myque close <ITEM>
@@ -233,5 +245,5 @@ does not move the SDK repository, signing keys, or issue history.
 - [README](README.md): what Slime OS is.
 - [Getting started](docs/getting-started/01-orientation.md): how to learn,
   build, run, and change it.
-- [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, MyQue, and devlog rules.
-- [Devlog](devlog/README.md): evidence and history.
+- [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, MyQue, and change-record rules.
+- [Devlog](devlog/README.md): retained historical investigations and transition policy.

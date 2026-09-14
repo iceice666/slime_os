@@ -1,17 +1,40 @@
 # Slime OS development log
 
-This directory is the curated, chronological record of investigations, regressions, design decisions, and verification results. It complements—not replaces—the canonical work-item store in `.tasks/items/`, the architectural documentation in `roadmap/`, focused incident reports, raw transcripts, and machine-readable evidence.
+This directory is the retained chronological record of investigations,
+regressions, design decisions, and verification results created before the
+repository-history split. It complements—not replaces—the canonical work-item
+store in `.tasks/items/`, current owning documentation, focused incident
+reports, raw transcripts, and machine-readable evidence.
 
-## Goals
+**A devlog entry is no longer required for an ordinary feature, bug fix,
+refactor, milestone completion, or work-item closure.** Commits and pull
+requests record the change, claim, risk, exact verification, and limits; the
+work item records the exit conditions actually observed. Update owning docs for
+current behavior. Use `docs/decisions/` for important long-lived cross-module
+choices, `docs/plans/` for unimplemented designs and qualification requirements,
+and `docs/directions/` for exploration.
 
-- Make regressions searchable by symptom, root cause, affected check, and guard.
-- Preserve the evidence chain from observation through fix and verification.
-- Record decisions that change future debugging or CI practice.
-- Separate directly observed results from inherited reports and unresolved hypotheses.
+While this corpus remains in the product repository, an expensive reusable
+investigation or unusual verification campaign may still add a curated entry.
+Complete transcripts are not a routine change deliverable. Existing entries and
+raw evidence remain immutable and continue to pass `just devlog_check` until H3
+verifies and performs the archive cutover.
 
-## Layout
+## Historical goals
 
-Every entry is a folder. There is no flat-file form.
+- Keep retained regressions searchable by symptom, root cause, affected check,
+  and guard.
+- Preserve the existing evidence chain from observation through fix and
+  verification.
+- Preserve decisions that changed debugging or CI practice without promoting a
+  historical proposal to an accepted current decision.
+- Keep directly observed results distinct from inherited reports and unresolved
+  hypotheses.
+
+## Retained layout
+
+Every retained or exceptional transition entry is a folder. There is no
+flat-file form.
 
 ```text
 devlog/
@@ -33,9 +56,18 @@ Rules:
 - **Evidence lives with its entry.** Do not add a shared `assets/` or `transcripts/` directory; provenance travels with the write-up.
 - One entry may cover several related failures when they share an investigation or verification campaign (`2026-07-26-b7-b8-budget-hygiene/`).
 
-## Entry format
+## Entry format during transition
 
-Write `index.md` from [TEMPLATE.md](TEMPLATE.md): an `# H1` title, the front-matter table, then `##` sections in template order.
+When an exceptional investigation adds an entry before H3, write `index.md`
+from [TEMPLATE.md](TEMPLATE.md): an `# H1` title, the front-matter table, then
+`##` sections in template order. This format preserves the existing corpus; it
+is not the format for `docs/decisions/`.
+
+Entries correspond to logical events, not commits. Before merge, follow-up
+commits that continue the same exceptional investigation or verification
+campaign update its curated entry in place; a distinct investigation, defect,
+decision, or independently meaningful campaign gets a separate entry even when
+it shares a pull request.
 
 ### Front matter
 
@@ -59,16 +91,19 @@ silently rather than adding anything.
 
 A `Status` of `Fixed`, `Verified`, or `Monitoring` asserts an observed result, so it requires at least one gate. `Gates` names the *guards*, not every command run — the exhaustive list belongs in *Verification*. Repository hygiene targets (`fmt_check`, `lint`, `framework_safety_check`, and the `_components` variants) are assumed on every permanent Rust change and are not listed as gates.
 
-### Kinds
+### Historical kinds
 
-| Kind | Use for | Required sections |
+| Kind | Use in the retained corpus | Required sections |
 |---|---|---|
-| **Defect** | A regression, bug, or wrong claim: something behaved incorrectly. | Every section in the template. |
-| **Change** | A milestone or feature landing correctly the first time. | Summary, Changes, Regression guards, Verification, Decisions, Open risks and follow-ups, Artifacts and provenance. |
-| **Audit** | A verification campaign over existing work, whether or not it finds defects. | Summary, Observable symptom, Investigation log, Changes, Verification, Open risks and follow-ups, Artifacts and provenance. |
-| **Decision** | A design, sequencing, or architecture decision, typically `Proposed`. | Summary, Changes, Decisions, Open risks and follow-ups, Artifacts and provenance. |
+| **Defect** | A regression, bug, or wrong claim investigated in a curated entry. | Every section in the template. |
+| **Change** | A historical milestone or feature record. New ordinary changes do not require this entry. | Summary, Changes, Regression guards, Verification, Decisions, Open risks and follow-ups, Artifacts and provenance. |
+| **Audit** | An expensive or reusable verification campaign over existing work. | Summary, Observable symptom, Investigation log, Changes, Verification, Open risks and follow-ups, Artifacts and provenance. |
+| **Decision** | A historical design, sequencing, or architecture record, typically `Proposed`; current durable decisions use `docs/decisions/`. | Summary, Changes, Decisions, Open risks and follow-ups, Artifacts and provenance. |
 
-Sections beyond the required set are welcome when they carry evidence; drop the ones your kind does not require rather than filling them with "n/a". Sections always keep template order, and no heading outside the template may be introduced without extending `TEMPLATE.md` and the checker together.
+Sections beyond the required set are welcome when they carry evidence; drop the
+ones the kind does not require rather than filling them with "n/a". Sections
+always keep template order, and no heading outside the template may be
+introduced without extending `TEMPLATE.md` and the checker together.
 
 Every **Defect** entry must identify:
 
@@ -109,9 +144,21 @@ When `Status` changes, update the same entry's row in the index below; the check
 - Never place credentials, account banners, tokens, or unrelated terminal metadata in curated entries.
 - Work-item state remains authoritative in `.tasks/items/`; devlog entries explain how conclusions were reached.
 
-## Checking
+## Checking during transition
 
-`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, the exact front-matter field set and order with no duplicate or unknown rows, `Kind`/`Status` vocabulary, every `Work items` UUID resolving to a file in `.tasks/items/`, `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, every `devlog/...` path referenced anywhere in the repository resolving to a real file, and every relative link's `#fragment` naming a real heading or explicit `<a id="…">` anchor in its target — a reworded heading breaks an inbound URL while leaving the file in place, so the fragment is checked rather than stripped. It reads the tree and runs no guest code or external binary, so it is cheap enough to run on any documentation change; `just tasks_check` separately validates the store itself.
+`just devlog_check` (`scripts/check/check-devlog.py`) keeps the retained corpus
+readable while H3 is pending: it enforces folder shape, exact ordered front
+matter, canonical work-item UUIDs, real Justfile targets, required sections,
+sibling provenance, index agreement, escaped literal pipes in tables, and local
+links including `#fragment` anchors. A repository-wide scan also rejects missing
+retained `devlog/` paths in tracked or new Markdown and Python files.
+Independently, the checker covers every policy entry point plus every
+getting-started guide, PR template, roadmap, decision, plan, and direction
+document for local links/fragments and for all canonical UUID references except
+the frozen backlog rows owned by `just tasks_check`. Embedded controls prove
+those document families are discovered and each malformed reference is rejected
+once. Passing it does not require a new entry; this policy change itself is the
+regression case for an ordinary non-trivial change with no devlog.
 
 `scripts/lib/markdown_anchors.py` decides which fragments a file offers, over a declared subset of Markdown: ATX headings outside fenced code, inline code contributing its literal text (`` `budget_us` `` keeps its underscore), duplicate headings taking `-1`/`-2` suffixes in document order, and explicit `<a id>`/`<a name>` anchors. Setext headings and raw `<h1>`–`<h6>` are outside that subset. Because a phantom anchor accepts a dead link and a missing one rejects a live link — neither visible at the destination — every rule is pinned as an executable control that `just devlog_check` runs before it trusts the computation.
 

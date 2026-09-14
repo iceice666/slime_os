@@ -337,7 +337,7 @@ A Raspberry Pi 5 physically runs Slime OS with two local ROS 2 nodes exchanging 
 - inject or simulate denied route, denied endpoint, malformed batch length, malformed declaration, malformed CDR payload, malformed attachment, subscriber restart, publisher restart, queue exhaustion, retry exhaustion, timer delay, and peer-loss cases relevant to the demo profile;
 - verify every endpoint, buffer, mapping, loan, timer, heap page, queue entry, fragment, retry record, writer/reader history entry, and trace record returns to its declared baseline after normal completion or restart;
 - make the demo gate reproducible enough that later roadmap work can use it as a regression target;
-- write a devlog entry with the evidence chain before declaring the near-term release closed.
+- record the repeated observations, exact image and generation identities, evidence class, scope, and limits in the PR and canonical work item before declaring the near-term release closed.
 
 ### Required checks
 

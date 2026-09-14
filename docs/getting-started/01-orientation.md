@@ -48,11 +48,12 @@ Three files answer most "where is..." questions:
 
 Two habits distinguish this repository; adopting them early saves friction:
 
-- **Evidence over intention.** A behavior exists when a gate observes it on
-  a real boot, not when code for it lands. Gates fail closed: missing
-  hardware evidence is a failing check, never a skip. Claims about how
-  conclusions were reached live in `devlog/`, kept separate from the work
-  item's recorded state.
+- **Evidence over intention.** A behavior exists when the owning gate observes
+  it on the required surface, not when code for it lands. Gates fail closed:
+  missing hardware evidence is a failing check, never a skip. The PR records
+  the claim, exact verification, evidence class, identity, and limits; the work
+  item records the exit conditions actually observed. Historical investigations
+  are supporting records, not the live state store.
 - **Refusal over accommodation.** Malformed data, wrong-target binaries,
   superseded formats, unknown operations, unbudgeted requests — all are
   refused at the boundary rather than tolerated, migrated, or guessed at.

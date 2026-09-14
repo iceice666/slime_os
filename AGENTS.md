@@ -77,8 +77,8 @@ Use the Justfile targets from the repository root:
 - `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
 - `just sel4_fabric_aggregate_check` — C8.15's parent close: both aggregate schedules booted twice over one composition, with byte-identical semantic traces.
 - `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
-- `just devlog_check` — validate devlog structure, front matter (the exact eight fields, in order, no duplicates or extras), gates, and links including their `#fragment` anchors, and that every work-item reference is a UUID the store has. Reads the tree only, so it needs no MyQue binary.
-- `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity of the frozen backlog index in `roadmap/00-backlog.md`, whose headings are validated one section at a time because `B29` and `B30` are each carried twice.
+- `just devlog_check` — validate the retained devlog corpus, its links and fragments, and maintained documentation links plus canonical work-item references outside the frozen backlog rows. Reads the tree only, so it needs no MyQue binary.
+- `just tasks_check` — `myque check` over `.tasks/items/`, then the repository's own policy: backlog-first ordering and the integrity and UUID resolution of the frozen backlog index in `roadmap/00-backlog.md`, whose headings are validated one section at a time because `B29` and `B30` are each carried twice.
 - `just tasks_list` / `just tasks_next` / `just tasks_graph` — the work-item store's generated views. Never authoritative; `.tasks/items/` is.
 - `just x86_64_sel4_image_check` — P6.1's x86-64 admission: exact target profiles, pinned pc99 kernel/toolchain inputs, and a byte-identical rebuild, with no boot claim.
 - `just x86_64_sel4_root_boot_check` — P6.3's root, component runtime, child loader, fault, thread-context, and timer markers on pc99.
@@ -105,13 +105,13 @@ Backlog defects are the items tagged `backlog`. Resolve, defer, or block every o
 
 `roadmap/` is readable architectural documentation and carries no tracker semantics: its headings allocate no identity, and completion, state, hierarchy, and dependencies are the store's. There is no mechanism, supported or otherwise, by which editing `roadmap/` creates or mutates a work item; the data flows one way, from the store into views and documentation.
 
-## Development log
+## Change records and historical investigations
 
-`devlog/` is the curated, chronological record of investigations, regressions, design decisions, and verification results. Record an entry whenever you complete a roadmap milestone or land a non-trivial feature, make a design or architecture decision, fix a non-trivial regression, root-cause a defect, or run a verification campaign.
+Ordinary features, bug fixes, refactors, and milestone completions do not require a separate devlog entry. The commit and PR record the change, claim, risk, review surface, exact verification, and known limits; the canonical work item records scope, state, and the exit conditions actually observed. Distinguish direct observations from inherited evidence and unobserved inference, and bind hardware or image claims to the target, revision, and binary identity that was tested.
 
-Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `index.md` written from `devlog/TEMPLATE.md`, with focused reports, raw transcripts, and other evidence as siblings in that folder — a folder even when there is no evidence yet, so later evidence never moves the entry. Front matter declares `Date`, `Kind` (`Defect`/`Change`/`Audit`/`Decision`, which selects the required sections), `Status`, `Scope`, `Work items`, `Gates`, `Trigger`, and `Baseline` in that order; `Work items` names canonical work-item UUIDs — only UUIDs resolve, a key is a display alias — and `Gates` names real Justfile targets. Register the entry in `devlog/README.md`, whose index carries keys in its own display column, and follow its evidence rules — prefer exact `just` targets and observed results, label inherited evidence and unobserved conclusions, and never rewrite a raw log; corrections are appended under `## Corrections`, never edited into the frozen body. Run `just devlog_check` after touching `devlog/`. Work-item state is the store's; devlog entries explain how conclusions were reached. When a backlog item or milestone closes, its devlog entry is the record of how it closed, and the `roadmap/` side keeps only the rationale plus a link to that entry. A resolved backlog item or completed milestone with no devlog link is incomplete: either write the entry or leave the full text in place and say why no entry exists.
+Update the owning current documentation when a contract, operating procedure, or limitation changes. Put long-lived cross-module choices in [`docs/decisions/`](docs/decisions/README.md) when they need a durable record; put unimplemented designs and qualification requirements in [`docs/plans/`](docs/plans/README.md); keep exploratory directions in [`docs/directions/`](docs/directions/README.md); keep local invariants beside the implementation. A decision record states context, the decision, alternatives and trade-offs, consequences, revisit conditions, status (`proposed`, `accepted`, or `superseded`), and relevant work-item UUIDs and code references. Moving an old proposal never makes it accepted. The accepted ownership split is recorded in [`docs/decisions/development-record-ownership.md`](docs/decisions/development-record-ownership.md).
 
-Devlog entries correspond to logical events, not commits. Before merge, follow-up commits that continue the same logical change update its curated entry in place; a distinct investigation, defect, decision, or independently meaningful change gets a new entry even in the same PR. After merge, preserve the landed entry: append factual corrections under `## Corrections`, and create a new entry for subsequent implementation or investigation work. Raw evidence is immutable. The one exception is a repository-format migration of the front matter's machine fields, which re-expresses the same reference in a new form and asserts nothing new; `devlog/README.md` states its bounds. Prose is never migrated — a landed entry may keep describing an architecture the repository has since replaced.
+The existing `devlog/` corpus remains a historical record during the repository split. Do not rewrite its observed results or raw evidence. Expensive reusable investigations and unusual verification campaigns may still add a curated entry while that corpus remains here, but complete transcripts are not a routine change deliverable. Any added or corrected entry follows `devlog/README.md` and `devlog/TEMPLATE.md` and must pass `just devlog_check`; ordinary changes need no entry. H3 will archive the corpus only after its bytes and active consumers have been independently verified.
 
 ## Documentation ownership
 
@@ -125,11 +125,12 @@ investigation history, failed approaches, reviewer findings, mutation campaigns,
 historical alternatives, speculative designs, verification results, or narration
 of the code in implementation comments.
 
-Place local invariants beside the implementation, stable subsystem rationale in
-the owning `docs/` or contract documentation, investigation and evidence in
-`devlog/`, and review guidance in the PR description. Prefer one to three precise
+Place local invariants beside the implementation and stable subsystem rationale
+in the owning `docs/` or contract documentation. Prefer one to three precise
 sentences over defensive paragraphs. PR descriptions state the change, claim,
-risk, review surface, and verification; they do not duplicate devlogs.
+risk, review surface, exact verification, and limits; work items record observed
+exit evidence. Historical investigation records explain how an older conclusion
+was reached and are referenced rather than duplicated.
 
 ## Development rules
 

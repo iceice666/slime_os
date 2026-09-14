@@ -67,8 +67,11 @@ when the diff is the change you meant. New rights or operations update
 [`../syscall-abi.md`](../syscall-abi.md) in the same change — the latter is
 machine-enforced.
 
-**Docs only** — state that no runtime tests were run; `just typos` and
-`just devlog_check` (if you touched `devlog/`) still apply.
+**Docs only** — state that no runtime tests were run; `just typos` applies.
+Run `just devlog_check` when editing getting-started guides, PR templates,
+policy, roadmap, decision, plan, or direction documents; when adding or changing
+a `devlog/` path in any Markdown or Python file; or when adding or correcting a
+retained historical entry.
 
 ## Before you finish
 
@@ -79,19 +82,21 @@ just fmt_check_all
 just lint_all
 ```
 
-Then the record-keeping, which is not optional ceremony here:
+Then leave the records that make the claim reviewable:
 
-- **Devlog** (`devlog/`): non-trivial fixes, decisions, regressions, and
-  milestone completions get an entry — a dated folder with a curated
-  `index.md` from `devlog/TEMPLATE.md`, whose `Work items` front-matter field
-  names canonical work-item UUIDs — a key such as `IO4` is a display alias
-  and resolves nothing. Run `just devlog_check`. The devlog is *how* a
-  conclusion was reached; the work item holds the problem statement and the
-  state; `roadmap/` holds the architectural rationale.
-- **Work-item hygiene**: close the item with `myque close`, which records the
-  closure date, and record the exit condition that was *observed* in the
-  item's body. Never allocate an id by scanning for the next number — `myque`
-  assigns a UUID. Run `just tasks_check`.
+- **Commit and PR**: state the change, claim, risks/invariants, review surface,
+  exact commands and observed results, evidence class, target or image identity
+  when relevant, and known limits. Ordinary changes do not need a devlog.
+- **Owning knowledge**: update the owning docs or contract when current behavior,
+  operation, or limitations change. Long-lived cross-module choices belong in
+  `docs/decisions/`; unfinished designs in `docs/plans/`; exploration stays in
+  `docs/directions/`. Expensive reusable investigations or unusual verification
+  campaigns may add a retained devlog entry during the archive transition.
+- **Work-item hygiene**: record the exit condition that was *observed*, its
+  evidence class, scope, target or image identity, and limits in the item. Only
+  then close it with `myque close`, which records the closure date. Never
+  allocate an id by scanning for the next number — `myque` assigns a UUID. Run
+  `just tasks_check`.
 
 `AGENTS.md` carries the full statement of these rules; this page is the
 tour, that file is the law.
