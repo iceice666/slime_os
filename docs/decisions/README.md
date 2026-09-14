@@ -21,3 +21,5 @@ readable and link to the decision that replaced them.
 - [Development record ownership](development-record-ownership.md) — accepted;
   separates current knowledge, work state, change evidence, durable rationale,
   and retained history during the repository split.
+- [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed;
+  target-specific assurance and the required Reply/scheduling-context cutover.

@@ -1,5 +1,10 @@
 # Backlog (frozen index of pre-cutover defects)
 
+> **H2 classification — historical index only.** No current specification or
+> unextracted plan is owned here. Preserve the frozen defect headings and evidence
+> links until verified H3 archival; current defects and follow-up requirements
+> belong to their canonical work items. See the [file classification](README.md).
+
 > **Frozen index, not the backlog.** The backlog is the `backlog`-tagged items
 > in `.tasks/items/`, which own identity, state, hierarchy, and dependencies.
 > This file indexes the entries that existed before the work-item store became

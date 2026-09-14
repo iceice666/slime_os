@@ -77,10 +77,7 @@ Two properties are load-bearing:
 ## Related
 
 - Schema-first message types: [Contracts](contracts.md).
-- Fabric routes, brokered streams, and QoS are userspace policy built on
-  these two paths — see `contracts/fabric-graph/v1/` and the C8 milestones in
-  `roadmap/02-core-runtime.md`.
-- Request/completion rings over shared memory plus Notifications are the third
-  shape built on these two paths, for drivers and their clients — see
-  `contracts/io-queue/v1/` and the IO milestones in
-  `roadmap/11-io-substrate.md`.
+- [Typed data fabric](../architecture/typed-data-fabric.md) — routes, brokered
+  streams, and QoS as userspace policy over these paths.
+- [Userspace I/O substrate](../architecture/io-substrate.md) — driver/client
+  request/completion rings over shared memory plus Notifications.

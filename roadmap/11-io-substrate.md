@@ -1,5 +1,16 @@
 # Native I/O substrate
 
+> **H2 routing — current substrate separated from migration history.** Read
+> [I/O architecture](../docs/architecture/io-substrate.md) for present mechanism,
+> authority and limitations and the [network plan](../docs/plans/network-data-plane.md)
+> for the unfinished service data plane. IO4's broader IPv6/NDP, DHCP/SLAAC,
+> listener and later-backend requirements remain unextracted planned scope here,
+> not implemented behavior or an implicit part of the first TCP slice. Detailed
+> IO0–IO3 lifecycle and IO5–IO7 model/proof obligations beyond the architecture
+> page remain source references owned by the contracts and proof implementations.
+> Delivery/gate evidence, including “Existing evidence and migration boundary”,
+> is retained history, not today's root-driver path. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

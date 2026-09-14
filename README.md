@@ -4,7 +4,7 @@ Slime OS is an experimental atomic personal operating system: a Rust `no_std` us
 
 The current product is a QEMU-verified `aarch64-sel4-qemu-virt` image: upstream seL4 16.0.0 owns scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, and timers, while `slime-root` owns the dynamic mechanism above them — generation admission, task construction and reclamation, bounded object allocation, shared buffers, native Endpoint IPC, and fault supervision. The custom microkernel that preceded it was retired with P5; there is no Slime kernel and no Slime trap vector.
 
-The Milk-V Duo (`riscv64-sel4-milkv-duo`) runs the system today, booting upstream seL4, `slime-root`, and a target-qualified generation from removable media through unmodified vendor firmware. The Raspberry Pi 5 ROS 2 robotics demonstration, Framework laptop bring-up, physical NVMe, and daily-driver hardware support remain deferred or open.
+The Milk-V Duo (`riscv64-sel4-milkv-duo`) has observed upstream-seL4 product-boot evidence. The named Framework 13 has a recorded removable-media CPU/product boot, not device qualification. Raspberry Pi 5 boot, physical NVMe, and daily-driver hardware remain unclaimed. See [target profiles and evidence limits](docs/architecture/targets-and-portability.md).
 
 ## Current status
 
@@ -14,10 +14,11 @@ state and `just tasks_next` prints what is actionable, from the canonical store
 in `.tasks/items/`.
 
 - The automated target is `aarch64-sel4-qemu-virt` under `qemu-system-aarch64 -machine virt,virtualization=on`. `just run` boots it; `just test` runs the product behavioral aggregate.
-- The foundations, core runtime, native I/O substrate, and component platform tracks are closed under named QEMU gates: bounded shared-sample and typed-fabric planes, robot-runtime authority (clock/timer, wait sets, scheduling class, lifecycle policy), task-private component memory, userspace virtio-blk and virtio-net drivers over declared device authority, and 42 spec-derived seL4 compositions built by one data-driven builder from any of 50 generated image closures.
+- The QEMU corpus covers bounded shared samples and typed fabric, clock/timer authority, wait sets, scheduling classes, lifecycle policy, task-private memory, and userspace virtio-blk/virtio-net drivers. [Subsystem architecture](docs/architecture/README.md) names current owners and limits; [component/system/image boundaries](docs/architecture/component-system-image.md) explains the spec-derived build path.
 - The Milk-V Duo has observed physical evidence: it boots upstream seL4, `slime-root`, and a target-qualified generation from removable media through unmodified vendor firmware.
-- **Unclaimed, and failing closed rather than reporting a false pass:** physical Framework storage — no seL4 NVMe transport exists, so `just storage_nvme_read_check` fails closed; Raspberry Pi 5 qualification — its media builds reproducibly but the available USB-UART adapter produces no serial evidence, so `just rpi5_boot_check` fails closed; IO4's network data plane — Ethernet framing, ARP, IPv4, ICMP, UDP, TCP, and DNS are unimplemented, so no byte stream is obtainable from it.
-- Deferred by decision: the RPi5 ROS 2 demo beyond its contract and build path, ROS 2 wire compatibility, Framework daily-driver hardware, foreign workloads, distributed authority, and on-device native development. ROS 2 is a bounded userspace compatibility profile over native Slime contracts, never a kernel ABI.
+- The named Framework cold-booted its exact removable image twice on 2026-09-13 without internal-storage write authority. The retained observation is currently unbound from the rebuildable root image; it is not evidence of a fresh build or of any device support.
+- **Unclaimed:** physical Framework storage — no seL4 NVMe transport exists, so `just storage_nvme_read_check` fails closed; Raspberry Pi 5 boot — missing serial evidence keeps `just rpi5_boot_check` closed; network application streams — the service already attaches LinkDevice and exchanges ARP/ICMP, but TCP/UDP payload transport and DNS remain unfinished. The linked network gate expects `tcp=0`, not a working byte stream.
+- Unimplemented plans include the physical RPi5 ROS 2 demo, broader ROS 2 wire compatibility, Framework daily-driver devices, foreign workloads, distributed authority, and native development. [Plans](docs/plans/README.md) and the [retained-detail classification](roadmap/README.md) own requirements; MyQue alone owns their priority and state.
 - All DMA on QEMU is trusted; no containment claim is made. QEMU evidence completes no physical milestone, and one board's evidence completes no other board's gate.
 
 ## Vision
@@ -65,20 +66,20 @@ POSIX and Linux compatibility may exist later as userspace personalities or isol
 
 ### Tier 0: automated product target
 
-`aarch64-sel4-qemu-virt` is the deterministic development and test platform, and the only profile the product image is built for. It exercises memory isolation, native Endpoint IPC, component lifecycle, generation boot, storage, and fault injection before equivalent paths are enabled on physical hardware.
+`aarch64-sel4-qemu-virt` is the default deterministic development and test platform. It exercises memory isolation, native Endpoint IPC, component lifecycle, generation boot, storage, and fault injection before equivalent paths are enabled on physical hardware. RV64 QEMU and x86-64 pc99 provide additional architecture-reference paths.
 
 seL4 16.0.0 is pinned in `sel4/pins.toml` and configured by `sel4/config/qemu-arm-virt.cmake`. The machine is `qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m 2048M`, with virtio block devices attached by the gates that need them.
 
-The seven admitted target profiles are declared in `contracts/target-profile/v1/schema.zt`; `scripts/build/build-sel4.py` builds images for four of them. `aarch64-sel4-qemu-virt` (id 5) is the automated product target. `riscv64-sel4-qemu-virt` (id 6) is the RV64 reference plane. `aarch64-rpi5` (id 3) and `riscv64-sel4-milkv-duo` (id 7) are the physical boards, each built into its own prefix with its own pinned artifact hashes. `x86_64-qemu-virtio` (id 1) is the retained pre-P0 identity that legacy *executable* revisions still resolve to — `contracts/component/v1` and `contracts/kernel-image/v2` keep their old meaning so retained artifacts are classified rather than misread. It is not a decodable generation format: superseded generations are refused by header (`UnsupportedVersion`), never migrated, so rollback is safe by refusal rather than compatible by migration (`roadmap/README.md` invariant 7). `aarch64-qemu-virt` (id 2) and `riscv64-qemu-virt` (id 4) are the retired custom-kernel identities and build no image. Every generation names exactly one profile; the immutable selector and root admission reject architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
+The nine target identities are declared in `contracts/target-profile/v1/schema.zt`; `scripts/build/build-sel4.py` selects six build platforms. The [target-profile reference](docs/architecture/targets-and-portability.md) distinguishes current seL4 identities, retained artifact identities, the Raspberry Pi 5 build boundary, and physical evidence. Old executable encodings retain their original meaning; superseded generation formats are refused, not migrated.
 
 ### Tier 1: named physical targets
 
 `riscv64-sel4-milkv-duo` is the RV64 physical lane, qualified by P3.D/P3.E/P3.F: the named Milk-V Duo boots upstream seL4, `slime-root`, and a target-qualified generation over a hands-off deployment loop, replays the architecture-neutral sample plane with byte-identical normalized traces, emits bounded fault evidence, recovers autonomously to vendor Linux, and serves Slisp as the resident shell. Gates: `just sel4_duo_image_check`, `just duo_payload_check`, and the board gates in `just/hardware.just`.
 
 
-`aarch64-rpi5` remains the robotics demo's acceptance board, deferred with the demo. Its kernel, loader, and removable-media boot files build reproducibly (`just rpi5_media_check`), but the board has **not** been booted, so `just rpi5_boot_check` verifies the media and then fails closed on the missing serial evidence. See [`roadmap/09-rpi5-ros2-demo.md`](roadmap/09-rpi5-ros2-demo.md) and [`devlog/2026-08-24-p4-rpi5-board-bringup/`](devlog/2026-08-24-p4-rpi5-board-bringup/index.md).
+`aarch64-rpi5` remains the robotics demo's acceptance board. Its kernel, loader, and removable-media boot files build reproducibly (`just rpi5_media_check`), but no board boot was observed; `just rpi5_boot_check` fails closed on missing serial evidence. See the [RPi5 demo plan](docs/plans/rpi5-ros2-demo.md).
 
-The Framework Laptop 13 remains the eventual daily-driver target, deferred off the critical path and holding no admitted profile of its own yet. Its M4 removable-media vertical slice was observed on the retired custom kernel; no seL4 Framework image exists, so `just framework_inventory_check` fails closed.
+The Framework Laptop 13 has an exact `x86_64-sel4-framework13-ai300` profile and a recorded CPU/product boot. Device inventory and daily-driver qualification remain separate requirements in the [Framework hardware plan](docs/plans/framework-hardware.md). A CPU boot qualifies no device; the retained observation cannot be re-stamped to qualify a changed image.
 
 Framework reference hardware:
 
@@ -159,7 +160,7 @@ bindings but cannot define a second cross-boundary format or grant authority.
 
 ## Component and generation boundary
 
-The stable cross-project artifact is the versioned, deterministic generation manifest. Its host-side manifest source schema is `contracts/generation-manifest/v1/schema.zt`; the built wire format is v5, defined by `contracts/generation/v5/schema.zt` and decoded by `boot-contracts/src/generation.rs`. Retained v2 generations still decode for the bounded rollback window. Its logical content is:
+The stable cross-project artifact is the versioned, deterministic generation manifest. Its host-side source schema is `contracts/generation-manifest/v1/schema.zt`; the built wire format is v5, defined by `contracts/generation/v5/schema.zt` and decoded by `boot-contracts/src/generation.rs`. The decoder refuses v2, v3, and v4 as unsupported; rollback safety comes from refusing an undecodable candidate, not migrating it. Its logical content is:
 
 ```text
 GenerationManifest
@@ -179,7 +180,7 @@ Neither seL4 nor `slime-root` parses Zutai source or owns system policy. `slime-
 
 On `aarch64-sel4-qemu-virt` a generation still declares exactly one `kernelObject` because the format requires it and the root re-checks that closure at admission, but nothing maps it: seL4 is the kernel, pinned and built separately under `sel4/pins.toml`.
 
-Executable payloads use the component image format in `contracts/component/v1/`: a bounded qualification header naming one exact target profile, then either a segment table with per-segment R/W/X flags (revision V2) or a complete native ELF the loader maps (revision `Elf`, the seL4 product path). Retained V1 images carry the implicit `x86_64-qemu-virtio` qualification of their only producer. Integrity comes from the generation object digest and authority from generation grants, so an image itself carries neither.
+Current executable payloads use `contracts/component/v2/`: a bounded exact-target qualification header followed by either segments or a complete native ELF (the seL4 product revision). Retained v1 images imply `x86_64-qemu-virtio`. Integrity comes from the generation object digest and authority from generation grants; the image carries neither independently. See [component and image boundaries](docs/architecture/component-system-image.md).
 
 ## Agentic direction
 
@@ -201,7 +202,7 @@ Atomicity and agentic operation reinforce each other: agent memory and authority
 
 ## Differentiating directions
 
-Exploratory directions enabled by the capability and generation model — descriptions, dependencies, exit-condition sketches, and promotion status — are registered in [`docs/directions/`](docs/directions/README.md), one elaborated file per active entry. None of them is committed work; each becomes real only when promoted into a work item with an observable exit condition, with its design context filed under [`roadmap/`](roadmap/).
+Exploratory directions are registered in [`docs/directions/`](docs/directions/README.md). They are not committed work: promotion requires a canonical work item with an observable exit condition and design context in the owning [`docs/plans/`](docs/plans/README.md) page.
 
 ## First vertical slice (complete)
 
@@ -237,22 +238,17 @@ just tasks_graph   # the dependency graph
 just tasks_check   # validate the store and the repository's ordering policy
 ```
 
-[`roadmap/`](roadmap/README.md) is architectural documentation, not the plan: it holds the track ownership, boundaries, sequencing, architectural invariants, and release-gate composition that no work-item body should have to restate. It records no state and owns no problem statement — each item owns its own.
+Current ownership, invariants, and limitations live in
+[`docs/architecture/`](docs/architecture/README.md). Unimplemented designs and
+qualification requirements live in [`docs/plans/`](docs/plans/README.md);
+long-lived choices in [`docs/decisions/`](docs/decisions/README.md) retain their
+accepted or proposed status. [`docs/`](docs/README.md) is the entry point.
 
-- [Backlog: frozen index of pre-cutover defects](roadmap/00-backlog.md)
-- [Foundations and implemented history](roadmap/01-foundations.md)
-- [Core runtime C7–C10](roadmap/02-core-runtime.md)
-- [ROS 2 compatibility R0–R3](roadmap/03-ros2-compatibility.md)
-- [Platform hardware H1–H14](roadmap/04-platform-hardware.md)
-- [Foreign workloads X1–X2](roadmap/05-foreign-workloads.md)
-- [Authority and trust A0–A5](roadmap/06-authority-trust.md)
-- [Architecture portability P0–P5](roadmap/07-architecture-portability.md)
-- [Native development D1–D7](roadmap/08-native-development.md)
-- [Raspberry Pi 5 ROS 2 two-node demo RP0–RP8](roadmap/09-rpi5-ros2-demo.md)
-- [Component platform CP0–CP15](roadmap/10-component-platform.md)
-- [Native I/O substrate IO0–IO7](roadmap/11-io-substrate.md)
-
-Open backlog items sit ahead of every lane; `just tasks_check` enforces that ordering. The physical execution lane is Milk-V Duo architecture work. Framework daily-driver work, the RPi5 ROS 2 demo, foreign workloads, and distributed authority are deferred. Results compose only at the release gates defined in `roadmap/README.md`.
+The [roadmap classification](roadmap/README.md) identifies each retained source,
+its extracted owner, and detailed requirements not yet extracted. Historical
+chronology and devlogs remain readable until verified archival. Open backlog
+items precede milestone work under `just tasks_check`; this page does not carry
+a second priority or completion table.
 
 ## Current repository layout
 
@@ -265,7 +261,8 @@ boot-contracts/  Shared Rust boot, generation, storage, recovery, and admission 
 contracts/       Versioned Zutai schemas for every persisted, IPC, and boot format, plus generation fixtures
 scripts/         Host tooling grouped as build/, check/, generate/, and lib/
 tools/           Developer-facing helpers such as LLDB attachment
-roadmap/         Architectural documentation pending H2 classification: boundaries, sequencing, invariants, plans, and delivered history
+docs/            Current architecture, operation, references, decisions, plans, and exploration
+roadmap/         Classified historical sources and explicitly unextracted requirements pending verified archival
 devlog/          Retained historical investigations and evidence pending the verified archive cutover; not required for ordinary changes
 assets/          Boot/runtime assets
 deps/            Pinned seL4, rust-sel4, and Zutai submodules

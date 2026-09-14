@@ -1,5 +1,13 @@
 # Foreign workloads
 
+> **H2 routing — unextracted plan retained.** This file still owns X1 Linux
+> personality and X2 AMD-V guest design, confinement/error mapping, target and
+> physical-enablement requirements, and their ROS workload relationship. None is
+> reclassified as implemented or historical merely by H2. Current substrate
+> boundaries live in [architecture](../docs/architecture/README.md), not in the
+> proposed foreign-workload interfaces below. Original status and sequencing are
+> retained context; MyQue owns work state. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

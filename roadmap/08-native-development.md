@@ -1,5 +1,15 @@
 # Native development, live update, and on-device build track
 
+> **H2 routing — unextracted plan retained.** This file still owns D1–D7 source
+> workspaces, direct language backend ownership, hermetic build/provenance,
+> ephemeral admission, transactional live cutover, authorized generation
+> construction and full-generation reproduction requirements. These are not
+> historical-only or implemented capabilities. Current image and authority
+> boundaries are in [component/system/image architecture](../docs/architecture/component-system-image.md)
+> and [runtime authority](../docs/architecture/runtime-authority.md); those pages
+> do not replace the unextracted development-service design. Original status and
+> sequencing remain context; MyQue owns state. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

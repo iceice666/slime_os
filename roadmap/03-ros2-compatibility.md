@@ -1,5 +1,15 @@
 # ROS 2 compatibility track
 
+> **H2 routing — retained detailed plan.** The
+> [RPi5 demo plan](../docs/plans/rpi5-ros2-demo.md) owns the extracted minimal-demo
+> boundary; [typed fabric](../docs/architecture/typed-data-fabric.md) owns its
+> current native substrate. This file still owns unextracted R0–R3 deliverables,
+> admitted IDL/CDR types, wire conformance, service/action and existing-workload
+> requirements, and the embedded-companion profile boundary. Those are planned
+> requirements, not implemented ROS support or historical-only text. Original
+> status, transport-pivot and sequencing prose is retained context; MyQue owns
+> state. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

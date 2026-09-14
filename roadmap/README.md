@@ -1,5 +1,47 @@
 # Slime OS roadmap
 
+> **H2 classification — routing index plus retained source.** Current subsystem
+> documentation lives in [architecture](../docs/architecture/README.md), and
+> extracted delivery/qualification boundaries live in [plans](../docs/plans/README.md).
+> The original prose below is preserved for H3: its status, physical execution
+> goals, delivery counts, gate results and track diagram are historical context,
+> not a live plan or evidence that today's image is qualified. Extracted scope is
+> maintained only in its owning document. Unextracted requirements explicitly
+> listed below remain authoritative in their source sections; retaining them does
+> not make them historical or implemented. MyQue alone owns work state and exits.
+
+## File classification and residual ownership
+
+This table classifies all thirteen files without duplicating their technical
+specifications or maintaining progress. “History” means original narrative is
+retained in place until H3 verifies its archive, not that archival has happened.
+The older “Not authoritative” notices concern work-item identity/state: they do
+not revoke the residual design and qualification ownership named here. Current
+behavior always resolves to owning code/contracts; an unextracted narrative is
+not a substitute for checking them.
+
+| Source | Extracted current owner | Planned / genuinely unextracted owner | Retained history |
+| --- | --- | --- | --- |
+| [README.md](README.md) | [Architecture](../docs/architecture/README.md): subsystem ownership, authority, image and target boundaries | [Plans](../docs/plans/README.md): memory, network, Framework, authority and demo boundaries. Residual external-wire, existing-workload and architecture release composition below remains requirement context, with detailed owners in the corresponding rows | Original goals, track map, physical sequence, achieved releases and status |
+| [00-backlog.md](00-backlog.md) | None; live defects belong to `.tasks/items/` | No residual design; follow-up requirements belong to canonical items | Frozen B anchors and investigation links; retained for existing consumers |
+| [01-foundations.md](01-foundations.md) | [Architecture](../docs/architecture/README.md): extracted capability/runtime/image boundaries | [Framework plan](../docs/plans/framework-hardware.md): promotion boundary. M5.7 storage-aware boot/NVMe checks remain requirements here; detailed M5 storage/BootState/recovery and M6 native-service descriptions remain unextracted references to owning contracts/source | M1–M6 deliveries, retired kernel and gate narratives |
+| [02-core-runtime.md](02-core-runtime.md) | [IPC](../docs/architecture/ipc-and-capabilities.md), [fabric](../docs/architecture/typed-data-fabric.md), [runtime authority](../docs/architecture/runtime-authority.md), [private memory](../docs/architecture/private-memory.md) | [Memory plan](../docs/plans/memory-capacity.md). Fine-grained C7/C8 protocols and C9 admission/recording details beyond those pages remain unextracted references to owning contracts/source | C7–C10 sequencing, delivery/gates and exact capacity-run results |
+| [03-ros2-compatibility.md](03-ros2-compatibility.md) | [Fabric](../docs/architecture/typed-data-fabric.md): native substrate only, not ROS support | [Demo plan](../docs/plans/rpi5-ros2-demo.md): minimal boundary. This file still owns R0–R3 detailed profiles, admitted IDL/CDR subset, wire/service/action/workload checks and companion requirements | Original status, transport-pivot and sequencing context |
+| [04-platform-hardware.md](04-platform-hardware.md) | [Targets](../docs/architecture/targets-and-portability.md), [I/O](../docs/architecture/io-substrate.md): current substrate only | [Framework plan](../docs/plans/framework-hardware.md): qualification sequence/safety. H1–H14 device-specific deliverables, denial/fault scenarios, records and integrated acceptance remain requirements here | Original boot observations, status and priority narrative |
+| [05-foreign-workloads.md](05-foreign-workloads.md) | [Architecture](../docs/architecture/README.md): native substrate, not Linux/VM support | Unextracted X1 personality, X2 AMD-V, authority/error mapping, target enablement and ROS relationship remain owned here | Original status and sequence, not the unimplemented requirements |
+| [06-authority-trust.md](06-authority-trust.md) | [Capability matrix](../docs/capability-matrix.md), [runtime authority](../docs/architecture/runtime-authority.md); capability-rights contract owns the algebra | [Authority/trust plan](../docs/plans/authority-and-trust.md): A1–A5 boundaries. Detailed denial/lease checks, disk×TPM matrix, recovery and distributed-authority acceptance remain requirements here | A0 delivery/gates and original status/sequence |
+| [07-architecture-portability.md](07-architecture-portability.md) | [Targets](../docs/architecture/targets-and-portability.md): profiles and mechanism/evidence split | [Demo](../docs/plans/rpi5-ros2-demo.md) and [Framework](../docs/plans/framework-hardware.md) plans. P4 board corpus/firmware/media/serial acceptance and prospective companion profile remain requirements here; target construction detail beyond the extraction remains a source/pins reference | P0–P6 delivery, retired custom-kernel routes, migration rationale and target pivots |
+| [08-native-development.md](08-native-development.md) | [Component/system/image](../docs/architecture/component-system-image.md), [runtime authority](../docs/architecture/runtime-authority.md): existing admission boundaries | Unextracted D1–D7 editor/source workspace, language-producer contract, hermetic build, ephemeral execution, live cutover and generation reproduction remain owned here | Original status and sequence, not the unimplemented requirements |
+| [09-rpi5-ros2-demo.md](09-rpi5-ros2-demo.md) | [Targets](../docs/architecture/targets-and-portability.md), [component/system/image](../docs/architecture/component-system-image.md): existing build/admission boundary | [Demo plan](../docs/plans/rpi5-ros2-demo.md): goal/exclusions/physical rule. RP3–RP8 runtime-envelope, trace, fault, repeatability and physical acceptance detail remains requirements here | RP0–RP2 delivery, transport pivot and original execution priority |
+| [10-component-platform.md](10-component-platform.md) | [Component/system/image](../docs/architecture/component-system-image.md): spec/generation/closure/test identities | No new unfinished CP plan. Detailed SDK export/publication, prefix assets, compatibility, consumer upgrade/rollback and scenario rules remain unextracted references; owning contracts/scripts/SDK docs decide current behavior | CP0–CP15 deliveries, motivating-gap snapshots, counts and cutover sequence |
+| [11-io-substrate.md](11-io-substrate.md) | [I/O](../docs/architecture/io-substrate.md): mechanism, authority and current limitations | [Network plan](../docs/plans/network-data-plane.md): first service data-plane scope. Broader IO4 IPv6/address configuration/listener/backend requirements remain here; detailed lifecycle/model/proof obligations remain references to owning contracts/proofs | IO0–IO7 delivery/gates and superseded root-driver migration narrative |
+
+Unextracted scope is deliberately retained, not silently duplicated into a short
+summary. Its next extraction must name the precise replacement owner and preserve
+the source until verified archival. The original sections below, including their
+headings, remain available for existing links; the final maintenance policy is
+active, not part of the frozen chronology.
+
 **This directory is architectural documentation, not the canonical plan.** Work-item
 identity, state, hierarchy, and dependencies live in `.tasks/items/`, one Markdown
 file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque).
@@ -231,11 +273,11 @@ Documentation-only roadmap edits do not run runtime tests; their verification is
 ## Updating this directory
 
 - **State never comes here.** Close an item with `myque close`, which records the closure date, and record the exit condition that was *observed* in the item's body. Never allocate an id by scanning for the next number, and never edit this directory to change what an item's state is: nothing reads `roadmap/` for identity, state, or dependencies, and no mechanism turns an edit here into a store change.
-- Update the owning track file, not this index, for detailed rationale and boundaries.
-- Update this index when a track's ownership, boundary, sequencing, or release composition changes — not when an item's state does. Exact counts, per-track status, and "what is open" belong to `just tasks_list` and `just tasks_next`; writing them here recreates the drift this cutover removed.
+- Update the owning architecture, operation, contract or limitation document for current behavior; update the owning plan for unimplemented design and qualification requirements. Use the classification table above to locate the owner, not the chronological track as a default destination.
+- Change this routing table only when extraction or ownership changes. Genuinely unextracted requirements remain maintained in their named source sections until a precise replacement owner is established; do not create competing specifications or update retained chronology to mirror work-item state.
 - Preserve completed evidence; do not rewrite an observed check as a future intention.
-- When a milestone lands, replace its future-tense `Deliverables`, `Required checks`, and planned verification sections with one `**Delivered:**` sentence, one `**Exit condition (observed):**` sentence, a `**Gates:**` line naming exact Justfile targets, and an `**Evidence:**` link to the canonical work-item UUID. A retained historical entry may also be linked when one exists, but completion does not require creating one. Keep current architecture, operation, and limitations in the owning documentation; record the change, claim, risks, exact verification, and limits in the PR; and record the observed exit condition in the work item before closure.
+- When work lands, record the change, claim, risks, exact verification and limits in the PR, and the observed exit condition in the canonical work item before closure. Update owning current docs and plans only where their contract or limitation changes. Do not convert retained milestone prose into new `Delivered`/`Gates`/`Evidence` entries or maintain a chronological delivery index.
 - Preserve historical evidence by reference rather than copying it into current subsystem prose. The H3 archive cutover will replace retained product-tree history links only after their bytes and destinations are verified.
-- Move exploratory work from `../docs/directions/` only after it has dependencies, bounded deliverables, required checks, and an observable exit condition — and create the work item that owns it.
+- Promote exploratory work from `../docs/directions/` only with a bounded design and observable acceptance requirements in the owning plan, and a canonical work item for scope, state and dependencies; do not turn a direction into a new roadmap progress record.
 - Never treat a milestone as complete from implementation status alone when its exit condition requires QEMU or physical evidence.
 - **A heading is a URL.** 77 merged devlog links name a `#fragment` in this directory, so rewording a heading breaks an inbound link while leaving the file in place — a failure with no symptom at the destination. `just devlog_check` validates every fragment. When a heading must change, keep the old address by putting `<a id="old-slug"></a>` on its own line above the new heading; that is what the two P4 and P5.4.9 anchors are. Note that repeated headings are addressed by position — 39 slugs repeat across these track files, so `#deliverables-7` moves when a section is inserted above it. Prefer an explicit anchor over relying on a duplicate's index.

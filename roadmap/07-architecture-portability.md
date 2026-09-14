@@ -1,5 +1,17 @@
 # Architecture portability track
 
+> **H2 routing — current targets separated from port history.** Read
+> [targets and portability](../docs/architecture/targets-and-portability.md) for
+> current target/mechanism/evidence boundaries and the
+> [RPi5](../docs/plans/rpi5-ros2-demo.md) and
+> [Framework](../docs/plans/framework-hardware.md) plans for qualification scope.
+> Unextracted P4 board-specific corpus, firmware/media/serial acceptance detail
+> and the prospective MCU companion profile remain requirements here. P0–P6
+> delivery, retired custom-kernel mechanisms, migration explanations and original
+> status/pivots remain history, not current support or image qualification.
+> Target construction details beyond the extracted page remain unextracted source
+> references to check against current pins/source. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.

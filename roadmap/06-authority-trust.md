@@ -1,5 +1,15 @@
 # Authority and trust roadmap
 
+> **H2 routing — extracted plan with retained acceptance detail.** Read the
+> [authority/trust plan](../docs/plans/authority-and-trust.md) for A1–A5 design
+> boundaries and the [capability matrix](../docs/capability-matrix.md) for current
+> authority. Unextracted per-slice denial checks, lease/revocation cases,
+> disk×TPM recovery matrix and distributed-authority acceptance detail remain
+> authoritative requirements here, not historical-only text. A0 delivery/gate
+> evidence and original status/sequence are retained history; the checked
+> capability-rights contract owns the current algebra. No planned object or
+> physical trust claim is introduced by this routing. See the [file classification](README.md).
+
 > **Not authoritative.** Work-item identity, state, and relationships live in
 > `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
 > This file holds the problem statements, boundaries, and sequencing behind them.
