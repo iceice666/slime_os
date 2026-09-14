@@ -1196,6 +1196,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-pwm-servo-driver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-reclamation-fault"
 version = "0.1.0"
 dependencies = [

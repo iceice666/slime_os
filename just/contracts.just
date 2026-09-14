@@ -33,6 +33,7 @@ release_trust_check: contracts_check release_trust_runtime_check
 contracts_source_check: bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
+    python3 scripts/generate/generate-pwm-servo-bindings.py --check
     python3 scripts/generate/generate-link-device-bindings.py --check
     python3 scripts/generate/generate-network-service-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py

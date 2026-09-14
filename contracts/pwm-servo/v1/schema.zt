@@ -1,0 +1,106 @@
+-- Slime OS pwm-servo protocol, version 1.
+-- One request programs one PWM channel's servo pulse; the reply carries a
+-- status and the period word the driver read back. Requests are 32 bytes and
+-- replies 16, exchanged as one call over the driver's endpoint. Widths are
+-- microseconds at the driver's count clock, so a `pulse_us` is the high time of
+-- each frame and `period_us` the frame; `pulseDisable` stops the channel.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 32;
+replyLen :: Int = 16;
+maxChannel :: Int = 5;
+minPeriodUs :: Int = 2000;
+maxPeriodUs :: Int = 20000;
+minPulseUs :: Int = 1000;
+maxPulseUs :: Int = 2000;
+pulseDisable :: Int = 0;
+clockHz :: Int = 1000000;
+failsafeNs :: Int = 10000000000;
+statusOk :: Int = 0;
+statusBadChannel :: Int = -1;
+statusBadPeriod :: Int = -2;
+statusBadPulse :: Int = -3;
+statusNoDevice :: Int = -4;
+statusDeviceError :: Int = -5;
+statusMalformed :: Int = -6;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+PwmServoRequest :: type {
+  magic : Int;
+  version : Int;
+  channel : Int;
+  period_us : Int;
+  pulse_us : Int;
+  flags : Int;
+  reserved : Int;
+};
+
+PwmServoReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  detail : Int;
+};
+
+requestSchema ::= schema PwmServoRequest;
+replySchema ::= schema PwmServoReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "channel"; width = 4; signed = false; byteArray = false; };
+  { name = "period_us"; width = 4; signed = false; byteArray = false; };
+  { name = "pulse_us"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 8; signed = false; byteArray = true; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "detail"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  maxChannel =;
+  minPeriodUs =;
+  maxPeriodUs =;
+  minPulseUs =;
+  maxPulseUs =;
+  pulseDisable =;
+  clockHz =;
+  failsafeNs =;
+  statusOk =;
+  statusBadChannel =;
+  statusBadPeriod =;
+  statusBadPulse =;
+  statusNoDevice =;
+  statusDeviceError =;
+  statusMalformed =;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  requestLayout =;
+  replyLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_PWM_SERVO_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    rustPath := t.join "" { root; "/components/proto/src/pwm_servo.rs"; };
+    cPath := t.join "" { root; "/components/runtime/include/slime/pwm_servo.h"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write cPath bindings.c
+  ];
+
+main
