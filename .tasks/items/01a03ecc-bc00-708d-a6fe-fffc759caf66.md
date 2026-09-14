@@ -29,7 +29,7 @@ Gates: `just contracts_check`, `just generation_check`, `just sel4_component_gra
 
 ## Evidence
 
-[`devlog/2026-08-04-p5-2-native-component-images/`](../devlog/2026-08-04-p5-2-native-component-images/index.md), [`devlog/2026-08-27-resident-product-graph/`](../devlog/2026-08-27-resident-product-graph/index.md), [`devlog/2026-08-27-slisp-product-cutover/`](../devlog/2026-08-27-slisp-product-cutover/index.md)
+[`devlog/2026-08-04-p5-2-native-component-images/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-04-p5-2-native-component-images/index.md), [`devlog/2026-08-27-resident-product-graph/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-27-resident-product-graph/index.md), [`devlog/2026-08-27-slisp-product-cutover/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-27-slisp-product-cutover/index.md)
 
 ## Notes
 

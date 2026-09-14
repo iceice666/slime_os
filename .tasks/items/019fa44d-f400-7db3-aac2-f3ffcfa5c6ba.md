@@ -29,7 +29,7 @@ Gates: `just fabric_stream_check`
 
 ## Evidence
 
-[`devlog/2026-07-28-c8-4-bounded-streams/`](../devlog/2026-07-28-c8-4-bounded-streams/index.md)
+[`devlog/2026-07-28-c8-4-bounded-streams/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-28-c8-4-bounded-streams/index.md)
 
 ## Notes
 

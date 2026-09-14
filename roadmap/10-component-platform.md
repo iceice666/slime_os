@@ -67,7 +67,7 @@
 
 **Gates:** `just component_spec_check`, `just contracts_check`.
 
-**Evidence:** [`devlog/2026-08-18-cp0-component-spec-model/`](../devlog/2026-08-18-cp0-component-spec-model/index.md)
+**Evidence:** [`devlog/2026-08-18-cp0-component-spec-model/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-18-cp0-component-spec-model/index.md)
 
 ## CP1 — System specification model and generation derivation
 
@@ -79,15 +79,15 @@
 
 **Gates:** `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_check`, `just sel4_generation_check`.
 
-**Evidence:** [`devlog/2026-08-18-cp1-generation-derivation/`](../devlog/2026-08-18-cp1-generation-derivation/index.md)
+**Evidence:** [`devlog/2026-08-18-cp1-generation-derivation/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-18-cp1-generation-derivation/index.md)
 
 ## CP2 — Runtime-resolved component binding
 
 **Status:** Complete. The query surface answers grant bindings, namespaced boot-layout roles, unambiguous capability roles, the fabric-graph read, and the generation's boot action, and the site-by-site migration finished on 2026-08-22: no component source `include!`s a `build.rs`-private, manifest-derived constant table. The nine `fabric_profile` sites that no query could retire — their symbols size fixed arrays at compile time — split into authenticated `fabric-graph` header fields (`trace_depth`, `trace_overflow`, query ids 24/25), existing `RuntimeLimits` ceilings, and published `contracts/fabric-graph/v1` storage constants. `render_fabric_profile_rust`, the `SLIME_DATA_FABRIC_PROFILE` handoff, both command-table generators, and `components/build-support`'s manifest parser are deleted.
 
-**Progress (2026-08-21, boot action):** `CAPABILITY BOOT ACTION` (label 40) answers `BootAction`'s frozen id, so a component reads which composition it was booted into instead of `include!`ing a `build.rs`-private per-plane string. Five sites migrated and six `include!`s deleted, taking the all-profile count from 15 to 9. Gated on the *lifecycle* service rather than the capability table its label namespace names: the query must be answerable to every launched instance, and 30 of the 182 instances the seL4 fixtures declare hold no capability-transfer service where 0 lack lifecycle. **Evidence:** [`devlog/2026-08-21-b70-boot-action-query/`](../devlog/2026-08-21-b70-boot-action-query/index.md)
+**Progress (2026-08-21, boot action):** `CAPABILITY BOOT ACTION` (label 40) answers `BootAction`'s frozen id, so a component reads which composition it was booted into instead of `include!`ing a `build.rs`-private per-plane string. Five sites migrated and six `include!`s deleted, taking the all-profile count from 15 to 9. Gated on the *lifecycle* service rather than the capability table its label namespace names: the query must be answerable to every launched instance, and 30 of the 182 instances the seL4 fixtures declare hold no capability-transfer service where 0 lack lifecycle. **Evidence:** [`devlog/2026-08-21-b70-boot-action-query/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-21-b70-boot-action-query/index.md)
 
-**Closure (2026-08-22):** [`devlog/2026-08-22-b70-profile-include-closure/`](../devlog/2026-08-22-b70-profile-include-closure/index.md)
+**Closure (2026-08-22):** [`devlog/2026-08-22-b70-profile-include-closure/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-22-b70-profile-include-closure/index.md)
 
 **Depends on:** Cleared or explicitly deferred backlog. Independent of CP0/CP1.
 
@@ -184,13 +184,13 @@ No component source file `include!`s a `build.rs`-private, manifest-derived cons
 
 **Delivered:** `components/bins` is 52 independent workspace packages, one per component, each with its own `Cargo.toml`, `build.rs`, and `src/main.rs`; the shared helpers are the `slime-components` library at `components/lib`, and the generation-manifest parser that was private to the old crate's build script is the documented `slime-build-support` crate any component crate depends on from `[build-dependencies]`. `build_rust_components()` builds `-p slime-component-<name>` in two invocations grouped by feature set, which is what actually scopes the allocator: Cargo unifies features across every package in one invocation, so a plain component built beside a store component gained the heap too — measured as 6 heap symbols in the linked `slime-rt` rlib against 0 when grouped. `docs/syscall-abi.md` states the v1 compatibility policy (frozen labels and statuses, additive-only growth, retired numbers reserved, an incompatible change is a new major contract version).
 
-**Exit condition (observed):** all 33 `just sel4_*_check` plane gates and `just sel4_gate_control_check` pass with unchanged behavior; a new component was added as one directory, built to an ELF, and removed with no edit to any other crate; a plain component's shipped ELF carries 0 allocator symbols against a store component's 4; `just generation_check` is byte-identical across two isolated builds; `just component_crate_split_check` pins the split's six properties, each proven to fail under a one-line perturbation. The [B65 deferred follow-up](00-backlog.md) ("the 52-binary fixture population uncollapsed") is closed by this milestone.
+**Exit condition (observed):** all 33 `just sel4_*_check` plane gates and `just sel4_gate_control_check` pass with unchanged behavior; a new component was added as one directory, built to an ELF, and removed with no edit to any other crate; a plain component's shipped ELF carries 0 allocator symbols against a store component's 4; `just generation_check` is byte-identical across two isolated builds; `just component_crate_split_check` pins the split's six properties, each proven to fail under a one-line perturbation. The [B65 deferred follow-up](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) ("the 52-binary fixture population uncollapsed") is closed by this milestone.
 
 **Amended deliverable:** the "preserving byte-identical output for every existing in-tree component" clause was unachievable and is recorded as amended rather than met. Cargo's `-C metadata` hash derives from the package name and appears in CGU symbol names inside the shipped `.symtab`, so renaming a package necessarily moves the ELF — measured as 15 differing bytes, all inside that string, with source, bin name, target, and target directory held fixed. No repository artifact pins those bytes. Determinism plus unchanged gate behavior is the property that replaced it, and both are observed above.
 
 **Gates:** `just component_crate_split_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just generation_check`, the 33 `just sel4_*_check` planes, `just sel4_gate_control_check`.
 
-**Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](../devlog/2026-08-21-cp3-crate-per-component/index.md)
+**Evidence:** [`devlog/2026-08-21-cp3-crate-per-component/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-21-cp3-crate-per-component/index.md)
 
 ## CP4 — External-artifact admission path
 
@@ -227,7 +227,7 @@ just external_component_admission_check
 
 **Gates:** `just external_component_admission_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-21-cp4-external-artifact-admission/`](../devlog/2026-08-21-cp4-external-artifact-admission/index.md)
+**Evidence:** [`devlog/2026-08-21-cp4-external-artifact-admission/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-21-cp4-external-artifact-admission/index.md)
 
 ## CP5 — Out-of-tree component development proof
 
@@ -265,7 +265,7 @@ Two RP4 data-path components, authored and built entirely in a separate git chec
 
 **Gates:** `just component_sdk_out_of_tree_check`, `just lint_all`, `just fmt_check_all`, `just machete`, `just test_host`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-22-cp5-out-of-tree-component-sdk/`](../devlog/2026-08-22-cp5-out-of-tree-component-sdk/index.md)
+**Evidence:** [`devlog/2026-08-22-cp5-out-of-tree-component-sdk/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-22-cp5-out-of-tree-component-sdk/index.md)
 
 ## CP6 — Deterministic component SDK export
 
@@ -305,7 +305,7 @@ One checked-in exporter, invoked twice from the same `slime_os` commit, produces
 
 **Gates:** `just component_sdk_export_check`, `just contracts_check`, `just component_sdk_out_of_tree_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
 
 ## CP7 — Permanent SDK repository and one-way publication
 
@@ -349,7 +349,7 @@ An immutable SDK commit and signed tag exist in the canonical repository, regene
 
 **Gates:** `just component_sdk_release_check`, `just component_sdk_export_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md), and for the hosted closure [`devlog/2026-08-26-cp7-hosted-publication-hardening/`](../devlog/2026-08-26-cp7-hosted-publication-hardening/index.md)
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md), and for the hosted closure [`devlog/2026-08-26-cp7-hosted-publication-hardening/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-26-cp7-hosted-publication-hardening/index.md)
 
 ## CP8 — Platform build-input releases
 
@@ -393,7 +393,7 @@ Two things the QEMU profile alone hid. The RPi profile builds components against
 
 **Gates:** `just component_sdk_prefix_check`, `just component_sdk_release_check`, `just test_host`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
 
 ## CP9 — SDK versioning and compatibility matrix
 
@@ -433,7 +433,7 @@ Two consecutive immutable SDK releases are correctly classified, every published
 
 **Gates:** `just component_sdk_compatibility_check`, `just contracts_check`, `just component_sdk_prefix_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
 
 ## CP10 — Consumer pin, upgrade, and rollback workflow
 
@@ -475,7 +475,7 @@ A separate consumer repository moves between two immutable SDK releases, boots t
 
 **Gates:** `just component_sdk_upgrade_check`, `just component_sdk_compatibility_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](../devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
+**Evidence:** [`devlog/2026-08-25-cp6-cp10-component-sdk-releases/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-cp6-cp10-component-sdk-releases/index.md)
 
 ## CP11 — Canonical system-image and test-run closure contracts
 
@@ -515,7 +515,7 @@ One canonical, versioned image closure resolves in two clean build roots to the 
 
 **Gates:** `just system_image_closure_check`, `just sel4_fault_check`, `just sel4_boot_selection_check`, `just lint_all`, `just fmt_check_all`, `just ruff`.
 
-**Evidence:** [`devlog/2026-09-02-cp11-system-image-closure/`](../devlog/2026-09-02-cp11-system-image-closure/index.md)
+**Evidence:** [`devlog/2026-09-02-cp11-system-image-closure/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-02-cp11-system-image-closure/index.md)
 
 ## CP12 — Complete spec derivation for every test composition
 
@@ -555,11 +555,11 @@ All 42 seL4 test compositions are generated from component/system specifications
 
 **Exit condition (observed, partial):** `just system_composition_closure_check` compiles 41 system specs, derives 41 manifests semantically identical to their committed fixtures, refuses 21 named derivation mutations, inventories all 42 compositions (40 derived, 2 hand-authored) with every row backed by a real owning gate, and refuses 7 named inventory mutations. Every converted composition's `generation.bin` was rebuilt from its frozen pre-migration text and from its derived text under one toolchain and compared: all 40 are byte-identical (39 measured directly; `sel4-channel` is a file this milestone does not modify and whose pre-B91 baseline predates `slotReason`). `just sel4_boot_layout_check` resolved 31 plane layouts against their frozen fixtures, `just generation_check` produced byte-identical generations across two isolated builds, `just sel4_gate_control_check` proved 45 gates reject 1748 mutated transcripts, and 36 QEMU plane gates passed — including the 23-instance `sel4-stress` graph, the 5-instance `sel4-clock-authority` plane, and the 4-instance `sel4-lifecycle-restart` plane that the one-instance-per-component model could not express. The generator carries no condition keyed on a composition, test, plane, or generation number.
 
-**Not delivered:** 2 compositions. `sel4-matrix` gives three fabric components route roles their specs do not declare, and `just component_spec_check` requires a spec's interface list to match `valid.zti`'s graph exactly, so one spec cannot describe two compositions' route sets; resolving it needs per-composition interface entries or a system-level route-role override. `sel4-c-runtime`'s implementation is a freestanding C source built by a helper script at gate time with no committed content identity to pin. Both reasons are in the inventory contract's closed vocabulary and tracked in [`roadmap/00-backlog.md`](00-backlog.md).
+**Not delivered:** 2 compositions. `sel4-matrix` gives three fabric components route roles their specs do not declare, and `just component_spec_check` requires a spec's interface list to match `valid.zti`'s graph exactly, so one spec cannot describe two compositions' route sets; resolving it needs per-composition interface entries or a system-level route-role override. `sel4-c-runtime`'s implementation is a freestanding C source built by a helper script at gate time with no committed content identity to pin. Both reasons are in the inventory contract's closed vocabulary and tracked in [`roadmap/00-backlog.md`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md).
 
-**Gates:** `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just devlog_check`.
+**Gates:** `just system_composition_closure_check`, `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, [`just devlog_check`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/just/quality.just).
 
-**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md)
+**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-02-cp12-composition-derivation/index.md)
 
 ## CP13 — Data-driven seL4 image builder cutover
 
@@ -601,7 +601,7 @@ One data-driven command builds every ordinary product and test image from its cl
 
 **Gates:** `just system_image_builder_check`, `just system_image_closure_check`, `just system_composition_closure_check`, `just ruff`.
 
-**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md)
+**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-02-cp12-composition-derivation/index.md)
 
 ## CP14 — Explicit scenario, selector, and negative-test identities
 
@@ -653,7 +653,7 @@ The fifth deliverable is the test-run records. All 45 plane gates that boot a se
 
 **Gates:** `just system_image_scenario_check`, `just system_test_run_check`, `just system_image_builder_check`, `just system_image_closure_check`, `just ruff`.
 
-**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](../devlog/2026-09-02-cp12-composition-derivation/index.md)
+**Evidence:** [`devlog/2026-09-02-cp12-composition-derivation/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-02-cp12-composition-derivation/index.md)
 
 ## CP15 — Whole-corpus closure cutover and legacy deletion
 

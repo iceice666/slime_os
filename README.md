@@ -246,7 +246,7 @@ accepted or proposed status. [`docs/`](docs/README.md) is the entry point.
 
 The [roadmap classification](roadmap/README.md) identifies each retained source,
 its extracted owner, and detailed requirements not yet extracted. Historical
-chronology and devlogs remain readable until verified archival. Open backlog
+chronology and devlogs are preserved in the [private archive](docs/history.md). Open backlog
 items precede milestone work under `just tasks_check`; this page does not carry
 a second priority or completion table.
 
@@ -262,8 +262,8 @@ contracts/       Versioned Zutai schemas for every persisted, IPC, and boot form
 scripts/         Host tooling grouped as build/, check/, generate/, and lib/
 tools/           Developer-facing helpers such as LLDB attachment
 docs/            Current architecture, operation, references, decisions, plans, and exploration
-roadmap/         Classified historical sources and explicitly unextracted requirements pending verified archival
-devlog/          Retained historical investigations and evidence pending the verified archive cutover; not required for ordinary changes
+roadmap/         Explicitly unextracted requirements and retained surrounding context
+docs/history.md  Immutable private archive locator and evidence/restoration boundary
 assets/          Boot/runtime assets
 deps/            Pinned seL4, rust-sel4, and Zutai submodules
 .tasks/          Canonical work-item store (`items/`) and the pre-migration roadmap-id map

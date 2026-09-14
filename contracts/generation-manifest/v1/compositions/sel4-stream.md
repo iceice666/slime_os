@@ -3,7 +3,7 @@
 A seventh seL4 generation, beside [`sel4.zti`](sel4.md),
 [`sel4-channel.zti`](sel4-channel.md), [`sel4-loan.zti`](sel4-loan.md),
 [`sel4-spawn.zti`](sel4-spawn.md), [`sel4-sample.zti`](sel4-sample.md), and the
-frozen x86 [`valid.zti`](valid.zti). It declares the graph that carries P5.5's
+frozen x86 [`valid.zti`](../fixtures/valid.zti). It declares the graph that carries P5.5's
 exit condition in full: the C8.4 stream plane as the x86 oracle builds it, with
 every participant unmodified.
 

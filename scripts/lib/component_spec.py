@@ -741,9 +741,8 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
         if not test[key]:
             _fail(f"test.{key}: must be declared")
     # A gate that does not exist is a verification claim the repository cannot
-    # honour, on the same terms `just devlog_check` enforces for a devlog's
-    # `Gates` front matter. Checked here rather than only at corpus level so a
-    # single malformed record is refused on its own.
+    # honour. Checked here rather than only at corpus level so a single
+    # malformed record is refused on its own.
     if test["requiredTestEnvironment"] not in declared_just_targets():
         _fail(
             f"test.requiredTestEnvironment: {test['requiredTestEnvironment']!r} "

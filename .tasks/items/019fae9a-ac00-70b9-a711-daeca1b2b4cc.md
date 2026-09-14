@@ -31,7 +31,7 @@ Gates: `just data_fabric_profile_check`
 
 ## Evidence
 
-[`devlog/2026-07-30-c8-9-integration-decomposition/`](../devlog/2026-07-30-c8-9-integration-decomposition/index.md), [`devlog/2026-07-30-c8-9-typed-fabric-profile/`](../devlog/2026-07-30-c8-9-typed-fabric-profile/index.md)
+[`devlog/2026-07-30-c8-9-integration-decomposition/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-9-integration-decomposition/index.md), [`devlog/2026-07-30-c8-9-typed-fabric-profile/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-9-typed-fabric-profile/index.md)
 
 ## Notes
 

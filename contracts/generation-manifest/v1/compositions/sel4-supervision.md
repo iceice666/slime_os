@@ -4,7 +4,7 @@ An eighth seL4 generation, beside [`sel4.zti`](sel4.md),
 [`sel4-channel.zti`](sel4-channel.md), [`sel4-loan.zti`](sel4-loan.md),
 [`sel4-spawn.zti`](sel4-spawn.md), [`sel4-sample.zti`](sel4-sample.md),
 [`sel4-stream.zti`](sel4-stream.md), and the frozen x86
-[`valid.zti`](valid.zti). It declares the smallest graph that can reach backlog
+[`valid.zti`](../fixtures/valid.zti). It declares the smallest graph that can reach backlog
 **B16**'s exit condition: *a graph that creates more than `MAX_RECORDS` tasks
 over its lifetime still answers `supervision_status` correctly for every live
 handle.*

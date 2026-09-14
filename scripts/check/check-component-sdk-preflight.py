@@ -15,9 +15,10 @@ It writes nothing and needs no credential, so it runs on an ordinary runner
 before the release job is reached.
 
 It is also the only thing in this repository that reads the hosted release at
-all. `devlog/2026-08-26-cp7-hosted-publication-hardening/index.md` records that
+all. The archived CP7 record documents that
 absence: the hosted assertions were observed once, by hand, so hosted drift
 would otherwise surface only at the next publication.
+Archive: https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-26-cp7-hosted-publication-hardening/index.md
 
 The profile axis is compared over the intersection of the hosted and exported
 profile sets. Exporting a subset is a local choice about which prefixes were

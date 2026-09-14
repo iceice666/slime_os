@@ -28,8 +28,8 @@ Gates: `just sel4_stream_check`
 
 ## Evidence
 
-[`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md)
+[`devlog/2026-08-07-p5-4-5-qos-clock/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-07-p5-4-5-qos-clock/index.md)
 
 ## Notes
 
-Migrated from `roadmap/00-backlog.md` line 1064: `B27 — the manifest→flag table set and scrubbed in one pass, so two manifests could not share a flag — **resolved 2026-08-07**`.
+Migrated from [`roadmap/00-backlog.md`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) line 1064: `B27 — the manifest→flag table set and scrubbed in one pass, so two manifests could not share a flag — **resolved 2026-08-07**`.

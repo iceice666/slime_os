@@ -6,7 +6,7 @@ An eleventh seL4 generation, beside [`sel4.zti`](sel4.md),
 [`sel4-stream.zti`](sel4-stream.md),
 [`sel4-supervision.zti`](sel4-supervision.md),
 [`sel4-crossing.zti`](sel4-crossing.md), [`sel4-call.zti`](sel4-call.md),
-`sel4-qos.zti`, and the frozen x86 [`valid.zti`](valid.zti). It declares the
+`sel4-qos.zti`, and the frozen x86 [`valid.zti`](../fixtures/valid.zti). It declares the
 C8.7 operation graph — the `navigation` route with two clients, a supervised
 replacement for the second, a server, and a capability-routed clock, plus client
 A's private `nav-backup` route — for P5.4.7.

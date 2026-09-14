@@ -17,7 +17,7 @@
 
 **Purpose:** Preserve the defined Raspberry Pi 5 ROS 2 two-node product track and its completed contract, artifact, and AArch64 QEMU evidence while physical execution proceeds on Milk-V Duo.
 
-**Status:** Deferred after RP0, RP1, and RP2 completed. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`. RP3–RP8 retain their original Raspberry Pi 5 exit conditions, but they are not the current execution lane because the available USB-UART adapter yields no serial evidence and seL4 ships no display driver to substitute.
+**Status:** Deferred after RP0, RP1, and RP2 completed. RP0 was reissued as contract format 2 when the transport pivoted from DDSI-RTPS to Zenoh; see [`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md). RP2 closed 2026-08-20 on `aarch64-sel4-qemu-virt`. RP3–RP8 retain their original Raspberry Pi 5 exit conditions, but they are not the current execution lane because the available USB-UART adapter yields no serial evidence and seL4 ships no display driver to substitute.
 
 **Acceptance target:** A reproducible Raspberry Pi 5 boot runs a declared publisher node and subscriber node. The publisher emits a bounded ROS 2 topic stream through the admitted transport profile, the subscriber observes the expected samples in order under the declared QoS/profile, and the run records image identity, board/firmware/media identity, generation/release identity, serial transcript, semantic/wire trace, and every device/storage/stream/network capability involved.
 
@@ -149,7 +149,7 @@ it executed.
 **Gates:** `just sel4_demo_check`, `just sel4_boot_layout_check` (26 plane
 layouts), `just sel4_gate_control_check` (33 gates).
 
-**Evidence:** [`devlog/2026-08-20-rp2-demo-scoped-arm-slice/`](../devlog/2026-08-20-rp2-demo-scoped-arm-slice/index.md)
+**Evidence:** [`devlog/2026-08-20-rp2-demo-scoped-arm-slice/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-20-rp2-demo-scoped-arm-slice/index.md)
 
 **Depends on:** RP1 and P5. P2's custom-kernel bring-up deliverables are
 superseded: seL4 supplies that mechanism, so re-deriving it is explicitly out of

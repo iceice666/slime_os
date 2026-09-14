@@ -62,7 +62,7 @@ INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interf
 # executable. The 17 remaining compositions need that generalization (a
 # concrete instance distinct from the component/executable it runs, with
 # composition-declared per-instance dependencies) before they can convert; see
-# `roadmap/00-backlog.md`. `sel4-c-runtime` and `sel4-filesystem` fit the
+# the archived backlog (docs/history.md). `sel4-c-runtime` and `sel4-filesystem` fit the
 # one-to-one shape but are deferred too: the former's implementation is a
 # freestanding C source with no stable committed content identity, and the
 # latter's executable name (`sel4-filesystem-service`) collides with the

@@ -157,7 +157,7 @@ For an automated failure:
    to exit. Other checkers may own their own loop and deadline; do not assume
    this graph checker's terminal condition applies to every gate.
 
-The [July stage-0 investigation](../../devlog/2026-07-24-boot-check-hangs/index.md)
+The [July stage-0 investigation](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-24-boot-check-hangs/index.md)
 is historical evidence, not a diagnosis of today's seL4 product. Its reusable
 lesson is to separate a boot fault from a healthy resident workload that the
 host mistakenly expects to exit, and to inspect captured output from a bounded

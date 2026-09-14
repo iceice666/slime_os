@@ -6,13 +6,13 @@ An eleventh seL4 generation, beside [`sel4.zti`](sel4.md),
 [`sel4-stream.zti`](sel4-stream.md),
 [`sel4-supervision.zti`](sel4-supervision.md),
 [`sel4-crossing.zti`](sel4-crossing.md), [`sel4-call.zti`](sel4-call.md), and the
-frozen x86 [`valid.zti`](valid.zti). It supplies the clock P5.4.5's remaining
+frozen x86 [`valid.zti`](../fixtures/valid.zti). It supplies the clock P5.4.5's remaining
 C8.5 arms need.
 
 **It does not pass yet.** Three arms that were unreachable without a clock now
 fire — bounded RELIABLE retry accounting, deadline miss, and liveliness loss —
 and the plane then stops at `[fabric] fail: no inline retained publisher`. See
-[`devlog/2026-08-07-p5-4-5-qos-clock/`](../../../../devlog/2026-08-07-p5-4-5-qos-clock/index.md).
+[`devlog/2026-08-07-p5-4-5-qos-clock/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-07-p5-4-5-qos-clock/index.md).
 
 ## Why this fixture is the stream graph verbatim
 

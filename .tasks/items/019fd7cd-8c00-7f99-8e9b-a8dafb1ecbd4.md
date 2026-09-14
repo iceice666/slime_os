@@ -29,7 +29,7 @@ Gates: `just sel4_stream_check`
 
 ## Evidence
 
-[`devlog/2026-08-07-p5-4-4-fabric-graph-admission/`](../devlog/2026-08-07-p5-4-4-fabric-graph-admission/index.md)
+[`devlog/2026-08-07-p5-4-4-fabric-graph-admission/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-07-p5-4-4-fabric-graph-admission/index.md)
 
 ## Notes
 

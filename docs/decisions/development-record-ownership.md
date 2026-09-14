@@ -23,10 +23,10 @@ choices. It states its status, context, decision, alternatives and trade-offs,
 consequences, revisit conditions, and relevant work-item UUIDs and code
 references. Ordinary changes do not require one.
 
-The existing `devlog/` corpus remains immutable historical evidence during the
-archive transition. Expensive reusable investigations and unusual verification
-campaigns may still add a curated entry, but a devlog is not required for a
-feature, bug fix, milestone completion, or work-item closure.
+The existing corpus is immutable [archived history](../history.md), not an active
+product directory. Expensive reusable investigations and unusual verification
+campaigns belong with their owning knowledge and immutable evidence. A devlog is
+not required for a feature, bug fix, milestone completion, or work-item closure.
 
 ## Alternatives and trade-offs
 
@@ -48,8 +48,9 @@ where future maintainers need the rationale independently of one implementation.
 - Evidence requirements remain strict: direct and inherited evidence are
   distinguished, inference is labeled, and hardware or image claims identify
   the tested target and binary.
-- Existing devlog entries, raw artifacts, links, and checker rules remain in
-  place until the verified archive cutover.
+- Existing devlog entries, raw artifacts, and legacy checker rules are preserved
+  at the immutable archive revision; product documentation links there without
+  making archive availability a build or test dependency.
 - `docs/decisions/` is not a tracker or a per-PR diary. MyQue remains the only
   live work-state store.
 
@@ -64,6 +65,6 @@ becoming a product build or test dependency.
 
 - `AGENTS.md` — repository-wide record and evidence rules.
 - `CONTRIBUTING.md` — contributor and pull-request workflow.
-- `scripts/check/check-devlog.py` — retained corpus validation and active-policy
-  link/UUID checks during the transition.
+- `scripts/check/check-docs.py` — current local documentation link/UUID checks.
+  Legacy corpus validation remains at the [archive revision](../history.md).
 - `01a09f85-6721-791c-b8a1-11c007a35391` — parent repository-split epic.

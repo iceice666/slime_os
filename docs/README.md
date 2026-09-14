@@ -79,9 +79,9 @@ in the same commit as the surface it describes.
 | --- | --- |
 | Work-item state: what is done, open, blocked, deferred | `just tasks_list`, `just tasks_next` over the canonical store in `.tasks/items/` |
 | Current subsystem ownership and invariants | [`architecture/`](architecture/README.md); unfinished requirements in [`plans/`](plans/README.md); retained detail classified in [`roadmap/`](../roadmap/README.md) |
-| Known defects and regressions (open ones come before milestone work) | the `backlog`-tagged items in the store, which own their problem statements; [`roadmap/00-backlog.md`](../roadmap/00-backlog.md) is a frozen index of the pre-cutover ones |
+| Known defects and regressions (open ones precede milestone work) | The `backlog`-tagged canonical work items; the old frozen index is historical only |
 | How userspace drivers receive device/MMIO/IRQ/DMA authority, and what IO gates prove | [Userspace I/O substrate](architecture/io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and operations in [`syscall-abi.md`](syscall-abi.md) |
-| How a historical conclusion was reached | [`devlog/`](../devlog/README.md), retained during the archive transition; ordinary changes do not add an entry |
+| How a historical conclusion was reached | [Private history archive](history.md), pinned by full commit and original path; ordinary changes need no investigation |
 | Code map and task-to-file index | [`AGENTS.md`](../AGENTS.md) |
 | The schemas every persisted or cross-process format is generated from | `contracts/` |
 | Build, test, and gate commands | `Justfile` (`just --list`) |

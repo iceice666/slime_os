@@ -68,10 +68,9 @@ when the diff is the change you meant. New rights or operations update
 machine-enforced.
 
 **Docs only** — state that no runtime tests were run; `just typos` applies.
-Run `just devlog_check` when editing getting-started guides, PR templates,
-policy, roadmap, decision, plan, or direction documents; when adding or changing
-a `devlog/` path in any Markdown or Python file; or when adding or correcting a
-retained historical entry.
+Run `just docs_check` when editing Markdown documentation, work-item bodies,
+PR templates, or documentation links. This checks current local documentation
+without requiring a history checkout or archive-network access.
 
 ## Before you finish
 
@@ -91,7 +90,8 @@ Then leave the records that make the claim reviewable:
   operation, or limitations change. Long-lived cross-module choices belong in
   `docs/decisions/`; unfinished designs in `docs/plans/`; exploration stays in
   `docs/directions/`. Expensive reusable investigations or unusual verification
-  campaigns may add a retained devlog entry during the archive transition.
+  campaigns belong with their owning knowledge and immutable evidence; consult
+  [the history guide](../history.md) for archived records.
 - **Work-item hygiene**: record the exit condition that was *observed*, its
   evidence class, scope, target or image identity, and limits in the item. Only
   then close it with `myque close`, which records the closure date. Never

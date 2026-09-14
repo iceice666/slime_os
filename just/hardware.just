@@ -93,7 +93,7 @@ duo_serial_monitor serial timeout="120":
     python3 scripts/check/check-duo-boot.py --monitor --serial {{ serial }} --timeout {{ timeout }}
 
 # P3.D: prove `duo_boot_check`'s marker chain has teeth. Mutates the observed
-# board transcript committed beside the P3.D devlog entry — deleting each
+# board transcript committed under evidence/duo/ — deleting each
 # required marker, reordering the terminal one, appending each failure marker —
 # and requires every mutation to fail the checker. Touches no hardware, so it
 # guards the checker rather than the board.
