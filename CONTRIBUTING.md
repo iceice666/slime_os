@@ -187,6 +187,46 @@ mechanical maintenance with **no behavioral or project-state consequence** may
 skip the landed-item requirement. Judge semantics, not line count. When
 uncertain, create the item. This exception does not waive applicable checks.
 
+## Continuous integration
+
+General CI lives in `.woodpecker/`. Pushes to `main` and `develop`, and pull
+requests targeting any branch, run the checks previously in the GitHub `CI`
+workflow. Woodpecker's overall pipeline result replaces the GitHub aggregate
+status jobs; update branch protection to require the new forge's actual
+Woodpecker status after the first run.
+
+The server needs Docker agents labeled `platform=linux/amd64` for host checks
+and Kani, and `platform=linux/arm64` for seL4 and the four generation shards.
+Workflows use `nixos/nix:2.35.2` and the repository's pinned Nix shells. Each
+matrix job keeps setup and gates in one container; seL4 jobs fetch both Rust
+toolchains' locked dependencies before the offline build. No host mounts,
+privileged containers, release keys, or cross-run caches are configured.
+Cold runs therefore download the Nix closures and Rust dependencies again.
+
+In Woodpecker project settings, leave the pipeline path at its default (or
+set `.woodpecker/`), allow pull requests, retain approval for forked pipelines,
+and enable cancellation of previous `push` and `pull_request` pipelines.
+Set the overall timeout above 60 minutes to allow checkout plus the longest
+job; commands retain their individual 10–60 minute limits, including setup.
+These server settings are not YAML workflow fields. Agents need network
+access to the forge, container registries, Nix inputs/caches, Rust downloads,
+and the public HTTPS submodules; QEMU runs without hardware-device access.
+
+Validate workflow syntax locally with:
+
+```sh
+woodpecker-cli lint --strict .woodpecker/
+bash -n scripts/ci/prepare-sel4.sh
+```
+
+SDK publication and MyQue's GitHub issue projection remain in
+`.github/workflows/`: they rely on GitHub-specific permissions, events, and
+the dedicated signing runner, not ordinary CI. The projector no longer
+subscribes to the removed GitHub `CI` completion event; its existing scheduled
+reconciliation still handles external checks on GitHub. It does not project
+issues to the new forge. This CI migration does not move the SDK repository,
+signing keys, issue history, or submodules.
+
 ## Further reading
 
 - [README](README.md): what Slime OS is.

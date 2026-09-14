@@ -1,0 +1,55 @@
+when:
+  - event: push
+    branch: [main, develop]
+  - event: pull_request
+
+labels:
+  platform: linux/amd64
+  backend: docker
+
+clone:
+  - name: git
+    image: woodpeckerci/plugin-git:2.6.3
+    settings:
+      recursive: true
+
+matrix:
+  include:
+    - JOB: lint
+      TIMEOUT: 20
+      COMMAND: just fmt_check_all; just lint_boot_contracts lint_components_host
+    - JOB: sel4_pins
+      TIMEOUT: 10
+      COMMAND: python3 scripts/check/check-sel4-pins.py --skip-host-tools
+    - JOB: test_host
+      TIMEOUT: 20
+      COMMAND: just test_host
+    - JOB: miri_boot_contracts
+      TIMEOUT: 45
+      COMMAND: just miri_boot_contracts
+    - JOB: miri_proto
+      TIMEOUT: 45
+      COMMAND: just miri_proto
+    - JOB: deps
+      TIMEOUT: 15
+      COMMAND: cargo deny check; cargo-machete boot-contracts components slime-root
+    - JOB: scripts
+      TIMEOUT: 10
+      COMMAND: ruff check scripts/; typos
+    - JOB: docs_gates
+      TIMEOUT: 15
+      COMMAND: just x86_portability_check; just framework_safety_check; just devlog_check; just sel4_gate_control_check; python3 scripts/check/check-generation-v5.py --check-controls
+    - JOB: work_items
+      TIMEOUT: 20
+      COMMAND: just tasks_check
+
+steps:
+  - name: ${JOB}
+    image: nixos/nix:2.35.2
+    environment:
+      CARGO_TERM_COLOR: always
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        sandbox = false
+    commands:
+      - timeout ${TIMEOUT}m nix develop --command bash -ec '${COMMAND}'
