@@ -25,12 +25,15 @@ pub mod io_queue_ring;
 #[cfg(kani)]
 mod io_queue_proofs;
 pub mod link_device;
+pub mod mavlink;
+pub mod mavlink_heartbeat;
 pub mod network_service;
 pub mod powerbox;
 pub mod pwm_servo;
 pub mod recording_stream;
 pub mod ring;
 pub mod sample_descriptor;
+pub mod serial_device;
 pub mod spawn;
 pub mod store;
 pub mod syscall_abi;
@@ -195,6 +198,39 @@ pub fn valid_pwm_servo_reply(reply: &pwm_servo::WirePwmServoReply) -> bool {
                 | pwm_servo::STATUS_NO_DEVICE
                 | pwm_servo::STATUS_DEVICE_ERROR
                 | pwm_servo::STATUS_MALFORMED
+        )
+}
+
+/// Structural validity of a serial-device request: the protocol identity, the
+/// one defined operation, no flags, a length the payload can hold, and zeroed
+/// reserved storage and unused payload, so every admissible encoding is
+/// canonical.
+pub fn valid_serial_request(request: &serial_device::WireSerialRequest) -> bool {
+    let length = request.length as usize;
+    request.magic == serial_device::SERIAL_MAGIC
+        && request.version == serial_device::FORMAT_VERSION
+        && request.op == serial_device::OP_WRITE
+        && request.flags & !serial_device::KNOWN_REQUEST_FLAGS == 0
+        && (1..=serial_device::MAX_PAYLOAD).contains(&length)
+        && request.reserved.iter().all(|byte| *byte == 0)
+        && request.payload[length..].iter().all(|byte| *byte == 0)
+}
+
+/// A serial-device reply carries the protocol identity, one of its statuses,
+/// and a byte count the request could have carried.
+pub fn valid_serial_reply(reply: &serial_device::WireSerialReply) -> bool {
+    reply.magic == serial_device::SERIAL_MAGIC
+        && reply.version == serial_device::FORMAT_VERSION
+        && reply.bytes_written as usize <= serial_device::MAX_PAYLOAD
+        && matches!(
+            reply.status,
+            serial_device::STATUS_OK
+                | serial_device::STATUS_BAD_LENGTH
+                | serial_device::STATUS_BAD_OP
+                | serial_device::STATUS_NO_DEVICE
+                | serial_device::STATUS_DEVICE_ERROR
+                | serial_device::STATUS_TIMEOUT
+                | serial_device::STATUS_MALFORMED
         )
 }
 

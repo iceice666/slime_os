@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-private-memory";
-  imageClosureIdentity = "bc700eb39c5690b9b92419b7c1ae52aa72a9fd743d15a09a1cd737d3ff222fb6";
+  imageClosureIdentity = "92107068dab74cd16095d9e76c3a152472b5232836b5082f76b4d7de0d53ab2d";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

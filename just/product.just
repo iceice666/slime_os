@@ -99,6 +99,14 @@ sel4_component_graph_check: sel4_pin_check
 sel4_pwm_graph_check: sel4_pin_check
     python3 scripts/check/check-sel4-component-graph.py --composition sel4-pwm
 
+# IO9: the product graph plus a serial driver and a MAVLink heartbeat producer,
+# on QEMU where no port exists: the driver binds nothing and stays resident,
+# the producer holds its one-second grid and reports each refusal, and the
+# graph stays healthy.
+[group('product')]
+sel4_mavlink_graph_check: sel4_pin_check
+    python3 scripts/check/check-sel4-component-graph.py --composition sel4-mavlink
+
 # Use fresh QEMU boots for rollback and wrong-target negative controls.
 [group('product')]
 sel4_demo_check: sel4_pin_check

@@ -17,4 +17,5 @@ pub mod servo_failsafe;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
 pub mod tick_clock;
+pub mod uart16550;
 pub mod virtio_mmio;
