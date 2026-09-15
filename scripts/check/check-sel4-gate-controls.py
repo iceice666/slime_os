@@ -30,7 +30,7 @@ from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
     ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 39),
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 29),
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 66),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_io_queue_plane", "check/check-sel4-io-queue-plane.py", 15),

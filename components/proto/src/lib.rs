@@ -27,6 +27,7 @@ mod io_queue_proofs;
 pub mod link_device;
 pub mod network_service;
 pub mod powerbox;
+pub mod pwm_servo;
 pub mod recording_stream;
 pub mod ring;
 pub mod sample_descriptor;
@@ -168,6 +169,33 @@ fn packed_fields_valid<const N: usize>(bytes: &[u8; N], count: usize) -> bool {
 
 pub fn valid_spawn_reply(reply: &spawn::WireSpawnReply) -> bool {
     reply.magic == spawn::SPAWN_MAGIC && reply.version == spawn::FORMAT_VERSION
+}
+
+/// Structural validity of a pwm-servo request: the protocol identity, no
+/// flags (none are defined), and zeroed reserved bytes. The channel, period,
+/// and pulse bounds are deliberately not checked here: the driver answers each
+/// with its own status so a client learns which bound it crossed.
+pub fn valid_pwm_servo_request(request: &pwm_servo::WirePwmServoRequest) -> bool {
+    request.magic == pwm_servo::PWM_SERVO_MAGIC
+        && request.version == pwm_servo::FORMAT_VERSION
+        && request.flags == 0
+        && request.reserved.iter().all(|byte| *byte == 0)
+}
+
+/// A pwm-servo reply carries the protocol identity and one of its statuses.
+pub fn valid_pwm_servo_reply(reply: &pwm_servo::WirePwmServoReply) -> bool {
+    reply.magic == pwm_servo::PWM_SERVO_MAGIC
+        && reply.version == pwm_servo::FORMAT_VERSION
+        && matches!(
+            reply.status,
+            pwm_servo::STATUS_OK
+                | pwm_servo::STATUS_BAD_CHANNEL
+                | pwm_servo::STATUS_BAD_PERIOD
+                | pwm_servo::STATUS_BAD_PULSE
+                | pwm_servo::STATUS_NO_DEVICE
+                | pwm_servo::STATUS_DEVICE_ERROR
+                | pwm_servo::STATUS_MALFORMED
+        )
 }
 
 /// Validate a versioned sample descriptor before a receiver maps the loaned
