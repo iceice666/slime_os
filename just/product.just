@@ -113,12 +113,12 @@ sel4_demo_check: sel4_pin_check
     python3 scripts/check/check-sel4-demo-plane.py
 
 [group('product')]
-sel4_boot_layout_check: sel4_pin_check
-    python3 scripts/check/check-sel4-boot-layout.py
+sel4_boot_layout_check shard_index="0" shard_count="1": sel4_pin_check
+    python3 scripts/check/check-sel4-boot-layout.py --shard-index {{ shard_index }} --shard-count {{ shard_count }}
 
 [group('product')]
-sel4_boot_layout_bless: sel4_pin_check
-    python3 scripts/check/check-sel4-boot-layout.py --bless
+sel4_boot_layout_bless shard_index="0" shard_count="1": sel4_pin_check
+    python3 scripts/check/check-sel4-boot-layout.py --bless --shard-index {{ shard_index }} --shard-count {{ shard_count }}
 
 # Fail closed: each injected CSpace mutation must make its boot fail.
 # This performs six builds and boots, so it is intentionally outside `just test`.

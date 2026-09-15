@@ -543,7 +543,33 @@ def check_layout_gate() -> int:
     for description, text in mutations:
         if not rejects_shape(text):
             fail(f"boot-layout gate accepted a layout whose {description}")
-    return len(mutations)
+
+    # Shards: every count partitions the declared planes, each plane exactly
+    # once, and an impossible shard is refused rather than checking nothing.
+    planes = list(gate.PLANES)
+    for count in range(1, len(planes) + 1):
+        covered = [
+            name
+            for index in range(count)
+            for name, _image in gate.select_planes(planes, index, count)
+        ]
+        if sorted(covered) != sorted(name for name, _image in planes):
+            fail(f"boot-layout shards of {count} do not cover every plane exactly once")
+    refused = 0
+    for index, count in ((-1, 1), (1, 1), (0, 0), (0, -1), (0, len(planes) + 1)):
+        try:
+            gate.select_planes(planes, index, count)
+        except gate.ShardError:
+            refused += 1
+        else:
+            fail(f"boot-layout gate accepted the impossible shard {index}/{count}")
+    try:
+        gate.select_planes([], 0, 1)
+    except gate.ShardError:
+        refused += 1
+    else:
+        fail("boot-layout gate accepted a shard of no planes")
+    return len(mutations) + refused
 
 class ControlRejection(Exception):
     pass

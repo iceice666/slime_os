@@ -35,6 +35,13 @@ readable as a layout diff, not inferred from a component failing.
 
 Regenerate with `--bless`; the resulting diff is the evidence that a layout
 change was intended.
+
+# Shards
+
+Every plane is a separate build and boot, so the set divides cleanly:
+`--shard-index I --shard-count N` checks every Nth plane by name starting at the
+Ith, and the N shards together cover each plane exactly once. Shards write
+distinct closure directories and may run at the same time.
 """
 
 from __future__ import annotations
@@ -160,6 +167,28 @@ PLANES: tuple[tuple[str, str], ...] = (
 # whichever ran last overwrite the other's evidence, and a future divergence
 # would then be invisible rather than a failure.
 X86_64_PLANES: frozenset[str] = frozenset({"sel4", "sel4-sample", "sel4-wait-set"})
+
+
+class ShardError(ValueError):
+    pass
+
+
+def select_planes(
+    planes: list[tuple[str, str]], shard_index: int, shard_count: int
+) -> list[tuple[str, str]]:
+    """The planes one shard checks; the shards of a count partition the planes."""
+    ordered = sorted(planes)
+    if not ordered:
+        raise ShardError("no planes to shard")
+    if shard_count <= 0:
+        raise ShardError("--shard-count must be positive")
+    if shard_index < 0:
+        raise ShardError("--shard-index must not be negative")
+    if shard_index >= shard_count:
+        raise ShardError("--shard-index must be less than --shard-count")
+    if shard_count > len(ordered):
+        raise ShardError(f"--shard-count {shard_count} exceeds the {len(ordered)} planes")
+    return ordered[shard_index::shard_count]
 
 
 def fail(message: str) -> NoReturn:
@@ -327,6 +356,8 @@ def main() -> None:
         default="qemu-arm-virt",
         help="the pinned QEMU profile whose layouts are frozen",
     )
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     arguments = parser.parse_args()
 
     if Path.cwd().resolve() != ROOT:
@@ -342,6 +373,13 @@ def main() -> None:
     ]
     if not planes:
         fail(f"no boot-layout planes are declared for {arguments.platform}")
+    sharded = arguments.shard_count != 1
+    if sharded:
+        try:
+            planes = select_planes(planes, arguments.shard_index, arguments.shard_count)
+        except ShardError as error:
+            fail(str(error))
+    shard = f"shard {arguments.shard_index}/{arguments.shard_count}: " if sharded else ""
 
     failures: list[str] = []
     for name, image_name in planes:
@@ -389,9 +427,9 @@ def main() -> None:
             print(line)
         raise SystemExit("seL4 boot layout check: layouts moved")
     if arguments.bless:
-        print("seL4 boot layout check: blessed")
+        print(f"seL4 boot layout check: {shard}blessed")
         return
-    print(f"seL4 boot layout check: {len(planes)} plane layouts match their fixtures")
+    print(f"seL4 boot layout check: {shard}{len(planes)} plane layouts match their fixtures")
 
 
 if __name__ == "__main__":

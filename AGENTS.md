@@ -72,7 +72,7 @@ Use the Justfile targets from the repository root:
 - `just generation_check` — build and validate the deterministic seL4 generation.
 - `just contracts_check` — validate generation manifest contracts.
 - `just sel4_root_boot_check` — root admission, allocator, timer, fault isolation, cleanup, and ready path.
-- `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
+- `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`. Both take `shard_index shard_count` (for example `just sel4_boot_layout_check 1 4`); the shards of one count cover every plane exactly once and may run concurrently.
 - `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
 - `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
 - `just sel4_fabric_aggregate_check` — C8.15's parent close: both aggregate schedules booted twice over one composition, with byte-identical semantic traces.

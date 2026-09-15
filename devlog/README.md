@@ -450,4 +450,5 @@ The `Keys` column carries the human aliases the entries are searched by, so "whi
 | 2026-09-14 | [Every closure-built plane failed after #61 moved the rust-sel4 pin](2026-09-14-closures-stale-after-rust-sel4-pin/index.md) | Defect | Fixed | none |
 | 2026-09-14 | [Two source gates refused the tree after #61: the run-record generator and the closure aggregate](2026-09-14-source-gates-after-61/index.md) | Defect | Fixed | none |
 | 2026-09-14 | [IO8: a declared device, the pwm-servo protocol, and a driver whose register model is the platform's](2026-09-14-io8-pwm-servo/index.md) | Change | Verified | IO8 |
+| 2026-09-15 | [The seL4 boot-layout gate runs as shards](2026-09-15-boot-layout-shards/index.md) | Change | Verified | none |
 | 2026-09-15 | [IO9: bounded serial transmit, a MAVLink heartbeat contract, and a producer that keeps a one-second grid](2026-09-15-io9-serial-tx/index.md) | Change | Verified | IO9 |
