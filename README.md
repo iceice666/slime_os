@@ -266,7 +266,7 @@ roadmap/         Explicitly unextracted requirements and retained surrounding co
 docs/history.md  Immutable private archive locator and evidence/restoration boundary
 assets/          Boot/runtime assets
 deps/            Pinned seL4, rust-sel4, and Zutai submodules
-.tasks/          Canonical work-item store (`items/`) and the pre-migration roadmap-id map
+.tasks/          Canonical work-item store (`items/`)
 Justfile         Build, run, test, format, lint, generation, contract, and debug commands
 ```
 

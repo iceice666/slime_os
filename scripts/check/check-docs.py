@@ -4,9 +4,9 @@
 
 Local links and canonical work-item references are checked in every docs page,
 retained roadmap page and PR template. Literal Just invocations are checked in
-current documentation only: roadmap chronology and work-item evidence do not
-promise that their recorded commands still exist. History URLs must pin a full
-commit, but their destinations are never opened. Just metadata is read locally.
+current documentation, live task requirements, scripts and CI execution fields;
+historical task outcomes and roadmap chronology do not promise recipe presence.
+History URLs pin a full commit but are never opened. Just metadata is local.
 """
 
 from __future__ import annotations
@@ -16,15 +16,18 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import ast
 import re
 import shlex
 import tempfile
 from urllib.parse import unquote
 
+import yaml
+
 from harness import ROOT
 from just_metadata import recipes
 from markdown_anchors import anchors, controls as anchor_controls
-from work_items import UUID, identities
+from work_items import FIELD, UUID, identities
 
 REQUIRED_ACTIVE_DOCUMENTS = (
     "README.md",
@@ -177,6 +180,7 @@ def command_reference_failures(path: _Path, text: str, known_recipes: dict[str, 
                         "-d",
                         "--shell",
                         "--shell-arg",
+                        "--dump-format",
                     }:
                         index += 1
                     elif name == "--set":
@@ -200,6 +204,179 @@ def command_reference_failures(path: _Path, text: str, known_recipes: dict[str, 
                         break
                     index += 1
     return list(dict.fromkeys(found))
+
+
+def task_requirements(text: str) -> str:
+    """Only unfinished items' requirement sections, never Gate/Observed evidence."""
+    state = FIELD["state"].search(text.split("---", 2)[1] if text.startswith("---\n") else "")
+    if state is None or state.group("value") not in {"open", "active", "blocked", "deferred"}:
+        return ""
+    selected: list[str] = []
+    active = False
+    history_level: int | None = None
+    for line in text.splitlines():
+        heading = re.match(r"^(#{2,6})\s+(.+?)\s*#*\s*$", line)
+        if heading:
+            level = len(heading[1])
+            title = heading[2].casefold()
+            if level == 2:
+                active = title in {"scope", "requirements", "exit conditions", "verification"}
+            if history_level is not None and level <= history_level:
+                history_level = None
+            if re.match(r"(?:gates?|observed|outcomes?|evidence|history)\b", title):
+                history_level = level
+        if active and history_level is None:
+            selected.append(line)
+    return "\n".join(selected)
+
+
+def machine_consumers(root: _Path = ROOT) -> tuple[_Path, ...]:
+    return tuple(
+        sorted(
+            path
+            for directory, suffixes in (
+                (root / "scripts", {".py", ".sh"}),
+                (root / ".woodpecker", {".yml", ".yaml"}),
+                (root / ".github" / "workflows", {".yml", ".yaml"}),
+                (root / ".github" / "actions", {".yml", ".yaml"}),
+            )
+            for path in directory.rglob("*")
+            if path.is_file() and path.suffix in suffixes
+        )
+    )
+
+
+def shell_commands(text: str) -> list[str]:
+    """Repo shell subset: simple commands, chains, timeout/nix and sh -c wrappers.
+
+    Not a shell interpreter: no variable expansion, eval, functions or heredocs.
+    Tokenization keeps quoted prose and comments out of executable positions.
+    """
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    lexer = shlex.shlex(text.replace("\\\n", ""), posix=True, punctuation_chars=";&|()<>\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    segments: list[list[str]] = [[]]
+    comment = False
+    for word in lexer:
+        if word and all(character in ";&|()<>\n" for character in word):
+            comment = comment and "\n" not in word
+            segments.append([])
+        elif comment:
+            continue
+        elif word.startswith("#"):
+            comment = True
+        else:
+            segments[-1].append(word)
+    commands: list[str] = []
+    for words in segments:
+        while words and ("=" in words[0] or words[0] in {"then", "do", "exec"}):
+            words = words[1:]
+        if words[:1] == ["timeout"] and len(words) >= 3:
+            words = words[2:]
+        if words[:2] == ["nix", "develop"] and "--command" in words:
+            words = words[words.index("--command") + 1 :]
+        if words[:1] in (["bash"], ["sh"]) and len(words) >= 3:
+            if words[1].startswith("-") and "c" in words[1]:
+                commands.extend(shell_commands(words[2]))
+        elif words[:1] == ["just"]:
+            commands.append(shlex.join(words))
+    return commands
+
+
+def python_commands(text: str) -> list[str]:
+    """Inspect subprocess calls, not comments, docstrings or command fixtures.
+
+    Literal argv prefixes are enough to check the recipe even with dynamic
+    arguments. Computed commands and custom execution wrappers are out of scope.
+    """
+    tree = ast.parse(text)
+    modules = {"subprocess"}
+    functions: set[str] = set()
+    runners = {"run", "call", "check_call", "check_output", "Popen"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "subprocess"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            functions.update(
+                alias.asname or alias.name for alias in node.names if alias.name in runners
+            )
+    commands: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if not (
+            isinstance(function, ast.Name)
+            and function.id in functions
+            or isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id in modules
+            and function.attr in runners
+        ):
+            continue
+        argument = (
+            node.args[0]
+            if node.args
+            else next((keyword.value for keyword in node.keywords if keyword.arg == "args"), None)
+        )
+        if isinstance(argument, (ast.List, ast.Tuple)):
+            words = []
+            for element in argument.elts:
+                if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+                    break
+                words.append(element.value)
+            if words[:1] == ["just"]:
+                commands.append(shlex.join(words))
+            elif words[:1] in (["bash"], ["sh"]) and len(words) >= 3:
+                if words[1].startswith("-") and "c" in words[1]:
+                    commands.extend(shell_commands(words[2]))
+        elif isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            if any(
+                keyword.arg == "shell"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+                for keyword in node.keywords
+            ):
+                commands.extend(shell_commands(argument.value))
+    return commands
+
+
+def ci_commands(value: object) -> list[str]:
+    """Parse executable CI fields, including the repo's COMMAND/GATES matrices."""
+    commands: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "GATES" and isinstance(child, str):
+                commands.extend(shell_commands(f"just {child}"))
+            elif key in {"run", "commands", "COMMAND"}:
+                for command in child if isinstance(child, list) else [child]:
+                    if isinstance(command, str):
+                        commands.extend(shell_commands(command))
+            else:
+                commands.extend(ci_commands(child))
+    elif isinstance(value, list):
+        for child in value:
+            commands.extend(ci_commands(child))
+    return commands
+
+
+def machine_reference_failures(path: _Path, text: str, known_recipes: dict[str, dict]) -> list[str]:
+    try:
+        if path.suffix == ".py":
+            commands = python_commands(text)
+        elif path.suffix == ".sh":
+            commands = shell_commands(text)
+        else:
+            commands = ci_commands(yaml.safe_load(text))
+    except (SyntaxError, ValueError, yaml.YAMLError) as error:
+        return [f"{path}: cannot read literal recipe consumers: {error}"]
+    return command_reference_failures(
+        path, "```sh\n" + "\n".join(commands) + "\n```", known_recipes
+    )
 
 
 def controls() -> list[str]:
@@ -287,6 +464,86 @@ def controls() -> list[str]:
                 failures.append(
                     f"command control {document!r}: expected failure={expected}, got {found}"
                 )
+        live_item = "---\nstate: open\n---\n## Scope\n`just removed_check`\n"
+        history = "## Gate\n`just retired_check`\n## Observed\n`just retired_check`\n"
+        for document, expected in (
+            (live_item + history, True),
+            (live_item.replace("removed_check", "current_check") + history, False),
+            (live_item.replace("state: open", "state: done") + history, False),
+            ("---\nstate: active\n---\n## Verification\n### Observed\n`just retired_check`", False),
+        ):
+            found = command_reference_failures(
+                item_root / f"{present}.md", task_requirements(document), {"current_check": {}}
+            )
+            if bool(found) != expected:
+                failures.append(f"task consumer control: expected failure={expected}, got {found}")
+        machine_cases = (
+            (
+                "scripts/consumer.py",
+                "import subprocess\nsubprocess.run(['just', 'removed_check'])",
+                True,
+            ),
+            (
+                "scripts/consumer.py",
+                "from subprocess import run\nrun('just removed_check', shell=True)",
+                True,
+            ),
+            (
+                "scripts/consumer.py",
+                "import subprocess\nsubprocess.run(['just', 'removed_check', dynamic])",
+                True,
+            ),
+            (
+                "scripts/consumer.py",
+                "# just retired_check\nexample = ['just', 'retired_check']",
+                False,
+            ),
+            (
+                "scripts/consumer.py",
+                "import subprocess\nsubprocess.run(['just', '--dump', '--dump-format', 'json'])",
+                False,
+            ),
+            (
+                "scripts/consumer.sh",
+                "# just retired_check\necho 'just retired_check'\njust $RECIPE",
+                False,
+            ),
+            ("scripts/consumer.sh", "just removed_check # active invocation", True),
+            (
+                "scripts/consumer.sh",
+                "nix build .#kani; nix develop .#kani --command just removed_check",
+                True,
+            ),
+            (".woodpecker/consumer.yml", "matrix:\n  GATES: current_check removed_check", True),
+            (".woodpecker/consumer.yml", "matrix:\n  COMMAND: just removed_check", True),
+            (
+                ".woodpecker/consumer.yml",
+                "steps:\n- commands:\n  - |\n    timeout 60m nix develop --command bash -ec '\n      just removed_check\n    '\n",
+                True,
+            ),
+            (
+                ".github/workflows/consumer.yml",
+                "jobs:\n  check:\n    steps:\n    - run: nix develop --command just removed_check",
+                True,
+            ),
+            (
+                ".github/workflows/consumer.yml",
+                "# just retired_check\nname: just retired_check\nrun: echo 'just retired_check'",
+                False,
+            ),
+        )
+        for relative, text, expected in machine_cases:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+            found = machine_reference_failures(path, text, {"current_check": {}})
+            absent_recipe = any("absent recipe 'removed_check'" in failure for failure in found)
+            if (expected and not absent_recipe) or (not expected and found):
+                failures.append(
+                    f"machine consumer control {relative}: expected failure={expected}, got {found}"
+                )
+            if path not in machine_consumers(root):
+                failures.append(f"machine discovery control: missed {relative}")
     return failures
 
 
@@ -303,13 +560,32 @@ def main() -> int:
         failures.extend(document_reference_failures(path, text, known_items=known_items))
         if checks_commands(path):
             failures.extend(command_reference_failures(path, text, known_recipes))
+        elif path.relative_to(ROOT).parts[:2] == (".tasks", "items"):
+            failures.extend(
+                command_reference_failures(path, task_requirements(text), known_recipes)
+            )
+    consumers = machine_consumers()
+    for path in consumers:
+        failures.extend(machine_reference_failures(path, path.read_text(), known_recipes))
+    for recipe in known_recipes.values():
+        body = "\n".join(
+            "".join(part if isinstance(part, str) else "" for part in line)
+            for line in recipe.get("body", [])
+        )
+        commands = shell_commands(body)
+        failures.extend(
+            command_reference_failures(
+                ROOT / "Justfile", "```sh\n" + "\n".join(commands) + "\n```", known_recipes
+            )
+        )
     for failure in failures:
         print(f"docs: {failure.replace(f'{ROOT}/', '')}")
     if failures:
         print(f"docs check failed with {len(failures)} problem(s)")
         return 1
     print(
-        f"docs: checked {len(documents)} maintained documents; local links, fragments, UUIDs and current Just commands pass"
+        f"docs: checked {len(documents)} maintained documents and {len(consumers)} script/CI files; "
+        "local links, fragments, UUIDs and current Just commands pass"
     )
     return 0
 
