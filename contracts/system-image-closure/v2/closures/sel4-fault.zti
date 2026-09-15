@@ -254,7 +254,7 @@
     implementation = {
       path = "deps/rust-sel4";
       kind = "tree";
-      identity = "ef0a9c73de9664c067098bea137b4178f74d82684a26a4d157df9e90ed0edc2c";
+      identity = "e0afd3db4fbd868e4361a38f0612fe0e8b889897a0d0ad51c4db9ee98cf81a57";
     };
     parameters = [];
   };
@@ -264,7 +264,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "98e8eac92dd3993289d781a9d424d131f39e3a2a4a47bb87054be202285802e3";
+        identity = "65db16ed21919195f8636ee456a833363dfdb60e1d6109082fdf699fa6461681";
       };
     };
     {
@@ -320,7 +320,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a08e527fa20670d6033135fd76a881c4e129efa7f3b71528d234093849edbf11";
+        identity = "33545f58a5ae48db6bb089f414d0c38b0605aa8e5e9d09ad97f3c533d6f2e428";
       };
     };
     {
@@ -336,7 +336,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "c4563d8cfb4e5bf258b682f73e323ef0c963e75c86c7a47f7bcafbcab0e7ec47";
+        identity = "491d84e84883e9dd9f1b2d4f93ddbacb5438adc50ebd7f722c43845a08fbf49c";
       };
     };
     {

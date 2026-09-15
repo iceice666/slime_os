@@ -28,6 +28,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import argparse
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -196,11 +197,39 @@ def fail(message: str) -> None:
     raise SystemExit(f"system image closure generation: {message}")
 
 
+def ignored_files(path: Path) -> list[str]:
+    """Gitignored files below `path`, which `tree_identity` would hash anyway.
+
+    A tree identity is a raw filesystem walk excluding only `.git`, so a
+    `target/` or `__pycache__/` that git ignores still enters the digest. Such
+    a closure records bytes no clone reproduces, and every consumer refuses it
+    with `identity mismatch`. Querying git from inside the tree covers both a
+    submodule root and a subdirectory of this repository.
+    """
+    status = subprocess.run(
+        ["git", "-C", str(path), "status", "--porcelain", "--ignored", "--untracked-files=all", "--", "."],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status.returncode != 0:
+        fail(f"cannot query git status below {path.relative_to(ROOT)}: {status.stderr.strip()}")
+    return sorted(line[3:] for line in status.stdout.splitlines() if line.startswith("!! "))
+
+
 def identity_of(relative: str, kind: str) -> str:
     path = ROOT / relative
     if kind == "tree":
         if not path.is_dir():
             fail(f"missing tree input: {relative}")
+        ignored = ignored_files(path)
+        if ignored:
+            fail(
+                f"{relative} contains gitignored files that would enter its identity "
+                f"but no clone reproduces: {', '.join(ignored[:5])}"
+                + (f" (+{len(ignored) - 5} more)" if len(ignored) > 5 else "")
+                + "; remove them and regenerate"
+            )
         return tree_identity(path)
     if not path.is_file():
         fail(f"missing file input: {relative}")
