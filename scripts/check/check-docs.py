@@ -236,7 +236,6 @@ def machine_consumers(root: _Path = ROOT) -> tuple[_Path, ...]:
             path
             for directory, suffixes in (
                 (root / "scripts", {".py", ".sh"}),
-                (root / ".woodpecker", {".yml", ".yaml"}),
                 (root / ".github" / "workflows", {".yml", ".yaml"}),
                 (root / ".github" / "actions", {".yml", ".yaml"}),
             )
@@ -346,16 +345,14 @@ def python_commands(text: str) -> list[str]:
 
 
 def ci_commands(value: object) -> list[str]:
-    """Parse executable CI fields, including the repo's COMMAND/GATES matrices."""
+    """Parse executable CI fields, including the workflow matrices' recipe names."""
     commands: list[str] = []
     if isinstance(value, dict):
         for key, child in value.items():
-            if key == "GATES" and isinstance(child, str):
+            if key == "recipe" and isinstance(child, str):
                 commands.extend(shell_commands(f"just {child}"))
-            elif key in {"run", "commands", "COMMAND"}:
-                for command in child if isinstance(child, list) else [child]:
-                    if isinstance(command, str):
-                        commands.extend(shell_commands(command))
+            elif key == "run" and isinstance(child, str):
+                commands.extend(shell_commands(child))
             else:
                 commands.extend(ci_commands(child))
     elif isinstance(value, list):
@@ -514,11 +511,14 @@ def controls() -> list[str]:
                 "nix build .#kani; nix develop .#kani --command just removed_check",
                 True,
             ),
-            (".woodpecker/consumer.yml", "matrix:\n  GATES: current_check removed_check", True),
-            (".woodpecker/consumer.yml", "matrix:\n  COMMAND: just removed_check", True),
             (
-                ".woodpecker/consumer.yml",
-                "steps:\n- commands:\n  - |\n    timeout 60m nix develop --command bash -ec '\n      just removed_check\n    '\n",
+                ".github/workflows/consumer.yml",
+                "jobs:\n  check:\n    strategy:\n      matrix:\n        include:\n        - recipe: removed_check\n",
+                True,
+            ),
+            (
+                ".github/workflows/consumer.yml",
+                "jobs:\n  check:\n    steps:\n    - run: |\n        just current_check\n        just removed_check\n",
                 True,
             ),
             (

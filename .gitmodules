@@ -3,15 +3,15 @@
 	url = https://github.com/iceice666/zutai.git
 [submodule "deps/sel4"]
 	path = deps/sel4
-	url = https://git.justaslime.dev/iceice666/sel4.git
+	url = https://github.com/iceice666/seL4.git
 [submodule "deps/rust-sel4"]
 	path = deps/rust-sel4
-	url = https://git.justaslime.dev/iceice666/rust-sel4.git
+	url = https://github.com/iceice666/rust-sel4.git
 [submodule "deps/rust-sel4-bcm2712-rpi5"]
 	path = deps/rust-sel4-bcm2712-rpi5
-	url = https://git.justaslime.dev/iceice666/rust-sel4.git
+	url = https://github.com/iceice666/rust-sel4.git
 	branch = slime/bcm2712-loader-platform
 [submodule "deps/rust-sel4-cv1800b-duo"]
 	path = deps/rust-sel4-cv1800b-duo
-	url = https://git.justaslime.dev/iceice666/rust-sel4.git
+	url = https://github.com/iceice666/rust-sel4.git
 	branch = slime-cv1800b-duo

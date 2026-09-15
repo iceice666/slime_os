@@ -200,42 +200,32 @@ uncertain, create the item. This exception does not waive applicable checks.
 
 ## Continuous integration
 
-General CI lives in `.woodpecker/`. Pushes to `main` and `develop`, and pull
-requests targeting any branch, run those workflows. Configure branch protection
-to require the forge's actual Woodpecker pipeline status; this repository does
-not configure server-side protection rules.
+General CI lives in `.github/workflows/ci.yml`. Pushes to `main` and `develop`,
+and pull requests targeting any branch, run it; a newer run cancels the
+superseded one for the same ref. The workflow's aggregate `CI` job is the
+single status to require in branch protection — it fails unless every gate
+job succeeded.
 
-The server needs Docker agents labeled `platform=linux/amd64` for host checks
-and Kani, and `platform=linux/arm64` for seL4 and the four generation shards.
-Workflows use `nixos/nix:2.35.2` and the repository's pinned Nix shells. Each
-matrix job keeps setup and gates in one container; seL4 jobs fetch both Rust
-toolchains' locked dependencies before the offline build. No host mounts,
-privileged containers, release keys, or cross-run caches are configured.
-Cold runs therefore download the Nix closures and Rust dependencies again.
+Host checks, Kani, and the aggregates run on `ubuntu-latest`; the seL4 image,
+root tests, rollback runtime, contract sources, and the four generation shards
+run on `ubuntu-24.04-arm`, which is the product's native architecture and free
+for public repositories. seL4 jobs enter the repository's pinned Nix dev shell
+through the local `.github/actions/slime-env` composite action, which restores
+the Nix store, `~/.rustup`, `~/.cargo`, and the persistent Cargo build outputs,
+then fetches both pinned toolchains' locked dependencies before the deliberately
+offline product build. Jobs that need neither the seL4 prefix nor Nix use a
+plain pinned toolchain and `Swatinem/rust-cache`.
 
-In Woodpecker project settings, leave the pipeline path at its default (or
-set `.woodpecker/`), allow pull requests, retain approval for forked pipelines,
-and enable cancellation of previous `push` and `pull_request` pipelines.
-Set the overall timeout above 60 minutes to allow checkout plus the longest
-job; commands retain their individual 10–60 minute limits, including setup.
-These server settings are not YAML workflow fields. Agents need network
-access to the forge, container registries, Nix inputs/caches, Rust downloads,
-and the public HTTPS submodules; QEMU runs without hardware-device access.
+Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the
+seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in
+`sel4/pins.toml` and enforced by `sel4_pin_check`. QEMU runs without
+hardware-device access.
 
-Validate workflow syntax locally with:
-
-```sh
-woodpecker-cli lint --strict .woodpecker/
-bash -n scripts/ci/prepare-sel4.sh
-```
-
-SDK publication and MyQue's GitHub issue projection live in
-`.github/workflows/`: they rely on GitHub-specific permissions, events, and
-the dedicated signing runner, not ordinary CI. Scheduled reconciliation handles
-external checks on GitHub; issues are not projected to the new forge. The seL4
-and rust-sel4 source repositories and all four matching submodules resolve from
-`git.justaslime.dev`. SDK publication, signing keys, and issue history retain
-their separate owners.
+SDK publication (`publish-sdk.yml`, on the dedicated signing runner) and
+MyQue's issue projection (`myque-project.yml`) stay separate from ordinary CI:
+they rely on GitHub-specific permissions, events, and secrets. The projector
+reacts to this workflow's completion and reconciles on a schedule. SDK
+publication, signing keys, and issue history retain their separate owners.
 
 ## Further reading
 
