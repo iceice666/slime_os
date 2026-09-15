@@ -31,4 +31,4 @@ Delivery chronology and historical verification results do not belong in a plan.
 The [roadmap classification](../../roadmap/README.md) names every retained
 source and any detailed requirements not yet extracted. Those explicitly
 retained sections remain the owner of that detail; extracted subjects use the
-pages above. Delivery chronology stays in place until verified H3 archival.
+pages above. Historical investigations are preserved in the [archive](../history.md).

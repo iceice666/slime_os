@@ -26,8 +26,8 @@ CI run 33002668719 is green across all ten jobs, including the three hosted `ubu
 
 ## Evidence
 
-[`devlog/2026-08-27-ci-hosted-arm64-cutover/`](../devlog/2026-08-27-ci-hosted-arm64-cutover/index.md)
+[`devlog/2026-08-27-ci-hosted-arm64-cutover/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-27-ci-hosted-arm64-cutover/index.md)
 
 ## Notes
 
-Migrated from `roadmap/00-backlog.md` line 172: `B78 — CI could not pass: a prefix gate on a prefixless runner, a job with no runner, and a stale child path`.
+Migrated from [`roadmap/00-backlog.md`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) line 172: `B78 — CI could not pass: a prefix gate on a prefixless runner, a job with no runner, and a stale child path`.

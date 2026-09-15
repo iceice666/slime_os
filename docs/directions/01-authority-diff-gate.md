@@ -40,7 +40,7 @@ to the object store" hides inside a model-or-prompt update.
 
 Builder emits, alongside each generation, a normalized authority view:
 per component, the set of (object-kind, rights) pairs derived from the
-manifest, in canonical order. `just generation_diff A B` compares the two
+manifest, in canonical order. A proposed `generation_diff` command compares two
 views and prints per-component additions and removals, where an addition
 is any pair not implied by the old closure under the narrow-only algebra —
 adding `READ|WRITE` where only `READ` existed is widening; splitting a
@@ -69,7 +69,7 @@ manifest in format v2, which this consumes.
 
 ## Exit-condition sketch
 
-`just generation_diff A B` prints per-component grant changes; a build
+The proposed `generation_diff` command prints per-component grant changes; a build
 that widens rights without the sign-off file fails.
 
 ## Probe guidance

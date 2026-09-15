@@ -3,7 +3,7 @@
 """P3.D: prove `check-duo-boot.py`'s marker chain rejects tampered evidence.
 
 `duo_boot_check` can only qualify a board if its assertions have teeth. This
-gate takes the observed transcript committed beside the P3.D devlog entry,
+gate takes the observed transcript committed under evidence/duo/,
 confirms the unmodified bytes pass, then mutates them one way at a time and
 requires each mutation to fail:
 
@@ -27,12 +27,7 @@ from typing import NoReturn
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts" / "check" / "check-duo-boot.py"
-TRANSCRIPT = (
-    ROOT
-    / "devlog"
-    / "2026-08-31-p3e-sel4-milkv-duo"
-    / "maee-smoke.log"
-)
+TRANSCRIPT = ROOT / "evidence" / "duo" / "maee-smoke.log"
 
 
 def fail(message: str) -> NoReturn:

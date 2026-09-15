@@ -2,7 +2,7 @@
 
 An inbound `…#fragment` link is an address. Rewording a heading changes that
 address while leaving the file in place, so the failure has no symptom at the
-destination — which is why `check-devlog.py` validates fragments rather than
+destination — which is why `check-docs.py` validates fragments rather than
 stripping them, and why this computation lives in one tested place.
 
 Scope, stated exactly rather than as "GitHub's rules":

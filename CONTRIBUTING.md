@@ -69,7 +69,7 @@ Issues by milestone. Until real child work exists, a milestone may be empty.
 | GitHub | Intake, collaboration, reviews, projected work |
 | PR | Reviewable change, claim, risk, verification, limits, and related canonical work |
 | Owning docs/contracts | Current architecture, behavior, procedures, and limitations |
-| `devlog/` | Retained historical investigations and evidence; optional exceptional investigations during the archive transition |
+| [History archive](docs/history.md) | Historical investigations and raw evidence; optional exceptional reusable investigations, never a product build dependency |
 
 UUIDs are canonical identities. Optional human keys are mutable display aliases,
 not persistent references. Generated lists and `roadmap/` are not state stores.
@@ -117,7 +117,7 @@ These guides own the tutorials; this document owns the contribution workflow.
   Put long-lived cross-module choices in `docs/decisions/`, unfinished designs
   and qualification requirements in `docs/plans/`, and exploration in
   `docs/directions/`. Expensive reusable investigations or unusual verification
-  campaigns may use the retained devlog while the history archive is pending.
+  campaigns belong in the private [history repository](docs/history.md).
 
 ## Pull requests
 
@@ -167,11 +167,10 @@ by [AGENTS.md](AGENTS.md). Record exact commands, observed results, evidence
 class, scope, target or image identity when relevant, and limits; separate
 direct observations from inherited evidence and label unobserved conclusions
 as inference. Documentation-only PRs state that no runtime tests were run.
-Ordinary changes do not require a devlog entry. Run `just devlog_check` when
-editing getting-started guides, PR templates, policy, roadmap, decision, plan,
-or direction documents; when adding or changing a `devlog/` path reference in
-any Markdown or Python file; or when an exceptional investigation adds or
-corrects a retained devlog entry during the archive transition. Run
+Ordinary changes do not require a devlog entry. Run `just docs_check` for
+maintained documentation, policy, links, or command-reference changes. Archived
+records retain their original checker at their immutable revision; no archive
+checkout or network access is required for current docs checks. Run
 `just tasks_check` when applicable and `just typos` for documentation.
 
 ## Review and completion
@@ -247,4 +246,4 @@ does not move the SDK repository, signing keys, or issue history.
   build, run, and change it.
 - [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, MyQue, and change-record rules.
 - [Architecture](docs/architecture/README.md) and [plans](docs/plans/README.md): current subsystem rationale versus unimplemented requirements; [roadmap classification](roadmap/README.md) names unextracted detail and historical sources.
-- [Devlog](devlog/README.md): retained historical investigations and transition policy.
+- [History](docs/history.md): immutable archive lookup, privacy, evidence boundaries, and restoration.

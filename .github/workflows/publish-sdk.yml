@@ -96,7 +96,7 @@ jobs:
       #
       # This also reads the hosted release, which nothing else in the
       # repository does; see the open follow-up in
-      # devlog/2026-08-26-cp7-hosted-publication-hardening/index.md.
+      # https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-26-cp7-hosted-publication-hardening/index.md
       - name: Verify the requested version against the hosted release
         env:
           PROFILE_FLAGS: >-

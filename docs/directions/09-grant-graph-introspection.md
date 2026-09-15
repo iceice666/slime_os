@@ -79,7 +79,7 @@ question.
 
 ## Exit-condition sketch
 
-`just authority_query` answers "which components can reach BlockDevice
+The proposed `authority_query` command answers "which components can reach BlockDevice
 write" from the manifest alone, matching runtime provenance on a test
 graph.
 

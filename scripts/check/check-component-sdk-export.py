@@ -111,7 +111,7 @@ PUBLISHED_PROBES = (
     "slime-root/src/main.rs",
     "contracts/generation-manifest/v1/compositions/sel4-demo.zti",
 )
-UNPUBLISHED_PROBE = "devlog/README.md"
+UNPUBLISHED_PROBE = "README.md"
 MIRROR_PATHS = (
     component_sdk_system.COPY_ROOTS
     + ("Cargo.toml", "sel4/pins.toml", "contracts", "scripts/lib/component_sdk_system_entry.py")

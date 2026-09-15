@@ -81,7 +81,7 @@ Two bounds, both sized against single-plane graphs:
   again as the composition's own children.
 
 Both are recorded at their definitions and in
-[`devlog/2026-08-08-p5-4-9-full-graph-boot/`](../../../../devlog/2026-08-08-p5-4-9-full-graph-boot/index.md).
+[`devlog/2026-08-08-p5-4-9-full-graph-boot/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-08-p5-4-9-full-graph-boot/index.md).
 
 ## The boot layout
 

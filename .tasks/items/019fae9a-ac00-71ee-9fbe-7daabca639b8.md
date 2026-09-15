@@ -31,7 +31,7 @@ Gates: `just fabric_visibility_check`
 
 ## Evidence
 
-[`devlog/2026-07-30-c8-8-filtered-introspection-interposition/`](../devlog/2026-07-30-c8-8-filtered-introspection-interposition/index.md)
+[`devlog/2026-07-30-c8-8-filtered-introspection-interposition/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-8-filtered-introspection-interposition/index.md)
 
 ## Notes
 

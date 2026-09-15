@@ -2,7 +2,7 @@
 
 A fifth seL4 generation, beside [`sel4.zti`](sel4.md),
 [`sel4-channel.zti`](sel4-channel.md), [`sel4-loan.zti`](sel4-loan.md), and the
-frozen x86 [`valid.zti`](valid.zti). It declares the smallest graph that can
+frozen x86 [`valid.zti`](../fixtures/valid.zti). It declares the smallest graph that can
 exercise P5.3.3's exit condition: a component that constructs a child from a
 grant-resolved executable, hands it declared capabilities at the slots its
 layout names, and observes its termination through a supervision handle rather
@@ -120,7 +120,7 @@ exactly what a spawn plane is about.
 
 ## Relationship to B13
 
-This slice closes [B13](../../../../roadmap/00-backlog.md): `serve_buffer_create`
+This slice closes [B13](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md): `serve_buffer_create`
 now resolves the factory capability its caller names before admitting anything.
 B13's deferral reason was verbatim "the same distribution problem P5.3.3
 solves", and this is that slice, so it is closed here rather than deferred

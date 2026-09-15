@@ -9,7 +9,7 @@
 | Now | Paper, plus one implementation half that is legal today: `slime-root` allocates only 4 KiB granules while both architectures expose 2 MiB and 1 GiB frame objects. Large-page support is pure mechanism and changes no contract. |
 
 The memory portion now has [architectural sequencing](../../roadmap/02-core-runtime.md#memory-capacity)
-and canonical work items, recorded in the [planning decision](../../devlog/2026-09-07-memory-capacity-milestones/index.md).
+and canonical work items, recorded in the [planning decision](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-07-memory-capacity-milestones/index.md).
 The sketches below are design background, not implementation status or a
 second tracker. Their memory open questions are resolved for this plan by
 exact 4 KiB accounting, target-qualified ceilings, scalable task backing, and

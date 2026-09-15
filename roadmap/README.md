@@ -3,7 +3,7 @@
 > **H2 classification — routing index plus retained source.** Current subsystem
 > documentation lives in [architecture](../docs/architecture/README.md), and
 > extracted delivery/qualification boundaries live in [plans](../docs/plans/README.md).
-> The original prose below is preserved for H3: its status, physical execution
+> The original prose below remains surrounding context for unextracted requirements: its status, physical execution
 > goals, delivery counts, gate results and track diagram are historical context,
 > not a live plan or evidence that today's image is qualified. Extracted scope is
 > maintained only in its owning document. Unextracted requirements explicitly
@@ -12,9 +12,9 @@
 
 ## File classification and residual ownership
 
-This table classifies all thirteen files without duplicating their technical
-specifications or maintaining progress. “History” means original narrative is
-retained in place until H3 verifies its archive, not that archival has happened.
+This table classifies the thirteen original files without duplicating technical
+specifications or maintaining progress. The frozen index and devlogs are in the
+verified [private archive](../docs/history.md); other files remain for residual scope.
 The older “Not authoritative” notices concern work-item identity/state: they do
 not revoke the residual design and qualification ownership named here. Current
 behavior always resolves to owning code/contracts; an unextracted narrative is
@@ -23,7 +23,7 @@ not a substitute for checking them.
 | Source | Extracted current owner | Planned / genuinely unextracted owner | Retained history |
 | --- | --- | --- | --- |
 | [README.md](README.md) | [Architecture](../docs/architecture/README.md): subsystem ownership, authority, image and target boundaries | [Plans](../docs/plans/README.md): memory, network, Framework, authority and demo boundaries. Residual external-wire, existing-workload and architecture release composition below remains requirement context, with detailed owners in the corresponding rows | Original goals, track map, physical sequence, achieved releases and status |
-| [00-backlog.md](00-backlog.md) | None; live defects belong to `.tasks/items/` | No residual design; follow-up requirements belong to canonical items | Frozen B anchors and investigation links; retained for existing consumers |
+| [Archived 00-backlog.md](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) | None; live defects belong to `.tasks/items/` | No residual design; follow-up requirements belong to canonical items | Frozen B anchors and investigation links; no current checker dependency |
 | [01-foundations.md](01-foundations.md) | [Architecture](../docs/architecture/README.md): extracted capability/runtime/image boundaries | [Framework plan](../docs/plans/framework-hardware.md): promotion boundary. M5.7 storage-aware boot/NVMe checks remain requirements here; detailed M5 storage/BootState/recovery and M6 native-service descriptions remain unextracted references to owning contracts/source | M1–M6 deliveries, retired kernel and gate narratives |
 | [02-core-runtime.md](02-core-runtime.md) | [IPC](../docs/architecture/ipc-and-capabilities.md), [fabric](../docs/architecture/typed-data-fabric.md), [runtime authority](../docs/architecture/runtime-authority.md), [private memory](../docs/architecture/private-memory.md) | [Memory plan](../docs/plans/memory-capacity.md). Fine-grained C7/C8 protocols and C9 admission/recording details beyond those pages remain unextracted references to owning contracts/source | C7–C10 sequencing, delivery/gates and exact capacity-run results |
 | [03-ros2-compatibility.md](03-ros2-compatibility.md) | [Fabric](../docs/architecture/typed-data-fabric.md): native substrate only, not ROS support | [Demo plan](../docs/plans/rpi5-ros2-demo.md): minimal boundary. This file still owns R0–R3 detailed profiles, admitted IDL/CDR subset, wire/service/action/workload checks and companion requirements | Original status, transport-pivot and sequencing context |
@@ -69,7 +69,7 @@ record that drifts the moment an item closes, which is why there is none.
 
 | Track | Owns | Boundary |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | Nothing live: a frozen index of the pre-cutover `B<N>` anchors that devlog entries link into | The backlog itself is the `backlog`-tagged items in the store, and open ones precede milestone work |
+| [Archived backlog](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) | Nothing live: a frozen historical index | The backlog itself is the `backlog`-tagged items in the store, and open ones precede milestone work |
 | [Foundations](01-foundations.md) | The x86/QEMU-era mechanisms the later tracks were built on, and the Framework removable-media boot claim | A Framework claim requires observed removable-media boot with no internal-NVMe write; no other board's evidence substitutes |
 | [Core runtime](02-core-runtime.md) | The typed data fabric, robot-runtime authority (clock/timer, wait sets, scheduling class, lifecycle policy, determinism claims), and task-private component memory | Mechanism stays in `slime-root`; policy — supervision decisions, health, QoS — is a userspace component's. Runtime memory is task-private, generation-bounded, never executable, and fully reclaimed |
 | [Component platform](10-component-platform.md) | `component-spec/v1` through `system-spec/v1`: immutable component sources, target-qualified platform prefixes, external artifact admission, compatibility evidence, upgrade, rollback, and closure identity as the reproducible build key | A closure is an identity over declared inputs; the handful of plane gates a closure structurally cannot describe stay outside it |
@@ -101,7 +101,7 @@ The completed P3/P3.E Milk-V Duo sequence remains the physical RV64 baseline. Th
 7. **H1 boundary (active):** inventory and qualify the actual firmware and devices. CPU boot does not imply PCI, DMA, keyboard, NVMe, network, display, or daily-driver support, and P6.6 claims none of them.
 
 
-The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitly defer open defects before opening a new roadmap gate. A green verification suite is a precondition for milestone work, not a milestone itself.
+The canonical backlog still sits ahead of all lanes: resolve or explicitly defer open defects before opening a new roadmap gate. A green verification suite is a precondition for milestone work, not a milestone itself.
 
 ## Track map
 
@@ -268,7 +268,7 @@ Deferred unless selected as the implementation route for a future product worklo
 
 Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. P6 requires the target-specific QEMU gate before media construction, QEMU boot of the exact raw media before physical use, and the recorded Framework no-write boot before H1. Milk-V Duo, Raspberry Pi 5, and Framework evidence remain target-specific and cannot substitute for one another.
 
-Documentation-only roadmap edits do not run runtime tests; their verification is link, identifier, and content consistency under `just devlog_check`, plus `just tasks_check` when the work-item store changes. No new devlog entry is required.
+Documentation-only roadmap edits do not run runtime tests; verify local links and UUIDs with `just docs_check`, plus `just tasks_check` when the store changes. Historical commands are interpreted at their archived revision, never as today's qualification results.
 
 ## Updating this directory
 
@@ -277,7 +277,7 @@ Documentation-only roadmap edits do not run runtime tests; their verification is
 - Change this routing table only when extraction or ownership changes. Genuinely unextracted requirements remain maintained in their named source sections until a precise replacement owner is established; do not create competing specifications or update retained chronology to mirror work-item state.
 - Preserve completed evidence; do not rewrite an observed check as a future intention.
 - When work lands, record the change, claim, risks, exact verification and limits in the PR, and the observed exit condition in the canonical work item before closure. Update owning current docs and plans only where their contract or limitation changes. Do not convert retained milestone prose into new `Delivered`/`Gates`/`Evidence` entries or maintain a chronological delivery index.
-- Preserve historical evidence by reference rather than copying it into current subsystem prose. The H3 archive cutover will replace retained product-tree history links only after their bytes and destinations are verified.
+- Preserve historical evidence by immutable archive reference rather than copying it into current subsystem prose. See [archive lookup](../docs/history.md).
 - Promote exploratory work from `../docs/directions/` only with a bounded design and observable acceptance requirements in the owning plan, and a canonical work item for scope, state and dependencies; do not turn a direction into a new roadmap progress record.
 - Never treat a milestone as complete from implementation status alone when its exit condition requires QEMU or physical evidence.
-- **A heading is a URL.** 77 merged devlog links name a `#fragment` in this directory, so rewording a heading breaks an inbound link while leaving the file in place — a failure with no symptom at the destination. `just devlog_check` validates every fragment. When a heading must change, keep the old address by putting `<a id="old-slug"></a>` on its own line above the new heading; that is what the two P4 and P5.4.9 anchors are. Note that repeated headings are addressed by position — 39 slugs repeat across these track files, so `#deliverables-7` moves when a section is inserted above it. Prefer an explicit anchor over relying on a duplicate's index.
+- **A heading is a URL.** Current local fragments remain checked by `just docs_check`. Preserve explicit anchors when changing referenced headings; avoid duplicate-heading ordinals that shift when sections are inserted. Archived links resolve inside the fixed snapshot rather than constraining today's heading set.

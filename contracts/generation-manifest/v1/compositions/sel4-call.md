@@ -6,7 +6,7 @@ A tenth seL4 generation, beside [`sel4.zti`](sel4.md),
 [`sel4-stream.zti`](sel4-stream.md),
 [`sel4-supervision.zti`](sel4-supervision.md),
 [`sel4-crossing.zti`](sel4-crossing.md), and the frozen x86
-[`valid.zti`](valid.zti). It declares the C8.6 call graph — one `ParameterCall`
+[`valid.zti`](../fixtures/valid.zti). It declares the C8.6 call graph — one `ParameterCall`
 route, two clients, a server, and a capability-routed clock — for P5.4.6.
 
 The plane uses parent-vouched post-spawn introduction: `init` retains the

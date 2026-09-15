@@ -51,13 +51,11 @@ fmt_check_sel4_root:
 fmt_check_all: fmt_check
 
 [group('quality')]
-devlog_check:
-    python3 scripts/check/check-devlog.py
+docs_check:
+    python3 scripts/check/check-docs.py
 
-# The canonical work-item store: `myque check` validates `.tasks/items/`, then
-# the repository's own policy over it. `devlog_check` deliberately stays
-# binary-free so it runs in a checkout-only CI job; this target is where the
-# MyQue dependency lives.
+# MyQue validates the live store; this target also enforces backlog-first policy.
+# docs_check needs only the checkout, never MyQue or the history repository.
 [group('quality')]
 tasks_check:
     python3 scripts/check/check-work-items.py

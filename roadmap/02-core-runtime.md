@@ -65,7 +65,7 @@ full-graph boot checks. Residual debt is narrow and recorded rather than
 open: `SYS_SHARED_BUFFER_REVOKE` has no live caller, and the two
 insert-failure rollback paths are uncovered.
 **Gates:** `just sample_plane_check`, `just sample_plane_live_check`, `just generation_check`, `just contracts_check`
-**Evidence:** [`devlog/2026-07-26-c7-audit/`](../devlog/2026-07-26-c7-audit/index.md), [`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`](../devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](../devlog/2026-07-26-b4-live-shared-buffer-budget/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](../devlog/2026-07-26-b5-live-sample-plane/index.md)
+**Evidence:** [`devlog/2026-07-26-c7-audit/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-c7-audit/index.md), [`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b4-live-shared-buffer-budget/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b5-live-sample-plane/index.md)
 
 **Depends on:** the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 
@@ -90,7 +90,7 @@ embeds the kernel it runs, so a v2 rollback would execute its own v2-era
 kernel rather than this tree's (backlog B6, resolved with that scope
 recorded).
 **Gates:** `just generation_check`, `just contracts_check`, `just test`, `just transfer_check`
-**Evidence:** [`devlog/2026-07-24-c7-1-generation-v3-u64-rights/`](../devlog/2026-07-24-c7-1-generation-v3-u64-rights/index.md), [`devlog/2026-07-26-b6-retained-v2-rollback-scope/`](../devlog/2026-07-26-b6-retained-v2-rollback-scope/index.md), [`devlog/2026-07-26-b7-b8-budget-hygiene/`](../devlog/2026-07-26-b7-b8-budget-hygiene/index.md)
+**Evidence:** [`devlog/2026-07-24-c7-1-generation-v3-u64-rights/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-24-c7-1-generation-v3-u64-rights/index.md), [`devlog/2026-07-26-b6-retained-v2-rollback-scope/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b6-retained-v2-rollback-scope/index.md), [`devlog/2026-07-26-b7-b8-budget-hygiene/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b7-b8-budget-hygiene/index.md)
 
 **Depends on:** M6.1 generation format v2 and the capability/rights foundation.
 
@@ -112,7 +112,7 @@ unauthorized component is denied, exhaustion is structured and isolated, and
 no derivation or transfer widens authority. The create-insert-failure
 rollback path remains uncovered.
 **Gates:** `just shared_buffer_factory_check`, `just sample_plane_live_check`
-**Evidence:** [`devlog/2026-07-24-c7-2-shared-buffer-factory/`](../devlog/2026-07-24-c7-2-shared-buffer-factory/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](../devlog/2026-07-26-b4-live-shared-buffer-budget/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](../devlog/2026-07-26-b5-live-sample-plane/index.md)
+**Evidence:** [`devlog/2026-07-24-c7-2-shared-buffer-factory/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-24-c7-2-shared-buffer-factory/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b4-live-shared-buffer-budget/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b5-live-sample-plane/index.md)
 
 **Depends on:** C7.1 v3 rights and the M6.1 factory-capability pattern.
 
@@ -135,7 +135,7 @@ generation-declared budgets; one reaches byte or buffer-count exhaustion
 without affecting the other, and termination of its supervision subtree
 returns every unloaned page and charge.
 **Gates:** `just shared_buffer_accounting_check`, `just contracts_check`, `just generation_check`
-**Evidence:** [`devlog/2026-07-24-c7-3-shared-buffer-accounting/`](../devlog/2026-07-24-c7-3-shared-buffer-accounting/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](../devlog/2026-07-26-b4-live-shared-buffer-budget/index.md)
+**Evidence:** [`devlog/2026-07-24-c7-3-shared-buffer-accounting/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-24-c7-3-shared-buffer-accounting/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b4-live-shared-buffer-budget/index.md)
 
 **Depends on:** C7.2 factory allocation; M6.1 supervision and per-spawner accounting.
 
@@ -157,7 +157,7 @@ page-table changes. All three syscalls are driven at the syscall boundary
 by real components under `just sample_plane_live_check` (B5), which asserts
 a writable mapping cannot be obtained after sealing.
 **Gates:** `just shared_buffer_mapping_check`, `just sample_plane_live_check`
-**Evidence:** [`devlog/2026-07-24-c7-4-shared-buffer-mapping/`](../devlog/2026-07-24-c7-4-shared-buffer-mapping/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](../devlog/2026-07-26-b5-live-sample-plane/index.md)
+**Evidence:** [`devlog/2026-07-24-c7-4-shared-buffer-mapping/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-24-c7-4-shared-buffer-mapping/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b5-live-sample-plane/index.md)
 
 **Depends on:** C7.2 shared-buffer objects and C7.3 accounting.
 
@@ -183,7 +183,7 @@ wrong-buffer returns fail closed, while peer death deterministically settles
 the loan and restores every charge. All four syscalls are driven by real
 components under `just sample_plane_live_check` (B5).
 **Gates:** `just shared_buffer_loan_check`, `just transfer_check`, `just spawn_service_check`, `just dango_check`
-**Evidence:** [`devlog/2026-07-25-c7-5-shared-buffer-loan/`](../devlog/2026-07-25-c7-5-shared-buffer-loan/index.md), [`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`](../devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/index.md)
+**Evidence:** [`devlog/2026-07-25-c7-5-shared-buffer-loan/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-25-c7-5-shared-buffer-loan/index.md), [`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/index.md)
 
 **Depends on:** C7.3 accounting and C7.4 sealed mappings.
 
@@ -205,7 +205,7 @@ than the control-message bound (`MAX_MSG` = 8192 bytes) without widening
 `MAX_MSG` or copying payload bytes through the kernel queue; every malformed
 descriptor fails before mapping or allocation.
 **Gates:** `just sample_descriptor_check`, `just contracts_check`
-**Evidence:** [`devlog/2026-07-25-c7-6-sample-descriptor/`](../devlog/2026-07-25-c7-6-sample-descriptor/index.md)
+**Evidence:** [`devlog/2026-07-25-c7-6-sample-descriptor/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-25-c7-6-sample-descriptor/index.md)
 
 **Depends on:** C7.4 sealed mappings and C7.5 loan/return lifecycle.
 
@@ -229,7 +229,7 @@ buffer-count, mapping-count, loan-count), and peer death remain bounded,
 reclaim all resources, and do not disturb an unrelated channel or the
 retained v2 known-good boot path.
 **Gates:** `just sample_plane_check`
-**Evidence:** [`devlog/2026-07-25-c7-7-sample-plane-integration/`](../devlog/2026-07-25-c7-7-sample-plane-integration/index.md)
+**Evidence:** [`devlog/2026-07-25-c7-7-sample-plane-integration/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-25-c7-7-sample-plane-integration/index.md)
 
 **Depends on:** C7.1–C7.6.
 
@@ -251,7 +251,7 @@ built and driven. The C8.15 audit also reopened and closed C8.9: backlog B56
 records that `just data_fabric_profile_check` had been red since B55 on a
 check that could not pass.
 **Gates:** see each C8.x sub-milestone below; the closing aggregate is `just data_fabric_check`
-**Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](../devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md)
+**Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-structural-audit/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-structural-audit/index.md)
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
 `Blocked` state and its wait mechanism). Both are complete. C8 is local-first
@@ -324,7 +324,7 @@ sample-plane gate pass with one deterministic normal form, full identity,
 generated local tag, and native binding set; malformed, unsupported,
 over-bound, duplicate, and forced-collision inputs fail before output.
 **Gates:** `just interface_schema_check`
-**Evidence:** [`devlog/2026-07-27-c8-1-interface-schemas/`](../devlog/2026-07-27-c8-1-interface-schemas/index.md)
+**Evidence:** [`devlog/2026-07-27-c8-1-interface-schemas/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-27-c8-1-interface-schemas/index.md)
 
 ### C8.2 — Generation graph, QoS, and aggregate admission
 
@@ -349,7 +349,7 @@ hop, a 35-case negative corpus each rejected by its intended check, 18
 `boot-contracts` decoder tests, and 4 QEMU tests against the booted
 generation.
 **Gates:** `just fabric_manifest_check`
-**Evidence:** [`devlog/2026-07-27-c8-2-fabric-graph-admission/`](../devlog/2026-07-27-c8-2-fabric-graph-admission/index.md)
+**Evidence:** [`devlog/2026-07-27-c8-2-fabric-graph-admission/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-27-c8-2-fabric-graph-admission/index.md)
 
 **Depends on:** C8.1.
 
@@ -376,7 +376,7 @@ through a poll/yield loop" arm is proven by a source lint (the gate rejects
 any fabric component containing `yield_now` or lacking a `SYS_WAIT` park), a
 necessary condition rather than a direct measurement.
 **Gates:** `just fabric_authority_check`
-**Evidence:** [`devlog/2026-07-27-c8-3-fabric-authority/`](../devlog/2026-07-27-c8-3-fabric-authority/index.md)
+**Evidence:** [`devlog/2026-07-27-c8-3-fabric-authority/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-27-c8-3-fabric-authority/index.md)
 
 **Depends on:** C8.2.
 
@@ -404,7 +404,7 @@ pinned by host unit tests because a transcript can show samples arrived but
 not which one was dropped; a participant fault beyond a deliberate stall is
 C8.9's composition.
 **Gates:** `just fabric_stream_check`
-**Evidence:** [`devlog/2026-07-28-c8-4-bounded-streams/`](../devlog/2026-07-28-c8-4-bounded-streams/index.md)
+**Evidence:** [`devlog/2026-07-28-c8-4-bounded-streams/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-28-c8-4-bounded-streams/index.md)
 
 **Depends on:** C8.3.
 
@@ -422,7 +422,7 @@ bounded RELIABLE/BEST_EFFORT, VOLATILE/retained, deadline, lifespan, and
 liveliness semantics without busy-polling or unbounded history; every
 terminal or degradation condition has a distinct deterministic event.
 **Gates:** `just fabric_qos_check`
-**Evidence:** [`devlog/2026-07-28-c8-5-fabric-qos/`](../devlog/2026-07-28-c8-5-fabric-qos/index.md)
+**Evidence:** [`devlog/2026-07-28-c8-5-fabric-qos/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-28-c8-5-fabric-qos/index.md)
 
 **Depends on:** C8.4.
 
@@ -439,7 +439,7 @@ exchange bounded typed requests and replies with exact correlation and one
 terminal result; duplicate, timeout, cancellation, rejection, and
 peer-fault paths remain isolated and fully reclaimed.
 **Gates:** `just fabric_call_check`
-**Evidence:** [`devlog/2026-07-28-c8-6-bounded-native-calls/`](../devlog/2026-07-28-c8-6-bounded-native-calls/index.md)
+**Evidence:** [`devlog/2026-07-28-c8-6-bounded-native-calls/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-28-c8-6-bounded-native-calls/index.md)
 
 **Depends on:** C8.3 and C8.5's event/time semantics.
 
@@ -456,7 +456,7 @@ cancel, and retrieve bounded native operations with exact correlation and
 authority; transport outcomes remain deterministic while application and
 ROS goal policy stay outside the fabric.
 **Gates:** `just fabric_operation_check`
-**Evidence:** [`devlog/2026-07-29-c8-7-native-operations/`](../devlog/2026-07-29-c8-7-native-operations/index.md)
+**Evidence:** [`devlog/2026-07-29-c8-7-native-operations/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-29-c8-7-native-operations/index.md)
 
 **Depends on:** C8.4 and C8.6.
 
@@ -475,7 +475,7 @@ caller's visibility grant, and every declared interposer occupies the only
 authorized route path with no ambient discovery, bypass, or widened proxy
 authority.
 **Gates:** `just fabric_visibility_check`
-**Evidence:** [`devlog/2026-07-30-c8-8-filtered-introspection-interposition/`](../devlog/2026-07-30-c8-8-filtered-introspection-interposition/index.md)
+**Evidence:** [`devlog/2026-07-30-c8-8-filtered-introspection-interposition/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-8-filtered-introspection-interposition/index.md)
 
 **Depends on:** C8.3, C8.4, and C8.6.
 
@@ -493,7 +493,7 @@ fixes the full fabric profile, normalized schemas, runtime tables, and
 satisfiable resource ceilings; host, kernel, and userspace cannot select or
 interpret different graph authority.
 **Gates:** `just data_fabric_profile_check`
-**Evidence:** [`devlog/2026-07-30-c8-9-integration-decomposition/`](../devlog/2026-07-30-c8-9-integration-decomposition/index.md), [`devlog/2026-07-30-c8-9-typed-fabric-profile/`](../devlog/2026-07-30-c8-9-typed-fabric-profile/index.md)
+**Evidence:** [`devlog/2026-07-30-c8-9-integration-decomposition/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-9-integration-decomposition/index.md), [`devlog/2026-07-30-c8-9-typed-fabric-profile/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-9-typed-fabric-profile/index.md)
 
 **Depends on:** C8.2, C8.7, and C8.8. C8.7 is named explicitly because
 `inFlightOperations`, `retainedSamples`, and `eventDepth` are graph limits its
@@ -521,9 +521,9 @@ P2.2 set.
 **Gates:** `just data_fabric_profile_check`, `just data_fabric_boot_check`,
 `just sel4_boot_check`
 **Evidence:**
-[`devlog/2026-07-30-c8-10-route-worker-partition/`](../devlog/2026-07-30-c8-10-route-worker-partition/index.md),
-[`devlog/2026-07-31-c8-10-full-graph-boot/`](../devlog/2026-07-31-c8-10-full-graph-boot/index.md),
-[`devlog/2026-08-15-b55-full-graph-boot-restoration/`](../devlog/2026-08-15-b55-full-graph-boot-restoration/index.md)
+[`devlog/2026-07-30-c8-10-route-worker-partition/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-30-c8-10-route-worker-partition/index.md),
+[`devlog/2026-07-31-c8-10-full-graph-boot/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-07-31-c8-10-full-graph-boot/index.md),
+[`devlog/2026-08-15-b55-full-graph-boot-restoration/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-15-b55-full-graph-boot-restoration/index.md)
 
 ### C8.11 — Unified simulated time and deterministic semantic traces
 
@@ -546,7 +546,7 @@ edge the caller already holds) had validator arms and generated codes but no
 emitter yet at this point; their emitters land with C8.12.
 **Gates:** `just data_fabric_trace_check`, `just sel4_trace_check`
 **Evidence:**
-[`devlog/2026-08-15-c8-11-semantic-trace/`](../devlog/2026-08-15-c8-11-semantic-trace/index.md)
+[`devlog/2026-08-15-c8-11-semantic-trace/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-15-c8-11-semantic-trace/index.md)
 
 ### C8.12 — Integrated matching, visibility, and denial matrix
 
@@ -566,7 +566,7 @@ authority nor protected visibility, and declared interposition remains the
 only route path.
 **Gates:** `just data_fabric_matrix_check`, `just sel4_matrix_check`
 **Evidence:**
-[`devlog/2026-08-15-c8-12-matrix/`](../devlog/2026-08-15-c8-12-matrix/index.md)
+[`devlog/2026-08-15-c8-12-matrix/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-15-c8-12-matrix/index.md)
 
 ### C8.13 — Concurrent cross-plane traffic and resource ceilings
 
@@ -596,13 +596,13 @@ real usage at all; C8.13.3 supplied the mechanism for `capabilitySlots`,
 `queueDepth` remains unconsumed.
 **Gates:** `just data_fabric_traffic_check`, `just data_fabric_saturation_check`
 **Evidence:**
-[`devlog/2026-08-15-c8-13-traffic/`](../devlog/2026-08-15-c8-13-traffic/index.md),
-[`devlog/2026-08-16-c8-13-queue-history-evidence/`](../devlog/2026-08-16-c8-13-queue-history-evidence/index.md),
-[`devlog/2026-08-16-c8-13-saturation-ceilings/`](../devlog/2026-08-16-c8-13-saturation-ceilings/index.md),
-[`devlog/2026-08-16-c8-13-qos-timed-traffic/`](../devlog/2026-08-16-c8-13-qos-timed-traffic/index.md),
-[`devlog/2026-08-16-c8-13-resource-event-loan-walls/`](../devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md),
-[`devlog/2026-08-16-c8-13-declared-fields-audit/`](../devlog/2026-08-16-c8-13-declared-fields-audit/index.md),
-[`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](../devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md)
+[`devlog/2026-08-15-c8-13-traffic/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-15-c8-13-traffic/index.md),
+[`devlog/2026-08-16-c8-13-queue-history-evidence/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-queue-history-evidence/index.md),
+[`devlog/2026-08-16-c8-13-saturation-ceilings/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-saturation-ceilings/index.md),
+[`devlog/2026-08-16-c8-13-qos-timed-traffic/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-qos-timed-traffic/index.md),
+[`devlog/2026-08-16-c8-13-resource-event-loan-walls/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md),
+[`devlog/2026-08-16-c8-13-declared-fields-audit/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-declared-fields-audit/index.md),
+[`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md)
 
 ### C8.13.1 -- Self-reported shared-buffer occupancy evidence (narrow)
 
@@ -630,7 +630,7 @@ own live charges: `resourceMapping` (constant 6, asserted nonzero) and
 `resourceLoan` (peak 5, drained baseline, asserted nonzero peak and bounded
 baseline).
 **Gates:** `just sel4_traffic_check`, `just data_fabric_traffic_check`
-**Evidence:** [`devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/`](../devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/index.md)
+**Evidence:** [`devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/index.md)
 
 **Depends on:** C8.13.
 
@@ -661,7 +661,7 @@ map and unmap a loan, and `fabric-publisher-b` transiently holds a third
 mapping it releases before reporting — because a scripted participant has no
 sweep loop to sample from mid-run.
 **Gates:** `just sel4_traffic_check`
-**Evidence:** [`devlog/2026-08-16-c8-13-2-participant-occupancy/`](../devlog/2026-08-16-c8-13-2-participant-occupancy/index.md)
+**Evidence:** [`devlog/2026-08-16-c8-13-2-participant-occupancy/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-16-c8-13-2-participant-occupancy/index.md)
 
 **Depends on:** C8.13.
 
@@ -693,7 +693,7 @@ declared occupancy genuinely rises and falls (measured peak 33 then 35
 against baseline 29) as the broker drops supervision handles it no longer
 waits on.
 **Gates:** `just sel4_traffic_check`, `just sel4_saturation_check`
-**Evidence:** [`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](../devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md)
+**Evidence:** [`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md)
 
 **Depends on:** none. An independent root mechanism, not gated by C8.13.1/.2.
 
@@ -728,7 +728,7 @@ and the hop death is the only *injected* fault — a stalled subscriber and a
 faulting (rather than exiting) participant remain unexercised as injections,
 though the scripted peer deaths cover the settlement path either would take.
 **Gates:** `just sel4_fault_check`, `just data_fabric_fault_check`
-**Evidence:** [`devlog/2026-08-17-c8-14-fault-isolation/`](../devlog/2026-08-17-c8-14-fault-isolation/index.md)
+**Evidence:** [`devlog/2026-08-17-c8-14-fault-isolation/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-c8-14-fault-isolation/index.md)
 
 **Depends on:** C8.13.
 
@@ -776,7 +776,7 @@ the denial, stall, and malformed-input schedules are carried inside the two
 aggregate boots rather than run as separate arms, each driven and asserted
 by `sel4_fault_check`.
 **Gates:** `just sel4_fabric_aggregate_check`, `just data_fabric_check`
-**Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](../devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-b68-aggregate-trace-determinism/`](../devlog/2026-08-17-b68-aggregate-trace-determinism/index.md)
+**Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-b68-aggregate-trace-determinism/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-b68-aggregate-trace-determinism/index.md)
 
 **Depends on:** C8.9–C8.14.
 
@@ -806,7 +806,7 @@ mechanism that brokers them (`slime-root/src/{platform_timer,timer,event,notific
 R2's ROS 2 managed-node and parameter-service compatibility is expected to be
 implemented as a profile over C9's lifecycle-transition and parameter-state
 schemas rather than a separate ROS-specific state machine; see
-[`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](../devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md).
+[`devlog/2026-08-17-ros2-transport-zenoh-pivot/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-17-ros2-transport-zenoh-pivot/index.md).
 
 **Motivation:** every mechanism this track needs at the bottom already exists
 and none of it reaches a component. `slime-root` claims the one architected-timer
@@ -924,7 +924,7 @@ dropped at the timer holder's exit while the root timer phase remains healthy;
 `just test_sel4_root` additionally observes that an IRQ acknowledgement failure
 cannot discard the expiry transition it follows.
 **Gates:** `just clock_authority_check`, `just sel4_boot_layout_check`, `just sel4_gate_control_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root`
-**Evidence:** [`devlog/2026-08-24-c9-1-clock-authority/`](../devlog/2026-08-24-c9-1-clock-authority/index.md)
+**Evidence:** [`devlog/2026-08-24-c9-1-clock-authority/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-24-c9-1-clock-authority/index.md)
 
 **Depends on:** P5's timer mechanism, observed by `just sel4_root_boot_check`.
 
@@ -970,7 +970,7 @@ the tie rule's two failure sequences now pinned by host tests.
 **Gates:** `just wait_set_check`, `just sel4_gate_control_check` (37 gates, 1415
 mutations), `just sel4_boot_layout_check` (28 plane layouts), `just contracts_check`,
 `just generation_check`, `just test_sel4_root` (160), `just test_host` (250)
-**Evidence:** [`devlog/2026-08-25-c9-2-bounded-wait-sets/`](../devlog/2026-08-25-c9-2-bounded-wait-sets/index.md)
+**Evidence:** [`devlog/2026-08-25-c9-2-bounded-wait-sets/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-c9-2-bounded-wait-sets/index.md)
 
 **Depends on:** C9.1's timer source and B46's native Endpoint/Notification
 mechanism.
@@ -1017,7 +1017,7 @@ survival is C9.4's to observe, so C9.3 closes without it.
 gates, 1450 mutations), `just sel4_boot_layout_check` (29 plane layouts), `just
 contracts_check`, `just generation_check`, `just test_sel4_root` (170), `just
 test_host` (265)
-**Evidence:** [`devlog/2026-08-25-c9-3-declared-scheduling-class/`](../devlog/2026-08-25-c9-3-declared-scheduling-class/index.md)
+**Evidence:** [`devlog/2026-08-25-c9-3-declared-scheduling-class/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-c9-3-declared-scheduling-class/index.md)
 
 **Depends on:** B48's per-thread declared priority. Explicitly **not** MCS: see
 the architecture decision above.
@@ -1078,7 +1078,7 @@ and two assertions comparing a value to itself — all applied.
 gates, 1518 mutations), `just sel4_boot_layout_check` (30 plane layouts), `just
 contracts_check`, `just generation_check`, `just test_sel4_root` (183), `just
 test_host` (284)
-**Evidence:** [`devlog/2026-08-25-c9-4-supervised-restart/`](../devlog/2026-08-25-c9-4-supervised-restart/index.md)
+**Evidence:** [`devlog/2026-08-25-c9-4-supervised-restart/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-25-c9-4-supervised-restart/index.md)
 
 **Depends on:** C9.1 (backoff needs a clock) and C9.3 (class must survive
 restart), both complete. C9.3's deferred restart-survival check is closed here.
@@ -1187,7 +1187,7 @@ frame, or physical address appears in a C9 contract or trace record.
 `just sel4_boot_layout_check`, `just contracts_check`, `just generation_check`,
 `just test_sel4_root`, `just test_host`.
 
-**Evidence:** [`devlog/2026-08-26-c9-6-robot-workload-composition/`](../devlog/2026-08-26-c9-6-robot-workload-composition/index.md)
+**Evidence:** [`devlog/2026-08-26-c9-6-robot-workload-composition/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-26-c9-6-robot-workload-composition/index.md)
 
 **Depends on:** C9.1–C9.5.
 
@@ -1306,7 +1306,7 @@ records this repository lacking.
 (146 host tests across 16 modules), `just sel4_gate_control_check` (33 gates,
 1295 mutations).
 
-**Evidence:** [`devlog/2026-08-23-c10-1-private-memory-mechanism/`](../devlog/2026-08-23-c10-1-private-memory-mechanism/index.md)
+**Evidence:** [`devlog/2026-08-23-c10-1-private-memory-mechanism/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-23-c10-1-private-memory-mechanism/index.md)
 
 **Depends on:** B9 (resolved).
 
@@ -1515,7 +1515,7 @@ the frame allocator where it started.
 The [memory-capacity epic](../.tasks/items/01a07a2c-9c4f-7ca0-8417-aba2b48ce16b.md)
 continues after C10 without reopening that completed work. The store owns all
 state, dependency edges, and exit conditions; the names below are display keys.
-The [planning decision](../devlog/2026-09-07-memory-capacity-milestones/index.md)
+The [planning decision](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-07-memory-capacity-milestones/index.md)
 records why the memory portion of [direction 34](../docs/directions/34-capacity-ceilings.md)
 is now a named qualification workload rather than an unspecified ceiling raise.
 
@@ -1540,7 +1540,7 @@ the root image and consumes boot capacity before any component starts.
 MEM-ARENAS reserves one data extent per private span. A failed large mapping
 can be converted to base pages by revoking only its unmapped, reusable,
 whole-extent frame; no duplicate quota backing is needed. The
-[recycled-backing evidence](../devlog/2026-09-11-mem-arenas-recycled-backing/index.md)
+[recycled-backing evidence](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-11-mem-arenas-recycled-backing/index.md)
 records the four-holder sizing and unchanged public-quota execution boundary.
 
 A published ceiling is a promise the root must honour in full, so it is declared
@@ -1548,9 +1548,9 @@ per target-profile name rather than globally: the QEMU profiles carry the
 qualified envelope while every physical target resolves to the conservative
 default, because a board's 12-bit root CNode cannot hold the descriptor tables a
 larger holder needs and no board has run the workload. The
-[target-qualified capacity evidence](../devlog/2026-09-13-mem-64m-target-qualified-capacity/index.md)
+[target-qualified capacity evidence](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-13-mem-64m-target-qualified-capacity/index.md)
 records the 64 MiB envelope on both QEMU architectures, and the
-[ordinary-memory inventory](../devlog/2026-09-13-mem-platform-ordinary-inventory/index.md)
+[ordinary-memory inventory](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-09-13-mem-platform-ordinary-inventory/index.md)
 records why per-range kernel evidence, not a launcher argument, is what qualifies
 a memory platform. The 256 MiB per-holder and 1 GiB aggregate envelope is
 deliberately not published: its arithmetic fits the measured ARM window, but the

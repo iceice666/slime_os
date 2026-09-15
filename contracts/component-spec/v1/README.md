@@ -11,7 +11,7 @@ Before CP0 the repository had no component-level specification at all.
 `contracts/generation-manifest/v1/schema.zt`'s `Executable`/`Instance` pair was the only
 description of a component anywhere, so "what this component is" and "how this
 generation composes it" were the same hand-authored text — the coupling
-[B70](../../../roadmap/00-backlog.md) opens. `contracts/component/v2`'s
+[B70](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) opens. `contracts/component/v2`'s
 `ImageHeader` did not close the gap either: it carries only target-qualification
 fields (`magic`, `architecture`, `abi`, `page_profile`, `required_features`, a
 segment table), so nothing described a component's identity, authority,
@@ -67,9 +67,9 @@ when any field's content does.
 `components/lib/src/default_fabric_profile.rs`, but no `[[bin]]` target or
 source file exists for either. Both were deleted as unreachable clients of
 retired syscalls — see
-[`devlog/2026-08-10-b44-policy-labels-deleted/`](../../../devlog/2026-08-10-b44-policy-labels-deleted/index.md)
+[`devlog/2026-08-10-b44-policy-labels-deleted/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-10-b44-policy-labels-deleted/index.md)
 and
-[`devlog/2026-08-10-b43-block-service-endpoint/`](../../../devlog/2026-08-10-b43-block-service-endpoint/index.md)
+[`devlog/2026-08-10-b43-block-service-endpoint/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-10-b43-block-service-endpoint/index.md)
 — while their manifest entries stayed.
 
 `provider = "undeclared"` records that fact rather than inventing a source file
@@ -103,8 +103,7 @@ enforces is grounded in real repository state rather than in a literal:
 - `runtime.resource` is bounded by the constants the builder and root already
   enforce (`COMPONENT_MAX_STACK_BYTES`, `MAX_SPAWN_BUDGET`, `MAX_CHILD_THREADS`,
   `MAX_TOTAL_PAGES`);
-- `test.requiredTestEnvironment` must be a real Justfile target, on the same
-  terms `just devlog_check` enforces for a devlog's `Gates` front matter, and
+- `test.requiredTestEnvironment` must be a real Justfile target, and
   `test.passFailCriteria` must appear in a string literal `ast`-parsed out of
   that gate's own check script — so a criterion is text the gate matches on
   rather than any fragment of its source;
@@ -134,7 +133,7 @@ documentation, not a contract, and CP1 could not derive one from the other.
 
 42 named malformations are refused, each paired with an admitted baseline of the
 same shape so no arm can pass by tripping an unrelated guard — the discipline
-[B67](../../../roadmap/00-backlog.md) established after two negative controls
+[B67](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) established after two negative controls
 were found to be structurally incapable of failing.
 
 ## Scope boundary

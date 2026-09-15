@@ -52,7 +52,7 @@ What is **not** done, stated plainly so no consumer assumes otherwise:
   wrappers; the parser survives only as `boot_selector_block.rs` under
   `#[cfg(slime_boot_selector)]`, serving the immutable selector's
   pre-admission bootstrap read. Evidence:
-  [`devlog/2026-08-29-b83-root-block-path-deleted/`](../devlog/2026-08-29-b83-root-block-path-deleted/index.md).
+  [`devlog/2026-08-29-b83-root-block-path-deleted/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-29-b83-root-block-path-deleted/index.md).
 - **IO4's unimplemented network data plane:** Ethernet framing, ARP, IPv4,
   ICMP, UDP, TCP, exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC,
   and the TCP listener/accept data path are not implemented. DHCP, SLAAC, and
@@ -127,7 +127,7 @@ P5.4.2 established device-untyped/MMIO/IRQ/DMA construction in `slime-root`, a b
 the two-component QEMU proof all landed; `just io_queue_check` boots the plane and
 asserts round trip, backpressure, late-completion rejection, reset epoch cutover,
 and malformed-slice refusal, with 54 host tests behind the structural refusals.
-**Evidence:** [`devlog/2026-08-28-io0-queue-substrate/`](../devlog/2026-08-28-io0-queue-substrate/index.md)
+**Evidence:** [`devlog/2026-08-28-io0-queue-substrate/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-28-io0-queue-substrate/index.md)
 
 **Depends on:** C7 shared-buffer identities, mappings, loans, quotas, and fault reclamation; C9.2 bounded WaitSets; C9.4 supervised restart terminal states.
 
@@ -181,7 +181,7 @@ and request settlement before task-object reclamation. The boot transcript repor
 and zero outstanding requests reclaimed to exact zero, then respawns the driver at
 epoch 2 and refuses predecessor epoch 1. IO1's restart tally includes DMA charges now
 that live-loan payload DMA and driver-owned contiguous queue DMA have landed.
-**Evidence:** [`devlog/2026-08-28-io1-hardware-resource-authority/`](../devlog/2026-08-28-io1-hardware-resource-authority/index.md)
+**Evidence:** [`devlog/2026-08-28-io1-hardware-resource-authority/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-28-io1-hardware-resource-authority/index.md)
 
 **Depends on:** IO0, C7 generation-v3 rights and quotas, C9.4 supervision/reclamation, and the P1/P5 architecture boundary.
 
@@ -317,7 +317,7 @@ direct-map path is not admitted. Interrupt *authority* is granted and reclaimed
 (`reclaimed_irq_sources`), but this device completes faster than the line is
 dispatched, so completions are serviced by draining the used ring; no
 interrupt-sequence marker is claimed.
-**Evidence:** [`devlog/2026-08-28-io3-userspace-virtio-net/`](../devlog/2026-08-28-io3-userspace-virtio-net/index.md)
+**Evidence:** [`devlog/2026-08-28-io3-userspace-virtio-net/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-28-io3-userspace-virtio-net/index.md)
 
 **Device-boundary hardening, 2026-08-29 (B86, B87).** IO3's original driver
 validated its client and largely trusted its device: the used-ring descriptor
@@ -331,7 +331,7 @@ point. The rules are now three pure helpers in `components/lib/src/virtio_mmio.r
 covered by seven host tests under `just test_host`, and the plane's reset marker
 asserts `tx-stalled=0 device-refused=0` so a refusal of legitimate traffic
 becomes visible. **Evidence:**
-[`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
+[`devlog/2026-08-29-b86-virtio-net-device-boundary/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
 
 **Depends on:** IO0, IO1, and IO2 as the first complete substrate proof.
 
@@ -387,7 +387,7 @@ literal is gone from the decoder and its encoder, and the module went from 3
 positive-path tests to 9 covering the refusal arms that previously had none.
 Four parser mutations and one corrupted generated offset each fail the suite.
 **Evidence:**
-[`devlog/2026-08-29-b88-network-destination-generated-offsets/`](../devlog/2026-08-29-b88-network-destination-generated-offsets/index.md)
+[`devlog/2026-08-29-b88-network-destination-generated-offsets/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-29-b88-network-destination-generated-offsets/index.md)
 
 **Unimplemented and not claimed:** Ethernet framing, ARP, IPv4, ICMP, UDP, TCP,
 exact-name DNS framing/resolution, IPv6/NDP, DHCP, SLAAC, and the TCP
@@ -402,7 +402,7 @@ or listening must treat IO4 as unfinished.
 `LinkDevice` operation. The service therefore does not demonstrate a backend boundary
 or backend independence. IO3 separately qualifies virtio-net `LinkDevice`; physical
 link qualification remains H6/H12/RP.
-**Evidence:** [`devlog/2026-08-28-io4-network-service/`](../devlog/2026-08-28-io4-network-service/index.md)
+**Evidence:** [`devlog/2026-08-28-io4-network-service/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-28-io4-network-service/index.md)
 
 **Depends on:** IO3, C9 clocks/WaitSets/restart where timers and reconnect use them, and generation/capability introspection.
 
@@ -681,7 +681,7 @@ Kani entered the flake on 2026-08-29 as a dedicated `.#kani` devShell plus a
 runs against a bundle pinned by its published sha256 and a toolchain pinned as
 a store path. Bare `just kani_io_proofs` still works wherever `cargo-kani` is
 already on `PATH`. Evidence:
-[`devlog/2026-08-29-kani-in-flake/`](../devlog/2026-08-29-kani-in-flake/index.md).
+[`devlog/2026-08-29-kani-in-flake/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-29-kani-in-flake/index.md).
 
 ### Exit condition (observed)
 
@@ -790,7 +790,7 @@ disabling the proof module fails the gate, and deleting a single
 `#[kani::proof]` attribute is caught by the harness-count assertion while Kani
 itself still reports `VERIFICATION:- SUCCESSFUL`.
 
-**Evidence:** [`devlog/2026-08-29-b86-virtio-net-device-boundary/`](../devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
+**Evidence:** [`devlog/2026-08-29-b86-virtio-net-device-boundary/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-29-b86-virtio-net-device-boundary/index.md)
 
 ### Boundary
 

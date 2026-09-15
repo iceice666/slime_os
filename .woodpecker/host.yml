@@ -38,7 +38,7 @@ matrix:
       COMMAND: ruff check scripts/; typos
     - JOB: docs_gates
       TIMEOUT: 15
-      COMMAND: just x86_portability_check; just framework_safety_check; just devlog_check; just sel4_gate_control_check; python3 scripts/check/check-generation-v5.py --check-controls
+      COMMAND: just x86_portability_check; just framework_safety_check; just docs_check; just sel4_gate_control_check; python3 scripts/check/check-generation-v5.py --check-controls
     - JOB: work_items
       TIMEOUT: 20
       COMMAND: just tasks_check

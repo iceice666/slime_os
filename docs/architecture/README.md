@@ -40,7 +40,7 @@ store for scope, state, relationships, and observed exit conditions.
 - `AGENTS.md` maps implementation work to canonical source owners and narrow
   verification gates.
 
-The [roadmap classification](../../roadmap/README.md) identifies historical
-milestone material awaiting verified H3 archival and detailed requirements not
-yet extracted. Retained detail remains authoritative only for its explicitly
-unextracted scope; extracted subjects use the owners above.
+The [roadmap classification](../../roadmap/README.md) names detailed requirements
+not yet extracted. Retained detail remains authoritative only for that scope;
+extracted subjects use the owners above. Historical investigations are preserved
+in the [private archive](../history.md), never required by product checks.

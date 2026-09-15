@@ -87,5 +87,7 @@ Current executable gates include:
   exempt from equality;
 - `just sel4_gate_control_check` — negative control over the marker contracts.
 
-Historical C8 delivery order remains in `roadmap/02-core-runtime.md` until H3;
-this page is the current subsystem owner.
+Historical C8 delivery order and unextracted requirements remain in
+[`roadmap/02-core-runtime.md`](../../roadmap/02-core-runtime.md); this page is the
+current subsystem owner. Its historical evidence links resolve to the immutable
+archive described in [the history guide](../history.md).
