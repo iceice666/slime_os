@@ -1,0 +1,64 @@
+{
+  formatVersion = 1;
+  name = "uart16550-driver";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Bounded 16550 transmit on a declared device page, serving serial-device v1 on the platform's line; resident and refusing when bound no device.";
+  implementation = {
+    provider = "workspace";
+    binary = "uart16550-driver";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "device";
+    "endpoint";
+    "mmioRegion";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+      "device";
+    ];
+  };
+  health = "required";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/serial-device/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "sel4_mavlink_graph_check boots generation 56 under QEMU, where no port for this driver exists, and the heartbeat producer calls it once a second";
+    expectedResult = "the driver binds no device, stays resident, answers every request with STATUS_NO_DEVICE, and the graph stays healthy";
+    passFailCriteria = "[uart16550-driver] device absent, refusing requests";
+    requiredTestEnvironment = "sel4_mavlink_graph_check";
+  };
+}

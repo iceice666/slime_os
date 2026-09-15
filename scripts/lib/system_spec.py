@@ -92,6 +92,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-io-queue": "sel4-io-queue.zti",
     "sel4-lifecycle-restart": "sel4-lifecycle-restart.zti",
     "sel4-loan": "sel4-loan.zti",
+    "sel4-mavlink": "sel4-mavlink.zti",
     "sel4-operation": "sel4-operation.zti",
     "sel4-powerbox": "sel4-powerbox.zti",
     "sel4-private-memory": "sel4-private-memory.zti",

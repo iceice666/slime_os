@@ -862,6 +862,72 @@ the driver's seam and a board gate that observes the pad.
 
 **Evidence:** [`devlog/2026-09-14-io8-pwm-servo/`](../devlog/2026-09-14-io8-pwm-servo/index.md)
 
+## IO9 — Bounded serial transmit and a clock-paced heartbeat producer
+
+**Status:** Complete 2026-09-15 on QEMU and host evidence: the `sel4-mavlink`
+composition admits, its serial driver binds no device and stays resident
+answering `STATUS_NO_DEVICE`, the heartbeat producer sends one MAVLink v2
+HEARTBEAT per second on a fixed deadline grid and reports each refusal, and
+the graph stays healthy, guarded by `just sel4_mavlink_graph_check`. The line
+behind the driver is a platform's, and this tree carries none.
+
+**Depends on:** IO8 for the declared-device inventory the driver is granted
+through.
+
+### Why this exists
+
+A component could not put a byte on a serial port: the root's UART path reads
+the console, and nothing granted a userspace driver a transmit line. A
+telemetry link is also periodic, which needs a component to pace itself in
+real time rather than in scheduler turns. IO9 is the smallest vendor-neutral
+facility for both: a byte-transparent transmit protocol, a driver for the
+most common UART register model, and a producer of the most common telemetry
+frame.
+
+### What lands
+
+- `contracts/serial-device/v1`: a 64-byte request (`op`, `length`, up to 52
+  payload bytes, canonical zeroes) and a 16-byte reply (`bytes_written`, a
+  signed `status`, the transmitter-empty bits), rendered to
+  `components/proto/src/serial_device.rs`, with seven distinct statuses
+  generated from the schema.
+- `contracts/mavlink-heartbeat/v1`: the 21-byte MAVLink v2 HEARTBEAT layout,
+  the identity a Slime heartbeat declares, and three pinned frames, rendered
+  both to `components/proto/src/mavlink_heartbeat.rs` and to
+  `scripts/lib/mavlink_heartbeat_contract.py`. The checksum is arithmetic,
+  not format: `components/proto/src/mavlink.rs` and `scripts/lib/mavlink.py`
+  each implement it, and both reproduce the pinned frames byte for byte.
+- `components/lib/src/uart16550.rs`: 16550 line configuration with every
+  latch read back, and polled transmit whose every wait has a deadline of four
+  character times at the line's own rate, over a register trait, host-tested
+  against a scripted register model.
+- `components/services/uart16550-driver`: slots endpoint 0, device 1, region 2;
+  binds its declared device, maps the first page, refuses on a failed bind or
+  a virtio magic, and asks the platform's `line.rs` for the clock, divisor,
+  and register layout. The line this tree carries is none, so on every plane
+  here the driver refuses. Requests are received blocking and answered
+  through the caller's reply capability.
+- `components/applications/mavlink-heartbeat`: one frame per period of the
+  root's reported counter rate, on a grid of deadlines that a slow send or a
+  late wake never shifts, arming at most one timer per wait.
+- `contracts/system-spec/v1/systems/sel4-mavlink.zti` (generation 56): the
+  product graph plus both components, the producer's timer notification and
+  clock row, and the driver's budget of one 4 KiB region and one mapping.
+  Init launches any declared resident driver or producer before Slisp.
+
+The rate syscall this needed, `clock RATE_READ`, was already in the tree.
+
+### Boundary
+
+QEMU has no port the graph can bind, so the plane proves admission, launch
+order, the declared quota, the refusal path, the call/reply pairing, and the
+producer's deadline arithmetic, never a byte on a wire. Wall-clock cadence is
+not judged under QEMU, whose counter follows the host. The first byte on
+silicon needs a platform's line in the driver's seam and a board gate that
+decodes the frames on the far end.
+
+**Evidence:** [`devlog/2026-09-15-io9-serial-tx/`](../devlog/2026-09-15-io9-serial-tx/index.md)
+
 ## Consumption by later subsystems
 
 Later milestones reuse the substrate but retain their own semantics:
