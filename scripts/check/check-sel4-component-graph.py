@@ -169,9 +169,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("Slisp reported the accepted spawn", TERMINAL_MARKER),
 )
 
-# Component-spec evidence literal: startup scheduling may print this after the
-# terminal Slisp marker, so product admission checks its declared source string
-# without making it part of the bounded transcript prefix.
+# Component-spec evidence literal (`contracts/component-spec/v1/components/
+# spawn-service.zti` names it as this gate's pass/fail criterion). spawn-service
+# prints it at entry, before the `[spawn-service] request` marker the ordered
+# chain pins, so it is always inside the bounded transcript; its position
+# relative to other actors' output is a scheduling detail, so it is unordered.
 SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
 
 # Evidence that must appear but whose position cannot be pinned, because a
@@ -183,6 +185,7 @@ SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
 # fail intermittently on whichever ran second.
 EXPECTED_UNORDERED: tuple[str, ...] = (
     r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
+    SPAWN_SERVICE_READY,
 )
 
 # B50 is a repository-wide cutover. Guard every surviving implementation source
