@@ -32,15 +32,17 @@ For current subsystem rationale, start at [`docs/architecture/`](docs/architectu
 
 | Change | Canonical starting point | Follow-on files |
 | --- | --- | --- |
-| Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`, generation grants in `contracts/generation-manifest/v1/compositions/sel4-*.zti` |
+| Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`; grants are declared in the system spec below |
 | Native endpoint IPC, message bounds, endpoint lifetime | `slime-root/src/peer_endpoint.rs` | `slime-root/src/{ipc,notification}.rs`, `components/runtime/src/syscall/sel4_transport.rs` |
 | Tasks, spawn, supervision, termination, reclamation | `slime-root/src/task.rs` | `slime-root/src/{main,child_vspace,fault,supervision}.rs` |
 | Syscall argument validation and rights gates | `slime-root/src/ipc.rs` | owner modules in `slime-root/src/`, wrappers in `components/runtime/src/syscall.rs` |
 | seL4 object allocation and VSpace construction | `slime-root/src/object_allocator.rs` | `slime-root/src/{child_vspace,buffer_adapter}.rs` |
 | Shared-buffer allocation, mapping, loan, accounting | `slime-root/src/shared_buffer.rs` | `slime-root/src/{buffer_adapter,transfer_window,ipc}.rs` |
-| Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, manifest fixtures below |
+| Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, system specs below |
 | Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
-| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation-manifest/v1/compositions/sel4-*.zti`, `components/build-support/src/lib.rs` |
+| Composition: which components run, grants, slots, budgets, health | `contracts/system-spec/v1/systems/<name>.zti` | derivation map `DERIVED_GENERATION_FIXTURES` in `scripts/lib/system_spec.py`; regenerate with `python3 scripts/generate/generate-generation-from-spec.py`; `just system_spec_check` refuses drift. `contracts/generation-manifest/v1/{compositions,fixtures}/*.zti` are derived outputs |
+| Generation construction and manifest encoding | `scripts/build/build-generation.py` | `contracts/generation-manifest/v1/schema.zt`, `components/build-support/src/lib.rs` |
+| System-image closure: the build key every `sel4_*` gate resolves before booting | `scripts/generate/generate-system-image-closures.py` | `contracts/system-image-closure/v2/{closures,negative}/*.zti` are derived outputs recording a tree digest of `slime-root`, `boot-contracts`, `components/{lib,proto,runtime,build-support}`, each closed-over component crate, `just`, `Cargo.{toml,lock}`, `contracts/{component-spec,interface-schema,system-spec}`, and `deps/rust-sel4`. After editing any of those, rerun the generator and commit the closures with the change, or every plane gate refuses with `closure does not resolve: … identity mismatch`. Resolver: `scripts/lib/system_image_closure.py`; drift gate: `just system_image_builder_check` |
 | Component image format/loading | `contracts/component/v2/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs`; v1 is retained format history |
 | Userspace component behavior | `components/<lifecycle>/<component>/src/main.rs` | shared helpers in `components/lib/src/*.rs`; the crate's own `components/<lifecycle>/<component>/Cargo.toml` |
 | Userspace syscall ABI | `components/runtime/src/syscall.rs` | seL4 transport in `components/runtime/src/syscall/sel4_transport.rs`, root implementation in `slime-root/src/ipc.rs` |
@@ -53,16 +55,16 @@ For current subsystem rationale, start at [`docs/architecture/`](docs/architectu
 | Host build/check orchestration | `Justfile` target | implementation in `scripts/{build,check,generate,lib}/` |
 | Root behavioral regression | `slime-root/src/<module>.rs` tests | run `just test_sel4_root` and the matching `just sel4_*_check` |
 | Protocol validation regression | `components/proto/tests/<protocol>.rs` | generated protocol module and schema |
-| Adding a component | new `components/{system,services,applications,testkit}/<name>/` crate | the matching `Cargo.toml` workspace member glob plus its `[profile.release.package]` stanza, a `contracts/component-spec/v1/components/` record, and a generation-manifest entry; `just component_crate_split_check` gates the shape |
+| Adding a component | new `components/{system,services,applications,testkit}/<name>/` crate | the matching `Cargo.toml` workspace member glob plus its `[profile.release.package]` stanza, a `contracts/component-spec/v1/components/` record, and a `contracts/system-spec/v1/systems/` entry with its regenerated manifest; `just component_crate_split_check` gates the shape. [`docs/getting-started/05-add-a-component.md`](docs/getting-started/05-add-a-component.md) walks it end to end |
 
 ### Generated-code rule
 
-Files beginning with `@generated` and files under `boot-contracts/src/generated/` are outputs, not sources. Change the matching `contracts/.../schema.zt` or `gen_rust.zt`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen`. `components/build-support` separately generates the build-time command tables from `contracts/generation-manifest/v1/fixtures/valid.zti` into each consuming crate's `OUT_DIR`, and copies the per-plane fabric profile the host builder renders.
+Files beginning with `@generated`, files under `boot-contracts/src/generated/`, every manifest named in `DERIVED_GENERATION_FIXTURES` (`scripts/lib/system_spec.py`), and every closure under `contracts/system-image-closure/v2/` are outputs, not sources. Change the matching `contracts/.../schema.zt`, `gen_rust.zt`, or `contracts/system-spec/v1/systems/*.zti`, then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen` / `generate-generation-from-spec.py` / `generate-system-image-closures.py`. `components/build-support` separately generates the build-time command tables from the derived `contracts/generation-manifest/v1/fixtures/valid.zti` into each consuming crate's `OUT_DIR`, and copies the per-plane fabric profile the host builder renders.
 
 ### Navigation traps
 
 - `slime-root/src/lib.rs` exposes the mechanism modules host tests compile; the product binary in `slime-root/src/main.rs` links those same modules.
-- A component's capability slot layout is established by grants in the matching `contracts/generation-manifest/v1/compositions/sel4-*.zti` and generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority.
+- A component's capability slot layout is established by grants in the matching `contracts/system-spec/v1/systems/<plane>.zti`, the manifest derived from it under `contracts/generation-manifest/v1/compositions/`, and the generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority; edit only the system spec.
 - `scripts/check/` contains end-to-end QEMU assertions and expected serial markers; it is verification code, not the implementation of the behavior it checks.
 
 ## Commands
@@ -73,6 +75,7 @@ Use the Justfile targets from the repository root:
 - `just test` — run the root/product behavioral aggregate.
 - `just generation_check` — build and validate the deterministic seL4 generation.
 - `just contracts_check` — validate generation manifest contracts.
+- `just system_spec_check` — validate system specs and refuse a derived composition manifest that drifted from its spec.
 - `just sel4_root_boot_check` — root admission, allocator, timer, fault isolation, cleanup, and ready path.
 - `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
 - `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
@@ -93,7 +96,7 @@ Use the Justfile targets from the repository root:
 - `just machete` — unused-dependency scan of workspace crates.
 - `just miri` — UB check of host-testable crates.
 - `just test_host` — host-side unit tests for boot-contracts and slime-proto.
-- `just test_sel4_root` — `slime-root`'s 243 host unit tests across 21 modules, with the count asserted (B23); requires the installed seL4 prefix.
+- `just test_sel4_root` — `slime-root`'s host unit tests, with the count asserted in `just/quality.just` (B23); raise it deliberately when adding tests. Requires the installed seL4 prefix.
 - `just ruff` — Python lint for `scripts/`.
 - `just typos` — spell-check sources and docs.
 
@@ -102,6 +105,8 @@ Use the Justfile targets from the repository root:
 `.tasks/items/` is the canonical record of work-item identity, state, hierarchy, and dependencies, managed by [MyQue](https://github.com/mozufu/myque). Canonical identity is the UUID a work item's filename carries. Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: they are optional, they may change, and no checker, devlog reference, dependency edge, or generated view may resolve through them. Do not allocate an id by scanning for the next number, and do not create a persistent relationship using a human key — use `myque` to create and mutate items, which allocates a UUIDv7 locally and writes relationships as UUIDs.
 
 Backlog defects are the items tagged `backlog`. Resolve, defer, or block every open one before starting a new track milestone; a green verification suite is a precondition for milestone work, not a milestone itself. `deferred` means postponed by decision and `blocked` means waiting on something outside this repository — both satisfy the rule, `open` and `active` do not. `just tasks_check` enforces that ordering and validates the store, and `just tasks_next` lists what is actionable. Create an item with `myque new "<title>" --kind bug --tag backlog`, which allocates the UUID; close it with `myque close`, which records the closure date, and record the exit condition that was *observed* in the item's body — a milestone closes on observed evidence, never on implementation status alone.
+
+Non-trivial work implements a canonical item that is already on `main`; land a work-item-only planning PR first, then the implementation PR. Never use GitHub auto-close keywords (`Closes`, `Fixes`, `Resolves`) against projected Issues, and never hand-edit `myque:*` markers or the `myque-gh` PR trailer. Only a genuine typo, broken link, format-only change, or mechanical maintenance with no behavioral or project-state consequence skips the landed-item requirement; judge semantics, not line count. [`CONTRIBUTING.md`](CONTRIBUTING.md) owns the full PR workflow.
 
 The old frozen backlog index is archived, not a live obligation. New and reopened defects belong only to the canonical store. Historical evidence uses the repository identity, full commit, and original path described in [`docs/history.md`](docs/history.md); archived task snapshots never participate in current validation or projection.
 
@@ -129,14 +134,12 @@ of the code in implementation comments.
 
 Place local invariants beside the implementation and stable subsystem rationale
 in the owning `docs/` or contract documentation. Prefer one to three precise
-sentences over defensive paragraphs. PR descriptions state the change, claim,
-risk, review surface, exact verification, and limits; work items record observed
-exit evidence. Historical investigation records explain how an older conclusion
-was reached and are referenced rather than duplicated.
+sentences over defensive paragraphs. Historical investigation records explain
+how an older conclusion was reached and are referenced rather than duplicated.
 
 ## Development rules
 
-- **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, and boot records — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
+- **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, and boot records — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt, as are readers and writers of externally specified formats (ELF, GPT, Ethernet/IP, MAVLink, SSH signatures) that Slime OS does not own; those may use `struct` with the standard's offsets.
 - Prefer small, direct changes over new abstractions.
 - Keep mechanism in `slime-root`; component policy belongs in userspace components.
 - Preserve the capability/component/generation model. Do not add ambient authority, global executable paths, or implicit environment assumptions.
@@ -159,17 +162,18 @@ QEMU planes do not by themselves justify top-level checker executables. Public
 `just` targets remain narrow and descriptive; several targets may invoke one
 checker with different cases.
 
-For seL4 planes, converge repeated mechanisms toward a shared
-`scripts/check/check-sel4-plane.py` entry point with focused modules under
-`scripts/check/sel4/`. The shared runner should own QEMU invocation, transcript
-collection, marker ordering, common failures, and common control or mutation
-machinery. Plane modules should own concrete expectations for boot, lifecycle,
-fabric, IO, storage, and similar domains. Extract only observed repetition; do
-not build a generic class-heavy test framework, and keep existing public gates.
+For seL4 planes, the shared mechanism lives in `scripts/lib/sel4_plane.py`
+(QEMU invocation, transcript collection, common failures, control and mutation
+machinery) and `scripts/lib/sel4_gate_markers.py` (marker chains and ordering).
+Each `scripts/check/check-sel4-*-plane.py` owns only its concrete expectations
+for boot, lifecycle, fabric, IO, storage, and similar domains. Move repeated
+QEMU or transcript handling into those libraries rather than copying it into a
+new plane script. Extract only observed repetition; do not build a generic
+class-heavy test framework, and keep existing public gates.
 
 ## Verification
 
-- For root or userspace behavior changes, run the narrowest seL4 QEMU path that exercises the changed behavior.
+- For root or userspace behavior changes, regenerate the system-image closures (`python3 scripts/generate/generate-system-image-closures.py`), then run the narrowest seL4 QEMU path that exercises the changed behavior. The generator refuses a tree holding gitignored files; a closure digest is a raw filesystem walk, so ignored build output would record bytes no clone reproduces.
 - For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
 - For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing.
 - For documentation-only changes, state that no runtime tests were run.

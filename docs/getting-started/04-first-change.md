@@ -34,24 +34,40 @@ This demonstrates the marker contract from the
    `[spawn-service] ready` debug line, and change the text — even one
    character.
 
-3. Run the gate again. It fails: the transcript no longer contains the
-   marker `spawn-service reached its service loop` pins, and the gate prints
-   the transcript plus exactly which expectation broke
-   (`scripts/check/check-sel4-component-graph.py` holds the table).
+3. Run the gate again. It refuses before booting:
+   `closure does not resolve: implementations[spawn-service].artifact:
+   identity mismatch for components/services/spawn-service`. Every seL4 gate
+   first resolves a system-image closure — a recorded digest of each source
+   tree the image is built from (`contracts/system-image-closure/v2/closures/`)
+   — and your edit changed one of those trees. Regenerate the closures:
 
-4. Revert your edit; run the gate green again.
+   ```sh
+   python3 scripts/generate/generate-system-image-closures.py
+   ```
 
-What you just observed: component output is contract surface. A real change
-to a marker updates the emitting code *and* the gate's marker table in the
-same commit, and the gate diff is the evidence the change was intended —
-never a reason to loosen the assertion.
+4. Run the gate a third time. Now it boots and fails on the marker:
+   `missing unordered marker: \[spawn-service\] ready`, with the transcript
+   tail and exactly which expectation broke
+   (`scripts/check/check-sel4-component-graph.py` holds the table; the
+   component's own spec in
+   `contracts/component-spec/v1/components/spawn-service.zti` names that
+   literal as its pass/fail criterion).
+
+5. Revert your edit, regenerate the closures again, and run the gate green.
+
+What you just observed, twice: component output is contract surface, and so
+is the identity of the source that produced it. A real change to a marker
+updates the emitting code, the gate's marker table, *and* the regenerated
+closures in the same commit; the gate diff is the evidence the change was
+intended — never a reason to loosen the assertion.
 
 ## The real workflow, by change kind
 
 **Behavior in the root or a component** — edit the owning module (per the
-index), run the narrowest `sel4_*` plane gate that exercises the path, and
-for root logic also `just test_sel4_root` (its test count is asserted; raise
-it deliberately when you add tests).
+index), regenerate the closures, run the narrowest `sel4_*` plane gate that
+exercises the path, and for root logic also `just test_sel4_root` (its test
+count is asserted; raise it deliberately when you add tests). Commit the
+closures with the change.
 
 **Anything with a wire format** — schema first, always:
 edit `contracts/<name>/vN/schema.zt`, regenerate with the matching
@@ -59,11 +75,14 @@ edit `contracts/<name>/vN/schema.zt`, regenerate with the matching
 `just contracts_check`. Never edit a file whose first line says
 `@generated`. See [contracts](../concepts/contracts.md).
 
-**Authority: grants, slots, budgets** — these live in the generation
-fixtures (`contracts/generation-manifest/v1/fixtures/`), not in component code.
-Expect `just sel4_boot_layout_check` to show the layout diff; bless it only
-when the diff is the change you meant. New rights or operations update
-[`../capability-matrix.md`](../capability-matrix.md) /
+**Authority: grants, slots, budgets** — these live in the system spec
+(`contracts/system-spec/v1/systems/<name>.zti`), not in component code and not
+in the manifests under `contracts/generation-manifest/v1/`, which are derived
+outputs. Edit the spec, run
+`python3 scripts/generate/generate-generation-from-spec.py`, commit both, and
+run `just system_spec_check`. Expect `just sel4_boot_layout_check` to show the
+layout diff; bless it only when the diff is the change you meant. New rights
+or operations update [`../capability-matrix.md`](../capability-matrix.md) /
 [`../syscall-abi.md`](../syscall-abi.md) in the same change — the latter is
 machine-enforced.
 
