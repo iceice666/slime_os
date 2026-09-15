@@ -86,6 +86,13 @@ EXTRA_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 # execution profile)`; the image resolves through the closure, so there is no
 # literal path to name.
 EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    # IO8 and IO9: the product-graph checker's other arms boot the product
+    # graph plus the pwm driver (`just sel4_pwm_graph_check`) and plus the
+    # serial driver and heartbeat producer (`just sel4_mavlink_graph_check`).
+    "sel4-component-graph": (
+        ("sel4-pwm", "sel4-pwm", "qemu-arm-virt"),
+        ("sel4-mavlink", "sel4-mavlink", "qemu-arm-virt"),
+    ),
     "sel4-private-memory": (
         (
             "sel4-private-memory-fail-large-map",
@@ -118,6 +125,7 @@ NOT_A_PLANE = {
     "check-sel4-gate-controls.py",  # asserts other gates reject bad input; boots nothing
     "check-sel4-pins.py",  # host-side pin assertion; boots nothing
     "check-sel4-trace-plane.py",  # analyses a transcript; boots nothing
+    "check-sel4-x86-64-image.py",  # P6.1 admission over built pc99 artifacts; boots nothing
 }
 
 

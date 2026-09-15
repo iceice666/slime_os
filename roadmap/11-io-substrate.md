@@ -796,6 +796,138 @@ internally, and its slot argument is driver-derived rather than device-derived.
 The virtio-blk driver needs none of this — it is single-outstanding and reads
 only the used *index* — so IO7 is IO3-scoped by fact, not by omission.
 
+## IO8 — Declared-device authority and the pwm-servo protocol
+
+**Status:** Complete 2026-09-14 on QEMU evidence: the `sel4-pwm` composition
+admits, its driver binds no device and stays resident answering
+`STATUS_NO_DEVICE`, Slisp's `(pwm 0 1600)` reaches it and comes back
+`! pwm no-device`, and the graph stays healthy, guarded by
+`just sel4_pwm_graph_check`. The register model behind the driver is a
+platform's, and this tree carries none.
+
+**Depends on:** IO1 for the device, region, and budget mechanism the driver is
+granted through.
+
+### Why this exists
+
+IO1 resolves a driver's hardware only by scanning the virtio-mmio window, so a
+physical block at a fixed address — a SoC's PWM controller, later its Ethernet
+MAC — could not be granted to a userspace driver at all. IO8 adds the other
+half: an inventory the platform *declares* rather than discovers, and the first
+device-specific protocol that uses it.
+
+### What lands
+
+- `AuthorityInventory::declared(region)` in `slime-root/src/device.rs`: one
+  pre-carved region is device 0 at offset 0, and nothing else is inventoried.
+  The inventory moved from the binary's platform module into the device
+  module so that its shape is host-tested; the platform module keeps only
+  how a scan fills it. A board's root feeds it from its own carve.
+- `contracts/pwm-servo/v1`: a 32-byte request (`channel`, `period_us`,
+  `pulse_us`, no flags) and a 16-byte reply (`status`, `detail` = the period
+  word read back), rendered to `components/proto/src/pwm_servo.rs` and to
+  the C header `components/runtime/include/slime/pwm_servo.h`, with the
+  bounds and the seven statuses generated from the schema.
+- `components/services/pwm-servo-driver`: slots endpoint 0, device 1, region 2;
+  binds its declared device, maps the block's first page, and refuses to
+  serve when the bind fails, when the page's word 0 carries a virtio magic,
+  or when the page is one its register model does not know. Each request is
+  admitted in the order channel, period, pulse, each with its own status,
+  before the model is asked to write; a channel driving above idle for which
+  the device has accepted no request for ten seconds is returned to the idle
+  width, and a return the device refuses is retried each second
+  (`components/lib/src/servo_failsafe.rs`, host-tested). Requests are
+  answered through the caller's reply capability, so a client that falls
+  silent mid-exchange cannot hold the failsafe. Only channels 0–5 are ever
+  programmed: no capability bound narrows a page to a channel, so that is
+  policy in the driver.
+- The register model is the seam a platform fills: `block.rs` in the driver
+  crate names `attach`, `program`, and `disable`, and the model this tree
+  carries attaches to nothing, so on every plane here the driver refuses.
+- Slisp `(pwm ch us)` / `(pwm ch us period_us)` as one call over slot 3
+  (`slime_endpoint_call` in the C runtime), an effect beside `spawn`; the host
+  harness pins one 32-byte request vector that
+  `components/proto/tests/pwm_servo.rs` pins from the other side.
+- `contracts/system-spec/v1/systems/sel4-pwm.zti` (generation 55): the
+  product graph plus the driver, with its device, region, endpoint, clock row,
+  and budget; init launches the driver before Slisp when the generation
+  declares it.
+
+### Boundary
+
+QEMU has no PWM block, so the plane proves admission, launch order, the
+declared quota, the refusal path, and the Slisp round trip — never a register
+write. The first write to real silicon needs a platform's register model in
+the driver's seam and a board gate that observes the pad.
+
+**Evidence:** [`devlog/2026-09-14-io8-pwm-servo/`](../devlog/2026-09-14-io8-pwm-servo/index.md)
+
+## IO9 — Bounded serial transmit and a clock-paced heartbeat producer
+
+**Status:** Complete 2026-09-15 on QEMU and host evidence: the `sel4-mavlink`
+composition admits, its serial driver binds no device and stays resident
+answering `STATUS_NO_DEVICE`, the heartbeat producer sends one MAVLink v2
+HEARTBEAT per second on a fixed deadline grid and reports each refusal, and
+the graph stays healthy, guarded by `just sel4_mavlink_graph_check`. The line
+behind the driver is a platform's, and this tree carries none.
+
+**Depends on:** IO8 for the declared-device inventory the driver is granted
+through.
+
+### Why this exists
+
+A component could not put a byte on a serial port: the root's UART path reads
+the console, and nothing granted a userspace driver a transmit line. A
+telemetry link is also periodic, which needs a component to pace itself in
+real time rather than in scheduler turns. IO9 is the smallest vendor-neutral
+facility for both: a byte-transparent transmit protocol, a driver for the
+most common UART register model, and a producer of the most common telemetry
+frame.
+
+### What lands
+
+- `contracts/serial-device/v1`: a 64-byte request (`op`, `length`, up to 52
+  payload bytes, canonical zeroes) and a 16-byte reply (`bytes_written`, a
+  signed `status`, the transmitter-empty bits), rendered to
+  `components/proto/src/serial_device.rs`, with seven distinct statuses
+  generated from the schema.
+- `contracts/mavlink-heartbeat/v1`: the 21-byte MAVLink v2 HEARTBEAT layout,
+  the identity a Slime heartbeat declares, and three pinned frames, rendered
+  both to `components/proto/src/mavlink_heartbeat.rs` and to
+  `scripts/lib/mavlink_heartbeat_contract.py`. The checksum is arithmetic,
+  not format: `components/proto/src/mavlink.rs` and `scripts/lib/mavlink.py`
+  each implement it, and both reproduce the pinned frames byte for byte.
+- `components/lib/src/uart16550.rs`: 16550 line configuration with every
+  latch read back, and polled transmit whose every wait has a deadline of four
+  character times at the line's own rate, over a register trait, host-tested
+  against a scripted register model.
+- `components/services/uart16550-driver`: slots endpoint 0, device 1, region 2;
+  binds its declared device, maps the first page, refuses on a failed bind or
+  a virtio magic, and asks the platform's `line.rs` for the clock, divisor,
+  and register layout. The line this tree carries is none, so on every plane
+  here the driver refuses. Requests are received blocking and answered
+  through the caller's reply capability.
+- `components/applications/mavlink-heartbeat`: one frame per period of the
+  root's reported counter rate, on a grid of deadlines that a slow send or a
+  late wake never shifts, arming at most one timer per wait.
+- `contracts/system-spec/v1/systems/sel4-mavlink.zti` (generation 56): the
+  product graph plus both components, the producer's timer notification and
+  clock row, and the driver's budget of one 4 KiB region and one mapping.
+  Init launches any declared resident driver or producer before Slisp.
+
+The rate syscall this needed, `clock RATE_READ`, was already in the tree.
+
+### Boundary
+
+QEMU has no port the graph can bind, so the plane proves admission, launch
+order, the declared quota, the refusal path, the call/reply pairing, and the
+producer's deadline arithmetic, never a byte on a wire. Wall-clock cadence is
+not judged under QEMU, whose counter follows the host. The first byte on
+silicon needs a platform's line in the driver's seam and a board gate that
+decodes the frames on the far end.
+
+**Evidence:** [`devlog/2026-09-15-io9-serial-tx/`](../devlog/2026-09-15-io9-serial-tx/index.md)
+
 ## Consumption by later subsystems
 
 Later milestones reuse the substrate but retain their own semantics:

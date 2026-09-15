@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-b40-missing";
-  baseClosureIdentity = "e3bccd9cf060cf19541fce5433cbad1ce1b6a87777643e5cf5962427725ddef5";
+  baseClosureIdentity = "d631b667eba1221f24ef8cbf15be9a996ad5fda7559bf644b3bce0b137bfefc3";
   mutation = "missing";
   expectedRefusal = "CSpaceMismatch";
 }

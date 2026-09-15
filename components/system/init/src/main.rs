@@ -144,13 +144,27 @@ fn main(startup_arg: u32) {
         .supervision_slot;
 
     if startup_arg == boot_contracts::generation::BootAction::Product.id() {
+        // A product generation may declare resident drivers and producers
+        // beside the shell (`sel4-pwm`, `sel4-mavlink`); each is launched,
+        // servers before their clients, before Slisp. The plain product graph
+        // declares none of them and launches none.
+        let component_pwm = spawn_declared(b"executable:pwm-servo-driver");
+        let component_uart = spawn_declared(b"executable:uart16550-driver");
+        let component_heartbeat = spawn_declared(b"executable:mavlink-heartbeat");
         let slisp_executable =
             slime_rt::resolve_binding(b"executable:slisp").unwrap_or_else(|_| slime_rt::exit(1));
         let component_slisp = slime_rt::spawn(slisp_executable, &[])
             .unwrap_or_else(|_| slime_rt::exit(1))
             .supervision_slot;
         slime_rt::debug_write(b"[init] product services resident\n");
-        supervise_resident(&[component_console, component_spawn_service, component_slisp]);
+        supervise_resident(&[
+            Some(component_console),
+            Some(component_spawn_service),
+            component_pwm,
+            component_uart,
+            component_heartbeat,
+            Some(component_slisp),
+        ]);
     }
 
     let shutdown = slime_proto::spawn::WireSpawnRequest {
@@ -182,9 +196,19 @@ fn main(startup_arg: u32) {
     slime_rt::exit(0);
 }
 
-fn supervise_resident(handles: &[u32]) -> ! {
+/// Launch the executable the generation declares under `name`, or nothing when
+/// it declares none; a declared executable that fails to spawn is fatal.
+fn spawn_declared(name: &[u8]) -> Option<u32> {
+    slime_rt::resolve_binding(name).ok().map(|executable| {
+        slime_rt::spawn(executable, &[])
+            .unwrap_or_else(|_| slime_rt::exit(1))
+            .supervision_slot
+    })
+}
+
+fn supervise_resident(handles: &[Option<u32>]) -> ! {
     loop {
-        for handle in handles {
+        for handle in handles.iter().flatten() {
             if slime_rt::supervision_status(*handle)
                 .unwrap_or_else(|_| slime_rt::exit(1))
                 .is_some()
