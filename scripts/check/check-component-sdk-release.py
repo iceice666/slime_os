@@ -14,7 +14,7 @@ booting.
 
 The one clause this gate cannot observe is the hosted repository's branch
 protection and credential boundary, which is a GitHub setting rather than a
-repository artifact. `roadmap/10-component-platform.md` records it as configured
+repository artifact. `docs/architecture/component-system-image.md#qualification-limits` records hosted state as unqualified
 rather than gate-proven, on the same terms this repository already refuses to
 call QEMU evidence board evidence.
 """

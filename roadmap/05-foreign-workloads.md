@@ -8,15 +8,9 @@
 > proposed foreign-workload interfaces below. Original status and sequencing are
 > retained context; MyQue owns work state. See the [file classification](README.md).
 
-> **Not authoritative.** Work-item identity, state, and relationships live in
-> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
-> This file holds the problem statements, boundaries, and sequencing behind them.
-> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
-
 | | |
 | --- | --- |
 | **Purpose** | Run selected Linux workloads without changing Slime's native ABI or importing Linux's ambient authority model. |
-| **Status** | Not started. X1 is the first compatibility route; X2 is a later, separately gated route. |
 | **Dependencies** | X1 consumes the completed M5.4 content-addressed store and M6 spawn, endpoint-minting, and userspace-filesystem machinery in [Foundations](01-foundations.md), plus the [IO4 network-service contract](11-io-substrate.md#io4--network-service-and-exact-destination-authority) for networked workloads and P0/P1 target/artifact boundaries in [Architecture portability](07-architecture-portability.md). X2 additionally consumes IO2/IO4 service contracts; as an x86-64 Framework AMD-V route it still requires H4 AMD-IOMMU containment and an observed virtualization-enablement gate. [ROS 2 compatibility](03-ros2-compatibility.md) R3 may consume a route only on a target for which that route and executable closure are admitted. |
 
 Linux compatibility remains a userspace facility. Native Slime components continue to use the capability-based Slime ABI; neither track adds Linux syscalls, FHS paths, process-global environment state, or ambient filesystem and network lookup to that ABI. A foreign workload is still one generation-declared component contract: a content-addressed image, a selected compatibility backend, bounded configuration, and an explicit grant set.
@@ -24,8 +18,6 @@ Linux compatibility remains a userspace facility. Native Slime components contin
 Foreign compatibility is architecture-qualified. X1's syscall-to-service semantics may be ported across admitted Slime targets, but each Linux executable, loader ABI, and personality build is validated for one exact architecture profile. X2 does not exist on AArch64 or RV64: a future hardware-virtualization route there would require a separately named milestone and target-specific containment evidence rather than reusing the AMD-V claim.
 
 ## X1: Linux userspace personality
-
-**Status:** Not started. This is the primary and first compatibility route.
 
 ### Deliverables
 
@@ -51,9 +43,28 @@ Foreign compatibility is architecture-qualified. X1's syscall-to-service semanti
 
 **Exit condition:** A Linux binary declared as a container in the generation runs under the personality, confined to its declared directory, network, time, randomness, process, and other service grants; everything else is denied with a normal Linux errno, and its complete authority is visible and diffable in the manifest.
 
+### Remaining personality design questions
+
+The fixed, versioned syscall subset and content-addressed image are selected
+above; they are no longer alternatives to best-effort coverage or path lookup.
+Size that subset against a minimal real workload, such as a static
+busybox-class binary, with each syscall's service, required grant, and absent-grant
+errno tabulated. Coverage determines when a workload needs X2 instead.
+
+Still decide whether filesystem authority is a directory into the shared store
+or a private writable state binding, and how its quota composes with the
+[resource-account proposal](../docs/directions/25-resource-accounts.md). Also
+choose the first admitted process shape (one process or a bounded tree) and the
+exact `fork`/`exec` translation within the explicit-subset spawn rule above.
+Clock and randomness mapping consumes [D3's explicit clock/entropy authority](08-native-development.md#deterministic-component-authority).
+
+The [archived direction 31](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/31-compat-personality.md)
+preserves the personality-first/VM-later design origin; neither route becomes
+implemented by extracting it here.
+
 ## X2: Isolated AMD-V guest VM
 
-**Status:** Later. X2 does not block X1 and MUST NOT begin hardware-backed guest execution until H4 IOMMU containment and AMD-V enablement have been observed on the target.
+X2 MUST NOT begin hardware-backed guest execution until H4 IOMMU containment and AMD-V enablement have been observed on the target.
 
 **Architecture boundary:** X2 applies only to the x86-64 Framework/AMD-V profile. It is not a generic `X2` release dependency for AArch64 or RV64.
 
@@ -77,6 +88,14 @@ X2 reuses X1's generation-level foreign-workload contract rather than creating a
 - The manifest and authority diff expose the same complete workload grant contract whether its selected backend is X1 or X2.
 
 **Exit condition:** After the physical AMD-V and H4 IOMMU gates pass, a generation-declared Linux guest runs under AMD-V with bounded guest memory and an audited virtio surface; it can use only its declared service-backed devices and destinations, all physical DMA remains IOMMU-contained, and its complete authority is visible and diffable in the manifest. QEMU verification alone cannot complete X2.
+
+### Remaining guest design questions
+
+Choose the initial audited virtio device subset and whether guest memory is
+charged to the spawner's resource account; bounded VM memory alone does not
+settle account ownership. Workloads requiring custom kernels or syscalls outside
+X1's translation profile motivate this route. The device-model design remains
+paper work until the X2 and H4 physical-enablement prerequisites permit execution.
 
 ## ROS 2 relationship
 

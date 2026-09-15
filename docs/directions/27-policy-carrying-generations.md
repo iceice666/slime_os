@@ -2,11 +2,8 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | authority |
-| Depends on | M5.5 machine-readable grants (complete); the M5.6 activation path (complete) |
 | Enables | turns [entry 1](01-authority-diff-gate.md)'s CI gate into a boot gate |
-| Now | Fully unblocked: both dependencies are landed. Invariant-section format, builder computation, and verification-hook placement are all designable and implementable as host-side/builder work today. |
 
 ## Motivation
 
@@ -20,21 +17,6 @@ component outside the allowlist reaches `BLOCK_WRITE`" — computed by the
 builder from the manifest and re-verified before activation. The CI gate
 becomes a boot gate: editing a manifest to widen grants without
 recomputing the invariant section makes the generation unbootable.
-
-## What exists today
-
-- M5.5 (complete) provides deterministic, byte-identical generation
-  output with machine-readable 1:1 rights strings — the invariant section
-  can be computed deterministically and covered by the generation's own
-  integrity hashes.
-- M5.6 (complete) provides the activation path: the immutable disk-backed seL4
-  selector spends pending attempts before reading candidate bytes and verifies
-  the generation/release closure before `slime-root` launches it; the health
-  service confirms or rolls back after boot. Both are candidate verification points.
-- [entry 9](09-grant-graph-introspection.md)'s grant-graph engine is the
-  evaluator: an invariant is a predicate over the same graph.
-- [entry 24](24-rights-algebra-model.md) defines the widening order the
-  predicates express.
 
 ## Design sketch
 
@@ -78,11 +60,3 @@ invariants the policy itself is data, not kernel code.
 A generation whose grants violate its carried invariant is rejected before its
 component graph launches; a valid generation with a tampered invariant section
 fails verification.
-
-## Probe guidance
-
-Legal today end to end on the host: define the predicate language over
-format-v2 manifests, implement builder computation plus recomputation
-check, and demonstrate both failure modes against fixture manifests.
-The probe's output is the format proposal and a measured evaluation cost, which
-decides the selector/root versus bootstrap/health split before promotion.

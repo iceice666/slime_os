@@ -1,29 +1,12 @@
 # Native development, live update, and on-device build track
 
-> **H2 routing — unextracted plan retained.** This file still owns D1–D7 source
-> workspaces, direct language backend ownership, hermetic build/provenance,
-> ephemeral admission, transactional live cutover, authorized generation
-> construction and full-generation reproduction requirements. These are not
-> historical-only or implemented capabilities. Current image and authority
-> boundaries are in [component/system/image architecture](../docs/architecture/component-system-image.md)
-> and [runtime authority](../docs/architecture/runtime-authority.md); those pages
-> do not replace the unextracted development-service design. Original status and
-> sequencing remain context; MyQue owns state. See the [file classification](README.md).
-
-> **Not authoritative.** Work-item identity, state, and relationships live in
-> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
-> This file holds the problem statements, boundaries, and sequencing behind them.
-> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
-
 **Purpose:** Let a user author source inside Slime OS, compile a native program directly into the admitted component-image format, execute it without rebooting under explicit development authority, turn tested artifacts into release-authorized generations, switch compatible userspace components at runtime, and eventually reproduce a complete generation on-device.
-
-**Status:** Not started.
 
 **Decision:** Slisp is both the interactive language and the first non-Rust application language. Zutai remains Slime's only schema/configuration language. Slisp owns syntax, evaluator/compiler behavior, and its standard library; Slime owns executable-image, target, syscall, capability, build, admission, generation, activation, and verification contracts.
 
-**Source directions:** [direction 3](../docs/directions/03-nondeterminism-as-capabilities.md), [direction 23](../docs/directions/23-build-provenance.md), and [direction 30](../docs/directions/30-deterministic-on-device-builds.md).
+**Source directions:** [archived direction 3](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/03-nondeterminism-as-capabilities.md), [archived direction 23](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/23-build-provenance.md), and [archived direction 30](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/30-deterministic-on-device-builds.md).
 
-**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory, spawn, generation-management, input, and transfer mechanisms; Slisp's verified non-Rust component path; [P0](07-architecture-portability.md#p0-architecture-target-and-executable-artifact-contracts); and [C9](02-core-runtime.md#c9-robot-runtime-authority) for explicit time and lifecycle control.
+**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory, spawn, generation-management, input, and transfer mechanisms; Slisp's verified non-Rust component path; [target-qualified executable admission](../docs/architecture/targets-and-portability.md); and [C9](../docs/architecture/runtime-authority.md) for explicit time and lifecycle control.
 
 ## Boundaries
 
@@ -66,18 +49,7 @@ normalized source closure
     -> ephemeral admission OR generation construction
 ```
 
-## Sequencing
-
-1. D1 begins from completed M6 storage/directory mechanisms and the resident Slisp REPL. D2 extends the already producer-neutral external-artifact path into a direct Slisp image backend.
-2. D3 composes D1 and D2 with C9 time/lifecycle authority and the existing per-spawner/per-holder resource accounting into a hermetic on-device build service.
-3. D4 consumes D3 output through a new bounded executable-admission mechanism and closes the first edit → compile → run loop without changing BootState.
-4. D5 is an independent C8/C9 lifecycle slice over signed generations; it introduces the narrow, transactional live-update class and deterministic reboot-required classification.
-5. D6 composes D4 and D5 with M6 generation management: local artifacts are tested ephemerally, authorized externally, then either switched live or selected for next boot.
-6. D7 reproduces the reference mixed-language generation on-device. Because the current tree is Rust, its first complete-system gate consumes X1 for a confined pinned Rust toolchain unless a native Rust compiler route proves the same contract first.
-
 ## D1 — In-system source workspace and script loop
-
-**Status:** Not started.
 
 **Depends on:** M6.3 directory capabilities, the spawn service, and the resident Slisp REPL.
 
@@ -107,8 +79,6 @@ just authoring_check
 Inside QEMU, a user creates a project, edits and commits source, reopens the identical snapshot, and runs a stored Slisp program; an ungranted editor/program cannot observe or modify another directory or launch a command outside its profile.
 
 ## D2 — Producer-neutral image contract and direct language backend
-
-**Status:** Not started.
 
 **Depends on:** D1's normalized project identity and P0's exact architecture/ABI/page-profile executable-artifact contract. The language compiler may initially run on the development host, but its emitted image is the same object later consumed on-device.
 
@@ -141,9 +111,64 @@ A pinned compiler for the new language directly emits a byte-deterministic targe
 
 ## D3 — Hermetic on-device build service and provenance
 
-**Status:** Not started.
+**Depends on:** D1–D2, [C9.1](../docs/architecture/runtime-authority.md#clock-and-timers)'s explicit time and [C9.4](../docs/architecture/runtime-authority.md#lifecycle-and-supervised-restart)'s lifecycle authority, M5.4 object storage, and M5.8's separation of release authorization. This milestone absorbs the build-relevant mechanism from directions 3, 23, and 30. It does not depend on a conserved CPU account: see the track dependencies above.
 
-**Depends on:** D1–D2, [C9.1](02-core-runtime.md#c91--explicit-clock-and-timer-service-authority)'s explicit time and [C9.4](02-core-runtime.md#c94--lifecycle-transitions-and-supervised-restart)'s lifecycle authority, M5.4 object storage, and M5.8's separation of release authorization. This milestone absorbs the build-relevant mechanism from directions 3, 23, and 30. It does not depend on a conserved CPU account: see the track dependencies above.
+### Deterministic-component authority
+
+This is the shared, unimplemented clock/entropy design promoted from direction 3,
+not a build-only contract. [Replay](../docs/directions/11-flight-recorder-replay.md),
+[hermetic testing](../docs/directions/26-hermetic-testing.md), migrations, and
+foreign workloads consume the same authority boundary. Typed IPC supplies a
+meaningful input boundary, but recording IPC alone cannot reproduce a component
+that also reads an unrecorded clock or entropy source.
+
+- Define clock/entropy object kinds, rights strings, and sealing rules through
+  the capability-matrix amendment discipline, coordinated with C9 Clock authority.
+  Whether clock reads use one READ right or separate MONOTONIC / WALL rights
+  remains open: timeouts need not authorize learning the date.
+- Resolve kernel-pool Entropy authority versus a per-spawn seeded deterministic
+  stream minted by the spawner. A seeded fixture is an explicit input; decide
+  whether its seed belongs in the generation, replay trace, or both. Evaluate
+  replay composition before proposing the entropy mechanism's kernel work.
+- A manifest declares absence of real clock/entropy grants so the builder can
+  check it statically and grant-graph tooling can audit it. Preserve that negative
+  declaration under `derive` and later peer transfers: the sealing mechanism
+  remains a choice between schemas forbidding transfer of those object kinds and
+  a manifest flag forbidding their receipt.
+- Virtual fixture clocks and seeded entropy must use the same applicable rights
+  as their real-source counterparts, allowing test generations to change wiring
+  without changing component bytes.
+- State the determinism claim formally and decide whether identical ordered IPC
+  inputs suffice, or scheduler timing/preemption and IPC ordering require further
+  modeling. Absence of clock/entropy grants alone does not settle that scope.
+  Evaluate which existing components qualify unchanged; the proposed check is
+  byte-identical output across two boots given identical IPC inputs and declared
+  fixture inputs.
+
+### Detached provenance design
+
+D3 owns one canonical normalized source/toolchain/target/parameter closure and
+detached provenance schema for host and on-device builds; D7 applies it to every
+input/output edge of full-generation reproduction, not a separate provenance model.
+The deterministic, versioned document binds source revision, builder identity and
+version, build type, normalized parameters, resolved dependency digests, and the
+resulting generation identity (or component outputs for the D3 build service).
+The [SLSA build-provenance model](https://slsa.dev/spec/v1.2/build-provenance)
+informs the distinction from release authorization, not wholesale framework adoption.
+
+Verification stays outside the immutable selector: developers, auditors, or CI
+check consistency of the subject with the generation identity and reject altered
+inputs, dependency digests, builder identity, or output identity. Reproduction
+separately rebuilds the named input closure and compares identities byte-for-byte.
+The dependency list must support incident-response lookup by scanning attestations:
+which generations include dependency X at digest Y, including a compromised
+toolchain or library? D7 carries this requirement across the complete generation.
+
+Open design questions remain whether to reuse an M5.8 release signer identity or
+authorize a separate builder identity, and whether attestations live alongside
+generations in the M5.4 object store or only host-side. The schema/consistency-verifier
+design must resolve those conventions, exercise the accept and four rejection
+classes above, and measure verification cost; no implementation or cost is claimed.
 
 ### Deliverables
 
@@ -176,9 +201,7 @@ A native build service inside QEMU consumes one content-addressed source/toolcha
 
 ## D4 — Ephemeral executable admission and sandboxed run
 
-**Status:** Not started.
-
-**Depends on:** D3, M6 spawn/supervision, and [C9.4](02-core-runtime.md#c94--lifecycle-transitions-and-supervised-restart)'s lifecycle transitions. The session's resource bounds are the existing per-supervision-subtree limits this milestone declares below, not a conserved CPU account.
+**Depends on:** D3, M6 spawn/supervision, and [C9.4](../docs/architecture/runtime-authority.md#lifecycle-and-supervised-restart)'s lifecycle transitions. The session's resource bounds are the existing per-supervision-subtree limits this milestone declares below, not a conserved CPU account.
 
 ### Deliverables
 
@@ -210,8 +233,6 @@ just dev_exec_check
 Within one QEMU boot, a user edits new-language source, compiles it on-device, admits the sealed image, and runs it under a selected minimal capability set; malformed or unauthorized code never becomes executable, and session teardown reclaims every code and authority object without changing the active generation.
 
 ## D5 — Transactional live component cutover
-
-**Status:** Not started.
 
 **Depends on:** C8 typed route/interposition services, C9 lifecycle/health/restart authority, M5.6 checked state/rollback semantics, M5.8 release authorization, and M6.5 generation management.
 
@@ -247,8 +268,6 @@ A release-authorized generation differing only in one live-compatible component 
 
 ## D6 — On-device generation construction and authorized activation
 
-**Status:** Not started.
-
 **Depends on:** D4–D5 and completed M5/M6 generation, transfer, release, state, health, and rollback mechanisms.
 
 ### Deliverables
@@ -282,8 +301,6 @@ Inside Slime, a user builds and ephemerally tests a changed component, construct
 
 ## D7 — Independent full-generation reproduction
 
-**Status:** Not started.
-
 **Depends on:** D6 and one D3-conforming on-device toolchain route for every language in the reference generation. The initial current-tree route uses X1 for a pinned confined Rust compiler/linker unless a native Rust toolchain independently passes the same contract; the new language continues to use its direct native image backend.
 
 ### Deliverables
@@ -312,21 +329,5 @@ just self_host_check
 ### Exit condition
 
 A clean Slime build environment reproduces the complete reference generation byte-for-byte from the same normalized mixed-language source/toolchain closure as the host, with bounded hermetic execution and verifiable provenance; the resulting generation is admitted or rejected solely by ordinary artifact, release, authority, activation, health, and rollback contracts, not by where it was built.
-
-## Track verification stack
-
-Each milestone runs its narrowest target. Any new or changed serialized format runs `just contracts_check`; component/generation changes run `just generation_check`; kernel/component Rust changes run the repository format and lint gates. D4 and D5 additionally retain the full isolation, spawn, wait/wake, shared-buffer, rollback, and framework-safety corpus.
-
-Planned track targets:
-
-```sh
-just authoring_check
-just language_image_check
-just hermetic_build_check
-just dev_exec_check
-just live_update_check
-just on_device_generation_check
-just self_host_check
-```
 
 No D milestone claims a physical Framework development environment from QEMU evidence. Physical promotion additionally requires the owning storage, input, display, network, IOMMU, suspend/resume, and internal-write safety gates; until then on-device build/write scenarios use disposable QEMU or explicitly replaceable external storage.

@@ -2,11 +2,8 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | updates |
-| Depends on | M5.6 (complete); the [roadmap](../../roadmap/README.md) names it a follow-up enabled by that milestone |
 | Enables | unattended regression localization over the update history |
-| Now | Fully unblocked: the parent chain, pending/known-good mechanics, attempt consumption, and QEMU health checks all exist. This is automation over landed machinery. |
 
 ## Motivation
 
@@ -16,19 +13,6 @@ Manual regression hunting across updates is the slowest part of
 generation-based workflows; because every intermediate state is itself a
 bootable, verifiable generation, the search can be delegated to the
 machine with rollback as the safety net at every step.
-
-## What exists today
-
-- M5.5 (complete): generations are content-addressed with parent
-  metadata — the chain the bisect walks.
-- M5.6 (complete): staging a pending generation, consuming attempts
-  durably, automatic return to known-good on failure, and the health
-  service's confirmation path — every bisect step is an ordinary
-  activation with the same safety story.
-- QEMU health checks (`just rollback_check` and the other `_check`
-  targets) are the pass/fail oracle a bisect step needs.
-- Nothing needs inventing in the kernel; the bisect driver is a
-  userspace or host-side orchestrator.
 
 ## Design sketch
 
@@ -61,17 +45,3 @@ resumes from BootState rather than restarting.
   for unrelated reasons — skip-and-widen strategy?
 - How are bisect results recorded — a report object in the store, or
   host-side log only?
-
-## Exit-condition sketch
-
-Given a known-good and a known-bad generation identity, an automated run
-boots intermediate generations under QEMU health checks and identifies
-the first bad parent link unassisted.
-
-## Probe guidance
-
-Buildable today as host-side automation: script the
-stage-pending → boot → read-verdict loop over a synthetic chain of
-generations with one deliberately broken link, and verify the driver
-finds it unassisted. Success promotes directly; no kernel changes are
-expected.

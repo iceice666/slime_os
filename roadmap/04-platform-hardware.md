@@ -2,41 +2,16 @@
 
 > **H2 routing — retained qualification detail.** The
 > [Framework plan](../docs/plans/framework-hardware.md) owns the extracted
-> qualification sequence and safety boundary; current mechanisms are in
+> qualification sequence, safety boundary, and integrated definition of done; current mechanisms are in
 > [targets](../docs/architecture/targets-and-portability.md) and
 > [I/O](../docs/architecture/io-substrate.md). This file remains authoritative for
 > unextracted H1–H14 device-specific deliverables, denial/fault scenarios,
-> physical records and integrated acceptance detail. These requirements are not
+> physical records and H14's integrated-run acceptance detail. These requirements are not
 > obsolete and grant no device support. Original status and CPU-boot statements
 > are retained historical context, not today's image qualification or work state.
 > See the [file classification](README.md).
 
-> **Not authoritative.** Work-item identity, state, and relationships live in
-> `.tasks/items/`; the ids below are display aliases carried as MyQue keys.
-> This file holds the problem statements, boundaries, and sequencing behind them.
-> Use `just tasks_list` for current state and `just tasks_next` for actionable work.
-
-**Purpose:** Qualify the named x86-64 Framework now that the architecture track has established its upstream-seL4 CPU/product boot: inventory the real firmware and buses, bind the common [Native I/O substrate](11-io-substrate.md), implement Framework-specific device services, promote DMA through AMD-IOMMU containment, and record reproducible physical evidence.
-
-**Status:** Active. [P6.6's Framework removable-media CPU boot](07-architecture-portability.md#p66--framework-removable-media-cpu-boot) was observed on 2026-09-13, so H1 is unblocked and is the next open milestone in this track. The previous custom-kernel Framework evidence remains historical, and no Milk-V Duo result changes this status.
-
-**Dependencies:** [P6](07-architecture-portability.md#p6-x86-64-sel4-qemu-and-framework-cpu-boot), especially P6.6; [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 shared buffers and C9 scheduling/restart authority; and the architecture-neutral [Native I/O substrate](11-io-substrate.md). P6 owns target admission, Multiboot/UEFI media, the root/component path, and the first no-write CPU boot. H owns hardware inventory, Framework bindings, drivers, containment, promotion policy, and physical device evidence.
-
-The Hardware track promotes each Framework path in two distinct steps: deterministic device/service logic under host or QEMU checks, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs AMD-IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
-
-This track qualifies one named x86-64 Framework platform after P6 establishes its CPU/product boot. It does not own the portable I/O ABI, Raspberry Pi 5, generic Arm, or RISC-V support. ACPI, PCI BDF/BAR, APIC routes, AMD-IOMMU aliases, xHCI/NVMe identities, firmware methods, and physical observations remain Framework profile data and must not become universal Slime contracts. Milk-V Duo is retained target-specific evidence only: its serial, storage, component, or device results cannot satisfy P6, H1–H14, or M5.7. Raspberry Pi 5 remains admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
-
-Sequencing:
-
-- P6.6 first boots the resident product graph without probing or qualifying devices. H1 then inventories the actual Framework firmware and device topology; later drivers consume that evidence rather than guessed BDFs, interrupt routes, or protocols.
-- IO0–IO2 establish the common queue/lease/resource ABI and userspace virtio-blk proof. H2 then binds IO1 to the Framework PCI/ACPI/APIC profile and gates every Framework userspace hardware driver. H3 implements xHCI, USB, and HID over the common substrate under deterministic checks; H4 adds AMD-IOMMU containment and promotes USB HID on the Framework.
-- H5 and H6 consume H4 and the common block/network services and may proceed in parallel. H7 consumes H4, IO2, and H5's disposable external-media path.
-- H8 may proceed after IO0/IO1 and H2 because it uses the boot GOP framebuffer; H9 consumes the H1 ACPI inventory. H10 consumes every device service that must quiesce and resume.
-- H11 and H12 are independent once their buses, input/audio/network services, and resume hooks exist. H13 consumes H4, H8, and H10. H14 is the integrated acceptance slice and consumes all preceding slices.
-
 ### H1: Framework evidence harness and hardware inventory
-
-**Status:** Open, and no longer blocked: P6.6 completed `just framework_cpu_boot_check` on 2026-09-13 for image `95a0d213c1249cc7…`. What remains is physical inventory verification. `just framework_inventory_check` is still unavailable until it is implemented against that boot; H1 closes only when `evidence/framework-inventory.jsonl` records the target topology, localized keyboard failure, and byte-identical internal-NVMe comparison region.
 
 Deliverables:
 
@@ -52,15 +27,9 @@ Required checks:
 - the Framework report identifies whether the keyboard path is i8042, USB HID, or another firmware-described controller and records the exact initialization failure;
 - the internal NVMe comparison region remains byte-identical across the inventory boot.
 
-Planned verification target: `just framework_inventory_check`. It depends on `just framework_cpu_boot_check` and fails closed until the seL4 Framework evidence collector and physical record exist.
-
-Exit condition: starting from the exact P6.5 removable image already proven to boot the product graph, the repository contains reproducible evidence for the target Framework's actual controller topology and localizes the current keyboard path to a named initialization stage while preserving the no-internal-write boundary.
+Exit condition: the repository contains reproducible evidence for the target Framework's actual controller topology and localizes the current keyboard path to a named initialization stage while preserving the no-internal-write boundary.
 
 ### H2: Framework PCI binding for userspace drivers
-
-**Status:** Not started.
-
-H2 consumes [IO1's hardware resource authority](11-io-substrate.md#io1--hardware-resource-authority-and-dma-accounts), [H1's observed inventory](#h1-framework-evidence-harness-and-hardware-inventory), and [P6's x86-64 seL4 target boundary](07-architecture-portability.md#p6-x86-64-sel4-qemu-and-framework-cpu-boot). IO1 owns the portable device/MMIO/interrupt/DMA capability classes, quotas, restart/reclamation rules, and separation between shared buffers and DMA mappings. H2 owns their concrete Framework PCI/ACPI/APIC binding and the target-qualified failure/rollback behavior every later Framework driver consumes.
 
 Deliverables:
 
@@ -90,8 +59,6 @@ Exit condition: one manifest-declared Framework userspace driver is bound to exa
 
 ### H3: xHCI, USB core, and HID under QEMU
 
-**Status:** Not started.
-
 This slice implements the Framework xHCI/USB/HID stack over IO0/IO1 and the H2 PCI binding before physical DMA promotion. It proves the device-specific logic and transport-independent seat service under deterministic checks; it does not yet claim safe Framework xHCI operation.
 
 Deliverables:
@@ -120,8 +87,6 @@ Exit condition: QEMU xHCI keyboard and pointer input survive malformed devices, 
 
 ### H4: AMD IOMMU containment and Framework USB HID promotion
 
-**Status:** Not started.
-
 Deliverables:
 
 - parse the target's ACPI IVRS data with strict bounds and identify the AMD IOMMU and device aliases from H1 evidence;
@@ -149,8 +114,6 @@ Exit condition: the Framework has observable keyboard input through the common s
 
 ### H5: USB mass storage and removable-device identity
 
-**Status:** Not started.
-
 Deliverables:
 
 - implement one standards-based USB mass-storage transport proven by the target test device, with bounded command/data/status phases, sense decoding, timeout, reset, surprise-removal handling, and IO0 terminal request/lease behavior;
@@ -176,8 +139,6 @@ just usb_storage_check
 Exit condition: Slime OS has a capability-selected disposable physical storage target suitable for destructive reliability work without granting internal NVMe write authority.
 
 ### H6: Framework USB Ethernet qualification
-
-**Status:** Not started.
 
 H6 consumes [IO3's `LinkDevice`](11-io-substrate.md#io3--userspace-virtio-net-and-linkdevice-validation), [IO4's network service and exact destination authority](11-io-substrate.md#io4--network-service-and-exact-destination-authority), H1's observed USB descriptors, H3's USB bus, and H4 containment. IO4—not H6—owns the link/IP/DNS/UDP/TCP protocols, `NetworkDestination`, socket/resource bounds, and deterministic virtio-net reference backend. H6 qualifies one Framework USB-Ethernet backend and its physical failure envelope.
 
@@ -208,7 +169,7 @@ Exit condition: the Framework reaches one exact IO4 destination through a physic
 
 ### H7: Native NVMe reliability and internal-storage promotion
 
-**Status:** Not started. Internal NVMe writes remain prohibited until this slice's physical evidence is recorded.
+Internal NVMe writes remain prohibited until this slice's physical evidence is recorded.
 
 Deliverables:
 
@@ -237,8 +198,6 @@ Exit condition: internal NVMe writes are enabled only after deterministic and ph
 
 ### H8: Software compositor and desktop shell over GOP
 
-**Status:** Not started.
-
 Deliverables:
 
 - move visible output from the global debug stream to a userspace compositor holding the sole framebuffer capability; retain serial as diagnostics rather than the interactive UI path;
@@ -265,8 +224,6 @@ Exit condition: the Framework has an isolated, capability-routed graphical sessi
 
 ### H9: Battery, charger, brightness, lid, and thermal service
 
-**Status:** Not started.
-
 Deliverables:
 
 - consume H1 ACPI/EC evidence through a bounded target-specific ACPI resource evaluator; unsupported AML constructs fail closed rather than growing an implicit general interpreter;
@@ -292,8 +249,6 @@ just platform_service_check
 Exit condition: the Framework reports and controls its basic power state through explicit service capabilities while platform policy remains outside the kernel.
 
 ### H10: Suspend/resume lifecycle and device reinitialization
-
-**Status:** Not started.
 
 The target sleep state is selected from H1 firmware evidence; the slice does not claim both S3 and modern standby when the machine exposes only one supported route.
 
@@ -323,7 +278,7 @@ Exit condition: the Framework repeatedly suspends and resumes through a checked,
 
 ### H11: I2C touchpad and audio service
 
-**Status:** Not started. Touchpad and audio are independent implementations and may proceed in parallel after their H2/H9 bus and resource descriptions and the applicable IO0/IO1 contracts are available.
+Touchpad and audio are independent implementations and may proceed in parallel after their H2/H9 bus and resource descriptions and the applicable IO0/IO1 contracts are available.
 
 Touchpad deliverables and checks:
 
@@ -349,8 +304,6 @@ just audio_check
 Exit condition: the Framework has daily-usable touchpad input and capability-isolated playback/capture through services that survive reset and suspend.
 
 ### H12: MT7925 Wi-Fi and Bluetooth
-
-**Status:** Not started.
 
 Deliverables:
 
@@ -379,8 +332,6 @@ Exit condition: the Framework has capability-preserving wireless networking and 
 
 ### H13: Radeon display control and graphics acceleration
 
-**Status:** Not started.
-
 Deliverables:
 
 - package Radeon firmware as release-authorized generation objects and run the display driver with H2-bound PCI/interrupt authority, IO1 DMA mappings, and H4 IOMMU containment;
@@ -407,13 +358,11 @@ Exit condition: the Framework compositor owns a stable, IOMMU-contained Radeon d
 
 ### H14: Energy accounting and integrated daily-driver qualification
 
-**Status:** Not started.
-
 Deliverables:
 
 - attribute scheduler-active time and bounded service work (IPC, storage, network, audio, and graphics bytes/events) to components and supervision subtrees;
 - combine those counters with H9 battery/platform telemetry into readable per-component energy estimates and declare their schema in the generation;
-- keep Hardware-track accounting as telemetry and threshold events, not hidden scheduler authority; [A1 revocation](06-authority-trust.md) and [C9 scheduling-class authority](02-core-runtime.md#c9-robot-runtime-authority) arrive explicitly in their owning tracks;
+- keep Hardware-track accounting as telemetry and threshold events, not hidden scheduler authority; [A1 revocation](06-authority-trust.md) and [C9 scheduling-class authority](../docs/architecture/runtime-authority.md) arrive explicitly in their owning tracks;
 - provide an operator-visible hardware status and authority view covering current generation, device drivers, IOMMU domains/faults, storage identity, network destinations, power state, and per-component resource/energy use;
 - define and record one reproducible Framework qualification run covering interactive console/compositor use, wired and wireless networking, external removable storage, internal rollbackable storage, audio, touchpad, Bluetooth, display acceleration, suspend/resume, and recovery media.
 
@@ -432,53 +381,3 @@ just daily_driver_check
 ```
 
 Exit condition: the Framework target sustains the complete native daily-driver workload with explicit hardware and network authority, IOMMU-contained DMA, rollbackable storage, observable power/resource use, and repeatable physical evidence.
-
-## Hardware track verification stack
-
-Every permanent H change runs the narrowest deterministic device/service scenario and the applicable IO gate. Every physical promotion additionally records a removable-media Framework run; QEMU or IO evidence alone cannot complete an H slice. The repository gates remain mandatory:
-
-```sh
-just contracts_check
-just generation_check
-just test
-just fmt_check
-just lint
-just fmt_check_components
-just lint_components
-just framework_safety_check
-```
-
-Planned slice targets:
-
-```sh
-just framework_inventory_check
-just framework_driver_binding_check
-just usb_hid_check
-just iommu_check
-just usb_storage_check
-just framework_usb_ethernet_check
-just storage_reliability_check
-just compositor_check
-just platform_service_check
-just suspend_check
-just touchpad_check
-just audio_check
-just wifi_check
-just bluetooth_check
-just radeon_display_check
-just daily_driver_check
-```
-
-## Hardware track definition of done
-
-The Hardware track is complete only when all of the following are observed on the target Framework and backed by the deterministic IO and device checks above. Evidence from Milk-V Duo, Raspberry Pi 5, or QEMU can validate portable mechanisms but cannot replace any Framework-specific observation:
-
-- every DMA-capable physical driver consumes IO1 resources bound by H2 and runs in an H4 AMD-IOMMU domain that maps only its live IO0 leases, with fault isolation and supervised restart;
-- the built-in or attached keyboard, touchpad, pointer, display, audio, USB storage, USB Ethernet, Wi-Fi, and Bluetooth paths are usable through typed services rather than ambient hardware access;
-- applications receive input, display surfaces, audio streams, files, and IO4 network destinations only through explicit capabilities; the manifest can answer which component can reach which device or remote endpoint;
-- internal NVMe writes have passed the [M5.7](01-foundations.md), IO2, and H7 bounds, reset, flush, interruption, malformed-metadata, device-identity, rollback, and recovery gates on disposable hardware before promotion on the target device;
-- the compositor and Radeon driver survive client faults, stale completions, driver reset, and suspend/resume with a software-rendered fallback;
-- battery, charger, brightness, lid, and thermal state are observable, controls are explicitly authorized, and userspace owns policy;
-- suspend/resume repeatedly quiesces and restores storage, IOMMU, USB, input, display, network, wireless, and audio with fresh mappings/epochs and without BootState corruption;
-- per-component resource and energy accounting is visible and bounded, without silently introducing the [C9 scheduling-authority](02-core-runtime.md#c9-robot-runtime-authority) or [A1 revocation](06-authority-trust.md) models;
-- the integrated physical qualification run completes with no unauthorized internal-storage modification, no unbounded resource growth, and a signed removable recovery path that remains bootable.

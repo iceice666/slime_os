@@ -55,22 +55,10 @@ INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interf
 
 # Which committed `contracts/generation-manifest/v1` fixture each system spec derives.
 #
-# CP1 converted the reference manifest and the smallest seL4 manifest. CP12
-# converts every composition whose instances map one-to-one onto a component
-# spec name — no shared executable spawned under more than one instance name,
-# and no per-instance dependency naming another instance of the same
-# executable. The 17 remaining compositions need that generalization (a
-# concrete instance distinct from the component/executable it runs, with
-# composition-declared per-instance dependencies) before they can convert; see
-# the archived backlog (docs/history.md). `sel4-c-runtime` and `sel4-filesystem` fit the
-# one-to-one shape but are deferred too: the former's implementation is a
-# freestanding C source with no stable committed content identity, and the
-# latter's executable name (`sel4-filesystem-service`) collides with the
-# unrelated pre-existing `filesystem-service` component spec's implementation
-# binary. An explicit table rather than a glob, so "which fixtures are
-# generated" is a stated fact and a system spec that derives nothing is a gate
-# failure rather than a silent no-op. Both the gate and the generator read it
-# from here.
+# An explicit table rather than a glob makes "which fixtures are generated" a
+# stated fact and a system spec that derives nothing a gate failure rather
+# than a silent no-op. Every composition manifest is derived. Both the gate
+# and the generator read the map from here.
 DERIVED_GENERATION_FIXTURES = {
     "reference": "valid.zti",
     "sel4": "sel4.zti",

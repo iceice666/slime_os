@@ -2,11 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | lifecycle |
-| Depends on | M6.1 endpoint minting, derive-copy, supervision handles, and per-spawner accounting (complete); general SharedBuffer quotas move to Core C7 |
+| Depends on | general SharedBuffer quotas move to Core C7 |
 | Enables | declarative whole-machine resource allocation; bounded spawn authority; restart-storm bounding for [entry 8](08-declarative-supervision.md) |
-| Now | M6.1 landed bounded per-spawner accounting; the general conserved ResourceAccount object and whole-machine allocation policy remain design work. |
 
 ## Motivation
 
@@ -22,19 +20,6 @@ structured error, and child exit returns quota to the parent.
 
 Whole-machine resource allocation becomes generation manifest data:
 declarative, auditable, and rollbackable like every other grant.
-
-## What exists today
-
-- The gap is measured in the repo itself: global `MAX_TASKS` /
-  `MAX_CAPS` / `CHANNEL_QUEUE` constants, and the debt register's
-  unreaped task-table entries — table slots leak until reboot, so even
-  global accounting is currently approximate.
-- M6.1 landed per-spawner accounting with structured exhaustion.
-  SharedBuffer creation and quota remain future Core C7 work.
-- Genode's resource trading is the reference design; the Slime delta is
-  carrying the account distribution as rollbackable generation data.
-- M6.1's completed per-spawner accounting is the concrete mechanism;
-  this entry generalizes it into conserved, manifest-distributed accounts.
 
 ## Design sketch
 
@@ -72,22 +57,6 @@ could exhaust task slots" from the manifest.
   first-come allocation, or does the builder require hard conservation?
 - Account hierarchy versus the supervision tree: same shape, or may a
   component hold accounts from multiple parents?
-
-## Exit-condition sketch
-
-A service holding a two-task account cannot spawn a third; a child's
-quota returns to the parent account on exit; the generation manifest
-declares the initial account distribution and the builder bounds it.
-
-## Probe guidance
-
-Paper: the design note — account object shape, split/conservation rules,
-the manifest distribution format, and the builder bounding check —
-evaluated against the current constants (`MAX_TASKS`, `MAX_CAPS`,
-`CHANNEL_QUEUE`) as the initial quantities. Reference: Genode's resource
-trading, with the delta (accounts as rollbackable generation data)
-made explicit.
-
 ## References
 
 - [Genode Foundations](https://genode.org/documentation/genode-foundations/)

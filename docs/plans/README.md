@@ -27,6 +27,12 @@ Delivery chronology and historical verification results do not belong in a plan.
   accelerator authority, attestation, and distributed capabilities.
 - [RPi5 ROS 2 demo](rpi5-ros2-demo.md) — bounded middleware interoperability
   and the exact physical-board evidence boundary.
+- [Architecture releases](architecture-releases.md) — exact-target RV64 Milk-V
+  Duo and AArch64 release composition and evidence limits.
+- [ROS 2 wire compatibility](ros2-wire-compatibility.md) — minimum topics,
+  external peers, services/actions, and the transport-security boundary.
+- [Existing workloads](existing-workload.md) — backend admission for each
+  workload's exact target profile.
 
 The [roadmap classification](../../roadmap/README.md) names every retained
 source and any detailed requirements not yet extracted. Those explicitly

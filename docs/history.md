@@ -29,9 +29,46 @@ this is not an exhaustive secret-absence guarantee. Do not broaden access.
 ## What moved and what remains
 
 All 491 historical devlog files and the frozen backlog index were verified
-against the archive before removal. Other roadmap files remain because their
-[classification](../roadmap/README.md) explicitly retains unextracted requirements.
-Do not move those requirements into a private historical archive by implication.
+against the archive before removal. The snapshot also preserves the retired
+foundation and port deliveries, component-platform migration records, and
+I/O driver/proof investigations. The [roadmap classification](../roadmap/README.md)
+distinguishes archived sections from requirements still owned by the product.
+
+The [archived release record](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/README.md#x86-64-framework-cpuproduct-boot-release) preserves the observed P6.1–P6.6 Framework CPU/product boot completion.
+
+Promoted directions 2, 3, 5, 10, 23, 24, 28, 30, 31, and 33 are archive
+lookups rather than full exploratory pages. Their current owners are:
+
+- [native development](../roadmap/08-native-development.md) for deterministic
+  components, build provenance and on-device build requirements;
+- [checked rights algebra](architecture/ipc-and-capabilities.md#checked-rights-algebra)
+  for the current model boundary and vocabulary discipline;
+- [authority and trust](plans/authority-and-trust.md) for revocation/leases,
+  TPM/attestation, distributed authority, Secret and Accelerator design and
+  unresolved questions;
+- [foreign workloads](../roadmap/05-foreign-workloads.md) for personality and
+  guest design requirements and unresolved questions.
+
+The archive retains original probe measurements and promotion history. Later
+D3 clock/entropy and seeded-fixture clarifications in directions 31/33 were
+preserved in their current owners, not attributed to the older snapshot.
+Direction 2's later per-operation conservation and closure qualification also
+remain in the authority plan. The [capacity plan](plans/memory-capacity.md) owns
+memory requirements and residual sizing questions; direction 34 retains only
+thread/SMP exploration, with its old memory measurements at the immutable origin.
+I/O and Raspberry Pi construction investigations route to their archived
+originals; current authority and target limits remain in architecture owners.
+Composition notes retain current grants and verification boundaries; their
+numbering, failed migrations and closure stories route to archived originals.
+Historical removal is checked against the corresponding archive content, with
+prior link migrations distinguished from changed facts. Remaining roadmap files
+retain explicitly unextracted requirements; those are not private history by
+implication.
+
+Local Notion exports under an ignored, untracked `spec/` directory are not part
+of this product checkout or the immutable archive snapshot. They are not current
+contract owners or required build inputs. Preserve local originals independently;
+an archive reference here does not establish that those files were backed up.
 
 The exact Duo transcript remains a product checker fixture at
 [`evidence/duo/maee-smoke.log`](../evidence/duo/maee-smoke.log), SHA-256

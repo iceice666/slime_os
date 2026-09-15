@@ -87,7 +87,38 @@ Current executable gates include:
   exempt from equality;
 - `just sel4_gate_control_check` — negative control over the marker contracts.
 
-Historical C8 delivery order and unextracted requirements remain in
-[`roadmap/02-core-runtime.md`](../../roadmap/02-core-runtime.md); this page is the
+Historical delivery order and measured evidence remain in
+[`roadmap/02-core-runtime.md`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/02-core-runtime.md); this page is the
 current subsystem owner. Its historical evidence links resolve to the immutable
 archive described in [the history guide](../history.md).
+
+## Coverage limits
+
+The current gates do not establish broader coverage than these boundaries:
+
+- Exact resource ceilings are reached only for in-flight calls, in-flight
+  operations, and retained operation results; other declared resource classes
+  remain unsaturated. `queueDepth` is declared and recorded but unconsumed.
+  `resourceEvent` has no emitter because `ERR_WOULDBLOCK` is unreachable through
+  blocking `seL4_Send`.
+- Loan evidence comes only from the stream broker. Its mapping occupancy is
+  provisioning-fixed while loan occupancy varies with traffic, so a mapping-only
+  record cannot prove traffic variation. The call worker has no trace-sink
+  headroom for mapping/loan pairs.
+- End-of-run mapping counts are steady-state samples, not lifetime invariants or
+  peaks: subscriber loan mappings and a publisher's extra mapping are transient.
+  Three arms do not report: `fabric-call-client` releases its transient charge
+  inside the helper before sampling, so a synthetic `[0, 0]` pair is invalid;
+  `fabric-call-server` exits on injected peer death before flushing; and
+  `fabric-call-worker` lacks trace-sink headroom. The stream-broker sample is not
+  full-holder coverage.
+- Capability-slot evidence observes the stream broker below its declared ceiling;
+  it proves neither saturation nor coverage of every instrumentable participant.
+- QoS distinctness is asserted only on call and operation planes; the stream plane
+  emits no `kind=qos` record.
+- The injected fault is interposition-hop death only. Stalled-subscriber and
+  genuinely faulting-participant injections remain unexercised; scripted
+  peer-death settlement is not evidence for either injection.
+- Normalized-schema determinism is host-qualified, not established by QEMU boot
+  comparisons. Denial, stall, and malformed schedules run as aggregate arms, not
+  separate boots; their own fault assertions still apply.

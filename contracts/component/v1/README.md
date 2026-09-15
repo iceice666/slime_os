@@ -6,9 +6,9 @@ components. It is **retained, not current**: format 2
 `just component_gen` renders into `components/proto/src/component.rs`. A format-1
 image is not an architecture-neutral image missing some fields — it is an
 `x86_64-qemu-virtio` image whose target was implied by the only builder that
-could produce it, and decoders give it exactly that meaning for the bounded
-rollback window. `schema.zt` here remains the normative layout for those
-retained bytes and is still validated by `just contracts_check`.
+could produce it. Retained decoders preserve that identity; it does not make
+the image executable on a seL4 profile. `schema.zt` remains the normative
+layout for those bytes and is validated by `just contracts_check`.
 
 Format 2 keeps every segment rule below unchanged and adds the
 target-qualification header fields (`architecture`, `abi`, `page_profile`,
@@ -80,68 +80,22 @@ byte is mapped.
 
 ## Validation
 
-The decoder (`boot-contracts/src/component_image.rs`) rejects malformed images
-with a structured `ImageError`: `Truncated`, `BadMagic`, `UnsupportedVersion`,
-`AbiMismatch`, `BadSegmentCount`, `BadStack`, `BadFlags` (unknown bits or
-write+execute combined), `BadSegment` (misaligned, empty, `file_len >
-mem_len`, or unsorted/overlapping memory ranges), `BadFileRange`, `BadEntry`,
-and `ImageTooLarge`. `slime-root/src/child_vspace.rs` maps only images that
-decoded through it.
+[`boot-contracts/src/component_image.rs`](../../../boot-contracts/src/component_image.rs)
+classifies retained images with their original target identity and validates
+header and segment-table constraints. Its `admit_elf` entry point accepts only
+the ELF-carrying revision, not format 1. Retained format decoding is not a
+promise that the current product loader executes old images.
 
-Validation is eager: the generation decoder validates every object of kind
-`bootstrap` or `component` while decoding the generation, so a generation
-that decodes at boot never contains a malformed executable. Spawn re-decodes
-through the same function and therefore cannot fail on format grounds for
-generation-sourced executables. `scripts/check/check-generation.py` mirrors the
-same rules host-side so builder/decoder drift fails in `just generation_check`
-instead of at boot.
-
-`boot-contracts/src/component_image.rs`'s own host tests pin every acceptance
-and rejection class against the generated wire bindings, under
-`just test_host`.
+`just test_host` covers the shared decoder; `just contracts_check` continues
+to type-check this retained schema and generator.
 
 ## Build pipeline
 
-`scripts/build/build-generation.py` builds each component as:
-
-1. `cargo build --release -p slime-component-<name> ...` from `components/` uses
-   the root workspace while applying the component-specific Cargo target
-   configuration. CP3 made each component its own package, so the builder names
-   packages rather than `--bin` targets of one crate, in two invocations grouped
-   by whether the component declares an allocator.
-   The Cargo target comes from the generation's target profile
-   (`contracts/target-profile/v1`): the seL4 product profile builds for the
-   `aarch64-sel4-minimal` JSON target with no linker script, while the
-   segment-table profiles build for `x86_64-unknown-none` or
-   `aarch64-unknown-none` and link via `components/component.ld` or
-   `components/component-aarch64.ld` at the fixed base VA (`--build-id=none`,
-   `-z max-page-size=4096`, `relocation-model=static`; see
-   `components/.cargo/config.toml` and `components/build-support/src/lib.rs`) — this
-   step is the only language-specific one; step 2 onward accepts any static
-   ELF built this way;
-2. for a segment-table profile the converter reads the ELF program headers with
-   Python stdlib only, maps `PT_LOAD` segments to image segments (ELF
-   `PF_X`/`PF_W` to the image flags), asserts the same rules the decoder
-   validates, and emits the image. For the seL4 profile
-   `elf_component_image` instead wraps the whole ELF in the same 56-byte
-   qualification header with `segment_count` and `entry_offset` zero, because the
-   loader reads the entry point from the ELF header;
-3. the image becomes the generation object payload, hashed by the existing
-   `SLIMEGEN` path.
-
-Determinism: `--build-id=none`, a fixed link script, and a reproducible
-`cargo build --release` profile make the linked ELF byte-identical across
-clean builds; the converter emits segments in sorted order with zeroed
-reserved fields, so equivalent input produces identical bytes. The linked
-ELF stays in the build directory for host-side debugging; it is not part of
-the generation.
-
-Stack size comes from the header. The builder uses `DEFAULT_STACK_BYTES`
-(16 KiB, four pages) unless the generation manifest's component entry sets
-the optional `stackBytes` field (`contracts/generation-manifest/v1`), which must be a
-positive page multiple within the 1 MiB bound. Declaring resource
-requirements in-source (e.g. via a note section the builder reads) is left
-to a later format version.
+The current [component, system, and image reference](../../../docs/architecture/component-system-image.md)
+owns the build/admission flow and its format-2 ELF payload. The
+[original format note](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/contracts/component/v1/README.md)
+preserves the segment-image conversion pipeline, historical validation account,
+and build-time defaults. They are not instructions for today's seL4 build.
 
 ## Compatibility rules
 
@@ -149,9 +103,9 @@ to a later format version.
 - Existing fields do not change meaning within format 1.
 - New required fields, new flag bits consumed by readers, or layout changes
   require a new format version; old kernels reject them structurally.
-- Reserved fields are written as zero. Readers ignore them, so format 1
-  producers and readers tolerate future use of those bits only when a new
-  `kernel_abi` gates it.
+- Reserved fields are written as zero. The current retained-header decoder
+  rejects nonzero reserved header fields; old reader behavior is recorded in
+  the archived format note and must not be inferred as current acceptance.
 - The syscall ABI version is bumped independently of the format version; an
   image built against a newer ABI is rejected by older kernels even when its
   layout is valid.

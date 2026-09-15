@@ -72,6 +72,38 @@ A build closure proves reproducibility of bytes. A test-run contract and its gat
 prove behavior of those bytes. Neither substitutes for the other, and a QEMU run
 cannot establish a physical-board observation.
 
+## Qualification limits
+
+- **Target qualification:** A published `bcm2712-rpi5` platform prefix qualifies
+  external component build and admission against that platform input only; it
+  does not claim Raspberry Pi 5 boot support, which only a physical-board gate
+  qualifies.
+- **Host-side scope:** System-image closure, scenario, builder, and SDK-consumer
+  machinery is host-side; it does not implement in-system compilation, executable
+  admission, or live update, and does not widen physical-board qualification.
+- **Hosted publication:** The controlled-remote publication gate proves publisher
+  behavior—publication, refusal, regeneration, build/boot of the published SDK,
+  and atomic cleanup leaving no branch commit when the remote refuses the tag—not
+  the hosted repository's current branch/tag protection, credential scope, or
+  deployed state. Actual release qualification must check the hosted repository.
+- **Upgrade coverage:** Retained-generation admissibility and console fixtures in
+  the upgrade/rollback check are not an observed QEMU health-confirmation failure;
+  that failure path is unexercised.
+- **Reviewed non-closure exceptions:** The exceptions retain `--component-graph`
+  for mixed-source SDK admission/upgrade generations; `--demo-plane`,
+  `--generation-plane`, and `--rollback-plane` for non-closure arms;
+  `--sample-plane` for Milk-V Duo; `--boot-selection`; and `--skip-pin-check`:
+  `check-sel4-boot-selection.py` needs per-arm `boot_bundle_identity` test-run data;
+  `check-sel4-root-boot.py` has no plane-specific closure;
+  `check-sel4-demo-plane.py` has a closure-less boot-selection arm and a
+  wrong-target arm requiring scrubbed input; and `check-sel4-generation-plane.py`
+  and `check-sel4-rollback-plane.py` have RV64 arms outside their QEMU-AArch64
+  (`qemu-arm-virt`) closures. These are reviewed exceptions, not unfinished
+  ordinary-plane migration: legacy-only `SLIME_*` controls remain confined to the
+  aggregate reachability inventory, whose reachability rule is the source guard,
+  with no independent hard-coded-path or flag guard claimed; remove entries when
+  their paths migrate.
+
 ## Build and admission flow
 
 ```text

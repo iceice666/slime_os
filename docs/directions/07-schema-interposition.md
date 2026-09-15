@@ -2,11 +2,8 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | determinism; secondary: interposition |
-| Depends on | M5.2a contract tooling (complete) |
 | Enables | [entry 11](11-flight-recorder-replay.md) (recording machinery), agent dry-runs claimed in README's agentic direction |
-| Now | Legal today as userspace/host tooling: a generated membrane over the existing block schema (`contracts/block/`). Named as an M5.3 follow-up in the [roadmap](../../roadmap/README.md). |
 
 ## Motivation
 
@@ -17,21 +14,6 @@ all IPC is schema-first, a membrane can be *generated* from `contracts/` —
 recording, throttling, sanitizing, and fault injection for any endpoint
 with zero hand-written protocol code. Each new schema then comes with its
 interposition machinery for free.
-
-## What exists today
-
-- M5.2a (complete): the versioned Zutai block schema generates both
-  kernel Rust and component assembler bindings; `contracts_check`
-  rejects stale bindings. The generator infrastructure a membrane
-  generator would extend already exists.
-- M5.3 (complete) is the hand-written instance of the general
-  mechanism: deterministic request failure, timeout, reset, flush
-  failure, interrupted write, and bounded rejection, plus flight-recorder
-  replay, all verified by `storage_fault_check` — which is therefore the
-  natural replay fixture for a generated membrane.
-- Contracts live in `../../contracts/` with per-protocol versioned
-  directories (`block/v1`, `store/v1`, `bootstate/v1`, ...), so the
-  generator has one uniform input shape.
 
 ## Design sketch
 
@@ -65,16 +47,3 @@ hand-written semantics before any new protocol trusts it.
 - Sanitization policies are schema-specific logic — expressed how, if
   "zero hand-written protocol code" is the goal? (A declared field
   constraint language, or escape hatch to hand-written filters?)
-
-## Exit-condition sketch
-
-A generated membrane records and replays the block protocol; replay
-reproduces a `storage_fault_check` failure deterministically.
-
-## Probe guidance
-
-Legal today: generate a record/replay membrane for `contracts/block/v1`
-only, drive it against the existing storage slice, and replay a captured
-`storage_fault_check` failure. The probe's output is the membrane
-generator skeleton plus the trace-format proposal that entry 11 then
-consumes; success promotes both entries' recording halves together.

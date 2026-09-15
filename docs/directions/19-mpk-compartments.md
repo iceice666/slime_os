@@ -2,11 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | hardware |
 | Depends on | [Hardware H track](../../roadmap/04-platform-hardware.md); explicitly an optional optimization that does not block the track's exit conditions |
 | Enables | a third isolation tier between full components and same-address-space code |
-| Now | Paper: compartment model, fault semantics, and the criteria for when a boundary may use PKU instead of a component boundary. |
 
 ## Motivation
 
@@ -17,18 +15,6 @@ spaces and context switches; some boundaries (a hot parser, a codec, an
 in-process plugin) want memory protection without that cost. PKU gives
 page-granularity write/execute disablement switchable from userspace —
 cheap enough for per-call boundaries.
-
-## What exists today
-
-- The two existing tiers are: separate components (address-space
-  isolation, channel-only interaction) and same-address-space code
-  (no isolation). The capability model governs the first; the second
-  has no authority story at all.
-- The target CPU (Framework's AMD Krackan) provides PKU-class user
-  protection keys. [INFERENCE: PKU availability on the specific part
-  should be confirmed during Hardware H-track bring-up.]
-- Nothing in the kernel models protection keys; the entry is
-  explicitly an optional Hardware H-track optimization, not a blocking feature.
 
 ## Design sketch
 
@@ -65,15 +51,3 @@ authority, independent failure domain in the generation graph).
   component, or the compartment alone?
 - State: may a compartment hold `preserve`d state bindings, or is all
   durable state the owner's?
-
-## Exit-condition sketch
-
-Two compartments share an address space; a PKU violation in one is
-reported as a structured fault without terminating the other.
-
-## Probe guidance
-
-Paper until Hardware H-track bring-up: the principal question (separate
-authority vs owner's grants) answered as a matrix impact note, plus the
-admission criteria list. A microbenchmark of PKU switch cost on the target
-part belongs to Hardware H-track bring-up, not to this entry's promotion.

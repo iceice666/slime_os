@@ -31,21 +31,24 @@ launch-context behavior.
 | --- | --- | --- |
 | Buildable in-tree code | `components/{system,services,applications,testkit}/<name>/` | Cargo can produce a component ELF. The selected root records lifecycle responsibility; nothing runs yet. |
 | A component declaration | `contracts/component-spec/v1/components/<name>.zti` | The repository can validate the component's identity, requirements, compatibility, and evidence. Nothing runs yet. |
-| A system-spec-derived composition | [`contracts/system-spec/v1/systems/*.zti`](../../contracts/system-spec/v1/systems/) | A system spec selects components, placement, authority, budgets, and graph records from which a generation fixture is derived. |
-| A direct seL4 plane composition | [`contracts/generation-manifest/v1/compositions/sel4-*.zti`](../../contracts/generation-manifest/v1/compositions/) | The owning seL4 composition directly declares its executable, instance, authority, and policy. |
+| A system composition | [`contracts/system-spec/v1/systems/*.zti`](../../contracts/system-spec/v1/systems/) | A system spec selects components, placement, authority, budgets, and graph records from which a generation manifest is derived. |
 
-The current derivation boundary is deliberately narrow:
+All manifests under `contracts/generation-manifest/v1/compositions/` are
+generated outputs, not editable composition sources. The explicit derivation
+map, `DERIVED_GENERATION_FIXTURES` in
+[`scripts/lib/system_spec.py`](../../scripts/lib/system_spec.py), is shared by
+the generator and the system-spec gate:
 
 - `contracts/system-spec/v1/systems/reference.zti` derives
   `contracts/generation-manifest/v1/fixtures/valid.zti`.
-- `contracts/system-spec/v1/systems/sel4-channel.zti` derives
-  `contracts/generation-manifest/v1/compositions/sel4-channel.zti`.
-- The default product builder still reads
-  `contracts/generation-manifest/v1/compositions/sel4.zti` directly.
+- `contracts/system-spec/v1/systems/sel4.zti` derives the default product's
+  `contracts/generation-manifest/v1/compositions/sel4.zti`.
+- The other composition manifests are derived from their corresponding system
+  specs in the same map.
 
-Therefore, editing `reference.zti` alone does **not** change `just run`. Before
-editing a composition, determine whether its fixture is system-spec-derived or
-directly owned. Do not hand-edit a derived fixture.
+Editing `reference.zti` alone does **not** change `just run`. To change the
+default product, edit `contracts/system-spec/v1/systems/sel4.zti` and regenerate
+its manifest. Never hand-edit a generated manifest.
 
 ## 1. Add the implementation crate
 
@@ -207,31 +210,28 @@ The declaration says what `hello` is. A composition says that one instance of
 it exists in one generation, who owns it, how it starts, what it may access,
 and how the graph accounts for it.
 
-### Path A: system-spec-derived fixture
+### Edit the system spec and regenerate
 
 Use the matching source under
 [`contracts/system-spec/v1/systems/`](../../contracts/system-spec/v1/systems/).
-After editing it, regenerate the declared fixtures:
+For the default product, use
+[`sel4.zti`](../../contracts/system-spec/v1/systems/sel4.zti).
+After editing the source, regenerate the declared manifests:
 
 ```sh
 python3 scripts/generate/generate-generation-from-spec.py
 ```
 
-The generator currently owns only the `reference` → `valid.zti` and
-`sel4-channel` → `sel4-channel.zti` mappings listed above. It derives
-executable, instance, object, binding, budget, and health records from the
-system spec plus the component-spec corpus. Review the generated fixture; do
-not patch it afterward.
-
-### Path B: directly owned seL4 plane
-
-For a plane not listed in the derivation map, edit its owning
-`contracts/generation-manifest/v1/compositions/sel4-*.zti` directly. The default product is
-this path: `just run` consumes `sel4.zti` through the product builder.
+The generator uses the shared derivation map to produce all composition
+manifests and the reference fixture. It derives executable, instance, object,
+binding, budget, and health records from the system spec plus the component-spec
+corpus. Review the generated manifest; correct its sources and regenerate
+instead of patching the output.
 
 ### Facts every composition must cover
 
-Whether declared directly or derived, verify all applicable facts:
+Declare these facts in the system spec and component specs, then verify them
+in the generated manifest:
 
 1. **Executable and object:** the executable names the `hello` artifact, role,
    command profile if any, spawn budget, and generation-module object.
@@ -343,7 +343,7 @@ are not evidence required for this documentation-only page.
    just component_spec_check
    ```
 
-3. Only for a system-spec-derived path:
+3. System-spec derivation and generated-manifest consistency:
 
    ```sh
    just system_spec_check

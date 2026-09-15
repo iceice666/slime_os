@@ -6,20 +6,7 @@ The current product is a QEMU-verified `aarch64-sel4-qemu-virt` image: upstream 
 
 The Milk-V Duo (`riscv64-sel4-milkv-duo`) has observed upstream-seL4 product-boot evidence. The named Framework 13 has a recorded removable-media CPU/product boot, not device qualification. Raspberry Pi 5 boot, physical NVMe, and daily-driver hardware remain unclaimed. See [target profiles and evidence limits](docs/architecture/targets-and-portability.md).
 
-## Current status
-
-What the system does today, and what it explicitly does not. This is a
-capability summary, not a state record: `just tasks_list` prints every item's
-state and `just tasks_next` prints what is actionable, from the canonical store
-in `.tasks/items/`.
-
-- The automated target is `aarch64-sel4-qemu-virt` under `qemu-system-aarch64 -machine virt,virtualization=on`. `just run` boots it; `just test` runs the product behavioral aggregate.
-- The QEMU corpus covers bounded shared samples and typed fabric, clock/timer authority, wait sets, scheduling classes, lifecycle policy, task-private memory, and userspace virtio-blk/virtio-net drivers. [Subsystem architecture](docs/architecture/README.md) names current owners and limits; [component/system/image boundaries](docs/architecture/component-system-image.md) explains the spec-derived build path.
-- The Milk-V Duo has observed physical evidence: it boots upstream seL4, `slime-root`, and a target-qualified generation from removable media through unmodified vendor firmware.
-- The named Framework cold-booted its exact removable image twice on 2026-09-13 without internal-storage write authority. The retained observation is currently unbound from the rebuildable root image; it is not evidence of a fresh build or of any device support.
-- **Unclaimed:** physical Framework storage — no seL4 NVMe transport exists, so `just storage_nvme_read_check` fails closed; Raspberry Pi 5 boot — missing serial evidence keeps `just rpi5_boot_check` closed; network application streams — the service already attaches LinkDevice and exchanges ARP/ICMP, but TCP/UDP payload transport and DNS remain unfinished. The linked network gate expects `tcp=0`, not a working byte stream.
-- Unimplemented plans include the physical RPi5 ROS 2 demo, broader ROS 2 wire compatibility, Framework daily-driver devices, foreign workloads, distributed authority, and native development. [Plans](docs/plans/README.md) and the [retained-detail classification](roadmap/README.md) own requirements; MyQue alone owns their priority and state.
-- All DMA on QEMU is trusted; no containment claim is made. QEMU evidence completes no physical milestone, and one board's evidence completes no other board's gate.
+[Subsystem architecture](docs/architecture/README.md) names current owners and limits; [component/system/image boundaries](docs/architecture/component-system-image.md) explains the spec-derived build path.
 
 ## Vision
 
@@ -35,71 +22,9 @@ A generation is built and verified before it becomes bootable. Activation must n
 
 Atomicity therefore covers more than package files: it includes the boot selection, component graph, service endpoints, and declared persistent-state transitions.
 
-## Architectural direction
-
 Slime OS is not intended to become a small Unix clone with a different kernel implementation. Its native model is capability-based and component-oriented.
 
-Privileged mechanism is seL4's, and it is not reimplemented:
-
-- threads, scheduling, and address spaces;
-- physical memory and memory objects;
-- capability tables and object lifetime;
-- Endpoint/Notification IPC and capability transfer;
-- interrupts, timers, and minimal platform control.
-
-`slime-root` owns the dynamic mechanism seL4 leaves to the initial task, and no policy: generation admission, task construction and reclamation, bounded kernel-object allocation, VSpace construction, shared buffers, and fault supervision.
-
-Userspace services should own policy and most complex subsystems:
-
-- component resolution and spawning;
-- filesystems and persistent state;
-- device management and most drivers;
-- networking;
-- display, input, and audio;
-- generation construction, activation, health checking, and rollback.
-
-New IPC protocols must be schema-first: message types are declared as versioned Zutai types under `contracts/`, and endpoint bindings are generated from or deterministically validated against those contracts. Root and component code must not introduce independent hand-written field offsets. This makes "tool call = channel" literal — an agent tool schema and a system IPC schema are the same artifact — and gives interposition tooling (auditing, recording, replay) typed messages instead of opaque bytes.
-
-POSIX and Linux compatibility may exist later as userspace personalities or isolated virtual machines. They are compatibility facilities, not the native ABI or authority model.
-
-## Reference targets
-
-### Tier 0: automated product target
-
-`aarch64-sel4-qemu-virt` is the default deterministic development and test platform. It exercises memory isolation, native Endpoint IPC, component lifecycle, generation boot, storage, and fault injection before equivalent paths are enabled on physical hardware. RV64 QEMU and x86-64 pc99 provide additional architecture-reference paths.
-
-seL4 16.0.0 is pinned in `sel4/pins.toml` and configured by `sel4/config/qemu-arm-virt.cmake`. The machine is `qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 -m 2048M`, with virtio block devices attached by the gates that need them.
-
-The nine target identities are declared in `contracts/target-profile/v1/schema.zt`; `scripts/build/build-sel4.py` selects six build platforms. The [target-profile reference](docs/architecture/targets-and-portability.md) distinguishes current seL4 identities, retained artifact identities, the Raspberry Pi 5 build boundary, and physical evidence. Old executable encodings retain their original meaning; superseded generation formats are refused, not migrated.
-
-### Tier 1: named physical targets
-
-`riscv64-sel4-milkv-duo` is the RV64 physical lane, qualified by P3.D/P3.E/P3.F: the named Milk-V Duo boots upstream seL4, `slime-root`, and a target-qualified generation over a hands-off deployment loop, replays the architecture-neutral sample plane with byte-identical normalized traces, emits bounded fault evidence, recovers autonomously to vendor Linux, and serves Slisp as the resident shell. Gates: `just sel4_duo_image_check`, `just duo_payload_check`, and the board gates in `just/hardware.just`.
-
-
-`aarch64-rpi5` remains the robotics demo's acceptance board. Its kernel, loader, and removable-media boot files build reproducibly (`just rpi5_media_check`), but no board boot was observed; `just rpi5_boot_check` fails closed on missing serial evidence. See the [RPi5 demo plan](docs/plans/rpi5-ros2-demo.md).
-
-The Framework Laptop 13 has an exact `x86_64-sel4-framework13-ai300` profile and a recorded CPU/product boot. Device inventory and daily-driver qualification remain separate requirements in the [Framework hardware plan](docs/plans/framework-hardware.md). A CPU boot qualifies no device; the retained observation cannot be re-stamped to qualify a changed image.
-
-Framework reference hardware:
-
-| Area | Device |
-| --- | --- |
-| Machine | Framework Laptop 13, AMD Ryzen AI 300 Series, SKU `FRANVACP07` |
-| CPU | AMD Ryzen AI 7 350, 8 cores / 16 threads |
-| Memory | 32 GiB |
-| GPU | AMD Radeon 860M, PCI `1002:1114` |
-| Storage | WD_BLACK SN7100 1 TB NVMe, PCI `15b7:5045` |
-| Wireless | MediaTek MT7925 / RZ717 Wi-Fi 7, PCI `14c3:0717` |
-| Input | i8042 keyboard and PIXA3854 I2C touchpad |
-| Audio | AMD HDA and ACP devices |
-| Platform | x86-64 UEFI, ACPI, AMD IOMMU, xHCI, AMD-V |
-
-No general PC compatibility is promised. Hardware that happens to share supported standards is best-effort until promoted explicitly.
-
-### Physical-machine safety rule
-
-Early Slime OS builds must boot from removable media and must not write to the internal NVMe device. Internal-disk writes remain disabled until the NVMe and storage stacks have deterministic tests for bounds, DMA isolation, timeout/reset, flush ordering, interrupted writes, and malformed metadata. Destructive storage development belongs on a dedicated external device.
+The [target-profile reference](docs/architecture/targets-and-portability.md) distinguishes current seL4 identities, retained artifact identities, the Raspberry Pi 5 build boundary, and physical evidence.
 
 ## Language responsibilities
 
@@ -158,29 +83,7 @@ compiler that emits the exact target-qualified Slime component-image format.
 Zutai remains the only schema/configuration language; Slisp may consume generated
 bindings but cannot define a second cross-boundary format or grant authority.
 
-## Component and generation boundary
-
-The stable cross-project artifact is the versioned, deterministic generation manifest. Its host-side source schema is `contracts/generation-manifest/v1/schema.zt`; the built wire format is v5, defined by `contracts/generation/v5/schema.zt` and decoded by `boot-contracts/src/generation.rs`. The decoder refuses v2, v3, and v4 as unsupported; rollback safety comes from refusing an undecodable candidate, not migrating it. Its logical content is:
-
-```text
-GenerationManifest
-  format version
-  target identity
-  kernel and bootstrap objects
-  immutable component objects
-  initial component dependency graph
-  initial capability grants
-  persistent-state bindings and policies
-  health-check policy
-  parent/rollback metadata
-  integrity hashes
-```
-
-Neither seL4 nor `slime-root` parses Zutai source or owns system policy. `slime-root` admits the embedded generation, creates the initial capability graph, and launches the declared components; policy lives in those components.
-
-On `aarch64-sel4-qemu-virt` a generation still declares exactly one `kernelObject` because the format requires it and the root re-checks that closure at admission, but nothing maps it: seL4 is the kernel, pinned and built separately under `sel4/pins.toml`.
-
-Current executable payloads use `contracts/component/v2/`: a bounded exact-target qualification header followed by either segments or a complete native ELF (the seL4 product revision). Retained v1 images imply `x86_64-qemu-virtio`. Integrity comes from the generation object digest and authority from generation grants; the image carries neither independently. See [component and image boundaries](docs/architecture/component-system-image.md).
+See [component and image boundaries](docs/architecture/component-system-image.md).
 
 ## Agentic direction
 
@@ -203,26 +106,6 @@ Atomicity and agentic operation reinforce each other: agent memory and authority
 ## Differentiating directions
 
 Exploratory directions are registered in [`docs/directions/`](docs/directions/README.md). They are not committed work: promotion requires a canonical work item with an observable exit condition and design context in the owning [`docs/plans/`](docs/plans/README.md) page.
-
-## First vertical slice (complete)
-
-The current product vertical slice connects Slime OS, Zutai, and Slisp:
-
-```text
-Zutai generation configuration
-    -> target-qualified Rust service ELFs
-    -> externally built freestanding C Slisp ELF
-    -> hash-checked component admission
-    -> isolated init, console, spawn service, and resident Slisp REPL
-```
-
-`just sel4_component_graph_check` boots six target-qualified ELF payloads,
-observes the four required instances live, and stops after Slisp reaches its
-prompt and reports its first blocked input read. `just slisp_core_check`
-separately drives persistent definitions, lexical evaluation, typed refusal,
-and clean termination through the same non-Rust implementation.
-
-This slice defines the minimum useful contracts: userspace entry, address-space isolation, capability IPC, executable identity, command resolution, spawning, streams, termination notification, manifest decoding, fault containment, and the agent abstraction as a non-special case of the above.
 
 ## Plan and work items
 

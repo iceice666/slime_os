@@ -8,7 +8,7 @@ Format 1 describes:
 - immutable content-addressed objects;
 - components and dependency names, plus an optional per-component
   `stackBytes` override consumed by the component image builder
-  (`contracts/component/v1`);
+  (`contracts/component/v2`);
 - directed capability grants;
 - persistent-state ownership and policy;
 - boot health policy.

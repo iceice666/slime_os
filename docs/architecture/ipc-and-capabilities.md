@@ -75,15 +75,64 @@ The capability-transfer protocol is declared under
 `contracts/capability-transfer/v1/`. Transferability and every rights ceiling are
 checked against the vocabulary generated from `contracts/generation/v5/`.
 
+## Checked rights algebra
+
+The normative [bounded model](../../contracts/capability-rights/model/capability-rights.zt)
+covers `derive`, `spawnGrant`, `export`, `finalize`, `import`, and `cancel`.
+Derive and spawn grants share a non-consuming narrow-only rule; consuming
+transfer stages rights no wider than its source and permits cancellation only
+before finalization. Cancellation restores the exported rights, not a wider grant.
+
+Its state-safety properties are `DeriveOnlyNarrows`, `TransferOnlyNarrows`,
+`TransferRequiresTransferRight`, `TransferFollowsDeclaredEdge`,
+`RightsValidForKind`, `NoTransferDuplication`, and `NoAuthorityWidening`.
+The last is a weaker edge-scoped closure corollary, not a substitute for the
+per-operation conservation laws. Six mutation scenarios require violations of
+the first six properties: widening derive/transfer, missing transfer authority,
+undeclared edges, kind-blind derivation, and duplicate installation at finalize.
+`just capability_rights_model_check` checks the model and is included in
+generation-contract validation; this is a bounded specification, not a runtime
+refinement proof.
+
+The boundary is three components, one object, and four symbolic rights:
+transfer authority, two independently narrowable same-kind rights, and a
+foreign-kind right. These are equivalence classes, not a second copy of the
+[canonical rights vocabulary](../../contracts/generation/v5/vocab/rights.zt).
+The abstraction is documented rather than machine-checked. In particular:
+
+- `retain=true` non-consuming exports are outside the model;
+- descriptor and native-endpoint ticket movement is collapsed into a pending
+  record, not a model of the two runtime rendezvous orderings above;
+- native Endpoint transferability is held in `PeerEndpointTable`, not endpoint
+  rights bits; the model abstracts it as retaining or dropping `#transfer`.
+
+Changes to `rightBits`, `capability_rights_valid`, or a `rights_type!` `VALID`
+mask must land in the same commit as resulting model and capability-matrix
+updates. The vocabulary partition in `boot-contracts/src/generation.rs` checks
+manifest admission and rejection against `capability_rights_valid` and requires
+their union to equal `RIGHT_ALL`, so a new unclassified bit cannot silently drift.
+The [capability matrix](../capability-matrix.md) owns the current enforcement
+classification; historical vocabulary counts and ungated-right lists are not
+current authority.
+
+Original measurements, counterexample discovery, and promotion evidence live in
+[archived direction 24](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/24-rights-algebra-model.md),
+not in this current boundary.
+
 ## Shared buffers and loans
 
 `slime-root/src/shared_buffer.rs` owns a bounded table of page-backed shared
 objects, mappings, and receiver-bound loans. Creation requires a
 `SharedBufferFactory` grant and a per-holder generation budget. Mapping and loan
-charges are separate, and sealing irreversibly removes write access before
-publication. Mappings request data-page attributes; execute-never is enforced
+charges are separate. Mappings request data-page attributes; execute-never is enforced
 on AArch64/RISC-V, but not expressible through the current x86-64 seL4 mapping
 API. See [target limitations](targets-and-portability.md).
+
+Mapping accepts only page-aligned exact-frame ranges wholly within the buffer or
+loan. Invalid base, offset, length, arithmetic overflow, and lifecycle misuse are
+rejected before any page-table entry changes; a partial installation is fully
+unwound. Sealing downgrades every live writable page-table entry before publishing
+the irreversible read-only state; it cannot be bypassed to recover write access.
 
 A loan names an exact subrange and receiver. Releasing a creator cannot free
 pages still retained by a live loan; final return settles the last reference.

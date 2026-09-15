@@ -1,89 +1,46 @@
-# `sel4-visibility.zti` — the C8.8 filtered-introspection generation
+# `sel4-visibility.zti` — filtered introspection composition
 
-A twelfth seL4 generation, beside [`sel4-stream.zti`](sel4-stream.md),
-[`sel4-call.zti`](sel4-call.md), [`sel4-operation.zti`](sel4-operation.md), and
-their siblings. It declares the C8.8 graph — the telemetry and diagnostics
-routes with `fabric-intruder` interposed on the telemetry subscriber's chain —
-for P5.4.8.
-
-This is the **stream graph plus one declared interposition**. Its routes, QoS,
-and participants are `sel4-stream.zti`'s; what differs is the profile, and the
-composition `init` runs. Recorded below is only that difference.
-
-## Why generation 21
-
-18, 19, and 20 are the seL4 call, QoS, and operation planes. Generation 16 is
-the **x86** visibility plane and keeps the base x86 layout. Numbering this 21
-rather than reusing 16 is what stops the seL4 image from walking the x86 table.
-
-## The interposition lives in the profile, not the participant
-
-Every route participant declares `interposition = []`. The chain arrives from
-the profile:
-
-```
-profiles = [ { name = "sel4"; interpositions = [
-  { route = "telemetry"; participant = "fabric-subscriber"; chain = ["fabric-intruder";]; };
-]; }; ];
-```
-
-`resolve_fabric_graph` (`scripts/build/build-generation.py`) rewrites the named
-participant's `interposition` from that override, which is exactly how the
-oracle's own `visibility` profile expresses it. Declaring the chain inline on the
-participant would work, and would also make the fixture claim something the
-oracle's does not: that the chain is a property of the route rather than of the
-profile the boot selected.
-
-Admission is fail-closed on both halves. `FabricGraph::decode`
-(`boot-contracts/src/fabric_graph.rs`) requires every hop to resolve, the chain
-to terminate, and no participant to hop to itself; `slime-root/src/generation.rs`
-additionally requires every hop to name a component this generation declares. The
-boot marker reports `interpositions=1`, and the gate asserts it — a profile whose
-chain silently vanished would admit a graph with a direct edge where the
-generation declared a proxy.
-
-## `fabric-intruder` is the proxy here
-
-The same binary that proves undeclared-edge denial on the stream plane is the
-*declared proxy* on this one, selected by `SLIME_FABRIC_VISIBILITY_CHECK`. That
-is the oracle's arrangement, kept rather than modernized: C8.10's `fabric-proxy`
-is a later, distinct identity, and porting it would be porting the unified plane
-rather than C8.8.
+The [`sel4-visibility.zti`](sel4-visibility.zti) manifest owns
+`bootAction = "visibility"`, telemetry and diagnostics, and a profile override
+placing `fabric-intruder` on the telemetry subscriber's interposition chain.
+The [build resolver](../../../../scripts/build/generation_fabric.py) applies the
+profile's chain to the authenticated graph; it is not a participant's self-claim.
+[Graph decoding](../../../../boot-contracts/src/fabric_graph.rs) rejects cycles
+and self-hops; [root admission](../../../../slime-root/src/generation.rs) requires
+each hop to name a declared component.
 
 ## Static endpoint authority
 
-Every `init-*` executable grant declares `transferable = false`. Control and
-route endpoints are generation-declared objects installed through
-`mintedBindings`: the fabric holds slots 2–13, while each participant holds only
-the fixed control and route roles its authenticated descriptor describes.
+Controls and route Endpoints are ordinary declared grants with explicit instance
+bindings. The [visibility broker](../../../../components/lib/src/visibility_broker.rs)
+resolves route roles by declared names such as `telemetry-ingress` and
+`telemetry-proxy-upstream`; init does not create or transfer endpoint pairs.
+The proxy holds upstream receive/ack-send and downstream send/ack-receive roles.
+Telemetry sample delivery traverses the proxy. A separate direct
+`telemetry-proxy-event` endpoint reports events to the subscriber; it is not a
+bypass for telemetry samples. Diagnostics has its own ingress, egress, and ack
+edges and does not depend on the proxy.
 
-The proxy chain is therefore attenuated by construction. `fabric-intruder`
-holds receive/send/send/receive at slots 1–4 for upstream data, upstream ack,
-downstream data, and downstream ack; no direct fabric-to-subscriber telemetry
-binding exists. Diagnostics uses a separate service/publisher/subscriber triple,
-so proxy loss cannot remove that unrelated route. No endpoint factory or runtime
-capability handoff participates in visibility provisioning.
+All init executable grants are non-transferable. The
+[current launcher](../../../../components/system/init/src/fabric_planes.rs)
+nevertheless supplies narrowed supervision copies at service spawn: publisher,
+subscriber, proxy, publisher B, subscriber B occupy slots 7–11. The proxy and
+subscriber handles expose termination; an Endpoint cannot report peer death.
+The service also receives its factory, and publisher B has a declared factory
+binding. Scenario selection in broker and participants uses authenticated
+`BootAction::Visibility`, not an environment flag.
 
-## The shared-buffer budget
+## Budgets and visibility boundary
 
-One holder: `fabric-service`, at 28 pages and 14 buffers/mappings/loans. Those
-are the graph's declared `limits`, which `resolve_fabric_profile` checks against
-the holder quota. Nothing in this plane allocates — every record is an inline
-64-byte `WireVisibility*` or `WireStreamSample` — so the figures are a
-satisfiability floor rather than a measurement, and no participant declares a
-quota.
+Init has `spawnBudget = 6`. The service alone has a shared-buffer quota of 28
+pages and 14 buffers/mappings/loans, plus 16 private-memory pages. The visibility
+protocol uses inline records; the shared-buffer figures are declared admission
+budgets, not a measurement. The graph declares seven ingress sources and 32
+capability slots; the builder's stream wait shape adds one fixed source, so the
+ingress count must not be confused with the worker's complete park set.
 
-## `ingressSources = 7`
-
-Five telemetry participants and two diagnostics participants are seven
-publish/subscribe edges; the `stream` route worker's `graphDerived` count adds
-its fixed one, giving eight against `MAX_WAIT_SOURCES = 9`. The declared limit
-counts the edges rather than the worker's park set, which is why it is 7 and not
-8.
-
-## The boot layout
-
-`scripts/build/boot_layout.py`'s `SEL4_VISIBILITY_LAYOUT` records the generation
-objects. Native controls and route endpoints are declared in the fixture and
-installed into the fixed slots named by `mintedBindings`; component startup does
-not construct or transfer endpoint pairs at runtime.
+The broker reads the graph as its declared fabric holder and filters views for
+requesting participants. It does not grant other participants holder-wide graph
+access. The [visibility checker](../../../../scripts/check/check-sel4-visibility-plane.py)
+owns acceptance for filtered introspection, interposition, and proxy-loss
+behavior. No fresh execution result is claimed.

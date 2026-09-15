@@ -1,32 +1,24 @@
 # Component specification contract, format 1
 
-This directory defines CP0's component-level model: what a Slime OS component
+This directory defines the component-level model: what a Slime OS component
 *is*, independently of how any one generation composes it. `schema.zt` is the
 normative shape, `components/*.zti` is the corpus, and
 `scripts/check/check-component-spec.py` owns semantic admission.
 
-## Why this exists
+## Ownership
 
-Before CP0 the repository had no component-level specification at all.
-`contracts/generation-manifest/v1/schema.zt`'s `Executable`/`Instance` pair was the only
-description of a component anywhere, so "what this component is" and "how this
-generation composes it" were the same hand-authored text — the coupling
-[B70](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) opens. `contracts/component/v2`'s
-`ImageHeader` did not close the gap either: it carries only target-qualification
-fields (`magic`, `architecture`, `abi`, `page_profile`, `required_features`, a
-segment table), so nothing described a component's identity, authority,
-interfaces, or lifecycle.
-
-CP0 separates the two. A spec describes the component; a manifest composes an
-instance of it. CP1 derives the manifest from these records rather than
-hand-authoring both, and CP2 moves slot resolution off `build.rs`-private
-compile-time constants.
+A spec describes a component independently of its deployment. A system spec
+composes instances and authority; the generation manifest is derived from those
+records. Runtime binding resolution reads the admitted instance's bindings.
+The [component/system/image reference](../../../docs/architecture/component-system-image.md)
+owns these boundaries; an executable image describes mapping and target
+qualification, not component identity, interfaces, lifecycle, or grants.
 
 ## What a record declares
 
-The twelve sections `spec/requirement-document-v0.6.md` §2.1 names: Identity
-(`name`, `componentType`, `version`, `owner`), `purpose`, `implementation`,
-Capability (`provides`/`requires`), `interfaces`, `dependencies`,
+`schema.zt` declares identity (`name`, `componentType`, `version`, `owner`),
+`purpose`, `implementation`,
+capabilities (`provides`/`requires`), `interfaces`, `dependencies`,
 `communication`, `configuration`, `lifecycle`, `runtime`, `health`,
 `compatibility`, and `test`.
 
@@ -59,30 +51,21 @@ interface identity are computed the same way. The gate proves the identity is
 invariant under source field order and source formatting, and that it changes
 when any field's content does.
 
-## Two components are declared without an implementation
+## Declared components without an implementation
 
-`generation-list` and `storage-store-probe` are declared in
-`contracts/generation-manifest/v1/fixtures/valid.zti`, in every
-`contracts/boot-layout/v1/fixtures/*.layout`, and (for `generation-list`) in
-`components/lib/src/default_fabric_profile.rs`, but no `[[bin]]` target or
-source file exists for either. Both were deleted as unreachable clients of
-retired syscalls — see
-[`devlog/2026-08-10-b44-policy-labels-deleted/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-10-b44-policy-labels-deleted/index.md)
-and
-[`devlog/2026-08-10-b43-block-service-endpoint/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-10-b43-block-service-endpoint/index.md)
-— while their manifest entries stayed.
+The frozen reference generation retains component identities without a current
+implementation. `provider = "undeclared"` represents that explicitly rather
+than inventing a source path. `scripts/check/check-component-spec.py` owns the
+expected reference set and checks it against discovered component crates; a
+reference identity gaining or losing an implementation must update both facts.
+Newer product compositions are validated independently, not projected backward
+onto the frozen generation.
 
-`provider = "undeclared"` records that fact rather than inventing a source file
-for them. The gate pins the set to exactly those two and refuses a record that
-claims to be undeclared while its binary exists, so a third component losing its
-implementation fails this gate instead of passing silently. Deciding whether to
-delete the manifest entries or build the missing components is not CP0's call;
-recording the gap accurately is.
-
-Two further names resolve to a binary that is *not* spelled like the component:
-`generation-manager` is built by `sel4-generation-manager` and
-`filesystem-service` by `sel4-filesystem-service`. `implementation.binary` makes
-that a declared fact instead of a convention a reader must rediscover.
+Component identity and implementation binary name are separate. For example,
+`generation-manager` uses `sel4-generation-manager`, and `filesystem-service`
+uses `sel4-filesystem-service`; `implementation.binary` declares that mapping.
+The [original contract note](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/contracts/component-spec/v1/README.md)
+preserves the initial missing-provider account.
 
 ## Validation levels
 
@@ -120,29 +103,26 @@ enforces is grounded in real repository state rather than in a literal:
   some component — except `executable`, whose provider is the hash-verified
   generation module rather than a component.
 
-The gate also cross-checks each record against
-`contracts/generation-manifest/v1/fixtures/valid.zti` field by field: type, owner, health,
-dependencies, spawn budget, stack bytes, extra threads, shared-buffer budget,
-target, `provides`/`requires` derived from the manifest's `grants[]`, and every
-fabric route role with its exact QoS values. The fabric projection runs both
-ways: a declared interface entry must be authorized by a participant role, an
-interposition hop, `fabricComponent` ownership, or a route worker's partition, so
-a record can neither omit a role the graph gives it nor invent one it does not. A
-spec free to disagree with the generation that composes it would be
-documentation, not a contract, and CP1 could not derive one from the other.
-
-42 named malformations are refused, each paired with an admitted baseline of the
-same shape so no arm can pass by tripping an unrelated guard — the discipline
-[B67](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/roadmap/00-backlog.md) established after two negative controls
-were found to be structurally incapable of failing.
+Reference records are cross-checked against
+`contracts/generation-manifest/v1/fixtures/valid.zti`: type, owner, health,
+dependencies, resource budgets, target, and declared interfaces. Fabric roles
+are authorized against the committed compositions, not only the reference
+graph: a component may have a role in one composition and not another. An
+interface entry must correspond to a participant role, an interposition hop,
+fabric ownership, or a route-worker partition declared by a composition. A
+spec must agree with the authority declared by its consuming compositions.
+Malformed-case checks pair each refusal with an admitted baseline of the same
+shape so an unrelated guard cannot make a negative control pass.
 
 ## Scope boundary
 
-CP0 declares and validates the model. It does not derive generation manifests
-from it (CP1), move slot resolution to runtime (CP2), split components into
-independent crates (CP3), admit externally built artifacts (CP4), or prove
-out-of-tree development (CP5). No component source, root code, or generation
-byte changes in CP0.
+This contract describes and validates a component, not a deployment or build
+result. System specifications own composition and grants; runtime binding
+resolution uses the admitted instance's authority; executable admission and
+SDK publication have separate contracts. The
+[component, system, and image reference](../../../docs/architecture/component-system-image.md)
+maps those owners. The [original contract note](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/contracts/component-spec/v1/README.md)
+preserves CP0's delivery scope and validation history.
 
 Run the focused gate with:
 

@@ -2,11 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | sync |
 | Depends on | entries [14](14-cross-machine-sync.md) and [15](15-zutai-state-migrations.md); Zutai evaluation in the sync path (host-side acceptable initially) |
 | Enables | multi-machine state without silent winner-picking |
-| Now | The formal core — deterministic three-way merge semantics — is a self-contained host-side exercise with fixtures, legal before 14/15 land. |
 
 ## Motivation
 
@@ -17,16 +15,6 @@ independently on two machines. Attach a pure Zutai merge function to a
 state schema; sync performs a deterministic three-way merge whose result
 is byte-identical on both machines, and a non-mergeable conflict is a
 structured error that retains both roots — never a silent winner.
-
-## What exists today
-
-- State bindings are content-addressed objects in epochs (M5.6b,
-  complete), so "same binding, two evolutions" is well-defined: two
-  descendant objects of a common ancestor identity.
-- Zutai purity for transformations is established by entry 15's
-  migration design; merge adds a second input of the same schema.
-- M6.7 provides deterministic one-way generation transfer and activation;
-  entry 14's general network sync and this merge point's integration remain open.
 
 ## Design sketch
 
@@ -62,19 +50,3 @@ generation action.
   on both bindings, declared in whose manifest?
 - Does a merged result belong to both machines' epochs, and how does GC
   treat the two pre-merge tips (retained until when)?
-
-## Exit-condition sketch
-
-A fixture state diverged on two machines merges to byte-identical bytes
-on both; a schema without a merge function rejects divergent sync rather
-than silently picking a winner.
-
-## Probe guidance
-
-Host-side today, independent of 14/15: pick one fixture schema, write
-its merge function in Zutai, and demonstrate byte-identical convergence
-plus the conflict path on synthetic diverged fixtures. The probe's
-output is the merge-function contract and a classification of which
-state types in the system admit total merges — the evidence that decides
-whether this entry promotes as a general mechanism or a per-schema
-opt-in.

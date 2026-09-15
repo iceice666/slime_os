@@ -1,97 +1,33 @@
 # `sel4-qos.zti` — the C8.5 timed-QoS generation
 
-An eleventh seL4 generation, beside [`sel4.zti`](sel4.md),
-[`sel4-channel.zti`](sel4-channel.md), [`sel4-loan.zti`](sel4-loan.md),
-[`sel4-spawn.zti`](sel4-spawn.md), [`sel4-sample.zti`](sel4-sample.md),
-[`sel4-stream.zti`](sel4-stream.md),
-[`sel4-supervision.zti`](sel4-supervision.md),
-[`sel4-crossing.zti`](sel4-crossing.md), [`sel4-call.zti`](sel4-call.md), and the
-frozen x86 [`valid.zti`](../fixtures/valid.zti). It supplies the clock P5.4.5's remaining
-C8.5 arms need.
+This composition exercises timed QoS over the native typed fabric. The
+[`sel4-qos.zti`](sel4-qos.zti) manifest owns its graph, grants, slot bindings,
+and `bootAction = "qos"`; the [fabric architecture](../../../../docs/architecture/typed-data-fabric.md)
+owns the shared protocol and authority boundaries.
 
-**It does not pass yet.** Three arms that were unreachable without a clock now
-fire — bounded RELIABLE retry accounting, deadline miss, and liveliness loss —
-and the plane then stops at `[fabric] fail: no inline retained publisher`. See
-[`devlog/2026-08-07-p5-4-5-qos-clock/`](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/devlog/2026-08-07-p5-4-5-qos-clock/index.md).
+## Clock and retained data
 
-## Why this fixture is the stream graph verbatim
+`fabric-publisher-b-clock` is a generation-declared native Endpoint between
+`fabric-publisher-b` and `fabric-service`, separate from the publisher's
+participant-control endpoint. Its bindings pin slot 3 on the publisher and
+slot 11 on the broker. The root installs both halves before either task runs;
+init does not mint or distribute this clock endpoint.
 
-It is byte-identical to [`sel4-stream.zti`](sel4-stream.md) apart from its
-generation number. That is deliberate rather than lazy: C8.5's timed arms are
-properties of the *same* graph observed with time advancing, so declaring a
-different graph would make the gate assert about a different composition than
-the stream plane it extends.
+The publisher advances simulated time so the broker can exercise retry,
+deadline, liveliness, and lifespan policy deterministically. The retained
+diagnostics route supplies an inline retained head independently of the
+telemetry publisher's timing. This is not a claim about physical-clock latency.
 
-Everything the clock needs is added at runtime by `init.rs`, not here — see
-below.
+## Image and verification boundary
 
-## Why generation 19, and why no new boot-layout table
+`just sel4_qos_check` runs `scripts/check/check-sel4-qos-plane.py`. The gate
+builds the `sel4-qos-death` image closure, which selects `streamEarlyExit` for
+the publisher so the peer-death arm is reachable. The base `sel4-qos` closure
+does not provide that executable-changing scenario; authenticated boot-action
+data and the selected implementation identity have separate roles.
 
-The generation number must differ from the stream plane's, because
-`build-generation.py` keys its Cargo target directory on it and two generations
-sharing one directory would let the second build reuse the first's `init.elf`.
-
-It needs no `boot_layout.py` entry. Generation 19 is absent from both `OVERRIDES`
-and `REPLACEMENTS`, so it resolves the base table pruned to this component set —
-the same 31 rows the stream plane resolves, verified by resolving both. The clock
-is *minted* rather than declared, so the layout numbers nothing new. A
-replacement table would have been a second thing to keep in agreement for no
-benefit.
-
-## The clock is a declared grant, not a control
-
-This is the fixture's one load-bearing asymmetry. There is no
-`fabric-time-control` grant — the clock is not a participant, and adding one
-would give the generated profile's control table an entry the graph does not
-declare, which is what the broker maps a control slot to a caller identity with.
-
-Instead the clock edge is declared as `fabric-publisher-b-clock`, a native
-Endpoint between `fabric-publisher-b` and `fabric-service` at declared slot 11
-on the broker and 3 on the publisher, matching that component's own
-`TIME_SLOT = 3`. Init places nothing: the root installs both halves before
-either task runs.
-
-The broker's slot is computed rather than written:
-`TIME_SLOT = FABRIC_FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() + FABRIC_SUPERVISION.len()`.
-A hardcoded 9 was a constant racing a computed range — adding a ring participant
-moved supervision onto it (B50/R2) — so the declared slot must agree with that
-expression, not with a literal.
-
-The component that publishes is also the one that says what time it is, which is
-the wiring the oracle's QoS gate uses. Because a native Endpoint reports no peer
-death, the broker additionally names `fabric-publisher-b` by supervision handle
-to observe the clock's exit rather than blocking on it.
-
-## Why the QoS behaviour is not a build flag
-
-It used to be. `build-generation.py` mapped this manifest to two compile-time
-selectors — one choosing init's plane driver, one selecting the QoS behaviour in
-`fabric-service`, `fabric-publisher-b`, and `fabric-subscriber-b` — and the
-cutover deleted both along with the other 41 `SLIME_*_CHECK` flags (B50).
-
-The manifest is the selector now: the builder emits `GENERATION_BOOT_ACTION` from
-this fixture's `bootAction`, and each component reads it. That keeps the three
-components byte-identical across the stream and QoS planes — which is what
-`check-sel4-stream-plane.py`'s unmodified-component assertion demands — without a
-build flag able to disagree with the graph it was built for.
-
-It also retires the two defects the flags carried. Backlog **B27** was a flag
-table that set and scrubbed in one pass, so the `sel4-qos` row popped the flag
-the `sel4-stream` row had just set; and the plane driver needed a second guard
-requiring the *absence* of a flag, because otherwise an unrelated branch claimed
-this plane and walked the wrong boot layout. Both are unreachable once one
-authenticated field decides.
-
-## What still blocks it
-
-`create_late_subscriber` (`fabric-service.rs`) requires a `DURABILITY_RETAINED`
-publisher whose retained head is *inline*. This graph's retained publishers are
-`fabric-publisher` (inline) and `fabric-publisher-b` (which lends a
-`>MAX_INLINE_BYTES` sample), and at the moment the fabric's scheduled boundaries
-run, `fabric-publisher` has not yet taken its role — so no inline retained head
-exists.
-
-Closing it needs the graph to guarantee that head structurally, by declaring a
-retained publisher that publishes small. It is **not** a scheduling nudge away:
-adding a `yield_now` before the clock driver's spawn removed all three working
-arms, which is recorded as a correction on the devlog entry.
+The checker requires ordered marker chains for graph admission, participant
+matching, simulated-time advancement, reliable retry accounting and exhaustion,
+liveliness loss, deadline miss, lifespan expiry, publisher death, and plane
+completion. Independent chains may interleave; one total serial ordering is
+not the contract. These are gate requirements, not a fresh execution record.

@@ -2,11 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | authority |
-| Depends on | M5.5 (complete: machine-readable grants); provenance follow-up to M5.1 for the runtime half |
-| Enables | [entry 1](01-authority-diff-gate.md), [entry 27](27-policy-carrying-generations.md); audit queries for [entry 18](18-network-authority.md) and [entry 28](28-accelerator-objects.md) |
-| Now | The host-side half — a grant-graph query engine over manifests — is fully legal tooling today. Named as an M5.5 follow-up in the [roadmap](../../roadmap/README.md). |
+| Depends on | provenance follow-up to M5.1 for the runtime half |
+| Enables | [entry 1](01-authority-diff-gate.md), [entry 27](27-policy-carrying-generations.md); audit queries for [entry 18](18-network-authority.md) and [Authority A3](../plans/authority-and-trust.md#accelerator-compute-authority) |
 
 ## Motivation
 
@@ -22,25 +20,8 @@ It is also the seed of the whole authority route. Once the engine exists,
 [entry 27](27-policy-carrying-generations.md) is a predicate over the
 graph carried in the generation itself, and future object kinds
 ([entry 18](18-network-authority.md) destinations,
-[entry 28](28-accelerator-objects.md) compute budgets) become auditable
+[Authority A3](../plans/authority-and-trust.md#accelerator-compute-authority) compute budgets) become auditable
 by the same queries the day their matrix rows land.
-
-## What exists today
-
-- M5.5 landed generation format v2 with machine-readable 1:1 rights
-  strings; the manifest is deterministic, bounded, and validated by
-  `just contracts_check`.
-- The rights vocabulary and object kinds are fixed by
-  `../capability-matrix.md`; the horizon section lists candidate object
-  kinds (Directory, NetworkDestination, EnergyAccount, SharedBuffer
-  creation) whose audit questions this engine should absorb without
-  redesign.
-- M5.1 established that unprivileged components cannot acquire device
-  rights (`storage_cap_check`); the runtime half (a live introspection
-  service exposing the actual grant graph) needs the provenance
-  follow-up, which does not exist yet.
-- [entry 24](24-rights-algebra-model.md) is modeling the derive/transfer
-  semantics that define what "can reach" means transitively.
 
 ## Design sketch
 
@@ -58,7 +39,7 @@ the live grant graph — including capabilities minted and derived after
 boot — through a read-only schema. The exit condition ties the halves
 together: static answers must match runtime provenance on a test graph,
 which is also a cross-check of the narrow-only model in
-[entry 24](24-rights-algebra-model.md).
+the [current algebra boundary](../architecture/ipc-and-capabilities.md#checked-rights-algebra).
 
 Design constraint: the engine answers possibility, not permission. A
 component "can reach" a right if the manifest and derive rules allow a
@@ -76,21 +57,6 @@ question.
 - Where do channel schemas (`../../contracts/`) tighten the answer — a
   component may hold a channel but the schema bounds what authority can
   cross it?
-
-## Exit-condition sketch
-
-The proposed `authority_query` command answers "which components can reach BlockDevice
-write" from the manifest alone, matching runtime provenance on a test
-graph.
-
-## Probe guidance
-
-Legal today as host tooling: build the graph loader and the reachability
-queries over the current format-v2 manifests, and validate answers by
-hand against the existing QEMU component graphs (storage slice,
-rollback fixture). The probe's output is the engine plus a measured gap
-list — which queries the manifest alone cannot answer until provenance
-lands — which scopes the runtime half before promotion.
 
 ## References
 

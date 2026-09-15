@@ -28,6 +28,11 @@ frames or 4 KiB frames, with leaf tables created only where base pages require
 them. A failed growth unwinds the attempt's mappings without discarding existing
 committed pages or backing extents that remain reusable.
 
+Shared-buffer mappings are refused at every address in the reserved private-memory
+window, including addresses not yet backed by private frames. Outside the
+reservation, ordinary shared-buffer mapping, sealing, unmapping, release, and
+quota reuse are unchanged.
+
 Quota is deny-by-default and is a generation budget, not a capability. The region
 has no object identity and cannot be transferred, loaned, sealed, shared,
 file-backed, or made executable. The root exposes a grow operation only; it does

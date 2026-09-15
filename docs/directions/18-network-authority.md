@@ -2,11 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | hardware |
-| Depends on | [Hardware H6 networking](../../roadmap/04-platform-hardware.md) (not implemented); the capability-matrix horizon tracks the NetworkDestination object shape |
+| Depends on | [Hardware H6 networking](../../roadmap/04-platform-hardware.md); the capability-matrix horizon tracks the NetworkDestination object shape |
 | Enables | manifest-auditable exfiltration surface — particularly for agent components |
-| Now | Paper: the NetworkDestination object shape and rights strings are a matrix amendment exercise legal today. |
 
 ## Motivation
 
@@ -16,20 +14,6 @@ This is the agent-safety network story: an agent component's reachable
 destinations are enumerated in the same document as every other grant,
 so "where can this agent send data" is a static question with a
 checkable answer — not a property of runtime socket calls.
-
-## What exists today
-
-- The pattern is proven by storage: M5.1/M5.2 gating a BlockDevice
-  behind declared rights, verified by `storage_cap_check`, is exactly
-  the shape a NetworkDestination row would follow.
-- The capability-matrix horizon names the object shape question:
-  NetworkDestination with CONNECT / SEND / RECV / LISTEN rights, and
-  whether the object is (protocol, address, port) declared in the
-  generation.
-- [entry 9](09-grant-graph-introspection.md) makes the audit concrete:
-  "which components can reach which destinations" becomes a grant-graph
-  query over the manifest the day the row lands.
-- Hardware H6 owns networking; no stack exists to gate yet.
 
 ## Design sketch
 
@@ -64,17 +48,3 @@ reachability is a query.
   the same object shape, and who declares exposure?
 - Per-destination budgets (rate, byte counts) — inside this row, or
   deferred to [entry 25](25-resource-accounts.md)-style accounts?
-
-## Exit-condition sketch
-
-A component holding a capability for one declared destination cannot
-connect to any other address or port; the manifest lists every
-reachable destination.
-
-## Probe guidance
-
-Paper: the matrix amendment (object shape, rights strings, wildcard
-policy, DNS treatment) evaluated against the agent scenarios in
-README's agentic direction — does every realistic agent deployment keep
-a fully enumerable destination list? The answer sizes the wildcard
-escape hatch before Hardware H6 makes it concrete.

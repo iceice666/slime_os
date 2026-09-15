@@ -28,10 +28,22 @@ page does not restate their state.
 ## Invariants
 
 - Capacity is keyed by exact target-profile name and bounded by generation data.
+  Physical targets retain the conservative default: a board's 12-bit root CNode
+  cannot hold the descriptor tables a larger holder needs, and no board has run
+  the workload.
+- The 256 MiB per-holder and 1 GiB aggregate envelope remains unpublished:
+  its arithmetic fits the available ARM window, but simultaneous residency has
+  not been observed. Publication requires the qualification workload to run.
 - Virtual reservation, owned backing extents, committed quota pages, frame
   objects, page tables, slots, and metadata are reported separately.
 - Legal small growth requests must fit the published worst-case metadata and
   object envelope; best-case large-frame arithmetic cannot justify a ceiling.
+- Root-image and root-CNode storage consume boot capacity before holders run.
+  Include statically sized metadata, rootserver backing, alignment waste, and
+  page-table costs; increasing the CNode is not a substitute for scalable
+  backing and accounting.
+  Small growth must not commit an uncharged large frame, and admitted capacity
+  must remain representable by its metadata even under fragmented backing.
 - Private memory remains non-transferable, zero-filled before reuse, writable,
   non-executable where the target mapping API can enforce it, and fully reclaimed
   on task death.
@@ -54,8 +66,20 @@ reads the complete working set to detect aliasing, compares resource watermarks
 across incarnations, records backing shape, and confirms another holder's
 account is unchanged.
 
+Budget changes keep schema, generator, builder, root admission, VSpace, and
+runtime aligned. Existing checker ownership and closure-derived compositions
+remain the integration path; a capacity milestone does not add a top-level
+checker.
+
 The method is derived from the current private-memory reclamation invariant; one
 historical run's exact watermark values are not expected constants.
+
+## Remaining sizing question
+
+For a representative multi-holder composition, does the admitted task-count
+limit become the binding constraint before memory capacity? Qualification must
+distinguish that limit from per-holder and aggregate memory exhaustion rather
+than infer workload capacity from a memory ceiling alone.
 
 ## Exit condition
 

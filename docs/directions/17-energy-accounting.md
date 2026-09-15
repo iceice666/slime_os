@@ -2,11 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | hardware |
 | Depends on | [Hardware H track](../../roadmap/04-platform-hardware.md) daily-driver quality goals; the capability-matrix horizon questions whether accounting is authority or read-only telemetry (EnergyAccount row) |
 | Enables | background power budgets carried as grants; battery-policy as manifest data |
-| Now | Paper: the authority-vs-telemetry question the horizon poses is the design exercise, answerable without hardware. |
 
 ## Motivation
 
@@ -17,20 +15,6 @@ unanswerable, and "this background service may not exceed a power
 budget" is unenforceable. Carrying budgets as grants makes energy
 policy generation data — declared, auditable, rollbackable — like every
 other resource decision.
-
-## What exists today
-
-- The scheduler is the natural attribution point (per-component run
-  time already exists as a scheduling concept); nothing energy-related
-  is measured. [INFERENCE: no accounting rows exist in the matrix.]
-- The capability-matrix horizon carries the entry's core question
-  verbatim: an EnergyAccount object with READ rights, and whether
-  accounting is authority at all or read-only telemetry.
-- [entry 25](25-resource-accounts.md) designs the general account
-  mechanism; energy is a candidate quantity, or a deliberately
-  separate axis — the split is part of the design.
-- The Hardware H track owns daily-driver bring-up, including the power
-  telemetry this consumes.
 
 ## Design sketch
 
@@ -60,16 +44,3 @@ with the enforcement mechanism itself living in userspace policy.
   session — and how does rollback treat accumulated consumption?
 - Throttling semantics: hard scheduling denial versus priority
   degradation, and who declares which per component.
-
-## Exit-condition sketch
-
-On the Framework target, a busy-looping background component is
-throttled past its generation-declared energy budget; accounting is
-readable per component.
-
-## Probe guidance
-
-Paper: resolve the authority/telemetry boundary as a matrix amendment
-proposal, define the attribution rules (including the shared-service
-case), and sketch the budget schema in the manifest. Hardware
-validation waits for the Hardware H track.

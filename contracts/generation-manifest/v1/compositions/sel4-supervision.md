@@ -1,91 +1,35 @@
-# `sel4-supervision.zti` — the B16 supervision-plane generation
+# `sel4-supervision.zti` — supervision lifetime composition
 
-An eighth seL4 generation, beside [`sel4.zti`](sel4.md),
-[`sel4-channel.zti`](sel4-channel.md), [`sel4-loan.zti`](sel4-loan.md),
-[`sel4-spawn.zti`](sel4-spawn.md), [`sel4-sample.zti`](sel4-sample.md),
-[`sel4-stream.zti`](sel4-stream.md), and the frozen x86
-[`valid.zti`](../fixtures/valid.zti). It declares the smallest graph that can reach backlog
-**B16**'s exit condition: *a graph that creates more than `MAX_RECORDS` tasks
-over its lifetime still answers `supervision_status` correctly for every live
-handle.*
+The [`sel4-supervision.zti`](sel4-supervision.zti) manifest owns
+`bootAction = "supervision"`, init's two executable grants, and the endpoint-free
+`supervision-child` declaration. The
+[current scenario](../../../../components/lib/src/supervision_plane.rs) exercises
+handle lifetime across repeated child construction and collection.
 
-## Why an eighth generation
+## Authority and lifetime
 
-The same mechanical reason as the six before it: `init.rs` selects its scenario
-with `option_env!`, resolved at compile time, so one component build cannot
-serve two gates. A separate generation — and so a separate image — is required
-rather than preferred.
+Init resolves `supervision-child` by executable name; its declared slot is 1,
+with `exec`, `spawn`, and transfer authority. `sysinfo` is separately declared at
+slot 2 without transfer authority, but is not the loop subject. There are no
+endpoint grants, minted bindings, or shared-buffer quotas in this composition.
 
-## The three components
+`spawnBudget = 4` bounds live children, not lifetime constructions:
+[spawn admission](../../../../slime-root/src/graph_runtime/services/spawn.rs)
+uses `TaskTable::live_children`. The executable's transfer bit controls the
+transferability of the returned supervision capability; it does not grant a
+child arbitrary authority.
 
-### `init` — the parent
+The scenario derives a second handle, collects the original, then runs 49
+spawn/collect iterations. The derived handle must still report the original
+child's clean exit after the loop and must be refused after its own collection.
+The child requires no endpoint, so this exercises supervision lifetime without
+allocating an unrelated channel for each iteration. This scenario uses a derived
+handle, not an exported capability parked on a self-loop endpoint.
 
-Holds two `exec | spawn` grants. `spawnBudget`
-stays at 4, as `sel4-spawn.zti` uses: the budget bounds children *live at once*
-through `TaskTable::live_children`, which is derived from the table rather than
-from a counter, so a loop that spawns and reaps sequentially never approaches it
-however long it runs.
+## Verification boundary
 
-### `supervision-child` — the loop child, and why it is new
-
-Thirty-five of these are created over the boot: the 33-iteration loop plus the
-two whose handles are held across it (one retained, one held by a native export
-ticket). It writes one marker and returns, and it is the only component in the
-tree that takes **no endpoint**.
-
-That is the whole reason it exists rather than reusing `sysinfo`. A child that
-reads a launch context needs an endpoint. A per-child endpoint loop would spend
-unrelated kernel objects while this fixture is intended to cross the bounded
-supervision-record lifetime. With this child, the only dynamic endpoint is the
-carrier used to export and later import the held supervision capability.
-
-The cost is stated plainly: this weakens the "no new component binary" property
-the other planes have. When it was written the frozen oracle was `kernel/` rather
-than `components/`, so adding a bin there touched nothing the oracle read; that
-kernel is now deleted, and the duty it named remains — `contracts_check` and
-`generation_check` are what confirm this bin perturbs neither contract validation
-nor any other fixture's generation identity.
-
-### `sysinfo` — declared, unmodified, and not the subject
-
-The root launches every component a generation declares (P5.2), so this boot
-also starts one unconfigured `sysinfo` that no one hands a channel to. It exits
-non-zero, which is expected rather than a failure; every marker the gate asserts
-names the spawn that produced the task it is about.
-
-## Why `init-supervision-child` is `transferable = true`
-
-This is the one field in the fixture that is load-bearing and non-obvious, and
-it is a second instance of the B10 fixture/layout coupling.
-
-The gate must park a supervision handle in `Transit` **across** the crossing —
-the state where a capability is held by no table at all, and so the case a sweep
-reading only live capability tables frees by mistake. Moving a handle there
-requires `cap_transfer`, which gates on the mover holding `RIGHT_TRANSFER` on
-the capability itself. (Not `send`'s capability attachment: that path gates on
-`Resource::is_transferable`, which answers true for a loan and nothing else, by
-design.)
-
-A supervision handle carries `RIGHT_TRANSFER` only when the **executable** the
-spawn resolved carried it — `SpawnPlan::transferable_supervision`, read from the
-executable rather than from any grant. So the authority to move a child's
-supervision handle is declared here, on the parent's grant for the child's
-image.
-
-Because the boot layout and the fixture must agree bit for bit, the matching row
-in `scripts/build/boot_layout.py` is `0x1000c` rather than the usual `0x10008`
-for an executable — the extra `0x4` is exactly `RIGHT_TRANSFER`. Changing one
-without the other is refused at admission with `RightsMismatch`, which is B10
-working as intended.
-
-## Why the graph declares no channel edge
-
-Like `sel4-spawn.zti`, and for the same reason: this plane's subject is what a
-parent hands over at spawn, not what the generation pre-wires. Here it needs
-exactly one edge, and init holds **both** ends — it moves the handle to itself
-and collects it after the loop. That is deliberate rather than a shortcut: the
-capability-transfer path needs a peer that collects a capability, and every
-unmodified component either ignores the capability array or never receives at
-all, so a second component would have to be written for the purpose. Init as its
-own peer keeps the in-flight window open across the loop without inventing a
-binary whose only job is to wait.
+The [supervision checker](../../../../scripts/check/check-sel4-supervision-plane.py)
+compares the configured loop against the root's record bound and requires the
+lifetime-crossing, derived-handle survival, consumed-handle refusal, and no
+outstanding export markers. Those requirements do not constitute fresh runtime
+results or evidence for an in-transit export scenario.

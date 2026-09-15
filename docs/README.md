@@ -70,8 +70,7 @@ in the same commit as the surface it describes.
 ## Exploration
 
 - [`directions/`](directions/README.md) — the register of exploratory
-  directions that follow from the vision but are not committed work. Read its
-  rules before adding an entry; numbers are never reused.
+  directions that follow from the vision but are not committed work.
 
 ## Everything else lives elsewhere
 

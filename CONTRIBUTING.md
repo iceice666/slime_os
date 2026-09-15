@@ -201,10 +201,9 @@ uncertain, create the item. This exception does not waive applicable checks.
 ## Continuous integration
 
 General CI lives in `.woodpecker/`. Pushes to `main` and `develop`, and pull
-requests targeting any branch, run the checks previously in the GitHub `CI`
-workflow. Woodpecker's overall pipeline result replaces the GitHub aggregate
-status jobs; update branch protection to require the new forge's actual
-Woodpecker status after the first run.
+requests targeting any branch, run those workflows. Configure branch protection
+to require the forge's actual Woodpecker pipeline status; this repository does
+not configure server-side protection rules.
 
 The server needs Docker agents labeled `platform=linux/amd64` for host checks
 and Kani, and `platform=linux/arm64` for seL4 and the four generation shards.
@@ -230,14 +229,13 @@ woodpecker-cli lint --strict .woodpecker/
 bash -n scripts/ci/prepare-sel4.sh
 ```
 
-SDK publication and MyQue's GitHub issue projection remain in
+SDK publication and MyQue's GitHub issue projection live in
 `.github/workflows/`: they rely on GitHub-specific permissions, events, and
-the dedicated signing runner, not ordinary CI. The projector no longer
-subscribes to the removed GitHub `CI` completion event; its existing scheduled
-reconciliation still handles external checks on GitHub. It does not project
-issues to the new forge. The seL4 and rust-sel4 source repositories and all
-four matching submodules now resolve from `git.justaslime.dev`; this migration
-does not move the SDK repository, signing keys, or issue history.
+the dedicated signing runner, not ordinary CI. Scheduled reconciliation handles
+external checks on GitHub; issues are not projected to the new forge. The seL4
+and rust-sel4 source repositories and all four matching submodules resolve from
+`git.justaslime.dev`. SDK publication, signing keys, and issue history retain
+their separate owners.
 
 ## Further reading
 

@@ -296,31 +296,15 @@ pub enum SegmentError {
     Truncated,
 }
 
-/// Validate a component image's segment table (P5.4.10).
+/// Validate a component image's segment table.
 ///
 /// `records` is the packed segment array, `data` the payload the file ranges
 /// index into, `entry_offset` the declared entry, and `page_size` the target
 /// profile's page granule.
 ///
-/// # Why this lives in `boot-contracts`
-///
-/// These rules were only in `kernel/src/runtime/component.rs`, exercised only
-/// by `kernel/tests/component_image.rs` — eleven architecture-neutral
-/// assertions in a file no Justfile target names, reachable only through
-/// `just test`. P5.4.1's inventory recorded them as coverage that would vanish
-/// silently when `kernel/` is deleted, with no seL4 equivalent: P5.2 observes
-/// the positive path and target mismatch, and nothing exercises the malformed
-/// corpus.
-///
-/// `slime-root` is not the right home either — it has no SLIMECM loader and
-/// never will. The rules are a property of the *format*, which is what
-/// `boot-contracts` is for, and P0's required check says the corpus must
-/// "reject the wrong ... target-specific load layout" regardless of producer.
-/// Here they are host-tested and survive the oracle's deletion.
-///
-/// The retired kernel's `decode` keeps its own copy for now: it is frozen, and
-/// rewriting it to call this would edit the oracle. That is P5.4.final's
-/// business, not this slice's.
+/// Segment bounds and permissions are properties of the image format, independent
+/// of a loader or page allocator. Keeping validation here preserves the same
+/// admission rules for retained segment-table artifacts across consumers.
 pub fn validate_segments(
     records: &[u8],
     data: &[u8],

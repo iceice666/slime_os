@@ -2,11 +2,8 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | lifecycle |
-| Depends on | M6 spawn service, supervision handles, and endpoint minting (complete); interacts with M5.6b snapshot semantics and M5.6 fault classification (both complete) |
 | Enables | "let it crash" component design; restart-budget policy as manifest data |
-| Now | Design note legal today; M6 supplies the spawn and supervision mechanisms, while general restart-policy semantics remain open. |
 
 ## Motivation
 
@@ -17,20 +14,6 @@ policy as manifest data: restart limits, backoff, and whether state is
 capability re-grant — a component's recovery strategy is declared,
 auditable, and rollbackable like every other policy, instead of being
 hard-coded per service.
-
-## What exists today
-
-- M5.6 (complete) distinguishes component exit, fault, timeout, peer
-  loss, and explicit unhealthy status — the fault classification a
-  supervisor consumes.
-- M5.6b (complete) defines state policies across generation boundaries;
-  restart policy adds the same question within a generation: does a
-  restarted component see `preserve`d state or a fresh `ephemeral`
-  binding?
-- The health service already receives structured failure reports; a
-  supervisor's "gave up" status has a defined place to land.
-- M6 (complete) supplies supervision handles, userspace endpoint minting,
-  per-client accounting, and the spawn service this policy builds on.
 
 ## Design sketch
 
@@ -68,17 +51,3 @@ is where this is expressed.
   (straight to the health service)?
 - How are in-flight channel messages to a crashed component handled —
   failed, queued for the restart, or caller-visible errors?
-
-## Exit-condition sketch
-
-A manifest-declared policy restarts a killed component with fresh grants
-up to its limit, then reports a structured failed status through the
-health service.
-
-## Probe guidance
-
-Paper: the policy schema (fields, defaults, escalation vocabulary) plus
-a walk-through of three failure scenarios (single crash, crash loop,
-dependency mid-restart) against the M5.6 fault classification. The note
-also decides which semantics a general supervisor must carry on top of
-M6's completed supervision handles.

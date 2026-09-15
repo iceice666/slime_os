@@ -1,18 +1,10 @@
 -- Slime OS component specification contract, version 1 (CP0).
 --
--- A `ComponentSpec` is the component-level source of truth `spec/requirement-document-v0.6.md`
--- section 2.1 describes, expressed as inert Zutai data and independent of any
--- one generation manifest. Today `contracts/generation-manifest/v1`'s
--- `Executable`/`Instance` pair is the only place a component is described at
--- all, so "what a component is" and "how one generation composes it" are the
--- same text (B70). This contract separates them: a spec describes the
--- component, a manifest composes an instance of it.
---
--- CP0 only declares and validates the model. Deriving manifests from it is
--- CP1's job, and resolving a component's slots at runtime rather than at
--- compile time is CP2's. Nothing here is a wire format: no record is
--- serialized into a generation, so the boot-time encoding stays owned by
--- `contracts/generation-manifest/v1`.
+-- A `ComponentSpec` describes a component independently of any composition.
+-- System specs compose instances and authority; derived generation manifests
+-- supply boot inputs. This record is host-side data, not a boot wire layout.
+-- `contracts/generation-manifest/v1` owns the manifest shape and
+-- `contracts/generation/` owns the binary generation encoding.
 --
 -- The authoritative identity of a spec is SHA-256 over `identityDomain`
 -- followed by the normalized, sorted-key, whitespace-free, ASCII-escaped UTF-8
@@ -158,25 +150,13 @@ TestSpecification :: type {
 
 -- Where this component's implementation comes from.
 --
--- `spec/requirement-document-v0.6.md` section 2.2 names Implementation as its
--- own concept, and CP4 admits externally supplied artifacts, so a spec must be
--- able to say which it is without that being inferred from whether a build
--- happens to find a file.
+-- Implementation provenance is declared, never inferred from file existence.
+-- `provider` distinguishes workspace-built code, content-bound external ELF
+-- artifacts, and a declared component without an implementation (`undeclared`).
+-- An undeclared implementation must not acquire an invented build source.
 --
--- `provider` is closed: `workspace` (a `[[bin]]` in this repository's
--- component workspace), `external` (an artifact admitted by CP4's host-side
--- path), or `undeclared` (this repository declares the component but ships no
--- implementation for it). `undeclared` exists because two components in
--- `contracts/generation-manifest/v1/fixtures/valid.zti` are exactly that today:
--- `generation-list` and `storage-store-probe` were deleted as unreachable
--- clients of retired syscalls (see `devlog/2026-08-10-b44-policy-labels-deleted/`
--- and `devlog/2026-08-10-b43-block-service-endpoint/`) while their manifest,
--- boot-layout, and fabric-profile entries stayed. A model that could not
--- express that would have to invent a source file for them, which is the one
--- outcome worse than recording the gap.
---
--- `binary` is the implementation artifact name. For `workspace` it is the
--- `[[bin]]` target. For `external` it is the key the generation builder must
+-- `binary` is the implementation artifact name. For `workspace` it identifies
+-- the component binary built by its crate. For `external` it is the key the generation builder must
 -- resolve through an explicit name-to-ELF mapping. It is empty exactly when
 -- `provider` is `undeclared`.
 --

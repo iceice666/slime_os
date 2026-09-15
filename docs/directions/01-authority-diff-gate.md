@@ -2,11 +2,8 @@
 
 | | |
 | --- | --- |
-| Status | parked |
 | Route | authority |
-| Depends on | M5.5 (complete: manifest format v2 with 1:1 rights strings) |
 | Enables | [entry 27](27-policy-carrying-generations.md) (its CI gate becomes a boot gate) |
-| Now | Fully legal host-side tooling: parse two manifests, diff grants, gate CI. No kernel involvement. Named as an M5.5 follow-up in the [roadmap](../../roadmap/README.md). |
 
 ## Motivation
 
@@ -21,20 +18,6 @@ never a side effect of an unrelated change.
 For agent components this is the primary governance lever. An agent's tool
 set changes across generations; without the diff, "the agent can now write
 to the object store" hides inside a model-or-prompt update.
-
-## What exists today
-
-- Generation format v5 carries machine-readable, 1:1 rights strings;
-  `just generation_check` and `just contracts_check` already validate
-  deterministic generation output and manifest contracts.
-- The rights vocabulary each grant string maps to is defined by
-  `../capability-matrix.md`; rights are a flat `u64` with bits 26–63 free.
-- The widening/narrowing order the diff needs is exactly what
-  [entry 24](24-rights-algebra-model.md) is modeling: derive narrows only,
-  no transfer widens. The diff's definition of "grow" should reuse that
-  algebra rather than inventing a syntactic one.
-- [entry 9](09-grant-graph-introspection.md) builds the general query
-  engine; the diff is two engine snapshots plus a set difference.
 
 ## Design sketch
 
@@ -66,19 +49,6 @@ manifest in format v2, which this consumes.
 - Should removal of rights also require sign-off when it could break a
   downstream component's declared dependency, or is silent narrowing
   always safe?
-
-## Exit-condition sketch
-
-The proposed `generation_diff` command prints per-component grant changes; a build
-that widens rights without the sign-off file fails.
-
-## Probe guidance
-
-Not needed as a probe: dependencies are landed and the work is ordinary
-host tooling. Promote directly with the exit condition above once
-[entry 24](24-rights-algebra-model.md) fixes the widening definition the
-diff compares against, or implement against the syntactic definition and
-reconcile when 24 lands.
 
 ## References
 
