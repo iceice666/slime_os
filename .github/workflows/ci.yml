@@ -290,11 +290,15 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/slime-env
       - run: nix develop --command just sel4_qemu_image_check
-      - run: nix develop --command just contracts_source_check component_spec_validation_check
+      # One `just` invocation: prerequisites are deduplicated per process, so a
+      # second one re-runs the four zutai model checks this job already paid for.
       # Closures are digests of source trees; a merge that touches one without
       # regenerating them makes every plane gate refuse to resolve. Fail here,
       # on the clean checkout, rather than in whichever QEMU job runs first.
-      - run: nix develop --command just system_image_builder_check
+      - run: >-
+          nix develop --command just
+          contracts_source_check component_spec_validation_check
+          system_image_builder_check
 
   sel4_generations:
     name: Generation v5 (shard ${{ matrix.shard }})

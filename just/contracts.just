@@ -63,8 +63,13 @@ component_spec_validation_check:
 [group('contracts')]
 component_spec_check: contracts_check component_spec_validation_check
 
+# Depends on component-record validation alone, not on `contracts_check`. What
+# this recipe proves — specs parse, and every derived composition manifest still
+# matches the spec it came from — cannot change because the 42-manifest
+# generation corpus was or was not rebuilt first, and rebuilding it here costs
+# 15 minutes. `contracts_check` remains its own gate; CI runs it sharded.
 [group('contracts')]
-system_spec_check: component_spec_check
+system_spec_check: component_spec_validation_check
     python3 scripts/check/check-system-spec.py
     python3 scripts/generate/generate-generation-from-spec.py --check
 
