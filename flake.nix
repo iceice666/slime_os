@@ -18,7 +18,7 @@
     #
     # `myque-bin` is `justStaticExecutables`, a 4-path/75 MB runtime closure.
     # There is no published binary cache, so an uncached consumer builds it
-    # through GHC — which is why `devlog_check` stays binary-free and only
+    # through GHC — which is why `docs_check` stays binary-free and only
     # `tasks_check` needs this input.
     #
     # The lock currently pins db1c81f, which predates the store-relative

@@ -18,7 +18,7 @@ otherwise. A CPU boot qualifies no device.
 
 ## Code map: start here, do not broad-search
 
-Route work by ownership before searching for a symbol. Read the named module root first; use LSP symbols/references from there when available, and only then grep the exact symbol. Do not scan `deps/`, `target/`, `devlog/`, `roadmap/`, or `.tasks/` for implementation symbols unless the task specifically concerns them.
+Route work by ownership before searching for a symbol. Read the named module root first; use LSP symbols/references from there when available, and only then grep the exact symbol. Do not scan `deps/`, `target/`, `roadmap/`, or `.tasks/` for implementation symbols unless the task specifically concerns them.
 
 For current subsystem rationale, start at [`docs/architecture/`](docs/architecture/README.md), then the owning code or contract below. Unimplemented design and qualification boundaries live in [`docs/plans/`](docs/plans/README.md). [`roadmap/README.md`](roadmap/README.md) classifies retained detail and historical source; do not reconstruct extracted architecture from milestone chronology.
 
