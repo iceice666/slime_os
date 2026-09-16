@@ -36,10 +36,18 @@
       url = "github:mozufu/devloop/c78fcf345de424469196297d2be7b479fbb31a71";
       flake = false;
     };
+    # The Zutai revision `deps/zutai` is pinned to, packaged for the work-item
+    # gate, which runs without submodules or a Rust toolchain. Keep this
+    # revision equal to the submodule's; `scripts/lib/devloop.py` refuses a
+    # toolchain devloop was not released against.
+    zutai = {
+      url = "github:iceice666/zutai/9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
+      flake = false;
+    };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, myque, devloop, ... }:
+    { nixpkgs, rust-overlay, myque, devloop, zutai, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -65,6 +73,12 @@
           devloopTools = pkgs.callPackage ./nix/devloop.nix {
             src = devloop;
             version = "0.1.0";
+          };
+          # The same Zutai revision the submodule carries, so the gate can
+          # validate without building it from source.
+          zutaiTools = pkgs.callPackage ./nix/zutai.nix {
+            src = zutai;
+            revision = "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
           };
           # Workspace host crates use this toolchain. The seL4 root, child,
           # and loader use the independent pin in `sel4/pins.toml`.
@@ -184,6 +198,9 @@
                 # gate execution, and evidence recording for spec-driven items.
                 devloopTools
                 devloopTools.bridge
+                # `zutai-cli`, its standard library, and the native runtime
+                # archive devloop links its validators against.
+                zutaiTools
               ]
               ++ nixpkgs.lib.optionals
                 (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64)

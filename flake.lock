@@ -59,7 +59,8 @@
         "devloop": "devloop",
         "myque": "myque",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "zutai": "zutai"
       }
     },
     "rust-overlay": {
@@ -79,6 +80,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "zutai": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787659589,
+        "narHash": "sha256-cY7O+axK8Mmr0dMltEJWiS8podWIxdcWi7O6jf8fNW0=",
+        "owner": "iceice666",
+        "repo": "zutai",
+        "rev": "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "iceice666",
+        "repo": "zutai",
+        "rev": "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a",
         "type": "github"
       }
     }
