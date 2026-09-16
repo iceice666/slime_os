@@ -19,6 +19,9 @@ first-class concepts, current status, and non-goals. Then:
    to end: routing, gates, contracts, evidence, and owning documentation.
 5. [Add a component](getting-started/05-add-a-component.md) — create the crate,
    declare it, compose it, grant authority, and prove it under QEMU.
+6. [Carrying a work item](getting-started/06-work-item-lifecycle.md) — both
+   lifecycles command by command: an ordinary item closed on a recorded
+   observation, and a spec-driven item closed against bound evidence.
 
 ## Concepts
 
