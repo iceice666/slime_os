@@ -11,6 +11,9 @@ import os
 import struct
 import subprocess
 
+from unittest.mock import patch
+
+import elf_delivery
 from boot_contracts import (
     COMPONENT_DEFAULT_STACK_BYTES,
     COMPONENT_IMAGE_HEADER,
@@ -261,6 +264,157 @@ def check_target_identity_and_neutral_resources() -> None:
         fail("architecture-neutral resource bytes changed across target builds")
 
 
+def check_native_delivery_invariants() -> None:
+    """Section metadata may move; executable bytes and source admission may not."""
+    profile = TARGET_PROFILES_BY_NAME["aarch64-sel4-qemu-virt"]
+    source = bytearray(256)
+    source[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into(
+        "<HHIQQQIHHHHHH",
+        source,
+        16,
+        2,
+        profile.elf_machine,
+        1,
+        0x400080,
+        64,
+        192,
+        0,
+        64,
+        56,
+        1,
+        64,
+        1,
+        0,
+    )
+    struct.pack_into("<IIQQQQQQ", source, 64, 1, 5, 0, 0x400000, 0x400000, 160, 4096, 4096)
+    source[128:160] = b"\x90" * 32
+    original = bytes(source)
+    delivery = bytearray(source[:160])
+    struct.pack_into("<Q", delivery, 40, 0)
+    struct.pack_into("<HHH", delivery, 58, 0, 0, 0)
+    elf_delivery._verify_delivery(original, bytes(delivery))
+    CHECK_GENERATION.check_component_elf(bytes(delivery), profile, "stripped")
+    for label, offset in (("instructions", 128), ("entry", 24), ("program headers", 68)):
+        damaged = bytearray(delivery)
+        damaged[offset] ^= 1
+        try:
+            elf_delivery._verify_delivery(original, bytes(damaged))
+        except ValueError:
+            pass
+        else:
+            fail(f"ELF delivery accepted altered {label}")
+    malformed = bytearray(original)
+    struct.pack_into("<Q", malformed, 96, 4097)  # p_filesz > p_memsz
+    with patch.object(
+        BUILD_GENERATION,
+        "strip_elf_delivery",
+        side_effect=AssertionError("malformed input reached the stripping tool"),
+    ):
+        try:
+            BUILD_GENERATION.elf_component_image(
+                "malformed",
+                bytes(malformed),
+                COMPONENT_DEFAULT_STACK_BYTES,
+                profile,
+                toolchain="explicit-test-toolchain",
+            )
+        except SystemExit:
+            pass
+        else:
+            fail("ELF delivery repaired a malformed source before admission")
+
+    # Nonloaded attributes may move past removed symbols; their bytes may not.
+    source = bytearray(320)
+    source[:64] = original[:64]
+    struct.pack_into("<Q", source, 24, 0x4000B0)
+    struct.pack_into("<Q", source, 40, 0)
+    struct.pack_into("<H", source, 56, 2)
+    struct.pack_into("<HHH", source, 58, 0, 0, 0)
+    struct.pack_into("<IIQQQQQQ", source, 64, 1, 5, 0, 0x400000, 0x400000, 192, 4096, 4096)
+    struct.pack_into("<IIQQQQQQ", source, 120, 0x70000003, 4, 304, 0, 0, 16, 16, 1)
+    source[176:192] = b"\x90" * 16
+    source[304:320] = b"attributes-bytes"
+    delivery = bytearray(source[:192] + source[304:320])
+    struct.pack_into("<Q", delivery, 128, 192)
+    elf_delivery._verify_delivery(bytes(source), bytes(delivery))
+    for label, offset in (("attributes", 200), ("attribute size", 152), ("LOAD offset", 72)):
+        damaged = bytearray(delivery)
+        damaged[offset] ^= 1
+        try:
+            elf_delivery._verify_delivery(bytes(source), bytes(damaged))
+        except ValueError:
+            pass
+        else:
+            fail(f"ELF delivery accepted altered {label}")
+
+    # Worker launch consumes symbol values and sizes, not just PT_LOAD bytes.
+    import tomllib
+
+    source = bytearray(original[:160])
+    names = b"\0__slime_rt_worker_entrypoint\0__slime_rt_worker_stack\0unused_debug_name\0.strtab\0.symtab\0"
+    strings_offset = len(source)
+    source.extend(names)
+    source.extend(bytes(-len(source) % 8))
+    symbols_offset = len(source)
+    symbols = bytes(24)
+    for name, value, size, info in (
+        (b"__slime_rt_worker_entrypoint", 0x400080, 16, 0x12),
+        (b"__slime_rt_worker_stack", 0x400100, 256, 0x11),
+        (b"unused_debug_name", 0x400090, 8, 0x12),
+    ):
+        symbols += struct.pack("<IBBHQQ", names.index(name), info, 0, 0xFFF1, value, size)
+    source.extend(symbols)
+    sections_offset = len(source)
+    source.extend(bytes(64))
+    source.extend(
+        struct.pack(
+            "<IIQQQQIIQQ", names.index(b".strtab"), 3, 0, 0, strings_offset, len(names), 0, 0, 1, 0
+        )
+    )
+    source.extend(
+        struct.pack(
+            "<IIQQQQIIQQ",
+            names.index(b".symtab"),
+            2,
+            0,
+            0,
+            symbols_offset,
+            len(symbols),
+            1,
+            1,
+            8,
+            24,
+        )
+    )
+    struct.pack_into("<Q", source, 40, sections_offset)
+    struct.pack_into("<HHH", source, 58, 64, 3, 1)
+    toolchain = tomllib.loads((ROOT / "sel4/pins.toml").read_text())["rust_sel4"]["toolchain"]
+    delivery = elf_delivery.strip_elf_delivery(bytes(source), toolchain=toolchain)
+    shoff = struct.unpack_from("<Q", delivery, 40)[0]
+    shentsize, shnum = struct.unpack_from("<HH", delivery, 58)
+    sections = [
+        struct.unpack_from("<IIQQQQIIQQ", delivery, shoff + i * shentsize) for i in range(shnum)
+    ]
+    observed = {}
+    for section in sections:
+        if section[1] != 2:
+            continue
+        strings = sections[section[6]]
+        table = delivery[strings[4] : strings[4] + strings[5]]
+        for offset in range(section[4], section[4] + section[5], section[9]):
+            name, _info, _other, _index, value, size = struct.unpack_from(
+                "<IBBHQQ", delivery, offset
+            )
+            observed[table[name:].split(b"\0", 1)[0]] = (value, size)
+    if observed.get(b"__slime_rt_worker_entrypoint") != (0x400080, 16) or observed.get(
+        b"__slime_rt_worker_stack"
+    ) != (0x400100, 256):
+        fail("ELF delivery lost the worker entry or stack extent")
+    if b"unused_debug_name" in observed:
+        fail("ELF delivery retained an unrelated symbol")
+
+
 def check_generated_bindings() -> None:
     require_command(
         [_sys.executable, "scripts/generate/generate-boot-bindings.py", "--check"],
@@ -328,6 +482,7 @@ def run() -> None:
     check_unknown_target()
     check_cross_profile_rejection()
     check_target_identity_and_neutral_resources()
+    check_native_delivery_invariants()
     check_generated_bindings()
     check_rollback_window()
     check_manifest_target()

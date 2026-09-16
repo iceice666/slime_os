@@ -272,7 +272,7 @@
               rustup toolchain install ${sel4RustToolchain} \
                 --profile minimal \
                 --target aarch64-unknown-linux-gnu \
-                --component rust-src,rustfmt,clippy \
+                --component rust-src,rustfmt,clippy,llvm-tools-preview \
                 --no-self-update
             '';
           };

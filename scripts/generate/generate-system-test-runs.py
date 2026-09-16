@@ -117,6 +117,7 @@ NOT_A_PLANE = {
     "check-sel4-root-boot.py",  # root-only aggregate over the boot plane
     "check-sel4-gate-controls.py",  # asserts other gates reject bad input; boots nothing
     "check-sel4-pins.py",  # host-side pin assertion; boots nothing
+    "check-sel4-x86-64-image.py",  # validates artifact identity; boots nothing
     "check-sel4-trace-plane.py",  # analyses a transcript; boots nothing
 }
 

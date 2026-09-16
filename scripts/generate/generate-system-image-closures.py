@@ -6,7 +6,7 @@ CP11 authored one closure by hand to prove the contract. CP13 needs one per
 composition, and hand-authoring 40 records whose every field is a digest of
 repository state would be a corpus nobody could keep current: each closure
 names the system spec's identity, every component spec's identity, every
-implementation tree's identity, and fifteen shared workspace build inputs.
+implementation tree's identity, and shared workspace and packaging inputs.
 
 So the closures are generated. What makes that sound rather than circular is
 that generation and *resolution* are separate: this script reads repository
@@ -61,6 +61,9 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("component-proto", "components/proto", "tree"),
     ("component-runtime", "components/runtime", "tree"),
     ("component-spec-contract", "contracts/component-spec/v1", "tree"),
+    ("generation-builder", "scripts/build/build-generation.py", "file"),
+    ("image-builder", "scripts/build/build-sel4.py", "file"),
+    ("elf-delivery", "scripts/lib/elf_delivery.py", "file"),
     ("interface-schema-contract", "contracts/interface-schema/v1", "tree"),
     ("just-recipes", "just", "tree"),
     ("justfile", "Justfile", "file"),
@@ -90,7 +93,6 @@ LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
 # reference generation, which targets `x86_64-qemu-virtio` and has no seL4
 # platform asset to name.
 EXCLUDED = {"reference"}
-
 
 
 # CP14: scenario closures. A scenario is one base composition plus declared
@@ -207,7 +209,17 @@ def ignored_files(path: Path) -> list[str]:
     submodule root and a subdirectory of this repository.
     """
     status = subprocess.run(
-        ["git", "-C", str(path), "status", "--porcelain", "--ignored", "--untracked-files=all", "--", "."],
+        [
+            "git",
+            "-C",
+            str(path),
+            "status",
+            "--porcelain",
+            "--ignored",
+            "--untracked-files=all",
+            "--",
+            ".",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -288,8 +300,6 @@ def render(value: object, indent: int = 0) -> str:
     raise TypeError(type(value))
 
 
-
-
 def closure_for(
     name: str,
     specs: dict,
@@ -355,9 +365,7 @@ def closure_for(
     return {
         "formatVersion": CONTRACT.FORMAT_VERSION,
         "name": name,
-        "systemSpec": artifact(
-            str((SYSTEM_ROOT / f"{source}.zti").relative_to(ROOT)), "file"
-        ),
+        "systemSpec": artifact(str((SYSTEM_ROOT / f"{source}.zti").relative_to(ROOT)), "file"),
         "systemIdentity": system.identity.hex(),
         "implementations": implementations,
         "target": {
@@ -471,7 +479,8 @@ def main() -> None:
         orphaned = sorted(
             str(path.relative_to(ROOT))
             for directory in (CLOSURE_ROOT, NEGATIVE_ROOT)
-            for path in directory.glob("*.zti") if path not in emitted
+            for path in directory.glob("*.zti")
+            if path not in emitted
         )
         if stale or orphaned:
             raise SystemExit(

@@ -32,6 +32,7 @@ CARGO_BUILD = BUILD_ROOT / "sel4-cargo"
 ARTIFACTS = BUILD_ROOT / "sel4-artifacts"
 
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
+from elf_delivery import strip_elf_delivery  # noqa: E402
 
 from pc99_media import assemble_media  # noqa: E402
 
@@ -385,6 +386,7 @@ def text(entry: dict[str, object], key: str, section: str) -> str:
         fail(f"sel4/pins.toml [{section}].{key} must be non-empty text")
     return value
 
+
 def integer(entry: dict[str, object], key: str, section: str) -> int:
     value = entry.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
@@ -655,13 +657,15 @@ def cargo_build(
     description: str,
     cwd: Path = ROOT,
     features: tuple[str, ...] = (),
+    profile: str = "release",
 ) -> None:
     command = [
         "cargo",
         "build",
         "--locked",
         "--offline",
-        "--release",
+        "--profile",
+        profile,
         "--manifest-path",
         str(manifest),
         "--package",
@@ -769,7 +773,11 @@ def dump_device_tree(platform: Platform) -> Path:
             "-smp",
             "1",
             "-m",
-            str(integer(table(load_pins(), platform.pins_section), "memory_mib", platform.pins_section)),
+            str(
+                integer(
+                    table(load_pins(), platform.pins_section), "memory_mib", platform.pins_section
+                )
+            ),
             "-nographic",
             *(["-bios", "none"] if platform.architecture == "riscv64" else []),
         ],
@@ -953,17 +961,14 @@ def build_application(
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
     environment = cargo_environment(toolchain, platform)
-    root_target = root_target or ROOT / text(
-        rust_sel4, platform.root_target_key, "rust_sel4"
-    )
+    root_target = root_target or ROOT / text(rust_sel4, platform.root_target_key, "rust_sel4")
     if platform.child_target_key is not None:
         child_target = child_target or ROOT / text(
             rust_sel4, platform.child_target_key, "rust_sel4"
         )
     else:
         child_target = (
-            child_target
-            or RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
+            child_target or RUST_SEL4_SOURCE / "support" / "targets" / platform.child_target_name
         )
     require_file(root_target, "root target specification")
     require_file(child_target, "child target specification")
@@ -990,10 +995,16 @@ def build_application(
     )
     child_elf = child_target_dir / child_target.stem / "release" / "slime-root-child.elf"
     require_file(child_elf, "root child ELF")
+    # Keep the symbol-bearing build artifact; embed only its delivery copy.
+    child_delivery = child_elf.with_name("slime-root-child.delivery.elf")
+    try:
+        child_delivery.write_bytes(strip_elf_delivery(child_elf.read_bytes(), toolchain=toolchain))
+    except ValueError as error:
+        fail(f"root child ELF: {error}")
 
     root_environment = environment.copy()
     root_environment["SLIME_TARGET_PROFILE"] = platform.target_profile
-    root_environment["CHILD_ELF"] = str(child_elf.resolve())
+    root_environment["CHILD_ELF"] = str(child_delivery.resolve())
     if platform.name == CV1800B_DUO.name:
         frequency = table(pins, platform.pins_section).get("timer_frequency_hz")
         if not isinstance(frequency, int) or isinstance(frequency, bool) or frequency <= 0:
@@ -1026,9 +1037,7 @@ def build_application(
                 root_environment["SLIME_ROOT_FIXTURE"] = "1"
         if closure_root_role == "reclamation-unwind":
             rustflags = root_environment.get("RUSTFLAGS", "")
-            root_environment["RUSTFLAGS"] = (
-                f"{rustflags} --cfg slime_b38_force_unwind".strip()
-            )
+            root_environment["RUSTFLAGS"] = f"{rustflags} --cfg slime_b38_force_unwind".strip()
         if closure_root_role == "private-memory-fail-second-allocation":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (
@@ -1053,8 +1062,7 @@ def build_application(
         match = re.fullmatch(r"com1-16550a-(0x[0-9a-fA-F]+)", serial)
         if match is None:
             fail(
-                f"sel4/pins.toml [{platform.pins_section}].serial must name "
-                "com1-16550a-<hex-port>"
+                f"sel4/pins.toml [{platform.pins_section}].serial must name com1-16550a-<hex-port>"
             )
         root_environment["SLIME_PC99_COM1_PORT"] = match.group(1)
     if closure_root_role is None and platform in PRODUCT_UART_KINDS and variant == GRAPH_VARIANT:
@@ -1133,7 +1141,8 @@ def build_application(
     root_target_dir = CARGO_BUILD / platform.name / target_name
     rustflags = root_environment.get("RUSTFLAGS", "")
     remap = f"--remap-path-prefix={root_target_dir}=./target/sel4/{platform.name}/{target_name}"
-    root_environment["RUSTFLAGS"] = f"{rustflags} {remap}".strip()
+    # The root uses panic=abort; target-default unwind tables have no consumer.
+    root_environment["RUSTFLAGS"] = f"{rustflags} {remap} -C force-unwind-tables=no".strip()
     cargo_build(
         manifest=ROOT / "Cargo.toml",
         package="slime-root",
@@ -1141,8 +1150,9 @@ def build_application(
         target_dir=root_target_dir,
         environment=root_environment,
         description="build root task",
+        profile="root-image",
     )
-    root_elf = root_target_dir / root_target.stem / "release" / "slime-root.elf"
+    root_elf = root_target_dir / root_target.stem / "root-image" / "slime-root.elf"
     require_file(root_elf, "root task ELF")
     if closure_root_role is not None:
         return child_elf, root_elf, generation
@@ -1168,9 +1178,7 @@ def build_loader(
     """
     rust_sel4 = table(pins, "rust_sel4")
     toolchain = toolchain or text(rust_sel4, "toolchain", "rust_sel4")
-    loader_target = loader_target or text(
-        rust_sel4, platform.loader_target_key, "rust_sel4"
-    )
+    loader_target = loader_target or text(rust_sel4, platform.loader_target_key, "rust_sel4")
     environment = cargo_environment(toolchain, platform)
     loader_source = platform.loader_source
 
@@ -1315,7 +1323,9 @@ def write_manifest(
         suffix += "-test-terminator"
     stable_child = copy_artifact(child_elf, f"slime-root-child{suffix}.elf", source_platform)
     stable_root = copy_artifact(root_elf, f"slime-root{suffix}.elf", source_platform)
-    stable_loader = None if loader is None else copy_artifact(loader, "sel4-kernel-loader", source_platform)
+    stable_loader = (
+        None if loader is None else copy_artifact(loader, "sel4-kernel-loader", source_platform)
+    )
     stable_payload_tool = (
         None
         if payload_tool is None
@@ -1528,10 +1538,7 @@ def main() -> None:
     parser.add_argument(
         "--private-memory-cycles-plane",
         action="store_true",
-        help=(
-            "embed MEM-64M's private-memory reuse-cycle generation, writing a "
-            "separate image"
-        ),
+        help=("embed MEM-64M's private-memory reuse-cycle generation, writing a separate image"),
     )
     parser.add_argument(
         "--component-spec-root",
@@ -1658,9 +1665,7 @@ def main() -> None:
     if arguments.test_terminator:
         image = image.with_name(image.name.replace(".elf", "-test-terminator.elf"))
         manifest_path = manifest_path.with_name(
-            manifest_path.name.replace(
-                ".identity.json", "-test-terminator.identity.json"
-            )
+            manifest_path.name.replace(".identity.json", "-test-terminator.identity.json")
         )
     media: dict[str, object] | None = None
     if platform.boot_route == "kernel-loader":

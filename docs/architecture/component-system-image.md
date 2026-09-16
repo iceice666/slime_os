@@ -44,6 +44,39 @@ Retained old executable revisions remain classified so old artifacts are not
 misread. Superseded generation wire formats are rollback-safe by refusal, not by
 runtime migration.
 
+### Delivery ELF metadata
+
+The generation builder validates each native ELF before making a stripped delivery
+copy with `llvm-strip` from the explicitly selected Rust toolchain. Workspace build
+artifacts and externally supplied files remain unchanged. An external component's
+declared content hash authenticates the original input; the generation's executable
+object digest authenticates the wrapped delivery bytes.
+
+The symbol table is not entirely optional: `ChildImage::worker()` resolves
+`__slime_rt_worker_entrypoint` and `__slime_rt_worker_stack` from it. Delivery
+stripping retains these two symbols and their values/sizes for two-thread images.
+
+The delivery check preserves entry points, LOAD offsets, virtual addresses, sizes,
+permissions, zero-fill extents and segment contents. Section-table header metadata
+may change. Nonloaded metadata such as RISC-V attributes may move in the file, but
+its attributes and bytes must remain identical. The stripped image is admitted
+again before wrapping; stripping cannot make a previously refused input acceptable.
+
+The root builder likewise embeds `slime-root-child.delivery.elf` beside the
+symbol-bearing `slime-root-child.elf` in the child Cargo output directory. It keeps
+the child fixture and all its boot/fault checks. Never apply this stripping step
+blindly to the final loader ELF: the packaged image contains sectionless payloads.
+
+The root-only `root-image` Cargo profile is separate from the component and host
+release profiles. Its build disables target-default unwind tables because the
+pinned root uses `panic=abort`; resource rollback and fault supervision remain
+active and are not Rust stack unwinding. Original root symbols remain available
+in the `root-image/slime-root.elf` Cargo output and copied root artifact.
+
+File-size reductions are not automatically RAM or CSlot reductions. Loaded memory
+includes zero-fill, page alignment and reserved stacks; moving data to BSS alone
+does not eliminate that footprint.
+
 ## System-image closure
 
 `contracts/system-image-closure/v2/` names every identity-bearing input to a
@@ -51,6 +84,8 @@ reproducible bootable-image build: system spec, selected implementations, target
 and platform prefix, root and loader roles, release inputs, build parameters,
 and expected outputs. Paths are locators; their recorded identities are what the
 resolver trusts.
+The release inputs also bind the generation builder, image builder and ELF
+delivery helper, so a packaging change cannot reuse an old closure-cache image.
 
 An executable-changing scenario is part of the selected implementation or root
 role. A deliberately invalid build is a separate `NegativeBuildCase`, never a
