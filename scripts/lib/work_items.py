@@ -48,6 +48,8 @@ FIELD = {
 TAGS = re.compile(r"^tags:\n((?:  - .+\n)+)", re.MULTILINE)
 # A consumer's frontmatter record starts at an unquoted top-level namespace.
 CONSUMER = re.compile(r"^(?P<name>[a-z0-9_-]+):$", re.MULTILINE)
+# MyQue-owned keys whose value is a block sequence, and so look the same.
+OWNED_SEQUENCES = frozenset({"tags", "depends", "blocks", "related", "supersedes"})
 
 # The terminal schema devloop-independent consumers may rely on. MyQue owns it;
 # this module reads only the envelope fields a policy check needs.
@@ -66,9 +68,8 @@ def _record(text: str, *, identity: str, retired: bool, source: Path) -> dict[st
         "consumers": sorted(
             name
             for name in CONSUMER.findall(text.split("\n---", 2)[0])
-            if name not in {"tags", "depends", "blocks", "related", "supersedes"}
+            if name not in OWNED_SEQUENCES
         ),
-        "path": source,
     }
 
 
@@ -108,15 +109,15 @@ def _terminal() -> tuple[list[dict[str, object]], list[str]]:
 @lru_cache(maxsize=1)
 def identities() -> frozenset[str]:
     """Every canonical work-item id in the store, active or retired."""
-    retired, _ = _terminal()
+    records, _ = _terminal()
     return frozenset(path.stem for path in ITEMS.glob("*.md")) | frozenset(
-        str(item["id"]) for item in retired
+        str(item["id"]) for item in records
     )
 
 
 @lru_cache(maxsize=1)
 def items() -> list[dict[str, object]]:
-    """Every item's id, key, kind, state, tags, consumer namespaces, and origin.
+    """Every item's id, key, kind, state, tags, and consumer namespaces.
 
     Deliberately shallow: this exists for repository *policy* checks, such as
     "is an open backlog defect blocking milestone work", not to re-validate
@@ -143,6 +144,33 @@ def corrupt_terminal_records() -> list[str]:
     """Terminal records that cannot be read as a finished item."""
     _, corrupt = _terminal()
     return list(corrupt)
+
+
+def without_consumer_records(text: str) -> str:
+    """An item's text with consumer-owned frontmatter entries removed.
+
+    A consumer record legitimately carries identities of its own — devloop
+    stores a run epoch and an admission identity — and those are not work-item
+    references. MyQue-owned keys (`parent`, `depends`, and the rest) do name
+    items, so they stay, and so does the body.
+    """
+    opening, _, remainder = text.partition("---\n")
+    if opening.strip() or not remainder:
+        return text
+    frontmatter, fence, body = remainder.partition("\n---\n")
+    if not fence:
+        return text
+    kept: list[str] = []
+    consumer = False
+    for line in frontmatter.splitlines():
+        match = CONSUMER.match(line)
+        if match:
+            consumer = match.group("name") not in OWNED_SEQUENCES
+        elif not line.startswith((" ", "\t", "- ")):
+            consumer = False
+        if not consumer:
+            kept.append(line)
+    return "---\n" + "\n".join(kept) + fence + body
 
 
 def done(identity: str) -> bool:

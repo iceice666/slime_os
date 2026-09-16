@@ -27,7 +27,7 @@ import yaml
 from harness import ROOT
 from just_metadata import recipes
 from markdown_anchors import anchors, controls as anchor_controls
-from work_items import FIELD, UUID, identities, retired
+from work_items import FIELD, UUID, identities, retired, without_consumer_records
 
 REQUIRED_ACTIVE_DOCUMENTS = (
     "README.md",
@@ -564,8 +564,28 @@ def controls() -> list[str]:
     return failures
 
 
+def consumer_record_controls() -> list[str]:
+    """A consumer record's own identities are not work-item references."""
+    failures: list[str] = []
+    epoch = "3f2b9c11-4d5e-4a7b-9c2d-8e1f0a6b5c44"
+    parent = "00000000-0000-7000-8000-000000000001"
+    item = (
+        "---\nschema: work-item/v2\nid: 00000000-0000-7000-8000-000000000002\n"
+        "kind: task\nstate: open\ncreated: 2026-09-15T10:00:00Z\n"
+        f"parent: {parent}\ndevloop:\n  epoch: {epoch}\n  evidence: []\n---\n\n# Control\n"
+    )
+    scanned = without_consumer_records(item)
+    if epoch in scanned:
+        failures.append("consumer record control: a devloop identity was read as a reference")
+    if parent not in scanned:
+        failures.append("consumer record control: a MyQue-owned parent reference was dropped")
+    if "# Control" not in scanned:
+        failures.append("consumer record control: the item body was dropped")
+    return failures
+
+
 def main() -> int:
-    failures = controls()
+    failures = controls() + consumer_record_controls()
     known_recipes = recipes()
     known_items = identities()
     documents = active_documents()
@@ -574,10 +594,15 @@ def main() -> int:
             failures.append(f"{path}: maintained document is missing")
             continue
         text = path.read_text()
-        failures.extend(document_reference_failures(path, text, known_items=known_items))
+        is_work_item = path.relative_to(ROOT).parts[:2] == (".tasks", "items")
+        # A consumer's frontmatter record carries identities of its own — a
+        # devloop run epoch is a UUID, and names no work item — so only
+        # MyQue-owned metadata and the body are read as references.
+        scanned = without_consumer_records(text) if is_work_item else text
+        failures.extend(document_reference_failures(path, scanned, known_items=known_items))
         if checks_commands(path):
             failures.extend(command_reference_failures(path, text, known_recipes))
-        elif path.relative_to(ROOT).parts[:2] == (".tasks", "items"):
+        elif is_work_item:
             failures.extend(
                 command_reference_failures(path, task_requirements(text), known_recipes)
             )

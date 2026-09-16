@@ -60,3 +60,6 @@ empted = "empted"
 # through. Accepted as a whole identifier rather than by adding `ser` to the
 # word list, which would suppress a real misspelling everywhere else.
 ser2net = "ser2net"
+# Zutai's typed high-level IR, and the crate named after it (`zutai-thir`),
+# which devloop locks by name in its Cargo lock.
+thir = "thir"
