@@ -36,10 +36,26 @@
       url = "github:mozufu/devloop/c78fcf345de424469196297d2be7b479fbb31a71";
       flake = false;
     };
+    # The Zutai revision `deps/zutai` is pinned to, packaged for the work-item
+    # gate, which runs without submodules or a Rust toolchain. Keep this
+    # revision equal to the submodule's; `scripts/lib/devloop.py` refuses a
+    # toolchain devloop was not released against.
+    zutai = {
+      url = "github:iceice666/zutai/9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
+      flake = false;
+    };
+    # The projection consumer. Slime OS runs it itself rather than through
+    # myque-gh's reusable workflow, because a spec-driven item's description is
+    # rendered by devloop, and only this repository can supply that renderer
+    # with the pinned Zutai toolchain it needs.
+    myque-gh = {
+      url = "github:mozufu/myque-gh/376fe90742c11bc0a60236ad327a769dac2b9e13";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, myque, devloop, ... }:
+    { nixpkgs, rust-overlay, myque, myque-gh, devloop, zutai, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -65,6 +81,12 @@
           devloopTools = pkgs.callPackage ./nix/devloop.nix {
             src = devloop;
             version = "0.1.0";
+          };
+          # The same Zutai revision the submodule carries, so the gate can
+          # validate without building it from source.
+          zutaiTools = pkgs.callPackage ./nix/zutai.nix {
+            src = zutai;
+            revision = "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
           };
           # Workspace host crates use this toolchain. The seL4 root, child,
           # and loader use the independent pin in `sel4/pins.toml`.
@@ -184,6 +206,9 @@
                 # gate execution, and evidence recording for spec-driven items.
                 devloopTools
                 devloopTools.bridge
+                # `zutai-cli`, its standard library, and the native runtime
+                # archive devloop links its validators against.
+                zutaiTools
               ]
               ++ nixpkgs.lib.optionals
                 (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64)
@@ -260,6 +285,30 @@
             packages = [
               pkgs.just
               kani
+            ];
+          };
+
+          # `nix develop .#projection --command myque-gh apply …`. Separate from
+          # the default shell because projection needs one thing that shell does
+          # not — the myque-gh binary — and the default shell must not build a
+          # second Haskell closure for every other gate. devloop and the pinned
+          # Zutai toolchain are here because a spec-driven item's GitHub
+          # description is rendered by `devloop render`, never by pasting the
+          # stored requirements data.
+          projection = pkgs.mkShell {
+            packages = [
+              pkgs.git
+              pkgs.gh
+              # `devloop render` validates the stored payload by compiling
+              # devloop's helpers, so the renderer needs LLVM too.
+              pkgs.llvmPackages.llvm
+              pkgs.llvmPackages.clang
+              pkgs.python3
+              myque.packages.${system}.myque-bin
+              myque-gh.packages.${system}.myque-gh-bin
+              devloopTools
+              devloopTools.bridge
+              zutaiTools
             ];
           };
         }

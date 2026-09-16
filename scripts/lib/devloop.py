@@ -86,7 +86,29 @@ def pinned_revision() -> str:
 
 
 @lru_cache(maxsize=1)
-def submodule_revision() -> str:
+def installed_toolchain() -> tuple[Path, Path, str] | None:
+    """An installed `zutai-cli` that states which revision it was built from.
+
+    The dev shell provides one (`nix/zutai.nix`), which is what lets the
+    work-item gate run in a job that checks out no submodules and has no Rust
+    toolchain. Returns the binary, its standard-library root, and its revision.
+    """
+    resolved = shutil.which("zutai-cli")
+    if resolved is None:
+        return None
+    prefix = Path(resolved).resolve().parent.parent
+    revision = prefix / "share" / "zutai" / "revision"
+    stdlib = prefix / "share" / "zutai" / "stdlib"
+    if not revision.is_file() or not stdlib.is_dir():
+        return None
+    return Path(resolved), stdlib, revision.read_text().strip()
+
+
+@lru_cache(maxsize=1)
+def submodule_revision() -> str | None:
+    """The `deps/zutai` revision, or None when the submodule is not checked out."""
+    if not zutai_cli.ZUTAI_MANIFEST.is_file():
+        return None
     finished = subprocess.run(
         ["git", "-C", str(zutai_cli.ZUTAI_ROOT), "rev-parse", "HEAD"],
         capture_output=True,
@@ -100,8 +122,9 @@ def submodule_revision() -> str:
     return finished.stdout.strip()
 
 
-def _runtime_archive() -> Path:
-    """The native runtime archive devloop links its validators against."""
+def _submodule_runtime_archive() -> Path:
+    """Build the native runtime archive from the submodule, when that is the
+    toolchain in use. The installed toolchain ships its own."""
     if RUNTIME_ARCHIVE.exists():
         return RUNTIME_ARCHIVE
     finished = subprocess.run(
@@ -129,12 +152,35 @@ def _runtime_archive() -> Path:
 
 @lru_cache(maxsize=1)
 def _environment() -> dict[str, str]:
-    """devloop's environment: the submodule compiler, its stdlib, and LLVM."""
-    compiler = zutai_cli.binary()
+    """devloop's environment: one pinned compiler, its stdlib, and LLVM.
+
+    The installed toolchain is preferred because it states its revision and
+    needs no build. Falling back to the submodule keeps a local checkout
+    working, and both paths are checked against devloop's pin.
+    """
     environment = dict(os.environ)
-    environment["PATH"] = os.pathsep.join([str(compiler.parent), environment.get("PATH", "")])
-    environment["ZUTAI_STDLIB_ROOT"] = str(zutai_cli.STDLIB)
-    environment["ZUTAI_RUNTIME_ARCHIVE"] = str(_runtime_archive())
+    installed = installed_toolchain()
+    if installed is not None:
+        binary, stdlib, _ = installed
+        environment["ZUTAI_STDLIB_ROOT"] = str(stdlib)
+        # Name the archive rather than relying on the compiler's probe: the
+        # installed directory is the Rust target, which is not always the tuple
+        # the probe derives.
+        archives = sorted((binary.parent.parent / "lib" / "zutai").glob("*/libzutai_rt.a"))
+        if not archives:
+            raise SystemExit(
+                f"the installed Zutai toolchain at {binary.parent.parent} ships no "
+                "libzutai_rt.a, which devloop links its validators against"
+            )
+        environment["ZUTAI_RUNTIME_ARCHIVE"] = str(archives[0])
+        environment["PATH"] = os.pathsep.join(
+            [str(binary.parent), environment.get("PATH", "")]
+        )
+    else:
+        binary = zutai_cli.binary()
+        environment["PATH"] = os.pathsep.join([str(binary.parent), environment.get("PATH", "")])
+        environment["ZUTAI_STDLIB_ROOT"] = str(zutai_cli.STDLIB)
+        environment["ZUTAI_RUNTIME_ARCHIVE"] = str(_submodule_runtime_archive())
     for variable, program in (("ZUTAI_LLC", "llc"), ("ZUTAI_CLANG", "clang")):
         if variable not in environment:
             resolved = shutil.which(program)
@@ -144,14 +190,35 @@ def _environment() -> dict[str, str]:
 
 
 def check_toolchain() -> list[str]:
-    """Findings that would make any devloop result untrustworthy."""
-    pinned, submodule = pinned_revision(), submodule_revision()
-    if pinned != submodule:
+    """Findings that would make any devloop result untrustworthy.
+
+    A recorded helper identity is bound to one compiler revision, so the
+    toolchain actually in use must be the one devloop was released against.
+    """
+    pinned = pinned_revision()
+    installed = installed_toolchain()
+    if installed is not None:
+        _, _, revision = installed
+        if revision != pinned:
+            return [
+                f"the installed zutai-cli is revision {revision} but devloop pins "
+                f"{pinned}: a helper identity recorded against one compiler cannot "
+                "be validated with another; align the `zutai` flake input with the "
+                "devloop release"
+            ]
+        return []
+    submodule = submodule_revision()
+    if submodule is None:
         return [
-            "devloop pins Zutai "
-            f"{pinned} but deps/zutai is {submodule}: a helper identity recorded "
-            "against one compiler cannot be validated with another; move the "
-            "submodule or the devloop pin so they agree"
+            "no pinned Zutai toolchain: enter the repository dev shell "
+            "(`nix develop`), which installs the revision devloop was released "
+            "against, or check out the deps/zutai submodule"
+        ]
+    if submodule != pinned:
+        return [
+            f"deps/zutai is {submodule} but devloop pins {pinned}: a helper "
+            "identity recorded against one compiler cannot be validated with "
+            "another; move the submodule or the devloop pin so they agree"
         ]
     return []
 

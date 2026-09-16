@@ -6,8 +6,8 @@ on:
     paths:
       - '.tasks/**'
       - '.github/workflows/myque-project.yml'
-  # This privileged event must never check out or execute the PR head.
-  # The pinned reusable workflow reads canonical main and its own pinned CLI.
+  # This privileged event must never check out or execute the PR head. The job
+  # below reads canonical `main` and pinned tools only.
   pull_request_target:
     types:
       - opened
@@ -36,6 +36,10 @@ permissions:
   pull-requests: read
   checks: read
 
+concurrency:
+  group: myque-project-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   project:
     if: >-
@@ -43,13 +47,51 @@ jobs:
       (github.event_name != 'issues' ||
        (github.event.issue.user.login == 'github-actions[bot]' &&
         startsWith(github.event.issue.body, '<!-- myque:id=')))
-    uses: mozufu/myque-gh/.github/workflows/reconcile.yml@d4bf2aca50d3c762fa3299269b4c83ce4b0ea4fd
-    with:
-      branch: main
-      project: state = open or state = active or state = blocked or state = deferred
-      myque-gh-ref: d4bf2aca50d3c762fa3299269b4c83ce4b0ea4fd
-      issue-authors: github-actions[bot]
-      source-repo: iceice666/slime_os
-      source-branch: main
-    secrets:
-      token: ${{ secrets.GITHUB_TOKEN }}
+    name: Reconcile canonical items
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Canonical `main` only, never the PR head: this workflow runs on
+      # privileged events with a write token.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      # Keyed on the flake alone: the projection shell builds myque-gh through
+      # GHC and the pinned Zutai toolchain through cargo when cold.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            projection-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            }}
+          restore-prefixes-first-match: projection-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+
+      # Slime OS runs the projection itself rather than through myque-gh's
+      # reusable workflow: a spec-driven item's description is rendered by
+      # devloop, and the renderer is this repository's adapter, which supplies
+      # the pinned Zutai toolchain. A renderer failure refuses the run before
+      # any GitHub mutation rather than publishing stored requirements data.
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          nix develop .#projection --command
+          myque-gh apply
+          --store "$GITHUB_WORKSPACE"
+          --repo iceice666/slime_os
+          --ref refs/heads/main
+          --issue-author 'github-actions[bot]'
+          --source-repo iceice666/slime_os
+          --source-branch main
+          --project 'state = open or state = active or state = blocked or state = deferred'
+          --body-renderer python3
+          --body-renderer-arg scripts/lib/devloop.py
+          --body-renderer-arg render

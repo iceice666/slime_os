@@ -38,6 +38,50 @@
         "type": "github"
       }
     },
+    "myque-gh": {
+      "inputs": {
+        "myque": "myque_2",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789494222,
+        "narHash": "sha256-uU3FFKiUWGxGGGLt8z1GuIXBVHnT6b+6yF2h9wgBvCU=",
+        "owner": "mozufu",
+        "repo": "myque-gh",
+        "rev": "376fe90742c11bc0a60236ad327a769dac2b9e13",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mozufu",
+        "repo": "myque-gh",
+        "rev": "376fe90742c11bc0a60236ad327a769dac2b9e13",
+        "type": "github"
+      }
+    },
+    "myque_2": {
+      "inputs": {
+        "nixpkgs": [
+          "myque-gh",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789494003,
+        "narHash": "sha256-j552MCvxi6WeV3aMaXkSHimo3O7vnbdMbeOOZ5bqXOY=",
+        "owner": "mozufu",
+        "repo": "myque",
+        "rev": "d25241fcbf1d6b1e06283717c246576e88f6fa5d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mozufu",
+        "repo": "myque",
+        "rev": "d25241fcbf1d6b1e06283717c246576e88f6fa5d",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1784120854,
@@ -58,8 +102,10 @@
       "inputs": {
         "devloop": "devloop",
         "myque": "myque",
+        "myque-gh": "myque-gh",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "zutai": "zutai"
       }
     },
     "rust-overlay": {
@@ -79,6 +125,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "zutai": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787659589,
+        "narHash": "sha256-cY7O+axK8Mmr0dMltEJWiS8podWIxdcWi7O6jf8fNW0=",
+        "owner": "iceice666",
+        "repo": "zutai",
+        "rev": "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "iceice666",
+        "repo": "zutai",
+        "rev": "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a",
         "type": "github"
       }
     }
