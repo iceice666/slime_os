@@ -227,14 +227,20 @@ def check_controls() -> None:
 def check_profile_controls() -> None:
     """Prove the body convention refuses its negative cases, offline.
 
-    These run devloop's own refusals over synthesized records rather than
+    These run devloop's own refusals over the admitted item rather than
     asserting message text here: the profile belongs to devloop, so a control
     that re-encoded the rule would drift from it. None of them reach native
     validation, so the controls cost no compilation.
+
+    A retired item has no body to mutate, so the controls need an active
+    spec-driven item and report nothing when the store holds none. The summary
+    line says how many were validated, so an empty run is visible rather than
+    silently green.
     """
-    if not spec_driven():
+    active = [item for item in spec_driven() if not item["retired"]]
+    if not active:
         return
-    admitted = next(item for item in spec_driven() if not item["retired"])
+    admitted = active[0]
     binary = shutil.which("myque")
     if binary is None:
         return
@@ -351,8 +357,8 @@ def main() -> int:
         raise SystemExit(f"work-item check failed with {len(failures)} problem(s)")
 
     total = len(identities())
-    spec = len(spec_driven())
-    print(f"work-item check passed: {total} items, {spec} validated through devloop")
+    validated = len([item for item in spec_driven() if not item["retired"]])
+    print(f"work-item check passed: {total} items, {validated} validated through devloop")
     return 0
 
 
