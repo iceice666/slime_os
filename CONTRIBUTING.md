@@ -222,8 +222,11 @@ hardware evidence, failure/refusal evidence, repeated reliability runs, CI,
 or other item-specific observations. QEMU output does not prove hardware
 support, and a green unrelated gate does not satisfy an exit condition.
 
-Record the observed exit evidence, its scope, identity, and limits in the item.
-Only then run:
+For an ordinary prose item, record the observed exit evidence, scope, identity,
+and limits in exactly one unambiguous `## Closure evidence` section. Retirement
+extracts that section's content verbatim, through the next heading of the same
+or higher level or the body's end; an `Exit conditions` list is not observed
+evidence. Only then run:
 
 ```sh
 myque close <ITEM>
@@ -237,6 +240,59 @@ boundary; use it only for items that carry no `devloop` record.
 Commit the canonical `.tasks` transition. After it reaches `main`, `myque-gh`
 subsequently closes the projected Issue. Leave unfinished work unfinished.
 
+### Storage-only retirement PRs
+
+The separate `myque-retire.yml` workflow proposes retirement of live `done`
+items from a recorded full revision of canonical `origin/main`, with no
+arbitrary source refs and no additional age threshold. MyQue can retire both
+`work-item/v1` and `work-item/v2` directly; this is not envelope migration,
+closure, or a new completion judgment. Cancelled, unfinished, and already
+retired items are not candidates. Missing/empty/ambiguous prose evidence,
+unsupported consumer versions or evidence, and unknown consumer namespaces
+are reported skips. Devloop retirement references recorded evidence identities
+and gate results, not today's expiry or a fabricated completion receipt; its
+identity fields remain in the terminal consumer entry and full evidence remains
+in exact retained history.
+
+Preview in the pinned environment with
+`python3 scripts/lib/work_item_retirement_publish.py` (the default mode).
+Preview changes neither the source store nor remote refs, branches, or PRs.
+`--apply` is only for the trusted isolated GitHub workflow and enforces remote
+merge-protection and publication guards. It runs `just tasks_check` before and
+after MyQue mutation, verifies exact history and the same-UUID storage-only
+diff, and pushes/verifies this batch's retained refs before the branch or PR.
+Empty batches publish nothing; an existing retirement PR stops a new batch.
+Partial publication is resumed only after verifying expected bot-owned state,
+never by overwriting a PR under review or deleting retained refs. A human must
+review and merge after normal CI; automatic merge and direct `main` writes are
+not supported.
+
+Manual dispatch defaults to preview. The daily schedule runs only when the
+repository variable `MYQUE_RETIRE_ENABLED=true` is set **after real manual
+GitHub qualification**, including the retained refs, maintenance PR, actual CI
+trigger/approval path, and stale-base race. Do not infer qualification from
+local simulations; this document does not claim the workflow tested or enabled.
+Publication prerequisites are PR-required rules with no automation bypass,
+the required `Canonical work-item store` check from GitHub Actions (integration
+`15368`) under strict/current-base rules,
+and GitHub Actions permission to create PRs (“Allow GitHub Actions to create
+and approve pull requests”). Concurrency alone cannot stop stale retirement
+after an item is edited or reopened on `main`. `GITHUB_TOKEN`-created PRs may
+need human approval or a supported manual check trigger; do not claim automatic
+CI without observing it, replace the token, or bypass the merge rules.
+
+The [lifecycle guide](docs/getting-started/06-work-item-lifecycle.md#retirement-maintenance-prs)
+owns exact evidence selection, retained-ref transport, qualification, and recovery.
+An administrator must also approve the ruleset identities using the lifecycle
+guide's `--approve-rules` procedure and set `MYQUE_RETIRE_RULES_APPROVAL`;
+workflow tokens cannot inspect private bypass lists. A ruleset change invalidates
+that approval without granting the workflow administrative credentials.
+
+An administrator must establish these prerequisites before qualification;
+automation does not modify repository settings. A token may lack
+administrative read permission, so PR creation permission is ultimately
+enforced by GitHub's publication request, not promised by a local preflight.
+
 ## Trivial-change exception
 
 A genuine typo, broken link, format-only change, tiny wording correction, or
@@ -248,9 +304,11 @@ uncertain, create the item. This exception does not waive applicable checks.
 
 General CI lives in `.github/workflows/ci.yml`. Pushes to `main` and `develop`,
 and pull requests targeting any branch, run it; a newer run cancels the
-superseded one for the same ref. The workflow's aggregate `CI` job is the
-single status to require in branch protection — it fails unless every gate
-job succeeded.
+superseded one for the same ref. The workflow's aggregate `CI` job fails unless
+every gate job succeeded. Retirement publication additionally requires the
+`Canonical work-item store` check with strict/current-base enforcement and
+PR-required rules without an automation bypass; `CI` alone does not establish
+that freshness boundary.
 
 Host checks, Kani, and the aggregates run on `ubuntu-latest`; the seL4 image,
 root tests, rollback runtime, contract sources, and the four generation shards

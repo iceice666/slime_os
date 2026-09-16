@@ -40,6 +40,11 @@ from harness import ROOT
 import devloop
 import work_items
 from work_items import ITEMS, identities, items, open_backlog
+from work_item_retirement import RetirementError
+from work_item_retirement_controls import check_retirement_controls
+from work_item_retirement_publish_controls import (
+    check_controls as check_retirement_publish_controls,
+)
 
 
 failures: list[str] = []
@@ -345,6 +350,11 @@ def main() -> int:
         )
     check_controls()
     check_terminal_controls()
+    failures.extend(check_retirement_controls())
+    try:
+        check_retirement_publish_controls()
+    except RetirementError as error:
+        fail(f"retirement publication control: {error}")
     failures.extend(run_myque_check())
     failures.extend(check_backlog_first())
     failures.extend(check_terminal_records())

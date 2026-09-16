@@ -184,6 +184,25 @@ jobs:
 
       - run: nix develop --command just tasks_check
 
+      - name: Checkout trusted retirement verifier
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          path: retirement-verifier
+          persist-credentials: false
+
+      - name: Verify retirement against current main
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
+        working-directory: retirement-verifier
+        env:
+          RETIREMENT_HEAD_REF: ${{ github.head_ref }}
+          RETIREMENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          nix develop --command
+          python3 scripts/lib/work_item_retirement_publish.py --check-pr
+
   kani_proofs:
     name: Kani IO wire and device-boundary proofs
     # An ordinary x64 runner, not the arm64 seL4 pool: nothing here builds for

@@ -2,10 +2,10 @@
 
 devloop owns the requirements body, its semantic helpers, and the evidence
 contracts; Slime OS owns only the choice to use them and the environment they
-run in. This module is that environment, and nothing else: it does not decode a
-payload, evaluate a predicate, or decide whether evidence is sufficient. Every
-such answer comes from `devloop` itself, so there is no second implementation of
-its semantics here.
+run in. This adapter also describes historical evidence for retirement through
+the installed consumer's parser and generated bindings. It does not decode a
+payload, evaluate a predicate, or decide whether evidence is sufficient; those
+answers come from `devloop`, with no second implementation of its semantics.
 
 Two facts shape it.
 
@@ -79,8 +79,7 @@ def pinned_revision() -> str:
     )
     if finished.returncode:
         raise SystemExit(
-            "cannot read devloop's compiler pin: "
-            f"{(finished.stderr or finished.stdout).strip()}"
+            f"cannot read devloop's compiler pin: {(finished.stderr or finished.stdout).strip()}"
         )
     return finished.stdout.strip()
 
@@ -173,9 +172,7 @@ def _environment() -> dict[str, str]:
                 "libzutai_rt.a, which devloop links its validators against"
             )
         environment["ZUTAI_RUNTIME_ARCHIVE"] = str(archives[0])
-        environment["PATH"] = os.pathsep.join(
-            [str(binary.parent), environment.get("PATH", "")]
-        )
+        environment["PATH"] = os.pathsep.join([str(binary.parent), environment.get("PATH", "")])
     else:
         binary = zutai_cli.binary()
         environment["PATH"] = os.pathsep.join([str(binary.parent), environment.get("PATH", "")])
@@ -255,6 +252,96 @@ def render(item: dict[str, object], cwd: Path = ROOT) -> str:
     if finished.returncode:
         raise DevloopError((finished.stderr or finished.stdout).strip())
     return finished.stdout
+
+
+def retention(item: dict[str, object], cwd: Path = ROOT) -> tuple[str, dict[str, str]]:
+    """Describe recorded history, without rerunning gates or deciding eligibility.
+
+    The installed consumer owns parsing, supported identities, and serialization.
+    Its generated descriptors also constrain the historical evidence we describe;
+    the full observations and epoch remain only in MyQue's exact retained bytes.
+    """
+    finished = subprocess.run(
+        [
+            _require("python3", "the dev shell provides it"),
+            "-P",
+            "-c",
+            """
+import json
+from pathlib import Path
+import sys
+
+from devloop import bindings, core
+
+descriptors = json.loads(Path(bindings.__file__).with_name("bindings.json").read_text())
+
+def checked(module, name, value):
+    bindings.fields(module, name, value)
+    for field in descriptors[module][name]:
+        if field["name"] not in value:
+            continue
+        entry = value[field["name"]]
+        kind = field["type"]
+        expected = {"Text": str, "Int": int, "Bool": bool}.get(kind)
+        if expected is not None:
+            valid = type(entry) is expected
+            if kind == "Int" and valid:
+                valid = -(2**63) <= entry < 2**63
+        elif kind == "[record]":
+            valid = isinstance(entry, list)
+        elif kind in {"Identity", "Value"}:
+            valid = isinstance(entry, dict)
+        else:
+            raise core.Refusal(f"E_RETENTION: unsupported descriptor type {kind}")
+        if not valid:
+            raise core.Refusal(f"E_RETENTION_TYPE:{module}.{name}.{field['name']}")
+    return value
+
+item = json.load(sys.stdin)
+rec = checked("consumer", "Consumer", core.record(item))
+payload, spec, rec = core.stored(item)
+if not rec["epoch"] or not rec["evidence"]:
+    raise core.Refusal("E_RETENTION: recorded epoch and evidence required")
+lines = [
+    "Historical devloop evidence in the exact retained item; not a completion receipt.",
+    "Recorded passed values are gate results, not predicate or eligibility decisions.",
+    "No gates rerun, expiry evaluated, or completion inferred during retirement.",
+]
+for index, entry in enumerate(rec["evidence"]):
+    checked("execution", "Evidence", entry)
+    checked("execution", "Identity", entry["identity"])
+    if not all(entry["identity"].values()) or not all(
+        entry[key] for key in ("acceptance", "gate", "observer")
+    ):
+        raise core.Refusal("E_RETENTION: missing recorded evidence identity")
+    if entry["mode"] not in {"automated", "human"}:
+        raise core.Refusal("E_RETENTION: unsupported evidence mode")
+    for observation in entry["observations"]:
+        checked("spec", "Observation", observation)
+        checked("spec", "Value", observation["value"])
+        if observation["value"]["kind"] not in {"int", "bool", "text"}:
+            raise core.Refusal("E_RETENTION: unsupported observation kind")
+    reference = {key: value for key, value in entry.items() if key != "observations"}
+    lines.append(
+        f"devloop.evidence[{index}]: "
+        + json.dumps(reference, sort_keys=True, ensure_ascii=False)
+    )
+retained = {key: rec[key] for key in (
+    "recordSchema", "schema", "bodyProfile", "helper", "requirementsDigest", "admission"
+)}
+print(json.dumps(["\\n".join(lines) + "\\n", {"devloop": core.raw_record(retained)}]))
+""",
+        ],
+        cwd=cwd,
+        input=json.dumps(item),
+        capture_output=True,
+        text=True,
+        env=_environment(),
+    )
+    if finished.returncode:
+        raise DevloopError((finished.stderr or finished.stdout).strip())
+    evidence, retained = json.loads(finished.stdout)
+    return evidence, retained
 
 
 def main(arguments: list[str]) -> int:
