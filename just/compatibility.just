@@ -1,7 +1,7 @@
 # Public command compatibility, not an archive-validation dependency.
 # Retain aliases while external callers are unknown; new callers use canonical
 # recipes. Equal delegation does not imply equal historical qualification scope.
-# Per-recipe dispositions: .tasks/items/01a09f86-802e-70bb-9dfe-87d97822802c.md.
+# Per-recipe dispositions: work item 01a09f86-802e-70bb-9dfe-87d97822802c.
 
 [group('compatibility')]
 recovery_check: sel4_recovery_plane_check
