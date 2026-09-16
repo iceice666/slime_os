@@ -96,8 +96,11 @@ within its scope; a new planning item is not required for every PR.
 ### Spec-driven items
 
 An item may instead carry its requirements as structured data, which makes its
-completion enforceable rather than asserted. Author the payload as a
-`dev-spec/v1` `.zti` file — or as a `.zt` input that computes it — and admit it:
+completion enforceable rather than asserted.
+[Carrying a work item](docs/getting-started/06-work-item-lifecycle.md) walks
+both lifecycles command by command; the rules that bind a pull request are
+here. Author the payload as a `dev-spec/v1` `.zti` file — or as a `.zt` input
+that computes it — and admit it:
 
 ```sh
 just devloop admit spec.zti --title "Describe the work" --admission <token> --policy .devloop/policy.json --kind task
