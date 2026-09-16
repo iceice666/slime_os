@@ -1,0 +1,6 @@
+{
+  "scenario": "repository work-item store gates",
+  "recipes": ["tasks_check", "docs_check"],
+  "store": ".tasks",
+  "offline": true
+}
