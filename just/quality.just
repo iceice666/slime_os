@@ -72,6 +72,14 @@ tasks_next:
 tasks_graph:
     myque graph
 
+# Run the pinned devloop against this repository's Zutai toolchain and gate
+# policy: `just devloop validate <UUID>`, `just devloop admit <spec.zti> …`.
+# Positional arguments keep an operator's quoted title intact.
+[group('quality')]
+[positional-arguments]
+devloop *ARGS:
+    python3 scripts/lib/devloop.py "$@"
+
 [group('quality')]
 x86_portability_check:
     python3 scripts/check/check-architecture-portability.py

@@ -10,3 +10,6 @@ target
 # the per-artifact cargo target dirs, the packaged image, and its identity
 # manifest all land under /build/.
 /build/
+# MyQue's exclusive write lock. Canonical items, terminal records, and
+# admission records are tracked; the lock is a live process artifact.
+/.tasks/write.lock

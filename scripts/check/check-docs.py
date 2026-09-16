@@ -27,7 +27,7 @@ import yaml
 from harness import ROOT
 from just_metadata import recipes
 from markdown_anchors import anchors, controls as anchor_controls
-from work_items import FIELD, UUID, identities
+from work_items import FIELD, UUID, identities, retired, without_consumer_records
 
 REQUIRED_ACTIVE_DOCUMENTS = (
     "README.md",
@@ -86,10 +86,12 @@ def document_reference_failures(
     *,
     item_root: _Path = ROOT / ".tasks" / "items",
     known_items: frozenset[str] | None = None,
+    retired_items: frozenset[str] | None = None,
 ) -> list[str]:
     """Validate local Markdown destinations, fragments, and work-item links."""
     found: list[str] = []
     known = identities() if known_items is None else known_items
+    gone = retired() if retired_items is None else retired_items
     linked_work_items: set[str] = set()
     for target in dict.fromkeys(HISTORY_URL.findall(text)):
         if not HISTORY_COMMIT.match(target):
@@ -109,6 +111,11 @@ def document_reference_failures(
                 continue
             if reference not in known:
                 found.append(f"{path}: work-item link {target} names absent UUID {reference}")
+                continue
+            if reference in gone:
+                # A retired item's identity is its terminal record; the
+                # Markdown body it used to have lives only in Git history, so
+                # the canonical path is a resolvable reference, not a document.
                 continue
         if not destination.exists():
             found.append(f"{path}: dead relative link {target}")
@@ -381,6 +388,7 @@ def controls() -> list[str]:
     failures = [f"anchor control: {failure}" for failure in anchor_controls()]
     present = "00000000-0000-0000-0000-000000000001"
     absent = "00000000-0000-0000-0000-000000000002"
+    gone = "00000000-0000-0000-0000-000000000003"
     with tempfile.TemporaryDirectory() as temporary:
         root = _Path(temporary)
         for relative in REQUIRED_ACTIVE_DOCUMENTS:
@@ -401,6 +409,11 @@ def controls() -> list[str]:
             ("absent UUID", f"[item](.tasks/items/{absent}.md)", ("absent UUID",)),
             ("absent plain UUID", absent, ("absent work-item UUID",)),
             (
+                "retired UUID keeps resolving without a document",
+                f"[item](.tasks/items/{gone}.md) {gone}",
+                (),
+            ),
+            (
                 "immutable history",
                 f"[just retired_check]({HISTORY_BASE}src/commit/{'a' * 40}/devlog/missing.md)",
                 (),
@@ -413,7 +426,11 @@ def controls() -> list[str]:
         )
         for name, document, signals in cases:
             found = document_reference_failures(
-                source, document, item_root=item_root, known_items=frozenset({present})
+                source,
+                document,
+                item_root=item_root,
+                known_items=frozenset({present, gone}),
+                retired_items=frozenset({gone}),
             )
             if len(found) != len(signals) or any(
                 signal not in failure for signal, failure in zip(signals, found, strict=True)
@@ -547,8 +564,28 @@ def controls() -> list[str]:
     return failures
 
 
+def consumer_record_controls() -> list[str]:
+    """A consumer record's own identities are not work-item references."""
+    failures: list[str] = []
+    epoch = "3f2b9c11-4d5e-4a7b-9c2d-8e1f0a6b5c44"
+    parent = "00000000-0000-7000-8000-000000000001"
+    item = (
+        "---\nschema: work-item/v2\nid: 00000000-0000-7000-8000-000000000002\n"
+        "kind: task\nstate: open\ncreated: 2026-09-15T10:00:00Z\n"
+        f"parent: {parent}\ndevloop:\n  epoch: {epoch}\n  evidence: []\n---\n\n# Control\n"
+    )
+    scanned = without_consumer_records(item)
+    if epoch in scanned:
+        failures.append("consumer record control: a devloop identity was read as a reference")
+    if parent not in scanned:
+        failures.append("consumer record control: a MyQue-owned parent reference was dropped")
+    if "# Control" not in scanned:
+        failures.append("consumer record control: the item body was dropped")
+    return failures
+
+
 def main() -> int:
-    failures = controls()
+    failures = controls() + consumer_record_controls()
     known_recipes = recipes()
     known_items = identities()
     documents = active_documents()
@@ -557,10 +594,15 @@ def main() -> int:
             failures.append(f"{path}: maintained document is missing")
             continue
         text = path.read_text()
-        failures.extend(document_reference_failures(path, text, known_items=known_items))
+        is_work_item = path.relative_to(ROOT).parts[:2] == (".tasks", "items")
+        # A consumer's frontmatter record carries identities of its own — a
+        # devloop run epoch is a UUID, and names no work item — so only
+        # MyQue-owned metadata and the body are read as references.
+        scanned = without_consumer_records(text) if is_work_item else text
+        failures.extend(document_reference_failures(path, scanned, known_items=known_items))
         if checks_commands(path):
             failures.extend(command_reference_failures(path, text, known_recipes))
-        elif path.relative_to(ROOT).parts[:2] == (".tasks", "items"):
+        elif is_work_item:
             failures.extend(
                 command_reference_failures(path, task_requirements(text), known_recipes)
             )

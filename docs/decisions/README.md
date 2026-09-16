@@ -21,5 +21,8 @@ readable and link to the decision that replaced them.
 - [Development record ownership](development-record-ownership.md) — accepted;
   separates current knowledge, work state, change evidence, durable rationale,
   and retained history during the repository split.
+- [Spec-driven work-item bodies](spec-driven-work-item-bodies.md) — accepted;
+  what Slime OS owns once MyQue, devloop, and myque-gh publish the envelope,
+  requirements, evidence, and projection contracts it pins.
 - [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed;
   target-specific assurance and the required Reply/scheduling-context cutover.
