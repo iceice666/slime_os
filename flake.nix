@@ -55,7 +55,15 @@
   };
 
   outputs =
-    { nixpkgs, rust-overlay, myque, myque-gh, devloop, zutai, ... }:
+    {
+      nixpkgs,
+      rust-overlay,
+      myque,
+      myque-gh,
+      devloop,
+      zutai,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -213,9 +221,9 @@
                 # archive devloop links its validators against.
                 zutaiTools
               ]
-              ++ nixpkgs.lib.optionals
-                (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64)
-                [ pkgs.qemu-user ];
+              ++ nixpkgs.lib.optionals (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64) [
+                pkgs.qemu-user
+              ];
 
             # `sel4-sys` generates the libsel4 bindings with bindgen, which
             # resolves libclang at run time rather than at link time.
@@ -302,6 +310,7 @@
             packages = [
               pkgs.git
               pkgs.gh
+              pkgs.just
               # `devloop render` validates the stored payload by compiling
               # devloop's helpers; the wrapped `zutai-cli` carries the LLVM it
               # needs, so no toolchain is added to this PATH either.
