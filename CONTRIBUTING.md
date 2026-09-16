@@ -93,6 +93,44 @@ Submit a **work-item-only planning PR**, and merge it before opening an
 implementation PR. An already-landed item can cover another implementation PR
 within its scope; a new planning item is not required for every PR.
 
+### Spec-driven items
+
+An item may instead carry its requirements as structured data, which makes its
+completion enforceable rather than asserted. Author the payload as a
+`dev-spec/v1` `.zti` file — or as a `.zt` input that computes it — and admit it:
+
+```sh
+just devloop admit spec.zti --title "Describe the work" --admission <token> --policy .devloop/policy.json --kind task
+```
+
+[devloop](https://github.com/mozufu/devloop) allocates nothing: MyQue assigns
+the UUID, the body becomes one fenced `zti` block, and the `devloop`
+frontmatter record carries the profile, pins, digest, and admission identity.
+Repeating the same token is idempotent. From then on `just tasks_check`
+validates that body, and work proceeds by canonical UUID:
+
+```sh
+just devloop start <ITEM> --policy .devloop/policy.json
+just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
+just devloop human <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image> --observations <observed>.json --observer <who>
+just devloop complete <ITEM> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
+```
+
+Approval applies this repository's rules before anything starts: the item must
+already be on canonical `main`, and open backlog defects come first. Gate
+identities resolve through [`.devloop/policy.json`](.devloop/policy.json) to
+existing `just` targets; a gate reports the typed observations that policy
+declares, and the item's own predicates decide whether they satisfy an
+acceptance. Evidence is recorded into the `devloop` record bound to the exact
+requirements, helpers, code, policy, execution inputs, target, image, and run
+epoch that were tested, and the newest entry for an obligation decides it — a
+later failing run is never satisfied by an earlier pass. A human obligation
+stays pending until an operator supplies a real observation; nothing here may
+synthesize one, and `complete` refuses while any mandatory obligation is
+unmet. Merging still does not complete an item.
+
+Ordinary prose items need none of this and are unaffected.
+
 ## Development setup
 
 Start with [Orientation](docs/getting-started/01-orientation.md), then
@@ -187,6 +225,11 @@ Only then run:
 ```sh
 myque close <ITEM>
 ```
+
+A spec-driven item closes through `just devloop complete`, which verifies its
+mandatory acceptance obligations against recorded evidence and then transitions
+the item under the revision it checked. A direct `myque close` bypasses that
+boundary; use it only for items that carry no `devloop` record.
 
 Commit the canonical `.tasks` transition. After it reaches `main`, `myque-gh`
 subsequently closes the projected Issue. Leave unfinished work unfinished.
