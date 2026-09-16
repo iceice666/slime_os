@@ -13,6 +13,8 @@
 # Keep the flake input's revision equal to the submodule's.
 {
   lib,
+  llvmPackages,
+  makeWrapper,
   rustPlatform,
   stdenv,
   revision,
@@ -33,6 +35,7 @@ rustPlatform.buildRustPackage {
   ];
   # The workspace's own test suites are qualified upstream, not re-run here.
   doCheck = false;
+  nativeBuildInputs = [ makeWrapper ];
   postInstall = ''
     # `zutai-cli compile` probes ../lib/zutai/<rust target>/libzutai_rt.a
     # relative to its own executable, so the archive is installed exactly
@@ -44,6 +47,13 @@ rustPlatform.buildRustPackage {
     mkdir -p "$out/share/zutai"
     cp -r "$src/stdlib" "$out/share/zutai/stdlib"
     printf '%s\n' "${revision}" > "$out/share/zutai/revision"
+    # `zutai-cli compile` drives `llc` and `clang` directly. They are bound
+    # here rather than added to the dev shell, because the seL4 product build
+    # resolves its own `clang` and linker from that PATH: a second LLVM there
+    # broke `-fuse-ld=lld` for every cross-compiled component.
+    wrapProgram "$out/bin/zutai-cli" \
+      --set ZUTAI_LLC "${llvmPackages.llvm}/bin/llc" \
+      --set ZUTAI_CLANG "${llvmPackages.clang}/bin/clang"
   '';
   meta = {
     description = "Zutai compiler, standard library, and native runtime at the pinned revision";

@@ -165,10 +165,13 @@
               with pkgs;
               [
                 gcc
-                # `llc` and `clang`: devloop compiles its Zutai validators to a
-                # native binary, and `zutai-cli compile` drives both directly.
-                llvmPackages.llvm
+                # No second LLVM here on purpose: the seL4 product build
+                # resolves its own `clang` and linker from this PATH, and
+                # `llvmPackages.llvm` broke `-fuse-ld=lld` for every
+                # cross-compiled component. devloop's validator gets `llc` and
+                # `clang` from the wrapped `zutai-cli` in `nix/zutai.nix`.
                 llvmPackages.clang
+                llvmPackages.lld
                 just
                 lldb
                 qemu
@@ -300,9 +303,8 @@
               pkgs.git
               pkgs.gh
               # `devloop render` validates the stored payload by compiling
-              # devloop's helpers, so the renderer needs LLVM too.
-              pkgs.llvmPackages.llvm
-              pkgs.llvmPackages.clang
+              # devloop's helpers; the wrapped `zutai-cli` carries the LLVM it
+              # needs, so no toolchain is added to this PATH either.
               pkgs.python3
               myque.packages.${system}.myque-bin
               myque-gh.packages.${system}.myque-gh-bin
