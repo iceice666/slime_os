@@ -44,10 +44,18 @@
       url = "github:iceice666/zutai/9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
       flake = false;
     };
+    # The projection consumer. Slime OS runs it itself rather than through
+    # myque-gh's reusable workflow, because a spec-driven item's description is
+    # rendered by devloop, and only this repository can supply that renderer
+    # with the pinned Zutai toolchain it needs.
+    myque-gh = {
+      url = "github:mozufu/myque-gh/376fe90742c11bc0a60236ad327a769dac2b9e13";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, myque, devloop, zutai, ... }:
+    { nixpkgs, rust-overlay, myque, myque-gh, devloop, zutai, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -277,6 +285,30 @@
             packages = [
               pkgs.just
               kani
+            ];
+          };
+
+          # `nix develop .#projection --command myque-gh apply …`. Separate from
+          # the default shell because projection needs one thing that shell does
+          # not — the myque-gh binary — and the default shell must not build a
+          # second Haskell closure for every other gate. devloop and the pinned
+          # Zutai toolchain are here because a spec-driven item's GitHub
+          # description is rendered by `devloop render`, never by pasting the
+          # stored requirements data.
+          projection = pkgs.mkShell {
+            packages = [
+              pkgs.git
+              pkgs.gh
+              # `devloop render` validates the stored payload by compiling
+              # devloop's helpers, so the renderer needs LLVM too.
+              pkgs.llvmPackages.llvm
+              pkgs.llvmPackages.clang
+              pkgs.python3
+              myque.packages.${system}.myque-bin
+              myque-gh.packages.${system}.myque-gh-bin
+              devloopTools
+              devloopTools.bridge
+              zutaiTools
             ];
           };
         }
