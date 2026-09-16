@@ -170,6 +170,30 @@
       };
     };
     {
+      name = "elf-delivery";
+      artifact = {
+        path = "scripts/lib/elf_delivery.py";
+        kind = "file";
+        identity = "643f701cea23c2b2e38e6b7edade7363d715d60f31268de46fca79da46e50d11";
+      };
+    };
+    {
+      name = "generation-builder";
+      artifact = {
+        path = "scripts/build/build-generation.py";
+        kind = "file";
+        identity = "5c69c82502c83d8690de5fd25c3fecbab9f5169e8ede77d19406d1ce3274473d";
+      };
+    };
+    {
+      name = "image-builder";
+      artifact = {
+        path = "scripts/build/build-sel4.py";
+        kind = "file";
+        identity = "88d4fc31f3f9860931313815127363143759821558dfbb0e29139653d94ad5e7";
+      };
+    };
+    {
       name = "interface-schema-contract";
       artifact = {
         path = "contracts/interface-schema/v1";
@@ -222,7 +246,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "66ef737a5eb97e761701c6b25d2f5f7e730e77e76f8603eb89244a319da5863c";
+        identity = "029dc881d13423f91674121715adbf92b2827c8aa27adbf8dc98414d8c79159e";
       };
     };
   ];

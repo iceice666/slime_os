@@ -140,9 +140,9 @@ def _fail(message: str) -> None:
 
 
 def normalize(value: object) -> bytes:
-    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode(
-        "utf-8"
-    )
+    return (
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
+    ).encode("utf-8")
 
 
 # Repository metadata a tree input may carry without being part of its
@@ -246,7 +246,12 @@ def _artifact(raw: object, label: str, *, base: Path | None = None) -> tuple[dic
 
 def compile_closure(path: Path, contract: ModuleType = image_contract) -> CompiledClosure:
     value = _exact(
-        _run_zutai(path.resolve(), IMAGE_CHECKER, "SLIME_SYSTEM_IMAGE_CLOSURE_PATH", contract.MAX_SOURCE_BYTES),
+        _run_zutai(
+            path.resolve(),
+            IMAGE_CHECKER,
+            "SLIME_SYSTEM_IMAGE_CLOSURE_PATH",
+            contract.MAX_SOURCE_BYTES,
+        ),
         _IMAGE_FIELDS,
         str(path),
     )
@@ -257,11 +262,15 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
         _fail("closure name must match its file name and use canonical spelling")
     _digest(value["systemIdentity"], "systemIdentity")
     _artifact(value["systemSpec"], "systemSpec")
-    implementations = _list(value["implementations"], contract.MAX_IMPLEMENTATIONS, "implementations")
+    implementations = _list(
+        value["implementations"], contract.MAX_IMPLEMENTATIONS, "implementations"
+    )
     component_names: list[str] = []
     for index, raw in enumerate(implementations):
         entry = _exact(raw, _IMPLEMENTATION_FIELDS, f"implementations[{index}]")
-        component_names.append(_bounded_text(entry["component"], contract.MAX_NAME_BYTES, "component"))
+        component_names.append(
+            _bounded_text(entry["component"], contract.MAX_NAME_BYTES, "component")
+        )
         provider = _bounded_text(entry["provider"], contract.MAX_NAME_BYTES, "provider")
         if provider not in contract.PROVIDERS:
             _fail(f"implementations[{index}].provider: unknown provider {provider!r}")
@@ -275,7 +284,9 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
                 f"implementations[{index}].buildProfile: unknown profile {profile!r}; "
                 f"expected one of {sorted(contract.BUILD_PROFILES)}"
             )
-    if component_names != sorted(component_names) or len(set(component_names)) != len(component_names):
+    if component_names != sorted(component_names) or len(set(component_names)) != len(
+        component_names
+    ):
         _fail("implementations must be uniquely keyed and sorted by component")
     target = _exact(value["target"], _TARGET_FIELDS, "target")
     _bounded_text(target["profile"], contract.MAX_NAME_BYTES, "target.profile")
@@ -297,7 +308,9 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
     release_names = []
     for index, raw in enumerate(release_inputs):
         entry = _exact(raw, _NAMED_INPUT_FIELDS, f"releaseInputs[{index}]")
-        release_names.append(_bounded_text(entry["name"], contract.MAX_NAME_BYTES, "release input name"))
+        release_names.append(
+            _bounded_text(entry["name"], contract.MAX_NAME_BYTES, "release input name")
+        )
         _artifact(entry["artifact"], f"releaseInputs[{index}].artifact")
     if release_names != sorted(release_names) or len(set(release_names)) != len(release_names):
         _fail("releaseInputs must be uniquely keyed and sorted by name")
@@ -305,9 +318,13 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
     parameter_names = []
     for index, raw in enumerate(parameters):
         entry = _exact(raw, _PARAMETER_FIELDS, f"buildParameters[{index}]")
-        parameter_names.append(_bounded_text(entry["name"], contract.MAX_NAME_BYTES, "parameter name"))
+        parameter_names.append(
+            _bounded_text(entry["name"], contract.MAX_NAME_BYTES, "parameter name")
+        )
         _bounded_text(entry["value"], contract.MAX_TEXT_BYTES, "parameter value", empty=True)
-    if parameter_names != sorted(parameter_names) or len(set(parameter_names)) != len(parameter_names):
+    if parameter_names != sorted(parameter_names) or len(set(parameter_names)) != len(
+        parameter_names
+    ):
         _fail("buildParameters must be uniquely keyed and sorted by name")
     if parameter_names:
         unknown = sorted(set(parameter_names) - set(contract.BUILD_PARAMETERS))
@@ -332,7 +349,9 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
 
 def compile_test_run(path: Path, contract: ModuleType = test_contract) -> CompiledTestRun:
     value = _exact(
-        _run_zutai(path.resolve(), TEST_CHECKER, "SLIME_SYSTEM_TEST_RUN_PATH", contract.MAX_SOURCE_BYTES),
+        _run_zutai(
+            path.resolve(), TEST_CHECKER, "SLIME_SYSTEM_TEST_RUN_PATH", contract.MAX_SOURCE_BYTES
+        ),
         _TEST_FIELDS,
         str(path),
     )
@@ -365,16 +384,27 @@ def compile_test_run(path: Path, contract: ModuleType = test_contract) -> Compil
         _bounded_text(entry["target"], contract.MAX_TEXT_BYTES, "fault target")
         _bounded_text(entry["value"], contract.MAX_TEXT_BYTES, "fault value")
     timeout = value["timeoutSeconds"]
-    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 0 < timeout <= contract.MAX_TIMEOUT_SECONDS:
+    if (
+        not isinstance(timeout, int)
+        or isinstance(timeout, bool)
+        or not 0 < timeout <= contract.MAX_TIMEOUT_SECONDS
+    ):
         _fail("timeoutSeconds is outside the declared bound")
     _digest(value["markerContractIdentity"], "markerContractIdentity", contract)
-    forbidden = _list(value["forbiddenOutcomes"], contract.MAX_FORBIDDEN_OUTCOMES, "forbiddenOutcomes")
+    forbidden = _list(
+        value["forbiddenOutcomes"], contract.MAX_FORBIDDEN_OUTCOMES, "forbiddenOutcomes"
+    )
     for index, outcome in enumerate(forbidden):
         _bounded_text(outcome, contract.MAX_TEXT_BYTES, f"forbiddenOutcomes[{index}]")
     normalized = normalize(value)
     if len(normalized) > contract.MAX_NORMALIZED_BYTES:
         _fail("normalized test run exceeds bound")
-    return CompiledTestRun(path.resolve(), value, normalized, hashlib.sha256(contract.IDENTITY_DOMAIN + normalized).digest())
+    return CompiledTestRun(
+        path.resolve(),
+        value,
+        normalized,
+        hashlib.sha256(contract.IDENTITY_DOMAIN + normalized).digest(),
+    )
 
 
 def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
@@ -440,7 +470,10 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         if implementation["provider"] == image_contract.PROVIDER_EXTERNAL:
             if implementation_artifact.is_dir():
                 _fail(f"{component}: external implementation artifact must be a file")
-            if hashlib.sha256(implementation_artifact.read_bytes()).hexdigest() != implementation["contentHash"]:
+            if (
+                hashlib.sha256(implementation_artifact.read_bytes()).hexdigest()
+                != implementation["contentHash"]
+            ):
                 _fail(f"{component}: external ELF hash disagrees with component spec")
             external[implementation["binary"]] = implementation_artifact
     for name in ("root", "loader"):
@@ -448,12 +481,17 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         assert artifact is not None
         artifacts[name] = artifact
     for entry in value["releaseInputs"]:
-        _, artifact = _artifact(entry["artifact"], f"releaseInputs[{entry['name']}].artifact", base=base)
+        _, artifact = _artifact(
+            entry["artifact"], f"releaseInputs[{entry['name']}].artifact", base=base
+        )
         assert artifact is not None
         artifacts[f"release:{entry['name']}"] = artifact
     release_names = [entry["name"] for entry in value["releaseInputs"]]
     required_release_inputs = {
         "boot-contracts",
+        "generation-builder",
+        "image-builder",
+        "elf-delivery",
         "cargo-lock",
         "component-build-support",
         "component-cargo-config",
@@ -577,10 +615,16 @@ def make_build_result(
         "identityManifest": record(identity_manifest),
     }
     normalized = normalize(value)
-    return value, normalized, hashlib.sha256(image_contract.BUILD_RESULT_IDENTITY_DOMAIN + normalized).hexdigest()
+    return (
+        value,
+        normalized,
+        hashlib.sha256(image_contract.BUILD_RESULT_IDENTITY_DOMAIN + normalized).hexdigest(),
+    )
 
 
-def compile_negative_case(path: Path, contract: ModuleType = image_contract) -> CompiledNegativeCase:
+def compile_negative_case(
+    path: Path, contract: ModuleType = image_contract
+) -> CompiledNegativeCase:
     """One negative build case: a valid base closure plus one closed mutation.
 
     Compiled rather than resolved, and the distinction is the point: a negative

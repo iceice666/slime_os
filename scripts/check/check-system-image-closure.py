@@ -77,22 +77,72 @@ def write_closure(path: Path, value: dict) -> None:
 def check_refusals(temporary: Path) -> None:
     compiled = compile_closure(CLOSURE)
     cases = (
-        ("missing-prefix", lambda value: value["target"]["prefix"].update(path="missing-prefix"), "missing tree artifact"),
-        ("changed-system", lambda value: value["systemSpec"].update(identity="0" * 64), "identity mismatch"),
-        ("wrong-target", lambda value: value["target"].update(profile="riscv64-sel4-milkv-duo"), "target requirement"),
-        ("wrong-profile", lambda value: value["target"].update(platform="milkv-duo"), "profile and platform"),
-        ("wrong-toolchain", lambda value: value["target"].update(toolchain="nightly-2099-01-01"), "toolchain"),
-        ("wrong-rust-sel4", lambda value: value["target"].update(rustSel4Commit="0" * 40), "rust-sel4"),
+        (
+            "missing-prefix",
+            lambda value: value["target"]["prefix"].update(path="missing-prefix"),
+            "missing tree artifact",
+        ),
+        (
+            "changed-system",
+            lambda value: value["systemSpec"].update(identity="0" * 64),
+            "identity mismatch",
+        ),
+        (
+            "wrong-target",
+            lambda value: value["target"].update(profile="riscv64-sel4-milkv-duo"),
+            "target requirement",
+        ),
+        (
+            "wrong-profile",
+            lambda value: value["target"].update(platform="milkv-duo"),
+            "profile and platform",
+        ),
+        (
+            "wrong-toolchain",
+            lambda value: value["target"].update(toolchain="nightly-2099-01-01"),
+            "toolchain",
+        ),
+        (
+            "wrong-rust-sel4",
+            lambda value: value["target"].update(rustSel4Commit="0" * 40),
+            "rust-sel4",
+        ),
         (
             "wrong-target-spec",
-            lambda value: next(entry for entry in value["releaseInputs"] if entry["name"] == "target-spec").update(
-                artifact=copy.deepcopy(next(entry for entry in value["releaseInputs"] if entry["name"] == "root-target")["artifact"])
+            lambda value: next(
+                entry for entry in value["releaseInputs"] if entry["name"] == "target-spec"
+            ).update(
+                artifact=copy.deepcopy(
+                    next(
+                        entry for entry in value["releaseInputs"] if entry["name"] == "root-target"
+                    )["artifact"]
+                )
             ),
             "target-spec",
         ),
         ("unrecorded-component", lambda value: value["implementations"].pop(), "exactly cover"),
         ("missing-release", lambda value: value["releaseInputs"].pop(), "exactly cover"),
-        ("ambient-parameter", lambda value: value["buildParameters"].append({"name": "ambient", "value": "1"}), "does not admit"),
+        (
+            "missing-delivery-input",
+            lambda value: value.update(
+                releaseInputs=[
+                    entry for entry in value["releaseInputs"] if entry["name"] != "elf-delivery"
+                ]
+            ),
+            "exactly cover",
+        ),
+        (
+            "changed-delivery-input",
+            lambda value: next(
+                entry for entry in value["releaseInputs"] if entry["name"] == "elf-delivery"
+            )["artifact"].update(identity="0" * 64),
+            "identity mismatch",
+        ),
+        (
+            "ambient-parameter",
+            lambda value: value["buildParameters"].append({"name": "ambient", "value": "1"}),
+            "does not admit",
+        ),
     )
     for name, mutate, refusal in cases:
         value = copy.deepcopy(compiled.value)
@@ -112,7 +162,9 @@ def check_target_spec_path() -> None:
         copied = temporary / original.name
         shutil.copyfile(original, copied)
         value = copy.deepcopy(base.compiled.value)
-        target_spec = next(entry for entry in value["releaseInputs"] if entry["name"] == "target-spec")
+        target_spec = next(
+            entry for entry in value["releaseInputs"] if entry["name"] == "target-spec"
+        )
         target_spec["artifact"]["path"] = str(copied.relative_to(ROOT))
         path = temporary / CLOSURE.name
         write_closure(path, value)
@@ -264,7 +316,10 @@ def main() -> None:
         fail("test run does not name the resolved image closure")
     if resolved.artifacts["prefix"].resolve().is_relative_to(ROOT / "build"):
         fail("closure resolved its prefix through ambient build output")
-    if tree_identity(resolved.artifacts["prefix"]) != resolved.compiled.value["target"]["prefix"]["identity"]:
+    if (
+        tree_identity(resolved.artifacts["prefix"])
+        != resolved.compiled.value["target"]["prefix"]["identity"]
+    ):
         fail("resolved prefix identity changed after resolution")
     with tempfile.TemporaryDirectory(prefix="slime-system-image-closure-check-") as directory:
         temporary = Path(directory)
@@ -275,7 +330,9 @@ def main() -> None:
         check_repository_metadata(temporary)
         check_bounds(temporary)
         check_builds(temporary)
-    print("system image closure check: contracts, resolution, identity, isolation, and bytes verified")
+    print(
+        "system image closure check: contracts, resolution, identity, isolation, and bytes verified"
+    )
 
 
 if __name__ == "__main__":

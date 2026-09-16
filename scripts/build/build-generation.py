@@ -15,6 +15,7 @@ import os
 import struct
 import subprocess
 from pathlib import Path
+from elf_delivery import strip_elf_delivery
 
 from boot_contracts import (
     BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET,
@@ -341,8 +342,7 @@ SEL4_MANIFESTS = {
     "sel4-private-memory": GENERATION_COMPOSITIONS / "sel4-private-memory.zti",
     # MEM-64M's reuse clause: one declared 64 MiB holder init relaunches until
     # the root has reclaimed and re-served that quota twenty times.
-    "sel4-private-memory-cycles": GENERATION_COMPOSITIONS
-    / "sel4-private-memory-cycles.zti",
+    "sel4-private-memory-cycles": GENERATION_COMPOSITIONS / "sel4-private-memory-cycles.zti",
     # C9.3: a declared scheduling class, its band mapping, and promotion
     # authority over another component's class.
     "sel4-scheduling-class": GENERATION_COMPOSITIONS / "sel4-scheduling-class.zti",
@@ -1198,8 +1198,8 @@ def build_rust_components(
     # make every component's bytes change whenever any closure input moved.
     # `closure_target_name` supplies the composition-derived name the legacy
     # path would have used, so both paths build byte-identical components.
-    sel4_manifest = closure_target_name if build_profile == "closure" else os.environ.get(
-        "SLIME_SEL4_MANIFEST"
+    sel4_manifest = (
+        closure_target_name if build_profile == "closure" else os.environ.get("SLIME_SEL4_MANIFEST")
     )
     if recovery:
         target_name = "recovery"
@@ -1368,8 +1368,8 @@ def _elf64_load_segments(
     return entry, segments
 
 
-def _admit_sel4_elf(name: str, data: bytes, stack_bytes: int, profile: TargetProfile) -> bytes:
-    """Apply the canonical component and root-loader checks before signing."""
+def _validate_sel4_elf(name: str, data: bytes, profile: TargetProfile) -> None:
+    """Apply the canonical component and root-loader checks before stripping."""
     if len(data) > MAX_COMPONENT_IMAGE_BYTES:
         fail(f"{name}: image exceeds the component image bound")
     entry, segments = _elf64_load_segments(name, data, profile)
@@ -1409,6 +1409,10 @@ def _admit_sel4_elf(name: str, data: bytes, stack_bytes: int, profile: TargetPro
             page_flags[page] = page_flags.get(page, 0) | elf_flags
     if any(flags & 2 and flags & 1 for flags in page_flags.values()):
         fail(f"{name}: writable executable page")
+
+
+def _admit_sel4_elf(name: str, data: bytes, stack_bytes: int, profile: TargetProfile) -> bytes:
+    _validate_sel4_elf(name, data, profile)
     header = COMPONENT_IMAGE_HEADER.pack(
         COMPONENT_IMAGE_ELF_MAGIC,
         COMPONENT_IMAGE_ELF_VERSION,
@@ -1428,18 +1432,39 @@ def _admit_sel4_elf(name: str, data: bytes, stack_bytes: int, profile: TargetPro
 
 
 def elf_component_image(
-    name: str, elf: Path | bytes, stack_bytes: int, profile: TargetProfile
+    name: str,
+    elf: Path | bytes,
+    stack_bytes: int,
+    profile: TargetProfile,
+    *,
+    toolchain: str,
 ) -> bytes:
-    """Wrap one immutable native ELF after host/root-equivalent admission."""
+    """Admit the immutable source, strip its delivery copy, then admit and wrap it."""
     data = elf if isinstance(elf, bytes) else elf.read_bytes()
-    return _admit_sel4_elf(name, data, stack_bytes, profile)
+    _validate_sel4_elf(name, data, profile)
+    try:
+        delivery = strip_elf_delivery(data, toolchain=toolchain)
+    except ValueError as error:
+        fail(f"{name}: {error}")
+    return _admit_sel4_elf(name, delivery, stack_bytes, profile)
 
 
 def component_image(
-    name: str, elf: Path | bytes, stack_bytes: int, profile: TargetProfile
+    name: str,
+    elf: Path | bytes,
+    stack_bytes: int,
+    profile: TargetProfile,
+    *,
+    toolchain: str | None = None,
 ) -> bytes:
     if is_json_target(profile):
-        return elf_component_image(name, elf, stack_bytes, profile)
+        if toolchain is None:
+            import tomllib
+
+            toolchain = tomllib.loads((ROOT / "sel4" / "pins.toml").read_text())["rust_sel4"][
+                "toolchain"
+            ]
+        return elf_component_image(name, elf, stack_bytes, profile, toolchain=toolchain)
     data = elf if isinstance(elf, bytes) else elf.read_bytes()
     entry, segments = _elf64_load_segments(name, data, profile)
     segments = [segment for segment in segments if segment[3]]
@@ -3148,7 +3173,7 @@ def build_sel4_generation(
             f"implementation={binary_name} provider={provider} path={display_path}"
         )
         payloads[executable["object"]] = component_image(
-            executable["name"], elf, stack, target_profile
+            executable["name"], elf, stack, target_profile, toolchain=toolchain
         )
 
     # RP2: qualify one named executable for a *different* admitted target, so a

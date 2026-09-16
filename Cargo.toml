@@ -29,6 +29,13 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
+# Selected only by the root image builder; component and host profiles stay separate.
+[profile.root-image]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+lto = "fat"
+
 # Size-first codegen for every component image and the libraries linked into
 # one. `codegen-units = 1` is load-bearing rather than cosmetic: `slime-root`
 # maps a component image whole, so fewer, larger units keep it smaller.
