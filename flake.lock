@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "devloop": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789494337,
+        "narHash": "sha256-Yt49MTezyPr0ZexQVn+h7cngx81El6zzzb1TOksElf0=",
+        "owner": "mozufu",
+        "repo": "devloop",
+        "rev": "c78fcf345de424469196297d2be7b479fbb31a71",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mozufu",
+        "repo": "devloop",
+        "rev": "c78fcf345de424469196297d2be7b479fbb31a71",
+        "type": "github"
+      }
+    },
     "myque": {
       "inputs": {
         "nixpkgs": [
@@ -7,16 +24,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1788414777,
-        "narHash": "sha256-U54pZfMZPWVfFvEcy99LQpu9xGAh3xgKC7owK6NvIOY=",
+        "lastModified": 1789494003,
+        "narHash": "sha256-j552MCvxi6WeV3aMaXkSHimo3O7vnbdMbeOOZ5bqXOY=",
         "owner": "mozufu",
         "repo": "myque",
-        "rev": "db1c81f1aee81d00a1e9eb1afdef5b55ae1d27b7",
+        "rev": "d25241fcbf1d6b1e06283717c246576e88f6fa5d",
         "type": "github"
       },
       "original": {
         "owner": "mozufu",
         "repo": "myque",
+        "rev": "d25241fcbf1d6b1e06283717c246576e88f6fa5d",
         "type": "github"
       }
     },
@@ -38,6 +56,7 @@
     },
     "root": {
       "inputs": {
+        "devloop": "devloop",
         "myque": "myque",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"

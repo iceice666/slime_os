@@ -27,7 +27,7 @@ import yaml
 from harness import ROOT
 from just_metadata import recipes
 from markdown_anchors import anchors, controls as anchor_controls
-from work_items import FIELD, UUID, identities
+from work_items import FIELD, UUID, identities, retired
 
 REQUIRED_ACTIVE_DOCUMENTS = (
     "README.md",
@@ -86,10 +86,12 @@ def document_reference_failures(
     *,
     item_root: _Path = ROOT / ".tasks" / "items",
     known_items: frozenset[str] | None = None,
+    retired_items: frozenset[str] | None = None,
 ) -> list[str]:
     """Validate local Markdown destinations, fragments, and work-item links."""
     found: list[str] = []
     known = identities() if known_items is None else known_items
+    gone = retired() if retired_items is None else retired_items
     linked_work_items: set[str] = set()
     for target in dict.fromkeys(HISTORY_URL.findall(text)):
         if not HISTORY_COMMIT.match(target):
@@ -109,6 +111,11 @@ def document_reference_failures(
                 continue
             if reference not in known:
                 found.append(f"{path}: work-item link {target} names absent UUID {reference}")
+                continue
+            if reference in gone:
+                # A retired item's identity is its terminal record; the
+                # Markdown body it used to have lives only in Git history, so
+                # the canonical path is a resolvable reference, not a document.
                 continue
         if not destination.exists():
             found.append(f"{path}: dead relative link {target}")
@@ -381,6 +388,7 @@ def controls() -> list[str]:
     failures = [f"anchor control: {failure}" for failure in anchor_controls()]
     present = "00000000-0000-0000-0000-000000000001"
     absent = "00000000-0000-0000-0000-000000000002"
+    gone = "00000000-0000-0000-0000-000000000003"
     with tempfile.TemporaryDirectory() as temporary:
         root = _Path(temporary)
         for relative in REQUIRED_ACTIVE_DOCUMENTS:
@@ -401,6 +409,11 @@ def controls() -> list[str]:
             ("absent UUID", f"[item](.tasks/items/{absent}.md)", ("absent UUID",)),
             ("absent plain UUID", absent, ("absent work-item UUID",)),
             (
+                "retired UUID keeps resolving without a document",
+                f"[item](.tasks/items/{gone}.md) {gone}",
+                (),
+            ),
+            (
                 "immutable history",
                 f"[just retired_check]({HISTORY_BASE}src/commit/{'a' * 40}/devlog/missing.md)",
                 (),
@@ -413,7 +426,11 @@ def controls() -> list[str]:
         )
         for name, document, signals in cases:
             found = document_reference_failures(
-                source, document, item_root=item_root, known_items=frozenset({present})
+                source,
+                document,
+                item_root=item_root,
+                known_items=frozenset({present, gone}),
+                retired_items=frozenset({gone}),
             )
             if len(found) != len(signals) or any(
                 signal not in failure for signal, failure in zip(signals, found, strict=True)

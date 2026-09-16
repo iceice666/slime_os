@@ -1,0 +1,36 @@
+{
+  "schema": "devloop-policy/v1",
+  "bodyProfile": "fenced-zti/v1",
+  "codePaths": [
+    "scripts/check/check-work-items.py",
+    "scripts/check/check-docs.py",
+    "scripts/check/devloop-gate.py",
+    "scripts/check/devloop-approval.py",
+    "scripts/lib/work_items.py",
+    "scripts/lib/devloop.py",
+    "just/quality.just"
+  ],
+  "approvalArgv": ["python3", "scripts/check/devloop-approval.py"],
+  "gates": [
+    {
+      "id": "work-item-store",
+      "mode": "automated",
+      "argv": ["python3", "scripts/check/devloop-gate.py", "work-item-store"],
+      "ttlSeconds": 86400,
+      "observations": [
+        { "id": "tasksCheckPassed", "kind": "bool" },
+        { "id": "docsCheckPassed", "kind": "bool" },
+        { "id": "retiredIdentitiesResolved", "kind": "bool" },
+        { "id": "corruptTerminalRecordRefused", "kind": "bool" },
+        { "id": "specDrivenItemsValidated", "kind": "int" }
+      ]
+    },
+    {
+      "id": "generated-views",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [{ "id": "operatorReadRetiredItemInViews", "kind": "bool" }]
+    }
+  ]
+}

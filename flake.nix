@@ -21,20 +21,25 @@
     # through GHC — which is why `docs_check` stays binary-free and only
     # `tasks_check` needs this input.
     #
-    # The lock currently pins db1c81f, which predates the store-relative
-    # abbreviation fix. `myque check` is unaffected — the schema did not change
-    # and this store validates under both revisions — but `myque list` on that
-    # revision prints the first UUID group for every keyless item, which is one
-    # repeated token for the nine items here that have no key. Run
-    # `nix flake update myque` once the fix is published.
+    # Pinned to v0.2.0.0 (`d25241f`), the release that publishes
+    # `work-item/v2`: the open-record envelope, the `myque api` machine
+    # interface, guarded `start`/`close --expected`, and the terminal-record
+    # retirement lifecycle this repository's checks resolve offline.
     myque = {
-      url = "github:mozufu/myque";
+      url = "github:mozufu/myque/d25241fcbf1d6b1e06283717c246576e88f6fa5d";
       inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # devloop owns the requirements body, its semantic helpers, and the
+    # evidence contracts; Slime OS only configures it. It publishes no flake,
+    # so `nix/devloop.nix` builds the pinned release's two programs.
+    devloop = {
+      url = "github:mozufu/devloop/c78fcf345de424469196297d2be7b479fbb31a71";
+      flake = false;
     };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, myque, ... }:
+    { nixpkgs, rust-overlay, myque, devloop, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -55,6 +60,12 @@
           # ~325 MB and only one gate uses it, so every other `nix develop`
           # (and the five CI jobs that never run a proof) must not pay for it.
           kani = pkgs.callPackage ./nix/kani.nix { };
+          # The pinned devloop release: `just tasks_check` validates every item
+          # that carries a `devloop` record through it.
+          devloopTools = pkgs.callPackage ./nix/devloop.nix {
+            src = devloop;
+            version = "0.1.0";
+          };
           # Workspace host crates use this toolchain. The seL4 root, child,
           # and loader use the independent pin in `sel4/pins.toml`.
           rustToolchain = "nightly-2026-05-26";
@@ -132,8 +143,10 @@
               with pkgs;
               [
                 gcc
+                # `llc` and `clang`: devloop compiles its Zutai validators to a
+                # native binary, and `zutai-cli compile` drives both directly.
+                llvmPackages.llvm
                 llvmPackages.clang
-                llvmPackages.lld
                 just
                 lldb
                 qemu
@@ -167,6 +180,10 @@
               ++ [
                 # `just tasks_check` and the `tasks_*` views.
                 myque.packages.${system}.myque-bin
+                # `just tasks_check`'s devloop body validation, and admission,
+                # gate execution, and evidence recording for spec-driven items.
+                devloopTools
+                devloopTools.bridge
               ]
               ++ nixpkgs.lib.optionals
                 (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64)
