@@ -14,6 +14,13 @@ It reads devloop's gate request on stdin (`item`, `acceptance`, `execution`,
 exits zero even when what it observed is bad news, so a failing check is
 reported as a false observation with an attributable predicate rather than as a
 gate that could not run.
+
+`inputs` is a path devloop resolves, not decoded data, so a gate that needs
+execution inputs reads that file itself. devloop binds its digest into the
+evidence identity, which is what lets `just-target` take a target name from
+inputs without loosening what the evidence is bound to: naming a different
+target produces a different identity, and the earlier evidence no longer
+applies.
 """
 
 from __future__ import annotations
@@ -37,6 +44,14 @@ CORRUPT = {
 }
 
 
+class CannotRun(Exception):
+    """The gate could not run at all, which is not evidence about the repository.
+
+    Distinct from a check that ran and failed: that is reported as a false
+    observation with exit zero, so devloop records it against the acceptance.
+    """
+
+
 def observation(identity: str, kind: str, *, integer: int = 0, boolean: bool = False) -> dict:
     return {
         "id": identity,
@@ -51,7 +66,56 @@ def recipe(target: str) -> tuple[bool, str]:
     return finished.returncode == 0, finished.stdout + finished.stderr
 
 
-def work_item_store() -> list[dict]:
+def declared_targets() -> set[str]:
+    """Every recipe `just` currently publishes in this repository."""
+    finished = subprocess.run(
+        ["just", "--summary"], cwd=ROOT, capture_output=True, text=True
+    )
+    if finished.returncode:
+        raise CannotRun(f"cannot list just targets: {finished.stderr.strip()}")
+    return set(finished.stdout.split())
+
+
+def just_target(request: dict) -> list[dict]:
+    """Run one named `just` target and report whether it passed.
+
+    The target is named in the execution inputs rather than in policy, because
+    declaring typed observations for every check in this repository ahead of
+    time is not practical and would block the policy behind adapters nobody
+    needs yet. What policy keeps is the shape of the answer: one boolean.
+
+    The name is checked against what `just` actually publishes before anything
+    runs. This adapter executes what it is handed, so an unknown or malformed
+    name is refused as a gate that could not run (exit 2) rather than recorded
+    as a check that failed — the two are different claims, and only the second
+    is evidence about the repository.
+    """
+    location = request.get("inputs")
+    if not isinstance(location, str) or not location:
+        raise CannotRun("the request carries no execution inputs path")
+    try:
+        inputs = json.loads(Path(location).read_text())
+    except (OSError, ValueError) as error:
+        raise CannotRun(f"cannot read execution inputs: {error}") from error
+    if not isinstance(inputs, dict):
+        raise CannotRun("execution inputs are not a JSON object")
+    target = inputs.get("justTarget")
+    if not isinstance(target, str) or not target:
+        raise CannotRun(
+            "execution inputs declare no `justTarget` string; "
+            'name the recipe to run, for example {"justTarget": "sel4_qos_check"}'
+        )
+    if target not in declared_targets():
+        raise CannotRun(
+            f"{target!r} is not a recipe `just` publishes; gates run declared targets only"
+        )
+    passed, output = recipe(target)
+    sys.stderr.write(f"devloop gate just-target ran `just {target}`: ")
+    sys.stderr.write("passed\n" if passed else f"failed\n{output}")
+    return [observation("passed", "bool", boolean=passed)]
+
+
+def work_item_store(request: dict) -> list[dict]:
     tasks_passed, tasks_output = recipe("tasks_check")
     docs_passed, _ = recipe("docs_check")
 
@@ -92,7 +156,7 @@ def work_item_store() -> list[dict]:
     ]
 
 
-GATES = {"work-item-store": work_item_store}
+GATES = {"work-item-store": work_item_store, "just-target": just_target}
 
 
 def main() -> int:
@@ -108,7 +172,12 @@ def main() -> int:
     request = json.load(sys.stdin)
     acceptance = request.get("acceptance", {}).get("id", "?")
     sys.stderr.write(f"devloop gate {identity} for acceptance {acceptance}\n")
-    json.dump(GATES[identity](), sys.stdout)
+    try:
+        observations = GATES[identity](request)
+    except CannotRun as error:
+        sys.stderr.write(f"gate {identity}: {error}\n")
+        return 2
+    json.dump(observations, sys.stdout)
     sys.stdout.write("\n")
     return 0
 
