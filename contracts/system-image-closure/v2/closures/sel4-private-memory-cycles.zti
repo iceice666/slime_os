@@ -25,7 +25,7 @@
       artifact = {
         path = "components/testkit/private-cycle-probe";
         kind = "tree";
-        identity = "652239ec77b2eac457d9331638e454294c00eb86a3aa80c8b55bade6b330559f";
+        identity = "16f22b5f2a2b3621b8bfdcf748fc2a7f12a7eda3d959c7152c753a73750d4a20";
       };
       identity = "abc0381d4eb66f10a6d1685d53ea3b86f3e40096dab1a5492637a76f0c9a213a";
       buildProfile = "default";
@@ -47,7 +47,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "ef6fb9b46dad2dbe282691baaaf0fe93a8ebf0771bffdeb2e0af9cda54f1719a";
+      identity = "06bd5fb09b9ecd7d4c5f906dba670272767562f1540c5c1fd04205c61ab8e31f";
     };
     parameters = [];
   };
@@ -162,7 +162,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "bd8bc5526082958b94ee5a78140631b473f7239c1fda2f6d6919b6f9ef791f08";
+        identity = "46fa3f1fd68bfc49b9211d1d4596e15cd0d7a774c738ed849c178d6f6407f10a";
       };
     };
     {

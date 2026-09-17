@@ -500,16 +500,21 @@ pub fn reply_recv_console(
 /// by whichever thread is parked in `seL4_Recv`. Naming the buffer on the
 /// capability sidesteps the slot entirely (B41).
 pub fn recv_request_with(endpoint: sel4::cap::Endpoint, buffer: &mut sel4::IpcBuffer) -> Reception {
-    let reception = endpoint.with(buffer).recv_with_mrs(());
-    Reception {
-        info: reception.info.clone(),
-        badge: reception.badge,
-        request: decode_request(&reception),
-    }
+    let reception = endpoint.with(&mut *buffer).recv_with_mrs(());
+    received_request(reception, buffer)
 }
 
 pub fn recv_request(endpoint: sel4::cap::Endpoint) -> Reception {
     let reception = endpoint.recv_with_mrs(());
+    sel4::with_ipc_buffer_mut(|buffer| received_request(reception, buffer))
+}
+
+/// Fast-register receive returns MR0–MR3 outside the IPC buffer. Fault
+/// decoding still consumes that buffer, including any kernel-written tail.
+/// Synchronize only received words before applying service-message bounds.
+fn received_request(reception: sel4::RecvWithMRs, buffer: &mut sel4::IpcBuffer) -> Reception {
+    let count = reception.info.length().min(reception.msg.len());
+    buffer.msg_regs_mut()[..count].copy_from_slice(&reception.msg[..count]);
     Reception {
         info: reception.info.clone(),
         badge: reception.badge,
@@ -1513,6 +1518,108 @@ mod tests {
         lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
         supervision_labels,
     };
+
+    #[test]
+    fn receive_synchronizes_only_valid_fast_words_and_preserves_tail() {
+        for length in [0, 1, 3, 4, 5, 8] {
+            let mut explicit = sel4::IpcBuffer::default();
+            explicit.msg_regs_mut().fill(0xa5);
+            let unrelated = sel4::IpcBuffer::default();
+            let info = sel4::MessageInfoBuilder::default().length(length).build();
+            let received = received_request(
+                sel4::RecvWithMRs {
+                    info,
+                    badge: 42,
+                    msg: [11, 22, 33, 44],
+                },
+                &mut explicit,
+            );
+            let count = length.min(4);
+            assert_eq!(&explicit.msg_regs()[..count], &[11, 22, 33, 44][..count]);
+            assert!(
+                explicit.msg_regs()[count..]
+                    .iter()
+                    .all(|word| *word == 0xa5)
+            );
+            assert!(unrelated.msg_regs().iter().all(|word| *word == 0));
+            assert_eq!(received.badge, 42);
+            if length > FAST_MESSAGE_REGISTERS {
+                assert_eq!(received.request.err(), Some(IpcError::InvalidLength));
+            } else {
+                let request = received.request.unwrap();
+                assert_eq!(request.len, length);
+                assert_eq!(request.mrs, [11, 22, 33, 44]);
+            }
+        }
+    }
+
+    #[test]
+    fn received_vm_fault_replaces_stale_instruction_address_and_status() {
+        use crate::fault::{AccessKind, FaultKind};
+        let mut buffer = sel4::IpcBuffer::default();
+        buffer.msg_regs_mut().fill(9);
+        #[cfg(target_arch = "aarch64")]
+        let status = (0x24 << 26) | (1 << 6) | 7;
+        #[cfg(target_arch = "riscv64")]
+        let status = 15;
+        #[cfg(target_arch = "x86_64")]
+        let status = 2;
+        for (prefetch, expected) in [(0, AccessKind::Write), (1, AccessKind::Execute)] {
+            let info = sel4::MessageInfoBuilder::default()
+                .label(sel4::sys::seL4_Fault_tag::seL4_Fault_VMFault as sel4::Word)
+                .length(sel4::sys::seL4_VMFault_Msg::seL4_VMFault_Length as usize)
+                .build();
+            let reception = received_request(
+                sel4::RecvWithMRs {
+                    info,
+                    badge: 7,
+                    msg: [0x1234, 0x20000000, prefetch, status],
+                },
+                &mut buffer,
+            );
+            let fault =
+                crate::fault::normalize_fault(sel4::Fault::new(&buffer, &reception.info)).unwrap();
+            assert_eq!(fault.instruction, Some(0x1234));
+            assert_eq!(fault.address, Some(0x20000000));
+            assert_eq!(
+                fault.kind,
+                FaultKind::VirtualMemory {
+                    access: expected,
+                    status
+                }
+            );
+            assert_eq!(buffer.msg_regs()[4], 9);
+        }
+    }
+
+    #[test]
+    fn receive_preserves_service_capability_refusals() {
+        let mut buffer = sel4::IpcBuffer::default();
+        for info in [
+            sel4::MessageInfoBuilder::default()
+                .length(1)
+                .extra_caps(1)
+                .build(),
+            sel4::MessageInfoBuilder::default()
+                .length(1)
+                .caps_unwrapped(1)
+                .build(),
+        ] {
+            let reception = received_request(
+                sel4::RecvWithMRs {
+                    info,
+                    badge: 2,
+                    msg: [17, 0, 0, 0],
+                },
+                &mut buffer,
+            );
+            assert_eq!(
+                reception.request.err(),
+                Some(IpcError::UnsupportedCapabilityTransfer)
+            );
+            assert_eq!(buffer.msg_regs()[0], 17);
+        }
+    }
 
     /// Every declared operation routes to the mechanism that owns it. B61 moved
     /// this out of the binary so the routing is checkable without a boot; before

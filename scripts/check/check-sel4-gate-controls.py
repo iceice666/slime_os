@@ -996,8 +996,37 @@ def check_private_memory_capacity_controls() -> int:
     for description, transcript in ledger_mutations:
         require_rejection(description, "backing ledger:",
             lambda transcript=transcript: gate.check_backing_ledger(transcript))
+    fault_lines = []
+    for cycle in range(gate.CYCLE_COUNT):
+        task = cycle + 1
+        base = 0x10000000
+        fault_lines.extend([
+            f"SLIME_MEM quota task={task} instance=private-cycle-probe declared=16384 installed=16384 base=0x{base:x}",
+            f"SLIME_MEM grown task={task} delta=16384 previous=0 pages=16384 base=0x{base:x} quota=16384 total=16384 large_frames=32 base_frames=0 leaf_tables=0",
+            f"[private-cycle-probe] cycle={cycle} pages=16384 base=0x{base:x} stamp=0x{cycle + 1:x} zeroed=1 verified=1 end={'fault' if cycle % 2 else 'exit'}",
+        ])
+        if cycle % 2:
+            access = "Write" if cycle % 4 == 1 else "Execute"
+            address = base + (16384 * 4096 if access == "Write" else 0)
+            fault_lines.append(f"SLIME_GRAPH component fault task={task} kind=VirtualMemory {{ access: {access}, status: 15 }} address=Some({address})")
+    fault_trace = "\n".join(fault_lines)
+    gate.check_cycle_fault_attribution(fault_trace, 16384)
+    fault_mutations = (
+        ("fault wrong task", fault_trace.replace("fault task=2 ", "fault task=99 ")),
+        ("fault wrong access", fault_trace.replace("access: Write", "access: Read", 1)),
+        ("fault stale status", fault_trace.replace("status: 15", "status: 0", 1)),
+        ("fault stale address", fault_trace.replace("address=Some(335544320)", "address=Some(9)", 1)),
+        ("fault NX at guard", fault_trace.replace("access: Execute, status: 15 } address=Some(268435456)", "access: Execute, status: 15 } address=Some(335544320)", 1)),
+        ("fault missing record", "\n".join(line for line in fault_lines if not line.startswith("SLIME_GRAPH component fault task=2 "))),
+        ("fault duplicate record", fault_trace + "\n" + fault_lines[6]),
+        ("fault missing backed region", fault_trace.replace("grown task=4 delta=16384", "grown task=99 delta=16384", 1)),
+    )
+    for description, transcript in fault_mutations:
+        require_rejection(description, "cycle fault attribution:",
+            lambda transcript=transcript: gate.check_cycle_fault_attribution(transcript, 16384))
     return (
-        len(ledger_mutations)
+        len(fault_mutations)
+        + len(ledger_mutations)
         + len(conservation_mutations)
         + len(capacity_mutations)
         + len(rollback_mutations)

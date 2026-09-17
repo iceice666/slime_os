@@ -103,7 +103,11 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(0)
     }
     slime_rt::debug_write(b"fault\n");
-    fault_past_window(region.base + CYCLE_PAGES * 4096, stamp(cycle));
+    if cycle % 4 == 1 {
+        fault_past_window(region.base + CYCLE_PAGES * 4096, stamp(cycle));
+    } else {
+        fault_execute_private(region.base);
+    }
     // Unreachable: seL4 delivers the fault on the faulting instruction. Kept so
     // the arm cannot fall through into a clean exit and report a fault it never
     // raised.
@@ -123,10 +127,6 @@ fn main(_startup_arg: u32) {
 /// The address is one page past the declared window: exactly what
 /// `Region::admit` refuses, and derived from a base the root chose at runtime.
 ///
-/// The store does trap -- the caller's "did not trap" report never appears --
-/// but this configuration reports it as `access: Execute status: 0`, the same
-/// shape `reclamation-fault`'s own deliberate write produces. The gate
-/// therefore asserts `kind=VirtualMemory` and leaves the access open.
 fn fault_past_window(address: usize, value: u64) {
     // SAFETY: both blocks issue one store of a general-purpose register to
     // `address`, which is never mapped in this task's VSpace -- the root
@@ -152,6 +152,24 @@ fn fault_past_window(address: usize, value: u64) {
             options(nostack),
         )
     }
+}
+
+/// Branch into the already backed private region. No Rust function pointer is
+/// manufactured: permission failure must occur before interpreting its bytes.
+fn fault_execute_private(address: usize) {
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: a branch into the mapped execute-never region deliberately faults.
+    // No stack access or return address is required by this instruction.
+    unsafe {
+        core::arch::asm!("br {address}", address = in(reg) address, options(nostack));
+    }
+    #[cfg(target_arch = "riscv64")]
+    // SAFETY: the same deliberate instruction-fetch permission fault on RV64.
+    unsafe {
+        core::arch::asm!("jr {address}", address = in(reg) address, options(nostack));
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
+    let _ = address;
 }
 
 /// Read every word as zero, stamp every word, then read every stamp back.

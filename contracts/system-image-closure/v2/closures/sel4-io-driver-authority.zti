@@ -58,7 +58,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "ef6fb9b46dad2dbe282691baaaf0fe93a8ebf0771bffdeb2e0af9cda54f1719a";
+      identity = "06bd5fb09b9ecd7d4c5f906dba670272767562f1540c5c1fd04205c61ab8e31f";
     };
     parameters = [];
   };
@@ -173,7 +173,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "bd8bc5526082958b94ee5a78140631b473f7239c1fda2f6d6919b6f9ef791f08";
+        identity = "46fa3f1fd68bfc49b9211d1d4596e15cd0d7a774c738ed849c178d6f6407f10a";
       };
     };
     {
