@@ -343,9 +343,13 @@ def boot(profile: dict[str, object]) -> str:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+    transcript = "\n".join(lines)
+    (ROOT / "build" / "lifecycle-restart.serial.log").write_text(
+        transcript + "\n", encoding="utf-8"
+    )
     if timed_out:
-        fail("QEMU timed out")
-    return "\n".join(lines)
+        fail("QEMU timed out; transcript: build/lifecycle-restart.serial.log")
+    return transcript
 
 
 def fixture_manifest() -> dict[str, object]:

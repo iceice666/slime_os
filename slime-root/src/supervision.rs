@@ -13,6 +13,97 @@ use crate::task::TaskId;
 /// the outcomes owed simultaneously rather than cumulatively.
 pub const MAX_RECORDS: usize = crate::task::MAX_TASKS;
 
+/// Teardown advances only after the current owner confirms its effects.
+/// Retaining the task until `Arena` succeeds keeps raw VSpace capabilities
+/// unavailable for reuse while another subsystem can still name them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetirementPhase {
+    Suspend,
+    Io,
+    Buffers,
+    Arena,
+}
+
+#[derive(Clone, Copy)]
+struct PendingRetirement {
+    task: TaskId,
+    phase: RetirementPhase,
+}
+
+pub struct Retirements {
+    entries: [Option<PendingRetirement>; MAX_RECORDS],
+}
+
+impl Retirements {
+    pub const fn new() -> Self {
+        Self {
+            entries: [None; MAX_RECORDS],
+        }
+    }
+
+    pub fn contains(&self, task: TaskId) -> bool {
+        self.entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.task == task)
+    }
+
+    pub fn insert(&mut self, task: TaskId) -> bool {
+        if self.contains(task) {
+            return true;
+        }
+        let Some(slot) = self.entries.iter_mut().find(|entry| entry.is_none()) else {
+            return false;
+        };
+        *slot = Some(PendingRetirement {
+            task,
+            phase: RetirementPhase::Suspend,
+        });
+        true
+    }
+
+    pub fn tasks(&self) -> [Option<TaskId>; MAX_RECORDS] {
+        self.entries.map(|entry| entry.map(|entry| entry.task))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.iter().all(Option::is_none)
+    }
+
+    /// Completed phases are not replayed after a later failure. In particular,
+    /// IO epoch advancement and a successful arena release happen once only.
+    pub fn retry(&mut self, task: TaskId, mut settle: impl FnMut(RetirementPhase) -> bool) -> bool {
+        let Some(slot) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.is_some_and(|entry| entry.task == task))
+        else {
+            return false;
+        };
+        loop {
+            let phase = slot.unwrap().phase;
+            if !settle(phase) {
+                return false;
+            }
+            match phase {
+                RetirementPhase::Suspend => slot.as_mut().unwrap().phase = RetirementPhase::Io,
+                RetirementPhase::Io => slot.as_mut().unwrap().phase = RetirementPhase::Buffers,
+                RetirementPhase::Buffers => slot.as_mut().unwrap().phase = RetirementPhase::Arena,
+                RetirementPhase::Arena => {
+                    *slot = None;
+                    return true;
+                }
+            }
+        }
+    }
+}
+
+impl Default for Retirements {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// How a child ended. The discriminants are the wire values
 /// `components/runtime/src/syscall.rs::supervision_status` decodes; see
 /// `docs/syscall-abi.md`.
@@ -135,6 +226,57 @@ pub fn sweep<const TASKS: usize>(
 mod tests {
     use super::{MAX_RECORDS, Termination, Terminations};
     use crate::task::TaskId;
+
+    #[test]
+    fn retirement_keeps_identity_and_retries_only_unfinished_phases() {
+        use super::{RetirementPhase, Retirements};
+        let mut pending = Retirements::new();
+        let task = TaskId(7);
+        assert!(pending.insert(task));
+        assert!(pending.insert(task));
+        let mut observed = [None; 4];
+        let mut calls = 0;
+        assert!(!pending.retry(task, |phase| {
+            observed[calls] = Some(phase);
+            calls += 1;
+            phase != RetirementPhase::Buffers
+        }));
+        assert_eq!(
+            &observed[..calls],
+            &[
+                Some(RetirementPhase::Suspend),
+                Some(RetirementPhase::Io),
+                Some(RetirementPhase::Buffers)
+            ]
+        );
+        assert!(pending.contains(task));
+        assert!(!pending.retry(task, |phase| {
+            assert_eq!(phase, RetirementPhase::Buffers);
+            false
+        }));
+        assert!(pending.retry(task, |phase| {
+            assert!(matches!(
+                phase,
+                RetirementPhase::Buffers | RetirementPhase::Arena
+            ));
+            true
+        }));
+        assert!(!pending.contains(task));
+        assert!(pending.is_empty());
+        assert!(!pending.retry(task, |_| panic!("completed task replayed")));
+    }
+
+    #[test]
+    fn retirement_capacity_tracks_pending_tasks_not_lifetime_count() {
+        let mut pending = super::Retirements::new();
+        for task in 0..MAX_RECORDS as u32 {
+            assert!(pending.insert(TaskId(task)));
+        }
+        assert!(!pending.insert(TaskId(MAX_RECORDS as u32)));
+        assert!(pending.retry(TaskId(0), |_| true));
+        assert!(pending.insert(TaskId(MAX_RECORDS as u32)));
+        assert_eq!(pending.tasks().into_iter().flatten().count(), MAX_RECORDS);
+    }
 
     #[test]
     fn outcomes_are_bounded_and_first_writer_wins() {

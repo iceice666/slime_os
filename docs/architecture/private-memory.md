@@ -43,6 +43,30 @@ x86-64 seL4 mapping API exposes no NX frame attribute, so execute prevention is
 currently unenforced on that profile; `slime-root/src/vm_attributes.rs` owns this
 explicit non-equivalence.
 
+## Ordinary backing and alignment
+
+`slime-root/src/object_allocator/global_backing.rs` retains alignment prefixes as
+independent ordinary untyped children before advancing a parent's watermark.
+A prefix is partitioned into legal aligned powers of two, with descriptor and
+CSlot preflight before kernel effects. Each successful preservation step commits
+its own ownership, so a later failed retype does not lose the preceding pieces.
+
+Subsequent allocations consume the best-fitting preserved leaf, splitting it
+when necessary. A leaf is consumed whole; its retained parent is not advertised
+as free afterward. BootInfo parents also keep a tracked child alive, because
+seL4 resets an untyped's allocation position when its last descendant disappears.
+Device untypeds never enter this path. Small preserved leaves can serve small
+kernel objects, not only page-sized memory.
+
+Ordinary tails, unconsumed preserved leaves, reusable task/shared extents and
+initially live backing are separate, disjoint accounting categories. Retained
+anchor CSlots are occupied resources, not free slots. The preservation registry
+is bounded (4096 entries on large-descriptor images, 256 otherwise); exhaustion
+refuses provisioning without skipping unowned bytes. Entries, including consumed
+parents, remain owned for the root lifetime, so this is not unlimited allocator
+metadata or adaptive memory support. Actual target image/CSlot fit still requires
+its own admission and boot evidence.
+
 ## Userspace allocation
 
 Components built with the private-heap feature install the first-fit, address-

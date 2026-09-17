@@ -700,25 +700,39 @@ pub(super) fn reclaim_dead_task(
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     id: TaskId,
-) {
+    vspace: VSpaceCap,
+) -> bool {
     let holder = HolderId(u64::from(id.0));
     let charged = buffers.holder_buffers(holder)
         + buffers.holder_mappings(holder)
         + buffers.holder_loans(holder);
-    if charged != 0 {
-        let mut adapter = BufferAdapter::new(allocator);
-        match buffers.reclaim_holder(&mut adapter, holder) {
-            Ok(actions) => sel4::debug_println!(
-                "SLIME_GRAPH holder reclaimed task={} charges={charged} actions={}",
-                id.0,
-                actions.len()
-            ),
-            Err(error) => sel4::debug_println!(
+    let mut adapter = BufferAdapter::new(allocator);
+    if buffers.retry_vspace_orphans(&mut adapter, vspace) != 0 {
+        return false;
+    }
+    // Receiver-only loans have no local charge. Settlement must examine the
+    // relationships even when this holder's occupancy is zero.
+    match buffers.reclaim_holder(&mut adapter, holder) {
+        Ok(actions) => {
+            if charged != 0 || !actions.is_empty() {
+                sel4::debug_println!(
+                    "SLIME_GRAPH holder reclaimed task={} charges={charged} actions={}",
+                    id.0,
+                    actions.len()
+                );
+            }
+        }
+        Err(error) => {
+            sel4::debug_println!(
                 "SLIME_GRAPH holder reclaim incomplete task={} class={}",
                 id.0,
                 buffer_error_class(error)
-            ),
+            );
+            return false;
         }
+    }
+    if adapter.settle_pending_cleanup().is_err() {
+        return false;
     }
     if buffers.release_quota(holder) {
         sel4::debug_println!(
@@ -727,6 +741,7 @@ pub(super) fn reclaim_dead_task(
             buffers.quota_count()
         );
     }
+    true
 }
 
 /// The half of teardown `reclaim_dead_task` does not do. That function settles
@@ -756,15 +771,19 @@ pub(super) fn reclaim_task_objects(
     allocator: &mut ObjectAllocator,
     reclaimed: &mut usize,
     id: TaskId,
-) {
-    launched.release_by_task(id);
+) -> bool {
     match tasks.reclaim(allocator, id) {
         Ok(record) => *reclaimed += record.slot_count(),
-        Err(error) => sel4::debug_println!(
-            "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",
-            id.0
-        ),
+        Err(error) => {
+            sel4::debug_println!(
+                "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",
+                id.0
+            );
+            return false;
+        }
     }
+    launched.release_by_task(id);
+    report_memory_census(allocator, tasks, id.0);
     // C10.4: the allocator's own free capacity, printed at the one point in the
     // boot where a task has just returned everything it held.
     //
@@ -789,6 +808,33 @@ pub(super) fn reclaim_task_objects(
         allocator.untyped_bytes_remaining(),
         allocator.live_objects(),
         allocator.extents_reused(),
+    );
+    true
+}
+
+pub(super) fn report_memory_census(
+    allocator: &ObjectAllocator,
+    tasks: &TaskTable<MAX_TASKS>,
+    retired: u32,
+) {
+    sel4::debug_println!(
+        "SLIME_MEM census retired={} free_slots={} live_objects={} live_bytes={} untyped={} reusable={} anchors={} mapped_pages={} allocations_free={} extents_free={} shared_reusable={} shared_retained={} shared_anchors={} active_extent_bytes={} preserved_bytes={} preserved_anchors={}",
+        retired,
+        allocator.free_slots(),
+        allocator.live_objects(),
+        allocator.live_bytes(),
+        allocator.untyped_bytes_remaining(),
+        allocator.reusable_extent_bytes(),
+        allocator.reusable_extent_anchors(),
+        tasks.private_memory().total_pages(),
+        allocator.allocation_descriptors_free(),
+        allocator.extent_descriptors_free(),
+        allocator.reusable_shared_bytes(),
+        allocator.retained_shared_bytes(),
+        allocator.retained_shared_anchors(),
+        allocator.active_extent_bytes(),
+        allocator.preserved_bytes_remaining(),
+        allocator.preserved_anchor_count(),
     );
 }
 

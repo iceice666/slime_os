@@ -420,6 +420,7 @@ pub(super) fn serve_buffer_create(
         // and it is one of the four the milestone requires be observable.
         return Err(shared_buffer::SharedBufferError::QuotaExceeded);
     }
+    buffers.preflight_create_pages(holder, pages)?;
     // One frame per requested page. Allocating a single frame regardless of
     // `pages` would produce a region whose anchor count disagreed with what the
     // caller asked for, and every later range check reads the anchor count — so
@@ -434,7 +435,7 @@ pub(super) fn serve_buffer_create(
     let outcome = (|| {
         let (first, _) = adapter
             .allocator_mut()
-            .allocate_contiguous_granules(pages)
+            .allocate_shared_granules(pages)
             .map_err(|_| shared_buffer::SharedBufferError::BytesExhausted)?;
         for (index, frame) in requested.iter_mut().enumerate() {
             *frame = shared_buffer::FrameCap(first + index);
@@ -443,10 +444,12 @@ pub(super) fn serve_buffer_create(
         let anchors = shared_buffer::FrameAnchors::from_slice(requested)?;
         buffers.create(holder, anchors, writable)
     })();
-    if outcome.is_err() {
-        for frame in requested.iter().take(allocated) {
-            let _ = adapter.perform(shared_buffer::AdapterAction::ReleaseFrame { frame: *frame });
-        }
+    // Failed cleanup stays recorded as an unpublished abort, including the
+    // frames whose delete failed. Allocation retries that cleanup first.
+    if outcome.is_err() && allocated != 0 {
+        let _ = adapter
+            .allocator_mut()
+            .abort_shared_allocation(requested[0].0);
     }
     outcome
 }

@@ -939,8 +939,67 @@ def check_private_memory_capacity_controls() -> int:
                 transcript, declared, "qemu-arm-virt"
             ),
         )
+    cold = (
+        "SLIME_MEM census retired=0 untyped=10000 reusable=0 shared_reusable=0 "
+        "preserved_bytes=0 active_extent_bytes=100 mapped_pages=0 free_slots=100 "
+        "anchors=0 shared_anchors=0 preserved_anchors=0 allocations_free=100\n"
+        "SLIME_ALLOC preserved parent=1 slot=2 paddr=4096 bytes=16\n"
+        "SLIME_MEM census retired=1 untyped=9000 reusable=1000 shared_reusable=16 "
+        "preserved_bytes=84 active_extent_bytes=0 mapped_pages=0 free_slots=96 "
+        "anchors=2 shared_anchors=1 preserved_anchors=1 allocations_free=102"
+    )
+    gate.check_capacity_conservation(cold)
+    conservation_mutations = (
+        ("cold backing lost", cold.replace("untyped=9000", "untyped=8999")),
+        ("cold backing double counted", cold.replace("preserved_bytes=84", "preserved_bytes=85")),
+        ("cold slots lost", cold.replace("free_slots=96", "free_slots=95")),
+        ("cold mapping remains", cold.replace("active_extent_bytes=0 mapped_pages=0", "active_extent_bytes=0 mapped_pages=1")),
+        ("cold descriptor lost", cold.replace("allocations_free=102", "allocations_free=99")),
+        ("cold missing initial backing", cold.replace("active_extent_bytes=100", "active_extent_bytes=0")),
+        ("cold no real reuse", "\n".join(line for line in cold.splitlines() if not line.startswith("SLIME_ALLOC"))),
+    )
+    for description, transcript in conservation_mutations:
+        require_rejection(description, "capacity conservation:",
+            lambda transcript=transcript: gate.check_capacity_conservation(transcript))
+    ledger = "\n".join([
+        "SLIME_BACKING inventory parent=1 paddr=4096 bytes=4096",
+        "SLIME_BACKING preserve parent=1 child=2 paddr=4096 bytes=16",
+        "SLIME_ROOT ordinary range=0 paddr=0x1000 bytes=4096",
+        "SLIME_MEM census untyped=4080 preserved_bytes=16 preserved_anchors=1 active_extent_bytes=0 reusable=0 anchors=0 shared_reusable=0 shared_retained=0 shared_anchors=0",
+        "SLIME_BACKING snapshot phase=initial begin",
+        "SLIME_BACKING ordinary parent=1 paddr=4096 bytes=4096 used=16",
+        "SLIME_BACKING retained parent=2 paddr=4096 bytes=16 used=0",
+        "SLIME_BACKING snapshot phase=initial end",
+        "SLIME_BACKING preserve parent=1 child=3 paddr=4112 bytes=16",
+        "SLIME_BACKING consume source=ordinary parent=1 slot=4 paddr=4128 bytes=32 count=1",
+        "SLIME_BACKING consume source=preserved parent=3 slot=5 paddr=4112 bytes=16 count=1",
+        "SLIME_MEM census untyped=4032 preserved_bytes=16 preserved_anchors=2 active_extent_bytes=0 reusable=32 anchors=1 shared_reusable=16 shared_retained=16 shared_anchors=1",
+        "SLIME_BACKING snapshot phase=final begin",
+        "SLIME_BACKING ordinary parent=1 paddr=4096 bytes=4096 used=64",
+        "SLIME_BACKING retained parent=2 paddr=4096 bytes=16 used=0",
+        "SLIME_BACKING retained parent=3 paddr=4112 bytes=16 used=16",
+        "SLIME_BACKING task_extent parent=4 bytes=32 active=0",
+        "SLIME_BACKING shared_node cap=5 parent=0 paddr=4112 bytes=16 state=Free",
+        "SLIME_BACKING snapshot phase=final end",
+    ])
+    gate.check_backing_ledger(ledger)
+    ledger_mutations = (
+        ("ledger omitted prefix", ledger.replace("SLIME_BACKING preserve parent=1 child=3 paddr=4112 bytes=16\n", "")),
+        ("ledger overlapping ownership", ledger.replace("child=3 paddr=4112", "child=3 paddr=4096")),
+        ("ledger duplicate parent", ledger.replace("child=3 paddr=4112", "child=2 paddr=4112")),
+        ("ledger false reusable consumed leaf", ledger.replace("parent=3 paddr=4112 bytes=16 used=16", "parent=3 paddr=4112 bytes=16 used=0")),
+        ("ledger duplicate extent", ledger.replace("SLIME_BACKING task_extent parent=4 bytes=32 active=0", "SLIME_BACKING task_extent parent=4 bytes=32 active=0\nSLIME_BACKING task_extent parent=4 bytes=32 active=0")),
+        ("ledger incomplete snapshot", ledger.replace("SLIME_BACKING snapshot phase=final end", "")),
+        ("ledger wrong inventory", ledger.replace("ordinary range=0 paddr=0x1000", "ordinary range=0 paddr=0x2000")),
+        ("ledger invalid shared ancestry", ledger.replace("shared_node cap=5 parent=0", "shared_node cap=5 parent=99")),
+    )
+    for description, transcript in ledger_mutations:
+        require_rejection(description, "backing ledger:",
+            lambda transcript=transcript: gate.check_backing_ledger(transcript))
     return (
-        len(capacity_mutations)
+        len(ledger_mutations)
+        + len(conservation_mutations)
+        + len(capacity_mutations)
         + len(rollback_mutations)
         + len(conversion_mutations)
         + len(quota_mutations)

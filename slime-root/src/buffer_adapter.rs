@@ -51,6 +51,7 @@ struct AliasRecord {
     vspace: VSpaceCap,
     vaddr: usize,
     alias: sel4::cap::Granule,
+    pending_delete: bool,
 }
 
 /// Root-owned registry of frame aliases, outliving any one [`BufferAdapter`].
@@ -109,6 +110,7 @@ impl FrameAliases {
             vspace,
             vaddr,
             alias,
+            pending_delete: false,
         });
         self.len += 1;
         Ok(())
@@ -123,6 +125,22 @@ impl FrameAliases {
             (record.frame == frame && record.vspace == vspace && record.vaddr == vaddr)
                 .then_some(record.alias)
         })
+    }
+
+    fn mark_pending_delete(&mut self, frame: FrameCap, vspace: VSpaceCap, vaddr: usize) {
+        for entry in self.entries.iter_mut().flatten() {
+            if entry.frame == frame && entry.vspace == vspace && entry.vaddr == vaddr {
+                entry.pending_delete = true;
+            }
+        }
+    }
+
+    fn pending_delete(&self) -> Option<AliasRecord> {
+        self.entries
+            .iter()
+            .flatten()
+            .find(|entry| entry.pending_delete)
+            .copied()
     }
 
     fn remove(&mut self, frame: FrameCap, vspace: VSpaceCap, vaddr: usize) -> bool {
@@ -235,7 +253,6 @@ pub struct TableRecord {
 /// occupies the same monotonic CSlot range the rest of startup accounts for.
 pub struct BufferAdapter<'a> {
     allocator: &'a mut ObjectAllocator,
-    tables: [Option<TableRecord>; MAX_ADAPTER_TABLES],
     table_len: usize,
     frames_allocated: usize,
     mapped: usize,
@@ -250,7 +267,6 @@ impl<'a> BufferAdapter<'a> {
     pub fn new(allocator: &'a mut ObjectAllocator) -> Self {
         Self {
             allocator,
-            tables: [None; MAX_ADAPTER_TABLES],
             table_len: 0,
             frames_allocated: 0,
             mapped: 0,
@@ -405,69 +421,24 @@ impl<'a> BufferAdapter<'a> {
         Ok(())
     }
 
-    /// Ensure every intermediate translation table covering `vaddr` exists in
-    /// `vspace`, allocating and recording the ones that do not.
-    ///
-    /// A level whose table is already present answers `DeleteFirst`, which is
-    /// success for this purpose: the mapping only needs the table to exist, not
-    /// to have been created here. Any table this call does create is retained
-    /// in [`Self::tables`] so it is owned rather than leaked.
+    /// Dynamic tables and unused speculative tables belong to the VSpace's
+    /// task arena, not to this short-lived adapter.
     fn ensure_tables(
         &mut self,
         vspace: sel4::cap::VSpace,
         vaddr: usize,
     ) -> Result<(), BufferAdapterError> {
         for level in 1..sel4::vspace_levels::NUM_LEVELS {
-            let Some(ty) = sel4::TranslationTableObjectType::from_level(level) else {
+            let Some(_ty) = sel4::TranslationTableObjectType::from_level(level) else {
                 continue;
             };
             let span_bits = sel4::vspace_levels::span_bits(level);
             let aligned = vaddr & !((1usize << span_bits) - 1);
             if self
-                .tables
-                .iter()
-                .flatten()
-                .any(|table| table.level == level && table.vaddr == aligned)
-            {
-                continue;
-            }
-            // Reserve the bookkeeping slot before spending anything. Checking
-            // after the retype-and-map would consume a CSlot and link a live
-            // table into the child's page-table tree that this adapter then
-            // has no room to record — the opposite of failing closed.
-            if self.table_len >= self.tables.len() {
-                return Err(BufferAdapterError::TablesExhausted);
-            }
-            let slot = self
                 .allocator
-                .allocate(ty.blueprint())
-                .map_err(BufferAdapterError::Alloc)?;
-            match slot
-                .cap()
-                .cast::<sel4::cap_type::UnspecifiedIntermediateTranslationTable>()
-                .generic_intermediate_translation_table_map(
-                    ty,
-                    vspace,
-                    aligned,
-                    sel4::VmAttributes::default(),
-                ) {
-                Ok(()) => {
-                    let record = self
-                        .tables
-                        .get_mut(self.table_len)
-                        .ok_or(BufferAdapterError::TablesExhausted)?;
-                    *record = Some(TableRecord {
-                        slot: slot.index(),
-                        level,
-                        vaddr: aligned,
-                    });
-                    self.table_len += 1;
-                }
-                // The kernel already has a table at this level for this range.
-                // The freshly retyped object stays in its CSlot, owned by the
-                // root's monotonic allocation record, and is simply unused.
-                Err(sel4::Error::DeleteFirst) => {}
-                Err(error) => return Err(BufferAdapterError::TableMap { level, error }),
+                .ensure_owned_mapping_table(vspace, level, aligned)?
+            {
+                self.table_len += 1;
             }
         }
         Ok(())
@@ -496,6 +467,22 @@ impl<'a> BufferAdapter<'a> {
                 error: sel4::Error::AlignmentError,
             });
         }
+        self.retry_pending_alias_deletes()?;
+        self.allocator.prepare_mapping_page(vspace.0, vaddr)?;
+        let outcome = self.map_frame_prepared(frame, vspace, vaddr, rights);
+        if outcome.is_err() {
+            let _ = self.allocator.release_mapping_page(vspace.0, vaddr);
+        }
+        outcome
+    }
+
+    fn map_frame_prepared(
+        &mut self,
+        frame: FrameCap,
+        vspace: VSpaceCap,
+        vaddr: usize,
+        rights: MappingRights,
+    ) -> Result<(), BufferAdapterError> {
         let vspace_cap = vspace_cap(vspace);
         self.ensure_tables(vspace_cap, vaddr)?;
         // Rights narrowing is real here: `read_only()` clears capAllowWrite, so
@@ -548,11 +535,26 @@ impl<'a> BufferAdapter<'a> {
                     cap = fresh;
                 }
                 Err(error) => {
-                    if alias.is_some() {
+                    if let Some(alias) = alias {
+                        // SAFETY: root dispatch is single-threaded; the record
+                        // owns this unmapped copy until deletion succeeds.
+                        unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) }
+                            .mark_pending_delete(frame, vspace, vaddr);
+                        // Keep the registry entry on failed deletion so later
+                        // teardown can still find the capability and its slot.
+                        sel4::init_thread::slot::CNODE
+                            .cap()
+                            .absolute_cptr(alias)
+                            .delete()
+                            .map_err(|error| BufferAdapterError::Release {
+                                slot: alias.bits() as usize,
+                                error,
+                            })?;
                         // SAFETY: single-threaded; the reservation belongs to
                         // this call and the borrow ends with the statement.
                         unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) }
                             .remove(frame, vspace, vaddr);
+                        self.allocator.release_slot(alias.bits() as usize);
                     }
                     return Err(BufferAdapterError::Map { vaddr, error });
                 }
@@ -586,13 +588,13 @@ impl<'a> BufferAdapter<'a> {
             .map_err(BufferAdapterError::Alloc)?
             .cap();
         let root_cnode = sel4::init_thread::slot::CNODE.cap();
-        root_cnode
-            .absolute_cptr(alias)
-            .copy(
-                &root_cnode.absolute_cptr(frame_cap(frame)),
-                sel4::CapRights::read_write(),
-            )
-            .map_err(|error| BufferAdapterError::Map { vaddr, error })?;
+        if let Err(error) = root_cnode.absolute_cptr(alias).copy(
+            &root_cnode.absolute_cptr(frame_cap(frame)),
+            sel4::CapRights::read_write(),
+        ) {
+            self.allocator.release_slot(alias.bits() as usize);
+            return Err(BufferAdapterError::Map { vaddr, error });
+        }
         self.aliased += 1;
         Ok(alias)
     }
@@ -615,7 +617,40 @@ impl<'a> BufferAdapter<'a> {
         Ok(())
     }
 
+    pub fn settle_pending_cleanup(&mut self) -> Result<(), BufferAdapterError> {
+        self.retry_pending_alias_deletes()?;
+        self.allocator.settle_shared_releases()?;
+        Ok(())
+    }
+
+    fn retry_pending_alias_deletes(&mut self) -> Result<(), BufferAdapterError> {
+        loop {
+            // SAFETY: each registry borrow ends before any kernel invocation;
+            // this dispatcher is the only writer.
+            let Some(entry) = (unsafe { &*core::ptr::addr_of!(FRAME_ALIASES) }).pending_delete()
+            else {
+                return Ok(());
+            };
+            sel4::init_thread::slot::CNODE
+                .cap()
+                .absolute_cptr(entry.alias)
+                .delete()
+                .map_err(|error| BufferAdapterError::Release {
+                    slot: entry.alias.bits() as usize,
+                    error,
+                })?;
+            self.allocator.release_slot(entry.alias.bits() as usize);
+            // SAFETY: successful deletion retires exactly this owned record.
+            unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) }.remove(
+                entry.frame,
+                entry.vspace,
+                entry.vaddr,
+            );
+        }
+    }
+
     fn perform_inner(&mut self, action: AdapterAction) -> Result<(), BufferAdapterError> {
+        self.retry_pending_alias_deletes()?;
         match action {
             // `seL4_ARM_Page_Unmap` on an already-unmapped frame is a no-op that
             // returns success, which is exactly the idempotence the trait
@@ -625,6 +660,13 @@ impl<'a> BufferAdapter<'a> {
                 vspace,
                 vaddr,
             } => {
+                if self.allocator.shared_frame_released(frame.0) {
+                    return Ok(());
+                }
+                if !self.allocator.mapping_page_tracked(vspace.0, vaddr) {
+                    self.allocator.release_mapping_page(vspace.0, vaddr)?;
+                    return Ok(());
+                }
                 // Through whichever capability holds *this* mapping. Lookup is
                 // non-consuming: only a successful kernel unmap removes the
                 // alias record, so retry targets the same holder rather than
@@ -637,26 +679,16 @@ impl<'a> BufferAdapter<'a> {
                     .unwrap_or_else(|| frame_cap(frame))
                     .frame_unmap()
                     .map_err(|error| BufferAdapterError::Unmap { vaddr, error })?;
-                if let Some(alias) = alias {
-                    // Delete the alias capability and return its CSlot. The
-                    // registry record alone is not enough: `SlotPool::release`
-                    // hands an index back for reuse, so a record dropped
-                    // without emptying the slot leaves a live capability in a
-                    // slot the allocator believes is free — and the next
-                    // `reserve_slot` there is refused `DeleteFirst`
-                    // ("Destination not empty") when it tries to copy into it.
-                    //
-                    // Deleting an already-empty slot succeeds, so the batch
-                    // stays retryable exactly as `ReleaseFrame` does.
-                    let cptr = sel4::init_thread::slot::CNODE.cap().absolute_cptr(alias);
-                    cptr.delete().map_err(|error| BufferAdapterError::Release {
-                        slot: alias.bits() as usize,
-                        error,
-                    })?;
+                if alias.is_some() {
+                    // SAFETY: the leaf unmap completed. The registry retains
+                    // the unmapped copy and its slot until deletion succeeds.
                     unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) }
-                        .remove(frame, vspace, vaddr);
-                    self.allocator.release_slot(alias.bits() as usize);
+                        .mark_pending_delete(frame, vspace, vaddr);
                 }
+                self.allocator.release_mapping_page(vspace.0, vaddr)?;
+                // Leaf unmap is already committed. Failed copy deletion cannot
+                // be reported as an untouched leaf to sealing's rollback loop.
+                let _ = self.retry_pending_alias_deletes();
                 self.unmapped += 1;
                 Ok(())
             }
@@ -665,6 +697,9 @@ impl<'a> BufferAdapter<'a> {
             // frame with no derivations revokes successfully, so this is safe
             // to repeat.
             AdapterAction::Revoke { frame } => {
+                if self.allocator.shared_frame_released(frame.0) {
+                    return Ok(());
+                }
                 root_cptr(frame)
                     .revoke()
                     .map_err(|error| BufferAdapterError::Revoke {
@@ -677,6 +712,10 @@ impl<'a> BufferAdapter<'a> {
             // Delete the root's own capability, emptying the CSlot. Deleting an
             // already-empty slot succeeds, keeping the batch retryable.
             AdapterAction::ReleaseFrame { frame } => {
+                if self.allocator.release_shared_frame(frame.0)? {
+                    self.released += 1;
+                    return Ok(());
+                }
                 root_cptr(frame)
                     .delete()
                     .map_err(|error| BufferAdapterError::Release {
@@ -696,6 +735,19 @@ impl<'a> BufferAdapter<'a> {
 }
 
 impl SharedBufferAdapter for BufferAdapter<'_> {
+    fn commit_releases(&mut self, actions: &crate::shared_buffer::ActionList) {
+        for action in actions.iter() {
+            if let AdapterAction::ReleaseFrame { frame } = action {
+                self.allocator.commit_shared_frame_release(frame.0);
+            }
+        }
+        // Failed kernel cleanup remains quarantined and is retried before a
+        // subsequent allocation; logical teardown has already committed.
+        if let Err(error) = self.allocator.settle_shared_releases() {
+            self.last_error = Some(BufferAdapterError::Alloc(error));
+        }
+    }
+
     fn map_frame(
         &mut self,
         frame: FrameCap,

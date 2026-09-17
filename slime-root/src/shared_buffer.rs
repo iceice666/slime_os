@@ -441,6 +441,11 @@ pub trait SharedBufferAdapter {
     /// already-released anchor as success so a failed action batch can be
     /// retried from the beginning without losing reclamation progress.
     fn perform(&mut self, action: AdapterAction) -> Result<(), AdapterError>;
+
+    /// Publish successfully released backing only after logical ownership has
+    /// committed. Before this notification, a retry may replay any action in
+    /// the batch, so released anchors must remain quarantined against reuse.
+    fn commit_releases(&mut self, _actions: &ActionList) {}
 }
 
 /// Typed failures for every observable logical and adapter failure.
@@ -778,6 +783,27 @@ impl SharedBufferTable {
         self.commit_create(plan)
     }
 
+    /// Check admission before the live adapter spends backing. Anchor identity
+    /// is checked separately once the adapter has produced the actual frames.
+    pub fn preflight_create_pages(
+        &self,
+        owner: HolderId,
+        pages: usize,
+    ) -> Result<(), SharedBufferError> {
+        if pages == 0 || pages > MAX_BUFFER_PAGES {
+            return Err(SharedBufferError::BadSize);
+        }
+        self.preflight_buffer_charge(owner, pages)?;
+        if self.regions.iter().all(Option::is_some) {
+            return Err(SharedBufferError::ObjectsExhausted);
+        }
+        self.preflight_charge_slot(owner)?;
+        self.next_buffer_id
+            .checked_add(1)
+            .ok_or(SharedBufferError::IdentityExhausted)?;
+        Ok(())
+    }
+
     /// Preflight allocation admission without changing accounting or consuming
     /// root-owned frame anchors. This is the allocation adapter transaction's
     /// prepare phase.
@@ -788,11 +814,8 @@ impl SharedBufferTable {
         writable: bool,
     ) -> Result<CreatePlan, SharedBufferError> {
         let pages = anchors.len();
-        if pages == 0 || pages > MAX_BUFFER_PAGES {
-            return Err(SharedBufferError::BadSize);
-        }
+        self.preflight_create_pages(owner, pages)?;
         self.preflight_anchor_uniqueness(&anchors)?;
-        self.preflight_buffer_charge(owner, pages)?;
         let slot = self
             .regions
             .iter()
@@ -1324,6 +1347,7 @@ impl SharedBufferTable {
         self.append_region_reclamation(&plan, &mut actions)?;
         self.run_actions(adapter, &actions)?;
         self.commit_teardown(plan)?;
+        adapter.commit_releases(&actions);
         if has_loans {
             self.regions[slot]
                 .as_mut()
@@ -1780,6 +1804,36 @@ impl SharedBufferTable {
         Ok(())
     }
 
+    /// Retire only orphan mappings that still name this VSpace. A retiring
+    /// task must retain its VSpace capability until this returns zero.
+    pub fn retry_vspace_orphans<A: SharedBufferAdapter>(
+        &mut self,
+        adapter: &mut A,
+        vspace: VSpaceCap,
+    ) -> usize {
+        for entry in &mut self.orphans {
+            let Some(orphan) = *entry else {
+                continue;
+            };
+            if orphan.vspace == vspace
+                && adapter
+                    .perform(AdapterAction::Unmap {
+                        frame: orphan.frame,
+                        vspace,
+                        vaddr: orphan.vaddr,
+                    })
+                    .is_ok()
+            {
+                *entry = None;
+            }
+        }
+        self.orphans
+            .iter()
+            .flatten()
+            .filter(|orphan| orphan.vspace == vspace)
+            .count()
+    }
+
     /// Retry every retained orphan. A page that unmaps successfully is dropped
     /// from the table; one that fails again stays recorded. Returns how many
     /// remain live, so a caller can report reclamation as incomplete rather
@@ -1817,14 +1871,35 @@ impl SharedBufferTable {
     ) -> Result<Box<ActionList>, SharedBufferError> {
         self.run_actions(adapter, &actions)?;
         self.commit_teardown(plan)?;
+        adapter.commit_releases(&actions);
         Ok(actions)
     }
 
     fn run_actions<A: SharedBufferAdapter>(
-        &self,
+        &mut self,
         adapter: &mut A,
         actions: &ActionList,
     ) -> Result<(), SharedBufferError> {
+        // Orphans are not committed mappings and may belong to a different
+        // holder's VSpace. Settle every reference to a retiring frame before
+        // any revoke or release can make its raw CSlot reusable.
+        for entry in &mut self.orphans {
+            let Some(orphan) = *entry else {
+                continue;
+            };
+            if actions.iter().any(|action| {
+                matches!(action,
+                AdapterAction::Revoke { frame } | AdapterAction::ReleaseFrame { frame }
+                    if frame == orphan.frame)
+            }) {
+                adapter.perform(AdapterAction::Unmap {
+                    frame: orphan.frame,
+                    vspace: orphan.vspace,
+                    vaddr: orphan.vaddr,
+                })?;
+                *entry = None;
+            }
+        }
         for action in actions.iter() {
             adapter.perform(action)?;
         }
@@ -2084,6 +2159,7 @@ mod tests {
         calls: usize,
         fail_at: Option<usize>,
         fail_from: Option<usize>,
+        release_commits: usize,
     }
 
     impl RecordingAdapter {
@@ -2094,6 +2170,7 @@ mod tests {
                 calls: 0,
                 fail_at: None,
                 fail_from: None,
+                release_commits: 0,
             }
         }
 
@@ -2143,6 +2220,13 @@ mod tests {
         fn perform(&mut self, action: AdapterAction) -> Result<(), AdapterError> {
             self.record(action)
         }
+
+        fn commit_releases(&mut self, actions: &ActionList) {
+            self.release_commits += actions
+                .iter()
+                .filter(|action| matches!(action, AdapterAction::ReleaseFrame { .. }))
+                .count();
+        }
     }
 
     fn anchors(first: usize, count: usize) -> FrameAnchors {
@@ -2166,6 +2250,19 @@ mod tests {
     #[test]
     fn create_preflight_does_not_consume_anchors_or_accounting() {
         let mut table = table();
+        assert_eq!(
+            table.preflight_create_pages(OWNER, 0),
+            Err(SharedBufferError::BadSize)
+        );
+        assert_eq!(
+            table.preflight_create_pages(OWNER, 9),
+            Err(SharedBufferError::QuotaExceeded)
+        );
+        assert_eq!(
+            table.preflight_create_pages(HolderId(99), 1),
+            Err(SharedBufferError::QuotaExceeded)
+        );
+        assert_eq!(table.preflight_create_pages(OWNER, 2), Ok(()));
         let plan = table
             .preflight_create(OWNER, anchors(10, 2), true)
             .expect("preflight");
@@ -2176,6 +2273,11 @@ mod tests {
         assert_eq!(handle.id, plan.buffer_id());
         assert_eq!(table.total_pages(), 2);
         assert_eq!(table.holder_buffers(OWNER), 1);
+        assert_eq!(
+            table.preflight_create_pages(OWNER, 7),
+            Err(SharedBufferError::QuotaExceeded)
+        );
+        assert_eq!(table.preflight_create_pages(OWNER, 6), Ok(()));
         assert_eq!(table.commit_create(plan), Err(SharedBufferError::NotFound));
     }
 
@@ -2333,6 +2435,99 @@ mod tests {
         );
         let mut retry = RecordingAdapter::new();
         table.seal(&mut retry, OWNER, handle).expect("seal retry");
+    }
+
+    #[test]
+    fn receiver_orphans_must_settle_before_vspace_retirement() {
+        let mut table = table();
+        let handle = table.create(OWNER, anchors(10, 2), true).unwrap();
+        let mut adapter = RecordingAdapter::new();
+        table.seal(&mut adapter, OWNER, handle).unwrap();
+        let loan = table
+            .loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE * 2, false)
+            .unwrap();
+        let receiver_vspace = VSpaceCap(41);
+        // First page maps; the second map and rollback of the first both fail.
+        let mut failing = RecordingAdapter::failing_from(1);
+        assert!(
+            table
+                .map_loan(
+                    &mut failing,
+                    RECEIVER,
+                    loan,
+                    receiver_vspace,
+                    0x30_000,
+                    0,
+                    PAGE_SIZE * 2
+                )
+                .is_err()
+        );
+        assert_eq!(table.holder_buffers(RECEIVER), 0);
+        assert_eq!(table.holder_mappings(RECEIVER), 0);
+        assert_eq!(table.holder_loans(RECEIVER), 0);
+        assert_eq!(table.orphan_count(), 1);
+        assert_eq!(table.retry_vspace_orphans(&mut failing, receiver_vspace), 1);
+        assert_eq!(table.retry_vspace_orphans(&mut adapter, VSpaceCap(99)), 0);
+        assert_eq!(table.orphan_count(), 1);
+        assert_eq!(table.retry_vspace_orphans(&mut adapter, receiver_vspace), 0);
+        assert_eq!(table.orphan_count(), 0);
+        // The receiver-only loan still needs settlement despite zero charges.
+        assert_eq!(table.loan_count(), 1);
+        table.reclaim_holder(&mut adapter, RECEIVER).unwrap();
+        assert_eq!(table.loan_count(), 0);
+        assert_eq!(table.total_pages(), 2);
+        assert_eq!(table.holder_buffers(OWNER), 1);
+    }
+
+    #[test]
+    fn owner_reclamation_settles_foreign_orphans_before_frame_reuse() {
+        let mut table = table();
+        let handle = table.create(OWNER, anchors(10, 2), true).unwrap();
+        let mut adapter = RecordingAdapter::new();
+        table.seal(&mut adapter, OWNER, handle).unwrap();
+        let loan = table
+            .loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE * 2, false)
+            .unwrap();
+        let mut failing = RecordingAdapter::failing_from(1);
+        assert!(
+            table
+                .map_loan(
+                    &mut failing,
+                    RECEIVER,
+                    loan,
+                    VSpaceCap(41),
+                    0x30_000,
+                    0,
+                    PAGE_SIZE * 2
+                )
+                .is_err()
+        );
+        let mut blocked = RecordingAdapter::failing_at(0);
+        assert!(table.reclaim_holder(&mut blocked, OWNER).is_err());
+        assert_eq!(blocked.len, 0);
+        assert_eq!(blocked.release_commits, 0);
+        assert_eq!(table.orphan_count(), 1);
+        assert_eq!(table.total_pages(), 2);
+        let mut retry = RecordingAdapter::new();
+        table.reclaim_holder(&mut retry, OWNER).unwrap();
+        assert_eq!(
+            retry.actions[0],
+            Some(AdapterAction::Unmap {
+                frame: FrameCap(10),
+                vspace: VSpaceCap(41),
+                vaddr: 0x30_000,
+            })
+        );
+        assert!(matches!(
+            retry.actions[1],
+            Some(AdapterAction::Revoke { .. })
+        ));
+        assert_eq!(retry.release_commits, 2);
+        assert_eq!(table.orphan_count(), 0);
+        assert_eq!(table.total_pages(), 0);
+        let calls = retry.calls;
+        assert_eq!(table.retry_vspace_orphans(&mut retry, VSpaceCap(41)), 0);
+        assert_eq!(retry.calls, calls);
     }
 
     #[test]
@@ -2818,6 +3013,26 @@ mod tests {
     /// every release. With two regions torn down together, a per-region loop
     /// would emit Revoke(A) Release(A) Revoke(B) Release(B); the contract
     /// requires Revoke(A) Revoke(B) Release(A) Release(B).
+    #[test]
+    fn failed_release_batch_does_not_publish_reusable_anchors() {
+        let mut table = table();
+        table.create(OWNER, anchors(10, 1), true).unwrap();
+        table.create(OWNER, anchors(20, 1), true).unwrap();
+        let mut adapter = RecordingAdapter::failing_at(3);
+        assert!(table.reclaim_holder(&mut adapter, OWNER).is_err());
+        assert_eq!(adapter.release_commits, 0);
+        assert_eq!(table.total_pages(), 2);
+        assert_eq!(
+            table.create(RECEIVER, anchors(10, 1), true),
+            Err(SharedBufferError::DuplicateFrameAnchor)
+        );
+        adapter.fail_at = None;
+        table.reclaim_holder(&mut adapter, OWNER).unwrap();
+        assert_eq!(adapter.release_commits, 2);
+        assert_eq!(table.total_pages(), 0);
+        table.create(RECEIVER, anchors(10, 1), true).unwrap();
+    }
+
     #[test]
     fn teardown_revokes_every_region_before_releasing_any() {
         let mut table = table();
