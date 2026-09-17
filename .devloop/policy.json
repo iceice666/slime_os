@@ -26,6 +26,13 @@
       ]
     },
     {
+      "id": "just-target",
+      "mode": "automated",
+      "argv": ["python3", "scripts/check/devloop-gate.py", "just-target"],
+      "ttlSeconds": 86400,
+      "observations": [{ "id": "passed", "kind": "bool" }]
+    },
+    {
       "id": "generated-views",
       "mode": "human",
       "argv": [],

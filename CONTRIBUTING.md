@@ -54,9 +54,9 @@ no new `milestone:` front-matter field. Canonical terminal state closes the
 native milestone even when descendants remain unfinished.
 
 Create children only for independently trackable work with observable exit
-conditions. Use `myque new "Describe the work" --kind task`, then
-`myque parent <CHILD_UUID> <PARENT_UUID>` and `just tasks_check`; follow the
-planning-PR process below. Do not change kinds or parent relationships merely
+conditions. Admit one with `just devloop admit spec.zti --title "Describe the
+work" --kind task`, then `myque parent <CHILD_UUID> <PARENT_UUID>` and
+`just tasks_check`; follow the planning-PR process below. Do not change kinds or parent relationships merely
 to populate a progress bar. Browse the repository's
 [Milestones page](https://github.com/iceice666/slime_os/milestones) or filter
 Issues by milestone. Until real child work exists, a milestone may be empty.
@@ -76,18 +76,26 @@ not persistent references. Generated lists and `roadmap/` are not state stores.
 
 ## Proposing work
 
-Discuss bugs and ideas in Issues first when useful. To propose canonical work,
-use [MyQue](https://github.com/mozufu/myque) in the repository dev shell:
+Discuss bugs and ideas in Issues first when useful. **New canonical work must be
+spec-driven**: every item created on or after `2026-10-01T00:00:00Z` carries a
+devloop requirements body, so propose it with `just devloop admit` as described
+under [Spec-driven items](#spec-driven-items) below, not with `myque new`.
+`just tasks_check` refuses a store where a post-cutoff item lacks that record,
+and the rule admits no exemption by kind, tag, or state — defects included.
+
+MyQue allocates the UUID either way; never invent one or allocate a numbered key
+by scanning the store. Fill in the item's problem, scope, observable exit
+conditions, and use MyQue commands for any parent/dependency relationships.
+Follow [AGENTS.md](AGENTS.md)'s backlog-first and work-item rules; run
+`just tasks_check`.
+
+Items created before that instant stay valid as prose and never become subject,
+even if reopened. For one of those, and only for one of those, the older form
+applies:
 
 ```sh
-myque new "Describe the work" --kind task
+myque new "Describe the work" --kind task   # pre-cutoff items only
 ```
-
-Use `--kind bug --tag backlog` for a defect. MyQue allocates the UUID; never
-invent one or allocate a numbered key by scanning the store. Fill in the item's
-problem, scope, observable exit conditions, and use MyQue commands for any
-parent/dependency relationships. Follow [AGENTS.md](AGENTS.md)'s backlog-first
-and work-item rules; run `just tasks_check`.
 
 Submit a **work-item-only planning PR**, and merge it before opening an
 implementation PR. An already-landed item can cover another implementation PR
@@ -95,7 +103,7 @@ within its scope; a new planning item is not required for every PR.
 
 ### Spec-driven items
 
-An item may instead carry its requirements as structured data, which makes its
+An item carries its requirements as structured data, which makes its
 completion enforceable rather than asserted.
 [Carrying a work item](docs/getting-started/06-work-item-lifecycle.md) walks
 both lifecycles command by command; the rules that bind a pull request are
@@ -124,7 +132,21 @@ already be on canonical `main`, and open backlog defects come first. Gate
 identities resolve through [`.devloop/policy.json`](.devloop/policy.json) to
 existing `just` targets; a gate reports the typed observations that policy
 declares, and the item's own predicates decide whether they satisfy an
-acceptance. Evidence is recorded into the `devloop` record bound to the exact
+acceptance.
+
+Most acceptances bind the general `just-target` gate, which runs one declared
+recipe and reports a single `passed` boolean. Name the recipe in the execution
+inputs, never in requirement text:
+
+```sh
+echo '{"justTarget": "sel4_qos_check"}' > inputs.json
+just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs inputs.json --target sel4-qos --image qemu-arm-virt
+```
+
+The gate refuses a recipe `just` does not publish, and devloop binds the inputs
+digest into the evidence identity, so evidence recorded for one recipe never
+transfers to another. A check that deserves richer observations gets its own
+gate identity in policy instead. Evidence is recorded into the `devloop` record bound to the exact
 requirements, helpers, code, policy, execution inputs, target, image, and run
 epoch that were tested, and the newest entry for an obligation decides it — a
 later failing run is never satisfied by an earlier pass. A human obligation

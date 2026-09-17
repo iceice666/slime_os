@@ -4,8 +4,12 @@ Two ways to carry work, one identity model. An **ordinary item** closes on an
 observation a person records. A **spec-driven item** closes only against
 evidence bound to the exact inputs that were tested, and refuses otherwise.
 
-Both live in the same store and reach the same end state, so read the shared
-model first and then the path you need.
+**New work takes the spec-driven path.** Every item created on or after
+`2026-10-01T00:00:00Z` must carry a devloop record, and `just tasks_check`
+refuses the store otherwise. The ordinary path below remains authoritative for
+the items created before that instant, which stay valid and never become
+subject — not even when reopened. Read the shared model first, then the path
+your item's identity puts it on.
 
 ## Who decides what
 
@@ -43,6 +47,9 @@ terminal record; only the body is gone from the live tree, retained in a Git
 commit under `refs/myque/retained/*`.
 
 ## An ordinary item
+
+For pre-cutoff items only. New work cannot enter this way; `just tasks_check`
+refuses a post-cutoff item that carries no devloop record.
 
 1. **Propose.** MyQue allocates the id; never invent one or pick the next
    number.
@@ -113,7 +120,13 @@ for this repository's gates.
    decision cannot be overtaken by a competing write.
 
 4. **Record evidence.** A gate identity resolves through policy to existing
-   `just` targets; requirement text never carries a command.
+   `just` targets; requirement text never carries a command. `just-target` is
+   the general gate: name the recipe in the execution inputs
+   (`{"justTarget": "sel4_qos_check"}`) and it reports one `passed` boolean.
+   devloop binds the inputs digest into the evidence identity, so evidence
+   recorded for one target never transfers to another. A check needing richer
+   observations gets its own gate identity in
+   [`.devloop/policy.json`](../../.devloop/policy.json).
 
    ```sh
    just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
