@@ -146,6 +146,10 @@ def check_controls() -> None:
 
     with patch.object(publisher, "github", side_effect=remote_policy):
         approval = publisher.require_publication_permissions(Path.cwd(), approve=True)
+        detail["updated_at"] = "2026-09-16T08:00:00+08:00"
+        if publisher.require_publication_permissions(Path.cwd(), approve=True) != approval:
+            raise RetirementError("equivalent ruleset timestamp offsets changed approval")
+        detail["updated_at"] = "2026-09-16T00:00:00Z"
         with patch.dict(os.environ, {"MYQUE_RETIRE_RULES_APPROVAL": approval}):
             del detail["bypass_actors"]
             publisher.require_publication_permissions(Path.cwd())
@@ -159,6 +163,17 @@ def check_controls() -> None:
                 "stale ruleset approval",
             )
             detail["updated_at"] = "2026-09-16T00:00:00Z"
+        detail["bypass_actors"] = []
+        for timestamp, description in (
+            ("2026-09-16T00:00:00", "ruleset timestamp without timezone"),
+            ("not-a-timestamp", "invalid ruleset timestamp"),
+        ):
+            detail["updated_at"] = timestamp
+            refuse(
+                lambda: publisher.require_publication_permissions(Path.cwd(), approve=True),
+                description,
+            )
+        detail["updated_at"] = "2026-09-16T00:00:00Z"
         detail["bypass_actors"] = [{"actor_type": "Integration", "actor_id": publisher.ACTIONS_APP}]
         refuse(
             lambda: publisher.require_publication_permissions(Path.cwd(), approve=True),

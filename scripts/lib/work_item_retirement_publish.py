@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import hashlib
 import os
@@ -37,6 +38,30 @@ def github(root: Path, path: str) -> object:
     return json.loads(command(root, "gh", "api", f"repos/{REPOSITORY}/{path}"))
 
 
+def ruleset_revision(value: object) -> str:
+    """Canonical UTC instant for a GitHub ruleset's version timestamp.
+
+    GitHub serializes the same ``updated_at`` instant differently by token: an
+    administrator can receive a numeric offset while ``GITHUB_TOKEN`` receives
+    ``Z``. The approval binds the instant, not that presentation. Naive or
+    malformed timestamps are refused rather than producing an approval whose
+    meaning depends on the caller's local timezone.
+    """
+    if not isinstance(value, str):
+        raise RetirementError("retirement ruleset carries no version timestamp")
+    try:
+        timestamp = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RetirementError("retirement ruleset carries an invalid version timestamp") from error
+    if timestamp.tzinfo is None:
+        raise RetirementError("retirement ruleset version timestamp has no timezone")
+    return (
+        timestamp.astimezone(datetime.timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
 def require_publication_permissions(root: Path, *, approve: bool = False) -> str:
     """Bind operator-verified bypass policy to the current public ruleset revision."""
     rules = github(root, "rules/branches/main")
@@ -63,11 +88,11 @@ def require_publication_permissions(root: Path, *, approve: bool = False) -> str
         if rule.get("ruleset_source_type") != "Repository":
             raise RetirementError("cannot verify bypass policy of non-repository ruleset")
         detail = github(root, f"rulesets/{rule['ruleset_id']}")
-        if detail.get("enforcement") != "active" or not detail.get("updated_at"):
+        if detail.get("enforcement") != "active":
             raise RetirementError("retirement requires active versioned rulesets")
         if approve and detail.get("bypass_actors") != []:
             raise RetirementError("operator approval requires visible empty bypass actors")
-        identities.append((str(rule["ruleset_id"]), detail["updated_at"]))
+        identities.append((str(rule["ruleset_id"]), ruleset_revision(detail.get("updated_at"))))
     digest = hashlib.sha256(json.dumps(sorted(set(identities))).encode()).hexdigest()
     if not approve and os.environ.get("MYQUE_RETIRE_RULES_APPROVAL") != digest:
         raise RetirementError(
