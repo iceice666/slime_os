@@ -285,22 +285,14 @@ CYCLE_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # exit arm independently), and the milestone requires immediate reuse
         # after either.
         #
-        # `kind=VirtualMemory` is pinned but the access is deliberately not.
-        # Pinning `VirtualMemory` is what distinguishes a holder that died on a
-        # memory access from one that died of a syscall or user exception, which
-        # a pattern ending at `kind=` accepts. The access is left open because
-        # this configuration does not characterize it: the store demonstrably
-        # traps -- the probe's own "did not trap" line never appears -- yet the
-        # root reports `access: Execute status: 0`, and the pre-existing
-        # `reclamation-fault` probe reports exactly the same shape for its own
-        # deliberate write. That decode question is `fault.rs`'s, not this
-        # arm's, and asserting `Write` here would pin behaviour the platform
-        # does not produce.
+        # The first odd cycle stores into the guard. Later odd cycles alternate
+        # guard writes and execution from backed private memory; semantic checks
+        # join each fault to its own task, region and cycle.
         "a cycle that ended by deliberate fault was reclaimed and censused",
         (
             r"\[private-cycle-probe\] cycle=\d+ pages=16384 base=0x[0-9a-f]+ "
             r"stamp=0x[0-9a-f]+ zeroed=1 verified=1 end=fault",
-            r"SLIME_GRAPH component fault task=\d+ kind=VirtualMemory \{ access: \w+, "
+            r"SLIME_GRAPH component fault task=\d+ kind=VirtualMemory \{ access: Write, "
             r"status: \d+ \} address=Some\(\d+\)",
             r"SLIME_ROOT reclaim census task=\d+ slots=\d+ bytes=\d+ live_objects=\d+ "
             r"extent_reuses=\d+",
@@ -656,6 +648,47 @@ def check_markers(
         fail("normal private-memory transcript contains workload qualification")
 
 
+def check_cycle_fault_attribution(transcript: str, declared_pages: int) -> None:
+    prefix = "cycle fault attribution: "
+    quotas = list(re.finditer(
+        r"^SLIME_MEM quota task=(\d+) instance=private-cycle-probe "
+        r"declared=(\d+) installed=(\d+) base=(0x[0-9a-f]+)$", transcript, re.MULTILINE))
+    if len(quotas) != CYCLE_COUNT or len({q.group(1) for q in quotas}) != CYCLE_COUNT:
+        fail(prefix + "missing, duplicate or reused holder identity")
+    all_faults = re.findall(r"^SLIME_GRAPH component fault task=", transcript, re.MULTILINE)
+    if len(all_faults) != CYCLE_COUNT // 2:
+        fail(prefix + "unexpected fault count")
+    for cycle, quota in enumerate(quotas):
+        task, declared, installed, base = quota.groups()
+        if (int(declared), int(installed)) != (declared_pages, declared_pages):
+            fail(prefix + "installed quota differs")
+        end = quotas[cycle + 1].start() if cycle + 1 < len(quotas) else len(transcript)
+        interval = transcript[quota.end():end]
+        report = re.search(
+            rf"\[private-cycle-probe\] cycle={cycle} pages={declared_pages} base={base} "
+            r"stamp=0x[0-9a-f]+ zeroed=1 verified=1 end=(exit|fault)", interval)
+        growth = re.search(
+            rf"SLIME_MEM grown task={task} delta={declared_pages} previous=0 pages={declared_pages} "
+            rf"base={base} quota={declared_pages} total={declared_pages} large_frames={declared_pages // 512} base_frames=0 leaf_tables=0",
+            interval)
+        if report is None or growth is None or growth.end() > report.start():
+            fail(prefix + "fault subject did not establish its backed private region")
+        faults = list(re.finditer(
+            r"SLIME_GRAPH component fault task=(\d+) kind=VirtualMemory "
+            r"\{ access: (\w+), status: (\d+) \} address=Some\((\d+)\)", interval))
+        if cycle % 2 == 0:
+            if report.group(1) != "exit" or faults:
+                fail(prefix + "clean incarnation unexpectedly faulted")
+            continue
+        access = "Write" if cycle % 4 == 1 else "Execute"
+        address = int(base, 16) + (declared_pages * 4096 if access == "Write" else 0)
+        if report.group(1) != "fault" or len(faults) != 1:
+            fail(prefix + "missing exact fault record")
+        fault = faults[0]
+        if fault.start() < report.end() or fault.group(1) != task or fault.group(2) != access or int(fault.group(4)) != address or int(fault.group(3)) == 0:
+            fail(prefix + f"cycle {cycle} has wrong task, access, address, status or ordering")
+
+
 def check_reuse_cycles(transcript: str, declared_pages: int) -> None:
     """MEM-64M's reuse clause: twenty 64 MiB lives, no drift, no stale bytes.
 
@@ -704,15 +737,12 @@ def check_reuse_cycles(transcript: str, declared_pages: int) -> None:
         fail(prefix + f"incarnations were served {len(bases)} distinct bases: {sorted(bases)}")
 
     exits = len(re.findall(r"SLIME_GRAPH component exit task=\d+ status=0", transcript))
-    # Every fault is a memory fault. Counting the `VirtualMemory` form against
-    # the *total* refuses a run where nine holders died on a memory access and
-    # one died of a syscall or user exception -- which is the distinction this
-    # arm can make. The access field is not asserted: see `CYCLE_CHAINS`, where
-    # the observed decode and the reason it is left open are recorded.
+    # Access, address and task identity must describe the requested fault,
+    # not stale fast-register words from an earlier service call.
     faults = len(re.findall(r"SLIME_GRAPH component fault task=\d+ kind=", transcript))
     memory_faults = re.findall(
-        r"SLIME_GRAPH component fault task=\d+ kind=VirtualMemory "
-        r"\{ access: \w+, status: \d+ \} address=Some\((\d+)\)",
+        r"SLIME_GRAPH component fault task=(\d+) kind=VirtualMemory "
+        r"\{ access: (Write|Execute), status: (\d+) \} address=Some\((\d+)\)",
         transcript,
     )
     # Init exits too, so its own clean exit is the one beyond the ten cycles.
@@ -725,6 +755,7 @@ def check_reuse_cycles(transcript: str, declared_pages: int) -> None:
             prefix + f"{len(memory_faults)} of {faults} fault(s) were memory faults; "
             "the rest ended some other way"
         )
+    check_cycle_fault_attribution(transcript, declared_pages)
     # Each faulting holder reached its own report first, so the fault followed a
     # fully committed quota rather than killing the task during construction.
     # That is the property the milestone's clause needs -- reuse *after* a
@@ -1444,6 +1475,9 @@ def run_cycles_arm(platform: str) -> None:
         qemu_binary=qemu_binary,
         image=build_cycles_image(platform),
     )
+    (ROOT / "build" / f"private-memory-cycles-{platform}.serial.log").write_text(
+        transcript + "\n", encoding="utf-8"
+    )
     check_markers(transcript, CYCLE_CHAINS)
     check_declared_is_installed(transcript, declared)
     check_reuse_cycles(transcript, quota)
@@ -1453,6 +1487,7 @@ def run_cycles_arm(platform: str) -> None:
         f"chains and 1 image case on {platform}; the declared quota "
         f"({quota} page(s)) was reclaimed and re-served {CYCLE_COUNT} times over "
         f"{CYCLE_COUNT // 2} clean exits and {CYCLE_COUNT // 2} deliberate faults, "
+        "including five exact guard Write faults and five backed-private Execute faults; "
         "every served word zero, with no drift in reusable slots, untyped bytes, "
         "or live objects"
     )
