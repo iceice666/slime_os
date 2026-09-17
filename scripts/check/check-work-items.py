@@ -29,6 +29,10 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import contextlib
+import datetime
+import importlib.util
+import io
 import json
 import re
 import shutil
@@ -47,7 +51,27 @@ from work_item_retirement_publish_controls import (
 )
 
 
+# Items whose identity is at or after this instant must carry a devloop record.
+# The value is announced rather than derived from the identity of the item that
+# proposed the rule: work created between a plan and its enforcement must stay
+# valid, and a cutoff at that item's own timestamp would have retroactively
+# refused a prose item that landed less than three minutes later. Moving it
+# later is safe; moving it earlier retroactively refuses landed work.
+# docs/decisions/mandatory-spec-driven-work-items.md owns the rationale.
+SPEC_DRIVEN_FROM_MS = 1790812800000  # 2026-10-01T00:00:00Z
+
 failures: list[str] = []
+
+
+def identity_created_ms(identity: str) -> int:
+    """The creation instant a UUIDv7 identity carries, in milliseconds.
+
+    MyQue allocates UUIDv7, and ``myque check`` refuses any other form, so the
+    leading 48 bits are the authority for when an item came into existence. The
+    ``created`` frontmatter is not used: it is an independent field that can
+    drift from the identity every durable reference resolves through.
+    """
+    return int(identity.replace("-", "")[:12], 16)
 
 
 def fail(message: str) -> None:
@@ -136,6 +160,40 @@ def check_devloop_bodies() -> list[str]:
                 f"devloop {identity}: {line}" for line in str(error).splitlines() if line.strip()
             )
     return findings
+
+
+def check_spec_driven_required(cutoff: int = SPEC_DRIVEN_FROM_MS) -> list[str]:
+    """Every item created at or after the cutoff carries a devloop record.
+
+    Enforcement is deliberately unconditional: no exemption by ``kind``,
+    ``tag``, or state. An exemption any item could claim by choosing a kind
+    would make the rule advisory, which is the policy that already produced zero
+    adoption.
+
+    The subject is decided by identity alone, so the rule resolves offline, and
+    a retired item stays subject — MyQue preserves the consumer namespace in the
+    terminal record, so retirement neither satisfies nor escapes this.
+    """
+    findings = []
+    for item in items():
+        identity = str(item["id"])
+        if identity_created_ms(identity) < cutoff or "devloop" in item["consumers"]:
+            continue
+        where = ".tasks/terminal" if item["retired"] else ".tasks/items"
+        findings.append(
+            f"{identity} ({where}) carries no devloop record: items created on or after "
+            f"{_instant(cutoff)} must be admitted with `just devloop admit`"
+        )
+    return findings
+
+
+def _instant(milliseconds: int) -> str:
+    """The cutoff as an operator reads it, so a refusal names a date not an int."""
+    return (
+        datetime.datetime.fromtimestamp(milliseconds / 1000, datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def check_terminal_records() -> list[str]:
@@ -286,6 +344,122 @@ def check_profile_controls() -> None:
     )
 
 
+def _identity_at(milliseconds: int, suffix: int) -> str:
+    """A syntactically valid UUIDv7 that claims a given creation instant."""
+    stamp = f"{milliseconds:012x}"
+    return f"{stamp[:8]}-{stamp[8:]}-7000-8000-{suffix:012d}"
+
+
+def _fixture_item(identity: str, *, spec_driven: bool) -> str:
+    record = (
+        "devloop:\n  recordSchema: devloop-consumer/v1\n  schema: dev-spec/v1\n"
+        "  bodyProfile: fenced-zti/v1\n"
+        if spec_driven
+        else ""
+    )
+    return (
+        f"---\nschema: work-item/v2\nid: {identity}\nkind: task\nstate: open\n"
+        f"created: 2026-10-02T10:00:00Z\n{record}---\n\n# Cutoff control\n"
+    )
+
+
+def check_cutoff_controls() -> None:
+    """The cutoff refuses only what it claims to, on both sides of the instant.
+
+    Fixtures are derived from ``SPEC_DRIVEN_FROM_MS`` rather than hard-coded, so
+    moving the cutoff moves the controls with it instead of leaving them
+    asserting a date the rule no longer uses.
+    """
+    with tempfile.TemporaryDirectory(prefix="cutoff-controls-") as temporary:
+        fixtures = _Path(temporary) / "items"
+        fixtures.mkdir()
+        cases = {
+            "before": (_identity_at(SPEC_DRIVEN_FROM_MS - 1, 1), False),
+            "after": (_identity_at(SPEC_DRIVEN_FROM_MS, 2), False),
+            "after-admitted": (_identity_at(SPEC_DRIVEN_FROM_MS + 86_400_000, 3), True),
+        }
+        for name, (identity, spec_driven) in cases.items():
+            (fixtures / f"{identity}.md").write_text(
+                _fixture_item(identity, spec_driven=spec_driven)
+            )
+            if name == "before" and identity_created_ms(identity) >= SPEC_DRIVEN_FROM_MS:
+                fail("control: the pre-cutoff fixture is not actually before the cutoff")
+
+        with (
+            patch.object(work_items, "ITEMS", fixtures),
+            patch.object(work_items, "TERMINAL", _Path(temporary) / "absent"),
+        ):
+            work_items.cache_clear()
+            try:
+                findings = check_spec_driven_required()
+            finally:
+                work_items.cache_clear()
+
+        refused = {
+            identity for identity, _ in cases.values() if any(identity in f for f in findings)
+        }
+        if cases["after"][0] not in refused:
+            fail("control: a post-cutoff item without a devloop record was accepted")
+        if cases["before"][0] in refused:
+            fail("control: a pre-cutoff prose item was refused")
+        if cases["after-admitted"][0] in refused:
+            fail("control: a post-cutoff item carrying a devloop record was refused")
+        if len(findings) != 1:
+            fail(f"control: the cutoff reported {len(findings)} findings, expected exactly 1")
+
+
+def _gate_module():
+    """The gate adapter, loaded by path because its filename is not an identifier."""
+    location = _Path(__file__).resolve().parent / "devloop-gate.py"
+    spec = importlib.util.spec_from_file_location("devloop_gate", location)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_gate_controls() -> None:
+    """`just-target` separates a check that failed from a gate that could not run.
+
+    Conflating them would let a typo in an execution input be recorded as
+    evidence that the repository is broken, or a real regression be dismissed as
+    a harness problem. No target is executed here: both the recipe runner and
+    the declared-target list are replaced, so the controls stay offline.
+    """
+    module = _gate_module()
+    with tempfile.TemporaryDirectory(prefix="gate-controls-") as temporary:
+        inputs = _Path(temporary) / "inputs.json"
+
+        def request(payload: object) -> dict:
+            inputs.write_text(json.dumps(payload))
+            return {"inputs": str(inputs), "acceptance": {"id": "A1"}}
+
+        # The adapter narrates what it ran to stderr. That is wanted under
+        # devloop and misleading here, where a deliberately failing fixture
+        # would print `failed` inside a passing `just tasks_check`.
+        with (
+            patch.object(module, "declared_targets", lambda: {"fixture_target"}),
+            patch.object(module, "recipe", lambda target: (False, "fixture failure")),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            observations = module.just_target(request({"justTarget": "fixture_target"}))
+        if [o["value"]["boolValue"] for o in observations] != [False]:
+            fail("control: a failing target was not reported as passed=false")
+        if [o["id"] for o in observations] != ["passed"]:
+            fail("control: the generic gate reported observations policy does not declare")
+
+        with patch.object(module, "declared_targets", lambda: {"fixture_target"}):
+            for name, payload in {
+                "an undeclared target": {"justTarget": "not_a_recipe"},
+                "no justTarget": {"unrelated": True},
+                "a non-object inputs file": ["fixture_target"],
+            }.items():
+                try:
+                    module.just_target(request(payload))
+                except module.CannotRun:
+                    continue
+                fail(f"control: the generic gate ran with {name}")
+
+
 def check_terminal_controls() -> None:
     """A corrupt or non-terminal record is reported, never counted as done."""
     with tempfile.TemporaryDirectory(prefix="terminal-controls-") as temporary:
@@ -349,6 +523,8 @@ def main() -> int:
             "work-item authority and nothing reconstructs it"
         )
     check_controls()
+    check_cutoff_controls()
+    check_gate_controls()
     check_terminal_controls()
     failures.extend(check_retirement_controls())
     try:
@@ -357,6 +533,7 @@ def main() -> int:
         fail(f"retirement publication control: {error}")
     failures.extend(run_myque_check())
     failures.extend(check_backlog_first())
+    failures.extend(check_spec_driven_required())
     failures.extend(check_terminal_records())
     failures.extend(check_devloop_bodies())
     check_profile_controls()
