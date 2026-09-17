@@ -40,7 +40,15 @@ pub(super) fn serve_instance_graph(
     #[cfg(slime_boot_selector)] block_devices: &mut device::BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
+    policy::report_memory_census(allocator, tasks, 0);
+    let report_backing =
+        generation.boot_action == boot_contracts::generation::BootAction::PrivateMemory;
+    if report_backing {
+        allocator.report_backing_snapshot("initial");
+    }
     let mut terminations = supervision::Terminations::new();
+    let mut retirements = supervision::Retirements::new();
+    let mut cleanup_timer_armed = false;
     let mut healthy_emitted = false;
 
     sel4::debug_println!(
@@ -88,7 +96,59 @@ pub(super) fn serve_instance_graph(
         });
     }
     while iteration_limit.is_none_or(|limit| iterations < limit) {
-        if live == 0 {
+        for id in retirements.tasks().into_iter().flatten() {
+            retirements.retry(id, |phase| match phase {
+                supervision::RetirementPhase::Suspend => {
+                    tasks.get(id).is_some_and(|task| task.suspend().is_ok())
+                }
+                supervision::RetirementPhase::Io => {
+                    match io_resource::reclaim_driver(
+                        io_service,
+                        io_authority,
+                        allocator,
+                        tasks,
+                        id,
+                    ) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            sel4::debug_println!(
+                                "SLIME_IO reclaim pending task={} error={error:?}",
+                                id.0
+                            );
+                            false
+                        }
+                    }
+                }
+                supervision::RetirementPhase::Buffers => tasks
+                    .get(id)
+                    .map(|task| VSpaceCap(task.vspace.vspace.bits() as usize))
+                    .is_some_and(|vspace| reclaim_dead_task(buffers, allocator, id, vspace)),
+                supervision::RetirementPhase::Arena => {
+                    if reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id) {
+                        windows.release(id);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            });
+        }
+        if !retirements.is_empty() || cleanup_timer_armed {
+            let now = timer_adapter
+                .monotonic_now()
+                .unwrap_or_else(|error| fatal!("SLIME_GRAPH FAIL cleanup clock error={error:?}"));
+            let programming = if retirements.is_empty() {
+                clock_service.cancel_cleanup_retry(now)
+            } else {
+                clock_service.arm_cleanup_retry(now, (timer_adapter.frequency_hz() / 100).max(1))
+            }
+            .unwrap_or_else(|error| fatal!("SLIME_GRAPH FAIL cleanup timer error={error:?}"));
+            apply_deadline_programming(timer_adapter, programming).unwrap_or_else(|error| {
+                fatal!("SLIME_GRAPH FAIL cleanup timer programming error={error:?}")
+            });
+            cleanup_timer_armed = !retirements.is_empty();
+        }
+        if live == 0 && retirements.is_empty() {
             sel4::debug_println!(
                 "SLIME_ROOT allocator quiescent live_slots={} live_objects={} live_bytes={}",
                 allocator.live_slots(),
@@ -134,7 +194,7 @@ pub(super) fn serve_instance_graph(
             ipc::reply(Response::error(IpcError::InvalidOperation));
             continue;
         };
-        if tasks.get(id).is_none() {
+        if tasks.get(id).is_none() || retirements.contains(id) {
             sel4::debug_println!("SLIME_GRAPH unknown task badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
             continue;
@@ -242,14 +302,9 @@ pub(super) fn serve_instance_graph(
                 );
             }
             lifecycle_service.release(id);
-            if let Err(error) =
-                io_resource::reclaim_driver(io_service, io_authority, allocator, tasks, id)
-            {
-                sel4::debug_println!("SLIME_IO FAIL reclaim task={} error={error:?}", id.0);
+            if !retirements.insert(id) {
+                return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
             }
-            reclaim_dead_task(buffers, allocator, id);
-            windows.release(id);
-            reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
             live -= 1;
             continue;
         }
@@ -458,14 +513,9 @@ pub(super) fn serve_instance_graph(
                     );
                 }
                 lifecycle_service.release(id);
-                if let Err(error) =
-                    io_resource::reclaim_driver(io_service, io_authority, allocator, tasks, id)
-                {
-                    sel4::debug_println!("SLIME_IO FAIL reclaim task={} error={error:?}", id.0);
+                if !retirements.insert(id) {
+                    return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
                 }
-                reclaim_dead_task(buffers, allocator, id);
-                windows.release(id);
-                reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
                 live -= 1;
             }
             // Spawn the executable a declared grant named. The slot resolves
@@ -1494,7 +1544,7 @@ pub(super) fn serve_instance_graph(
                 ipc::reply(Response::error(IpcError::UnsupportedOperation));
             }
         }
-        if required != 0 {
+        if required != 0 && retirements.is_empty() {
             let mut live_required = 0;
             let mut completed = 0;
             for instance_index in 0..generation.instance_count() {
@@ -1675,8 +1725,11 @@ pub(super) fn serve_instance_graph(
         allocator.slots_reused(),
         allocator.extents_reused(),
     );
+    if report_backing && tasks.is_empty() && retirements.is_empty() {
+        allocator.report_backing_snapshot("final");
+    }
     let completed = completed_required.iter().filter(|done| **done).count();
-    if live == 0 && required != 0 && completed == required {
+    if live == 0 && retirements.is_empty() && required != 0 && completed == required {
         sel4::debug_println!(
             "SLIME_GRAPH HEALTHY generation={} required={} live=0 completed={} failed=0",
             generation.number,

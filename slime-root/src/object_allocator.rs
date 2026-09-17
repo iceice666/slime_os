@@ -8,6 +8,10 @@
 //! task. Root CSlots are managed by a bounded bitmap and are returned only after
 //! the corresponding capability is known to be gone.
 
+mod global_backing;
+mod mapping_tables;
+mod shared_backing;
+
 use core::ops::Range;
 #[cfg(slime_b38_force_unwind)]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -161,9 +165,11 @@ const fn widest_private_allocations() -> usize {
     if runtime > planned { runtime } else { planned }
 }
 pub const MAX_TASK_ALLOCATIONS: usize = if LARGE_DESCRIPTOR_TABLES {
-    widest_private_allocations() + MAX_TASK_ARENAS * MAX_PLANNED_STATIC_ALLOCATIONS
+    widest_private_allocations()
+        + MAX_TASK_ARENAS * MAX_PLANNED_STATIC_ALLOCATIONS
+        + mapping_tables::RECORDS
 } else {
-    4096
+    4096 + mapping_tables::RECORDS
 };
 const _: () = assert!(
     MAX_TASK_ALLOCATIONS
@@ -211,9 +217,9 @@ const fn widest_private_extents() -> usize {
 /// Every task consumes one static extent; qualified images additionally carry
 /// the widest private extent population either demand produces.
 pub const MAX_TASK_EXTENTS: usize = if LARGE_DESCRIPTOR_TABLES {
-    MAX_TASK_ARENAS + widest_private_extents()
+    MAX_TASK_ARENAS + widest_private_extents() + mapping_tables::RECORDS
 } else {
-    3 * MAX_TASK_ARENAS
+    3 * MAX_TASK_ARENAS + mapping_tables::RECORDS
 };
 const _: () = assert!(
     MAX_TASK_EXTENTS >= MAX_TASK_ARENAS + max_admissible_private_extents(),
@@ -419,20 +425,6 @@ pub(crate) fn plan_allocation(
     (end <= capacity).then_some((start, end))
 }
 
-fn plan_extent_in_regions(regions: &mut [Option<UntypedRegion>], size_bits: usize) -> bool {
-    let Some((index, watermark)) = regions.iter().enumerate().find_map(|(index, region)| {
-        let region = region.as_ref()?;
-        plan_allocation(region.watermark, region.capacity(), size_bits).map(|(_, end)| (index, end))
-    }) else {
-        return false;
-    };
-    regions[index]
-        .as_mut()
-        .expect("selected untyped region exists")
-        .watermark = watermark;
-    true
-}
-
 fn task_backing_extents_fit_in(
     regions: &mut [Option<UntypedRegion>],
     plan: TaskBackingPlan,
@@ -459,13 +451,28 @@ fn task_backing_extents_fit_in(
     {
         return false;
     }
+    let mut preserved = [None; global_backing::MAX_PRESERVED];
+    let mut preserved_len = 0;
+    let mut slots = usize::MAX;
     for _ in 0..holders {
-        if !plan_extent_in_regions(regions, static_size_bits) {
+        if !global_backing::plan_extent(
+            regions,
+            &mut preserved,
+            &mut preserved_len,
+            &mut slots,
+            static_size_bits,
+        ) {
             return false;
         }
         let mut index = 0;
         while let Some(extent) = layout.extent(index) {
-            if !plan_extent_in_regions(regions, extent.size_bits) {
+            if !global_backing::plan_extent(
+                regions,
+                &mut preserved,
+                &mut preserved_len,
+                &mut slots,
+                extent.size_bits,
+            ) {
                 return false;
             }
             index += 1;
@@ -643,7 +650,9 @@ impl PrivateBackingLayout {
         if index >= self.extent_parent_slots() {
             return None;
         }
-        Some(if index.is_multiple_of(2) {
+        // Group leaf-table extents before data extents so alternating 4 KiB
+        // and 2 MiB retypes cannot strand almost 2 MiB at every span boundary.
+        Some(if index < self.spans {
             PrivateExtentSpec {
                 kind: ExtentKind::PrivateTables,
                 size_bits: GRANULE_BYTES.trailing_zeros() as usize,
@@ -865,6 +874,7 @@ impl ProvenanceTable {
 fn records_provenance(blueprint: sel4::ObjectBlueprint) -> bool {
     blueprint == <sel4::cap_type::Granule as sel4::CapTypeForObjectOfFixedSize>::object_blueprint()
 }
+#[derive(Clone)]
 struct SlotPool {
     base: usize,
     len: usize,
@@ -907,16 +917,22 @@ impl SlotPool {
     }
 
     fn allocate(&mut self, total_allocated: usize) -> Result<(usize, bool), AllocError> {
-        for offset in 0..self.len {
-            let word = offset / SLOT_WORD_BITS;
-            let mask = 1usize << (offset % SLOT_WORD_BITS);
-            if self.used[word] & mask == 0 {
-                let reused = self.issued[word] & mask != 0;
-                self.used[word] |= mask;
-                self.issued[word] |= mask;
-                self.live += 1;
-                return Ok((self.base + offset, reused));
+        for word in 0..self.len.div_ceil(SLOT_WORD_BITS) {
+            let free = !self.used[word];
+            if free == 0 {
+                continue;
             }
+            let bit = free.trailing_zeros() as usize;
+            let offset = word * SLOT_WORD_BITS + bit;
+            if offset >= self.len {
+                break;
+            }
+            let mask = 1usize << bit;
+            let reused = self.issued[word] & mask != 0;
+            self.used[word] |= mask;
+            self.issued[word] |= mask;
+            self.live += 1;
+            return Ok((self.base + offset, reused));
         }
         Err(AllocError::SlotsExhausted {
             allocated: total_allocated,
@@ -1126,6 +1142,7 @@ enum ExtentKind {
     Static,
     PrivateData,
     PrivateTables,
+    MappingTables,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1271,11 +1288,14 @@ pub struct ObjectAllocator {
     slots: SlotPool,
     untypeds: [Option<UntypedRegion>; MAX_KERNEL_UNTYPEDS],
     untyped_len: usize,
+    preserved: [Option<UntypedRegion>; global_backing::MAX_PRESERVED],
+    preserved_len: usize,
     devices: [Option<DeviceRegion>; MAX_DEVICE_UNTYPEDS],
     device_len: usize,
     arenas: [ArenaRecord; MAX_TASK_ARENAS],
     extents: [Option<ExtentRecord>; MAX_TASK_EXTENTS],
     allocations: [AllocationRecord; MAX_TASK_ALLOCATIONS],
+    allocation_search_start: usize,
     next_arena_serial: u32,
     slots_allocated: usize,
     objects_allocated: usize,
@@ -1286,6 +1306,8 @@ pub struct ObjectAllocator {
     extents_reused: usize,
     last_paddr: usize,
     physical: ProvenanceTable,
+    shared_backing: shared_backing::BuddyBacking,
+    mapping_tables: mapping_tables::MappingTables,
     #[cfg(test)]
     private_visits: PrivateRecordVisits,
 }
@@ -1296,11 +1318,14 @@ impl ObjectAllocator {
             slots: SlotPool::EMPTY,
             untypeds: [None; MAX_KERNEL_UNTYPEDS],
             untyped_len: 0,
+            preserved: [None; global_backing::MAX_PRESERVED],
+            preserved_len: 0,
             devices: [None; MAX_DEVICE_UNTYPEDS],
             device_len: 0,
             arenas: [ArenaRecord::empty(); MAX_TASK_ARENAS],
             extents: [None; MAX_TASK_EXTENTS],
             allocations: [AllocationRecord::EMPTY; MAX_TASK_ALLOCATIONS],
+            allocation_search_start: 0,
             next_arena_serial: 1,
             slots_allocated: 0,
             objects_allocated: 0,
@@ -1311,6 +1336,8 @@ impl ObjectAllocator {
             extents_reused: 0,
             last_paddr: 0,
             physical: ProvenanceTable::new(),
+            shared_backing: shared_backing::BuddyBacking::new(),
+            mapping_tables: mapping_tables::MappingTables::new(),
             #[cfg(test)]
             private_visits: PrivateRecordVisits {
                 reusable: 0,
@@ -1350,6 +1377,37 @@ impl ObjectAllocator {
         }
         if self.untyped_len == 0 {
             return Err(AllocError::NoKernelUntyped);
+        }
+
+        // seL4 resets an untyped's cursor when it has no descendants. Keep a
+        // tracked minimum-size child alive so deleting ordinary objects cannot
+        // invalidate the allocator's physical-address prediction. The child's
+        // bytes remain available through preserved-leaf allocation.
+        if self.untyped_len > global_backing::MAX_PRESERVED - self.preserved_len {
+            return Err(AllocError::UntypedTableFull {
+                limit: global_backing::MAX_PRESERVED,
+                declared: self.preserved_len + self.untyped_len,
+            });
+        }
+        if self.untyped_len > self.free_slots() {
+            return Err(AllocError::SlotsExhausted {
+                allocated: self.slots_allocated,
+            });
+        }
+        for index in 0..self.untyped_len {
+            let region = self.untypeds[index].ok_or(AllocError::NoKernelUntyped)?;
+            sel4::debug_println!(
+                "SLIME_BACKING inventory parent={} paddr={} bytes={}",
+                region.cap.bits(),
+                region.paddr,
+                region.capacity(),
+            );
+            let anchor_bytes = if region.capacity() <= GRANULE_BYTES {
+                region.capacity()
+            } else {
+                1 << global_backing::MINIMUM_BITS
+            };
+            self.preserve_global_prefix(index, anchor_bytes)?;
         }
 
         let device_untypeds = bootinfo.device_untyped_range();
@@ -1401,6 +1459,24 @@ impl ObjectAllocator {
     }
     pub const fn extents_reused(&self) -> usize {
         self.extents_reused
+    }
+
+    /// Root capabilities retained as lifetime anchors for reusable extents.
+    pub fn reusable_extent_anchors(&self) -> usize {
+        self.extents
+            .iter()
+            .flatten()
+            .filter(|extent| !extent.active)
+            .count()
+    }
+
+    pub fn active_extent_bytes(&self) -> usize {
+        self.extents
+            .iter()
+            .flatten()
+            .filter(|extent| extent.active)
+            .map(|extent| 1usize << extent.size_bits)
+            .sum()
     }
 
     pub fn reusable_extent_bytes(&self) -> usize {
@@ -1503,13 +1579,62 @@ impl ObjectAllocator {
         static_backing: TaskStaticBacking,
         holders: usize,
     ) -> bool {
+        if plan_task_backing(plan.private_pages) != Some(plan) {
+            return false;
+        }
+        let Some(non_parent) = plan
+            .allocation_descriptors
+            .checked_add(static_backing.allocation_descriptors)
+        else {
+            return false;
+        };
+        let mut slots = self.free_slots();
+        let mut slot_pool = self.slots.clone();
+        if !static_backing.reserved_bytes.is_power_of_two() {
+            return holders == 0;
+        }
         let mut regions = self.untypeds;
-        task_backing_extents_fit_in(
-            &mut regions[..self.untyped_len],
-            plan,
-            static_backing,
-            holders,
-        )
+        let mut preserved = self.preserved;
+        let mut preserved_len = self.preserved_len;
+        let layout = PrivateBackingLayout::for_pages(plan.private_pages);
+        for _ in 0..holders {
+            if !global_backing::plan_extent_with_slots(
+                &mut regions[..self.untyped_len],
+                &mut preserved,
+                &mut preserved_len,
+                &mut slots,
+                static_backing.reserved_bytes.trailing_zeros() as usize,
+                Some(&mut slot_pool),
+            ) {
+                return false;
+            }
+            let mut index = 0;
+            while let Some(extent) = layout.extent(index) {
+                if !global_backing::plan_extent_with_slots(
+                    &mut regions[..self.untyped_len],
+                    &mut preserved,
+                    &mut preserved_len,
+                    &mut slots,
+                    extent.size_bits,
+                    Some(&mut slot_pool),
+                ) {
+                    return false;
+                }
+                index += 1;
+            }
+            // Runtime reserves payload descriptors and static object slots
+            // after the holder's parent extents, before the next holder.
+            let Some(remaining) = slots.checked_sub(non_parent) else {
+                return false;
+            };
+            for _ in 0..non_parent {
+                if slot_pool.allocate(0).is_err() {
+                    return false;
+                }
+            }
+            slots = remaining;
+        }
+        true
     }
 
     fn take_slot(&mut self) -> Result<usize, AllocError> {
@@ -1524,6 +1649,9 @@ impl ObjectAllocator {
         blueprint: sel4::ObjectBlueprint,
         slot_index: usize,
     ) -> Result<(), AllocError> {
+        if self.allocate_preserved(blueprint, slot_index)? {
+            return Ok(());
+        }
         let size_bits = blueprint.physical_size_bits();
         let (region_index, start, watermark) = self
             .untypeds
@@ -1551,6 +1679,7 @@ impl ObjectAllocator {
         // afterwards would mean either a live capability with no recoverable
         // physical base, or a slot released while still holding one — the
         // `DeleteFirst` hazard [`Self::release_slot`] documents.
+        self.preserve_global_prefix(region_index, start)?;
         let recorded = records_provenance(blueprint);
         if recorded {
             self.physical.insert(slot_index, paddr)?;
@@ -1576,6 +1705,24 @@ impl ObjectAllocator {
         self.live_objects += 1;
         self.bytes_allocated += 1usize << size_bits;
         self.live_bytes += 1usize << size_bits;
+        sel4::debug_println!(
+            "SLIME_BACKING consume source=ordinary parent={} slot={} paddr={} bytes={} count=1",
+            region.cap.bits(),
+            slot_index,
+            paddr,
+            1usize << size_bits,
+        );
+        sel4::debug_println!(
+            "SLIME_ALLOC global region={} parent={} slot={} prior={} start={} end={} bytes={} gap={}",
+            region_index,
+            region.cap.bits(),
+            slot_index,
+            region.watermark,
+            start,
+            watermark,
+            1usize << size_bits,
+            start - region.watermark,
+        );
         Ok(())
     }
 
@@ -1609,6 +1756,34 @@ impl ObjectAllocator {
         let blueprint =
             <sel4::cap_type::Granule as sel4::CapTypeForObjectOfFixedSize>::object_blueprint();
         let size_bits = blueprint.physical_size_bits();
+        if let Some(index) = self.preserved[..self.preserved_len]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, region)| {
+                region
+                    .filter(|region| region.watermark == 0 && region.size_bits == size_bits)
+                    .map(|region| (index, region.paddr))
+            })
+            .max_by_key(|(_, paddr)| *paddr)
+            .filter(|(_, paddr)| {
+                self.untypeds[..self.untyped_len]
+                    .iter()
+                    .flatten()
+                    .filter_map(|region| {
+                        plan_allocation(region.watermark, region.capacity(), size_bits)
+                            .and_then(|(start, _)| region.paddr.checked_add(start))
+                    })
+                    .all(|candidate| candidate < *paddr)
+            })
+            .map(|(index, _)| index)
+        {
+            let slot = self.take_slot()?;
+            if let Err(error) = self.allocate_preserved_leaf(blueprint, slot, index) {
+                self.slots.release(slot);
+                return Err(error);
+            }
+            return Ok(sel4::init_thread::Slot::from_index(slot));
+        }
         let (region_index, start, watermark) = self
             .untypeds
             .iter()
@@ -1630,6 +1805,10 @@ impl ObjectAllocator {
             remaining: 0,
         })?;
         let slot = self.take_slot()?;
+        if let Err(error) = self.preserve_global_prefix(region_index, start) {
+            self.slots.release(slot);
+            return Err(error);
+        }
         let paddr = region.paddr.saturating_add(start);
         if let Err(error) = self.physical.insert(slot, paddr) {
             self.slots.release(slot);
@@ -1655,6 +1834,13 @@ impl ObjectAllocator {
         self.live_objects += 1;
         self.bytes_allocated += 1usize << size_bits;
         self.live_bytes += 1usize << size_bits;
+        sel4::debug_println!(
+            "SLIME_BACKING consume source=ordinary parent={} slot={} paddr={} bytes={} count=1",
+            region.cap.bits(),
+            slot,
+            paddr,
+            1usize << size_bits,
+        );
         Ok(sel4::init_thread::Slot::from_index(slot))
     }
 
@@ -1702,6 +1888,12 @@ impl ObjectAllocator {
         let (first, reused) = self
             .slots
             .allocate_contiguous(count, self.slots_allocated)?;
+        if let Err(error) = self.preserve_global_prefix(region_index, start) {
+            for slot in first..first + count {
+                self.slots.release(slot);
+            }
+            return Err(error);
+        }
         let paddr = region.paddr.saturating_add(start);
         for index in 0..count {
             if let Err(error) = self
@@ -1739,6 +1931,14 @@ impl ObjectAllocator {
         self.bytes_allocated += total;
         self.live_bytes += total;
         self.last_paddr = paddr + (count - 1) * page_bytes;
+        sel4::debug_println!(
+            "SLIME_BACKING consume source=ordinary parent={} slot={} paddr={} bytes={} count={}",
+            region.cap.bits(),
+            first,
+            paddr,
+            total,
+            count,
+        );
         Ok((first, paddr))
     }
 
@@ -1948,9 +2148,9 @@ impl ObjectAllocator {
     }
 
     fn allocation_position(&self) -> Result<usize, AllocError> {
-        self.allocations
-            .iter()
-            .position(|record| record.owner == u16::MAX)
+        (self.allocation_search_start..MAX_TASK_ALLOCATIONS)
+            .chain(0..self.allocation_search_start)
+            .find(|index| self.allocations[*index].owner == u16::MAX)
             .ok_or(AllocError::ArenaSlotTableFull {
                 limit: MAX_TASK_ALLOCATIONS,
             })
@@ -1971,6 +2171,7 @@ impl ObjectAllocator {
             next_state: PRIVATE_STATE_NONE,
         };
         self.arena_mut(id)?.slot_len += 1;
+        self.allocation_search_start = (position + 1) % MAX_TASK_ALLOCATIONS;
         Ok(position)
     }
 
@@ -2000,11 +2201,19 @@ impl ObjectAllocator {
         id: TaskArenaId,
         blueprint: sel4::ObjectBlueprint,
     ) -> Result<sel4::init_thread::Slot<sel4::cap_type::Unspecified>, AllocError> {
+        self.allocate_in_kind(id, blueprint, ExtentKind::Static)
+    }
+
+    fn allocate_in_kind(
+        &mut self,
+        id: TaskArenaId,
+        blueprint: sel4::ObjectBlueprint,
+        kind: ExtentKind,
+    ) -> Result<sel4::init_thread::Slot<sel4::cap_type::Unspecified>, AllocError> {
         self.arena(id)?;
         self.allocation_position()?;
         let size_bits = blueprint.physical_size_bits();
-        let (extent_index, watermark) =
-            self.extent_for_allocation(id, ExtentKind::Static, size_bits)?;
+        let (extent_index, watermark) = self.extent_for_allocation(id, kind, size_bits)?;
         let slot = self.take_slot()?;
         let parent = self.extents[extent_index]
             .expect("selected extent exists")
@@ -2493,6 +2702,7 @@ impl ObjectAllocator {
             self.slots.release(slot);
             self.physical.remove(slot);
             self.allocations[index] = AllocationRecord::EMPTY;
+            self.allocation_search_start = self.allocation_search_start.min(index);
         }
         for extent in self.extents.iter_mut().flatten() {
             if extent.belongs_to(id) {
@@ -2503,6 +2713,7 @@ impl ObjectAllocator {
                 extent.watermark = 0;
             }
         }
+        self.mapping_tables.forget(id);
         self.arenas[id.index()] = ArenaRecord::empty();
         Ok(released)
     }
@@ -3233,17 +3444,15 @@ mod tests {
         assert_eq!(current.data_extents, 1);
         assert_eq!(current.reserved_bytes, MAX_PRIVATE_EXTENT_BYTES + 4096);
         assert!(plan_task_backing(MAX_PLANNED_PRIVATE_PAGES + 1).is_none());
-        // Runtime provisions table,data per span. At this scale each 4 KiB
-        // table advances the bump watermark past the next 2 MiB boundary, so
-        // the following data extent pays alignment again; summed bytes alone
-        // therefore understate the untyped size needed by four holders.
+        // Grouping table extents keeps alignment overhead bounded per holder,
+        // rather than discarding almost a large frame for every data span.
         let mut two_gib = [Some(UntypedRegion {
             cap: sel4::cap::Untyped::from_bits(1),
             paddr: 0x8000_0000,
             size_bits: 31,
             watermark: 128 * 1024 * 1024,
         })];
-        assert!(!task_backing_extents_fit_in(
+        assert!(task_backing_extents_fit_in(
             &mut two_gib,
             holder,
             TaskStaticBacking {
@@ -3373,7 +3582,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_replays_table_then_data_extent_order() {
+    fn capacity_replays_grouped_table_then_data_extent_order() {
         let plan = plan_task_backing(1024).unwrap();
         let static_backing = TaskStaticBacking {
             allocation_descriptors: 1,
@@ -3388,7 +3597,7 @@ mod tests {
             })
         };
         let mut misleading = [region(GRANULE_BYTES)];
-        assert!(!task_backing_extents_fit_in(
+        assert!(task_backing_extents_fit_in(
             &mut misleading,
             plan,
             static_backing,
@@ -3720,9 +3929,14 @@ mod tests {
             assert!(MAX_PLANNED_STATIC_ALLOCATIONS >= 520);
             assert_eq!(
                 MAX_TASK_ALLOCATIONS,
-                widest_private_allocations() + MAX_TASK_ARENAS * MAX_PLANNED_STATIC_ALLOCATIONS
+                widest_private_allocations()
+                    + MAX_TASK_ARENAS * MAX_PLANNED_STATIC_ALLOCATIONS
+                    + super::mapping_tables::RECORDS
             );
-            assert_eq!(MAX_TASK_EXTENTS, MAX_TASK_ARENAS + widest_private_extents());
+            assert_eq!(
+                MAX_TASK_EXTENTS,
+                MAX_TASK_ARENAS + widest_private_extents() + super::mapping_tables::RECORDS
+            );
             // Both demands are covered: the aggregate a growth may actually
             // charge, and the four-holder plan the capacity report describes.
             // Neither dominates the other in general, so the bound is the max.

@@ -489,10 +489,14 @@ impl Task {
         (live, peak)
     }
 
-    /// Stop the main thread during teardown. Idempotent from the root task's
-    /// perspective; arena revocation destroys every worker with it.
+    /// Stop every thread before external resources or the VSpace are retired.
+    /// A partial suspension is retryable without resuming completed threads.
     pub fn suspend(&self) -> Result<(), sel4::Error> {
-        self.tcb.tcb_suspend()
+        self.tcb.tcb_suspend()?;
+        for worker in self.workers.iter().flatten() {
+            worker.tcb_suspend()?;
+        }
+        Ok(())
     }
 }
 

@@ -460,8 +460,8 @@ fn neg(error: i64) -> u64 {
 }
 
 fn report(tag: &[u8], state: LifecycleStateInfo) {
-    debug_write(tag);
-    write_value(b" state=", state.state_id as u64);
+    let mut digits = [0u8; 20];
+    write_line(&[tag, b" state=", decimal(state.state_id as u64, &mut digits)]);
     write_value(b"[lifecycle] attempts=", state.attempts_remaining as u64);
     write_value(b"[lifecycle] cause=", state.predecessor_cause as u64);
 }
@@ -494,16 +494,29 @@ fn report_termination(termination: slime_rt::Termination) {
         slime_rt::Termination::PeerLoss => b"peerLoss",
         slime_rt::Termination::Unhealthy => b"unhealthy",
     };
-    debug_write(b"[lifecycle-supervisor] cause=");
-    debug_write(name);
-    debug_write(b"\n");
+    write_line(&[b"[lifecycle-supervisor] cause=", name]);
 }
 
 fn write_value(prefix: &[u8], value: u64) {
     let mut digits = [0u8; 20];
-    debug_write(prefix);
-    debug_write(decimal(value, &mut digits));
-    debug_write(b"\n");
+    write_line(&[prefix, decimal(value, &mut digits)]);
+}
+
+/// Each marker is one console request; separate fragments can interleave
+/// with clock-service output between requests.
+fn write_line(parts: &[&[u8]]) {
+    let mut line = [0u8; 256];
+    let mut used = 0usize;
+    for part in parts {
+        let Some(end) = used.checked_add(part.len()).filter(|end| *end < line.len()) else {
+            debug_write(b"[lifecycle] FAIL marker exceeds bound\n");
+            exit(1);
+        };
+        line[used..end].copy_from_slice(part);
+        used = end;
+    }
+    line[used] = b'\n';
+    debug_write(&line[..used + 1]);
 }
 
 fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
@@ -522,15 +535,17 @@ fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[lifecycle] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    write_line(&[b"[lifecycle] FAIL ", reason]);
     exit(1)
 }
 
 fn fail_with(reason: &[u8], error: i64) -> ! {
-    debug_write(b"[lifecycle] FAIL ");
-    debug_write(reason);
-    write_value(b" error=", neg(error));
+    let mut digits = [0u8; 20];
+    write_line(&[
+        b"[lifecycle] FAIL ",
+        reason,
+        b" error=",
+        decimal(neg(error), &mut digits),
+    ]);
     exit(1)
 }

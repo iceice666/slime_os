@@ -459,7 +459,13 @@ pub(super) fn construct_child(
                 None => 0,
             },
         )
-        .map_err(|_| IpcError::DestinationSlotsExhausted)?;
+        .map_err(|error| {
+            sel4::debug_println!(
+                "SLIME_GRAPH construction refused instance={} error={error:?}",
+                instance.name
+            );
+            IpcError::DestinationSlotsExhausted
+        })?;
 
     let Some(task) = tasks.get(id) else {
         release_child(tasks, windows, buffers, allocator, id);

@@ -817,7 +817,8 @@ pub(super) fn launch_instance_graph(
             cslots_available: allocator.free_slots(),
             allocation_descriptors_available: allocator.allocation_descriptors_free(),
             extent_descriptors_available: allocator.extent_descriptors_free(),
-            ordinary_bytes_available: allocator.untyped_bytes_remaining(),
+            ordinary_bytes_available: allocator.untyped_bytes_remaining()
+                + allocator.preserved_bytes_remaining(),
             ordinary_layout_fits: allocator.task_backing_extents_fit(plan, static_backing, HOLDERS),
             root_image_bytes: bootinfo.user_image_frames().len() * child_vspace::GRANULE_SIZE,
             root_stack_bytes: ROOT_STACK_BYTES,

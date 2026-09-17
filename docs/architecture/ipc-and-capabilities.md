@@ -139,6 +139,28 @@ pages still retained by a live loan; final return settles the last reference.
 Task death, supervised restart, release, and revocation reclaim the affected
 subtree's mappings, pages, and charges without disturbing another holder.
 
+Shared-buffer admission checks current page/count charges and descriptor space
+before acquiring physical frames. Ordinary backing is acquired on demand as
+independent untyped extents; free sibling extents can split or coalesce only
+within their recorded parent. Revoke/retype supplies fresh zeroed frames, while
+retained parent capabilities and reusable backing remain explicitly accounted.
+Unrelated physical extents are never merged by address arithmetic alone.
+
+The live adapter quarantines released frame anchors until the entire logical
+teardown commits. Retrying an earlier action cannot revoke a newly allocated
+buffer through a recycled CSlot. Failed unpublished allocation cleanup remains
+owned and is retried before subsequent allocation.
+
+Dynamic mapping tables are owned by the task arena and track shared-buffer,
+DMA, and MMIO mapping dependencies by VSpace lifetime and address. Empty owned
+tables are collected bottom-up; loader-owned tables are not reclaimed by this
+path. Completed per-page teardown is remembered before any later fallible
+cleanup, so retries do not target an alias's owner mapping or a recycled slot.
+The owning mechanisms are `slime-root/src/object_allocator/shared_backing.rs`,
+`slime-root/src/object_allocator/mapping_tables.rs`, and
+`slime-root/src/buffer_adapter.rs`. These rules do not raise the declared shared
+payload limits or qualify a physical machine.
+
 Shared buffers move data between components. They are not component heap memory;
 private allocation has no object identity or transfer semantics. See
 [`private-memory.md`](private-memory.md).

@@ -65,7 +65,7 @@ use object_allocator::ObjectAllocator;
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
 use shared_buffer::{
     BufferHandle, GenerationEpoch, HolderId, HolderQuota, MappingRights, PAGE_SIZE,
-    SharedBufferAdapter, SharedBufferTable, VSpaceCap,
+    SharedBufferTable, VSpaceCap,
 };
 use task::{Arrival, CHILD_CNODE_SIZE_BITS, MAX_TASKS, Supervision, TaskId, TaskTable};
 use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
@@ -1180,6 +1180,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         allocator.slots_allocated(),
         allocator.bytes_allocated(),
     );
+    let foundation_anchors_before = allocator.preserved_anchor_count();
     let mut foundation_adapter = BufferAdapter::new(allocator);
     if let Err(error) = foundation_adapter.prove_frame_independence(
         sel4::init_thread::slot::VSPACE.cap(),
@@ -1193,8 +1194,9 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         allocator.slots_allocated(),
         allocator.bytes_allocated(),
     );
-    if foundation_after.0 != foundation_before.0 + 2
-        || foundation_after.1 != foundation_before.1 + 2
+    let foundation_anchors = allocator.preserved_anchor_count() - foundation_anchors_before;
+    if foundation_after.0 != foundation_before.0 + 2 + foundation_anchors
+        || foundation_after.1 != foundation_before.1 + 2 + foundation_anchors
         || foundation_after.2 != foundation_before.2 + 2 * GRANULE_SIZE
     {
         fatal!(
@@ -1202,8 +1204,9 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         )
     }
     sel4::debug_println!(
-        "SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta={} caps_deleted=2",
+        "SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta={} caps_deleted=2 preserved_anchors={}",
         2 * GRANULE_SIZE,
+        foundation_anchors,
     );
 
     // ---- device phase ----

@@ -670,6 +670,7 @@ impl DeviceIrq {
 pub struct DmaPage {
     base: usize,
     paddr: usize,
+    child_vspace: Option<usize>,
     #[allow(dead_code)]
     frame: sel4::cap::Granule,
 }
@@ -706,7 +707,12 @@ impl DmaPage {
         // SAFETY: `base` names one granule mapped read-write above, and no
         // other reference to it exists — the frame was retyped in this call.
         unsafe { core::ptr::write_bytes(base as *mut u8, 0, GRANULE_BYTES) };
-        Ok(Self { base, paddr, frame })
+        Ok(Self {
+            base,
+            paddr,
+            frame,
+            child_vspace: None,
+        })
     }
 
     /// Retype one DMA page directly into a child VSpace. The shared-buffer
@@ -734,7 +740,12 @@ impl DmaPage {
                 crate::shared_buffer::MappingRights::ReadWrite,
             )
             .map_err(|_| DeviceError::Map(sel4::Error::FailedLookup))?;
-        Ok(Self { base, paddr, frame })
+        Ok(Self {
+            base,
+            paddr,
+            frame,
+            child_vspace: Some(vspace.bits() as usize),
+        })
     }
 
     /// Map an already-retyped contiguous granule CSlot into a child VSpace.
@@ -759,7 +770,12 @@ impl DmaPage {
                 crate::shared_buffer::MappingRights::ReadWrite,
             )
             .map_err(|_| DeviceError::Map(sel4::Error::FailedLookup))?;
-        Ok(Self { base, paddr, frame })
+        Ok(Self {
+            base,
+            paddr,
+            frame,
+            child_vspace: Some(vspace.bits() as usize),
+        })
     }
 
     /// Guest-physical base, the address a descriptor carries.
@@ -794,6 +810,11 @@ impl DmaPage {
     /// retry without losing the capability that names the live mapping.
     pub fn release(&self, allocator: &mut ObjectAllocator) -> Result<(), DeviceError> {
         self.frame.frame_unmap().map_err(DeviceError::Map)?;
+        if let Some(vspace) = self.child_vspace {
+            allocator
+                .release_mapping_page(vspace, self.base)
+                .map_err(DeviceError::Allocate)?;
+        }
         let slot = self.frame.bits() as usize;
         sel4::init_thread::slot::CNODE
             .cap()

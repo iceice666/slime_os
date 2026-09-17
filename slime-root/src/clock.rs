@@ -17,6 +17,10 @@ use crate::timer::{
 };
 
 pub const MAX_LIVE_TIMERS: usize = boot_contracts::clock_authority::MAX_LIVE_TIMERS;
+const SCHEDULER_CAPACITY: usize = MAX_LIVE_TIMERS + 1;
+// Component timer owners always use epoch zero. The extra scheduler slot is
+// reserved for root cleanup, so full userspace quotas cannot prevent retries.
+const CLEANUP_OWNER: TaskEpoch = TaskEpoch::new(0, u32::MAX);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClockError {
@@ -75,7 +79,7 @@ struct AuthorityEntry {
 }
 
 pub struct ClockService {
-    scheduler: TimerScheduler<MAX_LIVE_TIMERS>,
+    scheduler: TimerScheduler<SCHEDULER_CAPACITY>,
     simulated_now: u64,
     authorities: [Option<AuthorityEntry>; crate::task::MAX_TASKS],
 }
@@ -89,8 +93,32 @@ impl ClockService {
         }
     }
 
-    pub const fn live_timers(&self) -> usize {
-        self.scheduler.len()
+    pub fn live_timers(&self) -> usize {
+        self.scheduler.len() - self.scheduler.timers_of(CLEANUP_OWNER)
+    }
+
+    pub fn arm_cleanup_retry(
+        &mut self,
+        now: MonotonicInstant,
+        delay: u64,
+    ) -> Result<DeadlineProgramming, ClockError> {
+        if self.scheduler.timers_of(CLEANUP_OWNER) != 0 {
+            return Ok(DeadlineProgramming::Unchanged);
+        }
+        self.scheduler
+            .schedule_after(CLEANUP_OWNER, now, delay)
+            .map(|(_, transition)| transition.programming)
+            .map_err(map_timer_error)
+    }
+
+    pub fn cancel_cleanup_retry(
+        &mut self,
+        now: MonotonicInstant,
+    ) -> Result<DeadlineProgramming, ClockError> {
+        self.scheduler
+            .cancel_task(CLEANUP_OWNER, now)
+            .map(|transition| transition.programming)
+            .map_err(map_timer_error)
     }
 
     pub fn declare(
@@ -208,7 +236,9 @@ impl ClockService {
             return Err(ClockError::Undeclared);
         }
         let owner = task_epoch(task);
-        if self.scheduler.timers_of(owner) >= authority.timer_quota as usize {
+        if self.live_timers() >= MAX_LIVE_TIMERS
+            || self.scheduler.timers_of(owner) >= authority.timer_quota as usize
+        {
             return Err(ClockError::TimerLimit);
         }
         let (timer, transition) = self
@@ -251,10 +281,12 @@ impl ClockService {
     ) -> TimerSourceOutcome<P::Error> {
         let authorities = &self.authorities;
         match self.scheduler.service_timer_source(platform, |owner| {
-            authorities
-                .iter()
-                .flatten()
-                .any(|entry| entry.task.0 == owner.task)
+            owner == CLEANUP_OWNER
+                || (owner.epoch == 0
+                    && authorities
+                        .iter()
+                        .flatten()
+                        .any(|entry| entry.task.0 == owner.task))
         }) {
             Ok(transition) => TimerSourceOutcome::complete(transition),
             Err(ServiceTimerError::Clock(error)) => {
@@ -280,10 +312,12 @@ impl ClockService {
         let transition = self
             .scheduler
             .on_timer_expiry(now, |owner| {
-                authorities
-                    .iter()
-                    .flatten()
-                    .any(|entry| entry.task.0 == owner.task)
+                owner == CLEANUP_OWNER
+                    || (owner.epoch == 0
+                        && authorities
+                            .iter()
+                            .flatten()
+                            .any(|entry| entry.task.0 == owner.task))
             })
             .map_err(map_timer_error)?;
         Ok(ExpiryBatch::from_timer_transition(transition))
@@ -321,12 +355,13 @@ pub struct ExpiryBatch {
 impl ExpiryBatch {
     /// Preserve already-decided wakes carried by a post-mutation platform error.
     pub fn from_timer_transition(
-        transition: crate::timer::TimerTransition<MAX_LIVE_TIMERS>,
+        transition: crate::timer::TimerTransition<SCHEDULER_CAPACITY>,
     ) -> Self {
         let mut tasks = [None; MAX_LIVE_TIMERS];
         let mut len = 0;
         for event in transition.events.iter() {
             if let SchedulingEventKind::TaskReady { task, .. } = event.kind
+                && task.epoch == 0
                 && len < tasks.len()
             {
                 tasks[len] = Some(TaskId(task.task));
@@ -358,7 +393,7 @@ pub struct TimerSourceOutcome<E> {
 }
 
 impl<E> TimerSourceOutcome<E> {
-    fn complete(transition: crate::timer::TimerTransition<MAX_LIVE_TIMERS>) -> Self {
+    fn complete(transition: crate::timer::TimerTransition<SCHEDULER_CAPACITY>) -> Self {
         Self {
             expired: ExpiryBatch::from_timer_transition(transition),
             failure: None,
@@ -376,7 +411,7 @@ impl<E> TimerSourceOutcome<E> {
     }
 
     fn after_mutation(
-        transition: crate::timer::TimerTransition<MAX_LIVE_TIMERS>,
+        transition: crate::timer::TimerTransition<SCHEDULER_CAPACITY>,
         failure: TimerSourceFailure<E>,
     ) -> Self {
         Self {
@@ -443,6 +478,40 @@ mod tests {
         timer_signal: None,
         timer_badge: 0,
     };
+
+    #[test]
+    fn cleanup_retry_has_reserved_capacity_and_never_signals_a_task() {
+        let mut service = ClockService::new();
+        for index in 0..MAX_LIVE_TIMERS {
+            service
+                .arm(TIMER, TaskId(index as u32), MonotonicInstant(0), 20)
+                .unwrap();
+        }
+        assert_eq!(service.live_timers(), MAX_LIVE_TIMERS);
+        assert_eq!(
+            service.arm(TIMER, TaskId(1000), MonotonicInstant(0), 20),
+            Err(ClockError::TimerLimit)
+        );
+        assert_eq!(
+            service.arm_cleanup_retry(MonotonicInstant(0), 5),
+            Ok(DeadlineProgramming::Program(MonotonicInstant(5)))
+        );
+        assert_eq!(
+            service.arm_cleanup_retry(MonotonicInstant(1), 5),
+            Ok(DeadlineProgramming::Unchanged)
+        );
+        assert_eq!(service.live_timers(), MAX_LIVE_TIMERS);
+        let expired = service.expire(MonotonicInstant(5)).unwrap();
+        assert_eq!(expired.tasks().count(), 0);
+        assert_eq!(service.scheduler.timers_of(CLEANUP_OWNER), 0);
+        assert_eq!(service.live_timers(), MAX_LIVE_TIMERS);
+        service.arm_cleanup_retry(MonotonicInstant(5), 5).unwrap();
+        assert_eq!(
+            service.cancel_cleanup_retry(MonotonicInstant(6)),
+            Ok(DeadlineProgramming::Program(MonotonicInstant(20)))
+        );
+        assert_eq!(service.live_timers(), MAX_LIVE_TIMERS);
+    }
 
     #[test]
     fn rate_follows_the_monotonic_bit() {

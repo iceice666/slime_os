@@ -73,21 +73,30 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         {
             return Err(AdapterError::MapFailed);
         }
-        crate::buffer_adapter::BufferAdapter::new(self.allocator)
-            .ensure_mapping_tables(self.caller_vspace, self.requested_base)
-            .map_err(|_| AdapterError::MapFailed)?;
         let descriptor = self.device(device)?;
-        let region = self
-            .inventory
-            .region_mut(descriptor.region)
-            .ok_or(AdapterError::MapFailed)?;
-        region
-            .map_child(
-                self.caller_vspace,
-                self.requested_base,
-                matches!(access, MmioAccess::ReadWrite),
-            )
+        self.allocator
+            .prepare_mapping_page(self.caller_vspace.bits() as usize, self.requested_base)
             .map_err(|_| AdapterError::MapFailed)?;
+        let outcome = (|| {
+            crate::buffer_adapter::BufferAdapter::new(self.allocator)
+                .ensure_mapping_tables(self.caller_vspace, self.requested_base)
+                .map_err(|_| AdapterError::MapFailed)?;
+            self.inventory
+                .region_mut(descriptor.region)
+                .ok_or(AdapterError::MapFailed)?
+                .map_child(
+                    self.caller_vspace,
+                    self.requested_base,
+                    matches!(access, MmioAccess::ReadWrite),
+                )
+                .map_err(|_| AdapterError::MapFailed)
+        })();
+        if let Err(error) = outcome {
+            let _ = self
+                .allocator
+                .release_mapping_page(self.caller_vspace.bits() as usize, self.requested_base);
+            return Err(error);
+        }
         Ok(self.requested_base as u64)
     }
 
@@ -266,8 +275,16 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         match action {
             AdapterAction::UnmapMmio { token } => {
                 let base = usize::try_from(token).map_err(|_| AdapterError::TeardownFailed)?;
-                self.inventory
-                    .unmap_region_at(base)
+                if self
+                    .allocator
+                    .mapping_page_tracked(self.caller_vspace.bits() as usize, base)
+                {
+                    self.inventory
+                        .unmap_region_at(base)
+                        .map_err(|_| AdapterError::TeardownFailed)?;
+                }
+                self.allocator
+                    .release_mapping_page(self.caller_vspace.bits() as usize, base)
                     .map_err(|_| AdapterError::TeardownFailed)?;
             }
             AdapterAction::UnbindIrq { source } => {
@@ -296,16 +313,13 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
                     return Ok(());
                 };
                 for index in 0..record.pages {
-                    self.dma_pages[record.first + index]
-                        .as_ref()
-                        .ok_or(AdapterError::TeardownFailed)?
-                        .release(self.allocator)
-                        .map_err(|_| AdapterError::TeardownFailed)?;
+                    if let Some(page) = self.dma_pages[record.first + index].as_ref() {
+                        page.release(self.allocator)
+                            .map_err(|_| AdapterError::TeardownFailed)?;
+                        self.dma_pages[record.first + index] = None;
+                    }
                 }
                 self.queues[slot] = None;
-                for index in 0..record.pages {
-                    self.dma_pages[record.first + index] = None;
-                }
             }
             AdapterAction::SettleRequest { .. } => {}
         }

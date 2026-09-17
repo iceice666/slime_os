@@ -1458,6 +1458,247 @@ def run_cycles_arm(platform: str) -> None:
     )
 
 
+def check_capacity_conservation(transcript: str) -> None:
+    matches = list(re.finditer(r"^SLIME_MEM census (.*)$", transcript, re.MULTILINE))
+    rows = [match.group(1) for match in matches]
+    if len(rows) < 2:
+        fail("capacity conservation: missing initial or final census")
+    parsed = [dict((key, int(value)) for key, value in re.findall(r"(\w+)=(\d+)", row)) for row in rows]
+    initial, final = parsed[0], parsed[-1]
+    required = {
+        "untyped", "reusable", "shared_reusable", "preserved_bytes",
+        "active_extent_bytes", "mapped_pages", "free_slots", "anchors",
+        "shared_anchors", "preserved_anchors", "allocations_free",
+    }
+    if any(not required <= row.keys() for row in (initial, final)):
+        fail("capacity conservation: incomplete resource ledger")
+    if initial["mapped_pages"] != 0 or final["mapped_pages"] != 0 or final["active_extent_bytes"] != 0:
+        fail("capacity conservation: workload did not return private mappings and active backing")
+    available = ("untyped", "reusable", "shared_reusable", "preserved_bytes")
+    expected = sum(initial[key] for key in available) + initial["active_extent_bytes"]
+    observed = sum(final[key] for key in available)
+    if observed != expected:
+        fail(f"capacity conservation: available backing {observed}, expected {expected}")
+    slots = ("free_slots", "anchors", "shared_anchors", "preserved_anchors")
+    if sum(final[key] for key in slots) < sum(initial[key] for key in slots):
+        fail("capacity conservation: root slots lost beyond explicitly retained anchors")
+    if final["allocations_free"] < initial["allocations_free"]:
+        fail("capacity conservation: allocation descriptors lost")
+    interval = transcript[matches[0].end():matches[-1].start()]
+    if not re.search(r"^SLIME_ALLOC preserved parent=\d+ slot=\d+ paddr=\d+ bytes=\d+$", interval, re.MULTILINE):
+        fail("capacity conservation: preserved backing was never allocated")
+
+
+def check_backing_ledger(transcript: str) -> None:
+    """Replay exact parent partitions; counters alone cannot establish ownership."""
+    prefix = "backing ledger: "
+    nodes: dict[int, dict[str, int | str]] = {}
+    consumed: list[tuple[int, int, int]] = []
+    inventory: list[tuple[int, int]] = []
+    phase: str | None = None
+    snapshots: dict[str, dict[str, list[dict[str, int | str]]]] = {}
+    census: dict[str, int] | None = None
+    completed: list[str] = []
+
+    def fields(line: str) -> dict[str, int | str]:
+        result: dict[str, int | str] = {}
+        for token in line.split():
+            if "=" not in token:
+                fail(prefix + f"malformed field {token!r}")
+            key, value = token.split("=", 1)
+            if key in result:
+                fail(prefix + f"duplicate field {key}")
+            result[key] = int(value) if value.isdecimal() else value
+        return result
+
+    def integer(row: dict[str, int | str], key: str) -> int:
+        value = row.get(key)
+        if not isinstance(value, int) or not 0 <= value < 2**64:
+            fail(prefix + f"invalid {key}")
+        return value
+
+    def exact(row: dict[str, int | str], keys: str) -> None:
+        if set(row) != set(keys.split()):
+            fail(prefix + f"unexpected fields: {sorted(row)}")
+
+    def owned(cap: int) -> dict[str, int | str]:
+        if cap not in nodes:
+            fail(prefix + f"unknown parent {cap}")
+        return nodes[cap]
+
+    def consume_range(parent: int, start: int, size: int) -> None:
+        node = owned(parent)
+        base, length, used = (integer(node, key) for key in ("paddr", "bytes", "used"))
+        if size == 0 or start != base + used or start + size > base + length:
+            fail(prefix + "gap, overlap, or out-of-parent allocation")
+        node["used"] = used + size
+
+    def allocation(slot: int, size: int) -> tuple[int, int]:
+        candidates = [(start, length) for cap, start, length in consumed if cap == slot]
+        if len(candidates) != 1 or candidates[0][1] != size:
+            fail(prefix + f"extent {slot} has no unique matching allocation")
+        return candidates[0]
+
+    def verify_snapshot(name: str) -> None:
+        if census is None:
+            fail(prefix + "snapshot has no preceding census")
+        rows = snapshots[name]
+        for category, kind in (("ordinary", "ordinary"), ("retained", "preserved")):
+            expected = {cap: node for cap, node in nodes.items() if node["kind"] == kind}
+            seen: set[int] = set()
+            for row in rows[category]:
+                exact(row, "parent paddr bytes used")
+                cap = integer(row, "parent")
+                if cap in seen or cap not in expected:
+                    fail(prefix + "duplicate or unowned snapshot parent")
+                seen.add(cap)
+                if any(integer(row, key) != integer(expected[cap], key) for key in ("paddr", "bytes", "used")):
+                    fail(prefix + "snapshot disagrees with allocation history")
+            if seen != set(expected):
+                fail(prefix + "snapshot omits owned backing")
+        totals = {
+            "untyped": sum(integer(node, "bytes") - integer(node, "used") for node in nodes.values() if node["kind"] == "ordinary"),
+            "preserved_bytes": sum(integer(node, "bytes") - integer(node, "used") for node in nodes.values() if node["kind"] == "preserved"),
+            "preserved_anchors": len(rows["retained"]),
+            "active_extent_bytes": 0, "reusable": 0, "anchors": 0,
+            "shared_reusable": 0, "shared_retained": 0, "shared_anchors": len(rows["shared_node"]),
+        }
+        task_caps: set[int] = set()
+        for row in rows["task_extent"]:
+            exact(row, "parent bytes active")
+            cap, size, active = (integer(row, key) for key in ("parent", "bytes", "active"))
+            if cap in task_caps or active not in (0, 1):
+                fail(prefix + "duplicate task extent or invalid state")
+            task_caps.add(cap)
+            allocation(cap, size)
+            totals["active_extent_bytes" if active else "reusable"] += size
+            totals["anchors"] += int(not active)
+        shared: dict[int, dict[str, int | str]] = {}
+        children: dict[int, list[tuple[int, int]]] = {}
+        for row in rows["shared_node"]:
+            exact(row, "cap parent paddr bytes state")
+            cap, parent, start, size = (integer(row, key) for key in ("cap", "parent", "paddr", "bytes"))
+            if cap in shared or cap in task_caps or size == 0 or size & (size - 1) or start % size:
+                fail(prefix + "duplicate, unaligned, or invalid shared extent")
+            if row["state"] not in {"Free", "Split", "Leased", "Quarantined"}:
+                fail(prefix + "invalid shared state")
+            shared[cap] = row
+            if parent == 0:
+                if allocation(cap, size) != (start, size):
+                    fail(prefix + "shared root differs from its allocation")
+                totals["shared_retained"] += size
+            else:
+                children.setdefault(parent, []).append((start, size))
+            if row["state"] == "Free":
+                totals["shared_reusable"] += size
+        for cap, row in shared.items():
+            parent = integer(row, "parent")
+            if parent and parent not in shared:
+                fail(prefix + "shared child has no retained parent")
+            child_ranges = sorted(children.get(cap, []))
+            if row["state"] == "Split":
+                start, size = integer(row, "paddr"), integer(row, "bytes")
+                if child_ranges != [(start, size // 2), (start + size // 2, size // 2)]:
+                    fail(prefix + "shared siblings do not partition parent")
+            elif child_ranges:
+                fail(prefix + "unsplit shared parent has children")
+        # All event leaves and remaining tails must partition the initial
+        # BootInfo inventory exactly. Parent/child ancestry is never summed.
+        leaves = [(start, size) for _, start, size in consumed]
+        leaves += [(integer(node, "paddr") + integer(node, "used"), integer(node, "bytes") - integer(node, "used"))
+                   for node in nodes.values() if integer(node, "used") < integer(node, "bytes")]
+        leaves.sort()
+        index = 0
+        for start, size in sorted(inventory):
+            cursor = start
+            while index < len(leaves) and leaves[index][0] < start + size:
+                leaf_start, leaf_size = leaves[index]
+                if leaf_start != cursor or leaf_size <= 0 or leaf_start + leaf_size > start + size:
+                    fail(prefix + "exclusive leaves overlap, omit, or cross inventory")
+                cursor += leaf_size
+                index += 1
+            if cursor != start + size:
+                fail(prefix + "inventory is not fully represented")
+        if index != len(leaves):
+            fail(prefix + "backing lies outside ordinary inventory")
+        for key, value in totals.items():
+            if census.get(key) != value:
+                fail(prefix + f"{name} {key}={census.get(key)}, exclusive ownership={value}")
+        completed.append(name)
+
+    for line in transcript.splitlines():
+        if line.startswith("SLIME_MEM census "):
+            census = {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", line)}
+        if not line.startswith("SLIME_BACKING "):
+            continue
+        body = line.removeprefix("SLIME_BACKING ")
+        if body.startswith("snapshot "):
+            match = re.fullmatch(r"snapshot phase=(initial|final) (begin|end)", body)
+            if match is None:
+                fail(prefix + "malformed snapshot boundary")
+            name, edge = match.groups()
+            if edge == "begin":
+                if phase is not None or name in snapshots or (name == "final" and completed != ["initial"]):
+                    fail(prefix + "duplicate or reordered snapshot")
+                phase = name
+                snapshots[name] = {key: [] for key in ("ordinary", "retained", "task_extent", "shared_node")}
+            else:
+                if phase != name:
+                    fail(prefix + "unpaired snapshot end")
+                verify_snapshot(name)
+                phase = None
+            continue
+        kind, _, payload = body.partition(" ")
+        row = fields(payload)
+        if phase is not None:
+            if kind not in snapshots[phase]:
+                fail(prefix + "allocation interleaved with frozen snapshot")
+            snapshots[phase][kind].append(row)
+            continue
+        if kind == "inventory":
+            exact(row, "parent paddr bytes")
+            cap, start, size = (integer(row, key) for key in ("parent", "paddr", "bytes"))
+            if cap in nodes or size == 0 or size & (size - 1) or start % size:
+                fail(prefix + "duplicate or invalid inventory")
+            if any(start < base + length and base < start + size for base, length in inventory):
+                fail(prefix + "overlapping inventory")
+            inventory.append((start, size))
+            nodes[cap] = {"kind": "ordinary", "paddr": start, "bytes": size, "used": 0}
+        elif kind in {"preserve", "split"}:
+            exact(row, "parent child paddr bytes")
+            parent, child, start, size = (integer(row, key) for key in ("parent", "child", "paddr", "bytes"))
+            node = owned(parent)
+            if child in nodes or size == 0 or size & (size - 1) or start % size:
+                fail(prefix + "duplicate or invalid preserved child")
+            if (kind == "preserve") != (node["kind"] == "ordinary"):
+                fail(prefix + "wrong preservation parent kind")
+            if kind == "split" and size * 2 != integer(node, "bytes"):
+                fail(prefix + "split is not a buddy half")
+            consume_range(parent, start, size)
+            nodes[child] = {"kind": "preserved", "paddr": start, "bytes": size, "used": 0}
+        elif kind == "consume":
+            exact(row, "source parent slot paddr bytes count")
+            parent, slot, start, size, count = (integer(row, key) for key in ("parent", "slot", "paddr", "bytes", "count"))
+            node = owned(parent)
+            if row["source"] != node["kind"] or count == 0 or size % count:
+                fail(prefix + "invalid allocation source or count")
+            unit = size // count
+            if unit == 0 or unit & (unit - 1) or start % unit:
+                fail(prefix + "unaligned allocation")
+            if node["kind"] == "preserved" and (count != 1 or size != integer(node, "bytes")):
+                fail(prefix + "preserved allocation is not whole-leaf")
+            consume_range(parent, start, size)
+            consumed.append((slot, start, size))
+        else:
+            fail(prefix + f"unknown record {kind}")
+    if phase is not None or completed != ["initial", "final"]:
+        fail(prefix + "missing complete initial/final ownership snapshots")
+    reported_inventory = [(int(start, 16), int(size)) for start, size in re.findall(
+        r"^SLIME_ROOT ordinary range=\d+ paddr=(0x[0-9a-f]+) bytes=(\d+)$", transcript, re.MULTILINE)]
+    if sorted(reported_inventory) != sorted(inventory):
+        fail(prefix + "ledger inventory differs from BootInfo report")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
     parser.add_argument(
@@ -1490,6 +1731,7 @@ def main() -> None:
         image=image,
     )
     check_markers(transcript)
+    check_backing_ledger(transcript)
     check_declared_is_installed(transcript, declared)
     check_measured_ceiling(transcript, declared)
     check_only_declared_pages_were_charged(transcript, declared)
