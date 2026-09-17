@@ -25,7 +25,7 @@ readable and link to the decision that replaced them.
   what Slime OS owns once MyQue, devloop, and myque-gh publish the envelope,
   requirements, evidence, and projection contracts it pins.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
-  proposed; makes a devloop body compulsory for items created after a fixed
+  accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
 - [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed;
   target-specific assurance and the required Reply/scheduling-context cutover.

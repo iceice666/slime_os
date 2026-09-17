@@ -1,6 +1,6 @@
 # Mandatory spec-driven work items after a fixed identity cutoff
 
-**Status:** Proposed
+**Status:** Accepted
 **Related work item:** `01a0aef9-4c68-7251-8b66-291fe9f8cf4f`
 **Amends:** [`spec-driven-work-item-bodies.md`](spec-driven-work-item-bodies.md)
 (points 2 and 4 of its decision)
